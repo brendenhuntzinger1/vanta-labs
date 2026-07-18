@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Product } from "@/lib/demo-data";
 import { demoReferralCodes, type ReferralCode } from "@/lib/referral-codes";
-
+import { supabase } from "@/lib/supabase";
 export type CartItem = {
   slug: string;
   name: string;
@@ -187,49 +187,54 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const closeCart = () => setIsCartOpen(false);
   const toggleCart = () => setIsCartOpen((current) => !current);
 
-  const applyReferralCode = (code: string) => {
-    const normalized = code.trim().toUpperCase();
-    const details = demoReferralCodes.find((entry) => entry.code === normalized);
+  const applyReferralCode = async (code: string) => {
+const normalized = code.trim().toUpperCase();
 
-    if (!details) {
-      setReferralDetails(null);
-      setReferralCode(null);
-      setReferralError("That referral code is not recognized in the demo system.");
-      setReferralSuccess(null);
-      return;
-    }
+if (!normalized) {
+setReferralDetails(null);
+setReferralCode(null);
+setReferralError("Enter a referral code.");
+setReferralSuccess(null);
+return;
+}
 
-    if (details.status !== "Active") {
-      setReferralDetails(null);
-      setReferralCode(null);
-      setReferralError("This referral code is no longer active.");
-      setReferralSuccess(null);
-      return;
-    }
+const { data, error } = await supabase.rpc("validate_referral_code", {
+input_code: normalized,
+});
 
-    const expirationDate = new Date(details.expirationDate);
-    if (Number.isNaN(expirationDate.getTime()) || expirationDate < new Date()) {
-      setReferralDetails(null);
-      setReferralCode(null);
-      setReferralError("This referral code has expired.");
-      setReferralSuccess(null);
-      return;
-    }
+if (error) {
+setReferralDetails(null);
+setReferralCode(null);
+setReferralError("Unable to check the referral code right now.");
+setReferralSuccess(null);
+return;
+}
 
-    if (details.uses >= details.maxUses) {
-      setReferralDetails(null);
-      setReferralCode(null);
-      setReferralError("This referral code has reached its maximum number of uses.");
-      setReferralSuccess(null);
-      return;
-    }
+if (!data?.valid) {
+setReferralDetails(null);
+setReferralCode(null);
+setReferralError("That referral code is not active.");
+setReferralSuccess(null);
+return;
+}
 
-    setReferralCode(normalized);
-    setReferralDetails(details);
-    setReferralError(null);
-    setReferralSuccess(`Applied ${normalized} for ${details.customerDiscountPercent}% off.`);
-  };
+const details: ReferralCode = {
+code: data.referral_code,
+customerDiscountPercent: 10,
+ambassadorName: "",
+ambassadorId: "",
+commissionPercent: 10,
+status: "Active",
+expirationDate: "",
+maxUses: 0,
+uses: 0,
+};
 
+setReferralDetails(details);
+setReferralCode(data.referral_code);
+setReferralError(null);
+setReferralSuccess("Referral code applied — 10% off.");
+};
   const clearReferralCode = () => {
     setReferralCode(null);
     setReferralDetails(null);

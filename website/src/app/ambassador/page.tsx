@@ -1,99 +1,150 @@
-import Link from "next/link";
+"use client";
+
+import { FormEvent, useState } from "react";
 import { SiteHeader } from "@/components/site-header";
 
-const ambassadorData = {
-  name: "Mina Alvarez",
-  referralCode: "VANTA10",
-  referralLink: "https://vantalabs.demo/r/VANTA10",
-  clicks: 184,
-  orders: 22,
-  conversionRate: "11.9%",
-  referredRevenue: "$18,240",
-  pendingCommission: "$1,459",
-  approvedCommission: "$3,920",
-  paidCommission: "$2,110",
-};
+import { supabase } from "@/lib/supabase";
 
-const recentOrders = [
-  { id: "ORD-1042", customer: "R. Ellis", amount: "$1,240", status: "Pending" },
-  { id: "ORD-1088", customer: "J. Parker", amount: "$890", status: "Approved" },
-  { id: "ORD-1101", customer: "C. Vale", amount: "$1,540", status: "Paid" },
-];
+function createReferralCode(name: string) {
+const cleanName = name
+.trim()
+.toUpperCase()
+.replace(/[^A-Z0-9]/g, "")
+.slice(0, 12);
+
+const randomNumber = Math.floor(100 + Math.random() * 900);
+
+return `${cleanName || "VANTA"}${randomNumber}`;
+}
 
 export default function AmbassadorPage() {
-  return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <SiteHeader />
-      <main className="mx-auto max-w-7xl px-6 py-16 lg:px-8">
-        <div className="max-w-3xl">
-          <p className="text-sm uppercase tracking-[0.4em] text-zinc-500">Ambassador dashboard</p>
-          <h1 className="mt-3 text-4xl font-semibold text-white sm:text-5xl">Demo referral insights for ambassador partners.</h1>
-          <p className="mt-6 text-lg leading-8 text-zinc-400">These metrics are sample data intended to demonstrate the experience once Supabase is connected.</p>
-        </div>
+const [name, setName] = useState("");
+const [email, setEmail] = useState("");
+const [referralCode, setReferralCode] = useState("");
+const [message, setMessage] = useState("");
+const [submitting, setSubmitting] = useState(false);
 
-        <div className="mt-10 grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-          <div className="rounded-[2rem] border border-zinc-800 bg-zinc-900/70 p-8">
-            <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Ambassador profile</p>
-            <h2 className="mt-3 text-2xl font-semibold text-white">{ambassadorData.name}</h2>
-            <div className="mt-6 space-y-3 text-sm text-zinc-300">
-              <div className="flex justify-between border-b border-zinc-800 pb-3">
-                <span>Referral code</span>
-                <span className="text-white">{ambassadorData.referralCode}</span>
-              </div>
-              <div className="flex justify-between border-b border-zinc-800 pb-3">
-                <span>Referral link</span>
-                <span className="text-white">{ambassadorData.referralLink}</span>
-              </div>
-              <div className="flex justify-between border-b border-zinc-800 pb-3">
-                <span>Clicks</span>
-                <span className="text-white">{ambassadorData.clicks}</span>
-              </div>
-              <div className="flex justify-between border-b border-zinc-800 pb-3">
-                <span>Orders</span>
-                <span className="text-white">{ambassadorData.orders}</span>
-              </div>
-              <div className="flex justify-between border-b border-zinc-800 pb-3">
-                <span>Conversion rate</span>
-                <span className="text-white">{ambassadorData.conversionRate}</span>
-              </div>
-            </div>
-          </div>
-          <div className="rounded-[2rem] border border-zinc-800 bg-zinc-900/70 p-8">
-            <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Commission overview</p>
-            <div className="mt-6 grid gap-4 sm:grid-cols-2">
-              {[
-                ["Referred revenue", ambassadorData.referredRevenue],
-                ["Pending commission", ambassadorData.pendingCommission],
-                ["Approved commission", ambassadorData.approvedCommission],
-                ["Paid commission", ambassadorData.paidCommission],
-              ].map(([label, value]) => (
-                <div key={label} className="rounded-[1.25rem] border border-zinc-800 bg-zinc-950/70 p-4">
-                  <p className="text-sm text-zinc-500">{label}</p>
-                  <p className="mt-2 text-xl font-semibold text-white">{value}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+async function submitApplication(event: FormEvent<HTMLFormElement>) {
+event.preventDefault();
 
-        <div className="mt-10 rounded-[2rem] border border-zinc-800 bg-zinc-900/70 p-8">
-          <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Recent referral orders</p>
-          <div className="mt-6 space-y-3">
-            {recentOrders.map((order) => (
-              <div key={order.id} className="flex flex-col gap-2 rounded-[1.25rem] border border-zinc-800 bg-zinc-950/70 p-4 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-white">{order.id}</p>
-                  <p className="text-sm text-zinc-400">{order.customer}</p>
-                </div>
-                <div className="text-sm text-zinc-300">
-                  <p>{order.amount}</p>
-                  <p className="mt-1 text-zinc-500">{order.status}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </main>
-    </div>
-  );
+setSubmitting(true);
+setMessage("");
+
+const finalReferralCode =
+referralCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, "") ||
+createReferralCode(name);
+
+const { error } = await supabase.from("ambassadors").insert({
+name: name.trim(),
+email: email.trim().toLowerCase(),
+referral_code: finalReferralCode,
+commission_percent: 10,
+status: "pending",
+});
+
+if (error) {
+if (error.code === "23505") {
+setMessage(
+"That email or referral code is already being used. Try another one.",
+);
+} else {
+setMessage(`Application failed: ${error.message}`);
+}
+
+setSubmitting(false);
+return;
+}
+
+setMessage(
+"Application submitted. Vanta Labs must approve your account before your referral code becomes active.",
+);
+
+setName("");
+setEmail("");
+setReferralCode("");
+setSubmitting(false);
+}
+
+return (
+<>
+<SiteHeader />
+
+<main className="min-h-screen px-6 py-16">
+<section className="mx-auto max-w-xl rounded-3xl border border-white/10 bg-white/5 p-8">
+<p className="text-sm uppercase tracking-[0.25em] text-cyan-300">
+Vanta Labs
+</p>
+
+<h1 className="mt-3 text-4xl font-semibold text-white">
+Ambassador application
+</h1>
+
+<p className="mt-4 text-white/60">
+Apply for a referral code. Applications must be approved before
+the code becomes active.
+</p>
+
+<form onSubmit={submitApplication} className="mt-8 space-y-5">
+<label className="block">
+<span className="mb-2 block text-sm text-white/70">Name</span>
+
+<input
+value={name}
+onChange={(event) => setName(event.target.value)}
+required
+className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
+/>
+</label>
+
+<label className="block">
+<span className="mb-2 block text-sm text-white/70">Email</span>
+
+<input
+type="email"
+value={email}
+onChange={(event) => setEmail(event.target.value)}
+required
+className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 text-white outline-none"
+/>
+</label>
+
+<label className="block">
+<span className="mb-2 block text-sm text-white/70">
+Requested referral code
+</span>
+
+<input
+value={referralCode}
+onChange={(event) => setReferralCode(event.target.value)}
+placeholder="Example: BRENDEN10"
+className="w-full rounded-xl border border-white/10 bg-black/30 px-4 py-3 uppercase text-white outline-none"
+/>
+
+<span className="mt-2 block text-xs text-white/40">
+Leave blank and one will be generated automatically.
+</span>
+</label>
+
+<button
+type="submit"
+disabled={submitting}
+className="w-full rounded-xl bg-cyan-300 px-5 py-3 font-semibold text-black disabled:opacity-50"
+>
+{submitting ? "Submitting..." : "Submit application"}
+</button>
+</form>
+
+{message && (
+<p className="mt-6 rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-white/80">
+{message}
+</p>
+)}
+
+<p className="mt-6 text-sm text-white/50">
+Approved ambassadors earn 10% of eligible referred sales.
+</p>
+</section>
+</main>
+</>
+);
 }
