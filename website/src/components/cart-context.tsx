@@ -27,6 +27,9 @@ type CartContextValue = {
   shipping: number;
   discountAmount: number;
   total: number;
+  isBuy3Get1FreeActive: boolean;
+  isBuy3Get1FreeEligible: boolean;
+  totalQuantity: number;
   addToCart: (product: Product, quantity?: number) => void;
   updateQuantity: (slug: string, quantity: number) => void;
   removeFromCart: (slug: string) => void;
@@ -118,13 +121,30 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [items],
   );
 
-  const shipping = subtotal > 0 ? 24 : 0;
+  // Calculate buy 3 get 1 free discount (when 4+ items total)
+  const totalQuantity = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
+  const isBuy3Get1FreeEligible = useMemo(() => totalQuantity >= 3, [totalQuantity]);
+  const buy3Get1FreeDiscount = useMemo(() => {
+    if (totalQuantity < 3) return 0;
+    // Find the cheapest item
+    const cheapestItem = items.reduce((min, current) => (current.price < min.price ? current : min), items[0]);
+    return cheapestItem?.price || 0;
+  }, [items, totalQuantity]);
+
+  // Shipping: $14.99 for orders under $200, free for $200+
+  const shipping = subtotal >= 200 ? 0 : subtotal > 0 ? 14.99 : 0;
+  
+  // Discount amount: use buy 3 get 1 free if applicable, otherwise use referral code
+  // These two offers are mutually exclusive
   const discountAmount = useMemo(() => {
+    if (buy3Get1FreeDiscount > 0) {
+      return buy3Get1FreeDiscount;
+    }
     if (!referralDetails || !isReferralValid(referralDetails)) {
       return 0;
     }
     return subtotal * (referralDetails.customerDiscountPercent / 100);
-  }, [referralDetails, subtotal]);
+  }, [buy3Get1FreeDiscount, referralDetails, subtotal]);
 
   const total = Math.max(0, subtotal + shipping - discountAmount);
 
@@ -184,6 +204,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const applyReferralCode = async (code: string) => {
     const normalized = code.trim().toUpperCase();
+
+    // Check if buy 3 get 1 free is active - if so, don't allow referral codes
+    if (buy3Get1FreeDiscount > 0) {
+      setReferralDetails(null);
+      setReferralCode(null);
+      setReferralError("Referral codes cannot be combined with the Buy 3 Get 1 Free promotion.");
+      setReferralSuccess(null);
+      return;
+    }
 
     if (!normalized) {
       setReferralDetails(null);
@@ -249,6 +278,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     shipping,
     discountAmount,
     total,
+    isBuy3Get1FreeActive: buy3Get1FreeDiscount > 0,
+    isBuy3Get1FreeEligible,
+    totalQuantity,
     addToCart,
     updateQuantity,
     removeFromCart,
@@ -271,7 +303,18 @@ export function useCart() {
   }
   return context;
 }
-
+export function getShippingProgress(subtotal: number) {
+  const FREE_SHIPPING_THRESHOLD = 200;
+  const isEligibleForFreeShipping = subtotal >= FREE_SHIPPING_THRESHOLD;
+  const amountToFreeShipping = Math.max(0, FREE_SHIPPING_THRESHOLD - subtotal);
+  const progressPercentage = Math.min((subtotal / FREE_SHIPPING_THRESHOLD) * 100, 100);
+  
+  return {
+    isEligibleForFreeShipping,
+    amountToFreeShipping,
+    progressPercentage,
+  };
+}
 export function formatCartCurrency(value: number) {
   return formatCurrency(value);
 }

@@ -1,7 +1,7 @@
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { products } from "@/lib/demo-data";
-import { calculateDiscountAmount, createReferralOrderRecord } from "@/lib/referral-service";
+import { calculateDiscountAmount } from "@/lib/referral-service";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 import type {
@@ -192,6 +192,47 @@ export async function createCheckoutSession(
  const orderId = `order-${randomUUID()}`;
  const provider = getPaymentProvider();
 
+ const { error: orderInsertError } = await supabaseAdmin.from("orders").insert({
+   order_id: orderId,
+   payment_id: null,
+   customer_email: payload.customer.email,
+   customer_name: payload.customer.fullName,
+   shipping_address: payload.customer.address,
+   city: payload.customer.city,
+   postal_code: payload.customer.postalCode,
+   currency: payload.currency ?? "USD",
+   subtotal,
+   shipping_amount: shipping,
+   discount_amount: discountAmount,
+   amount_paid: expectedTotal,
+   referral_code: referral?.code ?? null,
+   ambassador_id: referral?.ambassadorId ?? null,
+   payment_status: "pending_payment",
+   fulfillment_status: "pending",
+   created_at: new Date().toISOString(),
+   updated_at: new Date().toISOString(),
+ });
+
+ if (orderInsertError) {
+   console.error("Unable to create order record", orderInsertError);
+   throw new Error("Unable to create order record");
+ }
+
+ const orderItemsPayload = lineItems.map((line) => ({
+   order_id: orderId,
+   product_id: line.product.id,
+   product_name: line.product.name,
+   unit_price: line.product.price,
+   quantity: line.quantity,
+   line_total: roundMoney(line.product.price * line.quantity),
+ }));
+
+ const { error: itemInsertError } = await supabaseAdmin.from("order_items").insert(orderItemsPayload);
+ if (itemInsertError) {
+   console.error("Unable to create order items", itemInsertError);
+   throw new Error("Unable to create order items");
+ }
+
  const checkout = await provider.createCheckoutSession({
  orderId,
  customerEmail: payload.customer.email,
@@ -207,20 +248,6 @@ export async function createCheckoutSession(
  amountPaid: expectedTotal.toFixed(2),
  customerEmail: payload.customer.email,
  },
- });
-
- await createReferralOrderRecord({
-   orderId,
-   ambassadorId: referral?.ambassadorId ?? "",
-   referralCode: referral?.code ?? "",
-   customerEmail: payload.customer.email,
-   commissionPercent: referral?.commissionPercent ?? 0,
-   subtotal,
-   shipping,
-   discountAmount,
-   total: expectedTotal,
-   paymentId: checkout.paymentId,
-   status: "pending",
  });
 
  return {

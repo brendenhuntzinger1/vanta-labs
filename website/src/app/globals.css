@@ -26,3 +26,179 @@ body {
 * {
   box-sizing: border-box;
 }
+
+/* ── Keyframe Animations ─────────────────────────────────────────────────── */
+
+@keyframes vl-float {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  33%       { transform: translateY(-10px) rotate(0.5deg); }
+  66%       { transform: translateY(-5px) rotate(-0.5deg); }
+}
+
+@keyframes vl-float-b {
+  0%, 100% { transform: translateY(0px) rotate(0deg); }
+  33%       { transform: translateY(-14px) rotate(-0.5deg); }
+  66%       { transform: translateY(-7px) rotate(0.5deg); }
+}
+
+@keyframes vl-ticker {
+  from { transform: translateX(0); }
+  to   { transform: translateX(-50%); }
+}
+
+@keyframes vl-glow-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%       { opacity: 1; }
+}
+
+@keyframes vl-fade-in {
+  0% { opacity: 0; transform: translateY(12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+/* ── Animation Utilities ─────────────────────────────────────────────────── */
+
+.vl-float      { animation: vl-float   7s ease-in-out infinite; }
+.vl-float-b    { animation: vl-float-b 9s ease-in-out 2s infinite; }
+.vl-ticker     { animation: vl-ticker 52s linear infinite; }
+.vl-glow-pulse { animation: vl-glow-pulse 2.5s ease-in-out infinite; }
+.animate-fade-in { animation: vl-fade-in 0.6s ease-out forwards; }
+
+/* ── Card hover glow (CSS variable --vl-glow set per-card) ───────────────── */
+
+.vl-card {
+  transition: box-shadow 0.3s ease, transform 0.3s ease, border-color 0.3s ease;
+}
+
+.vl-card:hover {
+  box-shadow: 0 0 28px var(--vl-glow, rgba(255,255,255,0.08)),
+              0 8px 24px rgba(0, 0, 0, 0.45);
+  transform: translateY(-3px);
+}
+
+/* ── Subtle background grid (used in hero) ───────────────────────────────── */
+
+.vl-grid-overlay {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.018) 1px, transparent 1px);
+  background-size: 72px 72px;
+}
+
+/* ── Particle Animations ─────────────────────────────────────────────────── */
+
+@keyframes vl-particle-float {
+  0% { opacity: 0; transform: translateY(100px) translateX(0) scale(0.5); }
+  10% { opacity: 0.6; }
+  90% { opacity: 0.6; }
+  100% { opacity: 0; transform: translateY(-400px) translateX(80px) scale(0.8); }
+}
+
+@keyframes vl-particle-float-reverse {
+  0% { opacity: 0; transform: translateY(100px) translateX(0) scale(0.5); }
+  10% { opacity: 0.6; }
+  90% { opacity: 0.6; }
+  100% { opacity: 0; transform: translateY(-400px) translateX(-80px) scale(0.8); }
+}
+
+@keyframes vl-molecule-rotate {
+  0% { transform: rotate(0deg) scale(1); }
+  50% { transform: rotate(180deg) scale(1.05); }
+  100% { transform: rotate(360deg) scale(1); }
+}
+
+@keyframes vl-dna-helix {
+  0% { transform: rotateZ(0deg) rotateY(0deg); }
+  50% { transform: rotateZ(180deg) rotateY(90deg); }
+  100% { transform: rotateZ(360deg) rotateY(180deg); }
+}
+
+@keyframes vl-glow-shimmer {
+  0% { opacity: 0.4; }
+  50% { opacity: 1; }
+  100% { opacity: 0.4; }
+}
+
+@keyframes vl-background-move {
+  0% { backgroundPosition: 0 0; }
+  100% { backgroundPosition: 100px 100px; }
+}
+
+@keyframes vl-card-lift {
+  0%, 100% { transform: translateY(0px); }
+  50% { transform: translateY(-8px); }
+}
+
+@keyframes vl-vial-glow {
+  0%, 100% { box-shadow: 0 0 20px rgba(99, 102, 241, 0.3), inset 0 0 20px rgba(99, 102, 241, 0.1); }
+  50% { box-shadow: 0 0 40px rgba(99, 102, 241, 0.6), inset 0 0 30px rgba(99, 102, 241, 0.2); }
+}
+
+/* ── Animation Classes ───────────────────────────────────────────────────── */
+
+.vl-particle-1 { animation: vl-particle-float 8s linear infinite; animation-delay: 0s; }
+.vl-particle-2 { animation: vl-particle-float 10s linear infinite; animation-delay: 2s; }
+.vl-particle-3 { animation: vl-particle-float-reverse 9s linear infinite; animation-delay: 1s; }
+.vl-particle-4 { animation: vl-particle-float-reverse 11s linear infinite; animation-delay: 3s; }
+
+.vl-molecule { animation: vl-molecule-rotate 6s linear infinite; }
+.vl-dna { animation: vl-dna-helix 8s linear infinite; }
+.vl-shimmer { animation: vl-glow-shimmer 3s ease-in-out infinite; }
+.vl-bg-move { animation: vl-background-move 20s linear infinite; }
+.vl-card-floating { animation: vl-card-lift 4s ease-in-out infinite; }
+.vl-vial-glow { animation: vl-vial-glow 3s ease-in-out infinite; }
+
+/* ── Glassmorphism Background ────────────────────────────────────────────── */
+
+.vl-glass {
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.vl-glass-dark {
+  backdrop-filter: blur(30px);
+  -webkit-backdrop-filter: blur(30px);
+  background: rgba(10, 10, 20, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* ── Moving Background Pattern ──────────────────────────────────────────── */
+
+.vl-moving-bg {
+  background-image: 
+    radial-gradient(circle at 20% 50%, rgba(99, 102, 241, 0.1) 1px, transparent 1px),
+    radial-gradient(circle at 60% 70%, rgba(168, 85, 247, 0.1) 1px, transparent 1px),
+    radial-gradient(circle at 80% 30%, rgba(59, 130, 246, 0.1) 1px, transparent 1px);
+  background-size: 200px 200px;
+  background-attachment: fixed;
+}
+
+/* ── Accessibility: respect reduced-motion preference ───────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-float,
+  .vl-float-b,
+  .vl-ticker,
+  .vl-glow-pulse,
+  .vl-particle-1,
+  .vl-particle-2,
+  .vl-particle-3,
+  .vl-particle-4,
+  .vl-molecule,
+  .vl-dna,
+  .vl-shimmer,
+  .vl-bg-move,
+  .vl-card-floating,
+  .vl-vial-glow,
+  .animate-fade-in {
+    animation: none !important;
+  }
+  .vl-card {
+    transition: border-color 0.15s ease;
+  }
+  .vl-card:hover {
+    transform: none;
+  }
+}

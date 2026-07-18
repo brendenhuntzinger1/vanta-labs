@@ -158,7 +158,40 @@ export default function CheckoutPage() {
 
           <div className="rounded-[2rem] border border-zinc-800 bg-zinc-900/70 p-6">
             <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Order summary</p>
-            <div className="mt-6 space-y-3 text-sm text-zinc-300">
+            
+            {/* Detailed items list with images */}
+            <div className="mt-6 space-y-4 border-b border-zinc-800 pb-4">
+              {items.map((item) => (
+                <div key={item.slug} className="flex gap-4 items-start pb-4 last:pb-0 border-b border-zinc-800/50 last:border-b-0">
+                  {/* Product image */}
+                  <div className="h-24 w-24 flex-shrink-0 rounded-lg border border-zinc-700 bg-zinc-950/50 overflow-hidden flex items-center justify-center">
+                    {item.image ? (
+                      <img src={item.image} alt={item.name} className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="text-xs text-zinc-500">No image</div>
+                    )}
+                  </div>
+                  
+                  {/* Product details */}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold text-white text-sm">{item.name}</p>
+                    <p className="text-xs text-zinc-500 mt-1">Batch {item.batchNumber}</p>
+                    <div className="flex items-center justify-between mt-3">
+                      <div>
+                        <p className="text-xs text-zinc-400">Qty: <span className="text-white font-medium">{item.quantity}</span></p>
+                        <p className="text-xs text-zinc-400">Price: <span className="text-white font-medium">${item.price}</span></p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-sm font-semibold text-white">{formatCartCurrency(item.price * item.quantity)}</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Order totals */}
+            <div className="mt-4 space-y-3 text-sm text-zinc-300">
               <div className="flex justify-between">
                 <span>Items</span>
                 <span>{orderCount}</span>
