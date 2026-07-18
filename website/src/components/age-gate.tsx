@@ -1,25 +1,47 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState, useSyncExternalStore } from "react";
+
+function getAgeVerifiedSnapshot() {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    return window.localStorage.getItem("vanta-labs-age-verified") === "true";
+  } catch (error) {
+    console.error("Unable to read age verification state", error);
+    return false;
+  }
+}
+
+function subscribeToAgeVerified(callback: () => void) {
+  if (typeof window === "undefined") {
+    return () => undefined;
+  }
+
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === "vanta-labs-age-verified") {
+      callback();
+    }
+  };
+
+  window.addEventListener("storage", handleStorage);
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+  };
+}
 
 export function AgeGate({ children }: { children: React.ReactNode }) {
-  const [isVerified, setIsVerified] = useState(false);
-  const [isChecking, setIsChecking] = useState(true);
+  const [localVerified, setLocalVerified] = useState(false);
   const [agreed, setAgreed] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
-
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem("vanta-labs-age-verified");
-      if (stored === "true") {
-        setIsVerified(true);
-      }
-    } catch (error) {
-      console.error("Unable to read age verification state", error);
-    } finally {
-      setIsChecking(false);
-    }
-  }, []);
+  const isVerifiedFromStorage = useSyncExternalStore(
+    subscribeToAgeVerified,
+    getAgeVerifiedSnapshot,
+    () => false,
+  );
+  const isVerified = isVerifiedFromStorage || localVerified;
 
   const handleEnter = () => {
     if (!agreed) {
@@ -31,10 +53,11 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error("Unable to save age verification state", error);
     }
-    setIsVerified(true);
+    setLocalVerified(true);
   };
 
   const handleExit = () => {
+    setLocalVerified(false);
     try {
       window.localStorage.removeItem("vanta-labs-age-verified");
     } catch (error) {
@@ -43,7 +66,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
     window.location.assign("https://www.google.com");
   };
 
-  if (isChecking || !isVerified) {
+  if (!isVerified) {
     return (
       <div className="flex min-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.16),_transparent_55%),linear-gradient(135deg,_#020202_0%,_#111111_50%,_#050505_100%)] px-6 py-10 text-zinc-100">
         <div className="absolute inset-0 bg-[url('https://images.unsplash.com/photo-1532187863486-abf9dbad1b69?auto=format&fit=crop&w=1600&q=80')] bg-cover bg-center opacity-20" />

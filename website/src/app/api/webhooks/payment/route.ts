@@ -5,9 +5,9 @@ export async function POST(request: Request) {
   try {
     const payload = await request.text();
     const signature = request.headers.get("x-payment-signature") ?? "";
-    const eventId = request.headers.get("x-event-id") ?? "demo-event";
+    const eventId = request.headers.get("x-event-id") ?? "";
 
-    const result = await processPaymentWebhook(payload, signature, process.env.PAYMENT_WEBHOOK_SECRET ?? "demo-secret", eventId);
+    const result = await processPaymentWebhook(payload, signature, process.env.PAYMENT_WEBHOOK_SECRET ?? "", eventId);
 
     return NextResponse.json({ success: true, ...result });
   } catch (error) {

@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { SiteHeader } from "@/components/site-header";
 
 const trustPoints = [
@@ -45,18 +46,18 @@ export default function Home() {
                 Vanta Labs delivers rigorously tested, research-driven formulations with full documentation and exceptional operational discipline.
               </p>
               <div className="mt-10 flex flex-col gap-3 sm:flex-row">
-                <a
+                <Link
                   href="/products"
                   className="rounded-full border border-zinc-600 bg-white px-6 py-3 text-center text-sm font-semibold text-zinc-950 transition hover:bg-zinc-200"
                 >
                   Shop Products
-                </a>
-                <a
+                </Link>
+                <Link
                   href="/coa-library"
                   className="rounded-full border border-zinc-700 px-6 py-3 text-center text-sm font-semibold text-zinc-200 transition hover:bg-zinc-900"
                 >
                   View COA Library
-                </a>
+                </Link>
               </div>
             </div>
           </div>

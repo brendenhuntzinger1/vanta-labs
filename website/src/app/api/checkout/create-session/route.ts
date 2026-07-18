@@ -1,14 +1,10 @@
 import { NextResponse } from "next/server";
 import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-service";
-import { rateLimitPlaceholder } from "@/lib/rate-limit";
 import type { CustomerInput } from "@/lib/payment-types";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    if (!rateLimitPlaceholder()) {
-      return NextResponse.json({ success: false, error: "Too many requests" }, { status: 429 });
-    }
     const customer = sanitizeCustomerInput(body.customer as CustomerInput);
 
     const result = await createCheckoutSession({

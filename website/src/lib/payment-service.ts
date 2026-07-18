@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { products } from "@/lib/demo-data";
+import { calculateDiscountAmount, createReferralOrderRecord } from "@/lib/referral-service";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 import type {
@@ -39,6 +40,8 @@ interface ValidatedReferral {
  ambassadorId: string;
  code: string;
  discountPercent: number;
+ commissionPercent: number;
+ ambassadorName: string;
 }
 
 const productsById = new Map<string, ServerProduct>(
@@ -91,8 +94,8 @@ async function validateReferralCode(
 
  const { data, error } = await supabaseAdmin
  .from("ambassadors")
- .select("id, referral_code, status")
- .ilike("referral_code", normalizedCode)
+ .select("id, name, referral_code, commission_percent, status")
+ .eq("referral_code", normalizedCode)
  .maybeSingle();
 
  if (error) {
@@ -112,6 +115,8 @@ async function validateReferralCode(
  ambassadorId: data.id,
  code: data.referral_code.toUpperCase(),
  discountPercent: 10,
+ commissionPercent: Number(data.commission_percent ?? 10),
+ ambassadorName: data.name,
  };
 }
 
@@ -169,7 +174,7 @@ export async function createCheckoutSession(
 
  const discountAmount = roundMoney(
  referral
- ? subtotal * (referral.discountPercent / 100)
+ ? calculateDiscountAmount(subtotal, referral.discountPercent)
  : 0,
  );
 
@@ -202,6 +207,20 @@ export async function createCheckoutSession(
  amountPaid: expectedTotal.toFixed(2),
  customerEmail: payload.customer.email,
  },
+ });
+
+ await createReferralOrderRecord({
+   orderId,
+   ambassadorId: referral?.ambassadorId ?? "",
+   referralCode: referral?.code ?? "",
+   customerEmail: payload.customer.email,
+   commissionPercent: referral?.commissionPercent ?? 0,
+   subtotal,
+   shipping,
+   discountAmount,
+   total: expectedTotal,
+   paymentId: checkout.paymentId,
+   status: "pending",
  });
 
  return {

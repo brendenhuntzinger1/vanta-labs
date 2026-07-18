@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { useMemo, useState } from "react";
 import { SiteHeader } from "@/components/site-header";
 import { coaRecords } from "@/lib/demo-data";

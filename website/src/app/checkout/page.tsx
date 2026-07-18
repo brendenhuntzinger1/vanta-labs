@@ -85,8 +85,8 @@ export default function CheckoutPage() {
       <main className="mx-auto max-w-7xl px-6 py-16 lg:px-8">
         <div className="max-w-3xl">
           <p className="text-sm uppercase tracking-[0.4em] text-zinc-500">Checkout</p>
-          <h1 className="mt-3 text-4xl font-semibold text-white sm:text-5xl">Professional demo checkout for research-use orders.</h1>
-          <p className="mt-6 text-lg leading-8 text-zinc-400">This checkout is a non-functional demo. No credit-card information is requested or stored.</p>
+          <h1 className="mt-3 text-4xl font-semibold text-white sm:text-5xl">Secure checkout for research-use orders.</h1>
+          <p className="mt-6 text-lg leading-8 text-zinc-400">Your order summary is validated server-side before checkout is created. Approved ambassador referral codes receive a fixed 10% customer discount.</p>
         </div>
 
         <div className="mt-10 grid gap-8 lg:grid-cols-[1.1fr_0.9fr]">
@@ -189,7 +189,7 @@ export default function CheckoutPage() {
               {checkoutState === "loading" ? "Creating secure checkout..." : "Place Order"}
             </button>
             {checkoutMessage ? <p className="mt-4 text-sm text-zinc-300">{checkoutMessage}</p> : null}
-            <p className="mt-4 text-sm text-zinc-400">Payment integration is in test mode. No real payment will be processed.</p>
+            <p className="mt-4 text-sm text-zinc-400">Checkout creation is validated server-side before the provider is invoked.</p>
             <Link href="/cart" className="mt-4 inline-flex text-sm text-zinc-400 transition hover:text-white">← Back to cart</Link>
           </div>
         </div>

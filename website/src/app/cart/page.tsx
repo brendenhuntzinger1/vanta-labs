@@ -19,7 +19,6 @@ export default function CartPage() {
     referralSuccess,
     applyReferralCode,
     clearReferralCode,
-    clearReferralMessage,
   } = useCart();
 
   return (
@@ -29,7 +28,7 @@ export default function CartPage() {
         <div className="max-w-3xl">
           <p className="text-sm uppercase tracking-[0.4em] text-zinc-500">Shopping cart</p>
           <h1 className="mt-3 text-4xl font-semibold text-white sm:text-5xl">Review your selected materials.</h1>
-          <p className="mt-6 text-lg leading-8 text-zinc-400">This demo cart persists in the browser so you can continue from a later visit. Referral codes are sample data until a live backend is connected.</p>
+          <p className="mt-6 text-lg leading-8 text-zinc-400">Your cart persists locally while you review or continue checkout. Approved ambassador referral codes are validated with Supabase before checkout.</p>
         </div>
 
         <div className="mt-10 grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">

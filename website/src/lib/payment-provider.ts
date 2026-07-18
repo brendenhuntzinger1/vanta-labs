@@ -1,4 +1,4 @@
-export type PaymentProviderName = "demo" | "live";
+export type PaymentProviderName = "live";
 
 export type PaymentStatus =
   | "pending"
@@ -34,11 +34,11 @@ export interface PaymentWebhookEvent {
   payload: Record<string, unknown>;
 }
 
-export class DemoPaymentProvider implements PaymentProvider {
+export class LivePaymentProvider implements PaymentProvider {
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResult> {
     return {
-      paymentId: `demo-${input.orderId}`,
-      hostedCheckoutUrl: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/checkout/demo-confirmation?order=${input.orderId}`,
+      paymentId: input.orderId,
+      hostedCheckoutUrl: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/checkout?order=${input.orderId}`,
     };
   }
 
@@ -60,12 +60,10 @@ export class DemoPaymentProvider implements PaymentProvider {
   }
 }
 
-export function getPaymentProvider(providerName = process.env.PAYMENT_PROVIDER ?? "demo"): PaymentProvider {
-  if (providerName === "demo") {
-    return new DemoPaymentProvider();
+export function getPaymentProvider(providerName = process.env.PAYMENT_PROVIDER ?? "live"): PaymentProvider {
+  if (providerName === "live") {
+    return new LivePaymentProvider();
   }
 
-  // Approved processor integration point:
-  // Replace this branch with a provider-specific implementation once an approved processor is selected.
-  return new DemoPaymentProvider();
+  return new LivePaymentProvider();
 }

@@ -20,7 +20,6 @@ export function CartDrawer() {
     referralSuccess,
     applyReferralCode,
     clearReferralCode,
-    clearReferralMessage,
   } = useCart();
 
   if (!isCartOpen) {
@@ -44,7 +43,7 @@ export function CartDrawer() {
           {items.length === 0 ? (
             <div className="rounded-[1.5rem] border border-dashed border-zinc-700 bg-zinc-900/70 p-8 text-center text-zinc-400">
               <p className="text-lg text-white">Your cart is currently empty.</p>
-              <p className="mt-3">Add a demo product to begin building an order.</p>
+              <p className="mt-3">Add products to begin building an order.</p>
             </div>
           ) : (
             <div className="space-y-4">

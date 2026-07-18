@@ -2,8 +2,8 @@
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Product } from "@/lib/demo-data";
-import { demoReferralCodes, type ReferralCode } from "@/lib/referral-codes";
-import { supabase } from "@/lib/supabase";
+import type { ReferralCode } from "@/lib/referral-codes";
+import { validateReferralCodeClient } from "@/lib/referral-client";
 export type CartItem = {
   slug: string;
   name: string;
@@ -52,60 +52,55 @@ function formatCurrency(value: number) {
 }
 
 function isReferralValid(code: ReferralCode) {
-  if (code.status !== "Active") {
-    return false;
-  }
-  const expirationDate = new Date(code.expirationDate);
-  if (Number.isNaN(expirationDate.getTime())) {
-    return false;
-  }
-  if (expirationDate < new Date()) {
-    return false;
-  }
-  return code.uses < code.maxUses;
+  return code.customerDiscountPercent === 10 && Boolean(code.ambassadorId);
 }
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [isHydrated, setIsHydrated] = useState(false);
+  const [isHydrated] = useState(false);
   const [referralCode, setReferralCode] = useState<string | null>(null);
   const [referralDetails, setReferralDetails] = useState<ReferralCode | null>(null);
   const [referralError, setReferralError] = useState<string | null>(null);
   const [referralSuccess, setReferralSuccess] = useState<string | null>(null);
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(CART_STORAGE_KEY);
-      if (stored) {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const loadPersistedCart = () => {
+      try {
+        const stored = window.localStorage.getItem(CART_STORAGE_KEY);
+        if (!stored) {
+          return;
+        }
+
         const parsed = JSON.parse(stored) as {
           items?: CartItem[];
           referralCode?: string | null;
         };
-        if (parsed.items) {
+
+        if (Array.isArray(parsed.items)) {
           setItems(parsed.items);
         }
-        if (parsed.referralCode) {
+
+        if (typeof parsed.referralCode === "string") {
           setReferralCode(parsed.referralCode);
-          const details = demoReferralCodes.find(
-            (entry) => entry.code === parsed.referralCode,
-          );
-          if (details) {
-            setReferralDetails(details);
-          }
         }
+      } catch (error) {
+        console.error("Unable to read cart state", error);
       }
-    } catch (error) {
-      console.error("Unable to read cart state", error);
-    } finally {
-      setIsHydrated(true);
-    }
+    };
+
+    loadPersistedCart();
   }, []);
 
   useEffect(() => {
-    if (!isHydrated) {
+    if (typeof window === "undefined") {
       return;
     }
+
     try {
       window.localStorage.setItem(
         CART_STORAGE_KEY,
@@ -188,53 +183,47 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const toggleCart = () => setIsCartOpen((current) => !current);
 
   const applyReferralCode = async (code: string) => {
-const normalized = code.trim().toUpperCase();
+    const normalized = code.trim().toUpperCase();
 
-if (!normalized) {
-setReferralDetails(null);
-setReferralCode(null);
-setReferralError("Enter a referral code.");
-setReferralSuccess(null);
-return;
-}
+    if (!normalized) {
+      setReferralDetails(null);
+      setReferralCode(null);
+      setReferralError("Enter a referral code.");
+      setReferralSuccess(null);
+      return;
+    }
 
-const { data, error } = await supabase.rpc("validate_referral_code", {
-input_code: normalized,
-});
+    try {
+      const validatedReferral = await validateReferralCodeClient(normalized);
 
-if (error) {
-setReferralDetails(null);
-setReferralCode(null);
-setReferralError("Unable to check the referral code right now.");
-setReferralSuccess(null);
-return;
-}
+      if (!validatedReferral) {
+        setReferralDetails(null);
+        setReferralCode(null);
+        setReferralError("That referral code is not active.");
+        setReferralSuccess(null);
+        return;
+      }
 
-if (!data?.valid) {
-setReferralDetails(null);
-setReferralCode(null);
-setReferralError("That referral code is not active.");
-setReferralSuccess(null);
-return;
-}
+      const details: ReferralCode = {
+        code: validatedReferral.referralCode,
+        customerDiscountPercent: validatedReferral.discountPercent,
+        ambassadorName: validatedReferral.ambassadorName,
+        ambassadorId: validatedReferral.ambassadorId,
+        commissionPercent: validatedReferral.commissionPercent,
+      };
 
-const details: ReferralCode = {
-code: data.referral_code,
-customerDiscountPercent: 10,
-ambassadorName: "",
-ambassadorId: "",
-commissionPercent: 10,
-status: "Active",
-expirationDate: "",
-maxUses: 0,
-uses: 0,
-};
-
-setReferralDetails(details);
-setReferralCode(data.referral_code);
-setReferralError(null);
-setReferralSuccess("Referral code applied — 10% off.");
-};
+      setReferralDetails(details);
+      setReferralCode(validatedReferral.referralCode);
+      setReferralError(null);
+      setReferralSuccess("Referral code applied — 10% off.");
+    } catch (error) {
+      console.error("Unable to validate referral code", error);
+      setReferralDetails(null);
+      setReferralCode(null);
+      setReferralError("Unable to check the referral code right now.");
+      setReferralSuccess(null);
+    }
+  };
   const clearReferralCode = () => {
     setReferralCode(null);
     setReferralDetails(null);

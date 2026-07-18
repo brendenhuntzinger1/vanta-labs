@@ -5,6 +5,7 @@ import { useCart } from "@/components/cart-context";
 
 export function SiteHeader() {
   const { itemCount, openCart } = useCart();
+  const displayItemCount = itemCount;
 
   return (
     <header className="sticky top-0 z-50 border-b border-zinc-800/80 bg-zinc-950/90 backdrop-blur">
@@ -35,7 +36,7 @@ export function SiteHeader() {
           className="inline-flex items-center rounded-full border border-zinc-700 bg-zinc-900 px-4 py-2 text-sm font-semibold text-zinc-100 transition hover:bg-zinc-800"
         >
           <span className="mr-2 text-base">🛒</span>
-          Cart ({itemCount})
+          Cart ({displayItemCount})
         </button>
       </div>
     </header>
