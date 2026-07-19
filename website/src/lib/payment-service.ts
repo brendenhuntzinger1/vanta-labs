@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
-import { products } from "@/lib/demo-data";
+import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { calculateDiscountAmount } from "@/lib/referral-service";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -15,6 +15,9 @@ export interface ServerProduct {
  name: string;
  price: number;
  stockStatus: string;
+ variantId?: string;
+ variantLabel?: string;
+ variantSku?: string;
 }
 
 export interface PendingOrder {
@@ -44,17 +47,8 @@ interface ValidatedReferral {
  ambassadorName: string;
 }
 
-const productsById = new Map<string, ServerProduct>(
- products.map((product) => [
- product.slug,
- {
- id: product.slug,
- name: product.name,
- price: Number(product.price.replace(/[^0-9.]/g, "")),
- stockStatus: product.stockStatus,
- },
- ]),
-);
+const FREE_SHIPPING_THRESHOLD = 250;
+const FLAT_SHIPPING_FEE = 15;
 
 function sanitizeText(value: string) {
  return value.replace(/[<>]/g, "").trim();
@@ -80,7 +74,24 @@ function validateCustomer(customer: CustomerInput) {
 }
 
 function calculateShipping(subtotal: number) {
- return subtotal > 0 ? 24 : 0;
+ return subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : subtotal > 0 ? FLAT_SHIPPING_FEE : 0;
+}
+
+function calculateBuy3Get1Discount(lineItems: Array<{ product: ServerProduct; quantity: number }>) {
+  const expandedPrices: number[] = [];
+  for (const line of lineItems) {
+    for (let i = 0; i < line.quantity; i += 1) {
+      expandedPrices.push(line.product.price);
+    }
+  }
+
+  const freeItemCount = Math.floor(expandedPrices.length / 4);
+  if (freeItemCount <= 0) {
+    return 0;
+  }
+
+  expandedPrices.sort((a, b) => a - b);
+  return roundMoney(expandedPrices.slice(0, freeItemCount).reduce((sum, price) => sum + price, 0));
 }
 
 async function validateReferralCode(
@@ -115,7 +126,7 @@ async function validateReferralCode(
  ambassadorId: data.id,
  code: data.referral_code.toUpperCase(),
  discountPercent: 10,
- commissionPercent: Number(data.commission_percent ?? 10),
+ commissionPercent: Number(data.commission_percent ?? 15),
  ambassadorName: data.name,
  };
 }
@@ -145,15 +156,51 @@ export async function createCheckoutSession(
  throw new Error("Invalid cart payload");
  }
 
- const lineItems = sanitizedItems.map((item) => {
- const product = productsById.get(item.id);
+ const requestedSlugs = Array.from(new Set(sanitizedItems.map((item) => item.id.split("::")[0])));
+ const catalogProducts = await getCatalogProductsBySlugs(requestedSlugs);
+ const productsById = new Map<string, ServerProduct>(
+   catalogProducts.map((product) => [
+     product.slug,
+     {
+       id: product.slug,
+       name: product.name,
+       price: Number(product.price.replace(/[^0-9.]/g, "")),
+       stockStatus: product.stockStatus,
+     },
+   ]),
+ );
 
- if (!product) {
+ const lineItems = sanitizedItems.map((item) => {
+ const [slug, variantId] = item.id.split("::");
+ const baseProduct = productsById.get(slug);
+
+ if (!baseProduct) {
  throw new Error(`Invalid product id: ${item.id}`);
  }
 
+ const catalogProduct = catalogProducts.find((product) => product.slug === slug);
+ const selectedDose = variantId
+   ? catalogProduct?.doses?.find((dose) => dose.id === variantId)
+   : catalogProduct?.doses?.find((dose) => dose.isDefault) ?? catalogProduct?.doses?.[0];
+
+ const product: ServerProduct = {
+   ...baseProduct,
+   id: item.id,
+   price: selectedDose
+     ? Number((selectedDose.salePrice ?? selectedDose.price).replace(/[^0-9.]/g, ""))
+     : baseProduct.price,
+   stockStatus: selectedDose?.stockStatus ?? baseProduct.stockStatus,
+   variantId: selectedDose?.id,
+   variantLabel: selectedDose?.label,
+   variantSku: selectedDose?.sku,
+ };
+
  if (product.stockStatus === "Reserved") {
  throw new Error(`Product is unavailable: ${product.name}`);
+ }
+
+ if (product.stockStatus === "Out of Stock") {
+ throw new Error(`Product is out of stock: ${product.name}`);
  }
 
  return {
@@ -170,12 +217,23 @@ export async function createCheckoutSession(
  );
 
  const shipping = roundMoney(calculateShipping(subtotal));
- const referral = await validateReferralCode(payload.referralCode);
+ const buy3Get1Discount = calculateBuy3Get1Discount(lineItems);
+ const isBuy3Get1Active = buy3Get1Discount > 0;
+
+ if (isBuy3Get1Active && payload.referralCode?.trim()) {
+ throw new Error("Referral codes cannot be combined with Buy 3 Get 1 Free. Remove the referral code to continue.");
+ }
+
+ const referral = isBuy3Get1Active
+   ? null
+   : await validateReferralCode(payload.referralCode);
 
  const discountAmount = roundMoney(
- referral
- ? calculateDiscountAmount(subtotal, referral.discountPercent)
- : 0,
+   isBuy3Get1Active
+     ? buy3Get1Discount
+     : referral
+       ? calculateDiscountAmount(subtotal, referral.discountPercent)
+       : 0,
  );
 
  const expectedTotal = roundMoney(
@@ -221,7 +279,7 @@ export async function createCheckoutSession(
  const orderItemsPayload = lineItems.map((line) => ({
    order_id: orderId,
    product_id: line.product.id,
-   product_name: line.product.name,
+   product_name: line.product.variantLabel ? `${line.product.name} (${line.product.variantLabel})` : line.product.name,
    unit_price: line.product.price,
    quantity: line.quantity,
    line_total: roundMoney(line.product.price * line.quantity),
@@ -243,6 +301,7 @@ export async function createCheckoutSession(
  orderId,
  ambassadorId: referral?.ambassadorId ?? "",
  referralCode: referral?.code ?? "",
+ promotionApplied: isBuy3Get1Active ? "BUY_3_GET_1" : referral ? "REFERRAL" : "NONE",
  originalSubtotal: subtotal.toFixed(2),
  customerDiscount: discountAmount.toFixed(2),
  amountPaid: expectedTotal.toFixed(2),

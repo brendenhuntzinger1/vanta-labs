@@ -1,49 +1,42 @@
-import { writeFile, readFile } from "node:fs/promises";
-import path from "node:path";
+import { NextResponse } from "next/server";
+import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { getAdminProductById, uploadProductImageToStorage } from "@/lib/admin-products";
+
+function unauthorizedResponse() {
+  return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+}
 
 export async function POST(request: Request) {
+  const session = await verifyAdminSessionFromRequest(request);
+  if (!session) {
+    return unauthorizedResponse();
+  }
+
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
-    const slug = formData.get("slug") as string | null;
+    const productId = formData.get("productId") as string | null;
+    const makePrimary = String(formData.get("makePrimary") ?? "true") === "true";
 
-    if (!file || !slug) {
-      return Response.json({ success: false, error: "Missing file or slug." }, { status: 400 });
+    if (!file || !productId) {
+      return NextResponse.json({ success: false, error: "Missing file or productId." }, { status: 400 });
     }
 
-    // Sanitize slug — only allow alphanumeric and hyphens
-    if (!/^[a-z0-9-]+$/.test(slug)) {
-      return Response.json({ success: false, error: "Invalid slug." }, { status: 400 });
+    if (!file.type.startsWith("image/")) {
+      return NextResponse.json({ success: false, error: "Only image files are allowed." }, { status: 400 });
     }
 
-    const ext = (file.name.split(".").pop() ?? "png").toLowerCase().replace(/[^a-z]/g, "");
-    const allowedExts = ["png", "jpg", "jpeg", "webp"];
-    if (!allowedExts.includes(ext)) {
-      return Response.json({ success: false, error: "Only PNG, JPG, JPEG, and WEBP files are allowed." }, { status: 400 });
-    }
+    const imageUrl = await uploadProductImageToStorage({
+      productId,
+      file,
+      makePrimary,
+    });
 
-    const bytes = await file.arrayBuffer();
-    const buffer = Buffer.from(bytes);
+    const product = await getAdminProductById(productId);
 
-    const filename = `${slug}.${ext}`;
-    const imagePath = path.join(process.cwd(), "public", "images", filename);
-    await writeFile(imagePath, buffer);
-
-    // Update product-images.json override map
-    const overridesPath = path.join(process.cwd(), "public", "product-images.json");
-    let overrides: Record<string, string> = {};
-    try {
-      const raw = await readFile(overridesPath, "utf8");
-      overrides = JSON.parse(raw);
-    } catch {
-      // file doesn't exist yet, start fresh
-    }
-    overrides[slug] = `/images/${filename}`;
-    await writeFile(overridesPath, JSON.stringify(overrides, null, 2));
-
-    return Response.json({ success: true, path: `/images/${filename}` });
+    return NextResponse.json({ success: true, imageUrl, product });
   } catch (err) {
     console.error("Image upload error:", err);
-    return Response.json({ success: false, error: "Upload failed." }, { status: 500 });
+    return NextResponse.json({ success: false, error: "Upload failed." }, { status: 500 });
   }
 }

@@ -1,14 +1,61 @@
 import { vi } from "vitest";
 
+type GenericRow = Record<string, unknown>;
+
+vi.mock("@/lib/catalog", () => ({
+  getCatalogProductsBySlugs: async (slugs: string[]) => slugs
+    .filter((slug) => slug === "bpc-157-10mg")
+    .map((slug) => ({
+      slug,
+      name: "BPC-157",
+      category: "Research Peptides",
+      price: "$44.99",
+      stockStatus: "In Stock",
+      batchNumber: "VL-0718A",
+      purityResult: "99.8%",
+      description: "Synthetic pentadecapeptide.",
+      image: "/images/vantalabs.png",
+      testingDate: "2026-07-10",
+      labName: "Vanta Independent Testing Group",
+      coaUrl: "/demo-coa.pdf",
+      molecularFormula: "C62H98N16O22",
+    })),
+}));
+
 vi.mock("@/lib/supabase-server", () => {
   const state = {
     paymentEvents: new Set<string>(),
-    orders: new Map<string, { id: string; order_id: string; payment_status?: string; paid_at?: string | null }>(),
-    referralOrders: new Map<string, { id: string; order_id: string; payment_status?: string }>(),
+    orders: new Map<string, { id: string; order_id: string; payment_status?: unknown; paid_at?: unknown }>(),
+    referralOrders: new Map<string, { id: string; order_id: string; payment_status?: unknown }>(),
     ambassadors: new Map<string, { id: string; name: string; referral_code: string; commission_percent: number; status: string }>(),
+    products: [
+      {
+        slug: "bpc-157-10mg",
+        name: "BPC-157",
+        category: "Research Peptides",
+        price_cents: 4499,
+        stock_status: "In Stock",
+        batch_number: "VL-0718A",
+        purity_result: "99.8%",
+        description: "Synthetic pentadecapeptide.",
+        image_url: "/images/vantalabs.png",
+        testing_date: "2026-07-10",
+        lab_name: "Vanta Independent Testing Group",
+        coa_url: "/demo-coa.pdf",
+        molecular_formula: "C62H98N16O22",
+        is_active: true,
+      },
+    ],
   };
 
-  function maybeSingleFor(table: string, filterCol?: string, filterValue?: string) {
+  function maybeSingleFor(table: string, filterCol?: string, filterValue?: string | boolean) {
+    if (table === "products") {
+      if (filterCol === "slug") {
+        return state.products.find((row) => row.slug === String(filterValue)) ?? null;
+      }
+      return state.products[0] ?? null;
+    }
+
     if (table === "payment_events" && filterCol === "event_id") {
       return state.paymentEvents.has(String(filterValue)) ? { event_id: String(filterValue) } : null;
     }
@@ -30,28 +77,54 @@ vi.mock("@/lib/supabase-server", () => {
 
   function makeSelectChain(table: string) {
     let filterCol: string | undefined;
-    let filterValue: string | undefined;
+    let filterValue: string | boolean | undefined;
+    let inFilterCol: string | undefined;
+    let inFilterValues: string[] | undefined;
 
-    return {
-      eq: (col: string, value: string) => {
+    const getRows = () => {
+      if (table === "products") {
+        let rows = [...state.products];
+        const slugFilterValues = inFilterValues;
+        if (inFilterCol === "slug" && slugFilterValues) {
+          rows = rows.filter((row) => slugFilterValues.includes(row.slug));
+        }
+        if (filterCol === "slug") {
+          rows = rows.filter((row) => row.slug === String(filterValue));
+        }
+        if (filterCol === "is_active") {
+          rows = rows.filter((row) => row.is_active === filterValue);
+        }
+        return rows;
+      }
+
+      const maybeSingle = maybeSingleFor(table, filterCol, filterValue);
+      return maybeSingle ? [maybeSingle] : [];
+    };
+
+    const chain = {
+      eq: (col: string, value: string | boolean) => {
         filterCol = col;
         filterValue = value;
-        return {
-          maybeSingle: async () => ({ data: maybeSingleFor(table, filterCol, filterValue), error: null }),
-          single: async () => ({ data: maybeSingleFor(table, filterCol, filterValue) ?? { id: "mock-id" }, error: null }),
-          limit: async () => ({ data: [], error: null }),
-        };
+        return chain;
       },
-      maybeSingle: async () => ({ data: maybeSingleFor(table, filterCol, filterValue), error: null }),
-      single: async () => ({ data: maybeSingleFor(table, filterCol, filterValue) ?? { id: "mock-id" }, error: null }),
-      in: async () => ({ data: [], error: null }),
+      in: (col: string, values: string[]) => {
+        inFilterCol = col;
+        inFilterValues = values;
+        return chain;
+      },
+      order: async () => ({ data: getRows(), error: null }),
+      maybeSingle: async () => ({ data: getRows()[0] ?? null, error: null }),
+      single: async () => ({ data: getRows()[0] ?? { id: "mock-id" }, error: null }),
+      limit: async () => ({ data: getRows(), error: null }),
     };
+
+    return chain;
   }
 
   function makeTableClient(table: string) {
     return {
-      select: (_columns?: string) => makeSelectChain(table),
-      insert: (payload: any) => {
+      select: () => makeSelectChain(table),
+      insert: (payload: GenericRow | GenericRow[]) => {
         const rows = Array.isArray(payload) ? payload : [payload];
 
         if (table === "orders") {
@@ -71,12 +144,12 @@ vi.mock("@/lib/supabase-server", () => {
         return {
           data: null,
           error: null,
-          select: (_columns?: string) => ({
+          select: () => ({
             single: async () => ({ data: { id: "mock-id" }, error: null }),
           }),
         };
       },
-      update: (payload: any) => ({
+      update: (payload: GenericRow) => ({
         eq: async (col: string, value: string) => {
           if (table === "orders" && col === "order_id") {
             const existing = state.orders.get(String(value)) ?? { id: `order-${value}`, order_id: String(value) };
@@ -94,7 +167,7 @@ vi.mock("@/lib/supabase-server", () => {
       delete: () => ({
         eq: async () => ({ data: null, error: null }),
       }),
-      upsert: async (payload: any) => {
+      upsert: async (payload: GenericRow | GenericRow[]) => {
         const rows = Array.isArray(payload) ? payload : [payload];
 
         if (table === "payment_events") {

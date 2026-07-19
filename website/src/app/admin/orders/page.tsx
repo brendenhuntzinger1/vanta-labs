@@ -1,15 +1,13 @@
 import { redirect } from "next/navigation";
-import { detectRoleFromUser } from "@/lib/auth-role";
-import { getAuthenticatedUser } from "@/lib/auth-session";
+import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getAdminOrderRows, type AdminOrderRow } from "@/lib/admin-orders";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminOrdersPage() {
-  const user = await getAuthenticatedUser();
-
-  if (!user || detectRoleFromUser(user) !== "admin") {
-    redirect("/login");
+  const session = await verifyAdminSessionFromCookie();
+  if (!session) {
+    redirect("/vault");
   }
 
   const orders = await getAdminOrderRows();

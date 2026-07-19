@@ -33,7 +33,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
   const [referralsPerMonth, setReferralsPerMonth] = useState(40);
   const [averageOrderValue, setAverageOrderValue] = useState(130);
   const [reorderRate, setReorderRate] = useState(35);
-  const [commissionPercent, setCommissionPercent] = useState(20);
+  const [commissionPercent, setCommissionPercent] = useState(15);
 
   useEffect(() => {
     const interval = window.setInterval(async () => {
@@ -188,7 +188,6 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
               <StatCard label="Total Commissions Paid" value={currency(stats.totalCommissionsPaid)} />
               <StatCard label="Average Partner Earnings" value={currency(stats.averagePartnerEarnings)} />
               <StatCard label="Average Approval Time" value={`${stats.averageApprovalTimeHours.toFixed(1)} hrs`} />
-              <StatCard label="Lifetime Commissions" value={currency(stats.lifetimeCommissions)} />
               <div className="sm:col-span-2">
                 <StatCard label="Top Partner Payout" value={currency(stats.topPartnerPayout)} />
               </div>

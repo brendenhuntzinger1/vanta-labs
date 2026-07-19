@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { detectRoleFromUser } from "@/lib/auth-role";
-import { getAuthenticatedUser } from "@/lib/auth-session";
+import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { markCommissionsPaid, updatePartnerStatus } from "@/lib/partner-portal";
 
 function unauthorizedResponse() {
@@ -8,8 +7,8 @@ function unauthorizedResponse() {
 }
 
 export async function PATCH(request: Request, context: { params: Promise<{ partnerId: string }> }) {
-  const user = await getAuthenticatedUser();
-  if (!user || detectRoleFromUser(user) !== "admin") {
+  const session = await verifyAdminSessionFromRequest(request);
+  if (!session) {
     return unauthorizedResponse();
   }
 
@@ -30,7 +29,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
       await updatePartnerStatus({
         partnerId,
         status,
-        actorUserId: user.id,
+        actorUserId: undefined,
         commissionPercent,
       });
 
@@ -47,7 +46,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
 
       const payout = await markCommissionsPaid({
         partnerId,
-        actorUserId: user.id,
+        actorUserId: undefined,
         amount,
         note,
       });

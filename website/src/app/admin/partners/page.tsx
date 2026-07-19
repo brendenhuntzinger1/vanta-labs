@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { AdminPartnersClient } from "@/components/admin-partners-client";
-import { detectRoleFromUser } from "@/lib/auth-role";
-import { getAuthenticatedUser } from "@/lib/auth-session";
+import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getAdminOperationsSummary, getAdminPartnerRows } from "@/lib/partner-portal";
 
 function currency(value: number) {
@@ -11,10 +10,9 @@ function currency(value: number) {
 export const dynamic = "force-dynamic";
 
 export default async function AdminPartnersPage() {
-  const user = await getAuthenticatedUser();
-
-  if (!user || detectRoleFromUser(user) !== "admin") {
-    redirect("/login");
+  const session = await verifyAdminSessionFromCookie();
+  if (!session) {
+    redirect("/vault");
   }
 
   const [rows, operations] = await Promise.all([

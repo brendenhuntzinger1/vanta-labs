@@ -12,7 +12,7 @@ export interface WebhookEventState {
 }
 
 export interface CommissionState {
-  status: "pending" | "paid" | "voided" | "manual_review";
+  status: "pending" | "reversed";
   reviewRequired: boolean;
   reviewReason: string | null;
 }
@@ -27,22 +27,17 @@ export function getOrderStatusForEventType(eventType: string): OrderStatus {
       return "canceled";
     case "refund.completed":
       return "refunded";
+    case "chargeback.created":
+    case "chargeback.lost":
+      return "refunded";
     default:
       return "pending_payment";
   }
 }
 
-export function getCommissionStateForRefund(commissionStatus: string | null | undefined): CommissionState {
-  if (commissionStatus === "paid") {
-    return {
-      status: "manual_review",
-      reviewRequired: true,
-      reviewReason: "Refund received after commission payment",
-    };
-  }
-
+export function getCommissionStateForRefund(): CommissionState {
   return {
-    status: "voided",
+    status: "reversed",
     reviewRequired: false,
     reviewReason: null,
   };
@@ -245,7 +240,7 @@ async function ensureCommissionRecord(input: {
   ambassadorId?: string;
   referralCode?: string;
   commissionPercent?: number;
-  amountPaid?: number;
+  commissionableSubtotal?: number;
   paymentStatus: OrderStatus;
   providerEventId?: string;
 }) {
@@ -253,7 +248,7 @@ async function ensureCommissionRecord(input: {
     return null;
   }
 
-  const commissionAmount = roundMoney((input.amountPaid ?? 0) * ((input.commissionPercent ?? 0) / 100));
+  const commissionAmount = roundMoney((input.commissionableSubtotal ?? 0) * ((input.commissionPercent ?? 0) / 100));
 
   const { data: existingCommission, error: commissionLookupError } = await supabaseAdmin
     .from("referral_orders")
@@ -271,9 +266,9 @@ async function ensureCommissionRecord(input: {
     referral_code: input.referralCode,
     commission_percent: input.commissionPercent ?? 0,
     commission_amount: commissionAmount,
-    amount_paid: roundMoney(input.amountPaid ?? 0),
+    amount_paid: roundMoney(input.commissionableSubtotal ?? 0),
     payment_id: null,
-    payment_status: input.paymentStatus === "paid" ? "paid" : "pending",
+    payment_status: "pending",
     provider_event_id: input.providerEventId ?? null,
     updated_at: new Date().toISOString(),
   };
@@ -332,13 +327,14 @@ async function ensureCommissionRecord(input: {
   return { id: data.id };
 }
 
-async function updateCommissionOnRefund(orderId: string, paymentStatus: OrderStatus) {
-  const commissionState = getCommissionStateForRefund(paymentStatus === "refunded" ? "paid" : null);
+async function updateCommissionOnRefund(orderId: string) {
+  const commissionState = getCommissionStateForRefund();
 
   const { error } = await supabaseAdmin
     .from("referral_orders")
     .update({
       payment_status: commissionState.status,
+      reversed_at: new Date().toISOString(),
       review_required: commissionState.reviewRequired,
       review_reason: commissionState.reviewReason,
       updated_at: new Date().toISOString(),
@@ -352,7 +348,7 @@ async function updateCommissionOnRefund(orderId: string, paymentStatus: OrderSta
   const { error: commissionMirrorError } = await supabaseAdmin
     .from("commissions")
     .update({
-      status: commissionState.status === "voided" ? "voided" : "pending",
+      status: "reversed",
       updated_at: new Date().toISOString(),
     })
     .eq("order_id", orderId);
@@ -389,6 +385,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   const shippingAmount = roundMoney(eventPayload.shippingAmount ?? 0);
   const discountAmount = roundMoney(eventPayload.discountAmount ?? 0);
   const amountPaid = roundMoney(eventPayload.amount ?? 0);
+  const commissionableSubtotal = roundMoney(Math.max(0, subtotal - discountAmount));
 
   await upsertOrderRecord({
     orderId,
@@ -420,14 +417,14 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       ambassadorId: eventPayload.ambassadorId,
       referralCode: eventPayload.referralCode,
       commissionPercent: eventPayload.commissionPercent,
-      amountPaid,
+      commissionableSubtotal,
       paymentStatus: nextStatus,
       providerEventId: eventId,
     });
   }
 
-  if (nextStatus === "refunded") {
-    await updateCommissionOnRefund(orderId, nextStatus);
+  if (nextStatus === "refunded" || nextStatus === "canceled" || nextStatus === "payment_failed") {
+    await updateCommissionOnRefund(orderId);
   }
 
   await markEventProcessed(eventId, orderId, nextStatus);

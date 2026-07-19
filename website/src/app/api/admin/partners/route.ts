@@ -1,6 +1,5 @@
 import { NextResponse } from "next/server";
-import { detectRoleFromUser } from "@/lib/auth-role";
-import { getAuthenticatedUser } from "@/lib/auth-session";
+import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { createPartnerInvite, getAdminPartnerRows } from "@/lib/partner-portal";
 
 function unauthorizedResponse() {
@@ -8,17 +7,18 @@ function unauthorizedResponse() {
 }
 
 export async function GET(request: Request) {
-  const user = await getAuthenticatedUser();
-  if (!user || detectRoleFromUser(user) !== "admin") {
+  const session = await verifyAdminSessionFromRequest(request);
+  if (!session) {
     return unauthorizedResponse();
   }
 
   const url = new URL(request.url);
   const search = url.searchParams.get("search") ?? "";
   const status = url.searchParams.get("status") ?? "all";
+  const payoutStatus = url.searchParams.get("payoutStatus") ?? "all";
 
   try {
-    const rows = await getAdminPartnerRows({ search, status });
+    const rows = await getAdminPartnerRows({ search, status, payoutStatus });
     return NextResponse.json({ success: true, rows });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to load partners";
@@ -27,8 +27,8 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const user = await getAuthenticatedUser();
-  if (!user || detectRoleFromUser(user) !== "admin") {
+  const session = await verifyAdminSessionFromRequest(request);
+  if (!session) {
     return unauthorizedResponse();
   }
 
@@ -50,7 +50,7 @@ export async function POST(request: Request) {
       name,
       email,
       commissionPercent,
-      createdByUserId: user.id,
+      createdByUserId: undefined,
     });
 
     return NextResponse.json({ success: true, invite });

@@ -18,8 +18,8 @@ export function SiteHeader() {
   ];
 
   return (
-    <header className="sticky top-0 z-50 border-b border-white/10 bg-zinc-950/80 backdrop-blur-2xl">
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(138,180,255,0.08),transparent_40%,transparent_60%,rgba(138,180,255,0.08))]" />
+    <header className="sticky top-0 z-50 border-b border-white/20 bg-zinc-900/62 backdrop-blur-2xl">
+      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.15),transparent_38%,transparent_62%,rgba(255,255,255,0.15))]" />
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
         <Link href="/" className="vl-focus-ring relative truncate text-sm font-semibold tracking-[0.25em] text-white sm:text-base sm:tracking-[0.32em]" onClick={() => setMobileNavOpen(false)}>
           VANTA LABS

@@ -1,14 +1,14 @@
 @import "tailwindcss";
 
 :root {
-  --background: #050505;
-  --foreground: #f5f5f5;
-  --surface: #0c0c10;
-  --surface-elevated: #111118;
-  --border-soft: rgba(255, 255, 255, 0.12);
-  --accent: #8ab4ff;
-  --accent-strong: #5f90ff;
-  --accent-soft: rgba(138, 180, 255, 0.2);
+  --background: #090909;
+  --foreground: #f7f7f7;
+  --surface: #151515;
+  --surface-elevated: #1f1f1f;
+  --border-soft: rgba(255, 255, 255, 0.2);
+  --accent: #ffffff;
+  --accent-strong: #f0f0f0;
+  --accent-soft: rgba(255, 255, 255, 0.22);
   --success: #34d399;
   --danger: #fb7185;
 }
@@ -28,8 +28,9 @@ html {
 body {
   margin: 0;
   background:
-    radial-gradient(1200px 600px at 85% -5%, rgba(94, 130, 255, 0.12), transparent 55%),
-    radial-gradient(1000px 500px at -10% 100%, rgba(34, 197, 94, 0.08), transparent 50%),
+    radial-gradient(1200px 640px at 85% -10%, rgba(255, 255, 255, 0.2), transparent 56%),
+    radial-gradient(1100px 620px at -10% 100%, rgba(255, 255, 255, 0.12), transparent 50%),
+    radial-gradient(900px 440px at 50% 0%, rgba(255, 255, 255, 0.1), transparent 70%),
     var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
@@ -83,10 +84,10 @@ textarea {
   pointer-events: none;
   z-index: -1;
   background-image:
-    linear-gradient(rgba(255, 255, 255, 0.014) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(255, 255, 255, 0.014) 1px, transparent 1px);
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
   background-size: 42px 42px;
-  mask-image: radial-gradient(circle at 50% 20%, black 35%, transparent 95%);
+  mask-image: radial-gradient(circle at 50% 20%, black 40%, transparent 95%);
 }
 
 .vl-container {
@@ -98,7 +99,7 @@ textarea {
   font-size: 0.7rem;
   letter-spacing: 0.32em;
   text-transform: uppercase;
-  color: rgb(148 163 184 / 0.85);
+  color: rgb(228 228 228 / 0.9);
   font-weight: 600;
 }
 
@@ -117,27 +118,27 @@ textarea {
 }
 
 .vl-body-muted {
-  color: rgb(161 161 170);
+  color: rgb(196 196 196 / 0.88);
   line-height: 1.72;
 }
 
 .vl-panel {
   border-radius: 1.5rem;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(255, 255, 255, 0.2);
   background:
-    linear-gradient(175deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.015)),
-    rgba(15, 15, 18, 0.78);
+    linear-gradient(175deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.035)),
+    rgba(23, 23, 23, 0.78);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.06),
-    0 20px 42px rgba(0, 0, 0, 0.38);
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 20px 42px rgba(0, 0, 0, 0.5);
 }
 
 .vl-panel-soft {
   border-radius: 1.1rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(12, 12, 15, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(30, 30, 30, 0.66);
 }
 
 .vl-chip {
@@ -145,9 +146,9 @@ textarea {
   align-items: center;
   gap: 0.35rem;
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.04);
-  color: rgb(228 228 231);
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.1);
+  color: rgb(245 245 245);
   padding: 0.36rem 0.78rem;
   font-size: 0.72rem;
   font-weight: 600;
@@ -156,47 +157,47 @@ textarea {
 
 .vl-btn-primary {
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.7);
-  background: linear-gradient(160deg, #f8fafc 0%, #e4e4e7 100%);
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  background: linear-gradient(160deg, #ffffff 0%, #e9e9e9 100%);
   color: #070709;
   font-weight: 650;
-  box-shadow: 0 6px 20px rgba(255, 255, 255, 0.18);
+  box-shadow: 0 8px 26px rgba(255, 255, 255, 0.28);
 }
 
 .vl-btn-primary:hover {
   transform: translateY(-1px);
-  box-shadow: 0 10px 24px rgba(255, 255, 255, 0.23);
+  box-shadow: 0 12px 30px rgba(255, 255, 255, 0.36);
 }
 
 .vl-btn-secondary {
   border-radius: 999px;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  background: rgba(255, 255, 255, 0.03);
-  color: rgb(228 228 231);
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.08);
+  color: rgb(240 240 240);
   font-weight: 620;
 }
 
 .vl-btn-secondary:hover {
-  border-color: rgba(255, 255, 255, 0.3);
-  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.42);
+  background: rgba(255, 255, 255, 0.15);
 }
 
 .vl-input {
   border-radius: 0.9rem;
-  border: 1px solid rgba(255, 255, 255, 0.13);
-  background: rgba(6, 7, 10, 0.84);
-  color: rgb(244 244 245);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  background: rgba(18, 18, 18, 0.86);
+  color: rgb(248 248 248);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
 .vl-input:focus {
   outline: none;
-  border-color: rgba(138, 180, 255, 0.72);
-  box-shadow: 0 0 0 3px rgba(138, 180, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.2);
 }
 
 .vl-link {
-  color: rgb(212 212 216);
+  color: rgb(225 225 225);
 }
 
 .vl-link:hover {
@@ -209,12 +210,12 @@ textarea {
 
 .vl-elevate-hover:hover {
   transform: translateY(-4px);
-  border-color: rgba(255, 255, 255, 0.28);
-  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.44);
+  border-color: rgba(255, 255, 255, 0.44);
+  box-shadow: 0 18px 38px rgba(0, 0, 0, 0.58);
 }
 
 .vl-focus-ring:focus-visible {
-  outline: 2px solid rgba(138, 180, 255, 0.85);
+  outline: 2px solid rgba(255, 255, 255, 0.85);
   outline-offset: 2px;
 }
 

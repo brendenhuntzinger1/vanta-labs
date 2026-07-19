@@ -11,6 +11,7 @@ export function AdminPartnersClient({ initialRows }: { initialRows: AdminPartner
   const [rows, setRows] = useState(initialRows);
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
+  const [payoutStatus, setPayoutStatus] = useState("all");
   const [inviteName, setInviteName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteCommission, setInviteCommission] = useState("10");
@@ -19,6 +20,8 @@ export function AdminPartnersClient({ initialRows }: { initialRows: AdminPartner
 
   const liveSales = useMemo(() => rows.reduce((sum, row) => sum + row.totalRevenue, 0), [rows]);
   const paidCommissions = useMemo(() => rows.reduce((sum, row) => sum + row.paidCommissions, 0), [rows]);
+  const approvedForPayoutCommissions = useMemo(() => rows.reduce((sum, row) => sum + row.approvedForPayoutCommissions, 0), [rows]);
+  const reversedCommissions = useMemo(() => rows.reduce((sum, row) => sum + row.reversedCommissions, 0), [rows]);
   const pendingCommissions = useMemo(() => rows.reduce((sum, row) => sum + row.pendingCommissions, 0), [rows]);
 
   const filteredRows = useMemo(() => rows.filter((row) => {
@@ -35,6 +38,7 @@ export function AdminPartnersClient({ initialRows }: { initialRows: AdminPartner
   const refreshRows = async () => {
     const params = new URLSearchParams();
     if (status !== "all") params.set("status", status);
+    if (payoutStatus !== "all") params.set("payoutStatus", payoutStatus);
     if (search.trim()) params.set("search", search.trim());
 
     const response = await fetch(`/api/admin/partners?${params.toString()}`);
@@ -103,7 +107,7 @@ export function AdminPartnersClient({ initialRows }: { initialRows: AdminPartner
 
   return (
     <div className="space-y-6">
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
         <div className="vl-panel rounded-2xl p-4">
           <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Live Sales</p>
           <p className="mt-2 text-2xl font-semibold text-white">{currency(liveSales)}</p>
@@ -115,6 +119,14 @@ export function AdminPartnersClient({ initialRows }: { initialRows: AdminPartner
         <div className="vl-panel rounded-2xl p-4">
           <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Paid Commissions</p>
           <p className="mt-2 text-2xl font-semibold text-white">{currency(paidCommissions)}</p>
+        </div>
+        <div className="vl-panel rounded-2xl p-4">
+          <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Approved For Payout</p>
+          <p className="mt-2 text-2xl font-semibold text-white">{currency(approvedForPayoutCommissions)}</p>
+        </div>
+        <div className="vl-panel rounded-2xl p-4">
+          <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Reversed Commissions</p>
+          <p className="mt-2 text-2xl font-semibold text-white">{currency(reversedCommissions)}</p>
         </div>
         <div className="vl-panel rounded-2xl p-4">
           <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Active Partners</p>
@@ -171,11 +183,23 @@ export function AdminPartnersClient({ initialRows }: { initialRows: AdminPartner
             <option value="rejected">Rejected</option>
             <option value="disabled">Disabled</option>
           </select>
+          <select value={payoutStatus} onChange={(event) => setPayoutStatus(event.target.value)} className="vl-input px-3 py-2 text-sm sm:w-52">
+            <option value="all">All payout statuses</option>
+            <option value="pending">Pending</option>
+            <option value="approved_for_payout">Approved for payout</option>
+            <option value="paid">Paid</option>
+            <option value="reversed">Reversed</option>
+          </select>
           <button type="button" onClick={refreshRows} className="vl-btn-secondary px-4 py-2 text-sm">Refresh</button>
           <button
             type="button"
             onClick={() => {
-              window.location.href = "/api/admin/partners/export-payouts";
+              const params = new URLSearchParams();
+              if (payoutStatus !== "all") {
+                params.set("payoutStatus", payoutStatus);
+              }
+              const query = params.toString();
+              window.location.href = `/api/admin/partners/export-payouts${query ? `?${query}` : ""}`;
             }}
             className="vl-btn-secondary px-4 py-2 text-sm text-center"
           >
@@ -211,7 +235,9 @@ export function AdminPartnersClient({ initialRows }: { initialRows: AdminPartner
                   <td className="px-2 py-2">{currency(row.totalRevenue)}</td>
                   <td className="px-2 py-2">
                     <p>{currency(row.pendingCommissions)} pending</p>
+                    <p className="text-xs text-zinc-500">{currency(row.approvedForPayoutCommissions)} approved</p>
                     <p className="text-xs text-zinc-500">{currency(row.paidCommissions)} paid</p>
+                    <p className="text-xs text-zinc-500">{currency(row.reversedCommissions)} reversed</p>
                   </td>
                   <td className="px-2 py-2">{row.clicks}</td>
                   <td className="px-2 py-2">{row.conversionRate.toFixed(2)}%</td>
@@ -256,8 +282,8 @@ export function AdminPartnersClient({ initialRows }: { initialRows: AdminPartner
                       >Set %</button>
                       <button
                         type="button"
-                        disabled={loading || row.pendingCommissions <= 0}
-                        onClick={() => applyPartnerAction(row.id, { action: "mark_paid", amount: row.pendingCommissions, note: "Bulk payout" })}
+                        disabled={loading || row.approvedForPayoutCommissions <= 0}
+                        onClick={() => applyPartnerAction(row.id, { action: "mark_paid", amount: row.approvedForPayoutCommissions, note: "Bulk payout" })}
                         className="rounded border border-cyan-400/35 bg-cyan-500/10 px-2 py-1 text-xs text-cyan-100 disabled:opacity-50"
                       >Mark Paid</button>
                     </div>

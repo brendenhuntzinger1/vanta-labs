@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useMemo, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { SiteHeader } from "@/components/site-header";
@@ -67,6 +68,7 @@ export default function CheckoutPage() {
     referralSuccess,
     applyReferralCode,
     clearReferralCode,
+    isBuy3Get1FreeActive,
   } = useCart();
 
   const [acknowledged, setAcknowledged] = useState(false);
@@ -128,7 +130,7 @@ export default function CheckoutPage() {
 
     try {
       const payload = {
-        items: items.map((item) => ({ id: item.slug, quantity: item.quantity })),
+        items: items.map((item) => ({ id: item.variantId ? `${item.slug}::${item.variantId}` : item.slug, quantity: item.quantity })),
         customer: {
           email: form.email.trim(),
           fullName: form.fullName.trim(),
@@ -326,28 +328,34 @@ export default function CheckoutPage() {
               <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Shipping method</p>
               <div className="vl-panel-soft mt-4 rounded-xl p-3">
                 <p className="text-sm font-semibold text-white">Standard shipping</p>
-                <p className="text-xs text-zinc-400">2-5 business days • {formatCartCurrency(shipping)}</p>
+                <p className="text-xs text-zinc-400">Free at $250+ • otherwise flat {formatCartCurrency(15)} • current {formatCartCurrency(shipping)}</p>
               </div>
             </div>
 
             <div>
               <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Promo / referral code</p>
-              <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-                <input
-                  type="text"
-                  value={effectiveReferralInput}
-                  onChange={(event) => setReferralInput(event.target.value)}
-                  placeholder="VANTA10"
-                  className="vl-input w-full flex-1 px-4 py-3 text-sm"
-                />
-                <button
-                  type="button"
-                  onClick={() => applyReferralCode(effectiveReferralInput)}
-                  className="vl-btn-secondary vl-focus-ring px-4 py-3 text-sm"
-                >
-                  Apply
-                </button>
-              </div>
+              {isBuy3Get1FreeActive ? (
+                <p className="mt-4 rounded-xl border border-amber-700/40 bg-amber-900/20 px-3 py-2 text-sm text-amber-200">
+                  Buy 3 Get 1 Free is active. Referral discounts cannot be combined with this promotion.
+                </p>
+              ) : (
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                  <input
+                    type="text"
+                    value={effectiveReferralInput}
+                    onChange={(event) => setReferralInput(event.target.value)}
+                    placeholder="VANTA10"
+                    className="vl-input w-full flex-1 px-4 py-3 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => applyReferralCode(effectiveReferralInput)}
+                    className="vl-btn-secondary vl-focus-ring px-4 py-3 text-sm"
+                  >
+                    Apply
+                  </button>
+                </div>
+              )}
               {referralSuccess ? <p className="mt-3 text-sm text-emerald-400">{referralSuccess}</p> : null}
               {referralError ? <p className="mt-3 text-sm text-rose-400">{referralError}</p> : null}
               {referralDetails ? (
@@ -355,7 +363,7 @@ export default function CheckoutPage() {
                   Ambassador {referralDetails.ambassadorName} • {referralDetails.customerDiscountPercent}% discount
                 </p>
               ) : null}
-              {referralCode ? (
+              {referralCode && !isBuy3Get1FreeActive ? (
                 <button
                   type="button"
                   onClick={() => {
@@ -390,10 +398,10 @@ export default function CheckoutPage() {
             ) : (
               <div className="mt-6 space-y-4 border-b border-zinc-800 pb-4">
                 {items.map((item) => (
-                  <div key={item.slug} className="flex items-start gap-3 border-b border-zinc-800/50 pb-4 last:border-b-0 last:pb-0">
-                    <div className="h-16 w-16 flex-shrink-0 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950/50 sm:h-20 sm:w-20">
+                  <div key={item.key} className="flex items-start gap-3 border-b border-zinc-800/50 pb-4 last:border-b-0 last:pb-0">
+                    <div className="relative h-16 w-16 flex-shrink-0 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950/50 sm:h-20 sm:w-20">
                       {item.image ? (
-                        <img src={item.image} alt={item.name} className="h-full w-full object-cover" />
+                        <Image src={item.image} alt={item.name} fill sizes="80px" className="h-full w-full object-cover" />
                       ) : (
                         <div className="flex h-full w-full items-center justify-center text-xs text-zinc-500">No image</div>
                       )}
@@ -401,7 +409,7 @@ export default function CheckoutPage() {
 
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold text-white sm:text-base">{item.name}</p>
-                      <p className="mt-1 text-xs text-zinc-500">Qty {item.quantity} • Batch {item.batchNumber}</p>
+                      <p className="mt-1 text-xs text-zinc-500">Qty {item.quantity} • {item.doseLabel ? `${item.doseLabel} • ` : ""}Batch {item.batchNumber}</p>
                       <p className="mt-2 text-sm font-medium text-zinc-200">{formatCartCurrency(item.price * item.quantity)}</p>
                     </div>
                   </div>
@@ -422,10 +430,12 @@ export default function CheckoutPage() {
                 <span>Shipping estimate</span>
                 <span>{formatCartCurrency(shipping)}</span>
               </div>
-              <div className="flex justify-between">
-                <span>Service fee</span>
-                <span>{formatCartCurrency(serviceFee)}</span>
-              </div>
+              {serviceFee > 0 ? (
+                <div className="flex justify-between">
+                  <span>Service fee</span>
+                  <span>{formatCartCurrency(serviceFee)}</span>
+                </div>
+              ) : null}
               <div className="flex justify-between">
                 <span>Discount</span>
                 <span>-{formatCartCurrency(discountAmount)}</span>

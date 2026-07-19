@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Image from "next/image";
 import { formatCartCurrency, useCart, getShippingProgress } from "@/components/cart-context";
 
 export function CartDrawer() {
@@ -69,12 +70,12 @@ export function CartDrawer() {
           ) : (
               <div className="space-y-3 sm:space-y-4">
               {items.map((item) => (
-                <div key={item.slug} className="vl-panel-soft rounded-[1.25rem] p-3.5 sm:p-4">
+                <div key={item.key} className="vl-panel-soft rounded-[1.25rem] p-3.5 sm:p-4">
                   <div className="flex gap-3 items-start justify-between mb-3">
                     {/* Product image */}
-                    <div className="h-14 w-14 flex-shrink-0 rounded-lg border border-zinc-700 bg-zinc-950/50 overflow-hidden flex items-center justify-center sm:h-16 sm:w-16">
+                    <div className="relative h-14 w-14 flex-shrink-0 rounded-lg border border-zinc-700 bg-zinc-950/50 overflow-hidden flex items-center justify-center sm:h-16 sm:w-16">
                       {item.image ? (
-                        <img src={item.image} alt={item.name} className="h-full w-full object-cover" />
+                        <Image src={item.image} alt={item.name} fill sizes="64px" className="h-full w-full object-cover" />
                       ) : (
                         <div className="text-xs text-zinc-500">No image</div>
                       )}
@@ -84,9 +85,9 @@ export function CartDrawer() {
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <h3 className="text-xs font-semibold text-white sm:text-sm">{item.name}</h3>
-                          <p className="mt-1 text-xs text-zinc-400">Batch {item.batchNumber}</p>
+                          <p className="mt-1 text-xs text-zinc-400">{item.doseLabel ? `${item.doseLabel} • ` : ""}Batch {item.batchNumber}</p>
                         </div>
-                        <button type="button" onClick={() => removeFromCart(item.slug)} className="text-xs text-zinc-500 transition hover:text-white flex-shrink-0">
+                        <button type="button" onClick={() => removeFromCart(item.key)} className="text-xs text-zinc-500 transition hover:text-white flex-shrink-0">
                           Remove
                         </button>
                       </div>
@@ -95,9 +96,9 @@ export function CartDrawer() {
                   
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2 rounded-full border border-zinc-700 px-2 py-1.5 text-xs text-zinc-300 sm:px-3 sm:py-2">
-                      <button type="button" onClick={() => updateQuantity(item.slug, item.quantity - 1)} className="px-2" aria-label="Decrease quantity">−</button>
+                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="px-2" aria-label="Decrease quantity">−</button>
                       <span>{item.quantity}</span>
-                      <button type="button" onClick={() => updateQuantity(item.slug, item.quantity + 1)} className="px-2" aria-label="Increase quantity">+</button>
+                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="px-2" aria-label="Increase quantity">+</button>
                     </div>
                     <p className="text-xs font-medium text-white sm:text-sm">{formatCartCurrency(item.price * item.quantity)}</p>
                   </div>
@@ -115,10 +116,10 @@ export function CartDrawer() {
                 🎁 Buy 3 Get 1 Free Active
               </p>
               <p className="text-xs text-emerald-300 mt-2">
-                Your cheapest item ({`$${Math.min(...items.map(i => i.price)).toFixed(2)}`}) is free! 
+                Lowest-priced eligible item is free.
               </p>
               <p className="text-xs text-emerald-300/70 mt-1">
-                Exclusive summer offer
+                Referral discounts are disabled while this promotion is active.
               </p>
             </div>
           )}
@@ -169,7 +170,7 @@ export function CartDrawer() {
               ) : (
                 <div>
                   <div className="flex justify-between text-sm mb-2">
-                    <span className="text-zinc-400">Free shipping at $200</span>
+                    <span className="text-zinc-400">Free shipping at $250</span>
                     <span className="text-white font-semibold">${shippingProgress.amountToFreeShipping.toFixed(2)} more</span>
                   </div>
                   <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden">

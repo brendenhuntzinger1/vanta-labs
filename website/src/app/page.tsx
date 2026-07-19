@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { SiteHeader } from "@/components/site-header";
-import { products as allProducts } from "@/lib/demo-data";
+import type { Product } from "@/lib/catalog-types";
 
 // ────────────────────────────────────────────────────────────────────────────
 // FEATURED PRODUCTS - Automatically detect top sellers
@@ -18,42 +18,38 @@ const TOP_SELLER_SLUGS = [
   "ghk-cu-1mg",
 ];
 
-const FEATURED_PRODUCTS = TOP_SELLER_SLUGS
-  .map((slug) => allProducts.find((p) => p.slug === slug))
-  .filter(Boolean) as typeof allProducts;
-
 // ────────────────────────────────────────────────────────────────────────────
 // WHY VANTA LABS FEATURES
 // ────────────────────────────────────────────────────────────────────────────
 
 const WHY_VANTA_FEATURES = [
   {
-    icon: "🔬",
+    icon: "01",
     title: "Third-Party Tested",
     description: "Every batch independently verified by accredited laboratories.",
   },
   {
-    icon: "📋",
+    icon: "02",
     title: "COA Verified",
     description: "Complete Certificates of Analysis with every order.",
   },
   {
-    icon: "✨",
+    icon: "03",
     title: "99%+ Purity",
     description: "Guaranteed minimum purity on all research compounds.",
   },
   {
-    icon: "🛡️",
+    icon: "04",
     title: "Secure Checkout",
     description: "Enterprise-grade encryption and payment security.",
   },
   {
-    icon: "🇺🇸",
+    icon: "05",
     title: "USA Fulfilled",
     description: "All compounds manufactured, tested, and dispatched domestically.",
   },
   {
-    icon: "⚖️",
+    icon: "06",
     title: "Research Use Only",
     description: "Compounds sold strictly for legitimate research purposes.",
   },
@@ -83,15 +79,37 @@ const FOOTER_LINKS = {
 // ────────────────────────────────────────────────────────────────────────────
 
 export default function Home() {
+  const [allProducts, setAllProducts] = useState<Product[]>([]);
   const [carouselIndex, setCarouselIndex] = useState(0);
+
+  const featuredProducts = useMemo(() => TOP_SELLER_SLUGS
+    .map((slug) => allProducts.find((product) => product.slug === slug))
+    .filter(Boolean) as Product[], [allProducts]);
+
+  useEffect(() => {
+    fetch("/api/catalog/products", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((json) => {
+        if (json?.success && Array.isArray(json.products)) {
+          setAllProducts(json.products as Product[]);
+        }
+      })
+      .catch(() => {
+        setAllProducts([]);
+      });
+  }, []);
 
   // Carousel auto-rotate
   useEffect(() => {
+    if (featuredProducts.length === 0) {
+      return;
+    }
+
     const interval = setInterval(() => {
-      setCarouselIndex((prev) => (prev + 1) % FEATURED_PRODUCTS.length);
+      setCarouselIndex((prev) => (prev + 1) % featuredProducts.length);
     }, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [featuredProducts.length]);
 
   return (
     <div className="vl-page-shell min-h-screen bg-zinc-950 text-zinc-100 overflow-x-hidden">
@@ -100,9 +118,11 @@ export default function Home() {
       {/* ═══════════════════════════ HERO SECTION ═══════════════════════════ */}
       <section className="relative isolate flex min-h-[88svh] items-center overflow-hidden sm:min-h-screen">
         {/* Background gradients */}
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-5%,rgba(14,165,233,0.1),transparent)]" />
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_50%_40%_at_80%_55%,rgba(139,92,246,0.08),transparent)]" />
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_40%_35%_at_15%_75%,rgba(59,130,246,0.07),transparent)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-5%,rgba(255,255,255,0.11),transparent)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_50%_40%_at_80%_55%,rgba(255,255,255,0.07),transparent)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_40%_35%_at_15%_75%,rgba(255,255,255,0.06),transparent)]" />
+        <div className="pointer-events-none absolute inset-y-0 left-1/3 w-px bg-gradient-to-b from-transparent via-white/25 to-transparent animate-pulse" />
+        <div className="pointer-events-none absolute inset-y-0 right-1/4 w-px bg-gradient-to-b from-transparent via-white/18 to-transparent animate-pulse" style={{ animationDelay: "0.8s" }} />
 
         {/* Animated peptide chains - left side (desktop) */}
         <div aria-hidden="true" className="pointer-events-none absolute left-0 top-0 hidden h-full w-[30%] lg:block">
@@ -110,19 +130,19 @@ export default function Home() {
           <div className="absolute left-[5%] top-[15%] opacity-60 hover:opacity-100 transition-opacity">
             <svg width="120" height="160" viewBox="0 0 120 160" className="animate-pulse">
               {/* Molecular bonds */}
-              <line x1="30" y1="20" x2="60" y2="40" stroke="rgba(59,130,246,0.4)" strokeWidth="2" />
-              <line x1="60" y1="40" x2="90" y2="60" stroke="rgba(139,92,246,0.4)" strokeWidth="2" />
-              <line x1="90" y1="60" x2="60" y2="90" stroke="rgba(34,197,94,0.4)" strokeWidth="2" />
-              <line x1="60" y1="90" x2="30" y2="110" stroke="rgba(59,130,246,0.4)" strokeWidth="2" />
-              <line x1="30" y1="110" x2="60" y2="140" stroke="rgba(139,92,246,0.4)" strokeWidth="2" />
+              <line x1="30" y1="20" x2="60" y2="40" stroke="rgba(255,255,255,0.36)" strokeWidth="2" />
+              <line x1="60" y1="40" x2="90" y2="60" stroke="rgba(255,255,255,0.28)" strokeWidth="2" />
+              <line x1="90" y1="60" x2="60" y2="90" stroke="rgba(255,255,255,0.32)" strokeWidth="2" />
+              <line x1="60" y1="90" x2="30" y2="110" stroke="rgba(255,255,255,0.24)" strokeWidth="2" />
+              <line x1="30" y1="110" x2="60" y2="140" stroke="rgba(255,255,255,0.3)" strokeWidth="2" />
               
               {/* Amino acid nodes */}
-              <circle cx="30" cy="20" r="6" fill="rgba(59,130,246,0.6)" />
-              <circle cx="60" cy="40" r="7" fill="rgba(139,92,246,0.6)" />
-              <circle cx="90" cy="60" r="6" fill="rgba(34,197,94,0.6)" />
-              <circle cx="60" cy="90" r="7" fill="rgba(59,130,246,0.6)" />
-              <circle cx="30" cy="110" r="6" fill="rgba(139,92,246,0.6)" />
-              <circle cx="60" cy="140" r="7" fill="rgba(34,197,94,0.6)" />
+              <circle cx="30" cy="20" r="6" fill="rgba(255,255,255,0.58)" />
+              <circle cx="60" cy="40" r="7" fill="rgba(255,255,255,0.45)" />
+              <circle cx="90" cy="60" r="6" fill="rgba(255,255,255,0.52)" />
+              <circle cx="60" cy="90" r="7" fill="rgba(255,255,255,0.5)" />
+              <circle cx="30" cy="110" r="6" fill="rgba(255,255,255,0.43)" />
+              <circle cx="60" cy="140" r="7" fill="rgba(255,255,255,0.55)" />
             </svg>
           </div>
 
@@ -130,17 +150,17 @@ export default function Home() {
           <div className="absolute left-[15%] top-[50%] opacity-50 hover:opacity-90 transition-opacity" style={{ animationDelay: "0.5s" }}>
             <svg width="100" height="140" viewBox="0 0 100 140" className="animate-pulse">
               {/* Molecular bonds */}
-              <line x1="20" y1="10" x2="50" y2="30" stroke="rgba(34,197,94,0.4)" strokeWidth="2" />
-              <line x1="50" y1="30" x2="80" y2="50" stroke="rgba(59,130,246,0.4)" strokeWidth="2" />
-              <line x1="80" y1="50" x2="50" y2="80" stroke="rgba(139,92,246,0.4)" strokeWidth="2" />
-              <line x1="50" y1="80" x2="20" y2="100" stroke="rgba(34,197,94,0.4)" strokeWidth="2" />
+              <line x1="20" y1="10" x2="50" y2="30" stroke="rgba(255,255,255,0.36)" strokeWidth="2" />
+              <line x1="50" y1="30" x2="80" y2="50" stroke="rgba(255,255,255,0.28)" strokeWidth="2" />
+              <line x1="80" y1="50" x2="50" y2="80" stroke="rgba(255,255,255,0.32)" strokeWidth="2" />
+              <line x1="50" y1="80" x2="20" y2="100" stroke="rgba(255,255,255,0.24)" strokeWidth="2" />
               
               {/* Amino acid nodes */}
-              <circle cx="20" cy="10" r="5" fill="rgba(34,197,94,0.6)" />
-              <circle cx="50" cy="30" r="6" fill="rgba(59,130,246,0.6)" />
-              <circle cx="80" cy="50" r="5" fill="rgba(139,92,246,0.6)" />
-              <circle cx="50" cy="80" r="6" fill="rgba(34,197,94,0.6)" />
-              <circle cx="20" cy="100" r="5" fill="rgba(59,130,246,0.6)" />
+              <circle cx="20" cy="10" r="5" fill="rgba(255,255,255,0.52)" />
+              <circle cx="50" cy="30" r="6" fill="rgba(255,255,255,0.46)" />
+              <circle cx="80" cy="50" r="5" fill="rgba(255,255,255,0.54)" />
+              <circle cx="50" cy="80" r="6" fill="rgba(255,255,255,0.48)" />
+              <circle cx="20" cy="100" r="5" fill="rgba(255,255,255,0.42)" />
             </svg>
           </div>
 
@@ -148,17 +168,17 @@ export default function Home() {
           <div className="absolute left-[8%] bottom-[20%] opacity-55 hover:opacity-95 transition-opacity" style={{ animationDelay: "1s" }}>
             <svg width="110" height="150" viewBox="0 0 110 150" className="animate-pulse">
               {/* Molecular bonds */}
-              <line x1="25" y1="20" x2="55" y2="45" stroke="rgba(139,92,246,0.4)" strokeWidth="2" />
-              <line x1="55" y1="45" x2="85" y2="65" stroke="rgba(34,197,94,0.4)" strokeWidth="2" />
-              <line x1="85" y1="65" x2="55" y2="95" stroke="rgba(59,130,246,0.4)" strokeWidth="2" />
-              <line x1="55" y1="95" x2="25" y2="120" stroke="rgba(139,92,246,0.4)" strokeWidth="2" />
+              <line x1="25" y1="20" x2="55" y2="45" stroke="rgba(255,255,255,0.36)" strokeWidth="2" />
+              <line x1="55" y1="45" x2="85" y2="65" stroke="rgba(255,255,255,0.28)" strokeWidth="2" />
+              <line x1="85" y1="65" x2="55" y2="95" stroke="rgba(255,255,255,0.32)" strokeWidth="2" />
+              <line x1="55" y1="95" x2="25" y2="120" stroke="rgba(255,255,255,0.24)" strokeWidth="2" />
               
               {/* Amino acid nodes */}
-              <circle cx="25" cy="20" r="6" fill="rgba(139,92,246,0.6)" />
-              <circle cx="55" cy="45" r="7" fill="rgba(34,197,94,0.6)" />
-              <circle cx="85" cy="65" r="6" fill="rgba(59,130,246,0.6)" />
-              <circle cx="55" cy="95" r="7" fill="rgba(139,92,246,0.6)" />
-              <circle cx="25" cy="120" r="6" fill="rgba(34,197,94,0.6)" />
+              <circle cx="25" cy="20" r="6" fill="rgba(255,255,255,0.55)" />
+              <circle cx="55" cy="45" r="7" fill="rgba(255,255,255,0.48)" />
+              <circle cx="85" cy="65" r="6" fill="rgba(255,255,255,0.52)" />
+              <circle cx="55" cy="95" r="7" fill="rgba(255,255,255,0.46)" />
+              <circle cx="25" cy="120" r="6" fill="rgba(255,255,255,0.42)" />
             </svg>
           </div>
         </div>
@@ -168,29 +188,29 @@ export default function Home() {
           <div className="absolute right-[10%] top-[20%] h-72 w-14 animate-pulse">
             <div className="relative h-full">
               {/* Vial glow */}
-              <div className="absolute -inset-8 rounded-full bg-blue-500/10 blur-2xl" />
+              <div className="absolute -inset-8 rounded-full bg-white/10 blur-2xl" />
               {/* Main vial */}
-              <div className="absolute inset-0 rounded-b-[99px] rounded-t-xl border border-blue-300/20 bg-gradient-to-b from-blue-400/15 to-blue-600/20 backdrop-blur-sm">
-                <div className="absolute inset-2 rounded-b-[95px] bg-gradient-to-b from-white/5 via-blue-300/10 to-transparent" />
-                <div className="absolute bottom-1/3 left-1/2 h-20 w-1 -translate-x-1/2 rounded-full bg-blue-300/20" />
+              <div className="absolute inset-0 rounded-b-[99px] rounded-t-xl border border-white/22 bg-gradient-to-b from-white/16 to-white/6 backdrop-blur-sm">
+                <div className="absolute inset-2 rounded-b-[95px] bg-gradient-to-b from-white/8 via-white/10 to-transparent" />
+                <div className="absolute bottom-1/3 left-1/2 h-20 w-1 -translate-x-1/2 rounded-full bg-white/24" />
               </div>
             </div>
           </div>
 
           <div className="absolute right-[40%] top-[35%] h-56 w-10 animate-pulse" style={{ animationDelay: "0.7s" }}>
             <div className="relative h-full">
-              <div className="absolute -inset-6 rounded-full bg-purple-500/8 blur-2xl" />
-              <div className="absolute inset-0 rounded-b-[99px] rounded-t-lg border border-purple-300/15 bg-gradient-to-b from-purple-400/10 to-purple-600/15 backdrop-blur-sm">
-                <div className="absolute inset-2 rounded-b-[95px] bg-gradient-to-b from-white/4 via-purple-300/8 to-transparent" />
+              <div className="absolute -inset-6 rounded-full bg-white/8 blur-2xl" />
+              <div className="absolute inset-0 rounded-b-[99px] rounded-t-lg border border-white/18 bg-gradient-to-b from-white/12 to-white/5 backdrop-blur-sm">
+                <div className="absolute inset-2 rounded-b-[95px] bg-gradient-to-b from-white/5 via-white/8 to-transparent" />
               </div>
             </div>
           </div>
 
           <div className="absolute right-[15%] bottom-[15%] h-40 w-9 animate-pulse" style={{ animationDelay: "1.4s" }}>
             <div className="relative h-full">
-              <div className="absolute -inset-5 rounded-full bg-cyan-500/8 blur-2xl" />
-              <div className="absolute inset-0 rounded-b-[99px] rounded-t-lg border border-cyan-300/15 bg-gradient-to-b from-cyan-400/10 to-cyan-600/15 backdrop-blur-sm">
-                <div className="absolute inset-2 rounded-b-[95px] bg-gradient-to-b from-white/4 via-cyan-300/8 to-transparent" />
+              <div className="absolute -inset-5 rounded-full bg-white/8 blur-2xl" />
+              <div className="absolute inset-0 rounded-b-[99px] rounded-t-lg border border-white/16 bg-gradient-to-b from-white/10 to-white/4 backdrop-blur-sm">
+                <div className="absolute inset-2 rounded-b-[95px] bg-gradient-to-b from-white/4 via-white/7 to-transparent" />
               </div>
             </div>
           </div>
@@ -198,20 +218,20 @@ export default function Home() {
 
         {/* Hero content */}
         <div className="relative z-10 mx-auto w-full max-w-7xl px-4 py-14 sm:px-6 sm:py-20 lg:w-[55%] lg:px-8 lg:py-0">
-          <p className="mb-6 animate-fade-in text-[10px] font-semibold uppercase tracking-[0.3em] text-cyan-300/80 sm:mb-8 sm:text-[11px] sm:tracking-[0.4em]">
-            Premium Biotech Research
+          <p className="mb-6 animate-fade-in text-[10px] font-semibold uppercase tracking-[0.3em] text-zinc-300 sm:mb-8 sm:text-[11px] sm:tracking-[0.4em]">
+            Certified Research Supply
           </p>
 
           <h1 className="mb-5 animate-fade-in text-4xl font-bold leading-tight tracking-tight sm:mb-6 sm:text-6xl lg:text-7xl"
             style={{ animationDelay: "0.1s" }}>
-            <span className="bg-gradient-to-r from-cyan-200 via-white to-blue-300 bg-clip-text text-transparent">
-              Precision Without Compromise
+            <span className="bg-gradient-to-r from-zinc-200 via-white to-zinc-300 bg-clip-text text-transparent">
+              Official-Grade Research Standards
             </span>
           </h1>
 
           <p className="mb-7 max-w-lg animate-fade-in text-base text-zinc-400 sm:mb-8 sm:text-xl"
             style={{ animationDelay: "0.2s" }}>
-            Premium research compounds. Third-party tested. COA verified. USA fulfilled.
+            Premium compounds with institutional-grade quality control, verified documentation, and reliable domestic fulfillment.
           </p>
 
           <div className="mb-10 flex animate-fade-in flex-col gap-3 sm:mb-12 sm:flex-row sm:gap-4"
@@ -229,22 +249,22 @@ export default function Home() {
           </div>
 
           {/* Stats */}
-          <div className="grid animate-fade-in grid-cols-2 gap-4 border-t border-cyan-500/20 pt-6 sm:grid-cols-4 sm:gap-6 sm:pt-8"
+          <div className="grid animate-fade-in grid-cols-2 gap-4 border-t border-white/20 pt-6 sm:grid-cols-4 sm:gap-6 sm:pt-8"
             style={{ animationDelay: "0.4s" }}>
             <div>
-              <p className="text-2xl font-bold text-cyan-200 sm:text-3xl">40+</p>
+              <p className="text-2xl font-bold text-zinc-100 sm:text-3xl">40+</p>
               <p className="text-sm text-zinc-500 mt-1">Research Compounds</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-emerald-200 sm:text-3xl">99%+</p>
+              <p className="text-2xl font-bold text-zinc-100 sm:text-3xl">99%+</p>
               <p className="text-sm text-zinc-500 mt-1">Purity Standard</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-violet-200 sm:text-3xl">12</p>
+              <p className="text-2xl font-bold text-zinc-100 sm:text-3xl">12</p>
               <p className="text-sm text-zinc-500 mt-1">Lab Partners</p>
             </div>
             <div>
-              <p className="text-2xl font-bold text-amber-200 sm:text-3xl">100%</p>
+              <p className="text-2xl font-bold text-zinc-100 sm:text-3xl">100%</p>
               <p className="text-sm text-zinc-500 mt-1">Verified</p>
             </div>
           </div>
@@ -252,13 +272,13 @@ export default function Home() {
       </section>
 
       {/* ═══════════════════════════ BUY 3 GET 1 FREE PROMO ═════════════════ */}
-      <section className="relative isolate overflow-hidden border-b border-zinc-800/50 bg-gradient-to-r from-emerald-950/25 via-zinc-950 to-emerald-950/25 py-12 sm:py-16">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_85%_42%_at_50%_50%,rgba(16,185,129,0.08),transparent)]" />
+      <section className="relative isolate overflow-hidden border-b border-zinc-800/50 bg-gradient-to-r from-zinc-950 via-zinc-900/70 to-zinc-950 py-12 sm:py-16">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_85%_42%_at_50%_50%,rgba(255,255,255,0.08),transparent)]" />
         
         <div className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="vl-panel rounded-2xl border-emerald-500/20 bg-emerald-950/10 p-6 text-center sm:p-12">
-            <div className="mx-auto mb-5 inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-400/10 px-4 py-1.5">
-              <span className="text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-200">
+          <div className="vl-panel rounded-2xl border-white/20 bg-white/5 p-6 text-center sm:p-12">
+            <div className="mx-auto mb-5 inline-flex items-center rounded-full border border-white/25 bg-white/10 px-4 py-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.24em] text-zinc-100">
                 Volume Incentive
               </span>
             </div>
@@ -267,7 +287,7 @@ export default function Home() {
               Preferred Purchase Program
             </h2>
             
-            <p className="mb-4 text-xl font-semibold text-emerald-200">
+            <p className="mb-4 text-xl font-semibold text-zinc-100">
               Buy 3, Receive 1 Complimentary
             </p>
             
@@ -278,7 +298,7 @@ export default function Home() {
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
               <Link
                 href="/products"
-                className="vl-focus-ring rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600 px-8 py-3.5 text-sm font-semibold text-white transition-all duration-300 hover:shadow-lg hover:shadow-emerald-500/25 active:scale-95 sm:px-10 sm:py-4 sm:text-base"
+                className="vl-focus-ring rounded-full bg-gradient-to-r from-zinc-100 to-white px-8 py-3.5 text-sm font-semibold text-zinc-950 transition-all duration-300 hover:shadow-lg hover:shadow-white/20 active:scale-95 sm:px-10 sm:py-4 sm:text-base"
               >
                 View Eligible Compounds
               </Link>
@@ -302,8 +322,8 @@ export default function Home() {
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {WHY_VANTA_FEATURES.map((feature) => (
-              <div key={feature.title} className="vl-panel vl-elevate-hover group rounded-xl p-8 bg-gradient-to-br from-zinc-900/85 via-zinc-900/60 to-blue-950/20">
-                <span className="text-5xl block mb-4">{feature.icon}</span>
+              <div key={feature.title} className="vl-panel vl-elevate-hover group rounded-xl p-8 bg-gradient-to-br from-zinc-900/90 via-zinc-900/65 to-zinc-800/25">
+                <span className="text-sm font-bold tracking-[0.35em] text-zinc-300 block mb-4">{feature.icon}</span>
                 <h3 className="text-lg font-semibold text-white mb-2">
                   {feature.title}
                 </h3>
@@ -330,34 +350,34 @@ export default function Home() {
           <div className="relative">
             <div className="vl-panel overflow-hidden rounded-xl">
               <div className="aspect-video flex items-center justify-center bg-gradient-to-br from-zinc-900 to-zinc-950 relative">
-                {FEATURED_PRODUCTS[carouselIndex] && (
+                {featuredProducts[carouselIndex] ? (
                   <div key={carouselIndex} className="flex h-full w-full animate-fade-in flex-col items-center justify-center p-5 sm:p-8">
                     <div className="mb-4 text-5xl sm:text-6xl">🧪</div>
                     <h3 className="mb-2 text-center text-2xl font-bold text-white sm:text-3xl">
-                      {FEATURED_PRODUCTS[carouselIndex].name}
+                      {featuredProducts[carouselIndex].name}
                     </h3>
                     <p className="mb-4 text-lg text-zinc-400 sm:text-xl">
-                      {FEATURED_PRODUCTS[carouselIndex].price}
+                      {featuredProducts[carouselIndex].price}
+                    </p>
+                    <p className="mb-6 text-sm text-zinc-500 max-w-md text-center">
+                      Purity: <span className="text-zinc-200 font-semibold">{featuredProducts[carouselIndex].purityResult ?? "N/A"}</span>
                     </p>
                     <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4">
-                      <span className="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-300">
-                        {FEATURED_PRODUCTS[carouselIndex].purityResult}
-                      </span>
-                      <Link
-                        href={`/products/${FEATURED_PRODUCTS[carouselIndex].slug}`}
-                        className="vl-btn-primary vl-focus-ring px-6 py-2"
-                      >
+                      <span className="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-300">{featuredProducts[carouselIndex].price}</span>
+                      <Link href={`/products/${featuredProducts[carouselIndex].slug}`} className="vl-btn-primary vl-focus-ring px-6 py-2">
                         View Details
                       </Link>
                     </div>
                   </div>
+                ) : (
+                  <div className="text-zinc-500 text-sm">Featured products loading...</div>
                 )}
               </div>
             </div>
 
             {/* Carousel controls */}
             <div className="flex justify-center gap-2 mt-6">
-              {FEATURED_PRODUCTS.map((_, idx) => (
+              {featuredProducts.map((_, idx) => (
                 <button
                   key={idx}
                   onClick={() => setCarouselIndex(idx)}

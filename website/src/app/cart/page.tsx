@@ -24,6 +24,7 @@ export default function CartPage() {
     referralSuccess,
     applyReferralCode,
     clearReferralCode,
+    isBuy3Get1FreeActive,
   } = useCart();
 
   const effectiveReferralInput = referralInput || referralCode || "";
@@ -51,21 +52,23 @@ export default function CartPage() {
               </div>
             ) : (
               items.map((item) => (
-                <div key={item.slug} className="vl-panel rounded-[1.25rem] p-4 sm:rounded-[1.5rem] sm:p-6">
+                <div key={item.key} className="vl-panel rounded-[1.25rem] p-4 sm:rounded-[1.5rem] sm:p-6">
                   <div className="flex items-start justify-between gap-4">
                     <div>
                       <h2 className="text-lg font-semibold text-white sm:text-xl">{item.name}</h2>
-                      <p className="mt-2 text-sm text-zinc-400">Batch {item.batchNumber}</p>
+                      <p className="mt-2 text-sm text-zinc-400">
+                        {item.doseLabel ? `${item.doseLabel} • ` : ""}Batch {item.batchNumber}
+                      </p>
                     </div>
-                    <button type="button" onClick={() => removeFromCart(item.slug)} className="text-sm text-zinc-500 transition hover:text-white">
+                    <button type="button" onClick={() => removeFromCart(item.key)} className="text-sm text-zinc-500 transition hover:text-white">
                       Remove
                     </button>
                   </div>
                   <div className="mt-5 flex flex-wrap items-center justify-between gap-4 sm:mt-6">
                     <div className="flex items-center gap-2 rounded-full border border-zinc-700 px-2 py-1.5 text-sm text-zinc-300 sm:gap-3 sm:px-3 sm:py-2">
-                      <button type="button" onClick={() => updateQuantity(item.slug, item.quantity - 1)} className="px-2" aria-label="Decrease quantity">−</button>
+                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="px-2" aria-label="Decrease quantity">−</button>
                       <span>{item.quantity}</span>
-                      <button type="button" onClick={() => updateQuantity(item.slug, item.quantity + 1)} className="px-2" aria-label="Increase quantity">+</button>
+                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="px-2" aria-label="Increase quantity">+</button>
                     </div>
                     <p className="text-base font-semibold text-white sm:text-lg">{formatCartCurrency(item.price * item.quantity)}</p>
                   </div>
@@ -89,7 +92,7 @@ export default function CartPage() {
                 ) : (
                   <div>
                     <div className="mb-2 flex items-center justify-between text-sm">
-                      <span className="text-zinc-400">Free shipping at $200</span>
+                      <span className="text-zinc-400">Free shipping at $250</span>
                       <span className="font-semibold text-white">${shippingProgress.amountToFreeShipping.toFixed(2)} away</span>
                     </div>
                     <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
@@ -112,10 +115,12 @@ export default function CartPage() {
                 <span>Estimated shipping</span>
                 <span>{formatCartCurrency(shipping)}</span>
               </div>
-              <div className="flex justify-between">
-                <span>Service fee</span>
-                <span>{formatCartCurrency(serviceFee)}</span>
-              </div>
+              {serviceFee > 0 ? (
+                <div className="flex justify-between">
+                  <span>Service fee</span>
+                  <span>{formatCartCurrency(serviceFee)}</span>
+                </div>
+              ) : null}
               <div className="flex justify-between">
                 <span>Applied discount</span>
                 <span>-{formatCartCurrency(discountAmount)}</span>
@@ -126,37 +131,45 @@ export default function CartPage() {
               </div>
             </div>
 
-            <label className="mt-8 block text-sm text-zinc-400">
-              <span className="mb-2 block uppercase tracking-[0.3em]">Referral code</span>
-              <input
-                type="text"
-                value={effectiveReferralInput}
-                onChange={(event) => setReferralInput(event.target.value)}
-                placeholder="VANTA10"
-                className="vl-input w-full rounded-full px-4 py-3 text-sm"
-              />
-            </label>
-            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
-              <button
-                type="button"
-                onClick={() => applyReferralCode(effectiveReferralInput)}
-                className="vl-btn-primary vl-focus-ring rounded-full px-4 py-3 text-sm"
-              >
-                Apply code
-              </button>
-              {referralCode ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    clearReferralCode();
-                    setReferralInput("");
-                  }}
-                  className="vl-btn-secondary vl-focus-ring rounded-full px-4 py-3 text-sm"
-                >
-                  Clear
-                </button>
-              ) : null}
-            </div>
+            {isBuy3Get1FreeActive ? (
+              <p className="mt-8 rounded-xl border border-amber-700/40 bg-amber-900/20 px-3 py-2 text-sm text-amber-200">
+                Buy 3 Get 1 Free is active. Referral discounts cannot be combined with this promotion.
+              </p>
+            ) : (
+              <>
+                <label className="mt-8 block text-sm text-zinc-400">
+                  <span className="mb-2 block uppercase tracking-[0.3em]">Referral code</span>
+                  <input
+                    type="text"
+                    value={effectiveReferralInput}
+                    onChange={(event) => setReferralInput(event.target.value)}
+                    placeholder="VANTA10"
+                    className="vl-input w-full rounded-full px-4 py-3 text-sm"
+                  />
+                </label>
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row">
+                  <button
+                    type="button"
+                    onClick={() => applyReferralCode(effectiveReferralInput)}
+                    className="vl-btn-primary vl-focus-ring rounded-full px-4 py-3 text-sm"
+                  >
+                    Apply code
+                  </button>
+                  {referralCode ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        clearReferralCode();
+                        setReferralInput("");
+                      }}
+                      className="vl-btn-secondary vl-focus-ring rounded-full px-4 py-3 text-sm"
+                    >
+                      Clear
+                    </button>
+                  ) : null}
+                </div>
+              </>
+            )}
             {referralSuccess ? <p className="mt-4 text-sm text-emerald-400">{referralSuccess}</p> : null}
             {referralError ? <p className="mt-4 text-sm text-rose-400">{referralError}</p> : null}
             {referralDetails ? (

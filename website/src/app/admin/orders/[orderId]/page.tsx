@@ -1,16 +1,15 @@
 import { notFound, redirect } from "next/navigation";
-import { detectRoleFromUser } from "@/lib/auth-role";
-import { getAuthenticatedUser } from "@/lib/auth-session";
+import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminOrderDetailPage({ params }: { params: Promise<{ orderId: string }> }) {
   const { orderId } = await params;
-  const user = await getAuthenticatedUser();
+  const session = await verifyAdminSessionFromCookie();
 
-  if (!user || detectRoleFromUser(user) !== "admin") {
-    redirect("/login");
+  if (!session) {
+    redirect("/vault");
   }
 
   const { data, error } = await supabaseAdmin

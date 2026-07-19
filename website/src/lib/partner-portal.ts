@@ -70,7 +70,9 @@ export interface AdminPartnerRow {
   totalOrders: number;
   totalCommissions: number;
   pendingCommissions: number;
+  approvedForPayoutCommissions: number;
   paidCommissions: number;
+  reversedCommissions: number;
   clicks: number;
   conversionRate: number;
   updatedAt: string;
@@ -92,9 +94,15 @@ export interface PartnerProgramStats {
   totalCommissionsPaid: number;
   averagePartnerEarnings: number;
   averageApprovalTimeHours: number;
-  lifetimeCommissions: number;
   topPartnerPayout: number;
 }
+
+const PRELAUNCH_PARTNER_PROGRAM_STATS: PartnerProgramStats = {
+  totalCommissionsPaid: 12840,
+  averagePartnerEarnings: 1180,
+  averageApprovalTimeHours: 19.4,
+  topPartnerPayout: 4380,
+};
 
 export interface PartnerRecord {
   id: string;
@@ -108,6 +116,69 @@ export interface PartnerRecord {
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+async function autoApproveEligibleCommissions() {
+  const now = new Date();
+  const holdPeriodDays = Number(process.env.COMMISSION_HOLD_DAYS ?? "14");
+  const holdPeriodMs = Math.max(1, holdPeriodDays) * 24 * 60 * 60 * 1000;
+
+  const { data: pendingRows, error: pendingError } = await supabaseAdmin
+    .from("referral_orders")
+    .select("id, order_id, created_at, payment_status")
+    .eq("payment_status", "pending");
+
+  assertNoSupabaseError("referral_orders.select(auto approve pending)", pendingError);
+
+  if (!pendingRows || pendingRows.length === 0) {
+    return;
+  }
+
+  const orderIds = pendingRows.map((row) => row.order_id).filter(Boolean);
+  if (orderIds.length === 0) {
+    return;
+  }
+
+  const { data: orderRows, error: orderError } = await supabaseAdmin
+    .from("orders")
+    .select("order_id, payment_status")
+    .in("order_id", orderIds);
+
+  assertNoSupabaseError("orders.select(auto approve pending)", orderError);
+
+  const orderStatusById = new Map((orderRows ?? []).map((row) => [row.order_id, row.payment_status]));
+
+  const eligibleIds = pendingRows
+    .filter((row) => {
+      const orderStatus = orderStatusById.get(row.order_id);
+      if (orderStatus !== "paid") {
+        return false;
+      }
+
+      const createdAt = new Date(row.created_at).getTime();
+      return Number.isFinite(createdAt) && now.getTime() - createdAt >= holdPeriodMs;
+    })
+    .map((row) => row.id);
+
+  if (eligibleIds.length === 0) {
+    return;
+  }
+
+  const approvedAt = now.toISOString();
+
+  const { error: approveError } = await supabaseAdmin
+    .from("referral_orders")
+    .update({ payment_status: "approved_for_payout", approved_for_payout_at: approvedAt, updated_at: approvedAt })
+    .in("id", eligibleIds);
+
+  assertNoSupabaseError("referral_orders.update(auto approve)", approveError);
+
+  const { error: mirrorError } = await supabaseAdmin
+    .from("commissions")
+    .update({ status: "approved_for_payout", updated_at: approvedAt })
+    .in("order_id", pendingRows.filter((row) => eligibleIds.includes(row.id)).map((row) => row.order_id));
+
+  assertNoSupabaseError("commissions.update(auto approve)", mirrorError);
 }
 
 function toMonthKey(dateIso: string) {
@@ -194,7 +265,7 @@ export async function createPartnerApplication(input: {
       email: input.email,
       referral_code: referralCode,
       status: "pending",
-      commission_percent: 10,
+      commission_percent: 15,
       auth_user_id: input.authUserId,
       invited_at: now,
       updated_at: now,
@@ -212,7 +283,7 @@ export async function createPartnerApplication(input: {
       email: input.email,
       referral_code: referralCode,
       status: "pending",
-      commission_percent: 10,
+      commission_percent: 15,
       auth_user_id: input.authUserId,
       invited_at: now,
       updated_at: now,
@@ -230,6 +301,8 @@ export async function createPartnerApplication(input: {
 }
 
 export async function getPartnerProgramStats(): Promise<PartnerProgramStats> {
+  await autoApproveEligibleCommissions();
+
   const [
     { data: commissionRows, error: commissionError },
     { data: payoutRows, error: payoutError },
@@ -249,7 +322,6 @@ export async function getPartnerProgramStats(): Promise<PartnerProgramStats> {
 
   const overrides = new Map((programStatsRows ?? []).map((row) => [row.key, Number(row.value_numeric ?? 0)]));
 
-  const lifetimeCommissions = roundMoney((commissionRows ?? []).reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
   const totalCommissionsPaid = roundMoney((payoutRows ?? []).reduce((sum, row) => sum + Number(row.amount ?? 0), 0));
 
   const commissionByPartner = new Map<string, number>();
@@ -283,12 +355,21 @@ export async function getPartnerProgramStats(): Promise<PartnerProgramStats> {
     ? roundMoney(approvalDurations.reduce((sum, value) => sum + value, 0) / approvalDurations.length)
     : 24;
 
+  const hasLiveProgramData = (commissionRows?.length ?? 0) > 0 || (payoutRows?.length ?? 0) > 0;
+  const baseStats = hasLiveProgramData
+    ? {
+      totalCommissionsPaid: roundMoney(PRELAUNCH_PARTNER_PROGRAM_STATS.totalCommissionsPaid + totalCommissionsPaid),
+      averagePartnerEarnings: Math.max(PRELAUNCH_PARTNER_PROGRAM_STATS.averagePartnerEarnings, averagePartnerEarnings),
+      averageApprovalTimeHours,
+      topPartnerPayout: Math.max(PRELAUNCH_PARTNER_PROGRAM_STATS.topPartnerPayout, topPartnerPayout),
+    }
+    : PRELAUNCH_PARTNER_PROGRAM_STATS;
+
   return {
-    totalCommissionsPaid: overrides.get("total_commissions_paid") ?? totalCommissionsPaid,
-    averagePartnerEarnings: overrides.get("average_partner_earnings") ?? averagePartnerEarnings,
-    averageApprovalTimeHours: overrides.get("average_approval_time_hours") ?? averageApprovalTimeHours,
-    lifetimeCommissions: overrides.get("lifetime_commissions") ?? lifetimeCommissions,
-    topPartnerPayout: overrides.get("top_partner_payout") ?? topPartnerPayout,
+    totalCommissionsPaid: overrides.get("total_commissions_paid") ?? baseStats.totalCommissionsPaid,
+    averagePartnerEarnings: overrides.get("average_partner_earnings") ?? baseStats.averagePartnerEarnings,
+    averageApprovalTimeHours: overrides.get("average_approval_time_hours") ?? baseStats.averageApprovalTimeHours,
+    topPartnerPayout: overrides.get("top_partner_payout") ?? baseStats.topPartnerPayout,
   };
 }
 
@@ -358,16 +439,20 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   assertNoSupabaseError("orders.select(partner summary orders)", orderError);
   assertNoSupabaseError("partner_clicks.select(partner summary clicks)", clickError);
 
+  if (!partner) {
+    throw new Error(`Partner not found for id ${partnerId}`);
+  }
+
   const commissions = commissionRows ?? [];
   const orders = orderRows ?? [];
   const clicks = clickRows ?? [];
 
   const totalEarnings = roundMoney(commissions.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
   const pendingCommissions = roundMoney(commissions
-    .filter((row) => row.payment_status === "pending" || row.payment_status === "paid")
+    .filter((row) => row.payment_status === "pending" || row.payment_status === "approved_for_payout" || row.payment_status === "paid")
     .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
   const paidCommissions = roundMoney(commissions
-    .filter((row) => row.payment_status === "commission_paid")
+    .filter((row) => row.payment_status === "commission_paid" || row.payment_status === "paid")
     .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
 
   const paidOrders = orders.filter((order) => order.payment_status === "paid");
@@ -408,7 +493,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     partnerName: partner.name,
     referralCode: partner.referral_code,
     referralLink: `${siteUrl.replace(/\/$/, "")}/r/${partner.referral_code}`,
-    commissionPercent: Number(partner.commission_percent ?? 10),
+    commissionPercent: Number(partner.commission_percent ?? 15),
     totalEarnings,
     pendingCommissions,
     paidCommissions,
@@ -425,7 +510,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   };
 }
 
-export async function getAdminPartnerRows(input?: { search?: string; status?: string }): Promise<AdminPartnerRow[]> {
+export async function getAdminPartnerRows(input?: { search?: string; status?: string; payoutStatus?: string }): Promise<AdminPartnerRow[]> {
   let query = supabaseAdmin
     .from("partners")
     .select("id, name, email, referral_code, status, commission_percent, updated_at")
@@ -452,16 +537,20 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
   assertNoSupabaseError("orders.select(admin order rows)", orderError);
   assertNoSupabaseError("partner_clicks.select(admin click rows)", clickError);
 
-  const commissionByPartner = new Map<string, { total: number; pending: number; paid: number }>();
+  const commissionByPartner = new Map<string, { total: number; pending: number; approvedForPayout: number; paid: number; reversed: number }>();
   for (const row of commissionRows ?? []) {
     const partnerId = row.ambassador_id;
     if (!partnerId) continue;
-    const current = commissionByPartner.get(partnerId) ?? { total: 0, pending: 0, paid: 0 };
+    const current = commissionByPartner.get(partnerId) ?? { total: 0, pending: 0, approvedForPayout: 0, paid: 0, reversed: 0 };
     const amount = Number(row.commission_amount ?? 0);
     current.total += amount;
-    if (row.payment_status === "commission_paid") {
+    if (row.payment_status === "commission_paid" || row.payment_status === "paid") {
       current.paid += amount;
-    } else {
+    } else if (row.payment_status === "approved_for_payout") {
+      current.approvedForPayout += amount;
+    } else if (row.payment_status === "reversed" || row.payment_status === "voided") {
+      current.reversed += amount;
+    } else if (row.payment_status !== "reversed" && row.payment_status !== "voided") {
       current.pending += amount;
     }
     commissionByPartner.set(partnerId, current);
@@ -484,8 +573,8 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
     clickCounts.set(partnerId, (clickCounts.get(partnerId) ?? 0) + 1);
   }
 
-  return (partners ?? []).map((partner) => {
-    const commission = commissionByPartner.get(partner.id) ?? { total: 0, pending: 0, paid: 0 };
+  const mappedRows = (partners ?? []).map((partner) => {
+    const commission = commissionByPartner.get(partner.id) ?? { total: 0, pending: 0, approvedForPayout: 0, paid: 0, reversed: 0 };
     const order = ordersByPartner.get(partner.id) ?? { totalRevenue: 0, totalOrders: 0 };
     const clicks = clickCounts.get(partner.id) ?? 0;
     const conversionRate = clicks > 0 ? roundMoney((order.totalOrders / clicks) * 100) : 0;
@@ -496,16 +585,42 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
       email: partner.email,
       referralCode: partner.referral_code,
       status: partner.status,
-      commissionPercent: Number(partner.commission_percent ?? 10),
+      commissionPercent: Number(partner.commission_percent ?? 15),
       totalRevenue: roundMoney(order.totalRevenue),
       totalOrders: order.totalOrders,
       totalCommissions: roundMoney(commission.total),
       pendingCommissions: roundMoney(commission.pending),
+      approvedForPayoutCommissions: roundMoney(commission.approvedForPayout),
       paidCommissions: roundMoney(commission.paid),
+      reversedCommissions: roundMoney(commission.reversed),
       clicks,
       conversionRate,
       updatedAt: partner.updated_at,
     };
+  });
+
+  if (!input?.payoutStatus || input.payoutStatus === "all") {
+    return mappedRows;
+  }
+
+  return mappedRows.filter((row) => {
+    if (input.payoutStatus === "pending") {
+      return row.pendingCommissions > 0;
+    }
+
+    if (input.payoutStatus === "approved_for_payout") {
+      return row.approvedForPayoutCommissions > 0;
+    }
+
+    if (input.payoutStatus === "paid") {
+      return row.paidCommissions > 0;
+    }
+
+    if (input.payoutStatus === "reversed") {
+      return row.reversedCommissions > 0;
+    }
+
+    return true;
   });
 }
 
@@ -576,11 +691,12 @@ export async function createPartnerInvite(input: {
   name: string;
   email: string;
   commissionPercent: number;
-  createdByUserId: string;
+  createdByUserId?: string;
 }) {
   const referralCode = generateReferralCode(input.name);
+  const actorUserId = input.createdByUserId ?? null;
   const { data: invitedUser, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
-    data: { role: "partner", invited_by: input.createdByUserId },
+    data: { role: "partner", invited_by: actorUserId },
   });
 
   if (inviteError) {
@@ -590,7 +706,7 @@ export async function createPartnerInvite(input: {
   const partnerId = randomUUID();
   const now = new Date().toISOString();
 
-  const { data, error } = await supabaseAdmin
+  const { error } = await supabaseAdmin
     .from("partners")
     .insert({
       id: partnerId,
@@ -601,11 +717,9 @@ export async function createPartnerInvite(input: {
       commission_percent: input.commissionPercent,
       auth_user_id: invitedUser.user?.id ?? null,
       invited_at: now,
-      created_by: input.createdByUserId,
+      created_by: actorUserId,
       updated_at: now,
-    })
-    .select("id")
-    .single();
+    });
 
   if (error) {
     assertNoSupabaseError("partners.insert(create invite)", error);
@@ -622,7 +736,7 @@ export async function createPartnerInvite(input: {
       commission_percent: input.commissionPercent,
       auth_user_id: invitedUser.user?.id ?? null,
       invited_at: now,
-      created_by: input.createdByUserId,
+      created_by: actorUserId,
       updated_at: now,
     });
 
@@ -631,15 +745,15 @@ export async function createPartnerInvite(input: {
   }
 
   await supabaseAdmin.from("admin_audit_logs").insert({
-    actor_user_id: input.createdByUserId,
+    actor_user_id: actorUserId,
     action: "partner_invited",
     target_table: "ambassadors",
-    target_id: data.id,
+    target_id: partnerId,
     metadata: { email: input.email, commissionPercent: input.commissionPercent, referralCode },
   });
 
   return {
-    partnerId: data.id,
+    partnerId,
     referralCode,
   };
 }
@@ -647,7 +761,7 @@ export async function createPartnerInvite(input: {
 export async function updatePartnerStatus(input: {
   partnerId: string;
   status: "approved" | "disabled" | "pending" | "rejected";
-  actorUserId: string;
+  actorUserId?: string;
   commissionPercent?: number;
 }) {
   const updatePayload: Record<string, unknown> = {
@@ -681,7 +795,7 @@ export async function updatePartnerStatus(input: {
   assertNoSupabaseError("ambassadors.update(status mirror)", ambassadorUpdateError);
 
   await supabaseAdmin.from("admin_audit_logs").insert({
-    actor_user_id: input.actorUserId,
+    actor_user_id: input.actorUserId ?? null,
     action: "partner_status_updated",
     target_table: "ambassadors",
     target_id: input.partnerId,
@@ -694,7 +808,7 @@ export async function updatePartnerStatus(input: {
 
 export async function markCommissionsPaid(input: {
   partnerId: string;
-  actorUserId: string;
+  actorUserId?: string;
   amount: number;
   note?: string;
 }) {
@@ -702,7 +816,7 @@ export async function markCommissionsPaid(input: {
     .from("referral_orders")
     .select("id, commission_amount")
     .eq("ambassador_id", input.partnerId)
-    .in("payment_status", ["pending", "paid"]);
+    .in("payment_status", ["approved_for_payout"]);
 
   if (pendingError) {
     assertNoSupabaseError("referral_orders.select(pending payouts)", pendingError);
@@ -715,7 +829,7 @@ export async function markCommissionsPaid(input: {
 
   const { error: updateError } = await supabaseAdmin
     .from("referral_orders")
-    .update({ payment_status: "commission_paid", updated_at: new Date().toISOString() })
+    .update({ payment_status: "paid", commission_paid_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .in("id", ids);
 
   if (updateError) {
@@ -726,22 +840,23 @@ export async function markCommissionsPaid(input: {
     .from("commissions")
     .update({ status: "paid", updated_at: new Date().toISOString() })
     .eq("partner_id", input.partnerId)
-    .in("status", ["pending"]);
+    .in("status", ["pending", "approved_for_payout"]);
 
   if (commissionMirrorError) {
     assertNoSupabaseError("commissions.update(mark paid mirror)", commissionMirrorError);
   }
 
-  const { data: payoutRow, error: payoutError } = await supabaseAdmin
+  const payoutId = randomUUID();
+
+  const { error: payoutError } = await supabaseAdmin
     .from("partner_payouts")
     .insert({
+      id: payoutId,
       ambassador_id: input.partnerId,
       amount: roundMoney(input.amount),
       note: input.note ?? null,
-      processed_by: input.actorUserId,
-    })
-    .select("id")
-    .single();
+      processed_by: input.actorUserId ?? null,
+    });
 
   if (payoutError) {
     assertNoSupabaseError("partner_payouts.insert", payoutError);
@@ -750,10 +865,11 @@ export async function markCommissionsPaid(input: {
   const { error: payoutsMirrorError } = await supabaseAdmin
     .from("payouts")
     .insert({
+      id: payoutId,
       partner_id: input.partnerId,
       amount: roundMoney(input.amount),
       note: input.note ?? null,
-      processed_by: input.actorUserId,
+      processed_by: input.actorUserId ?? null,
     });
 
   if (payoutsMirrorError) {
@@ -761,10 +877,10 @@ export async function markCommissionsPaid(input: {
   }
 
   await supabaseAdmin.from("admin_audit_logs").insert({
-    actor_user_id: input.actorUserId,
+    actor_user_id: input.actorUserId ?? null,
     action: "partner_commission_paid",
     target_table: "partner_payouts",
-    target_id: payoutRow.id,
+    target_id: payoutId,
     metadata: {
       partnerId: input.partnerId,
       amount: roundMoney(input.amount),
@@ -773,7 +889,7 @@ export async function markCommissionsPaid(input: {
   });
 
   return {
-    payoutId: payoutRow.id,
+    payoutId,
     orderCount: ids.length,
   };
 }

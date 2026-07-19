@@ -1,14 +1,31 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { SiteHeader } from "@/components/site-header";
-import { coaRecords } from "@/lib/demo-data";
-
-const categories = ["All", ...Array.from(new Set(coaRecords.map((record) => record.category)))];
+import type { CoaRecord } from "@/lib/catalog-types";
 
 export default function CoaLibraryPage() {
+  const [coaRecords, setCoaRecords] = useState<CoaRecord[]>([]);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("All");
+
+  useEffect(() => {
+    fetch("/api/catalog/coa-records", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((json) => {
+        if (json?.success && Array.isArray(json.records)) {
+          setCoaRecords(json.records as CoaRecord[]);
+        }
+      })
+      .catch(() => {
+        setCoaRecords([]);
+      });
+  }, []);
+
+  const categories = useMemo(
+    () => ["All", ...Array.from(new Set(coaRecords.map((record) => record.category)))],
+    [coaRecords],
+  );
 
   const filteredRecords = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -19,7 +36,7 @@ export default function CoaLibraryPage() {
       const matchesQuery = normalizedQuery.length === 0 || searchableText.includes(normalizedQuery);
       return matchesCategory && matchesQuery;
     });
-  }, [category, query]);
+  }, [category, coaRecords, query]);
 
   return (
     <div className="vl-page-shell min-h-screen bg-zinc-950 text-zinc-100">
@@ -27,12 +44,12 @@ export default function CoaLibraryPage() {
 
       <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8 lg:py-16">
         <div className="max-w-3xl">
-          <p className="text-xs uppercase tracking-[0.35em] text-zinc-500 sm:text-sm sm:tracking-[0.4em]">Demo COA archive</p>
+          <p className="text-xs uppercase tracking-[0.35em] text-zinc-500 sm:text-sm sm:tracking-[0.4em]">COA Archive</p>
           <h1 className="mt-3 text-3xl font-semibold text-white sm:text-4xl lg:text-5xl">
-            Searchable COA library for demo records.
+            Searchable COA library for verified product batches.
           </h1>
           <p className="mt-4 text-base leading-7 text-zinc-400 sm:mt-6 sm:text-lg sm:leading-8">
-            Use the filters below to review sample batch documentation. All records are clearly marked as demo data and are not intended to provide instruction or medical claims.
+            Use the filters below to review batch documentation, laboratory validation, and quality records.
           </p>
         </div>
 

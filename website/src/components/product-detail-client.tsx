@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { useState } from "react";
 import { useCart } from "@/components/cart-context";
 import { SiteHeader } from "@/components/site-header";
-import type { Product } from "@/lib/demo-data";
+import type { Product } from "@/lib/catalog-types";
 
 function parseDose(slug: string) {
   const match = slug.match(/(\d+(?:\.\d+)?(?:mg|iu|mcg|g|ml))$/i);
@@ -14,13 +15,33 @@ function parseDose(slug: string) {
 export function ProductDetailClient({ product }: { product: Product }) {
   const { addToCart } = useCart();
   const [message, setMessage] = useState<string | null>(null);
+  const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
+  const [selectedDoseId, setSelectedDoseId] = useState<string | null>(defaultDose?.id ?? null);
+
+  const selectedDose = product.doses?.find((dose) => dose.id === selectedDoseId) ?? defaultDose;
+
+  const selectedPrice = selectedDose?.salePrice ?? selectedDose?.price ?? product.price;
+  const selectedCompareAtPrice = selectedDose?.compareAtPrice ?? product.compareAtPrice;
+  const selectedBatchNumber = selectedDose?.batchNumber ?? product.batchNumber;
+  const selectedPurity = selectedDose?.purityResult ?? product.purityResult;
+  const selectedCoaUrl = selectedDose?.coaUrl ?? product.coaUrl;
+  const selectedImage = selectedDose?.imageUrl ?? product.coverImage ?? product.image;
+  const selectedStockStatus = selectedDose?.stockStatus ?? product.stockStatus;
 
   const handleAddToCart = (sourceElement?: HTMLElement | null) => {
-    addToCart(product, 1, sourceElement);
-    setMessage(`Added 1 item to the cart.`);
+    addToCart(product, 1, sourceElement, {
+      variantId: selectedDose?.id,
+      doseLabel: selectedDose?.label,
+      sku: selectedDose?.sku,
+      priceOverride: Number((selectedPrice ?? "$0").replace(/[^0-9.]/g, "")),
+      imageOverride: selectedImage,
+      batchNumberOverride: selectedBatchNumber,
+      stockStatusOverride: selectedStockStatus,
+    });
+    setMessage(`Added 1 item (${selectedDose?.label ?? "default"}) to the cart.`);
   };
 
-  const hasRealImage = product.image && !product.image.includes(".svg");
+  const hasRealImage = selectedImage && !selectedImage.includes(".svg");
   const dose = parseDose(product.slug);
 
   return (
@@ -37,10 +58,12 @@ export function ProductDetailClient({ product }: { product: Product }) {
             <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-zinc-900/60 to-transparent z-10 pointer-events-none rounded-b-[2rem]" />
 
             {hasRealImage ? (
-              <img
-                src={product.image}
+              <Image
+                src={selectedImage}
                 alt={product.name}
-                  className="h-[300px] w-full object-contain sm:h-[360px] lg:h-[420px]"
+                fill
+                sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 40vw"
+                className="h-[300px] w-full object-contain sm:h-[360px] lg:h-[420px]"
                 style={{ mixBlendMode: "multiply", padding: "24px" }}
               />
             ) : (
@@ -68,16 +91,40 @@ export function ProductDetailClient({ product }: { product: Product }) {
             <p className="text-sm uppercase tracking-[0.35em] text-zinc-500">Demo record</p>
             <h1 className="mt-3 text-2xl font-semibold text-white sm:text-3xl lg:text-4xl">{product.name}</h1>
             <p className="mt-4 text-base leading-7 text-zinc-400 sm:text-lg sm:leading-8">{product.description}</p>
+
+            {product.doses && product.doses.length > 0 ? (
+              <div className="mt-6">
+                <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Select dose</p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {product.doses.map((variant) => (
+                    <button
+                      key={variant.id}
+                      type="button"
+                      onClick={() => setSelectedDoseId(variant.id)}
+                      className={`rounded-full border px-4 py-2 text-sm transition ${selectedDose?.id === variant.id ? "border-cyan-300 bg-cyan-300/15 text-cyan-200" : "border-zinc-700 text-zinc-300 hover:border-zinc-500"}`}
+                    >
+                      {variant.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
             <div className="vl-panel-soft mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-4 sm:mt-8 sm:px-5">
               <div>
                 <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Price</p>
-                <p className="mt-2 text-xl font-semibold text-white sm:text-2xl">{product.price}</p>
+                <div className="mt-2 flex items-center gap-2">
+                  <p className="text-xl font-semibold text-white sm:text-2xl">{selectedPrice}</p>
+                  {selectedCompareAtPrice ? <p className="text-sm text-zinc-500 line-through">{selectedCompareAtPrice}</p> : null}
+                </div>
               </div>
               <div className="text-left sm:text-right">
                 <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Purity</p>
-                <p className="mt-2 text-white">{product.purityResult ?? "Pending"}</p>
+                <p className="mt-2 text-white">{selectedPurity ?? "Pending"}</p>
               </div>
             </div>
+
+            <p className="mt-3 text-sm text-zinc-400">Inventory status: <span className="text-zinc-200">{selectedStockStatus}</span></p>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <button
@@ -93,12 +140,18 @@ export function ProductDetailClient({ product }: { product: Product }) {
             <dl className="mt-8 space-y-3 text-sm text-zinc-400">
               <div className="flex justify-between border-b border-zinc-800 pb-3">
                 <dt>Batch number</dt>
-                <dd className="text-white">{product.batchNumber}</dd>
+                <dd className="text-white">{selectedBatchNumber}</dd>
               </div>
               <div className="flex justify-between border-b border-zinc-800 pb-3">
                 <dt>Purity result</dt>
-                <dd className="text-white">{product.purityResult ?? "Pending"}</dd>
+                <dd className="text-white">{selectedPurity ?? "Pending"}</dd>
               </div>
+              {selectedDose?.sku ? (
+                <div className="flex justify-between border-b border-zinc-800 pb-3">
+                  <dt>SKU</dt>
+                  <dd className="text-white">{selectedDose.sku}</dd>
+                </div>
+              ) : null}
               {product.molecularFormula && (
                 <div className="flex justify-between border-b border-zinc-800 pb-3">
                   <dt>Molecular formula</dt>
@@ -108,7 +161,7 @@ export function ProductDetailClient({ product }: { product: Product }) {
             </dl>
 
             <a
-              href={product.coaUrl}
+              href={selectedCoaUrl}
               target="_blank"
               rel="noopener noreferrer"
               className="vl-btn-secondary vl-focus-ring mt-8 inline-flex px-5 py-3 text-sm"

@@ -1,11 +1,15 @@
 "use client";
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import type { Product } from "@/lib/demo-data";
+import type { Product } from "@/lib/catalog-types";
 import type { ReferralCode } from "@/lib/referral-codes";
 import { validateReferralCodeClient } from "@/lib/referral-client";
 
 export type CartItem = {
+  key: string;
+  variantId?: string;
+  doseLabel?: string;
+  sku?: string;
   slug: string;
   name: string;
   price: number;
@@ -32,7 +36,20 @@ type CartContextValue = {
   isBuy3Get1FreeActive: boolean;
   isBuy3Get1FreeEligible: boolean;
   totalQuantity: number;
-  addToCart: (product: Product, quantity?: number, sourceElement?: HTMLElement | null) => void;
+  addToCart: (
+    product: Product,
+    quantity?: number,
+    sourceElement?: HTMLElement | null,
+    options?: {
+      variantId?: string;
+      doseLabel?: string;
+      sku?: string;
+      priceOverride?: number;
+      imageOverride?: string;
+      batchNumberOverride?: string;
+      stockStatusOverride?: string;
+    },
+  ) => void;
   updateQuantity: (slug: string, quantity: number) => void;
   removeFromCart: (slug: string) => void;
   clearCart: () => void;
@@ -48,7 +65,25 @@ const CartContext = createContext<CartContextValue | undefined>(undefined);
 
 const CART_STORAGE_KEY = "vanta-labs-cart";
 const REFERRAL_COOKIE_KEY = "vl_referral_code";
-const SERVICE_FEE_RATE = Number(process.env.NEXT_PUBLIC_SERVICE_FEE_RATE ?? "0.05");
+const FREE_SHIPPING_THRESHOLD = 250;
+const FLAT_SHIPPING_FEE = 15;
+
+function calculateBuy3Get1Discount(items: CartItem[]) {
+  const expandedPrices: number[] = [];
+  for (const item of items) {
+    for (let i = 0; i < item.quantity; i += 1) {
+      expandedPrices.push(item.price);
+    }
+  }
+
+  const freeItemCount = Math.floor(expandedPrices.length / 4);
+  if (freeItemCount <= 0) {
+    return 0;
+  }
+
+  expandedPrices.sort((a, b) => a - b);
+  return expandedPrices.slice(0, freeItemCount).reduce((sum, price) => sum + price, 0);
+}
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-US", {
@@ -90,7 +125,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         };
 
         if (Array.isArray(parsed.items)) {
-          setItems(parsed.items);
+          const normalized = parsed.items.map((item) => {
+            const record = item as CartItem;
+            const fallbackKey = record.variantId ? `${record.slug}::${record.variantId}` : record.slug;
+            return {
+              ...record,
+              key: record.key ?? fallbackKey,
+            };
+          });
+          setItems(normalized);
         }
 
         if (typeof parsed.referralCode === "string") {
@@ -261,22 +304,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   );
 
   const totalQuantity = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
-  const isBuy3Get1FreeEligible = useMemo(() => totalQuantity >= 3, [totalQuantity]);
-  const buy3Get1FreeDiscount = useMemo(() => {
-    if (totalQuantity < 3 || items.length === 0) return 0;
-    const cheapestItem = items.reduce((min, current) => (current.price < min.price ? current : min), items[0]);
-    return cheapestItem?.price || 0;
-  }, [items, totalQuantity]);
+  const isBuy3Get1FreeEligible = useMemo(() => totalQuantity >= 4, [totalQuantity]);
+  const buy3Get1FreeDiscount = useMemo(() => calculateBuy3Get1Discount(items), [items]);
 
-  const shipping = subtotal >= 200 ? 0 : subtotal > 0 ? 14.99 : 0;
+  const shipping = subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : subtotal > 0 ? FLAT_SHIPPING_FEE : 0;
 
-  const serviceFee = useMemo(() => {
-    const baseBeforeServiceFee = Math.max(0, subtotal + shipping);
-    if (!Number.isFinite(SERVICE_FEE_RATE) || SERVICE_FEE_RATE <= 0 || baseBeforeServiceFee <= 0) {
-      return 0;
-    }
-    return baseBeforeServiceFee * SERVICE_FEE_RATE;
-  }, [shipping, subtotal]);
+  const serviceFee = 0;
 
   const discountAmount = useMemo(() => {
     if (buy3Get1FreeDiscount > 0) {
@@ -290,12 +323,25 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const total = Math.max(0, subtotal + shipping + serviceFee - discountAmount);
 
-  const addToCart = (product: Product, quantity = 1, sourceElement?: HTMLElement | null) => {
+  const addToCart = (
+    product: Product,
+    quantity = 1,
+    sourceElement?: HTMLElement | null,
+    options?: {
+      variantId?: string;
+      doseLabel?: string;
+      sku?: string;
+      priceOverride?: number;
+      imageOverride?: string;
+      batchNumberOverride?: string;
+      stockStatusOverride?: string;
+    },
+  ) => {
     if (typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("vanta:cart-fly", {
           detail: {
-            image: product.image,
+            image: options?.imageOverride ?? product.image,
             name: product.name,
             fromRect: sourceElement?.getBoundingClientRect() ?? null,
           },
@@ -304,25 +350,30 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     }
 
     setItems((currentItems) => {
-      const existing = currentItems.find((item) => item.slug === product.slug);
+      const variantKey = options?.variantId ? `${product.slug}::${options.variantId}` : product.slug;
+      const existing = currentItems.find((item) => item.key === variantKey);
       if (existing) {
         return currentItems.map((item) =>
-          item.slug === product.slug
+          item.key === variantKey
             ? { ...item, quantity: item.quantity + quantity }
             : item,
         );
       }
-      const parsedPrice = Number(product.price.replace(/[^0-9.]/g, ""));
+      const parsedPrice = options?.priceOverride ?? Number(product.price.replace(/[^0-9.]/g, ""));
       return [
         ...currentItems,
         {
+          key: variantKey,
+          variantId: options?.variantId,
+          doseLabel: options?.doseLabel,
+          sku: options?.sku,
           slug: product.slug,
           name: product.name,
           price: Number.isFinite(parsedPrice) ? parsedPrice : 0,
           quantity,
-          batchNumber: product.batchNumber,
-          image: product.image,
-          stockStatus: product.stockStatus,
+          batchNumber: options?.batchNumberOverride ?? product.batchNumber,
+          image: options?.imageOverride ?? product.image,
+          stockStatus: options?.stockStatusOverride ?? product.stockStatus,
         },
       ];
     });
@@ -333,14 +384,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const updateQuantity = (slug: string, quantity: number) => {
     setItems((currentItems) => {
       if (quantity <= 0) {
-        return currentItems.filter((item) => item.slug !== slug);
+        return currentItems.filter((item) => item.key !== slug && item.slug !== slug);
       }
-      return currentItems.map((item) => (item.slug === slug ? { ...item, quantity } : item));
+      return currentItems.map((item) => (item.key === slug || item.slug === slug ? { ...item, quantity } : item));
     });
   };
 
   const removeFromCart = (slug: string) => {
-    setItems((currentItems) => currentItems.filter((item) => item.slug !== slug));
+    setItems((currentItems) => currentItems.filter((item) => item.key !== slug && item.slug !== slug));
   };
 
   const clearCart = () => {
@@ -465,7 +516,6 @@ export function useCart() {
 }
 
 export function getShippingProgress(subtotal: number) {
-  const FREE_SHIPPING_THRESHOLD = 200;
   const isEligibleForFreeShipping = subtotal >= FREE_SHIPPING_THRESHOLD;
   const amountToFreeShipping = Math.max(0, FREE_SHIPPING_THRESHOLD - subtotal);
   const progressPercentage = Math.min((subtotal / FREE_SHIPPING_THRESHOLD) * 100, 100);

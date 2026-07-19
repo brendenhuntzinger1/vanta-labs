@@ -10,19 +10,19 @@ describe("payment webhook helpers", () => {
     expect(getOrderStatusForEventType("payment.failed")).toBe("payment_failed");
   });
 
-  it("marks a pending commission as voided on refund", () => {
+  it("marks a pending commission as reversed on refund", () => {
     expect(getCommissionStateForRefund("pending")).toEqual({
-      status: "voided",
+      status: "reversed",
       reviewRequired: false,
       reviewReason: null,
     });
   });
 
-  it("flags a paid commission for manual review on refund", () => {
+  it("reverses a paid commission on refund", () => {
     expect(getCommissionStateForRefund("paid")).toEqual({
-      status: "manual_review",
-      reviewRequired: true,
-      reviewReason: "Refund received after commission payment",
+      status: "reversed",
+      reviewRequired: false,
+      reviewReason: null,
     });
   });
 });

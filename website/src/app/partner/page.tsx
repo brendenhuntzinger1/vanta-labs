@@ -17,7 +17,7 @@ async function getPartnerPageData() {
 export default async function PartnerProgramPage() {
   const { stats, errorMessage } = await getPartnerPageData();
 
-  if (errorMessage) {
+  if (errorMessage || !stats) {
     return (
       <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-12 text-zinc-100 sm:px-6 lg:px-8">
         <div className="vl-panel mx-auto max-w-5xl rounded-2xl p-6 sm:p-8">
@@ -25,7 +25,7 @@ export default async function PartnerProgramPage() {
           <h1 className="mt-3 text-2xl font-semibold text-white sm:text-3xl">Supabase Query Failed</h1>
           <p className="mt-3 text-sm text-zinc-300">The full error is shown below so it can be fixed directly.</p>
           <pre className="mt-5 overflow-x-auto whitespace-pre-wrap rounded-xl border border-rose-500/30 bg-zinc-950 p-4 text-xs text-rose-200 sm:text-sm">
-            {errorMessage}
+            {errorMessage ?? "Partner stats payload was empty."}
           </pre>
         </div>
       </div>

@@ -2,9 +2,10 @@
 
 import { useState, useMemo, useEffect } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { SiteHeader } from "@/components/site-header";
 import { useCart } from "@/components/cart-context";
-import { products } from "@/lib/demo-data";
+import type { Product } from "@/lib/catalog-types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -113,9 +114,11 @@ function ProductImagePanel({ name, dose, image }: { name: string; dose: string; 
       <div className="absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-[#0d0f1c] to-transparent z-10 pointer-events-none" />
 
       {hasRealImage ? (
-        <img
+        <Image
           src={image}
           alt={name}
+          fill
+          sizes="320px"
           className="h-full w-full object-contain"
           style={{ mixBlendMode: "multiply", padding: "8px" }}
         />
@@ -210,6 +213,7 @@ function TrustBanner() {
 // ── Main Page Component ───────────────────────────────────────────────────────
 
 export default function ProductsPage() {
+  const [products, setProducts] = useState<Product[]>([]);
   const [category, setCategory] = useState("All");
   const [sort, setSort] = useState<SortKey>("default");
   const [searchQuery, setSearchQuery] = useState("");
@@ -233,6 +237,19 @@ export default function ProductsPage() {
       .then((r) => r.json())
       .then((data) => setImageOverrides(data))
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/catalog/products", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((json) => {
+        if (json?.success && Array.isArray(json.products)) {
+          setProducts(json.products as Product[]);
+        }
+      })
+      .catch(() => {
+        setProducts([]);
+      });
   }, []);
 
   // Save favorites to localStorage
@@ -278,7 +295,7 @@ export default function ProductsPage() {
     }
 
     return result;
-  }, [category, sort, searchQuery]);
+  }, [category, products, searchQuery, sort]);
 
   const isFiltered = category !== "All" || searchQuery;
   const heading = category === "All" ? "ALL RESEARCH PEPTIDES" : `${category.toUpperCase()}`;

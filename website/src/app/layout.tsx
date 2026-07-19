@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AgeGate } from "@/components/age-gate";
 import { CartDrawer } from "@/components/cart-drawer";
@@ -34,6 +35,13 @@ export default function RootLayout({
         <CartProvider>
           <AgeGate>
             {children}
+            <Link
+              href="/vault"
+              aria-label="Secure access"
+              className="fixed bottom-2 right-2 z-40 text-[10px] uppercase tracking-[0.2em] text-white/15 transition hover:text-white/45"
+            >
+              vault
+            </Link>
             <CartDrawer />
           </AgeGate>
         </CartProvider>
