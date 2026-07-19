@@ -18,11 +18,28 @@ export default async function AdminOrdersPage() {
   const orders = await getAdminOrderRows();
 
   return (
-    <div className="min-h-screen bg-zinc-950 p-8 text-zinc-100">
+    <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
-        <h1 className="text-3xl font-semibold">Admin Orders</h1>
+        <h1 className="text-2xl font-semibold sm:text-3xl">Admin Orders</h1>
         <p className="mt-2 text-sm text-zinc-400">Real Supabase orders and commissions.</p>
-        <div className="mt-8 overflow-hidden rounded-2xl border border-zinc-800">
+
+        <div className="mt-6 grid gap-3 sm:hidden">
+          {orders.map((order: AdminOrderRow) => (
+            <article key={order.id} className="vl-panel rounded-xl p-4">
+              <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Order</p>
+              <p className="mt-1 text-sm font-semibold text-white break-all">{order.order_id}</p>
+              <div className="mt-3 space-y-1.5 text-sm text-zinc-300">
+                <p><span className="text-zinc-500">Customer:</span> {order.customer_email}</p>
+                <p><span className="text-zinc-500">Items:</span> {order.item_count}</p>
+                <p><span className="text-zinc-500">Amount:</span> ${order.amount_paid.toFixed(2)}</p>
+                <p><span className="text-zinc-500">Referral:</span> {order.referral_code ?? "-"}</p>
+                <p><span className="text-zinc-500">Status:</span> {order.payment_status}</p>
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <div className="vl-panel mt-8 hidden overflow-x-auto rounded-2xl sm:block">
           <table className="min-w-full divide-y divide-zinc-800 text-sm">
             <thead className="bg-zinc-900/80">
               <tr>

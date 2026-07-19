@@ -22,21 +22,21 @@ export default function CoaLibraryPage() {
   }, [category, query]);
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="vl-page-shell min-h-screen bg-zinc-950 text-zinc-100">
       <SiteHeader />
 
-      <main className="mx-auto max-w-7xl px-6 py-16 lg:px-8">
+      <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8 lg:py-16">
         <div className="max-w-3xl">
-          <p className="text-sm uppercase tracking-[0.4em] text-zinc-500">Demo COA archive</p>
-          <h1 className="mt-3 text-4xl font-semibold text-white sm:text-5xl">
+          <p className="text-xs uppercase tracking-[0.35em] text-zinc-500 sm:text-sm sm:tracking-[0.4em]">Demo COA archive</p>
+          <h1 className="mt-3 text-3xl font-semibold text-white sm:text-4xl lg:text-5xl">
             Searchable COA library for demo records.
           </h1>
-          <p className="mt-6 text-lg leading-8 text-zinc-400">
+          <p className="mt-4 text-base leading-7 text-zinc-400 sm:mt-6 sm:text-lg sm:leading-8">
             Use the filters below to review sample batch documentation. All records are clearly marked as demo data and are not intended to provide instruction or medical claims.
           </p>
         </div>
 
-        <div className="mt-10 rounded-[2rem] border border-zinc-800 bg-zinc-900/70 p-6">
+        <div className="vl-panel mt-8 rounded-[1.5rem] p-4 sm:mt-10 sm:rounded-[2rem] sm:p-6">
           <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
             <label className="text-sm text-zinc-400">
               <span className="mb-2 block uppercase tracking-[0.3em]">Search by product or batch</span>
@@ -44,7 +44,7 @@ export default function CoaLibraryPage() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Aurelium or AR-2407A"
-                className="w-full rounded-full border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm text-white outline-none"
+                className="vl-input w-full rounded-full px-4 py-3 text-sm"
               />
             </label>
             <label className="text-sm text-zinc-400">
@@ -52,7 +52,7 @@ export default function CoaLibraryPage() {
               <select
                 value={category}
                 onChange={(event) => setCategory(event.target.value)}
-                className="w-full rounded-full border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm text-white outline-none"
+                className="vl-input w-full rounded-full px-4 py-3 text-sm"
               >
                 {categories.map((item) => (
                   <option key={item} value={item}>
@@ -64,16 +64,16 @@ export default function CoaLibraryPage() {
           </div>
         </div>
 
-        <div className="mt-10 space-y-4">
+        <div className="mt-8 space-y-4 sm:mt-10">
           {filteredRecords.map((record) => (
-            <article key={record.slug} className="rounded-[1.5rem] border border-zinc-800 bg-zinc-900/70 p-6">
+            <article key={record.slug} className="vl-panel vl-elevate-hover rounded-[1.25rem] p-4 sm:rounded-[1.5rem] sm:p-6">
               <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
                 <div>
                   <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">{record.category}</p>
-                  <h2 className="mt-2 text-2xl font-semibold text-white">{record.productName}</h2>
+                  <h2 className="mt-2 text-xl font-semibold text-white sm:text-2xl">{record.productName}</h2>
                   <p className="mt-2 text-sm text-zinc-400">Batch {record.batchNumber}</p>
                 </div>
-                <div className="grid gap-3 text-sm text-zinc-300 sm:grid-cols-2 lg:min-w-[420px]">
+                <div className="grid gap-3 text-sm text-zinc-300 sm:grid-cols-2 lg:w-[420px] lg:min-w-0">
                   <div>
                     <p className="text-zinc-500">Purity result</p>
                     <p className="mt-1 text-white">{record.purityResult}</p>
@@ -91,7 +91,7 @@ export default function CoaLibraryPage() {
                       href={record.coaUrl}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex rounded-full border border-zinc-700 px-4 py-2 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-800"
+                      className="vl-btn-secondary vl-focus-ring inline-flex px-4 py-2 text-sm"
                     >
                       Open / Download COA
                     </a>

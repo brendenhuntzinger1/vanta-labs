@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Product } from "@/lib/demo-data";
 import type { ReferralCode } from "@/lib/referral-codes";
 import { validateReferralCodeClient } from "@/lib/referral-client";
+
 export type CartItem = {
   slug: string;
   name: string;
@@ -25,12 +26,13 @@ type CartContextValue = {
   itemCount: number;
   subtotal: number;
   shipping: number;
+  serviceFee: number;
   discountAmount: number;
   total: number;
   isBuy3Get1FreeActive: boolean;
   isBuy3Get1FreeEligible: boolean;
   totalQuantity: number;
-  addToCart: (product: Product, quantity?: number) => void;
+  addToCart: (product: Product, quantity?: number, sourceElement?: HTMLElement | null) => void;
   updateQuantity: (slug: string, quantity: number) => void;
   removeFromCart: (slug: string) => void;
   clearCart: () => void;
@@ -45,6 +47,7 @@ type CartContextValue = {
 const CartContext = createContext<CartContextValue | undefined>(undefined);
 
 const CART_STORAGE_KEY = "vanta-labs-cart";
+const SERVICE_FEE_RATE = Number(process.env.NEXT_PUBLIC_SERVICE_FEE_RATE ?? "0.05");
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-US", {
@@ -61,7 +64,7 @@ function isReferralValid(code: ReferralCode) {
 export function CartProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
-  const [isHydrated] = useState(false);
+  const [isHydrated, setIsHydrated] = useState(false);
   const [referralCode, setReferralCode] = useState<string | null>(null);
   const [referralDetails, setReferralDetails] = useState<ReferralCode | null>(null);
   const [referralError, setReferralError] = useState<string | null>(null);
@@ -76,6 +79,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const stored = window.localStorage.getItem(CART_STORAGE_KEY);
         if (!stored) {
+          setIsHydrated(true);
           return;
         }
 
@@ -93,6 +97,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         }
       } catch (error) {
         console.error("Unable to read cart state", error);
+      } finally {
+        setIsHydrated(true);
       }
     };
 
@@ -101,6 +107,84 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleFlyToCart = (event: Event) => {
+      const customEvent = event as CustomEvent<{
+        image?: string;
+        name?: string;
+        fromRect?: DOMRect | null;
+      }>;
+
+      const cartTrigger = document.getElementById("site-cart-trigger");
+      const fromRect = customEvent.detail?.fromRect;
+
+      if (!cartTrigger || !fromRect) {
+        return;
+      }
+
+      const toRect = cartTrigger.getBoundingClientRect();
+      const node = document.createElement("div");
+      node.className = "vanta-fly-node";
+      node.style.position = "fixed";
+      node.style.left = `${fromRect.left + fromRect.width / 2 - 18}px`;
+      node.style.top = `${fromRect.top + fromRect.height / 2 - 18}px`;
+      node.style.width = "36px";
+      node.style.height = "36px";
+      node.style.borderRadius = "999px";
+      node.style.zIndex = "1000";
+      node.style.pointerEvents = "none";
+      node.style.border = "1px solid rgba(255,255,255,0.35)";
+      node.style.boxShadow = "0 8px 24px rgba(0,0,0,0.45)";
+      node.style.overflow = "hidden";
+      node.style.background = "radial-gradient(circle at 30% 20%, rgba(255,255,255,0.5), rgba(138,180,255,0.8))";
+
+      const image = customEvent.detail?.image;
+      if (image && !image.includes(".svg")) {
+        const imgNode = document.createElement("img");
+        imgNode.src = image;
+        imgNode.alt = customEvent.detail?.name ?? "product";
+        imgNode.style.width = "100%";
+        imgNode.style.height = "100%";
+        imgNode.style.objectFit = "cover";
+        node.appendChild(imgNode);
+      }
+
+      document.body.appendChild(node);
+
+      const deltaX = toRect.left + toRect.width / 2 - (fromRect.left + fromRect.width / 2);
+      const deltaY = toRect.top + toRect.height / 2 - (fromRect.top + fromRect.height / 2);
+
+      node.animate(
+        [
+          { transform: "translate3d(0, 0, 0) scale(1)", opacity: 0.95 },
+          { transform: `translate3d(${deltaX * 0.7}px, ${deltaY * 0.25}px, 0) scale(0.88)`, opacity: 0.9 },
+          { transform: `translate3d(${deltaX}px, ${deltaY}px, 0) scale(0.32)`, opacity: 0.35 },
+        ],
+        { duration: 650, easing: "cubic-bezier(0.2, 0.8, 0.2, 1)" },
+      ).onfinish = () => {
+        node.remove();
+      };
+
+      cartTrigger.animate(
+        [
+          { transform: "scale(1)" },
+          { transform: "scale(1.06)" },
+          { transform: "scale(1)" },
+        ],
+        { duration: 420, easing: "ease-out" },
+      );
+    };
+
+    window.addEventListener("vanta:cart-fly", handleFlyToCart as EventListener);
+    return () => {
+      window.removeEventListener("vanta:cart-fly", handleFlyToCart as EventListener);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !isHydrated) {
       return;
     }
 
@@ -121,21 +205,24 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [items],
   );
 
-  // Calculate buy 3 get 1 free discount (when 4+ items total)
   const totalQuantity = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
   const isBuy3Get1FreeEligible = useMemo(() => totalQuantity >= 3, [totalQuantity]);
   const buy3Get1FreeDiscount = useMemo(() => {
-    if (totalQuantity < 3) return 0;
-    // Find the cheapest item
+    if (totalQuantity < 3 || items.length === 0) return 0;
     const cheapestItem = items.reduce((min, current) => (current.price < min.price ? current : min), items[0]);
     return cheapestItem?.price || 0;
   }, [items, totalQuantity]);
 
-  // Shipping: $14.99 for orders under $200, free for $200+
   const shipping = subtotal >= 200 ? 0 : subtotal > 0 ? 14.99 : 0;
-  
-  // Discount amount: use buy 3 get 1 free if applicable, otherwise use referral code
-  // These two offers are mutually exclusive
+
+  const serviceFee = useMemo(() => {
+    const baseBeforeServiceFee = Math.max(0, subtotal + shipping);
+    if (!Number.isFinite(SERVICE_FEE_RATE) || SERVICE_FEE_RATE <= 0 || baseBeforeServiceFee <= 0) {
+      return 0;
+    }
+    return baseBeforeServiceFee * SERVICE_FEE_RATE;
+  }, [shipping, subtotal]);
+
   const discountAmount = useMemo(() => {
     if (buy3Get1FreeDiscount > 0) {
       return buy3Get1FreeDiscount;
@@ -146,9 +233,21 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     return subtotal * (referralDetails.customerDiscountPercent / 100);
   }, [buy3Get1FreeDiscount, referralDetails, subtotal]);
 
-  const total = Math.max(0, subtotal + shipping - discountAmount);
+  const total = Math.max(0, subtotal + shipping + serviceFee - discountAmount);
 
-  const addToCart = (product: Product, quantity = 1) => {
+  const addToCart = (product: Product, quantity = 1, sourceElement?: HTMLElement | null) => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("vanta:cart-fly", {
+          detail: {
+            image: product.image,
+            name: product.name,
+            fromRect: sourceElement?.getBoundingClientRect() ?? null,
+          },
+        }),
+      );
+    }
+
     setItems((currentItems) => {
       const existing = currentItems.find((item) => item.slug === product.slug);
       if (existing) {
@@ -172,7 +271,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         },
       ];
     });
-    setIsCartOpen(true);
     setReferralError(null);
     setReferralSuccess(null);
   };
@@ -205,7 +303,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const applyReferralCode = async (code: string) => {
     const normalized = code.trim().toUpperCase();
 
-    // Check if buy 3 get 1 free is active - if so, don't allow referral codes
     if (buy3Get1FreeDiscount > 0) {
       setReferralDetails(null);
       setReferralCode(null);
@@ -253,6 +350,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       setReferralSuccess(null);
     }
   };
+
   const clearReferralCode = () => {
     setReferralCode(null);
     setReferralDetails(null);
@@ -276,6 +374,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     itemCount,
     subtotal,
     shipping,
+    serviceFee,
     discountAmount,
     total,
     isBuy3Get1FreeActive: buy3Get1FreeDiscount > 0,
@@ -303,18 +402,20 @@ export function useCart() {
   }
   return context;
 }
+
 export function getShippingProgress(subtotal: number) {
   const FREE_SHIPPING_THRESHOLD = 200;
   const isEligibleForFreeShipping = subtotal >= FREE_SHIPPING_THRESHOLD;
   const amountToFreeShipping = Math.max(0, FREE_SHIPPING_THRESHOLD - subtotal);
   const progressPercentage = Math.min((subtotal / FREE_SHIPPING_THRESHOLD) * 100, 100);
-  
+
   return {
     isEligibleForFreeShipping,
     amountToFreeShipping,
     progressPercentage,
   };
 }
+
 export function formatCartCurrency(value: number) {
   return formatCurrency(value);
 }

@@ -9,7 +9,6 @@ import { products } from "@/lib/demo-data";
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type SortKey = "default" | "price-asc" | "price-desc" | "name-asc" | "purity";
-type StockFilter = "All" | "In Stock" | "Limited" | "Reserved";
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -23,17 +22,6 @@ const CATEGORIES = [
   "Metabolic Research",
   "Solvents & Solutions",
 ];
-
-// CATEGORY_COLORS kept for future use
-const CATEGORY_COLORS: Record<string, { accent: string; glow: string; text: string }> = {
-  "Analytical Reference": { accent: "#6366f1", glow: "rgba(99, 102, 241, 0.2)", text: "from-indigo-500 to-indigo-300" },
-  "Calibration Series": { accent: "#8b5cf6", glow: "rgba(139, 92, 246, 0.2)", text: "from-violet-500 to-violet-300" },
-  "Research Peptides": { accent: "#06b6d4", glow: "rgba(6, 182, 212, 0.2)", text: "from-cyan-500 to-cyan-300" },
-  "Growth Factors": { accent: "#ec4899", glow: "rgba(236, 72, 153, 0.2)", text: "from-pink-500 to-pink-300" },
-  "Cognitive Research": { accent: "#f59e0b", glow: "rgba(245, 158, 11, 0.2)", text: "from-amber-500 to-amber-300" },
-  "Metabolic Research": { accent: "#10b981", glow: "rgba(16, 185, 129, 0.2)", text: "from-emerald-500 to-emerald-300" },
-  "Solvents & Solutions": { accent: "#64748b", glow: "rgba(100, 116, 139, 0.2)", text: "from-slate-500 to-slate-300" },
-};
 
 const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: "default", label: "Featured" },
@@ -107,10 +95,6 @@ function SearchIcon({ size = 18 }: { size?: number }) {
   );
 }
 
-// ── Consistent card image background (no per-product colors) ─────────────────
-
-const CARD_IMG_BG = "linear-gradient(135deg, #08090f 0%, #0d0f1c 50%, #0a0c16 100%)";
-
 function parseDoseFromSlug(slug: string): string {
   const match = slug.match(/(\d+(?:\.\d+)?(?:mg|iu|mcg|g|ml))$/i);
   return match ? match[1].toUpperCase() : "";
@@ -178,7 +162,7 @@ const ITEM_BORDER: string[] = [
 
 function TrustBanner() {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-[#060a16]">
+    <div className="relative overflow-hidden rounded-2xl border border-cyan-500/20 bg-[linear-gradient(130deg,#060a16_0%,#0b1324_55%,#0f172a_100%)]">
       {/* Red glow */}
       <div className="pointer-events-none absolute inset-y-0 -left-16 w-56 bg-gradient-to-r from-red-600/14 to-transparent" />
       {/* Blue glow */}
@@ -228,7 +212,6 @@ function TrustBanner() {
 export default function ProductsPage() {
   const [category, setCategory] = useState("All");
   const [sort, setSort] = useState<SortKey>("default");
-  const [stockFilter, setStockFilter] = useState<StockFilter>("All");
   const [searchQuery, setSearchQuery] = useState("");
   const [favorites, setFavorites] = useState<Set<string>>(() => {
     // Load favorites from localStorage during initialization
@@ -270,9 +253,6 @@ export default function ProductsPage() {
     if (category !== "All") {
       result = result.filter((p) => p.category === category);
     }
-    if (stockFilter !== "All") {
-      result = result.filter((p) => p.stockStatus === stockFilter);
-    }
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       result = result.filter((p) => 
@@ -298,17 +278,17 @@ export default function ProductsPage() {
     }
 
     return result;
-  }, [category, sort, stockFilter, searchQuery]);
+  }, [category, sort, searchQuery]);
 
-  const isFiltered = category !== "All" || stockFilter !== "All" || searchQuery;
+  const isFiltered = category !== "All" || searchQuery;
   const heading = category === "All" ? "ALL RESEARCH PEPTIDES" : `${category.toUpperCase()}`;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-zinc-950 via-[#0a0a1a] to-zinc-950 text-zinc-100 vl-moving-bg">
+    <div className="vl-page-shell min-h-screen bg-gradient-to-br from-zinc-950 via-[#0a0a1a] to-zinc-950 text-zinc-100 vl-moving-bg">
       <SiteHeader />
 
       {/* ── Floating Particles Background ─────────────────────────────────── */}
-      <div className="fixed inset-0 pointer-events-none overflow-hidden">
+      <div className="pointer-events-none fixed inset-0 hidden overflow-hidden sm:block">
         <div className="absolute top-20 left-10 w-2 h-2 bg-indigo-500 rounded-full vl-particle-1 opacity-30" />
         <div className="absolute top-40 right-20 w-1.5 h-1.5 bg-violet-500 rounded-full vl-particle-2 opacity-20" />
         <div className="absolute bottom-40 left-1/4 w-2 h-2 bg-cyan-500 rounded-full vl-particle-3 opacity-25" />
@@ -323,13 +303,14 @@ export default function ProductsPage() {
       </div>
 
       {/* ── Main Content ──────────────────────────────────────────────────── */}
-      <main className="relative mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
+      <main className="relative mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8">
 
         {/* Page header */}
         <div className="mb-8">
-          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-black uppercase tracking-widest text-white mb-2">
+          <h1 className="mb-2 text-3xl font-black uppercase tracking-[0.12em] text-white sm:text-4xl sm:tracking-widest lg:text-5xl">
             {heading}
           </h1>
+          <div className="h-1 w-28 rounded-full bg-gradient-to-r from-cyan-400 via-blue-400 to-violet-400" />
           <p className="text-sm text-zinc-400">
             {displayProducts.length} {displayProducts.length === 1 ? "product" : "products"}
             {isFiltered && <span className="ml-2 inline-block px-2.5 py-1 rounded-full bg-white/5 text-[11px] font-semibold tracking-wide">FILTERED</span>}
@@ -347,15 +328,15 @@ export default function ProductsPage() {
               placeholder="Search peptides, compounds..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-white/10 bg-white/5 text-white placeholder-zinc-500 transition focus:bg-white/10 focus:border-white/20 focus:outline-none text-sm"
+              className="vl-input w-full py-2.5 pl-10 pr-4 text-sm placeholder-zinc-500"
             />
           </div>
         </div>
 
         {/* Controls Row */}
-        <div className="mb-8 flex flex-col sm:flex-row gap-4 items-start sm:items-center">
+        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           {/* Category tabs */}
-          <div className="flex gap-2 overflow-x-auto pb-2 sm:pb-0 flex-1">
+          <div className="flex w-full gap-2 overflow-x-auto pb-2 sm:pb-0 sm:flex-1">
             {CATEGORIES.map((cat) => {
               const count = cat === "All"
                 ? products.length
@@ -367,7 +348,7 @@ export default function ProductsPage() {
                   className={[
                     "shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition-all whitespace-nowrap",
                     category === cat
-                      ? "bg-white/20 text-white border border-white/40"
+                      ? "border border-white/35 bg-white/20 text-white"
                       : "border border-white/10 text-zinc-400 hover:border-white/30 hover:text-white",
                   ].join(" ")}
                 >
@@ -378,23 +359,12 @@ export default function ProductsPage() {
             })}
           </div>
 
-          {/* Sort and Filter */}
-          <div className="flex gap-3 w-full sm:w-auto">
-            <select
-              value={stockFilter}
-              onChange={(e) => setStockFilter(e.target.value as StockFilter)}
-              className="flex-1 sm:flex-initial rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300 transition hover:border-white/20 focus:border-white/30 focus:outline-none"
-            >
-              <option value="All">Stock: All</option>
-              <option value="In Stock">In Stock</option>
-              <option value="Limited">Limited</option>
-              <option value="Reserved">Reserved</option>
-            </select>
-
+          {/* Sort */}
+          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
             <select
               value={sort}
               onChange={(e) => setSort(e.target.value as SortKey)}
-              className="flex-1 sm:flex-initial rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-xs text-zinc-300 transition hover:border-white/20 focus:border-white/30 focus:outline-none"
+              className="vl-input w-full rounded-lg px-3 py-2 text-xs text-zinc-300 sm:w-auto"
             >
               {SORT_OPTIONS.map((opt) => (
                 <option key={opt.value} value={opt.value}>
@@ -410,7 +380,7 @@ export default function ProductsPage() {
           <div className="mt-24 flex flex-col items-center gap-4 text-center">
             <p className="text-zinc-400">No products match your search.</p>
             <button
-              onClick={() => { setCategory("All"); setStockFilter("All"); setSearchQuery(""); }}
+              onClick={() => { setCategory("All"); setSearchQuery(""); }}
               className="text-sm text-zinc-300 underline underline-offset-4 hover:text-white transition"
             >
               Clear all filters
@@ -418,18 +388,18 @@ export default function ProductsPage() {
           </div>
         ) : (
           <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {displayProducts.map((product, productIndex) => {
+            {displayProducts.map((product) => {
               const dose = parseDoseFromSlug(product.slug);
               const isFav = favorites.has(product.slug);
               const productImage = imageOverrides[product.slug] || product.image;
               return (
                 <div key={product.slug} className="group h-full">
-                  <div className="relative h-full flex flex-col rounded-2xl overflow-hidden border border-white/10 hover:border-white/25 transition-all duration-300 bg-[#0d0f1c]">
+                  <div className="vl-panel vl-elevate-hover relative flex h-full flex-col overflow-hidden rounded-2xl bg-gradient-to-b from-[#101530] via-[#0f1221] to-[#0c0f1a]">
 
                     {/* Favorite button */}
                     <button
                       onClick={() => toggleFavorite(product.slug)}
-                      className="absolute top-3 right-3 z-10 text-zinc-500 hover:text-red-400 transition bg-black/30 rounded-full p-1.5 backdrop-blur-sm"
+                      className="vl-focus-ring absolute top-3 right-3 z-10 rounded-full bg-black/30 p-1.5 text-zinc-500 backdrop-blur-sm transition hover:text-red-400"
                       aria-label="Add to favorites"
                     >
                       <HeartIcon filled={isFav} size={16} />
@@ -454,25 +424,21 @@ export default function ProductsPage() {
 
                       <div className="flex items-center justify-between">
                         <span className="text-lg font-black text-white">{product.price}</span>
-                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
-                          product.stockStatus === "In Stock"
-                            ? "bg-emerald-500/15 text-emerald-400 border border-emerald-500/25"
-                            : product.stockStatus === "Limited"
-                            ? "bg-amber-500/15 text-amber-400 border border-amber-500/25"
-                            : "bg-red-500/15 text-red-400 border border-red-500/25"
-                        }`}>{product.stockStatus}</span>
+                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full border border-cyan-400/30 bg-cyan-400/10 text-cyan-200">
+                          COA Verified
+                        </span>
                       </div>
 
                       <div className="mt-auto flex flex-col gap-2">
                         <button
-                          onClick={() => addToCart(product, 1)}
-                          className="w-full rounded-lg bg-white px-3 py-2.5 text-xs font-bold text-zinc-950 transition hover:bg-zinc-100 active:scale-95"
+                          onClick={(event) => addToCart(product, 1, event.currentTarget)}
+                          className="vl-focus-ring w-full rounded-lg bg-gradient-to-r from-cyan-300 via-blue-200 to-indigo-200 px-3 py-2.5 text-xs font-bold text-zinc-950 shadow-[0_8px_24px_rgba(59,130,246,0.25)] transition hover:brightness-105 active:scale-95"
                         >
                           Add to Cart
                         </button>
                         <Link
                           href={`/products/${product.slug}`}
-                          className="block rounded-lg border border-white/15 px-3 py-2 text-center text-xs font-semibold text-zinc-400 transition hover:border-white/30 hover:text-white"
+                          className="vl-btn-secondary vl-focus-ring block rounded-lg px-3 py-2 text-center text-xs"
                         >
                           View Details
                         </Link>

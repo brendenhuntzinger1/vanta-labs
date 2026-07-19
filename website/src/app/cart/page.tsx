@@ -1,16 +1,21 @@
 "use client";
 
 import Link from "next/link";
-import { formatCartCurrency, useCart } from "@/components/cart-context";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { formatCartCurrency, getShippingProgress, useCart } from "@/components/cart-context";
 import { SiteHeader } from "@/components/site-header";
 
 export default function CartPage() {
+  const router = useRouter();
+  const [referralInput, setReferralInput] = useState("");
   const {
     items,
     updateQuantity,
     removeFromCart,
     subtotal,
     shipping,
+    serviceFee,
     discountAmount,
     total,
     referralCode,
@@ -21,53 +26,83 @@ export default function CartPage() {
     clearReferralCode,
   } = useCart();
 
+  const effectiveReferralInput = referralInput || referralCode || "";
+  const shippingProgress = getShippingProgress(subtotal);
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="vl-page-shell min-h-screen bg-zinc-950 text-zinc-100">
       <SiteHeader />
-      <main className="mx-auto max-w-7xl px-6 py-16 lg:px-8">
+      <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8 lg:py-16">
         <div className="max-w-3xl">
-          <p className="text-sm uppercase tracking-[0.4em] text-zinc-500">Shopping cart</p>
-          <h1 className="mt-3 text-4xl font-semibold text-white sm:text-5xl">Review your selected materials.</h1>
-          <p className="mt-6 text-lg leading-8 text-zinc-400">Your cart persists locally while you review or continue checkout. Approved ambassador referral codes are validated with Supabase before checkout.</p>
+          <p className="text-xs uppercase tracking-[0.35em] text-zinc-500 sm:text-sm sm:tracking-[0.4em]">Shopping cart</p>
+          <h1 className="mt-3 text-3xl font-semibold text-white sm:text-4xl lg:text-5xl">Review your selected materials.</h1>
+          <p className="mt-4 text-base leading-7 text-zinc-400 sm:mt-6 sm:text-lg sm:leading-8">Your cart persists locally while you review or continue checkout. Approved ambassador referral codes are validated with Supabase before checkout.</p>
         </div>
 
-        <div className="mt-10 grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
+        <div className="mt-8 grid gap-6 lg:mt-10 lg:gap-8 lg:grid-cols-[1.2fr_0.8fr]">
           <div className="space-y-4">
             {items.length === 0 ? (
-              <div className="rounded-[2rem] border border-dashed border-zinc-700 bg-zinc-900/70 p-10 text-center text-zinc-400">
-                <p className="text-xl text-white">No items yet.</p>
+              <div className="vl-panel rounded-[1.5rem] border-dashed p-6 text-center text-zinc-400 sm:rounded-[2rem] sm:p-10">
+                <p className="text-lg text-white sm:text-xl">No items yet.</p>
                 <p className="mt-3">Visit the catalog to add sample products.</p>
-                <Link href="/products" className="mt-6 inline-flex rounded-full border border-zinc-600 bg-white px-5 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-200">
+                <Link href="/products" className="vl-btn-primary vl-focus-ring mt-6 inline-flex px-5 py-3 text-sm">
                   Browse products
                 </Link>
               </div>
             ) : (
               items.map((item) => (
-                <div key={item.slug} className="rounded-[1.5rem] border border-zinc-800 bg-zinc-900/70 p-6">
+                <div key={item.slug} className="vl-panel rounded-[1.25rem] p-4 sm:rounded-[1.5rem] sm:p-6">
                   <div className="flex items-start justify-between gap-4">
                     <div>
-                      <h2 className="text-xl font-semibold text-white">{item.name}</h2>
+                      <h2 className="text-lg font-semibold text-white sm:text-xl">{item.name}</h2>
                       <p className="mt-2 text-sm text-zinc-400">Batch {item.batchNumber}</p>
                     </div>
                     <button type="button" onClick={() => removeFromCart(item.slug)} className="text-sm text-zinc-500 transition hover:text-white">
                       Remove
                     </button>
                   </div>
-                  <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
-                    <div className="flex items-center gap-3 rounded-full border border-zinc-700 px-3 py-2 text-sm text-zinc-300">
-                      <button type="button" onClick={() => updateQuantity(item.slug, item.quantity - 1)} className="px-2">−</button>
+                  <div className="mt-5 flex flex-wrap items-center justify-between gap-4 sm:mt-6">
+                    <div className="flex items-center gap-2 rounded-full border border-zinc-700 px-2 py-1.5 text-sm text-zinc-300 sm:gap-3 sm:px-3 sm:py-2">
+                      <button type="button" onClick={() => updateQuantity(item.slug, item.quantity - 1)} className="px-2" aria-label="Decrease quantity">−</button>
                       <span>{item.quantity}</span>
-                      <button type="button" onClick={() => updateQuantity(item.slug, item.quantity + 1)} className="px-2">+</button>
+                      <button type="button" onClick={() => updateQuantity(item.slug, item.quantity + 1)} className="px-2" aria-label="Increase quantity">+</button>
                     </div>
-                    <p className="text-lg font-semibold text-white">{formatCartCurrency(item.price * item.quantity)}</p>
+                    <p className="text-base font-semibold text-white sm:text-lg">{formatCartCurrency(item.price * item.quantity)}</p>
                   </div>
                 </div>
               ))
             )}
           </div>
 
-          <div className="rounded-[2rem] border border-zinc-800 bg-zinc-900/70 p-6">
+          <div className="vl-panel rounded-[1.5rem] p-4 sm:rounded-[2rem] sm:p-6">
             <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Order summary</p>
+
+            {subtotal > 0 ? (
+              <div className="vl-panel-soft mt-5 rounded-xl p-4">
+                {shippingProgress.isEligibleForFreeShipping ? (
+                  <div>
+                    <p className="text-sm font-semibold text-emerald-400">Free shipping unlocked</p>
+                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-800">
+                      <div className="h-full w-full bg-gradient-to-r from-emerald-500 to-emerald-300" />
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div className="mb-2 flex items-center justify-between text-sm">
+                      <span className="text-zinc-400">Free shipping at $200</span>
+                      <span className="font-semibold text-white">${shippingProgress.amountToFreeShipping.toFixed(2)} away</span>
+                    </div>
+                    <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+                      <div
+                        className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
+                        style={{ width: `${shippingProgress.progressPercentage}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
             <div className="mt-6 space-y-3 text-sm text-zinc-300">
               <div className="flex justify-between">
                 <span>Subtotal</span>
@@ -76,6 +111,10 @@ export default function CartPage() {
               <div className="flex justify-between">
                 <span>Estimated shipping</span>
                 <span>{formatCartCurrency(shipping)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Service fee</span>
+                <span>{formatCartCurrency(serviceFee)}</span>
               </div>
               <div className="flex justify-between">
                 <span>Applied discount</span>
@@ -91,26 +130,29 @@ export default function CartPage() {
               <span className="mb-2 block uppercase tracking-[0.3em]">Referral code</span>
               <input
                 type="text"
-                defaultValue={referralCode ?? ""}
+                value={effectiveReferralInput}
+                onChange={(event) => setReferralInput(event.target.value)}
                 placeholder="VANTA10"
-                className="w-full rounded-full border border-zinc-700 bg-zinc-950 px-4 py-3 text-sm text-white outline-none"
+                className="vl-input w-full rounded-full px-4 py-3 text-sm"
               />
             </label>
-            <div className="mt-4 flex gap-3">
+            <div className="mt-4 flex flex-col gap-3 sm:flex-row">
               <button
                 type="button"
-                onClick={() => {
-                  const input = document.querySelector<HTMLInputElement>("[placeholder='VANTA10']");
-                  if (input) {
-                    applyReferralCode(input.value);
-                  }
-                }}
-                className="rounded-full border border-zinc-600 bg-white px-4 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-200"
+                onClick={() => applyReferralCode(effectiveReferralInput)}
+                className="vl-btn-primary vl-focus-ring rounded-full px-4 py-3 text-sm"
               >
                 Apply code
               </button>
               {referralCode ? (
-                <button type="button" onClick={clearReferralCode} className="rounded-full border border-zinc-700 px-4 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearReferralCode();
+                    setReferralInput("");
+                  }}
+                  className="vl-btn-secondary vl-focus-ring rounded-full px-4 py-3 text-sm"
+                >
                   Clear
                 </button>
               ) : null}
@@ -121,9 +163,13 @@ export default function CartPage() {
               <p className="mt-4 text-sm text-zinc-300">Ambassador {referralDetails.ambassadorName} • {referralDetails.customerDiscountPercent}% customer discount</p>
             ) : null}
 
-            <Link href="/checkout" className="mt-8 inline-flex w-full justify-center rounded-full border border-zinc-600 bg-white px-5 py-3 text-center text-sm font-semibold text-zinc-950 transition hover:bg-zinc-200">
+            <button
+              type="button"
+              onClick={() => router.push("/checkout")}
+              className="vl-btn-primary vl-focus-ring mt-8 inline-flex w-full justify-center px-5 py-3 text-center text-sm"
+            >
               Continue to checkout
-            </Link>
+            </button>
           </div>
         </div>
       </main>

@@ -83,16 +83,7 @@ const FOOTER_LINKS = {
 // ────────────────────────────────────────────────────────────────────────────
 
 export default function Home() {
-  const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
   const [carouselIndex, setCarouselIndex] = useState(0);
-
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      setMousePosition({ x: e.clientX, y: e.clientY });
-    };
-    window.addEventListener("mousemove", handleMouseMove);
-    return () => window.removeEventListener("mousemove", handleMouseMove);
-  }, []);
 
   // Carousel auto-rotate
   useEffect(() => {
@@ -103,11 +94,11 @@ export default function Home() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 overflow-x-hidden">
+    <div className="vl-page-shell min-h-screen bg-zinc-950 text-zinc-100 overflow-x-hidden">
       <SiteHeader />
 
       {/* ═══════════════════════════ HERO SECTION ═══════════════════════════ */}
-      <section className="relative isolate min-h-screen flex items-center overflow-hidden">
+      <section className="relative isolate flex min-h-[88svh] items-center overflow-hidden sm:min-h-screen">
         {/* Background gradients */}
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-5%,rgba(14,165,233,0.1),transparent)]" />
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_50%_40%_at_80%_55%,rgba(139,92,246,0.08),transparent)]" />
@@ -206,57 +197,54 @@ export default function Home() {
         </div>
 
         {/* Hero content */}
-        <div className="relative z-10 mx-auto w-full max-w-7xl px-6 py-20 lg:px-8 lg:py-0 lg:w-[55%]">
-          <p className="animate-fade-in text-[11px] font-semibold uppercase tracking-[0.4em] text-zinc-400 mb-8">
+        <div className="relative z-10 mx-auto w-full max-w-7xl px-4 py-14 sm:px-6 sm:py-20 lg:w-[55%] lg:px-8 lg:py-0">
+          <p className="mb-6 animate-fade-in text-[10px] font-semibold uppercase tracking-[0.3em] text-cyan-300/80 sm:mb-8 sm:text-[11px] sm:tracking-[0.4em]">
             Premium Biotech Research
           </p>
 
-          <h1 className="animate-fade-in text-5xl sm:text-6xl lg:text-7xl font-bold leading-tight tracking-tight mb-6"
+          <h1 className="mb-5 animate-fade-in text-4xl font-bold leading-tight tracking-tight sm:mb-6 sm:text-6xl lg:text-7xl"
             style={{ animationDelay: "0.1s" }}>
-            <span className="bg-gradient-to-r from-white via-white to-zinc-400 bg-clip-text text-transparent">
+            <span className="bg-gradient-to-r from-cyan-200 via-white to-blue-300 bg-clip-text text-transparent">
               Precision Without Compromise
             </span>
           </h1>
 
-          <p className="animate-fade-in text-lg sm:text-xl text-zinc-400 max-w-lg mb-8"
+          <p className="mb-7 max-w-lg animate-fade-in text-base text-zinc-400 sm:mb-8 sm:text-xl"
             style={{ animationDelay: "0.2s" }}>
             Premium research compounds. Third-party tested. COA verified. USA fulfilled.
           </p>
 
-          <div className="animate-fade-in flex flex-col sm:flex-row gap-4 mb-12"
+          <div className="mb-10 flex animate-fade-in flex-col gap-3 sm:mb-12 sm:flex-row sm:gap-4"
             style={{ animationDelay: "0.3s" }}>
-            <Link
-              href="/products"
-              className="group relative px-8 py-3.5 rounded-lg bg-white text-zinc-950 font-semibold text-center transition-all duration-300 hover:shadow-lg hover:shadow-white/20 active:scale-95"
-            >
+            <Link href="/products" className="vl-btn-primary vl-focus-ring group relative px-7 py-3.5 text-center text-sm active:scale-95 sm:px-8 sm:text-base">
               <span className="relative z-10">Browse Products</span>
               <div className="absolute inset-0 rounded-lg bg-white opacity-0 group-hover:opacity-10 transition-opacity" />
             </Link>
             <Link
               href="/coa-library"
-              className="group px-8 py-3.5 rounded-lg border border-zinc-700 text-zinc-200 font-semibold text-center transition-all duration-300 hover:border-zinc-500 hover:bg-zinc-800/50 active:scale-95"
+              className="vl-btn-secondary vl-focus-ring group px-7 py-3.5 text-center text-sm transition-all duration-300 active:scale-95 sm:px-8 sm:text-base"
             >
               View COA Library
             </Link>
           </div>
 
           {/* Stats */}
-          <div className="animate-fade-in grid grid-cols-2 sm:grid-cols-4 gap-6 border-t border-zinc-800 pt-8"
+          <div className="grid animate-fade-in grid-cols-2 gap-4 border-t border-cyan-500/20 pt-6 sm:grid-cols-4 sm:gap-6 sm:pt-8"
             style={{ animationDelay: "0.4s" }}>
             <div>
-              <p className="text-3xl font-bold text-white">40+</p>
+              <p className="text-2xl font-bold text-cyan-200 sm:text-3xl">40+</p>
               <p className="text-sm text-zinc-500 mt-1">Research Compounds</p>
             </div>
             <div>
-              <p className="text-3xl font-bold text-white">99%+</p>
+              <p className="text-2xl font-bold text-emerald-200 sm:text-3xl">99%+</p>
               <p className="text-sm text-zinc-500 mt-1">Purity Standard</p>
             </div>
             <div>
-              <p className="text-3xl font-bold text-white">12</p>
+              <p className="text-2xl font-bold text-violet-200 sm:text-3xl">12</p>
               <p className="text-sm text-zinc-500 mt-1">Lab Partners</p>
             </div>
             <div>
-              <p className="text-3xl font-bold text-white">100%</p>
+              <p className="text-2xl font-bold text-amber-200 sm:text-3xl">100%</p>
               <p className="text-sm text-zinc-500 mt-1">Verified</p>
             </div>
           </div>
@@ -264,19 +252,19 @@ export default function Home() {
       </section>
 
       {/* ═══════════════════════════ BUY 3 GET 1 FREE PROMO ═════════════════ */}
-      <section className="relative isolate py-16 border-b border-zinc-800/50 bg-gradient-to-r from-emerald-950/40 via-zinc-950 to-emerald-950/40 overflow-hidden">
+      <section className="relative isolate overflow-hidden border-b border-zinc-800/50 bg-gradient-to-r from-emerald-950/40 via-zinc-950 to-emerald-950/40 py-12 sm:py-16">
         {/* Animated background glow */}
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_40%_at_50%_50%,rgba(16,185,129,0.1),transparent)]" />
         
-        <div className="relative z-10 mx-auto max-w-7xl px-6 lg:px-8">
-          <div className="rounded-2xl border border-emerald-500/30 bg-emerald-950/20 backdrop-blur-sm p-8 sm:p-12 text-center">
+        <div className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="vl-panel rounded-2xl border-emerald-500/30 bg-emerald-950/20 p-6 text-center sm:p-12">
             <div className="flex items-center justify-center gap-3 mb-4">
               <span className="text-4xl">🎁</span>
               <span className="text-4xl">✨</span>
               <span className="text-4xl">🎉</span>
             </div>
             
-            <h2 className="text-4xl sm:text-5xl font-bold text-white mb-3">
+            <h2 className="mb-3 text-3xl font-bold text-white sm:text-5xl">
               Exclusive Summer Sale
             </h2>
             
@@ -284,14 +272,14 @@ export default function Home() {
               Buy 3 Get 1 Free
             </p>
             
-            <p className="text-lg text-zinc-300 mb-8 max-w-2xl mx-auto">
+            <p className="mx-auto mb-7 max-w-2xl text-base text-zinc-300 sm:mb-8 sm:text-lg">
               This summer only: Add any 4 peptides to your cart and receive the cheapest one completely free. Automatically applied — no code needed.
             </p>
             
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
               <Link
                 href="/products"
-                className="px-10 py-4 rounded-lg bg-gradient-to-r from-emerald-500 to-emerald-600 text-white font-semibold transition-all duration-300 hover:shadow-lg hover:shadow-emerald-500/30 active:scale-95"
+                className="vl-focus-ring rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600 px-8 py-3.5 text-sm font-semibold text-white transition-all duration-300 hover:shadow-lg hover:shadow-emerald-500/30 active:scale-95 sm:px-10 sm:py-4 sm:text-base"
               >
                 Shop Now & Save
               </Link>
@@ -304,18 +292,18 @@ export default function Home() {
       </section>
 
       {/* ═══════════════════════════ WHY VANTA LABS ═════════════════════════ */}
-      <section className="py-20 border-b border-zinc-800/50 bg-zinc-950">
-        <div className="mx-auto max-w-7xl px-6 lg:px-8">
-          <div className="max-w-2xl mb-12">
+      <section className="border-b border-zinc-800/50 bg-zinc-950 py-14 sm:py-20">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="mb-10 max-w-2xl sm:mb-12">
             <p className="text-[11px] font-semibold uppercase tracking-[0.4em] text-zinc-500 mb-3">Quality Assurance</p>
-            <h2 className="text-4xl sm:text-5xl font-bold text-white">
+            <h2 className="text-3xl font-bold text-white sm:text-5xl">
               Why Vanta Labs
             </h2>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {WHY_VANTA_FEATURES.map((feature) => (
-              <div key={feature.title} className="group rounded-xl border border-zinc-800 bg-zinc-900/30 p-8 transition-all duration-300 hover:border-zinc-700 hover:bg-zinc-900/50">
+              <div key={feature.title} className="vl-panel vl-elevate-hover group rounded-xl p-8 bg-gradient-to-br from-zinc-900/85 via-zinc-900/60 to-blue-950/20">
                 <span className="text-5xl block mb-4">{feature.icon}</span>
                 <h3 className="text-lg font-semibold text-white mb-2">
                   {feature.title}
@@ -330,35 +318,35 @@ export default function Home() {
       </section>
 
       {/* ═══════════════════════════ FEATURED PRODUCTS ══════════════════════ */}
-      <section className="py-20 border-b border-zinc-800/50 bg-zinc-950/50">
-        <div className="mx-auto max-w-7xl px-6 lg:px-8">
-          <div className="max-w-2xl mb-12">
+      <section className="border-b border-zinc-800/50 bg-zinc-950/50 py-14 sm:py-20">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="mb-10 max-w-2xl sm:mb-12">
             <p className="text-[11px] font-semibold uppercase tracking-[0.4em] text-zinc-500 mb-3">Best Sellers</p>
-            <h2 className="text-4xl sm:text-5xl font-bold text-white">
+            <h2 className="text-3xl font-bold text-white sm:text-5xl">
               Featured Products
             </h2>
           </div>
 
           {/* Carousel */}
           <div className="relative">
-            <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/30">
+            <div className="vl-panel overflow-hidden rounded-xl">
               <div className="aspect-video flex items-center justify-center bg-gradient-to-br from-zinc-900 to-zinc-950 relative">
                 {FEATURED_PRODUCTS[carouselIndex] && (
-                  <div key={carouselIndex} className="flex flex-col items-center justify-center w-full h-full animate-fade-in p-8">
-                    <div className="text-6xl mb-4">🧪</div>
-                    <h3 className="text-3xl font-bold text-white text-center mb-2">
+                  <div key={carouselIndex} className="flex h-full w-full animate-fade-in flex-col items-center justify-center p-5 sm:p-8">
+                    <div className="mb-4 text-5xl sm:text-6xl">🧪</div>
+                    <h3 className="mb-2 text-center text-2xl font-bold text-white sm:text-3xl">
                       {FEATURED_PRODUCTS[carouselIndex].name}
                     </h3>
-                    <p className="text-xl text-zinc-400 mb-4">
+                    <p className="mb-4 text-lg text-zinc-400 sm:text-xl">
                       {FEATURED_PRODUCTS[carouselIndex].price}
                     </p>
-                    <div className="flex gap-4">
+                    <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4">
                       <span className="px-4 py-2 rounded-lg bg-zinc-800 text-zinc-300">
                         {FEATURED_PRODUCTS[carouselIndex].purityResult}
                       </span>
                       <Link
                         href={`/products/${FEATURED_PRODUCTS[carouselIndex].slug}`}
-                        className="px-6 py-2 rounded-lg bg-white text-zinc-950 font-semibold hover:bg-zinc-100 transition-colors"
+                        className="vl-btn-primary vl-focus-ring px-6 py-2"
                       >
                         View Details
                       </Link>
@@ -386,27 +374,27 @@ export default function Home() {
       </section>
 
       {/* ═══════════════════════════ COA SECTION ═════════════════════════════ */}
-      <section className="py-20 border-b border-zinc-800/50 bg-zinc-950">
-        <div className="mx-auto max-w-7xl px-6 lg:px-8">
-          <div className="grid lg:grid-cols-2 gap-12 items-center">
+      <section className="border-b border-zinc-800/50 bg-zinc-950 py-14 sm:py-20">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="grid items-center gap-8 lg:grid-cols-2 lg:gap-12">
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-[0.4em] text-zinc-500 mb-4">Quality Verification</p>
-              <h2 className="text-4xl sm:text-5xl font-bold text-white mb-6">
+              <h2 className="mb-5 text-3xl font-bold text-white sm:text-5xl sm:mb-6">
                 Every Batch Verified
               </h2>
-              <p className="text-lg text-zinc-400 mb-6">
+              <p className="mb-6 text-base text-zinc-400 sm:text-lg">
                 Every product is accompanied by independent laboratory testing with downloadable Certificates of Analysis. Our commitment to transparency means you can verify the quality and purity of every batch.
               </p>
               <div className="flex flex-col sm:flex-row gap-4">
                 <Link
                   href="/coa-library"
-                  className="px-8 py-3.5 rounded-lg bg-white text-zinc-950 font-semibold text-center transition-all hover:shadow-lg hover:shadow-white/20 active:scale-95"
+                  className="vl-btn-primary vl-focus-ring px-8 py-3.5 text-center active:scale-95"
                 >
                   Browse COA Library
                 </Link>
               </div>
             </div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-12 flex items-center justify-center aspect-square">
+            <div className="vl-panel aspect-square rounded-xl p-8 sm:p-12 flex items-center justify-center">
               <div className="text-center">
                 <div className="text-8xl mb-4">🛡️</div>
                 <p className="text-xl font-semibold text-white">Laboratory Certified</p>
@@ -418,32 +406,32 @@ export default function Home() {
       </section>
 
       {/* ═══════════════════════════ LABORATORY SECTION ══════════════════════ */}
-      <section className="py-20 border-b border-zinc-800/50 bg-zinc-950/50 relative overflow-hidden">
+      <section className="relative overflow-hidden border-b border-zinc-800/50 bg-zinc-950/50 py-14 sm:py-20">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_center,rgba(59,130,246,0.1),transparent_70%)]" />
         
-        <div className="mx-auto max-w-7xl px-6 lg:px-8 relative z-10">
-          <div className="text-center max-w-3xl mx-auto mb-12">
+        <div className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="mx-auto mb-10 max-w-3xl text-center sm:mb-12">
             <p className="text-[11px] font-semibold uppercase tracking-[0.4em] text-zinc-500 mb-4">Scientific Excellence</p>
-            <h2 className="text-4xl sm:text-5xl font-bold text-white mb-6">
+            <h2 className="mb-5 text-3xl font-bold text-white sm:mb-6 sm:text-5xl">
               State-of-the-Art Laboratory
             </h2>
-            <p className="text-lg text-zinc-400">
+            <p className="text-base text-zinc-400 sm:text-lg">
               Our research compounds are produced in accredited laboratories utilizing cutting-edge analytical equipment and rigorous quality control protocols. Every batch undergoes comprehensive testing to ensure consistency and purity.
             </p>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-6">
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-8 text-center hover:border-zinc-700 transition-colors">
+          <div className="grid gap-5 md:grid-cols-3 md:gap-6">
+            <div className="vl-panel vl-elevate-hover rounded-xl p-8 text-center">
               <div className="text-5xl mb-4">🔬</div>
               <h3 className="text-xl font-semibold text-white mb-2">Advanced Analytics</h3>
               <p className="text-zinc-400">HPLC, GC-MS, and NMR spectroscopy for precise compound analysis.</p>
             </div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-8 text-center hover:border-zinc-700 transition-colors">
+            <div className="vl-panel vl-elevate-hover rounded-xl p-8 text-center">
               <div className="text-5xl mb-4">🧪</div>
               <h3 className="text-xl font-semibold text-white mb-2">Rigorous Testing</h3>
               <p className="text-zinc-400">Comprehensive QC protocols and batch verification procedures.</p>
             </div>
-            <div className="rounded-xl border border-zinc-800 bg-zinc-900/30 p-8 text-center hover:border-zinc-700 transition-colors">
+            <div className="vl-panel vl-elevate-hover rounded-xl p-8 text-center">
               <div className="text-5xl mb-4">📊</div>
               <h3 className="text-xl font-semibold text-white mb-2">Full Transparency</h3>
               <p className="text-zinc-400">Complete documentation and COA with molecular formulas.</p>
@@ -453,17 +441,17 @@ export default function Home() {
       </section>
 
       {/* ═══════════════════════════ CTA SECTION ═════════════════════════════ */}
-      <section className="py-20 border-b border-zinc-800/50 bg-zinc-950">
-        <div className="mx-auto max-w-4xl px-6 lg:px-8 text-center">
-          <h2 className="text-4xl sm:text-5xl font-bold text-white mb-6">
+      <section className="border-b border-zinc-800/50 bg-zinc-950 py-14 sm:py-20">
+        <div className="mx-auto max-w-4xl px-4 text-center sm:px-6 lg:px-8">
+          <h2 className="mb-5 text-3xl font-bold text-white sm:mb-6 sm:text-5xl">
             Ready to get started?
           </h2>
-          <p className="text-lg text-zinc-400 mb-8 max-w-2xl mx-auto">
+          <p className="mx-auto mb-8 max-w-2xl text-base text-zinc-400 sm:text-lg">
             Explore our complete catalog of premium research compounds, all verified, tested, and ready to ship.
           </p>
           <Link
             href="/products"
-            className="inline-block px-10 py-4 rounded-lg bg-white text-zinc-950 font-semibold transition-all hover:shadow-lg hover:shadow-white/20 active:scale-95"
+            className="vl-btn-primary vl-focus-ring inline-block px-10 py-4 active:scale-95"
           >
             Browse Full Catalog
           </Link>
@@ -472,8 +460,8 @@ export default function Home() {
 
       {/* ═══════════════════════════ FOOTER ═════════════════════════════════ */}
       <footer className="bg-zinc-950 border-t border-zinc-800/50">
-        <div className="mx-auto max-w-7xl px-6 lg:px-8 py-16">
-          <div className="grid md:grid-cols-4 gap-12 mb-12">
+        <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 sm:py-16 lg:px-8">
+          <div className="mb-10 grid gap-8 sm:gap-10 md:grid-cols-2 lg:grid-cols-4 lg:gap-12">
             {/* Brand */}
             <div>
               <p className="text-lg font-bold tracking-wider text-white mb-2">VANTA LABS</p>
@@ -518,15 +506,15 @@ export default function Home() {
             <div>
               <p className="text-sm font-semibold text-white uppercase tracking-wider mb-4">Stay Updated</p>
               <p className="text-sm text-zinc-500 mb-4">Subscribe for new product releases and research updates.</p>
-              <form className="flex">
+              <form className="flex flex-col gap-2 sm:flex-row sm:gap-0">
                 <input
                   type="email"
                   placeholder="Enter email"
-                  className="flex-1 rounded-l-lg bg-zinc-900 border border-zinc-800 border-r-0 px-4 py-2 text-sm text-white placeholder-zinc-600 focus:outline-none focus:border-zinc-700"
+                  className="vl-input flex-1 px-4 py-2 text-sm placeholder-zinc-600 sm:rounded-r-none sm:border-r-0"
                 />
                 <button
                   type="submit"
-                  className="rounded-r-lg bg-white text-zinc-950 px-4 py-2 text-sm font-semibold hover:bg-zinc-100 transition-colors"
+                  className="vl-btn-primary vl-focus-ring rounded-lg px-4 py-2 text-sm sm:rounded-l-none"
                 >
                   Subscribe
                 </button>
@@ -534,8 +522,8 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="border-t border-zinc-800 pt-8 flex flex-col sm:flex-row justify-between items-center gap-4 text-sm text-zinc-500">
-            <p>&copy; 2026 Vanta Labs. All rights reserved. Research use only.</p>
+          <div className="flex flex-col items-start justify-between gap-4 border-t border-zinc-800 pt-8 text-sm text-zinc-500 sm:flex-row sm:items-center">
+            <p className="text-left sm:text-center">&copy; 2026 Vanta Labs. All rights reserved. Research use only.</p>
             <div className="flex gap-4">
               <a href="#" className="hover:text-zinc-300 transition-colors">Twitter</a>
               <a href="#" className="hover:text-zinc-300 transition-colors">LinkedIn</a>

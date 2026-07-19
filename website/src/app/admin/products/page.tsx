@@ -49,24 +49,24 @@ export default function AdminProductsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <div className="border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
+    <div className="vl-page-shell min-h-screen bg-zinc-950 text-zinc-100">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-4 py-4 sm:px-6">
         <div>
           <p className="text-xs uppercase tracking-[0.3em] text-zinc-500">Admin</p>
-          <h1 className="text-2xl font-bold text-white mt-1">Product Images</h1>
+          <h1 className="mt-1 text-xl font-bold text-white sm:text-2xl">Product Images</h1>
         </div>
-        <div className="flex gap-3">
-          <Link href="/admin/orders" className="text-sm text-zinc-400 hover:text-white transition px-4 py-2 border border-zinc-700 rounded-lg">
+        <div className="flex w-full gap-3 sm:w-auto">
+          <Link href="/admin/orders" className="vl-btn-secondary vl-focus-ring flex-1 px-4 py-2 text-center text-sm sm:flex-initial">
             Orders
           </Link>
-          <Link href="/products" className="text-sm text-zinc-400 hover:text-white transition px-4 py-2 border border-zinc-700 rounded-lg">
+          <Link href="/products" className="vl-btn-secondary vl-focus-ring flex-1 px-4 py-2 text-center text-sm sm:flex-initial">
             View Store
           </Link>
         </div>
       </div>
 
-      <div className="mx-auto max-w-7xl px-6 py-10">
-        <p className="text-zinc-400 text-sm mb-8">
+      <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 sm:py-10">
+        <p className="mb-7 text-sm text-zinc-400 sm:mb-8">
           Upload a photo for each peptide. Images are saved to <code className="text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded text-xs">/public/images/[slug].png</code> and applied site-wide instantly.
         </p>
 
@@ -79,7 +79,7 @@ export default function AdminProductsPage() {
             const dose = parseDose(product.slug);
 
             return (
-              <div key={product.slug} className="rounded-xl border border-zinc-800 bg-zinc-900/60 overflow-hidden">
+              <div key={product.slug} className="vl-panel vl-elevate-hover overflow-hidden rounded-xl">
                 {/* Image preview */}
                 <div
                   className="relative h-40 w-full flex items-center justify-center"
@@ -122,7 +122,7 @@ export default function AdminProductsPage() {
                       type="button"
                       onClick={() => inputRefs.current[product.slug]?.click()}
                       disabled={state === "uploading"}
-                      className="w-full rounded-lg border border-zinc-600 bg-zinc-800 px-3 py-2 text-xs font-semibold text-zinc-200 transition hover:bg-zinc-700 hover:border-zinc-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="vl-btn-secondary vl-focus-ring w-full rounded-lg px-3 py-2 text-xs disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       {state === "uploading" ? "Uploading…" : hasCustomImage ? "Replace Image" : "Upload Image"}
                     </button>

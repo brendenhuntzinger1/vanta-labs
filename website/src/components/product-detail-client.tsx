@@ -6,27 +6,6 @@ import { useCart } from "@/components/cart-context";
 import { SiteHeader } from "@/components/site-header";
 import type { Product } from "@/lib/demo-data";
 
-const VIAL_COLORS = [
-  { primary: "#06b6d4", secondary: "#0891b2", glow: "rgba(6,182,212,0.45)", label: "#cffafe" },
-  { primary: "#8b5cf6", secondary: "#7c3aed", glow: "rgba(139,92,246,0.45)", label: "#ede9fe" },
-  { primary: "#10b981", secondary: "#059669", glow: "rgba(16,185,129,0.45)", label: "#d1fae5" },
-  { primary: "#f59e0b", secondary: "#d97706", glow: "rgba(245,158,11,0.45)", label: "#fef3c7" },
-  { primary: "#ec4899", secondary: "#db2777", glow: "rgba(236,72,153,0.45)", label: "#fce7f3" },
-  { primary: "#6366f1", secondary: "#4f46e5", glow: "rgba(99,102,241,0.45)", label: "#e0e7ff" },
-  { primary: "#14b8a6", secondary: "#0d9488", glow: "rgba(20,184,166,0.45)", label: "#ccfbf1" },
-  { primary: "#f97316", secondary: "#ea580c", glow: "rgba(249,115,22,0.45)", label: "#ffedd5" },
-  { primary: "#a855f7", secondary: "#9333ea", glow: "rgba(168,85,247,0.45)", label: "#f3e8ff" },
-  { primary: "#3b82f6", secondary: "#2563eb", glow: "rgba(59,130,246,0.45)", label: "#dbeafe" },
-  { primary: "#84cc16", secondary: "#65a30d", glow: "rgba(132,204,22,0.45)", label: "#ecfccb" },
-  { primary: "#e11d48", secondary: "#be123c", glow: "rgba(225,29,72,0.45)",  label: "#ffe4e6" },
-];
-
-function slugColorIndex(slug: string) {
-  let hash = 0;
-  for (let i = 0; i < slug.length; i++) hash = (hash * 31 + slug.charCodeAt(i)) | 0;
-  return Math.abs(hash) % VIAL_COLORS.length;
-}
-
 function parseDose(slug: string) {
   const match = slug.match(/(\d+(?:\.\d+)?(?:mg|iu|mcg|g|ml))$/i);
   return match ? match[1].toUpperCase() : "";
@@ -36,8 +15,8 @@ export function ProductDetailClient({ product }: { product: Product }) {
   const { addToCart } = useCart();
   const [message, setMessage] = useState<string | null>(null);
 
-  const handleAddToCart = () => {
-    addToCart(product, 1);
+  const handleAddToCart = (sourceElement?: HTMLElement | null) => {
+    addToCart(product, 1, sourceElement);
     setMessage(`Added 1 item to the cart.`);
   };
 
@@ -45,15 +24,15 @@ export function ProductDetailClient({ product }: { product: Product }) {
   const dose = parseDose(product.slug);
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="vl-page-shell min-h-screen bg-zinc-950 text-zinc-100">
       <SiteHeader />
-      <main className="mx-auto max-w-7xl px-6 py-16 lg:px-8">
-        <Link href="/products" className="text-sm uppercase tracking-[0.3em] text-zinc-500 transition hover:text-white">
+      <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8 lg:py-16">
+        <Link href="/products" className="text-xs uppercase tracking-[0.24em] text-zinc-500 transition hover:text-white sm:text-sm sm:tracking-[0.3em]">
           ← Back to catalog
         </Link>
-        <div className="mt-8 grid gap-10 lg:grid-cols-[0.95fr_1.05fr]">
+        <div className="mt-6 grid gap-6 sm:mt-8 sm:gap-8 lg:gap-10 lg:grid-cols-[0.95fr_1.05fr]">
           {/* Product image */}
-          <div className="relative overflow-hidden rounded-[2rem] border border-zinc-800 min-h-[420px] flex items-center justify-center" style={{ background: "#020205" }}>
+          <div className="vl-panel relative flex min-h-[300px] items-center justify-center overflow-hidden rounded-[1.5rem] sm:min-h-[360px] sm:rounded-[2rem] lg:min-h-[420px]" style={{ background: "#020205" }}>
             {/* Subtle bottom vignette blending into the card below */}
             <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-zinc-900/60 to-transparent z-10 pointer-events-none rounded-b-[2rem]" />
 
@@ -61,7 +40,7 @@ export function ProductDetailClient({ product }: { product: Product }) {
               <img
                 src={product.image}
                 alt={product.name}
-                className="h-[420px] w-full object-contain"
+                  className="h-[300px] w-full object-contain sm:h-[360px] lg:h-[420px]"
                 style={{ mixBlendMode: "multiply", padding: "24px" }}
               />
             ) : (
@@ -85,26 +64,26 @@ export function ProductDetailClient({ product }: { product: Product }) {
               </div>
             )}
           </div>
-          <div className="rounded-[2rem] border border-zinc-800 bg-zinc-900/70 p-8">
+          <div className="vl-panel rounded-[1.5rem] p-5 sm:rounded-[2rem] sm:p-8">
             <p className="text-sm uppercase tracking-[0.35em] text-zinc-500">Demo record</p>
-            <h1 className="mt-3 text-3xl font-semibold text-white sm:text-4xl">{product.name}</h1>
-            <p className="mt-4 text-lg leading-8 text-zinc-400">{product.description}</p>
-            <div className="mt-8 flex items-center justify-between rounded-2xl border border-zinc-800 bg-zinc-950/70 px-5 py-4">
+            <h1 className="mt-3 text-2xl font-semibold text-white sm:text-3xl lg:text-4xl">{product.name}</h1>
+            <p className="mt-4 text-base leading-7 text-zinc-400 sm:text-lg sm:leading-8">{product.description}</p>
+            <div className="vl-panel-soft mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-4 sm:mt-8 sm:px-5">
               <div>
                 <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Price</p>
-                <p className="mt-2 text-2xl font-semibold text-white">{product.price}</p>
+                <p className="mt-2 text-xl font-semibold text-white sm:text-2xl">{product.price}</p>
               </div>
-              <div className="text-right">
-                <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Stock</p>
-                <p className="mt-2 text-white">{product.stockStatus}</p>
+              <div className="text-left sm:text-right">
+                <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Purity</p>
+                <p className="mt-2 text-white">{product.purityResult ?? "Pending"}</p>
               </div>
             </div>
 
             <div className="mt-8 flex flex-col gap-3 sm:flex-row">
               <button
                 type="button"
-                onClick={handleAddToCart}
-                className="rounded-full border border-zinc-600 bg-white px-6 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-zinc-200"
+                onClick={(event) => handleAddToCart(event.currentTarget)}
+                className="vl-btn-primary vl-focus-ring rounded-full px-6 py-3 text-sm"
               >
                 Add 1 to Cart
               </button>
@@ -132,7 +111,7 @@ export function ProductDetailClient({ product }: { product: Product }) {
               href={product.coaUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="mt-8 inline-flex rounded-full border border-zinc-700 px-5 py-3 text-sm font-semibold text-zinc-200 transition hover:bg-zinc-800"
+              className="vl-btn-secondary vl-focus-ring mt-8 inline-flex px-5 py-3 text-sm"
             >
               View matching COA
             </a>

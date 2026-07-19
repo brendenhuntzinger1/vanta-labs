@@ -3,6 +3,14 @@
 :root {
   --background: #050505;
   --foreground: #f5f5f5;
+  --surface: #0c0c10;
+  --surface-elevated: #111118;
+  --border-soft: rgba(255, 255, 255, 0.12);
+  --accent: #8ab4ff;
+  --accent-strong: #5f90ff;
+  --accent-soft: rgba(138, 180, 255, 0.2);
+  --success: #34d399;
+  --danger: #fb7185;
 }
 
 @theme inline {
@@ -14,17 +22,200 @@
 
 html {
   scroll-behavior: smooth;
+  overflow-x: clip;
 }
 
 body {
   margin: 0;
-  background: var(--background);
+  background:
+    radial-gradient(1200px 600px at 85% -5%, rgba(94, 130, 255, 0.12), transparent 55%),
+    radial-gradient(1000px 500px at -10% 100%, rgba(34, 197, 94, 0.08), transparent 50%),
+    var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), Arial, Helvetica, sans-serif;
+  overflow-x: clip;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 * {
   box-sizing: border-box;
+}
+
+img,
+video,
+canvas,
+svg {
+  max-width: 100%;
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+}
+
+::selection {
+  background: rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+a,
+button,
+input,
+select,
+textarea {
+  transition: border-color 0.24s ease, background-color 0.24s ease, color 0.24s ease, box-shadow 0.24s ease, transform 0.24s ease;
+}
+
+/* ── Premium UI Primitives ──────────────────────────────────────────────── */
+
+.vl-page-shell {
+  position: relative;
+  isolation: isolate;
+}
+
+.vl-page-shell::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.014) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.014) 1px, transparent 1px);
+  background-size: 42px 42px;
+  mask-image: radial-gradient(circle at 50% 20%, black 35%, transparent 95%);
+}
+
+.vl-container {
+  width: min(1100px, calc(100% - 2rem));
+  margin-inline: auto;
+}
+
+.vl-kicker {
+  font-size: 0.7rem;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: rgb(148 163 184 / 0.85);
+  font-weight: 600;
+}
+
+.vl-heading-xl {
+  font-size: clamp(2rem, 6vw, 4.4rem);
+  line-height: 1.04;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+}
+
+.vl-heading-lg {
+  font-size: clamp(1.6rem, 4vw, 2.8rem);
+  line-height: 1.08;
+  letter-spacing: -0.01em;
+  font-weight: 650;
+}
+
+.vl-body-muted {
+  color: rgb(161 161 170);
+  line-height: 1.72;
+}
+
+.vl-panel {
+  border-radius: 1.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(175deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.015)),
+    rgba(15, 15, 18, 0.78);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.06),
+    0 20px 42px rgba(0, 0, 0, 0.38);
+}
+
+.vl-panel-soft {
+  border-radius: 1.1rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(12, 12, 15, 0.68);
+}
+
+.vl-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgb(228 228 231);
+  padding: 0.36rem 0.78rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+
+.vl-btn-primary {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  background: linear-gradient(160deg, #f8fafc 0%, #e4e4e7 100%);
+  color: #070709;
+  font-weight: 650;
+  box-shadow: 0 6px 20px rgba(255, 255, 255, 0.18);
+}
+
+.vl-btn-primary:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(255, 255, 255, 0.23);
+}
+
+.vl-btn-secondary {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+  color: rgb(228 228 231);
+  font-weight: 620;
+}
+
+.vl-btn-secondary:hover {
+  border-color: rgba(255, 255, 255, 0.3);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.vl-input {
+  border-radius: 0.9rem;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  background: rgba(6, 7, 10, 0.84);
+  color: rgb(244 244 245);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.vl-input:focus {
+  outline: none;
+  border-color: rgba(138, 180, 255, 0.72);
+  box-shadow: 0 0 0 3px rgba(138, 180, 255, 0.15);
+}
+
+.vl-link {
+  color: rgb(212 212 216);
+}
+
+.vl-link:hover {
+  color: white;
+}
+
+.vl-elevate-hover {
+  transition: transform 0.28s ease, border-color 0.28s ease, box-shadow 0.28s ease;
+}
+
+.vl-elevate-hover:hover {
+  transform: translateY(-4px);
+  border-color: rgba(255, 255, 255, 0.28);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.44);
+}
+
+.vl-focus-ring:focus-visible {
+  outline: 2px solid rgba(138, 180, 255, 0.85);
+  outline-offset: 2px;
 }
 
 /* ── Keyframe Animations ─────────────────────────────────────────────────── */
@@ -53,6 +244,21 @@ body {
 
 @keyframes vl-fade-in {
   0% { opacity: 0; transform: translateY(12px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes vl-fade-backdrop {
+  0% { opacity: 0; }
+  100% { opacity: 1; }
+}
+
+@keyframes vl-drawer-in-desktop {
+  0% { opacity: 0; transform: translateX(24px) scale(0.985); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+
+@keyframes vl-drawer-in-mobile {
+  0% { opacity: 0; transform: translateY(16px); }
   100% { opacity: 1; transform: translateY(0); }
 }
 

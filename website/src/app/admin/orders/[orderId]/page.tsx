@@ -23,11 +23,11 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
   }
 
   return (
-    <div className="min-h-screen bg-zinc-950 p-8 text-zinc-100">
-      <div className="mx-auto max-w-5xl rounded-2xl border border-zinc-800 bg-zinc-900/70 p-8">
-        <h1 className="text-3xl font-semibold">{data.order_id}</h1>
+    <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
+      <div className="vl-panel mx-auto max-w-5xl rounded-2xl p-4 sm:p-8">
+        <h1 className="break-all text-2xl font-semibold sm:text-3xl">{data.order_id}</h1>
         <p className="mt-2 text-sm text-zinc-400">Customer: {data.customer_email}</p>
-        <pre className="mt-6 overflow-x-auto rounded-xl bg-zinc-950 p-4 text-sm text-zinc-300">
+        <pre className="mt-6 overflow-x-auto rounded-xl bg-zinc-950 p-3 text-xs text-zinc-300 sm:p-4 sm:text-sm">
 {JSON.stringify(data, null, 2)}
         </pre>
       </div>
