@@ -136,8 +136,6 @@ export default function ProductsPage() {
     return ["All", ...productCategories];
   }, [products]);
 
-  const [stockFilter, setStockFilter] = useState(false);
-
   const visibleProducts = useMemo(() => {
     let result = [...products];
 
