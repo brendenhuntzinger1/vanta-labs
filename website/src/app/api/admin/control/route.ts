@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { getControlSnapshot, upsertControlValue } from "@/lib/admin-control";
 
 function unauthorizedResponse() {
@@ -29,6 +29,9 @@ export async function PATCH(request: Request) {
     return unauthorizedResponse();
   }
 
+  const ipAddress = getRequestIpAddress(request);
+  const userAgent = getRequestUserAgent(request);
+
   try {
     const body = await request.json() as {
       updates?: Array<{ section: string; key: string; value: unknown }>;
@@ -44,6 +47,9 @@ export async function PATCH(request: Request) {
         section: String(update.section ?? ""),
         key: String(update.key ?? ""),
         value: update.value,
+        actorUsername: session.username,
+        ipAddress,
+        userAgent,
       });
     }
 

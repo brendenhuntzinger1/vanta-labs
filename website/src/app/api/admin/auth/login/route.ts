@@ -3,6 +3,8 @@ import {
   buildAdminSessionCookie,
   canAttemptAdminLogin,
   createAdminSession,
+  getRequestIpAddress,
+  getRequestUserAgent,
   recordAdminLoginAttempt,
   validateAdminCredentials,
 } from "@/lib/admin-auth";
@@ -20,8 +22,8 @@ export async function POST(request: Request) {
 
   const username = (payload.username ?? "").trim().toLowerCase();
   const password = payload.password ?? "";
-  const ipAddress = request.headers.get("x-forwarded-for") ?? null;
-  const userAgent = request.headers.get("user-agent") ?? null;
+  const ipAddress = getRequestIpAddress(request);
+  const userAgent = getRequestUserAgent(request);
 
   if (!username || !password) {
     return NextResponse.json({ error: "Username and password are required" }, { status: 400 });
@@ -52,6 +54,7 @@ export async function POST(request: Request) {
   });
 
   const response = NextResponse.json({ ok: true });
+  response.headers.set("Cache-Control", "no-store");
   const cookie = buildAdminSessionCookie(token);
   response.cookies.set(cookie.name, cookie.value, cookie.options);
   return response;

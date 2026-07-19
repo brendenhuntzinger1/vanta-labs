@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { createPartnerInvite, getAdminPartnerRows } from "@/lib/partner-portal";
 
 function unauthorizedResponse() {
@@ -32,6 +32,9 @@ export async function POST(request: Request) {
     return unauthorizedResponse();
   }
 
+  const ipAddress = getRequestIpAddress(request);
+  const userAgent = getRequestUserAgent(request);
+
   try {
     const body = await request.json();
     const name = String(body?.name ?? "").trim();
@@ -51,6 +54,9 @@ export async function POST(request: Request) {
       email,
       commissionPercent,
       createdByUserId: undefined,
+      actorUsername: session.username,
+      ipAddress,
+      userAgent,
     });
 
     return NextResponse.json({ success: true, invite });

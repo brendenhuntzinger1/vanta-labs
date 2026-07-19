@@ -17,6 +17,7 @@ export async function POST(request: Request) {
   await destroyAdminSession(token);
 
   const response = NextResponse.json({ ok: true });
+  response.headers.set("Cache-Control", "no-store");
   const expired = buildExpiredAdminSessionCookie();
   response.cookies.set(expired.name, expired.value, expired.options);
   return response;

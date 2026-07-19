@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 function unauthorizedResponse() {
@@ -11,6 +11,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
   if (!session) {
     return unauthorizedResponse();
   }
+
+  const ipAddress = getRequestIpAddress(request);
+  const userAgent = getRequestUserAgent(request);
 
   const { orderId } = await context.params;
 
@@ -47,6 +50,27 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         throw error;
       }
 
+      const { error: auditError } = await supabaseAdmin
+        .from("admin_audit_logs")
+        .insert({
+          action: "order_update_status",
+          target_table: "orders",
+          target_id: orderId,
+          metadata: {
+            paymentStatus: body.paymentStatus ?? null,
+            fulfillmentStatus: body.fulfillmentStatus ?? null,
+            trackingNumber: typeof body.trackingNumber === "string" ? body.trackingNumber.trim() || null : null,
+            performedAt: now,
+            performedBy: session.username,
+            ipAddress,
+            userAgent,
+          },
+        });
+
+      if (auditError) {
+        throw auditError;
+      }
+
       return NextResponse.json({ success: true });
     }
 
@@ -81,6 +105,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
             note: body.note ?? null,
             performedAt: now,
             performedBy: session.username,
+            ipAddress,
+            userAgent,
           },
         });
 

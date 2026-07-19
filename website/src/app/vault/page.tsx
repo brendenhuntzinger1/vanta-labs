@@ -104,14 +104,16 @@ export default function VaultPage() {
               </div>
             </div>
           ) : (
-            <form className="mt-6 space-y-4" onSubmit={onSubmit}>
+            <form className="mt-6 space-y-4" onSubmit={onSubmit} autoComplete="off">
               <label className="block text-xs uppercase tracking-[0.16em] text-zinc-500">
                 Username
                 <input
                   className="vl-input mt-2 w-full px-3 py-2"
                   value={username}
                   onChange={(event) => setUsername(event.target.value)}
-                  autoComplete="username"
+                  autoComplete="off"
+                  spellCheck={false}
+                  autoCapitalize="none"
                   required
                 />
               </label>
@@ -123,7 +125,7 @@ export default function VaultPage() {
                   type="password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
-                  autoComplete="current-password"
+                  autoComplete="off"
                   required
                 />
               </label>

@@ -1,10 +1,12 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
+import { getCurrentOnlineVisitorCount, getRevenueWindowMetrics } from "@/lib/admin-analytics";
 import { getAdminOrderRows } from "@/lib/admin-orders";
 import { listAdminProducts } from "@/lib/admin-products";
 import { getAdminPartnerRows } from "@/lib/partner-portal";
 import { AdminControlCenterClient } from "@/components/admin-control-center-client";
+import { AdminLiveMetrics } from "@/components/admin-live-metrics";
 
 export const dynamic = "force-dynamic";
 
@@ -18,10 +20,12 @@ export default async function AdminHomePage() {
     redirect("/vault");
   }
 
-  const [orders, products, partners] = await Promise.all([
+  const [orders, products, partners, onlineVisitors, revenueWindows] = await Promise.all([
     getAdminOrderRows().catch(() => []),
     listAdminProducts({ search: "", category: "all", status: "all" }).catch(() => []),
     getAdminPartnerRows({ status: "all" }).catch(() => []),
+    getCurrentOnlineVisitorCount().catch(() => 0),
+    getRevenueWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0 })),
   ]);
 
   const totalRevenue = orders.reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0);
@@ -48,7 +52,7 @@ export default async function AdminHomePage() {
           </div>
         </section>
 
-        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Orders</p>
             <p className="mt-2 text-2xl font-semibold text-white">{orders.length}</p>
@@ -64,6 +68,57 @@ export default async function AdminHomePage() {
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Pending Partners</p>
             <p className="mt-2 text-2xl font-semibold text-white">{pendingPartners}</p>
+          </div>
+          <AdminLiveMetrics
+            initial={{
+              onlineNow: onlineVisitors,
+              revenue: revenueWindows,
+              updatedAt: new Date().toISOString(),
+            }}
+          />
+        </section>
+
+        <section className="vl-panel rounded-[1.6rem] p-5 sm:p-7">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs uppercase tracking-[0.28em] text-zinc-400">Orders Snapshot</p>
+              <h2 className="mt-2 text-2xl font-semibold text-white">Recent Orders</h2>
+              <p className="mt-2 text-sm text-zinc-400">Latest paid and pending orders visible right inside admin home.</p>
+            </div>
+            <Link href="/admin/orders" className="vl-btn-secondary px-4 py-2 text-xs">Open Full Orders</Link>
+          </div>
+
+          <div className="mt-5 overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-white/10 text-zinc-400">
+                  <th className="px-3 py-2 font-medium">Order</th>
+                  <th className="px-3 py-2 font-medium">Customer</th>
+                  <th className="px-3 py-2 font-medium">Amount</th>
+                  <th className="px-3 py-2 font-medium">Payment</th>
+                  <th className="px-3 py-2 font-medium">Items</th>
+                </tr>
+              </thead>
+              <tbody>
+                {orders.slice(0, 10).map((order) => (
+                  <tr key={order.id} className="border-b border-white/5 text-zinc-200">
+                    <td className="px-3 py-2">
+                      <Link href={`/admin/orders/${order.order_id}`} className="transition hover:text-white">
+                        {order.order_id}
+                      </Link>
+                    </td>
+                    <td className="px-3 py-2">{order.customer_email ?? "Unknown"}</td>
+                    <td className="px-3 py-2">{money(Number(order.amount_paid ?? 0))}</td>
+                    <td className="px-3 py-2">{order.payment_status}</td>
+                    <td className="px-3 py-2">{order.item_count}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {orders.length === 0 ? (
+              <p className="px-3 py-6 text-sm text-zinc-400">No orders yet.</p>
+            ) : null}
           </div>
         </section>
 

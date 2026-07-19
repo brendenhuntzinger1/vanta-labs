@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { markCommissionsPaid, updatePartnerStatus } from "@/lib/partner-portal";
 
 function unauthorizedResponse() {
@@ -11,6 +11,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
   if (!session) {
     return unauthorizedResponse();
   }
+
+  const ipAddress = getRequestIpAddress(request);
+  const userAgent = getRequestUserAgent(request);
 
   const { partnerId } = await context.params;
 
@@ -31,6 +34,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
         status,
         actorUserId: undefined,
         commissionPercent,
+        actorUsername: session.username,
+        ipAddress,
+        userAgent,
       });
 
       return NextResponse.json({ success: true });
@@ -49,6 +55,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
         actorUserId: undefined,
         amount,
         note,
+        actorUsername: session.username,
+        ipAddress,
+        userAgent,
       });
 
       return NextResponse.json({ success: true, payout });

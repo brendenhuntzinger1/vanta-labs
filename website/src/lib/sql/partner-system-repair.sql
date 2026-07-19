@@ -294,20 +294,9 @@ alter table if exists public.admin_login_attempts
   add column if not exists success boolean not null default false,
   add column if not exists attempted_at timestamptz not null default now();
 
-insert into public.admin_credentials (username, password_salt, password_hash, is_active, updated_at)
-values (
-  'q7m.vr91xk_admin',
-  'e78b29be7a79956208490c779348c966',
-  '4a8a6af70ef5ba96d54e205ba448c8c58c7b285b9cd4429fcae2bdd2c69d6c696392dde65b0c9a6d82e66bcfe2dbdb9d3ec311cef9a8f7dba6077812b8fe25f1',
-  true,
-  now()
-)
-on conflict (username)
-do update set
-  password_salt = excluded.password_salt,
-  password_hash = excluded.password_hash,
-  is_active = true,
-  updated_at = now();
+-- SECURITY NOTE:
+-- Do not commit default admin credentials to source control.
+-- Create admin users using a secure one-time provisioning process in each environment.
 
 -- Ensure required columns exist for legacy table shapes
 alter table if exists public.partners

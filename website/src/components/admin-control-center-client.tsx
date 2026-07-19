@@ -26,6 +26,7 @@ function parseCsv(value: string) {
 
 export function AdminControlCenterClient() {
   const [saving, setSaving] = useState(false);
+  const [quickSaving, setQuickSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const [homepageHeroHeadline, setHomepageHeroHeadline] = useState("");
@@ -39,6 +40,8 @@ export function AdminControlCenterClient() {
   const [promoDiscountValue, setPromoDiscountValue] = useState("");
   const [promoBuyX, setPromoBuyX] = useState("");
   const [promoGetY, setPromoGetY] = useState("");
+  const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
+  const [promoBuy2Get1HalfEnabled, setPromoBuy2Get1HalfEnabled] = useState(false);
   const [promoFreeShippingThreshold, setPromoFreeShippingThreshold] = useState("");
   const [promoAnnouncement, setPromoAnnouncement] = useState("");
 
@@ -92,6 +95,8 @@ export function AdminControlCenterClient() {
     setPromoDiscountValue(String(promotions.discount_value ?? ""));
     setPromoBuyX(String(promotions.buy_x ?? ""));
     setPromoGetY(String(promotions.get_y ?? ""));
+    setPromoBuy3Get1Enabled(Boolean(promotions.buy_3_get_1_enabled ?? false));
+    setPromoBuy2Get1HalfEnabled(Boolean(promotions.buy_2_get_1_half_enabled ?? false));
     setPromoFreeShippingThreshold(String(promotions.free_shipping_threshold ?? ""));
     setPromoAnnouncement(String(promotions.sitewide_announcement ?? ""));
 
@@ -175,6 +180,8 @@ export function AdminControlCenterClient() {
       { section: "promotions", key: "discount_value", value: promoDiscountValue },
       { section: "promotions", key: "buy_x", value: promoBuyX },
       { section: "promotions", key: "get_y", value: promoGetY },
+      { section: "promotions", key: "buy_3_get_1_enabled", value: promoBuy3Get1Enabled },
+      { section: "promotions", key: "buy_2_get_1_half_enabled", value: promoBuy2Get1HalfEnabled },
       { section: "promotions", key: "free_shipping_threshold", value: promoFreeShippingThreshold },
       { section: "promotions", key: "sitewide_announcement", value: promoAnnouncement },
 
@@ -224,6 +231,42 @@ export function AdminControlCenterClient() {
     void loadSnapshot();
   };
 
+  const setMaintenanceInstant = async (enabled: boolean) => {
+    const confirmation = enabled
+      ? "Freeze public site now? Admin access will stay available."
+      : "Unfreeze public site and resume public traffic now?";
+
+    if (!window.confirm(confirmation)) {
+      return;
+    }
+
+    setQuickSaving(true);
+    setMessage(null);
+
+    try {
+      const res = await fetch("/api/admin/control", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          updates: [{ section: "settings", key: "maintenance_mode", value: enabled }],
+        }),
+      });
+
+      const json = await res.json() as { success: boolean; error?: string };
+      if (!res.ok || !json.success) {
+        setMessage(json.error ?? "Unable to update maintenance mode");
+        return;
+      }
+
+      setMaintenanceMode(enabled);
+      setMessage(enabled ? "Site is now frozen for visitors." : "Site is live again.");
+    } catch {
+      setMessage("Unable to update maintenance mode right now.");
+    } finally {
+      setQuickSaving(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -243,9 +286,19 @@ export function AdminControlCenterClient() {
             <h2 className="mt-2 text-2xl font-semibold text-white">Manage Website Operations</h2>
             <p className="mt-2 text-sm text-zinc-400">Update live website controls, promotions, and policy text without editing code.</p>
           </div>
-          <button type="button" onClick={saveAll} disabled={saving} className="vl-btn-primary vl-focus-ring px-5 py-3 text-sm disabled:opacity-60">
-            {saving ? "Saving..." : "Save All Changes"}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setMaintenanceInstant(!maintenanceMode)}
+              disabled={quickSaving}
+              className={`${maintenanceMode ? "vl-btn-secondary" : "vl-btn-primary"} vl-focus-ring px-5 py-3 text-sm disabled:opacity-60`}
+            >
+              {quickSaving ? "Updating..." : maintenanceMode ? "Unfreeze Site" : "Freeze Site Now"}
+            </button>
+            <button type="button" onClick={saveAll} disabled={saving} className="vl-btn-primary vl-focus-ring px-5 py-3 text-sm disabled:opacity-60">
+              {saving ? "Saving..." : "Save All Changes"}
+            </button>
+          </div>
         </div>
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
@@ -269,6 +322,8 @@ export function AdminControlCenterClient() {
               <label className="text-zinc-300">Discount value<input value={promoDiscountValue} onChange={(e) => setPromoDiscountValue(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Buy X<input value={promoBuyX} onChange={(e) => setPromoBuyX(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Get Y<input value={promoGetY} onChange={(e) => setPromoGetY(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="flex items-center gap-2 text-zinc-300 sm:col-span-2"><input type="checkbox" checked={promoBuy3Get1Enabled} onChange={(e) => setPromoBuy3Get1Enabled(e.target.checked)} /> Enable Buy 3 Get 1 Free</label>
+              <label className="flex items-center gap-2 text-zinc-300 sm:col-span-2"><input type="checkbox" checked={promoBuy2Get1HalfEnabled} onChange={(e) => setPromoBuy2Get1HalfEnabled(e.target.checked)} /> Enable Buy 2 Get 1 (50% Off)</label>
               <label className="text-zinc-300">Free shipping threshold<input value={promoFreeShippingThreshold} onChange={(e) => setPromoFreeShippingThreshold(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
           </section>

@@ -22,6 +22,8 @@ export type HomepageControlConfig = {
   featuredProductSlugs?: string[];
   qualityPanelTitle?: string;
   qualityPanelItems?: string[];
+  promoBuy3Get1Enabled?: boolean;
+  promoBuy2Get1HalfEnabled?: boolean;
 };
 
 function sanitizeSection(section: string) {
@@ -70,7 +72,15 @@ export async function getControlSnapshot(section?: string) {
   return result;
 }
 
-export async function upsertControlValue(input: { section: string; key: string; value: unknown; actorUserId?: string | null }) {
+export async function upsertControlValue(input: {
+  section: string;
+  key: string;
+  value: unknown;
+  actorUserId?: string | null;
+  actorUsername?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}) {
   const section = sanitizeSection(input.section);
   const key = sanitizeKey(input.key);
   if (!section || !key) {
@@ -84,7 +94,12 @@ export async function upsertControlValue(input: { section: string; key: string; 
       action: CONTROL_ACTION,
       target_table: section,
       target_id: key,
-      metadata: { value: input.value },
+      metadata: {
+        value: input.value,
+        actorUsername: input.actorUsername ?? null,
+        ipAddress: input.ipAddress ?? null,
+        userAgent: input.userAgent ?? null,
+      },
       created_at: new Date().toISOString(),
     });
 
@@ -95,8 +110,9 @@ export async function upsertControlValue(input: { section: string; key: string; 
 
 export async function getHomepageControlConfig(): Promise<HomepageControlConfig> {
   try {
-    const snapshot = await getControlSnapshot("homepage");
+    const snapshot = await getControlSnapshot();
     const homepage = snapshot.homepage ?? {};
+    const promotions = snapshot.promotions ?? {};
     return {
       promoTickerItems: Array.isArray(homepage.promo_ticker_items) ? homepage.promo_ticker_items as string[] : undefined,
       heroKicker: typeof homepage.hero_kicker === "string" ? homepage.hero_kicker : undefined,
@@ -107,6 +123,8 @@ export async function getHomepageControlConfig(): Promise<HomepageControlConfig>
       featuredProductSlugs: Array.isArray(homepage.featured_product_slugs) ? homepage.featured_product_slugs as string[] : undefined,
       qualityPanelTitle: typeof homepage.quality_panel_title === "string" ? homepage.quality_panel_title : undefined,
       qualityPanelItems: Array.isArray(homepage.quality_panel_items) ? homepage.quality_panel_items as string[] : undefined,
+      promoBuy3Get1Enabled: Boolean(promotions.buy_3_get_1_enabled ?? false),
+      promoBuy2Get1HalfEnabled: Boolean(promotions.buy_2_get_1_half_enabled ?? false),
     };
   } catch {
     return {};

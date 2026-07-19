@@ -75,12 +75,22 @@ function ProductCard({
 
 export default async function HomePage() {
   const control = await getHomepageControlConfig();
-  const tickerItems = control.promoTickerItems?.length
+  const enabledPromoLabels = [
+    control.promoBuy3Get1Enabled ? "Buy 3 Get 1 Free" : null,
+    control.promoBuy2Get1HalfEnabled ? "Buy 2 Get 1 (50% Off)" : null,
+  ].filter((value): value is string => Boolean(value));
+
+  const tickerBase = control.promoTickerItems?.length
     ? control.promoTickerItems
-    : ["Buy 3 Get 1 Free", "USA Sourced", "99%+ Purity", "Fast Shipping", "Third-Party Batch Verified"];
-  const promoPills = control.promoPills?.length
+    : ["USA Sourced", "99%+ Purity", "Fast Shipping", "Third-Party Batch Verified"];
+
+  const tickerItems = Array.from(new Set([...enabledPromoLabels, ...tickerBase]));
+
+  const promoBase = control.promoPills?.length
     ? control.promoPills
     : ["USA Sourced", "99%+ Purity", "Fast Shipping"];
+  const promoPills = Array.from(new Set([...enabledPromoLabels, ...promoBase]));
+
   const featuredForHome = control.featuredProductSlugs?.length
     ? featuredProducts.filter((product) => control.featuredProductSlugs?.includes(product.slug))
     : featuredProducts;

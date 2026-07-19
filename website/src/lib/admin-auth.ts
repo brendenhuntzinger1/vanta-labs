@@ -5,7 +5,7 @@ import { cookies } from "next/headers";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 export const ADMIN_SESSION_COOKIE = "vl_admin_session";
-const ADMIN_SESSION_DAYS = 30;
+const ADMIN_SESSION_HOURS = 12;
 const MAX_FAILED_ATTEMPTS = 6;
 const LOGIN_WINDOW_MINUTES = 15;
 
@@ -38,7 +38,7 @@ function verifyPassword(password: string, salt: string, hashHex: string) {
 
 function sessionExpiryIso() {
   const expires = new Date();
-  expires.setDate(expires.getDate() + ADMIN_SESSION_DAYS);
+  expires.setHours(expires.getHours() + ADMIN_SESSION_HOURS);
   return expires.toISOString();
 }
 
@@ -55,6 +55,18 @@ function normalizeIpAddress(raw: string | null | undefined) {
   return raw.split(",")[0]?.trim() || null;
 }
 
+export function getRequestIpAddress(request: Request) {
+  return normalizeIpAddress(
+    request.headers.get("x-forwarded-for")
+    ?? request.headers.get("x-real-ip")
+    ?? null,
+  );
+}
+
+export function getRequestUserAgent(request: Request) {
+  return request.headers.get("user-agent") ?? null;
+}
+
 export function buildAdminSessionCookie(token: string) {
   return {
     name: ADMIN_SESSION_COOKIE,
@@ -62,9 +74,8 @@ export function buildAdminSessionCookie(token: string) {
     options: {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",
-      sameSite: "lax" as const,
+      sameSite: "strict" as const,
       path: "/",
-      maxAge: 60 * 60 * 24 * ADMIN_SESSION_DAYS,
     },
   };
 }

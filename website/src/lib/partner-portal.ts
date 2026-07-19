@@ -692,6 +692,9 @@ export async function createPartnerInvite(input: {
   email: string;
   commissionPercent: number;
   createdByUserId?: string;
+  actorUsername?: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
 }) {
   const referralCode = generateReferralCode(input.name);
   const actorUserId = input.createdByUserId ?? null;
@@ -749,7 +752,14 @@ export async function createPartnerInvite(input: {
     action: "partner_invited",
     target_table: "ambassadors",
     target_id: partnerId,
-    metadata: { email: input.email, commissionPercent: input.commissionPercent, referralCode },
+    metadata: {
+      email: input.email,
+      commissionPercent: input.commissionPercent,
+      referralCode,
+      actorUsername: input.actorUsername ?? null,
+      ipAddress: input.ipAddress ?? null,
+      userAgent: input.userAgent ?? null,
+    },
   });
 
   return {
@@ -763,6 +773,9 @@ export async function updatePartnerStatus(input: {
   status: "approved" | "disabled" | "pending" | "rejected";
   actorUserId?: string;
   commissionPercent?: number;
+  actorUsername?: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
 }) {
   const updatePayload: Record<string, unknown> = {
     status: input.status,
@@ -802,6 +815,9 @@ export async function updatePartnerStatus(input: {
     metadata: {
       status: input.status,
       commissionPercent: input.commissionPercent ?? null,
+      actorUsername: input.actorUsername ?? null,
+      ipAddress: input.ipAddress ?? null,
+      userAgent: input.userAgent ?? null,
     },
   });
 }
@@ -811,6 +827,9 @@ export async function markCommissionsPaid(input: {
   actorUserId?: string;
   amount: number;
   note?: string;
+  actorUsername?: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
 }) {
   const { data: pendingRows, error: pendingError } = await supabaseAdmin
     .from("referral_orders")
@@ -885,6 +904,9 @@ export async function markCommissionsPaid(input: {
       partnerId: input.partnerId,
       amount: roundMoney(input.amount),
       orderCount: ids.length,
+      actorUsername: input.actorUsername ?? null,
+      ipAddress: input.ipAddress ?? null,
+      userAgent: input.userAgent ?? null,
     },
   });
 
