@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getAdminOrderRows, type AdminOrderRow } from "@/lib/admin-orders";
 
@@ -17,6 +18,11 @@ export default async function AdminOrdersPage() {
       <div className="mx-auto max-w-7xl">
         <h1 className="text-2xl font-semibold sm:text-3xl">Admin Orders</h1>
         <p className="mt-2 text-sm text-zinc-400">Real Supabase orders and commissions.</p>
+        <div className="mt-4">
+          <Link href="/api/admin/orders/export" className="vl-btn-secondary inline-flex px-4 py-2 text-xs">
+            Export Orders CSV
+          </Link>
+        </div>
 
         <div className="mt-6 grid gap-3 sm:hidden">
           {orders.map((order: AdminOrderRow) => (
@@ -30,6 +36,9 @@ export default async function AdminOrdersPage() {
                 <p><span className="text-zinc-500">Referral:</span> {order.referral_code ?? "-"}</p>
                 <p><span className="text-zinc-500">Status:</span> {order.payment_status}</p>
               </div>
+              <Link href={`/admin/orders/${order.order_id}`} className="mt-3 inline-flex text-xs text-zinc-200 underline-offset-4 hover:underline">
+                Open order
+              </Link>
             </article>
           ))}
         </div>
@@ -49,7 +58,7 @@ export default async function AdminOrdersPage() {
             <tbody className="divide-y divide-zinc-800 bg-zinc-950/70">
               {orders.map((order: AdminOrderRow) => (
                 <tr key={order.id}>
-                  <td className="px-4 py-3">{order.order_id}</td>
+                  <td className="px-4 py-3"><Link href={`/admin/orders/${order.order_id}`} className="hover:underline">{order.order_id}</Link></td>
                   <td className="px-4 py-3">{order.customer_email}</td>
                   <td className="px-4 py-3">{order.item_count}</td>
                   <td className="px-4 py-3">${order.amount_paid.toFixed(2)}</td>

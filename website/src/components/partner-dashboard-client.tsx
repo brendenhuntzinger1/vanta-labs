@@ -52,15 +52,15 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
   return (
     <div className="space-y-6">
       <section className="vl-panel relative overflow-hidden rounded-[1.8rem] p-5 sm:p-8">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(103,232,249,0.12),transparent_50%)]" />
-        <p className="text-xs uppercase tracking-[0.28em] text-cyan-300/80">Partner Command Center</p>
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.1),transparent_50%)]" />
+        <p className="text-xs uppercase tracking-[0.28em] text-zinc-300">Partner Command Center</p>
         <h1 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Welcome back, {liveSummary.partnerName}</h1>
         <p className="mt-3 max-w-3xl text-sm text-zinc-400 sm:text-base">Performance updates are connected to your live referral orders and payment events in Supabase.</p>
 
-        <div className="mt-5 rounded-2xl border border-cyan-400/20 bg-zinc-950/60 p-4">
+        <div className="mt-5 rounded-2xl border border-white/20 bg-zinc-950/60 p-4">
           <p className="text-[11px] uppercase tracking-[0.25em] text-zinc-500">Your Referral Link</p>
           <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
-            <p className="min-w-0 flex-1 truncate text-sm text-cyan-200">{liveSummary.referralLink}</p>
+            <p className="min-w-0 flex-1 truncate text-sm text-zinc-200">{liveSummary.referralLink}</p>
             <button
               type="button"
               onClick={async () => {
@@ -68,7 +68,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
                 setCopied(true);
                 window.setTimeout(() => setCopied(false), 1500);
               }}
-              className="vl-focus-ring rounded-full border border-cyan-300/30 bg-cyan-300/10 px-4 py-2 text-xs font-semibold text-cyan-100 transition hover:bg-cyan-300/20"
+              className="vl-focus-ring rounded-full border border-white/30 bg-white/10 px-4 py-2 text-xs font-semibold text-zinc-100 transition hover:bg-white/20"
             >
               {copied ? "Copied" : "Copy Link"}
             </button>
@@ -87,8 +87,8 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
       </section>
 
       <section className="grid gap-4 lg:grid-cols-2">
-        <RevenueBars title="Monthly Revenue" points={liveSummary.monthlyRevenueSeries} colorClass="from-cyan-300 via-blue-300 to-indigo-300" />
-        <RevenueBars title="Lifetime Revenue" points={liveSummary.lifetimeRevenueSeries} colorClass="from-emerald-300 via-cyan-300 to-blue-300" />
+        <RevenueBars title="Monthly Revenue" points={liveSummary.monthlyRevenueSeries} colorClass="from-zinc-100 via-zinc-300 to-zinc-500" />
+        <RevenueBars title="Lifetime Revenue" points={liveSummary.lifetimeRevenueSeries} colorClass="from-white via-zinc-200 to-zinc-500" />
       </section>
 
       <section className="vl-panel rounded-2xl p-4 sm:p-5">

@@ -97,7 +97,7 @@ export default function CartPage() {
                     </div>
                     <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
                       <div
-                        className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-500"
+                        className="h-full bg-gradient-to-r from-zinc-200 to-zinc-400 transition-all duration-500"
                         style={{ width: `${shippingProgress.progressPercentage}%` }}
                       />
                     </div>
@@ -132,7 +132,7 @@ export default function CartPage() {
             </div>
 
             {isBuy3Get1FreeActive ? (
-              <p className="mt-8 rounded-xl border border-amber-700/40 bg-amber-900/20 px-3 py-2 text-sm text-amber-200">
+              <p className="mt-8 rounded-xl border border-white/25 bg-white/8 px-3 py-2 text-sm text-zinc-200">
                 Buy 3 Get 1 Free is active. Referral discounts cannot be combined with this promotion.
               </p>
             ) : (

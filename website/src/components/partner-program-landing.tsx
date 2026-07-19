@@ -153,18 +153,18 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
   };
 
   return (
-    <div className="vl-page-shell min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_10%_20%,rgba(34,211,238,0.14),transparent_35%),radial-gradient(circle_at_85%_18%,rgba(99,102,241,0.15),transparent_30%),linear-gradient(150deg,#04060e_0%,#0b1324_45%,#060912_100%)] text-zinc-100">
+    <div className="vl-page-shell min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_10%_20%,rgba(255,255,255,0.11),transparent_35%),radial-gradient(circle_at_85%_18%,rgba(255,255,255,0.08),transparent_30%),linear-gradient(150deg,#050505_0%,#111111_45%,#070707_100%)] text-zinc-100">
       <div className="pointer-events-none fixed inset-0">
-        <div className="absolute left-[10%] top-[16%] h-2 w-2 rounded-full bg-cyan-300/35 animate-pulse" />
-        <div className="absolute right-[14%] top-[28%] h-3 w-3 rounded-full bg-blue-300/25 animate-pulse" />
-        <div className="absolute left-[25%] bottom-[24%] h-2 w-2 rounded-full bg-indigo-300/25 animate-pulse" />
-        <div className="absolute right-[22%] bottom-[18%] h-2 w-2 rounded-full bg-cyan-200/30 animate-pulse" />
+        <div className="absolute left-[10%] top-[16%] h-2 w-2 rounded-full bg-white/35 animate-pulse" />
+        <div className="absolute right-[14%] top-[28%] h-3 w-3 rounded-full bg-zinc-200/25 animate-pulse" />
+        <div className="absolute left-[25%] bottom-[24%] h-2 w-2 rounded-full bg-zinc-300/25 animate-pulse" />
+        <div className="absolute right-[22%] bottom-[18%] h-2 w-2 rounded-full bg-white/30 animate-pulse" />
       </div>
 
       <section className="relative mx-auto max-w-7xl px-4 pb-12 pt-20 sm:px-6 lg:px-8 lg:pt-28">
         <div className="grid items-center gap-10 lg:grid-cols-[1.05fr_0.95fr]">
           <div>
-            <p className="text-xs uppercase tracking-[0.34em] text-cyan-300/85">Vanta Labs Partner Program</p>
+            <p className="text-xs uppercase tracking-[0.34em] text-zinc-300">Vanta Labs Partner Program</p>
             <h1 className="mt-4 text-4xl font-semibold leading-tight text-white sm:text-5xl lg:text-6xl">
               Earn Recurring Income with Vanta Labs.
             </h1>
@@ -172,7 +172,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
               Join a high-performance affiliate network built for modern e-commerce growth. Share premium products, unlock recurring commissions, and manage performance with a real-time partner dashboard.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <a href="#apply" className="vl-focus-ring rounded-full bg-gradient-to-r from-cyan-300 via-blue-200 to-indigo-200 px-6 py-3 text-sm font-semibold text-zinc-950 transition hover:brightness-105">
+              <a href="#apply" className="vl-focus-ring rounded-full bg-gradient-to-r from-white to-zinc-300 px-6 py-3 text-sm font-semibold text-zinc-950 transition hover:brightness-105">
                 Become a Partner
               </a>
               <a href="#calculator" className="vl-btn-secondary rounded-full px-6 py-3 text-sm">
@@ -182,7 +182,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
           </div>
 
           <div className="vl-panel relative overflow-hidden rounded-[2rem] p-6 sm:p-8">
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(34,211,238,0.18),transparent_55%)]" />
+            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.14),transparent_55%)]" />
             <h2 className="relative text-sm font-semibold uppercase tracking-[0.26em] text-zinc-300">Program Stats</h2>
             <div className="relative mt-4 grid gap-3 sm:grid-cols-2">
               <StatCard label="Total Commissions Paid" value={currency(stats.totalCommissionsPaid)} />
@@ -236,9 +236,9 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
               </label>
             </div>
 
-            <div className="rounded-2xl border border-cyan-300/20 bg-zinc-950/60 p-5">
+            <div className="rounded-2xl border border-white/20 bg-zinc-950/60 p-5">
               <p className="text-xs uppercase tracking-[0.26em] text-zinc-500">Projected Commissions</p>
-              <p className="mt-3 text-4xl font-semibold text-cyan-200">{currency(estimatedMonthlyCommission)}</p>
+              <p className="mt-3 text-4xl font-semibold text-zinc-100">{currency(estimatedMonthlyCommission)}</p>
               <p className="text-sm text-zinc-400">Estimated monthly</p>
 
               <div className="mt-6 border-t border-zinc-800 pt-5">
@@ -272,8 +272,8 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
       <section id="apply" className="mx-auto max-w-7xl px-4 pb-16 pt-8 sm:px-6 lg:px-8">
         <div className="vl-panel rounded-[2rem] p-6 sm:p-8">
           <div className="mb-5 flex flex-wrap gap-2">
-            <button type="button" onClick={() => setAuthMode("signup")} className={authMode === "signup" ? "rounded-full border border-cyan-300/50 bg-cyan-300/15 px-4 py-2 text-sm text-cyan-100" : "rounded-full border border-white/15 px-4 py-2 text-sm text-zinc-400"}>Become a Partner</button>
-            <button type="button" onClick={() => setAuthMode("login")} className={authMode === "login" ? "rounded-full border border-cyan-300/50 bg-cyan-300/15 px-4 py-2 text-sm text-cyan-100" : "rounded-full border border-white/15 px-4 py-2 text-sm text-zinc-400"}>Partner Login</button>
+            <button type="button" onClick={() => setAuthMode("signup")} className={authMode === "signup" ? "rounded-full border border-white/45 bg-white/14 px-4 py-2 text-sm text-zinc-100" : "rounded-full border border-white/15 px-4 py-2 text-sm text-zinc-400"}>Become a Partner</button>
+            <button type="button" onClick={() => setAuthMode("login")} className={authMode === "login" ? "rounded-full border border-white/45 bg-white/14 px-4 py-2 text-sm text-zinc-100" : "rounded-full border border-white/15 px-4 py-2 text-sm text-zinc-400"}>Partner Login</button>
           </div>
 
           <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
@@ -306,12 +306,12 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
                 type="button"
                 disabled={loading}
                 onClick={authMode === "signup" ? handleSignup : handleLogin}
-                className="vl-focus-ring mt-6 rounded-full bg-gradient-to-r from-cyan-300 via-blue-200 to-indigo-200 px-6 py-3 text-sm font-semibold text-zinc-950 disabled:opacity-60"
+                className="vl-focus-ring mt-6 rounded-full bg-gradient-to-r from-white to-zinc-300 px-6 py-3 text-sm font-semibold text-zinc-950 disabled:opacity-60"
               >
                 {loading ? "Processing..." : authMode === "signup" ? "Submit Partner Application" : "Sign In"}
               </button>
 
-              {authMessage ? <p className="mt-4 text-sm text-cyan-200">{authMessage}</p> : null}
+              {authMessage ? <p className="mt-4 text-sm text-zinc-200">{authMessage}</p> : null}
             </div>
 
             <div className="rounded-2xl border border-white/12 bg-zinc-950/60 p-5 text-sm text-zinc-300">

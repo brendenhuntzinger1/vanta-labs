@@ -175,7 +175,7 @@ export function CartDrawer() {
                   </div>
                   <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden">
                     <div
-                      className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-300"
+                      className="h-full bg-gradient-to-r from-zinc-200 to-zinc-400 transition-all duration-300"
                       style={{ width: `${shippingProgress.progressPercentage}%` }}
                     />
                   </div>

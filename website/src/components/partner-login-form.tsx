@@ -55,7 +55,7 @@ export function PartnerLoginForm() {
 
   return (
     <form onSubmit={handleSubmit} className="vl-panel mx-auto w-full max-w-md rounded-[1.75rem] p-6 sm:p-8">
-      <p className="text-[11px] uppercase tracking-[0.35em] text-cyan-300/80">Partner Portal</p>
+      <p className="text-[11px] uppercase tracking-[0.35em] text-zinc-300">Partner Portal</p>
       <h1 className="mt-3 text-3xl font-semibold text-white">Secure Login</h1>
       <p className="mt-2 text-sm text-zinc-400">Use your approved partner credentials to access real-time commissions and referral performance.</p>
 
@@ -90,7 +90,7 @@ export function PartnerLoginForm() {
       <button
         type="submit"
         disabled={loading}
-        className="vl-focus-ring mt-6 inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-cyan-300 via-blue-200 to-indigo-200 px-6 py-3 text-sm font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+        className="vl-focus-ring mt-6 inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-white to-zinc-300 px-6 py-3 text-sm font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {loading ? "Signing in..." : "Sign In"}
       </button>

@@ -92,7 +92,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
             />
             <span>I confirm that I am at least 21 years of age and understand that Vanta Labs products are intended only for lawful laboratory research purposes.</span>
           </label>
-          {showPrompt ? <p className="mt-4 text-sm text-amber-300">Please confirm your age before continuing.</p> : null}
+          {showPrompt ? <p className="mt-4 text-sm text-zinc-300">Please confirm your age before continuing.</p> : null}
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
             <button
               type="button"

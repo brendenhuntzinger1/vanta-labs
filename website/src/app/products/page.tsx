@@ -1,99 +1,27 @@
 "use client";
-
-import { useState, useMemo, useEffect } from "react";
-import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import { SiteHeader } from "@/components/site-header";
 import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
-
 type SortKey = "default" | "price-asc" | "price-desc" | "name-asc" | "purity";
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const CATEGORIES = [
-  "All",
-  "Analytical Reference",
-  "Calibration Series",
-  "Research Peptides",
-  "Growth Factors",
-  "Cognitive Research",
-  "Metabolic Research",
-  "Solvents & Solutions",
-];
-
-const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+const SORT_OPTIONS: Array<{ value: SortKey; label: string }> = [
   { value: "default", label: "Featured" },
-  { value: "price-asc", label: "Price: Low → High" },
-  { value: "price-desc", label: "Price: High → Low" },
-  { value: "name-asc", label: "Name: A → Z" },
+  { value: "price-asc", label: "Price: Low to High" },
+  { value: "price-desc", label: "Price: High to Low" },
+  { value: "name-asc", label: "Name: A to Z" },
   { value: "purity", label: "Purity: Highest" },
 ];
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-function parsePrice(price: string): number {
+function parsePrice(price: string) {
   return Number(price.replace(/[^0-9.]/g, "")) || 0;
 }
 
-function parsePurity(purity?: string): number {
+function parsePurity(purity?: string) {
   return Number((purity ?? "0").replace(/[^0-9.]/g, "")) || 0;
-}
-
-// ── Icons ─────────────────────────────────────────────────────────────────────
-
-function ShieldCheckIcon({ size = 20 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 2 3 6v6c0 5.25 3.75 10.15 9 11.25C17.25 22.15 21 17.25 21 12V6z" />
-      <path d="m9 12 2 2 4-4" />
-    </svg>
-  );
-}
-
-function FlaskIcon({ size = 20 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M9 3h6" />
-      <path d="M8.5 3 5 14.5a2.5 2.5 0 0 0 2.5 3h9a2.5 2.5 0 0 0 2.5-3L15.5 3" />
-      <path d="M5.5 13h13" />
-    </svg>
-  );
-}
-
-function TruckIcon({ size = 20 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="1" y="3" width="15" height="13" rx="1" />
-      <path d="M16 8h4l3 3v5h-7V8z" />
-      <circle cx="5.5" cy="18.5" r="2.5" />
-      <circle cx="18.5" cy="18.5" r="2.5" />
-    </svg>
-  );
-}
-
-function HeartIcon({ filled = false, size = 20 }: { filled?: boolean; size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"}
-      stroke="currentColor" strokeWidth={filled ? "0" : "1.5"} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
-    </svg>
-  );
-}
-
-function SearchIcon({ size = 18 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
-      stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="11" cy="11" r="8" />
-      <path d="m21 21-4.35-4.35" />
-    </svg>
-  );
 }
 
 function parseDoseFromSlug(slug: string): string {
@@ -101,142 +29,91 @@ function parseDoseFromSlug(slug: string): string {
   return match ? match[1].toUpperCase() : "";
 }
 
-// ── Product Image Card Visual ─────────────────────────────────────────────────
+function StockPill({ stockStatus }: { stockStatus: Product["stockStatus"] }) {
+  const styles: Record<Product["stockStatus"], string> = {
+    "In Stock": "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
+    Limited: "border-zinc-300/40 bg-zinc-300/14 text-zinc-100",
+    Reserved: "border-zinc-300/35 bg-zinc-300/10 text-zinc-100",
+    "Out of Stock": "border-zinc-500/40 bg-zinc-600/15 text-zinc-300",
+  };
 
-function ProductImagePanel({ name, dose, image }: { name: string; dose: string; image?: string }) {
+  return <span className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.2em] ${styles[stockStatus]}`}>{stockStatus}</span>;
+}
+
+function ProductCard({
+  product,
+  image,
+  onAddToCart,
+}: {
+  product: Product;
+  image: string;
+  onAddToCart: (event: React.MouseEvent<HTMLButtonElement>) => void;
+}) {
+  const dose = parseDoseFromSlug(product.slug);
   const hasRealImage = image && !image.includes(".svg");
+
   return (
-    <div
-      className="relative w-full h-64 rounded-t-2xl overflow-hidden flex items-center justify-center"
-      style={{ background: "#020205" }}
-    >
-      {/* Subtle bottom vignette */}
-      <div className="absolute bottom-0 left-0 right-0 h-10 bg-gradient-to-t from-[#0d0f1c] to-transparent z-10 pointer-events-none" />
-
-      {hasRealImage ? (
-        <Image
-          src={image}
-          alt={name}
-          fill
-          sizes="320px"
-          className="h-full w-full object-contain"
-          style={{ mixBlendMode: "multiply", padding: "8px" }}
-        />
-      ) : (
-        /* Fallback SVG vial if no photo uploaded */
-        <div className="relative flex flex-col items-center justify-center h-full w-full">
-          <div
-            className="w-20 h-48 rounded-b-[3rem] rounded-t-xl flex flex-col overflow-hidden shadow-2xl"
-            style={{ background: "linear-gradient(160deg, rgba(100,120,255,0.15) 0%, rgba(80,100,220,0.3) 100%)", border: "1px solid rgba(150,170,255,0.25)" }}
-          >
-            <div className="h-5 w-full" style={{ background: "linear-gradient(180deg, rgba(150,170,255,0.6), rgba(100,130,255,0.4))" }} />
-            <div className="flex-1 mx-1.5 mt-1.5 rounded-lg flex flex-col items-center justify-center gap-1 px-1 bg-black/40">
-              <p className="text-[7px] font-black tracking-[0.25em] text-white/50">VANTA LABS</p>
-              <p className="text-[11px] font-black text-white text-center leading-tight">{name}</p>
-              <p className="text-[10px] font-bold text-white/60">{dose}</p>
-            </div>
-            <div className="h-8 rounded-b-[3rem]" style={{ background: "linear-gradient(180deg, rgba(80,100,220,0.4), rgba(100,130,255,0.6))" }} />
+    <article className="vl-panel vl-elevate-hover group overflow-hidden rounded-[1.65rem]">
+      <div className="relative h-64 border-b border-white/10 bg-[radial-gradient(circle_at_40%_10%,rgba(186,230,253,0.22),transparent_62%)]">
+        {hasRealImage ? (
+          <Image
+            src={image}
+            alt={product.name}
+            fill
+            sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 25vw"
+            className="object-contain p-7 transition duration-500 group-hover:scale-105"
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center">
+            <div className="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-zinc-300">Image pending</div>
           </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Trust Banner ──────────────────────────────────────────────────────────────
-
-type TrustItem =
-  | { kind: "icon"; IconComponent: typeof ShieldCheckIcon; label: string; sub: string }
-  | { kind: "flag"; label: string; sub: string };
-
-const TRUST_ITEMS: TrustItem[] = [
-  { kind: "icon", IconComponent: ShieldCheckIcon, label: "99%+ PURITY",             sub: "Third-party verified every batch"    },
-  { kind: "flag",                                 label: "MADE IN USA",              sub: "American-manufactured compounds"     },
-  { kind: "icon", IconComponent: FlaskIcon,       label: "BATCH TESTED EVERY ORDER", sub: "COA included with every shipment"   },
-  { kind: "icon", IconComponent: TruckIcon,       label: "FAST & DISCREET SHIPPING", sub: "Same-day dispatch on eligible orders" },
-];
-
-const ITEM_BORDER: string[] = [
-  "",
-  "border-l border-white/10",
-  "border-t border-white/10 sm:border-t-0 sm:border-l",
-  "border-l border-white/10 border-t border-white/10 sm:border-t-0",
-];
-
-function TrustBanner() {
-  return (
-    <div className="relative overflow-hidden rounded-2xl border border-cyan-500/20 bg-[linear-gradient(130deg,#060a16_0%,#0b1324_55%,#0f172a_100%)]">
-      {/* Red glow */}
-      <div className="pointer-events-none absolute inset-y-0 -left-16 w-56 bg-gradient-to-r from-red-600/14 to-transparent" />
-      {/* Blue glow */}
-      <div className="pointer-events-none absolute inset-y-0 -right-16 w-56 bg-gradient-to-l from-blue-600/14 to-transparent" />
-      {/* Top reflection */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/22 to-transparent" />
-      {/* Frosted glass */}
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-white/[0.04] to-transparent" />
-
-      <div className="relative grid grid-cols-2 sm:grid-cols-4">
-        {TRUST_ITEMS.map((item, i) => (
-          <div
-            key={item.label}
-            className={[
-              "group flex cursor-default flex-col items-center gap-1.5 p-3 text-center",
-              "transition-colors duration-200 hover:bg-white/[0.04]",
-              "sm:flex-row sm:items-center sm:gap-3.5 sm:px-5 sm:py-4 sm:text-left",
-              ITEM_BORDER[i] ?? "",
-            ].join(" ")}
-          >
-            <div className="shrink-0 text-white/70 transition-colors duration-200 group-hover:text-white">
-              {item.kind === "flag" ? (
-                <span className="block text-[1.6rem] leading-none sm:text-2xl" style={{ filter: "drop-shadow(0 0 5px rgba(255,255,255,0.3))" }}>
-                  🇺🇸
-                </span>
-              ) : (
-                <item.IconComponent size={20} />
-              )}
-            </div>
-            <div>
-              <p className="text-[10px] font-bold uppercase leading-tight tracking-widest text-white sm:text-[11px]">
-                {item.label}
-              </p>
-              <p className="mt-0.5 hidden text-[10px] leading-snug text-zinc-400 sm:block">
-                {item.sub}
-              </p>
-            </div>
-          </div>
-        ))}
+        )}
       </div>
-    </div>
+
+      <div className="p-5">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">{product.category}</p>
+          <StockPill stockStatus={product.stockStatus} />
+        </div>
+
+        <h2 className="mt-3 line-clamp-2 text-lg font-semibold text-white">{product.name}</h2>
+        <p className="mt-2 line-clamp-2 text-sm leading-6 text-zinc-300">{product.shortDescription ?? product.description}</p>
+
+        <div className="mt-4 flex items-end justify-between gap-2">
+          <div>
+            <p className="text-xl font-semibold text-zinc-100">{product.price}</p>
+            <p className="text-xs text-zinc-500">{dose ? `${dose} dose` : "Verified lot"}</p>
+          </div>
+          <span className="vl-chip text-[10px]">COA VERIFIED</span>
+        </div>
+
+        <div className="mt-5 grid gap-2 sm:grid-cols-2">
+          <button onClick={onAddToCart} className="vl-btn-primary vl-focus-ring px-4 py-2.5 text-sm" type="button">
+            Add to Cart
+          </button>
+          <Link href={`/products/${product.slug}`} className="vl-btn-secondary vl-focus-ring inline-flex items-center justify-center px-4 py-2.5 text-sm">
+            View Details
+          </Link>
+        </div>
+      </div>
+    </article>
   );
 }
-
-// ── Main Page Component ───────────────────────────────────────────────────────
 
 export default function ProductsPage() {
   const [products, setProducts] = useState<Product[]>([]);
-  const [category, setCategory] = useState("All");
   const [sort, setSort] = useState<SortKey>("default");
   const [searchQuery, setSearchQuery] = useState("");
-  const [favorites, setFavorites] = useState<Set<string>>(() => {
-    // Load favorites from localStorage during initialization
-    if (typeof window === "undefined") return new Set();
-    const stored = localStorage.getItem("vl-favorites");
-    if (stored) {
-      try {
-        return new Set(JSON.parse(stored));
-      } catch {}
-    }
-    return new Set();
-  });
+  const [selectedCategory, setSelectedCategory] = useState("All");
   const [imageOverrides, setImageOverrides] = useState<Record<string, string>>({});
+  const [isLoading, setIsLoading] = useState(true);
   const { addToCart } = useCart();
 
-  // Load per-product image overrides uploaded via admin
   useEffect(() => {
     fetch("/product-images.json")
-      .then((r) => r.json())
+      .then((response) => response.json())
       .then((data) => setImageOverrides(data))
-      .catch(() => {});
+      .catch(() => setImageOverrides({}));
   }, []);
 
   useEffect(() => {
@@ -245,38 +122,35 @@ export default function ProductsPage() {
       .then((json) => {
         if (json?.success && Array.isArray(json.products)) {
           setProducts(json.products as Product[]);
+        } else {
+          setProducts([]);
         }
       })
-      .catch(() => {
-        setProducts([]);
-      });
+      .catch(() => setProducts([]))
+      .finally(() => setIsLoading(false));
   }, []);
 
-  // Save favorites to localStorage
-  const toggleFavorite = (slug: string) => {
-    const updated = new Set(favorites);
-    if (updated.has(slug)) {
-      updated.delete(slug);
-    } else {
-      updated.add(slug);
-    }
-    setFavorites(updated);
-    localStorage.setItem("vl-favorites", JSON.stringify(Array.from(updated)));
-  };
+  const categories = useMemo(() => {
+    const productCategories = Array.from(new Set(products.map((product) => product.category))).sort();
+    return ["All", ...productCategories];
+  }, [products]);
 
-  const displayProducts = useMemo(() => {
+  const visibleProducts = useMemo(() => {
     let result = [...products];
 
-    if (category !== "All") {
-      result = result.filter((p) => p.category === category);
+    if (selectedCategory !== "All") {
+      result = result.filter((product) => product.category === selectedCategory);
     }
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      result = result.filter((p) => 
-        p.name.toLowerCase().includes(q) || 
-        p.category.toLowerCase().includes(q) ||
-        p.description.toLowerCase().includes(q)
-      );
+
+    if (searchQuery.trim()) {
+      const query = searchQuery.trim().toLowerCase();
+      result = result.filter((product) => {
+        return (
+          product.name.toLowerCase().includes(query) ||
+          product.category.toLowerCase().includes(query) ||
+          product.description.toLowerCase().includes(query)
+        );
+      });
     }
 
     switch (sort) {
@@ -292,183 +166,147 @@ export default function ProductsPage() {
       case "purity":
         result.sort((a, b) => parsePurity(b.purityResult) - parsePurity(a.purityResult));
         break;
+      case "default":
+      default:
+        break;
     }
 
     return result;
-  }, [category, products, searchQuery, sort]);
-
-  const isFiltered = category !== "All" || searchQuery;
-  const heading = category === "All" ? "ALL RESEARCH PEPTIDES" : `${category.toUpperCase()}`;
+  }, [products, searchQuery, selectedCategory, sort]);
 
   return (
-    <div className="vl-page-shell min-h-screen bg-gradient-to-br from-zinc-950 via-[#0a0a1a] to-zinc-950 text-zinc-100 vl-moving-bg">
+    <div className="vl-page-shell min-h-screen text-zinc-100">
       <SiteHeader />
 
-      {/* ── Floating Particles Background ─────────────────────────────────── */}
-      <div className="pointer-events-none fixed inset-0 hidden overflow-hidden sm:block">
-        <div className="absolute top-20 left-10 w-2 h-2 bg-indigo-500 rounded-full vl-particle-1 opacity-30" />
-        <div className="absolute top-40 right-20 w-1.5 h-1.5 bg-violet-500 rounded-full vl-particle-2 opacity-20" />
-        <div className="absolute bottom-40 left-1/4 w-2 h-2 bg-cyan-500 rounded-full vl-particle-3 opacity-25" />
-        <div className="absolute top-1/3 right-1/4 w-1 h-1 bg-pink-500 rounded-full vl-particle-4 opacity-15" />
-      </div>
+      <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
+        <section className="relative overflow-hidden rounded-[2rem] border border-white/10 bg-[linear-gradient(145deg,rgba(10,10,10,0.95),rgba(20,20,20,0.9))] px-5 py-10 sm:px-8 sm:py-12">
+          <div className="pointer-events-none absolute inset-0 vl-grid-overlay" />
+          <div className="pointer-events-none absolute -right-20 -top-20 h-60 w-60 rounded-full bg-white/10 blur-3xl" />
+          <div className="pointer-events-none absolute -bottom-20 left-[30%] h-52 w-52 rounded-full bg-white/10 blur-3xl" />
 
-      {/* ── Trust Banner ──────────────────────────────────────────────────── */}
-      <div className="relative border-b border-zinc-800/60 bg-gradient-to-b from-zinc-950 to-[#0a0a1a] px-4 py-6 sm:px-6 lg:px-8">
-        <div className="mx-auto max-w-7xl">
-          <TrustBanner />
-        </div>
-      </div>
+          <div className="relative max-w-3xl">
+            <p className="text-[11px] uppercase tracking-[0.34em] text-zinc-400">Vanta Labs Catalog</p>
+            <h1 className="mt-3 text-4xl font-semibold text-white sm:text-5xl">Research Storefront</h1>
+            <p className="mt-4 text-base leading-8 text-zinc-300 sm:text-lg">
+              Explore documented compounds with transparent purity records, mapped lot metadata, and streamlined fulfillment.
+            </p>
+          </div>
+        </section>
 
-      {/* ── Main Content ──────────────────────────────────────────────────── */}
-      <main className="relative mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8">
-
-        {/* Page header */}
-        <div className="mb-8">
-          <h1 className="mb-2 text-3xl font-black uppercase tracking-[0.12em] text-white sm:text-4xl sm:tracking-widest lg:text-5xl">
-            {heading}
-          </h1>
-          <div className="h-1 w-28 rounded-full bg-gradient-to-r from-cyan-400 via-blue-400 to-violet-400" />
-          <p className="text-sm text-zinc-400">
-            {displayProducts.length} {displayProducts.length === 1 ? "product" : "products"}
-            {isFiltered && <span className="ml-2 inline-block px-2.5 py-1 rounded-full bg-white/5 text-[11px] font-semibold tracking-wide">FILTERED</span>}
-          </p>
-        </div>
-
-        {/* Search Bar */}
-        <div className="mb-6 relative max-w-md">
-          <div className="relative">
-            <div className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500">
-              <SearchIcon size={18} />
-            </div>
+        <section className="sticky top-[68px] z-40 mt-6 rounded-2xl border border-white/10 bg-zinc-950/82 p-3 backdrop-blur-xl sm:p-4">
+          <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto]">
             <input
-              type="text"
-              placeholder="Search peptides, compounds..."
+              type="search"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="vl-input w-full py-2.5 pl-10 pr-4 text-sm placeholder-zinc-500"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Search compounds, categories, or notes"
+              className="vl-input w-full px-4 py-3 text-sm"
             />
-          </div>
-        </div>
 
-        {/* Controls Row */}
-        <div className="mb-8 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          {/* Category tabs */}
-          <div className="flex w-full gap-2 overflow-x-auto pb-2 sm:pb-0 sm:flex-1">
-            {CATEGORIES.map((cat) => {
-              const count = cat === "All"
-                ? products.length
-                : products.filter((p) => p.category === cat).length;
-              return (
-                <button
-                  key={cat}
-                  onClick={() => setCategory(cat)}
-                  className={[
-                    "shrink-0 rounded-full px-3 py-1.5 text-xs font-semibold transition-all whitespace-nowrap",
-                    category === cat
-                      ? "border border-white/35 bg-white/20 text-white"
-                      : "border border-white/10 text-zinc-400 hover:border-white/30 hover:text-white",
-                  ].join(" ")}
-                >
-                  {cat}
-                  <span className="ml-1 text-[9px] opacity-60">({count})</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Sort */}
-          <div className="flex w-full flex-col gap-3 sm:w-auto sm:flex-row">
             <select
-              value={sort}
-              onChange={(e) => setSort(e.target.value as SortKey)}
-              className="vl-input w-full rounded-lg px-3 py-2 text-xs text-zinc-300 sm:w-auto"
+              value={selectedCategory}
+              onChange={(event) => setSelectedCategory(event.target.value)}
+              className="vl-input w-full px-3 py-3 text-sm lg:w-56"
             >
-              {SORT_OPTIONS.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
+              {categories.map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+            </select>
+
+            <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)} className="vl-input w-full px-3 py-3 text-sm lg:w-52">
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>
           </div>
-        </div>
 
-        {/* Product Grid or Empty State */}
-        {displayProducts.length === 0 ? (
-          <div className="mt-24 flex flex-col items-center gap-4 text-center">
-            <p className="text-zinc-400">No products match your search.</p>
-            <button
-              onClick={() => { setCategory("All"); setSearchQuery(""); }}
-              className="text-sm text-zinc-300 underline underline-offset-4 hover:text-white transition"
-            >
-              Clear all filters
-            </button>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {categories.slice(0, 6).map((category) => (
+              <button
+                key={category}
+                onClick={() => setSelectedCategory(category)}
+                type="button"
+                className={`rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.16em] transition ${
+                  selectedCategory === category
+                    ? "border-white/45 bg-white/14 text-zinc-100"
+                    : "border-white/12 bg-white/5 text-zinc-300 hover:border-white/25 hover:text-white"
+                }`}
+              >
+                {category}
+              </button>
+            ))}
           </div>
-        ) : (
-          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {displayProducts.map((product) => {
-              const dose = parseDoseFromSlug(product.slug);
-              const isFav = favorites.has(product.slug);
-              const productImage = imageOverrides[product.slug] || product.image;
-              return (
-                <div key={product.slug} className="group h-full">
-                  <div className="vl-panel vl-elevate-hover relative flex h-full flex-col overflow-hidden rounded-2xl bg-gradient-to-b from-[#101530] via-[#0f1221] to-[#0c0f1a]">
+        </section>
 
-                    {/* Favorite button */}
-                    <button
-                      onClick={() => toggleFavorite(product.slug)}
-                      className="vl-focus-ring absolute top-3 right-3 z-10 rounded-full bg-black/30 p-1.5 text-zinc-500 backdrop-blur-sm transition hover:text-red-400"
-                      aria-label="Add to favorites"
-                    >
-                      <HeartIcon filled={isFav} size={16} />
-                    </button>
+        <section className="mt-8">
+          <div className="mb-5 flex items-center justify-between">
+            <p className="text-sm text-zinc-400">{visibleProducts.length} products available</p>
+            {(selectedCategory !== "All" || searchQuery) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedCategory("All");
+                  setSearchQuery("");
+                }}
+                className="text-xs uppercase tracking-[0.2em] text-zinc-300 transition hover:text-white"
+              >
+                Clear Filters
+              </button>
+            )}
+          </div>
 
-                    {/* Category badge */}
-                    <div className="absolute top-3 left-3 z-10">
-                      <span className="text-[8px] font-bold uppercase tracking-widest text-white/50 bg-black/40 backdrop-blur-sm px-2 py-1 rounded-full">
-                        {product.category.replace("Research ", "").replace(" Research", "")}
-                      </span>
-                    </div>
-
-                    {/* Large product image */}
-                    <ProductImagePanel name={product.name} dose={dose} image={productImage} />
-
-                    {/* Info section */}
-                    <div className="flex flex-col flex-1 p-4 gap-3">
-                      <div>
-                        <h3 className="text-sm font-bold text-white leading-tight">{product.name}</h3>
-                        <p className="text-xs text-zinc-500 mt-0.5">{dose} • {product.purityResult || "99.5%"} Purity</p>
-                      </div>
-
-                      <div className="flex items-center justify-between">
-                        <span className="text-lg font-black text-white">{product.price}</span>
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full border border-cyan-400/30 bg-cyan-400/10 text-cyan-200">
-                          COA Verified
-                        </span>
-                      </div>
-
-                      <div className="mt-auto flex flex-col gap-2">
-                        <button
-                          onClick={(event) => addToCart(product, 1, event.currentTarget)}
-                          className="vl-focus-ring w-full rounded-lg bg-gradient-to-r from-cyan-300 via-blue-200 to-indigo-200 px-3 py-2.5 text-xs font-bold text-zinc-950 shadow-[0_8px_24px_rgba(59,130,246,0.25)] transition hover:brightness-105 active:scale-95"
-                        >
-                          Add to Cart
-                        </button>
-                        <Link
-                          href={`/products/${product.slug}`}
-                          className="vl-btn-secondary vl-focus-ring block rounded-lg px-3 py-2 text-center text-xs"
-                        >
-                          View Details
-                        </Link>
-                      </div>
-                    </div>
+          {isLoading ? (
+            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+              {Array.from({ length: 8 }).map((_, index) => (
+                <div key={index} className="vl-panel animate-pulse overflow-hidden rounded-[1.65rem]">
+                  <div className="h-64 border-b border-white/10 bg-white/5" />
+                  <div className="space-y-3 p-5">
+                    <div className="h-3 w-24 rounded bg-white/10" />
+                    <div className="h-5 w-3/4 rounded bg-white/12" />
+                    <div className="h-3 w-full rounded bg-white/10" />
+                    <div className="h-3 w-2/3 rounded bg-white/10" />
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        )}
+              ))}
+            </div>
+          ) : visibleProducts.length === 0 ? (
+            <div className="vl-panel rounded-[1.8rem] p-10 text-center">
+              <h2 className="text-xl font-semibold text-white">No products matched your filters</h2>
+              <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-zinc-300">
+                Try a broader category or reset your search terms. The catalog updates as new batches are published.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedCategory("All");
+                  setSearchQuery("");
+                }}
+                className="vl-btn-secondary vl-focus-ring mt-6 px-5 py-2.5 text-sm"
+              >
+                Reset Filters
+              </button>
+            </div>
+          ) : (
+            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+              {visibleProducts.map((product) => {
+                const productImage = imageOverrides[product.slug] || product.coverImage || product.image;
+                return (
+                  <ProductCard
+                    key={product.slug}
+                    product={product}
+                    image={productImage}
+                    onAddToCart={(event) => addToCart(product, 1, event.currentTarget)}
+                  />
+                );
+              })}
+            </div>
+          )}
+        </section>
       </main>
     </div>
   );
 }
-

@@ -1,9 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Cormorant_Garamond, Geist, Geist_Mono, Manrope } from "next/font/google";
+import { Suspense } from "react";
 import { AgeGate } from "@/components/age-gate";
 import { CartDrawer } from "@/components/cart-drawer";
 import { CartProvider } from "@/components/cart-context";
+import { SiteAnalyticsTracker } from "@/components/site-analytics-tracker";
+import { SiteFooter } from "@/components/site-footer";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -14,6 +17,18 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+const cormorantDisplay = Cormorant_Garamond({
+  variable: "--font-cormorant-display",
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+});
+
+const manrope = Manrope({
+  variable: "--font-manrope",
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
 });
 
 export const metadata: Metadata = {
@@ -29,12 +44,16 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${cormorantDisplay.variable} ${manrope.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         <CartProvider>
+          <Suspense fallback={null}>
+            <SiteAnalyticsTracker />
+          </Suspense>
           <AgeGate>
             {children}
+            <SiteFooter />
             <Link
               href="/vault"
               aria-label="Secure access"

@@ -347,6 +347,18 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           },
         }),
       );
+
+      window.dispatchEvent(
+        new CustomEvent("vanta:analytics", {
+          detail: {
+            eventType: "add_to_cart",
+            productSlug: product.slug,
+            variantId: options?.variantId ?? null,
+            quantity,
+            price: (options?.priceOverride ?? Number(product.price.replace(/[^0-9.]/g, ""))) || 0,
+          },
+        }),
+      );
     }
 
     setItems((currentItems) => {
@@ -382,6 +394,18 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   };
 
   const updateQuantity = (slug: string, quantity: number) => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("vanta:analytics", {
+          detail: {
+            eventType: "update_cart_quantity",
+            slug,
+            quantity,
+          },
+        }),
+      );
+    }
+
     setItems((currentItems) => {
       if (quantity <= 0) {
         return currentItems.filter((item) => item.key !== slug && item.slug !== slug);
@@ -391,6 +415,17 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   };
 
   const removeFromCart = (slug: string) => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("vanta:analytics", {
+          detail: {
+            eventType: "remove_from_cart",
+            slug,
+          },
+        }),
+      );
+    }
+
     setItems((currentItems) => currentItems.filter((item) => item.key !== slug && item.slug !== slug));
   };
 

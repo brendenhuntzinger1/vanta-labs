@@ -47,6 +47,42 @@ function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+async function logCommerceAnalyticsEvent(input: {
+  eventType: "purchase" | "refund";
+  orderId: string;
+  amountPaid: number;
+  referralCode?: string;
+  ambassadorId?: string;
+}) {
+  try {
+    await supabaseAdmin.from("website_analytics_events").insert({
+      event_type: input.eventType,
+      page_path: "/checkout",
+      page_url: null,
+      referrer: null,
+      session_id: `order:${input.orderId}`,
+      visitor_id: null,
+      user_agent: null,
+      ip_address: null,
+      country: null,
+      city: null,
+      device_type: null,
+      utm_source: null,
+      utm_medium: null,
+      utm_campaign: null,
+      event_payload: {
+        orderId: input.orderId,
+        amountPaid: input.amountPaid,
+        referralCode: input.referralCode ?? null,
+        ambassadorId: input.ambassadorId ?? null,
+      },
+      created_at: new Date().toISOString(),
+    });
+  } catch {
+    // Analytics must not block order processing.
+  }
+}
+
 function normalizeOrderPayload(payload: string) {
   return JSON.parse(payload) as {
     orderId?: string;
@@ -421,10 +457,28 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       paymentStatus: nextStatus,
       providerEventId: eventId,
     });
+
+    await logCommerceAnalyticsEvent({
+      eventType: "purchase",
+      orderId,
+      amountPaid,
+      referralCode: eventPayload.referralCode,
+      ambassadorId: eventPayload.ambassadorId,
+    });
   }
 
   if (nextStatus === "refunded" || nextStatus === "canceled" || nextStatus === "payment_failed") {
     await updateCommissionOnRefund(orderId);
+
+    if (nextStatus === "refunded" || nextStatus === "canceled") {
+      await logCommerceAnalyticsEvent({
+        eventType: "refund",
+        orderId,
+        amountPaid,
+        referralCode: eventPayload.referralCode,
+        ambassadorId: eventPayload.ambassadorId,
+      });
+    }
   }
 
   await markEventProcessed(eventId, orderId, nextStatus);

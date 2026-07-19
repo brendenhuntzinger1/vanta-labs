@@ -1,8 +1,8 @@
 "use client";
 
-import Link from "next/link";
 import Image from "next/image";
-import { useState } from "react";
+import Link from "next/link";
+import { useMemo, useState } from "react";
 import { useCart } from "@/components/cart-context";
 import { SiteHeader } from "@/components/site-header";
 import type { Product } from "@/lib/catalog-types";
@@ -12,11 +12,22 @@ function parseDose(slug: string) {
   return match ? match[1].toUpperCase() : "";
 }
 
+type GalleryItem = {
+  id: string;
+  imageUrl: string;
+  altText: string;
+};
+
+function toPriceNumber(value?: string) {
+  if (!value) return 0;
+  return Number(value.replace(/[^0-9.]/g, "")) || 0;
+}
+
 export function ProductDetailClient({ product }: { product: Product }) {
   const { addToCart } = useCart();
-  const [message, setMessage] = useState<string | null>(null);
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
   const [selectedDoseId, setSelectedDoseId] = useState<string | null>(defaultDose?.id ?? null);
+  const [message, setMessage] = useState<string | null>(null);
 
   const selectedDose = product.doses?.find((dose) => dose.id === selectedDoseId) ?? defaultDose;
 
@@ -25,151 +36,218 @@ export function ProductDetailClient({ product }: { product: Product }) {
   const selectedBatchNumber = selectedDose?.batchNumber ?? product.batchNumber;
   const selectedPurity = selectedDose?.purityResult ?? product.purityResult;
   const selectedCoaUrl = selectedDose?.coaUrl ?? product.coaUrl;
-  const selectedImage = selectedDose?.imageUrl ?? product.coverImage ?? product.image;
   const selectedStockStatus = selectedDose?.stockStatus ?? product.stockStatus;
+
+  const galleryItems = useMemo<GalleryItem[]>(() => {
+    const fromGallery = (product.galleryImages ?? []).map((image) => ({
+      id: image.id,
+      imageUrl: image.imageUrl,
+      altText: image.altText ?? product.name,
+    }));
+
+    const fallback = [
+      selectedDose?.imageUrl,
+      product.coverImage,
+      product.image,
+    ]
+      .filter(Boolean)
+      .map((imageUrl, index) => ({
+        id: `fallback-${index}`,
+        imageUrl: imageUrl as string,
+        altText: product.name,
+      }));
+
+    const merged = [...fromGallery, ...fallback].filter((item) => item.imageUrl && !item.imageUrl.includes(".svg"));
+    const seen = new Set<string>();
+    return merged.filter((item) => {
+      if (seen.has(item.imageUrl)) return false;
+      seen.add(item.imageUrl);
+      return true;
+    });
+  }, [product.coverImage, product.galleryImages, product.image, product.name, selectedDose?.imageUrl]);
+
+  const [selectedImageUrl, setSelectedImageUrl] = useState<string | null>(galleryItems[0]?.imageUrl ?? null);
+
+  const imageToDisplay = useMemo(() => {
+    if (!galleryItems.length) {
+      return null;
+    }
+
+    if (selectedImageUrl && galleryItems.some((item) => item.imageUrl === selectedImageUrl)) {
+      return selectedImageUrl;
+    }
+
+    return galleryItems[0]?.imageUrl ?? null;
+  }, [galleryItems, selectedImageUrl]);
+  const hasRealImage = Boolean(imageToDisplay);
+  const doseFromSlug = parseDose(product.slug);
+
+  const stockTone =
+    selectedStockStatus === "In Stock"
+      ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-100"
+      : selectedStockStatus === "Limited"
+        ? "border-zinc-300/35 bg-zinc-300/12 text-zinc-100"
+        : selectedStockStatus === "Reserved"
+          ? "border-zinc-300/35 bg-zinc-300/12 text-zinc-100"
+          : "border-zinc-500/35 bg-zinc-500/10 text-zinc-200";
 
   const handleAddToCart = (sourceElement?: HTMLElement | null) => {
     addToCart(product, 1, sourceElement, {
       variantId: selectedDose?.id,
       doseLabel: selectedDose?.label,
       sku: selectedDose?.sku,
-      priceOverride: Number((selectedPrice ?? "$0").replace(/[^0-9.]/g, "")),
-      imageOverride: selectedImage,
+      priceOverride: toPriceNumber(selectedPrice),
+      imageOverride: imageToDisplay ?? product.image,
       batchNumberOverride: selectedBatchNumber,
       stockStatusOverride: selectedStockStatus,
     });
-    setMessage(`Added 1 item (${selectedDose?.label ?? "default"}) to the cart.`);
+
+    setMessage(`Added 1 item (${selectedDose?.label ?? "default"}) to cart.`);
   };
 
-  const hasRealImage = selectedImage && !selectedImage.includes(".svg");
-  const dose = parseDose(product.slug);
-
   return (
-    <div className="vl-page-shell min-h-screen bg-zinc-950 text-zinc-100">
+    <div className="vl-page-shell min-h-screen text-zinc-100">
       <SiteHeader />
-      <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8 lg:py-16">
-        <Link href="/products" className="text-xs uppercase tracking-[0.24em] text-zinc-500 transition hover:text-white sm:text-sm sm:tracking-[0.3em]">
-          ← Back to catalog
+
+      <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
+        <Link href="/products" className="text-xs uppercase tracking-[0.24em] text-zinc-400 transition hover:text-white">
+          Back to catalog
         </Link>
-        <div className="mt-6 grid gap-6 sm:mt-8 sm:gap-8 lg:gap-10 lg:grid-cols-[0.95fr_1.05fr]">
-          {/* Product image */}
-          <div className="vl-panel relative flex min-h-[300px] items-center justify-center overflow-hidden rounded-[1.5rem] sm:min-h-[360px] sm:rounded-[2rem] lg:min-h-[420px]" style={{ background: "#020205" }}>
-            {/* Subtle bottom vignette blending into the card below */}
-            <div className="absolute bottom-0 left-0 right-0 h-16 bg-gradient-to-t from-zinc-900/60 to-transparent z-10 pointer-events-none rounded-b-[2rem]" />
 
-            {hasRealImage ? (
-              <Image
-                src={selectedImage}
-                alt={product.name}
-                fill
-                sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 40vw"
-                className="h-[300px] w-full object-contain sm:h-[360px] lg:h-[420px]"
-                style={{ mixBlendMode: "multiply", padding: "24px" }}
-              />
-            ) : (
-              <div className="flex flex-col items-center justify-center py-16 w-full">
-                {/* Fallback vial — no photo uploaded yet */}
-                <div className="relative w-36 h-64 rounded-b-[4rem] rounded-t-2xl overflow-hidden flex flex-col shadow-2xl"
-                  style={{ background: "linear-gradient(160deg, rgba(100,120,255,0.15) 0%, rgba(80,100,220,0.3) 100%)", border: "1.5px solid rgba(150,170,255,0.25)" }}>
-                  <div className="h-7 w-full flex-shrink-0" style={{ background: "linear-gradient(180deg, rgba(150,170,255,0.7), rgba(100,130,255,0.5))" }} />
-                  <div className="absolute left-3 top-8 w-3 h-28 rounded-full opacity-20" style={{ background: "linear-gradient(180deg, white, transparent)" }} />
-                  <div className="mx-2 mt-2 flex-1 rounded-xl flex flex-col items-center justify-center gap-2 px-2 py-3 bg-black/50">
-                    <p className="text-[9px] font-black tracking-[0.3em] text-white/50 uppercase">VANTA LABS</p>
-                    <div className="w-full h-px bg-white/20" />
-                    <p className="text-lg font-black text-white text-center leading-tight">{product.name}</p>
-                    <p className="text-sm font-bold text-white/60">{dose}</p>
-                    <div className="w-full h-px bg-white/20" />
-                    <p className="text-[7px] font-semibold tracking-widest text-white/40 uppercase">Research Use Only</p>
+        <section className="mt-6 grid gap-7 lg:grid-cols-[1.12fr_0.88fr] lg:items-start">
+          <div>
+            <div className="vl-panel overflow-hidden rounded-[2rem]">
+              <div className="relative min-h-[360px] bg-[radial-gradient(circle_at_40%_8%,rgba(255,255,255,0.12),transparent_62%)] sm:min-h-[460px]">
+                {hasRealImage ? (
+                  <Image
+                    src={imageToDisplay as string}
+                    alt={product.name}
+                    fill
+                    sizes="(max-width: 1024px) 100vw, 58vw"
+                    className="object-contain p-8 sm:p-10"
+                  />
+                ) : (
+                  <div className="flex h-full items-center justify-center">
+                    <div className="rounded-full border border-white/15 bg-white/5 px-4 py-1.5 text-xs uppercase tracking-[0.2em] text-zinc-300">Image pending</div>
                   </div>
-                  <div className="h-10 w-full flex-shrink-0 rounded-b-[4rem]" style={{ background: "linear-gradient(180deg, rgba(80,100,220,0.4), rgba(100,130,255,0.6))" }} />
-                </div>
-                <p className="mt-6 text-xs text-zinc-500 tracking-widest uppercase">Upload your photo in Admin → Products</p>
+                )}
               </div>
-            )}
-          </div>
-          <div className="vl-panel rounded-[1.5rem] p-5 sm:rounded-[2rem] sm:p-8">
-            <p className="text-sm uppercase tracking-[0.35em] text-zinc-500">Demo record</p>
-            <h1 className="mt-3 text-2xl font-semibold text-white sm:text-3xl lg:text-4xl">{product.name}</h1>
-            <p className="mt-4 text-base leading-7 text-zinc-400 sm:text-lg sm:leading-8">{product.description}</p>
+            </div>
 
-            {product.doses && product.doses.length > 0 ? (
-              <div className="mt-6">
-                <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Select dose</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {product.doses.map((variant) => (
-                    <button
-                      key={variant.id}
-                      type="button"
-                      onClick={() => setSelectedDoseId(variant.id)}
-                      className={`rounded-full border px-4 py-2 text-sm transition ${selectedDose?.id === variant.id ? "border-cyan-300 bg-cyan-300/15 text-cyan-200" : "border-zinc-700 text-zinc-300 hover:border-zinc-500"}`}
-                    >
-                      {variant.label}
-                    </button>
-                  ))}
-                </div>
+            {galleryItems.length > 1 ? (
+              <div className="mt-4 grid grid-cols-4 gap-3 sm:grid-cols-6">
+                {galleryItems.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setSelectedImageUrl(item.imageUrl)}
+                    className={`relative overflow-hidden rounded-xl border ${
+                      item.imageUrl === imageToDisplay ? "border-white/45" : "border-white/12"
+                    } bg-zinc-900/80`}
+                  >
+                    <div className="relative aspect-square">
+                      <Image src={item.imageUrl} alt={item.altText} fill sizes="120px" className="object-cover" />
+                    </div>
+                  </button>
+                ))}
               </div>
             ) : null}
 
-            <div className="vl-panel-soft mt-6 flex flex-wrap items-center justify-between gap-3 rounded-2xl px-4 py-4 sm:mt-8 sm:px-5">
-              <div>
-                <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Price</p>
+            <section className="mt-7 grid gap-4 md:grid-cols-2">
+              <article className="vl-panel rounded-2xl p-5">
+                <h2 className="text-sm uppercase tracking-[0.22em] text-zinc-400">Specifications</h2>
+                <dl className="mt-4 space-y-3 text-sm">
+                  <div className="flex justify-between border-b border-white/10 pb-2">
+                    <dt className="text-zinc-400">Batch number</dt>
+                    <dd className="text-zinc-100">{selectedBatchNumber}</dd>
+                  </div>
+                  <div className="flex justify-between border-b border-white/10 pb-2">
+                    <dt className="text-zinc-400">Purity result</dt>
+                    <dd className="text-zinc-100">{selectedPurity ?? "Pending"}</dd>
+                  </div>
+                  <div className="flex justify-between border-b border-white/10 pb-2">
+                    <dt className="text-zinc-400">Formula</dt>
+                    <dd className="text-zinc-100">{product.molecularFormula ?? "Provided in COA"}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-zinc-400">Lab</dt>
+                    <dd className="text-zinc-100">{product.labName}</dd>
+                  </div>
+                </dl>
+              </article>
+
+              <article className="vl-panel rounded-2xl p-5">
+                <h2 className="text-sm uppercase tracking-[0.22em] text-zinc-400">Quality Notes</h2>
+                <p className="mt-4 text-sm leading-7 text-zinc-300">
+                  Each lot is documented and linked to testing records before release. For complete analysis, use the matching COA for the selected dose.
+                </p>
+                <a href={selectedCoaUrl} target="_blank" rel="noopener noreferrer" className="vl-btn-secondary vl-focus-ring mt-5 inline-flex px-4 py-2 text-sm">
+                  View COA
+                </a>
+              </article>
+            </section>
+          </div>
+
+          <aside className="lg:sticky lg:top-24">
+            <div className="vl-panel rounded-[2rem] p-6 sm:p-7">
+              <p className="text-[11px] uppercase tracking-[0.3em] text-zinc-500">Research Compound</p>
+              <h1 className="mt-3 text-3xl font-semibold text-white">{product.name}</h1>
+              <p className="mt-4 text-sm leading-7 text-zinc-300">{product.longDescription ?? product.description}</p>
+
+              <div className="mt-5 flex items-center gap-2">
+                <span className={`rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.2em] ${stockTone}`}>{selectedStockStatus}</span>
+                {doseFromSlug ? <span className="vl-chip text-[10px]">{doseFromSlug}</span> : null}
+              </div>
+
+              {product.doses && product.doses.length > 0 ? (
+                <div className="mt-7">
+                  <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Dose Selection</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {product.doses.map((variant) => (
+                      <button
+                        key={variant.id}
+                        type="button"
+                        onClick={() => setSelectedDoseId(variant.id)}
+                        className={`rounded-full border px-4 py-2 text-sm transition ${
+                          selectedDose?.id === variant.id
+                            ? "border-white/45 bg-white/14 text-zinc-100"
+                            : "border-white/12 bg-white/5 text-zinc-300 hover:border-white/25 hover:text-white"
+                        }`}
+                      >
+                        {variant.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="vl-panel-soft mt-7 rounded-2xl p-4">
+                <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Price</p>
                 <div className="mt-2 flex items-center gap-2">
-                  <p className="text-xl font-semibold text-white sm:text-2xl">{selectedPrice}</p>
+                  <p className="text-3xl font-semibold text-zinc-100">{selectedPrice}</p>
                   {selectedCompareAtPrice ? <p className="text-sm text-zinc-500 line-through">{selectedCompareAtPrice}</p> : null}
                 </div>
               </div>
-              <div className="text-left sm:text-right">
-                <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Purity</p>
-                <p className="mt-2 text-white">{selectedPurity ?? "Pending"}</p>
-              </div>
-            </div>
 
-            <p className="mt-3 text-sm text-zinc-400">Inventory status: <span className="text-zinc-200">{selectedStockStatus}</span></p>
-
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <button
-                type="button"
-                onClick={(event) => handleAddToCart(event.currentTarget)}
-                className="vl-btn-primary vl-focus-ring rounded-full px-6 py-3 text-sm"
-              >
+              <button onClick={(event) => handleAddToCart(event.currentTarget)} type="button" className="vl-btn-primary vl-focus-ring mt-6 w-full px-5 py-3 text-sm">
                 Add 1 to Cart
               </button>
+
+              {message ? <p className="mt-3 text-sm text-emerald-300">{message}</p> : null}
+
+              <div className="mt-6 grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-center">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">Testing Date</p>
+                  <p className="mt-1 text-xs text-zinc-200">{product.testingDate}</p>
+                </div>
+                <div className="rounded-xl border border-white/10 bg-white/[0.03] p-3 text-center">
+                  <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">COA</p>
+                  <p className="mt-1 text-xs text-zinc-200">Batch matched</p>
+                </div>
+              </div>
             </div>
-            {message ? <p className="mt-4 text-sm text-emerald-400">{message}</p> : null}
-
-            <dl className="mt-8 space-y-3 text-sm text-zinc-400">
-              <div className="flex justify-between border-b border-zinc-800 pb-3">
-                <dt>Batch number</dt>
-                <dd className="text-white">{selectedBatchNumber}</dd>
-              </div>
-              <div className="flex justify-between border-b border-zinc-800 pb-3">
-                <dt>Purity result</dt>
-                <dd className="text-white">{selectedPurity ?? "Pending"}</dd>
-              </div>
-              {selectedDose?.sku ? (
-                <div className="flex justify-between border-b border-zinc-800 pb-3">
-                  <dt>SKU</dt>
-                  <dd className="text-white">{selectedDose.sku}</dd>
-                </div>
-              ) : null}
-              {product.molecularFormula && (
-                <div className="flex justify-between border-b border-zinc-800 pb-3">
-                  <dt>Molecular formula</dt>
-                  <dd className="text-white">{product.molecularFormula}</dd>
-                </div>
-              )}
-            </dl>
-
-            <a
-              href={selectedCoaUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="vl-btn-secondary vl-focus-ring mt-8 inline-flex px-5 py-3 text-sm"
-            >
-              View matching COA
-            </a>
-          </div>
-        </div>
+          </aside>
+        </section>
       </main>
     </div>
   );

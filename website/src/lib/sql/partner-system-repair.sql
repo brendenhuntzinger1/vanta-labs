@@ -382,6 +382,26 @@ create table if not exists public.payment_events (
   processed_at timestamptz not null default now()
 );
 
+create table if not exists public.website_analytics_events (
+  id uuid primary key default gen_random_uuid(),
+  event_type text not null,
+  page_path text,
+  page_url text,
+  referrer text,
+  session_id text,
+  visitor_id text,
+  user_agent text,
+  ip_address text,
+  country text,
+  city text,
+  device_type text,
+  utm_source text,
+  utm_medium text,
+  utm_campaign text,
+  event_payload jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
 -- Ensure required columns exist
 alter table if exists public.orders
   add column if not exists referral_code text,
@@ -469,6 +489,10 @@ create index if not exists idx_referral_orders_ambassador_id on public.referral_
 create index if not exists idx_referral_orders_order_id on public.referral_orders(order_id);
 create index if not exists idx_orders_ambassador_id on public.orders(ambassador_id);
 create index if not exists idx_orders_referral_code on public.orders(referral_code);
+create index if not exists idx_website_analytics_events_created_at on public.website_analytics_events(created_at desc);
+create index if not exists idx_website_analytics_events_event_type on public.website_analytics_events(event_type);
+create index if not exists idx_website_analytics_events_page_path on public.website_analytics_events(page_path);
+create index if not exists idx_website_analytics_events_session_id on public.website_analytics_events(session_id);
 
 -- RLS enablement
 alter table public.partners enable row level security;
@@ -487,6 +511,7 @@ alter table public.admin_credentials enable row level security;
 alter table public.admin_sessions enable row level security;
 alter table public.admin_login_attempts enable row level security;
 alter table public.referral_orders enable row level security;
+alter table public.website_analytics_events enable row level security;
 
 -- Core policies for canonical tables
 drop policy if exists partners_select_owner_or_admin on public.partners;
@@ -703,3 +728,11 @@ for insert with check (auth.jwt() ->> 'role' = 'admin');
 drop policy if exists referral_orders_update_admin on public.referral_orders;
 create policy referral_orders_update_admin on public.referral_orders
 for update using (auth.jwt() ->> 'role' = 'admin');
+
+drop policy if exists website_analytics_events_insert_any on public.website_analytics_events;
+create policy website_analytics_events_insert_any on public.website_analytics_events
+for insert with check (true);
+
+drop policy if exists website_analytics_events_select_admin on public.website_analytics_events;
+create policy website_analytics_events_select_admin on public.website_analytics_events
+for select using (auth.jwt() ->> 'role' = 'admin');

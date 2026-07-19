@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { AdminOrderActions } from "@/components/admin-order-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -27,6 +28,14 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
       <div className="vl-panel mx-auto max-w-5xl rounded-2xl p-4 sm:p-8">
         <h1 className="break-all text-2xl font-semibold sm:text-3xl">{data.order_id}</h1>
         <p className="mt-2 text-sm text-zinc-400">Customer: {data.customer_email}</p>
+
+        <AdminOrderActions
+          orderId={String(data.order_id)}
+          initialPaymentStatus={String(data.payment_status ?? "pending_payment")}
+          initialFulfillmentStatus={String(data.fulfillment_status ?? "pending")}
+          initialTrackingNumber={data.tracking_number ? String(data.tracking_number) : null}
+        />
+
         <pre className="mt-6 overflow-x-auto rounded-xl bg-zinc-950 p-3 text-xs text-zinc-300 sm:p-4 sm:text-sm">
 {JSON.stringify(data, null, 2)}
         </pre>
