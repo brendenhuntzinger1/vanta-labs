@@ -107,6 +107,7 @@ export default function ProductsPage() {
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [imageOverrides, setImageOverrides] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
+  const [stockFilter, setStockFilter] = useState(false);
   const { addToCart } = useCart();
 
   useEffect(() => {
@@ -135,11 +136,17 @@ export default function ProductsPage() {
     return ["All", ...productCategories];
   }, [products]);
 
+  const [stockFilter, setStockFilter] = useState(false);
+
   const visibleProducts = useMemo(() => {
     let result = [...products];
 
     if (selectedCategory !== "All") {
       result = result.filter((product) => product.category === selectedCategory);
+    }
+
+    if (stockFilter) {
+      result = result.filter((product) => product.stockStatus === "In Stock" || product.stockStatus === "Limited");
     }
 
     if (searchQuery.trim()) {
@@ -172,7 +179,7 @@ export default function ProductsPage() {
     }
 
     return result;
-  }, [products, searchQuery, selectedCategory, sort]);
+  }, [products, searchQuery, selectedCategory, stockFilter, sort]);
 
   return (
     <div className="vl-page-shell min-h-screen text-zinc-100">
@@ -224,7 +231,7 @@ export default function ProductsPage() {
             </select>
           </div>
 
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             {categories.slice(0, 6).map((category) => (
               <button
                 key={category}
@@ -239,18 +246,63 @@ export default function ProductsPage() {
                 {category}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => setStockFilter((prev) => !prev)}
+              className={`ml-auto rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.16em] transition ${
+                stockFilter
+                  ? "border-emerald-300/40 bg-emerald-300/12 text-emerald-200"
+                  : "border-white/12 bg-white/5 text-zinc-400 hover:text-white"
+              }`}
+            >
+              {stockFilter ? "✓ In Stock Only" : "In Stock Only"}
+            </button>
           </div>
+
+          {(selectedCategory !== "All" || searchQuery.trim() || stockFilter) && (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="text-[10px] uppercase tracking-[0.18em] text-zinc-600">Active:</span>
+              {selectedCategory !== "All" && (
+                <span className="flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-xs text-zinc-200">
+                  {selectedCategory}
+                  <button type="button" onClick={() => setSelectedCategory("All")} className="text-zinc-400 hover:text-white">×</button>
+                </span>
+              )}
+              {searchQuery.trim() && (
+                <span className="flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-2.5 py-1 text-xs text-zinc-200">
+                  &ldquo;{searchQuery}&rdquo;
+                  <button type="button" onClick={() => setSearchQuery("")} className="text-zinc-400 hover:text-white">×</button>
+                </span>
+              )}
+              {stockFilter && (
+                <span className="flex items-center gap-1.5 rounded-full border border-emerald-300/30 bg-emerald-300/8 px-2.5 py-1 text-xs text-emerald-200">
+                  In Stock
+                  <button type="button" onClick={() => setStockFilter(false)} className="text-emerald-400 hover:text-emerald-100">×</button>
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => { setSelectedCategory("All"); setSearchQuery(""); setStockFilter(false); }}
+                className="text-[10px] uppercase tracking-[0.18em] text-zinc-500 transition hover:text-zinc-200"
+              >
+                Clear all
+              </button>
+            </div>
+          )}
         </section>
 
         <section className="mt-8">
           <div className="mb-5 flex items-center justify-between">
-            <p className="text-sm text-zinc-400">{visibleProducts.length} products available</p>
-            {(selectedCategory !== "All" || searchQuery) && (
+            <p className="text-sm text-zinc-400">
+              {isLoading ? "Loading catalog…" : `${visibleProducts.length} product${visibleProducts.length === 1 ? "" : "s"}`}
+            </p>
+            {(selectedCategory !== "All" || searchQuery || stockFilter) && (
               <button
                 type="button"
                 onClick={() => {
                   setSelectedCategory("All");
                   setSearchQuery("");
+                  setStockFilter(false);
                 }}
                 className="text-xs uppercase tracking-[0.2em] text-zinc-300 transition hover:text-white"
               >
@@ -284,6 +336,7 @@ export default function ProductsPage() {
                 onClick={() => {
                   setSelectedCategory("All");
                   setSearchQuery("");
+                  setStockFilter(false);
                 }}
                 className="vl-btn-secondary vl-focus-ring mt-6 px-5 py-2.5 text-sm"
               >

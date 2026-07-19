@@ -260,6 +260,41 @@ export async function getCatalogProductsBySlugs(slugs: string[]) {
   return slugs.map((slug) => bySlug.get(slug)).filter(Boolean) as Product[];
 }
 
+export async function getCatalogProductsByCategory(category: string, excludeSlug?: string, limit = 4) {
+  const query = supabaseAdmin
+    .from("products")
+    .select("id, slug, name, category, short_description, long_description, description, price_cents, compare_at_price_cents, sale_price_cents, stock_status, inventory_quantity, is_published, is_enabled, is_archived, is_featured, badge, position, batch_number, purity_result, image_url, testing_date, lab_name, coa_url, molecular_formula, seo_title, seo_description")
+    .eq("category", category)
+    .eq("is_active", true)
+    .eq("is_enabled", true)
+    .eq("is_published", true)
+    .eq("is_archived", false)
+    .order("position", { ascending: true })
+    .limit(limit + 1);
+
+  const { data, error } = await query;
+
+  if (error) {
+    throw error;
+  }
+
+  const rows = ((data ?? []) as Array<Record<string, unknown>>).filter(
+    (row) => !excludeSlug || row.slug !== excludeSlug,
+  ).slice(0, limit);
+
+  const { productIds } = buildProductMaps(rows);
+  const { imagesByProductId, dosesByProductId } = await fetchProductRelations(productIds);
+
+  return rows.map((row) => {
+    const productId = String(row.id);
+    return mapProductRow(
+      row,
+      imagesByProductId.get(productId) ?? [],
+      dosesByProductId.get(productId) ?? [],
+    );
+  });
+}
+
 export async function getCoaRecords() {
   const { data, error } = await supabaseAdmin
     .from("products")
