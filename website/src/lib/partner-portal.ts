@@ -98,10 +98,10 @@ export interface PartnerProgramStats {
 }
 
 const PRELAUNCH_PARTNER_PROGRAM_STATS: PartnerProgramStats = {
-  totalCommissionsPaid: 12840,
-  averagePartnerEarnings: 1180,
-  averageApprovalTimeHours: 19.4,
-  topPartnerPayout: 4380,
+  totalCommissionsPaid: 0,
+  averagePartnerEarnings: 0,
+  averageApprovalTimeHours: 24,
+  topPartnerPayout: 0,
 };
 
 export interface PartnerRecord {
@@ -358,10 +358,10 @@ export async function getPartnerProgramStats(): Promise<PartnerProgramStats> {
   const hasLiveProgramData = (commissionRows?.length ?? 0) > 0 || (payoutRows?.length ?? 0) > 0;
   const baseStats = hasLiveProgramData
     ? {
-      totalCommissionsPaid: roundMoney(PRELAUNCH_PARTNER_PROGRAM_STATS.totalCommissionsPaid + totalCommissionsPaid),
-      averagePartnerEarnings: Math.max(PRELAUNCH_PARTNER_PROGRAM_STATS.averagePartnerEarnings, averagePartnerEarnings),
+      totalCommissionsPaid,
+      averagePartnerEarnings,
       averageApprovalTimeHours,
-      topPartnerPayout: Math.max(PRELAUNCH_PARTNER_PROGRAM_STATS.topPartnerPayout, topPartnerPayout),
+      topPartnerPayout,
     }
     : PRELAUNCH_PARTNER_PROGRAM_STATS;
 

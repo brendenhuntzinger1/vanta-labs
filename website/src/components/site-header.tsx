@@ -14,6 +14,7 @@ export function SiteHeader() {
     { href: "/coa-library", label: "COA Library" },
     { href: "/cart", label: "Cart" },
     { href: "/checkout", label: "Checkout" },
+    { href: "/contact", label: "Contact" },
     { href: "/partner", label: "Partner Program" },
   ];
 
@@ -22,7 +23,7 @@ export function SiteHeader() {
       <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(90deg,rgba(255,255,255,0.12),transparent_38%,transparent_62%,rgba(255,255,255,0.18))]" />
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
         <Link href="/" className="vl-focus-ring vl-display relative truncate text-sm font-semibold tracking-[0.25em] text-white sm:text-base sm:tracking-[0.32em]" onClick={() => setMobileNavOpen(false)}>
-          VANTA LABS
+          Vanta Labs
         </Link>
         <nav className="hidden items-center gap-6 text-sm text-zinc-300 md:flex">
           {navLinks.map((link) => (

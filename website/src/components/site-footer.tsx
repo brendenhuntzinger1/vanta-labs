@@ -7,9 +7,9 @@ const FOOTER_COLUMNS = {
     { label: "Checkout", href: "/checkout" },
   ],
   company: [
+    { label: "Contact", href: "/contact" },
     { label: "Partner Program", href: "/partner" },
     { label: "Ambassador", href: "/ambassador" },
-    { label: "Contact", href: "mailto:hello@vantalabs.com" },
   ],
   legal: [
     { label: "Research Disclaimer", href: "#" },
@@ -31,9 +31,15 @@ function FooterColumn({
       <ul className="mt-4 space-y-3">
         {links.map((link) => (
           <li key={link.label}>
-            <Link href={link.href} className="text-sm text-zinc-300/80 transition hover:text-white">
-              {link.label}
-            </Link>
+            {link.href.startsWith("mailto:") ? (
+              <a href={link.href} className="text-sm text-zinc-300/80 transition hover:text-white">
+                {link.label}
+              </a>
+            ) : (
+              <Link href={link.href} className="text-sm text-zinc-300/80 transition hover:text-white">
+                {link.label}
+              </Link>
+            )}
           </li>
         ))}
       </ul>
@@ -48,7 +54,7 @@ export function SiteFooter() {
       <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
         <div className="grid gap-10 md:grid-cols-[1.6fr_1fr_1fr_1fr]">
           <div>
-            <p className="vl-display text-sm font-semibold tracking-[0.3em] text-white">VANTA LABS</p>
+            <p className="vl-display text-sm font-semibold tracking-[0.3em] text-white">Vanta Labs</p>
             <p className="mt-4 max-w-md text-sm leading-7 text-zinc-300/85">
               Premium biotech research supply with verified quality standards, transparent batch documentation,
               and streamlined fulfillment.
@@ -64,8 +70,13 @@ export function SiteFooter() {
         </div>
 
         <div className="mt-10 flex flex-col gap-3 border-t border-white/10 pt-6 text-xs text-zinc-500 sm:flex-row sm:items-center sm:justify-between">
-          <p>© 2026 Vanta Labs. All rights reserved.</p>
-          <p>Built for modern biotech commerce.</p>
+          <p>
+            Support{" "}
+            <a href="mailto:support@vantalabsresearch.com" className="text-zinc-300 transition hover:text-white">
+              support@vantalabsresearch.com
+            </a>
+          </p>
+          <p>© 2026 Vanta Labs. All Rights Reserved.</p>
         </div>
       </div>
     </footer>

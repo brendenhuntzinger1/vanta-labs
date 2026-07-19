@@ -502,24 +502,40 @@ alter table public.admin_login_attempts enable row level security;
 alter table public.referral_orders enable row level security;
 alter table public.website_analytics_events enable row level security;
 
+create or replace function public.current_auth_uid()
+returns uuid
+language sql
+stable
+as $$
+  select auth.uid();
+$$;
+
+create or replace function public.current_auth_role()
+returns text
+language sql
+stable
+as $$
+  select auth.jwt() ->> 'role';
+$$;
+
 -- Core policies for canonical tables
 drop policy if exists partners_select_owner_or_admin on public.partners;
 create policy partners_select_owner_or_admin on public.partners
-for select using (auth.uid() = auth_user_id or auth.jwt() ->> 'role' = 'admin');
+for select using (auth_user_id = (select public.current_auth_uid()) or (select public.current_auth_role()) = 'admin');
 
 drop policy if exists partners_insert_admin on public.partners;
 create policy partners_insert_admin on public.partners
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists partners_update_admin on public.partners;
 create policy partners_update_admin on public.partners
-for update using (auth.jwt() ->> 'role' = 'admin');
+for update using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists referrals_select_owner_or_admin on public.referrals;
 create policy referrals_select_owner_or_admin on public.referrals
 for select using (
-  partner_id in (select id from public.partners where auth_user_id = auth.uid())
-  or auth.jwt() ->> 'role' = 'admin'
+  partner_id in (select id from public.partners where auth_user_id = (select public.current_auth_uid()))
+  or (select public.current_auth_role()) = 'admin'
 );
 
 drop policy if exists referrals_insert_any on public.referrals;
@@ -529,28 +545,28 @@ for insert with check (true);
 drop policy if exists commissions_select_owner_or_admin on public.commissions;
 create policy commissions_select_owner_or_admin on public.commissions
 for select using (
-  partner_id in (select id from public.partners where auth_user_id = auth.uid())
-  or auth.jwt() ->> 'role' = 'admin'
+  partner_id in (select id from public.partners where auth_user_id = (select public.current_auth_uid()))
+  or (select public.current_auth_role()) = 'admin'
 );
 
 drop policy if exists commissions_insert_admin on public.commissions;
 create policy commissions_insert_admin on public.commissions
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists commissions_update_admin on public.commissions;
 create policy commissions_update_admin on public.commissions
-for update using (auth.jwt() ->> 'role' = 'admin');
+for update using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists payouts_select_owner_or_admin on public.payouts;
 create policy payouts_select_owner_or_admin on public.payouts
 for select using (
-  partner_id in (select id from public.partners where auth_user_id = auth.uid())
-  or auth.jwt() ->> 'role' = 'admin'
+  partner_id in (select id from public.partners where auth_user_id = (select public.current_auth_uid()))
+  or (select public.current_auth_role()) = 'admin'
 );
 
 drop policy if exists payouts_insert_admin on public.payouts;
 create policy payouts_insert_admin on public.payouts
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists partner_program_stats_select_public on public.partner_program_stats;
 create policy partner_program_stats_select_public on public.partner_program_stats
@@ -558,23 +574,23 @@ for select using (true);
 
 drop policy if exists partner_program_stats_insert_admin on public.partner_program_stats;
 create policy partner_program_stats_insert_admin on public.partner_program_stats
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists partner_program_stats_update_admin on public.partner_program_stats;
 create policy partner_program_stats_update_admin on public.partner_program_stats
-for update using (auth.jwt() ->> 'role' = 'admin');
+for update using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists products_select_public on public.products;
 create policy products_select_public on public.products
-for select using ((is_active = true and is_archived = false and is_enabled = true and is_published = true) or auth.jwt() ->> 'role' = 'admin');
+for select using ((is_active = true and is_archived = false and is_enabled = true and is_published = true) or (select public.current_auth_role()) = 'admin');
 
 drop policy if exists products_insert_admin on public.products;
 create policy products_insert_admin on public.products
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists products_update_admin on public.products;
 create policy products_update_admin on public.products
-for update using (auth.jwt() ->> 'role' = 'admin');
+for update using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists product_images_select_public on public.product_images;
 create policy product_images_select_public on public.product_images
@@ -585,22 +601,22 @@ for select using (
     where p.id = product_id
       and (
         (p.is_active = true and p.is_archived = false and p.is_enabled = true and p.is_published = true)
-        or auth.jwt() ->> 'role' = 'admin'
+        or (select public.current_auth_role()) = 'admin'
       )
   )
 );
 
 drop policy if exists product_images_insert_admin on public.product_images;
 create policy product_images_insert_admin on public.product_images
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists product_images_update_admin on public.product_images;
 create policy product_images_update_admin on public.product_images
-for update using (auth.jwt() ->> 'role' = 'admin');
+for update using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists product_images_delete_admin on public.product_images;
 create policy product_images_delete_admin on public.product_images
-for delete using (auth.jwt() ->> 'role' = 'admin');
+for delete using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists product_doses_select_public on public.product_doses;
 create policy product_doses_select_public on public.product_doses
@@ -611,41 +627,41 @@ for select using (
     where p.id = product_id
       and (
         (p.is_active = true and p.is_archived = false and p.is_enabled = true and p.is_published = true)
-        or auth.jwt() ->> 'role' = 'admin'
+        or (select public.current_auth_role()) = 'admin'
       )
   )
 );
 
 drop policy if exists product_doses_insert_admin on public.product_doses;
 create policy product_doses_insert_admin on public.product_doses
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists product_doses_update_admin on public.product_doses;
 create policy product_doses_update_admin on public.product_doses
-for update using (auth.jwt() ->> 'role' = 'admin');
+for update using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists product_doses_delete_admin on public.product_doses;
 create policy product_doses_delete_admin on public.product_doses
-for delete using (auth.jwt() ->> 'role' = 'admin');
+for delete using ((select public.current_auth_role()) = 'admin');
 
 -- Keep legacy mirrors readable/writable for admin workflows
 drop policy if exists ambassadors_select_owner_or_admin on public.ambassadors;
 create policy ambassadors_select_owner_or_admin on public.ambassadors
-for select using (auth.uid() = auth_user_id or auth.jwt() ->> 'role' = 'admin');
+for select using (auth_user_id = (select public.current_auth_uid()) or (select public.current_auth_role()) = 'admin');
 
 drop policy if exists ambassadors_insert_admin on public.ambassadors;
 create policy ambassadors_insert_admin on public.ambassadors
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists ambassadors_update_admin on public.ambassadors;
 create policy ambassadors_update_admin on public.ambassadors
-for update using (auth.jwt() ->> 'role' = 'admin');
+for update using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists partner_clicks_select_owner_or_admin on public.partner_clicks;
 create policy partner_clicks_select_owner_or_admin on public.partner_clicks
 for select using (
-  ambassador_id in (select id from public.ambassadors where auth_user_id = auth.uid())
-  or auth.jwt() ->> 'role' = 'admin'
+  ambassador_id in (select id from public.ambassadors where auth_user_id = (select public.current_auth_uid()))
+  or (select public.current_auth_role()) = 'admin'
 );
 
 drop policy if exists partner_clicks_insert_any on public.partner_clicks;
@@ -655,68 +671,79 @@ for insert with check (true);
 drop policy if exists partner_payouts_select_owner_or_admin on public.partner_payouts;
 create policy partner_payouts_select_owner_or_admin on public.partner_payouts
 for select using (
-  ambassador_id in (select id from public.ambassadors where auth_user_id = auth.uid())
-  or auth.jwt() ->> 'role' = 'admin'
+  ambassador_id in (select id from public.ambassadors where auth_user_id = (select public.current_auth_uid()))
+  or (select public.current_auth_role()) = 'admin'
 );
 
 drop policy if exists partner_payouts_insert_admin on public.partner_payouts;
 create policy partner_payouts_insert_admin on public.partner_payouts
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists admin_audit_logs_admin_only on public.admin_audit_logs;
 create policy admin_audit_logs_admin_only on public.admin_audit_logs
-for select using (auth.jwt() ->> 'role' = 'admin');
+for select using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists admin_audit_logs_insert_admin on public.admin_audit_logs;
 create policy admin_audit_logs_insert_admin on public.admin_audit_logs
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists admin_credentials_admin_only on public.admin_credentials;
 create policy admin_credentials_admin_only on public.admin_credentials
-for select using (auth.jwt() ->> 'role' = 'admin');
+for select using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists admin_credentials_admin_update on public.admin_credentials;
 create policy admin_credentials_admin_update on public.admin_credentials
-for update using (auth.jwt() ->> 'role' = 'admin');
+for update using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists admin_sessions_admin_only on public.admin_sessions;
 create policy admin_sessions_admin_only on public.admin_sessions
-for select using (auth.jwt() ->> 'role' = 'admin');
+for select using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists admin_sessions_admin_insert on public.admin_sessions;
 create policy admin_sessions_admin_insert on public.admin_sessions
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists admin_sessions_admin_delete on public.admin_sessions;
 create policy admin_sessions_admin_delete on public.admin_sessions
-for delete using (auth.jwt() ->> 'role' = 'admin');
+for delete using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists admin_login_attempts_admin_only on public.admin_login_attempts;
 create policy admin_login_attempts_admin_only on public.admin_login_attempts
-for select using (auth.jwt() ->> 'role' = 'admin');
+for select using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists admin_login_attempts_admin_insert on public.admin_login_attempts;
 create policy admin_login_attempts_admin_insert on public.admin_login_attempts
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists admin_login_attempts_admin_delete on public.admin_login_attempts;
 create policy admin_login_attempts_admin_delete on public.admin_login_attempts
-for delete using (auth.jwt() ->> 'role' = 'admin');
+for delete using ((select public.current_auth_role()) = 'admin');
 
+drop policy if exists orders_select_admin on public.orders;
+drop policy if exists orders_select_partner on public.orders;
+drop policy if exists orders_select_owner_or_admin on public.orders;
+create policy orders_select_owner_or_admin on public.orders
+for select using (
+  ambassador_id in (select id from public.ambassadors where auth_user_id = (select public.current_auth_uid()))
+  or (select public.current_auth_role()) = 'admin'
+);
+
+drop policy if exists referral_orders_select_admin on public.referral_orders;
+drop policy if exists referral_orders_select_partner on public.referral_orders;
 drop policy if exists referral_orders_select_owner_or_admin on public.referral_orders;
 create policy referral_orders_select_owner_or_admin on public.referral_orders
 for select using (
-  ambassador_id in (select id from public.ambassadors where auth_user_id = auth.uid())
-  or auth.jwt() ->> 'role' = 'admin'
+  ambassador_id in (select id from public.ambassadors where auth_user_id = (select public.current_auth_uid()))
+  or (select public.current_auth_role()) = 'admin'
 );
 
 drop policy if exists referral_orders_insert_admin on public.referral_orders;
 create policy referral_orders_insert_admin on public.referral_orders
-for insert with check (auth.jwt() ->> 'role' = 'admin');
+for insert with check ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists referral_orders_update_admin on public.referral_orders;
 create policy referral_orders_update_admin on public.referral_orders
-for update using (auth.jwt() ->> 'role' = 'admin');
+for update using ((select public.current_auth_role()) = 'admin');
 
 drop policy if exists website_analytics_events_insert_any on public.website_analytics_events;
 create policy website_analytics_events_insert_any on public.website_analytics_events
@@ -724,4 +751,4 @@ for insert with check (true);
 
 drop policy if exists website_analytics_events_select_admin on public.website_analytics_events;
 create policy website_analytics_events_select_admin on public.website_analytics_events
-for select using (auth.jwt() ->> 'role' = 'admin');
+for select using ((select public.current_auth_role()) = 'admin');

@@ -32,7 +32,7 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "Vanta Labs",
+  title: "Vanta Labs | Premium Research Peptides",
   description: "Premium laboratory-grade products and verified quality standards.",
 };
 

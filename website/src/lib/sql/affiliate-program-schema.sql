@@ -61,6 +61,7 @@ create table if not exists public.partner_program_stats (
 );
 
 create index if not exists idx_partners_status on public.partners(status);
+create index if not exists idx_partners_auth_user_id on public.partners(auth_user_id);
 create index if not exists idx_partners_updated_at on public.partners(updated_at desc);
 create index if not exists idx_referrals_partner_id on public.referrals(partner_id);
 create index if not exists idx_referrals_event_type on public.referrals(event_type);

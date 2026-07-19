@@ -1,8 +1,8 @@
 import Link from "next/link";
 import Image from "next/image";
 import { SiteHeader } from "@/components/site-header";
-import { products as featuredProducts } from "@/lib/demo-data";
 import { getHomepageControlConfig } from "@/lib/admin-control";
+import { getCatalogProducts } from "@/lib/catalog";
 
 const BRAND_PILLARS = [
   {
@@ -75,6 +75,7 @@ function ProductCard({
 
 export default async function HomePage() {
   const control = await getHomepageControlConfig();
+  const catalogProducts = await getCatalogProducts();
   const enabledPromoLabels = [
     control.promoBuy3Get1Enabled ? "Buy 3 Get 1 Free" : null,
     control.promoBuy2Get1HalfEnabled ? "Buy 2 Get 1 (50% Off)" : null,
@@ -92,8 +93,8 @@ export default async function HomePage() {
   const promoPills = Array.from(new Set([...enabledPromoLabels, ...promoBase]));
 
   const featuredForHome = control.featuredProductSlugs?.length
-    ? featuredProducts.filter((product) => control.featuredProductSlugs?.includes(product.slug))
-    : featuredProducts;
+    ? catalogProducts.filter((product) => control.featuredProductSlugs?.includes(product.slug))
+    : catalogProducts;
 
   return (
     <div className="vl-page-shell min-h-screen text-zinc-100">
@@ -207,18 +208,24 @@ export default async function HomePage() {
               </Link>
             </div>
 
-            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-              {featuredForHome.slice(0, 6).map((product) => (
-                <ProductCard
-                  key={product.slug}
-                  name={product.name}
-                  price={product.price}
-                  image={product.image}
-                  slug={product.slug}
-                  description={product.description}
-                />
-              ))}
-            </div>
+            {featuredForHome.length > 0 ? (
+              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+                {featuredForHome.slice(0, 6).map((product) => (
+                  <ProductCard
+                    key={product.slug}
+                    name={product.name}
+                    price={product.price}
+                    image={product.image}
+                    slug={product.slug}
+                    description={product.description}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="vl-panel rounded-2xl p-6 text-sm text-zinc-300">
+                Featured products will appear here once published in the live catalog.
+              </div>
+            )}
           </div>
         </section>
 

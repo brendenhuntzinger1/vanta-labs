@@ -33,6 +33,12 @@ type CheckoutForm = {
   billingCountry: string;
 };
 
+type ComplianceAcknowledgements = {
+  researchResponsibility: boolean;
+  researchCompliance: boolean;
+  ageLegalConfirmation: boolean;
+};
+
 function validateCheckoutForm(form: CheckoutForm, sameAsShipping: boolean) {
   const errors: Partial<Record<keyof CheckoutForm, string>> = {};
 
@@ -87,7 +93,11 @@ export default function CheckoutPage() {
     isBuy3Get1FreeActive,
   } = useCart();
 
-  const [acknowledged, setAcknowledged] = useState(false);
+  const [acknowledgements, setAcknowledgements] = useState<ComplianceAcknowledgements>({
+    researchResponsibility: false,
+    researchCompliance: false,
+    ageLegalConfirmation: false,
+  });
   const [checkoutMessage, setCheckoutMessage] = useState<string | null>(null);
   const [checkoutState, setCheckoutState] = useState<"idle" | "loading" | "success">("idle");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -135,6 +145,10 @@ export default function CheckoutPage() {
     }
   };
 
+  const handleAcknowledgementChange = (key: keyof ComplianceAcknowledgements, checked: boolean) => {
+    setAcknowledgements((prev) => ({ ...prev, [key]: checked }));
+  };
+
   const handleCheckout = async () => {
     if (items.length === 0) {
       setCheckoutMessage("Your cart is empty.");
@@ -148,8 +162,8 @@ export default function CheckoutPage() {
       return;
     }
 
-    if (!acknowledged) {
-      setCheckoutMessage("Please acknowledge the research-use statement before placing the order.");
+    if (Object.values(acknowledgements).some((value) => !value)) {
+      setCheckoutMessage("Please confirm all required research and legal acknowledgements before placing the order.");
       return;
     }
 
@@ -184,6 +198,7 @@ export default function CheckoutPage() {
             },
         referralCode: referralCode ?? undefined,
         expectedTotal: total,
+        complianceAcknowledgements: acknowledgements,
       };
 
       const result = await createSecureCheckoutSession(payload);
@@ -344,10 +359,54 @@ export default function CheckoutPage() {
               ) : null}
             </div>
 
-            <label className="vl-panel-soft mt-8 flex items-start gap-3 rounded-xl p-4 text-sm text-zinc-300">
-              <input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} className="mt-1 h-4 w-4 rounded border-zinc-700 bg-zinc-900" />
-              <span>I acknowledge these products are intended only for lawful laboratory research and not for human use.</span>
-            </label>
+            <div className="mt-8 space-y-4">
+              <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Required Confirmations</p>
+
+              <label className="vl-panel-soft flex items-start gap-3 rounded-xl p-4 text-sm text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={acknowledgements.researchResponsibility}
+                  onChange={(event) => handleAcknowledgementChange("researchResponsibility", event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-zinc-700 bg-zinc-900"
+                />
+                <span>
+                  <span className="block font-medium text-zinc-100">Research Responsibility Statement *</span>
+                  <span className="mt-1 block text-zinc-400">
+                    The purchaser assumes full responsibility for the proper handling, storage, and use of these laboratory materials. The seller provides products solely as research reference materials and does not provide medical or dosing guidance.
+                  </span>
+                </span>
+              </label>
+
+              <label className="vl-panel-soft flex items-start gap-3 rounded-xl p-4 text-sm text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={acknowledgements.researchCompliance}
+                  onChange={(event) => handleAcknowledgementChange("researchCompliance", event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-zinc-700 bg-zinc-900"
+                />
+                <span>
+                  <span className="block font-medium text-zinc-100">Research &amp; Compliance Agreement *</span>
+                  <span className="mt-1 block text-zinc-400">
+                    I acknowledge that the products sold on this website are intended strictly for laboratory research purposes. I confirm that I am purchasing these materials for legitimate research use and not for human or veterinary use. I understand these products are not drugs, dietary supplements, or medical products, and no instructions for preparation, dosage, or administration are provided by the seller.
+                  </span>
+                </span>
+              </label>
+
+              <label className="vl-panel-soft flex items-start gap-3 rounded-xl p-4 text-sm text-zinc-300">
+                <input
+                  type="checkbox"
+                  checked={acknowledgements.ageLegalConfirmation}
+                  onChange={(event) => handleAcknowledgementChange("ageLegalConfirmation", event.target.checked)}
+                  className="mt-1 h-4 w-4 rounded border-zinc-700 bg-zinc-900"
+                />
+                <span>
+                  <span className="block font-medium text-zinc-100">Age &amp; Legal Confirmation *</span>
+                  <span className="mt-1 block text-zinc-400">
+                    I confirm that I am 21 years of age or older and legally permitted to purchase laboratory research materials.
+                  </span>
+                </span>
+              </label>
+            </div>
           </section>
 
           <aside className="vl-panel rounded-[2rem] p-5 sm:p-7 lg:sticky lg:top-24">

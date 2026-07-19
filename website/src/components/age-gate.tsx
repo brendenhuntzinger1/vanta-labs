@@ -75,7 +75,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
             VL
           </div>
           <p className="mb-4 text-[11px] uppercase tracking-[0.35em] text-zinc-400 sm:text-xs sm:tracking-[0.45em]">Restricted Access</p>
-          <h1 className="text-3xl font-semibold tracking-[0.2em] text-white sm:text-5xl sm:tracking-[0.3em]">VANTA LABS</h1>
+          <h1 className="text-3xl font-semibold tracking-[0.2em] text-white sm:text-5xl sm:tracking-[0.3em]">Vanta Labs</h1>
           <p className="mt-4 text-base text-zinc-300 sm:text-lg">Research Integrity. Verified Quality.</p>
           <p className="mt-7 text-lg font-medium text-white sm:mt-8 sm:text-xl">Are you 21 years of age or older?</p>
           <label className="vl-panel-soft mt-6 flex items-start justify-center gap-3 rounded-[1.25rem] p-4 text-left text-sm text-zinc-300">

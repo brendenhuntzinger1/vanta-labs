@@ -45,7 +45,7 @@ export default function CartPage() {
             {items.length === 0 ? (
               <div className="vl-panel rounded-[1.5rem] border-dashed p-6 text-center text-zinc-400 sm:rounded-[2rem] sm:p-10">
                 <p className="text-lg text-white sm:text-xl">No items yet.</p>
-                <p className="mt-3">Visit the catalog to add sample products.</p>
+                <p className="mt-3">Visit the catalog to add products.</p>
                 <Link href="/products" className="vl-btn-primary vl-focus-ring mt-6 inline-flex px-5 py-3 text-sm">
                   Browse products
                 </Link>
