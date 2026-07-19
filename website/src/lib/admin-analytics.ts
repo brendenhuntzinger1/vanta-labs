@@ -55,6 +55,16 @@ type RevenueRow = {
   created_at: string | null;
 };
 
+export type RevenueTrendPoint = {
+  date: string;
+  amount: number;
+};
+
+type RevenueRangeInput = {
+  fromIso: string;
+  toIso: string;
+};
+
 function revenueFromRows(rows: RevenueRow[]) {
   const now = Date.now();
   const oneDay = 24 * 60 * 60 * 1000;
@@ -124,6 +134,83 @@ export async function getRevenueWindowMetrics() {
 
   const allRows = [...(paidRows ?? []), ...(fallbackRows ?? [])] as RevenueRow[];
   return revenueFromRows(allRows);
+}
+
+async function getRevenueRowsInRange(input: RevenueRangeInput) {
+  const [{ data: paidRows, error: paidError }, { data: fallbackRows, error: fallbackError }] = await Promise.all([
+    supabaseAdmin
+      .from("orders")
+      .select("amount_paid, payment_status, paid_at, created_at")
+      .gte("paid_at", input.fromIso)
+      .lte("paid_at", input.toIso),
+    supabaseAdmin
+      .from("orders")
+      .select("amount_paid, payment_status, paid_at, created_at")
+      .is("paid_at", null)
+      .gte("created_at", input.fromIso)
+      .lte("created_at", input.toIso),
+  ]);
+
+  if (paidError) {
+    throw paidError;
+  }
+
+  if (fallbackError) {
+    throw fallbackError;
+  }
+
+  return [...(paidRows ?? []), ...(fallbackRows ?? [])] as RevenueRow[];
+}
+
+function isoDay(value: Date) {
+  return value.toISOString().slice(0, 10);
+}
+
+function iterateDays(fromIso: string, toIso: string) {
+  const points: string[] = [];
+  const cursor = new Date(fromIso);
+  cursor.setUTCHours(0, 0, 0, 0);
+  const end = new Date(toIso);
+  end.setUTCHours(0, 0, 0, 0);
+
+  while (cursor.getTime() <= end.getTime()) {
+    points.push(isoDay(cursor));
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+
+  return points;
+}
+
+export async function getRevenueTrend(input: RevenueRangeInput) {
+  const rows = await getRevenueRowsInRange(input);
+  const dayTotals = new Map<string, number>();
+
+  for (const day of iterateDays(input.fromIso, input.toIso)) {
+    dayTotals.set(day, 0);
+  }
+
+  for (const row of rows) {
+    if (!isPaidStatus(row.payment_status)) {
+      continue;
+    }
+
+    const amount = Number(row.amount_paid ?? 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      continue;
+    }
+
+    const timestamp = row.paid_at ?? row.created_at;
+    if (!timestamp) {
+      continue;
+    }
+
+    const day = timestamp.slice(0, 10);
+    dayTotals.set(day, (dayTotals.get(day) ?? 0) + amount);
+  }
+
+  return Array.from(dayTotals.entries())
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([date, amount]) => ({ date, amount }));
 }
 
 export async function getDailyProfitEstimate() {

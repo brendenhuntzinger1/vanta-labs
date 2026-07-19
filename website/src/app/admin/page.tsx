@@ -73,6 +73,13 @@ export default async function AdminHomePage() {
             initial={{
               onlineNow: onlineVisitors,
               revenue: revenueWindows,
+              selectedRange: {
+                preset: "7d",
+                fromIso: "",
+                toIso: "",
+                total: revenueWindows.last7Days,
+                trend: [],
+              },
               updatedAt: new Date().toISOString(),
             }}
           />
