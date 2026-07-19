@@ -1,0 +1,779 @@
+import { randomUUID } from "crypto";
+import { supabaseAdmin } from "@/lib/supabase-server";
+import { generateReferralCode } from "@/lib/referral-code-utils";
+
+function formatSupabaseError(error: unknown) {
+  if (!error) {
+    return "Unknown Supabase error";
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (error instanceof Error) {
+    return `${error.name}: ${error.message}\n${error.stack ?? ""}`;
+  }
+
+  try {
+    return JSON.stringify(error, null, 2);
+  } catch {
+    return String(error);
+  }
+}
+
+function assertNoSupabaseError(context: string, error: unknown) {
+  if (!error) {
+    return;
+  }
+
+  throw new Error(`[Supabase] ${context} failed\n${formatSupabaseError(error)}`);
+}
+
+export interface PartnerSummary {
+  partnerId: string;
+  partnerName: string;
+  referralCode: string;
+  referralLink: string;
+  commissionPercent: number;
+  totalEarnings: number;
+  pendingCommissions: number;
+  paidCommissions: number;
+  totalOrders: number;
+  averageOrderValue: number;
+  returningCustomerRate: number;
+  totalRevenue: number;
+  totalClicks: number;
+  conversions: number;
+  conversionRate: number;
+  recentOrders: Array<{
+    orderId: string;
+    createdAt: string;
+    customerEmail: string | null;
+    amountPaid: number;
+    paymentStatus: string;
+    commissionAmount: number;
+    commissionStatus: string;
+  }>;
+  monthlyRevenueSeries: Array<{ label: string; value: number }>;
+  lifetimeRevenueSeries: Array<{ label: string; value: number }>;
+}
+
+export interface AdminPartnerRow {
+  id: string;
+  name: string;
+  email: string | null;
+  referralCode: string;
+  status: string;
+  commissionPercent: number;
+  totalRevenue: number;
+  totalOrders: number;
+  totalCommissions: number;
+  pendingCommissions: number;
+  paidCommissions: number;
+  clicks: number;
+  conversionRate: number;
+  updatedAt: string;
+}
+
+export interface AdminOperationsSummary {
+  liveSalesToday: number;
+  liveSalesMonth: number;
+  newCustomers: number;
+  returningCustomers: number;
+  returningCustomerRate: number;
+  lowStockItems: number;
+  pendingShipments: number;
+  activeCoupons: number;
+  pendingNotifications: number;
+}
+
+export interface PartnerProgramStats {
+  totalCommissionsPaid: number;
+  averagePartnerEarnings: number;
+  averageApprovalTimeHours: number;
+  lifetimeCommissions: number;
+  topPartnerPayout: number;
+}
+
+export interface PartnerRecord {
+  id: string;
+  name: string;
+  email: string | null;
+  referral_code: string;
+  status: string;
+  commission_percent: number;
+  auth_user_id: string | null;
+}
+
+function roundMoney(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function toMonthKey(dateIso: string) {
+  const date = new Date(dateIso);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function monthLabel(monthKey: string) {
+  const [year, month] = monthKey.split("-").map(Number);
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-US", {
+    month: "short",
+    year: "2-digit",
+    timeZone: "UTC",
+  });
+}
+
+function toDateLabel(dateIso: string) {
+  return new Date(dateIso).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+}
+
+export async function getApprovedPartnerByAuthUserId(userId: string) {
+  const partner = await getPartnerByAuthUserId(userId);
+  if (!partner || partner.status !== "approved") {
+    return null;
+  }
+
+  return partner;
+}
+
+export async function getPartnerByAuthUserId(userId: string): Promise<PartnerRecord | null> {
+  const { data, error } = await supabaseAdmin
+    .from("partners")
+    .select("id, name, email, referral_code, status, commission_percent, auth_user_id")
+    .eq("auth_user_id", userId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data) {
+    return null;
+  }
+
+  return data;
+}
+
+export async function createPartnerApplication(input: {
+  authUserId: string;
+  name: string;
+  email: string;
+}) {
+  const { data: existingPartner, error: existingPartnerError } = await supabaseAdmin
+    .from("partners")
+    .select("id, status, referral_code")
+    .eq("auth_user_id", input.authUserId)
+    .maybeSingle();
+
+  if (existingPartnerError) {
+    assertNoSupabaseError("partners.select(existing by auth_user_id)", existingPartnerError);
+  }
+
+  if (existingPartner) {
+    return {
+      partnerId: existingPartner.id,
+      status: existingPartner.status,
+      referralCode: existingPartner.referral_code,
+    };
+  }
+
+  const partnerId = randomUUID();
+  const referralCode = generateReferralCode(input.name);
+  const now = new Date().toISOString();
+
+  const partnerInsert = await supabaseAdmin
+    .from("partners")
+    .insert({
+      id: partnerId,
+      name: input.name,
+      email: input.email,
+      referral_code: referralCode,
+      status: "pending",
+      commission_percent: 10,
+      auth_user_id: input.authUserId,
+      invited_at: now,
+      updated_at: now,
+    });
+
+  if (partnerInsert.error) {
+    assertNoSupabaseError("partners.insert(create application)", partnerInsert.error);
+  }
+
+  const ambassadorInsert = await supabaseAdmin
+    .from("ambassadors")
+    .insert({
+      id: partnerId,
+      name: input.name,
+      email: input.email,
+      referral_code: referralCode,
+      status: "pending",
+      commission_percent: 10,
+      auth_user_id: input.authUserId,
+      invited_at: now,
+      updated_at: now,
+    });
+
+  if (ambassadorInsert.error) {
+    assertNoSupabaseError("ambassadors.insert(create application mirror)", ambassadorInsert.error);
+  }
+
+  return {
+    partnerId,
+    status: "pending",
+    referralCode,
+  };
+}
+
+export async function getPartnerProgramStats(): Promise<PartnerProgramStats> {
+  const [
+    { data: commissionRows, error: commissionError },
+    { data: payoutRows, error: payoutError },
+    { data: partnerRows, error: partnerError },
+    { data: programStatsRows, error: statsError },
+  ] = await Promise.all([
+    supabaseAdmin.from("referral_orders").select("commission_amount, created_at"),
+    supabaseAdmin.from("partner_payouts").select("amount"),
+    supabaseAdmin.from("partners").select("id, invited_at, approved_at"),
+    supabaseAdmin.from("partner_program_stats").select("key, value_numeric"),
+  ]);
+
+  assertNoSupabaseError("referral_orders.select(program commissions)", commissionError);
+  assertNoSupabaseError("partner_payouts.select(program payouts)", payoutError);
+  assertNoSupabaseError("partners.select(program partner approvals)", partnerError);
+  assertNoSupabaseError("partner_program_stats.select(configurable stats)", statsError);
+
+  const overrides = new Map((programStatsRows ?? []).map((row) => [row.key, Number(row.value_numeric ?? 0)]));
+
+  const lifetimeCommissions = roundMoney((commissionRows ?? []).reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
+  const totalCommissionsPaid = roundMoney((payoutRows ?? []).reduce((sum, row) => sum + Number(row.amount ?? 0), 0));
+
+  const commissionByPartner = new Map<string, number>();
+  const { data: partnerCommissionRows, error: partnerCommissionError } = await supabaseAdmin
+    .from("referral_orders")
+    .select("ambassador_id, commission_amount");
+
+  assertNoSupabaseError("referral_orders.select(program partner commission totals)", partnerCommissionError);
+
+  for (const row of partnerCommissionRows ?? []) {
+    const partnerId = row.ambassador_id;
+    if (!partnerId) continue;
+    commissionByPartner.set(partnerId, (commissionByPartner.get(partnerId) ?? 0) + Number(row.commission_amount ?? 0));
+  }
+
+  const earningsValues = Array.from(commissionByPartner.values());
+  const averagePartnerEarnings = earningsValues.length > 0
+    ? roundMoney(earningsValues.reduce((sum, value) => sum + value, 0) / earningsValues.length)
+    : 0;
+  const topPartnerPayout = earningsValues.length > 0 ? roundMoney(Math.max(...earningsValues)) : 0;
+
+  const approvalDurations = (partnerRows ?? [])
+    .filter((row) => row.invited_at && row.approved_at)
+    .map((row) => {
+      const invitedAt = new Date(row.invited_at as string).getTime();
+      const approvedAt = new Date(row.approved_at as string).getTime();
+      return Math.max(0, (approvedAt - invitedAt) / (1000 * 60 * 60));
+    });
+
+  const averageApprovalTimeHours = approvalDurations.length > 0
+    ? roundMoney(approvalDurations.reduce((sum, value) => sum + value, 0) / approvalDurations.length)
+    : 24;
+
+  return {
+    totalCommissionsPaid: overrides.get("total_commissions_paid") ?? totalCommissionsPaid,
+    averagePartnerEarnings: overrides.get("average_partner_earnings") ?? averagePartnerEarnings,
+    averageApprovalTimeHours: overrides.get("average_approval_time_hours") ?? averageApprovalTimeHours,
+    lifetimeCommissions: overrides.get("lifetime_commissions") ?? lifetimeCommissions,
+    topPartnerPayout: overrides.get("top_partner_payout") ?? topPartnerPayout,
+  };
+}
+
+function buildRevenueSeriesByMonth(orderRows: Array<{ created_at: string; amount_paid: number }>, monthsBack = 12) {
+  const totals = new Map<string, number>();
+  for (const row of orderRows) {
+    const key = toMonthKey(row.created_at);
+    totals.set(key, (totals.get(key) ?? 0) + Number(row.amount_paid ?? 0));
+  }
+
+  const now = new Date();
+  const labels: Array<{ label: string; value: number }> = [];
+
+  for (let i = monthsBack - 1; i >= 0; i -= 1) {
+    const date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    const key = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+    labels.push({ label: monthLabel(key), value: roundMoney(totals.get(key) ?? 0) });
+  }
+
+  return labels;
+}
+
+function buildLifetimeSeries(orderRows: Array<{ created_at: string; amount_paid: number }>, points = 20) {
+  const sorted = [...orderRows].sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+  let running = 0;
+  const allPoints = sorted.map((row) => {
+    running += Number(row.amount_paid ?? 0);
+    return {
+      label: toDateLabel(row.created_at),
+      value: roundMoney(running),
+    };
+  });
+
+  if (allPoints.length <= points) {
+    return allPoints;
+  }
+
+  const step = Math.max(1, Math.floor(allPoints.length / points));
+  return allPoints.filter((_, index) => index % step === 0 || index === allPoints.length - 1);
+}
+
+export async function getPartnerSummary(partnerId: string, siteUrl: string): Promise<PartnerSummary> {
+  const [{ data: partner, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }] = await Promise.all([
+    supabaseAdmin
+      .from("partners")
+      .select("id, name, referral_code, commission_percent")
+      .eq("id", partnerId)
+      .single(),
+    supabaseAdmin
+      .from("referral_orders")
+      .select("order_id, commission_amount, payment_status, created_at")
+      .eq("ambassador_id", partnerId)
+      .order("created_at", { ascending: false }),
+    supabaseAdmin
+      .from("orders")
+      .select("order_id, customer_email, amount_paid, payment_status, created_at")
+      .eq("ambassador_id", partnerId)
+      .order("created_at", { ascending: false }),
+    supabaseAdmin
+      .from("partner_clicks")
+      .select("created_at")
+      .eq("ambassador_id", partnerId),
+  ]);
+
+  assertNoSupabaseError("partners.select(partner summary)", partnerError);
+  assertNoSupabaseError("referral_orders.select(partner summary commissions)", commissionError);
+  assertNoSupabaseError("orders.select(partner summary orders)", orderError);
+  assertNoSupabaseError("partner_clicks.select(partner summary clicks)", clickError);
+
+  const commissions = commissionRows ?? [];
+  const orders = orderRows ?? [];
+  const clicks = clickRows ?? [];
+
+  const totalEarnings = roundMoney(commissions.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
+  const pendingCommissions = roundMoney(commissions
+    .filter((row) => row.payment_status === "pending" || row.payment_status === "paid")
+    .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
+  const paidCommissions = roundMoney(commissions
+    .filter((row) => row.payment_status === "commission_paid")
+    .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
+
+  const paidOrders = orders.filter((order) => order.payment_status === "paid");
+  const totalRevenue = roundMoney(paidOrders.reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0));
+  const totalOrders = paidOrders.length;
+  const averageOrderValue = totalOrders > 0 ? roundMoney(totalRevenue / totalOrders) : 0;
+
+  const customerOrderCounts = new Map<string, number>();
+  for (const order of paidOrders) {
+    if (!order.customer_email) continue;
+    customerOrderCounts.set(order.customer_email, (customerOrderCounts.get(order.customer_email) ?? 0) + 1);
+  }
+
+  const returningCustomers = Array.from(customerOrderCounts.values()).filter((count) => count > 1).length;
+  const returningCustomerRate = customerOrderCounts.size > 0
+    ? roundMoney((returningCustomers / customerOrderCounts.size) * 100)
+    : 0;
+
+  const conversions = totalOrders;
+  const totalClicks = clicks.length;
+  const conversionRate = totalClicks > 0 ? roundMoney((conversions / totalClicks) * 100) : 0;
+
+  const recentOrders = commissions.slice(0, 8).map((commission) => {
+    const order = orders.find((row) => row.order_id === commission.order_id);
+    return {
+      orderId: commission.order_id,
+      createdAt: commission.created_at,
+      customerEmail: order?.customer_email ?? null,
+      amountPaid: roundMoney(Number(order?.amount_paid ?? 0)),
+      paymentStatus: order?.payment_status ?? "pending_payment",
+      commissionAmount: roundMoney(Number(commission.commission_amount ?? 0)),
+      commissionStatus: commission.payment_status,
+    };
+  });
+
+  return {
+    partnerId: partner.id,
+    partnerName: partner.name,
+    referralCode: partner.referral_code,
+    referralLink: `${siteUrl.replace(/\/$/, "")}/r/${partner.referral_code}`,
+    commissionPercent: Number(partner.commission_percent ?? 10),
+    totalEarnings,
+    pendingCommissions,
+    paidCommissions,
+    totalOrders,
+    averageOrderValue,
+    returningCustomerRate,
+    totalRevenue,
+    totalClicks,
+    conversions,
+    conversionRate,
+    recentOrders,
+    monthlyRevenueSeries: buildRevenueSeriesByMonth(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) }))),
+    lifetimeRevenueSeries: buildLifetimeSeries(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) }))),
+  };
+}
+
+export async function getAdminPartnerRows(input?: { search?: string; status?: string }): Promise<AdminPartnerRow[]> {
+  let query = supabaseAdmin
+    .from("partners")
+    .select("id, name, email, referral_code, status, commission_percent, updated_at")
+    .order("updated_at", { ascending: false });
+
+  if (input?.status && input.status !== "all") {
+    query = query.eq("status", input.status);
+  }
+
+  if (input?.search) {
+    const normalizedSearch = input.search.trim();
+    query = query.or(`name.ilike.%${normalizedSearch}%,email.ilike.%${normalizedSearch}%,referral_code.ilike.%${normalizedSearch}%`);
+  }
+
+  const [{ data: partners, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }] = await Promise.all([
+    query,
+    supabaseAdmin.from("referral_orders").select("ambassador_id, commission_amount, payment_status"),
+    supabaseAdmin.from("orders").select("ambassador_id, amount_paid, payment_status"),
+    supabaseAdmin.from("partner_clicks").select("ambassador_id"),
+  ]);
+
+  assertNoSupabaseError("partners.select(admin partner rows)", partnerError);
+  assertNoSupabaseError("referral_orders.select(admin commission rows)", commissionError);
+  assertNoSupabaseError("orders.select(admin order rows)", orderError);
+  assertNoSupabaseError("partner_clicks.select(admin click rows)", clickError);
+
+  const commissionByPartner = new Map<string, { total: number; pending: number; paid: number }>();
+  for (const row of commissionRows ?? []) {
+    const partnerId = row.ambassador_id;
+    if (!partnerId) continue;
+    const current = commissionByPartner.get(partnerId) ?? { total: 0, pending: 0, paid: 0 };
+    const amount = Number(row.commission_amount ?? 0);
+    current.total += amount;
+    if (row.payment_status === "commission_paid") {
+      current.paid += amount;
+    } else {
+      current.pending += amount;
+    }
+    commissionByPartner.set(partnerId, current);
+  }
+
+  const ordersByPartner = new Map<string, { totalRevenue: number; totalOrders: number }>();
+  for (const row of orderRows ?? []) {
+    const partnerId = row.ambassador_id;
+    if (!partnerId || row.payment_status !== "paid") continue;
+    const current = ordersByPartner.get(partnerId) ?? { totalRevenue: 0, totalOrders: 0 };
+    current.totalRevenue += Number(row.amount_paid ?? 0);
+    current.totalOrders += 1;
+    ordersByPartner.set(partnerId, current);
+  }
+
+  const clickCounts = new Map<string, number>();
+  for (const row of clickRows ?? []) {
+    const partnerId = row.ambassador_id;
+    if (!partnerId) continue;
+    clickCounts.set(partnerId, (clickCounts.get(partnerId) ?? 0) + 1);
+  }
+
+  return (partners ?? []).map((partner) => {
+    const commission = commissionByPartner.get(partner.id) ?? { total: 0, pending: 0, paid: 0 };
+    const order = ordersByPartner.get(partner.id) ?? { totalRevenue: 0, totalOrders: 0 };
+    const clicks = clickCounts.get(partner.id) ?? 0;
+    const conversionRate = clicks > 0 ? roundMoney((order.totalOrders / clicks) * 100) : 0;
+
+    return {
+      id: partner.id,
+      name: partner.name,
+      email: partner.email,
+      referralCode: partner.referral_code,
+      status: partner.status,
+      commissionPercent: Number(partner.commission_percent ?? 10),
+      totalRevenue: roundMoney(order.totalRevenue),
+      totalOrders: order.totalOrders,
+      totalCommissions: roundMoney(commission.total),
+      pendingCommissions: roundMoney(commission.pending),
+      paidCommissions: roundMoney(commission.paid),
+      clicks,
+      conversionRate,
+      updatedAt: partner.updated_at,
+    };
+  });
+}
+
+export async function getAdminOperationsSummary(): Promise<AdminOperationsSummary> {
+  const today = new Date();
+  const todayStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate())).toISOString();
+  const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)).toISOString();
+
+  const [
+    { data: todayOrders, error: todayError },
+    { data: monthOrders, error: monthError },
+    { data: allPaidOrders, error: paidError },
+    { data: inventoryRows, error: inventoryError },
+    { data: shipmentRows, error: shipmentError },
+    { data: couponRows, error: couponError },
+    { data: notificationRows, error: notificationError },
+  ] = await Promise.all([
+    supabaseAdmin.from("orders").select("amount_paid").eq("payment_status", "paid").gte("created_at", todayStart),
+    supabaseAdmin.from("orders").select("amount_paid").eq("payment_status", "paid").gte("created_at", monthStart),
+    supabaseAdmin.from("orders").select("customer_email").eq("payment_status", "paid"),
+    supabaseAdmin.from("inventory_items").select("quantity_on_hand, reorder_level"),
+    supabaseAdmin.from("order_shipments").select("shipping_status").neq("shipping_status", "delivered"),
+    supabaseAdmin.from("coupons").select("id").eq("active", true),
+    supabaseAdmin.from("notification_queue").select("id").eq("status", "pending"),
+  ]);
+
+  assertNoSupabaseError("orders.select(live sales today)", todayError);
+  assertNoSupabaseError("orders.select(live sales month)", monthError);
+  assertNoSupabaseError("orders.select(customer analytics)", paidError);
+  assertNoSupabaseError("inventory_items.select(ops summary)", inventoryError);
+  assertNoSupabaseError("order_shipments.select(ops summary)", shipmentError);
+  assertNoSupabaseError("coupons.select(ops summary)", couponError);
+  assertNoSupabaseError("notification_queue.select(ops summary)", notificationError);
+
+  const liveSalesToday = roundMoney((todayOrders ?? []).reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0));
+  const liveSalesMonth = roundMoney((monthOrders ?? []).reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0));
+
+  const customerOrderCount = new Map<string, number>();
+  for (const row of allPaidOrders ?? []) {
+    const email = row.customer_email;
+    if (!email) continue;
+    customerOrderCount.set(email, (customerOrderCount.get(email) ?? 0) + 1);
+  }
+
+  const newCustomers = Array.from(customerOrderCount.values()).filter((count) => count === 1).length;
+  const returningCustomers = Array.from(customerOrderCount.values()).filter((count) => count > 1).length;
+  const totalCustomers = customerOrderCount.size;
+
+  const lowStockItems = (inventoryRows ?? []).filter((row) => Number(row.quantity_on_hand ?? 0) <= Number(row.reorder_level ?? 0)).length;
+  const pendingShipments = (shipmentRows ?? []).length;
+  const activeCoupons = (couponRows ?? []).length;
+  const pendingNotifications = (notificationRows ?? []).length;
+
+  return {
+    liveSalesToday,
+    liveSalesMonth,
+    newCustomers,
+    returningCustomers,
+    returningCustomerRate: totalCustomers > 0 ? roundMoney((returningCustomers / totalCustomers) * 100) : 0,
+    lowStockItems,
+    pendingShipments,
+    activeCoupons,
+    pendingNotifications,
+  };
+}
+
+export async function createPartnerInvite(input: {
+  name: string;
+  email: string;
+  commissionPercent: number;
+  createdByUserId: string;
+}) {
+  const referralCode = generateReferralCode(input.name);
+  const { data: invitedUser, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
+    data: { role: "partner", invited_by: input.createdByUserId },
+  });
+
+  if (inviteError) {
+    assertNoSupabaseError("auth.admin.inviteUserByEmail", inviteError);
+  }
+
+  const partnerId = randomUUID();
+  const now = new Date().toISOString();
+
+  const { data, error } = await supabaseAdmin
+    .from("partners")
+    .insert({
+      id: partnerId,
+      name: input.name,
+      email: input.email,
+      referral_code: referralCode,
+      status: "pending",
+      commission_percent: input.commissionPercent,
+      auth_user_id: invitedUser.user?.id ?? null,
+      invited_at: now,
+      created_by: input.createdByUserId,
+      updated_at: now,
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    assertNoSupabaseError("partners.insert(create invite)", error);
+  }
+
+  const { error: ambassadorInsertError } = await supabaseAdmin
+    .from("ambassadors")
+    .insert({
+      id: partnerId,
+      name: input.name,
+      email: input.email,
+      referral_code: referralCode,
+      status: "pending",
+      commission_percent: input.commissionPercent,
+      auth_user_id: invitedUser.user?.id ?? null,
+      invited_at: now,
+      created_by: input.createdByUserId,
+      updated_at: now,
+    });
+
+  if (ambassadorInsertError) {
+    assertNoSupabaseError("ambassadors.insert(create invite mirror)", ambassadorInsertError);
+  }
+
+  await supabaseAdmin.from("admin_audit_logs").insert({
+    actor_user_id: input.createdByUserId,
+    action: "partner_invited",
+    target_table: "ambassadors",
+    target_id: data.id,
+    metadata: { email: input.email, commissionPercent: input.commissionPercent, referralCode },
+  });
+
+  return {
+    partnerId: data.id,
+    referralCode,
+  };
+}
+
+export async function updatePartnerStatus(input: {
+  partnerId: string;
+  status: "approved" | "disabled" | "pending" | "rejected";
+  actorUserId: string;
+  commissionPercent?: number;
+}) {
+  const updatePayload: Record<string, unknown> = {
+    status: input.status,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (input.status === "approved") {
+    updatePayload.approved_at = new Date().toISOString();
+    updatePayload.disabled_at = null;
+  }
+
+  if (input.status === "disabled") {
+    updatePayload.disabled_at = new Date().toISOString();
+  }
+
+  if (input.status === "rejected") {
+    updatePayload.disabled_at = new Date().toISOString();
+  }
+
+  if (typeof input.commissionPercent === "number") {
+    updatePayload.commission_percent = input.commissionPercent;
+  }
+
+  const [{ error: partnerUpdateError }, { error: ambassadorUpdateError }] = await Promise.all([
+    supabaseAdmin.from("partners").update(updatePayload).eq("id", input.partnerId),
+    supabaseAdmin.from("ambassadors").update(updatePayload).eq("id", input.partnerId),
+  ]);
+
+  assertNoSupabaseError("partners.update(status)", partnerUpdateError);
+  assertNoSupabaseError("ambassadors.update(status mirror)", ambassadorUpdateError);
+
+  await supabaseAdmin.from("admin_audit_logs").insert({
+    actor_user_id: input.actorUserId,
+    action: "partner_status_updated",
+    target_table: "ambassadors",
+    target_id: input.partnerId,
+    metadata: {
+      status: input.status,
+      commissionPercent: input.commissionPercent ?? null,
+    },
+  });
+}
+
+export async function markCommissionsPaid(input: {
+  partnerId: string;
+  actorUserId: string;
+  amount: number;
+  note?: string;
+}) {
+  const { data: pendingRows, error: pendingError } = await supabaseAdmin
+    .from("referral_orders")
+    .select("id, commission_amount")
+    .eq("ambassador_id", input.partnerId)
+    .in("payment_status", ["pending", "paid"]);
+
+  if (pendingError) {
+    assertNoSupabaseError("referral_orders.select(pending payouts)", pendingError);
+  }
+
+  const ids = (pendingRows ?? []).map((row) => row.id);
+  if (ids.length === 0) {
+    return { payoutId: null, orderCount: 0 };
+  }
+
+  const { error: updateError } = await supabaseAdmin
+    .from("referral_orders")
+    .update({ payment_status: "commission_paid", updated_at: new Date().toISOString() })
+    .in("id", ids);
+
+  if (updateError) {
+    assertNoSupabaseError("referral_orders.update(mark paid)", updateError);
+  }
+
+  const { error: commissionMirrorError } = await supabaseAdmin
+    .from("commissions")
+    .update({ status: "paid", updated_at: new Date().toISOString() })
+    .eq("partner_id", input.partnerId)
+    .in("status", ["pending"]);
+
+  if (commissionMirrorError) {
+    assertNoSupabaseError("commissions.update(mark paid mirror)", commissionMirrorError);
+  }
+
+  const { data: payoutRow, error: payoutError } = await supabaseAdmin
+    .from("partner_payouts")
+    .insert({
+      ambassador_id: input.partnerId,
+      amount: roundMoney(input.amount),
+      note: input.note ?? null,
+      processed_by: input.actorUserId,
+    })
+    .select("id")
+    .single();
+
+  if (payoutError) {
+    assertNoSupabaseError("partner_payouts.insert", payoutError);
+  }
+
+  const { error: payoutsMirrorError } = await supabaseAdmin
+    .from("payouts")
+    .insert({
+      partner_id: input.partnerId,
+      amount: roundMoney(input.amount),
+      note: input.note ?? null,
+      processed_by: input.actorUserId,
+    });
+
+  if (payoutsMirrorError) {
+    assertNoSupabaseError("payouts.insert(mirror)", payoutsMirrorError);
+  }
+
+  await supabaseAdmin.from("admin_audit_logs").insert({
+    actor_user_id: input.actorUserId,
+    action: "partner_commission_paid",
+    target_table: "partner_payouts",
+    target_id: payoutRow.id,
+    metadata: {
+      partnerId: input.partnerId,
+      amount: roundMoney(input.amount),
+      orderCount: ids.length,
+    },
+  });
+
+  return {
+    payoutId: payoutRow.id,
+    orderCount: ids.length,
+  };
+}

@@ -252,39 +252,38 @@ export default function Home() {
       </section>
 
       {/* ═══════════════════════════ BUY 3 GET 1 FREE PROMO ═════════════════ */}
-      <section className="relative isolate overflow-hidden border-b border-zinc-800/50 bg-gradient-to-r from-emerald-950/40 via-zinc-950 to-emerald-950/40 py-12 sm:py-16">
-        {/* Animated background glow */}
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_80%_40%_at_50%_50%,rgba(16,185,129,0.1),transparent)]" />
+      <section className="relative isolate overflow-hidden border-b border-zinc-800/50 bg-gradient-to-r from-emerald-950/25 via-zinc-950 to-emerald-950/25 py-12 sm:py-16">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_85%_42%_at_50%_50%,rgba(16,185,129,0.08),transparent)]" />
         
         <div className="relative z-10 mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="vl-panel rounded-2xl border-emerald-500/30 bg-emerald-950/20 p-6 text-center sm:p-12">
-            <div className="flex items-center justify-center gap-3 mb-4">
-              <span className="text-4xl">🎁</span>
-              <span className="text-4xl">✨</span>
-              <span className="text-4xl">🎉</span>
+          <div className="vl-panel rounded-2xl border-emerald-500/20 bg-emerald-950/10 p-6 text-center sm:p-12">
+            <div className="mx-auto mb-5 inline-flex items-center rounded-full border border-emerald-400/25 bg-emerald-400/10 px-4 py-1.5">
+              <span className="text-[11px] font-semibold uppercase tracking-[0.24em] text-emerald-200">
+                Volume Incentive
+              </span>
             </div>
             
             <h2 className="mb-3 text-3xl font-bold text-white sm:text-5xl">
-              Exclusive Summer Sale
+              Preferred Purchase Program
             </h2>
             
-            <p className="text-xl text-emerald-300 mb-4 font-semibold">
-              Buy 3 Get 1 Free
+            <p className="mb-4 text-xl font-semibold text-emerald-200">
+              Buy 3, Receive 1 Complimentary
             </p>
             
             <p className="mx-auto mb-7 max-w-2xl text-base text-zinc-300 sm:mb-8 sm:text-lg">
-              This summer only: Add any 4 peptides to your cart and receive the cheapest one completely free. Automatically applied — no code needed.
+              Add any four qualifying research compounds to your cart and the lowest-priced item is automatically adjusted to no charge. No code required.
             </p>
             
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
               <Link
                 href="/products"
-                className="vl-focus-ring rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600 px-8 py-3.5 text-sm font-semibold text-white transition-all duration-300 hover:shadow-lg hover:shadow-emerald-500/30 active:scale-95 sm:px-10 sm:py-4 sm:text-base"
+                className="vl-focus-ring rounded-full bg-gradient-to-r from-emerald-500 to-emerald-600 px-8 py-3.5 text-sm font-semibold text-white transition-all duration-300 hover:shadow-lg hover:shadow-emerald-500/25 active:scale-95 sm:px-10 sm:py-4 sm:text-base"
               >
-                Shop Now & Save
+                View Eligible Compounds
               </Link>
               <p className="text-sm text-zinc-400">
-                Valid on all 40+ research compounds • Exclusive summer offer
+                Applied automatically at cart level on qualifying 4-item selections.
               </p>
             </div>
           </div>

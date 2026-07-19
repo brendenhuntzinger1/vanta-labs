@@ -47,6 +47,7 @@ type CartContextValue = {
 const CartContext = createContext<CartContextValue | undefined>(undefined);
 
 const CART_STORAGE_KEY = "vanta-labs-cart";
+const REFERRAL_COOKIE_KEY = "vl_referral_code";
 const SERVICE_FEE_RATE = Number(process.env.NEXT_PUBLIC_SERVICE_FEE_RATE ?? "0.05");
 
 function formatCurrency(value: number) {
@@ -94,6 +95,27 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
         if (typeof parsed.referralCode === "string") {
           setReferralCode(parsed.referralCode);
+        }
+
+        const params = new URLSearchParams(window.location.search);
+        const referralFromUrl = params.get("ref") || params.get("referral");
+        const referralFromCookie = document.cookie
+          .split("; ")
+          .find((entry) => entry.startsWith(`${REFERRAL_COOKIE_KEY}=`))
+          ?.split("=")[1];
+
+        const discoveredReferralCode = referralFromUrl || referralFromCookie;
+
+        if (discoveredReferralCode) {
+          setReferralCode(decodeURIComponent(discoveredReferralCode));
+        }
+
+        if (referralFromUrl) {
+          params.delete("ref");
+          params.delete("referral");
+          const query = params.toString();
+          const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+          window.history.replaceState({}, "", nextUrl);
         }
       } catch (error) {
         console.error("Unable to read cart state", error);
@@ -197,6 +219,39 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       console.error("Unable to save cart state", error);
     }
   }, [items, referralCode, isHydrated]);
+
+  useEffect(() => {
+    if (!isHydrated || !referralCode || referralDetails) {
+      return;
+    }
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const validatedReferral = await validateReferralCodeClient(referralCode);
+        if (!validatedReferral || cancelled) {
+          return;
+        }
+
+        setReferralDetails({
+          code: validatedReferral.referralCode,
+          customerDiscountPercent: validatedReferral.discountPercent,
+          ambassadorName: validatedReferral.ambassadorName,
+          ambassadorId: validatedReferral.ambassadorId,
+          commissionPercent: validatedReferral.commissionPercent,
+        });
+      } catch {
+        if (!cancelled) {
+          setReferralDetails(null);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isHydrated, referralCode, referralDetails]);
 
   const itemCount = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
 
@@ -342,6 +397,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       setReferralCode(validatedReferral.referralCode);
       setReferralError(null);
       setReferralSuccess("Referral code applied — 10% off.");
+      if (typeof document !== "undefined") {
+        document.cookie = `${REFERRAL_COOKIE_KEY}=${encodeURIComponent(validatedReferral.referralCode)}; path=/; max-age=${60 * 60 * 24 * 30}; samesite=lax`;
+      }
     } catch (error) {
       console.error("Unable to validate referral code", error);
       setReferralDetails(null);
@@ -356,6 +414,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setReferralDetails(null);
     setReferralError(null);
     setReferralSuccess("Referral code removed.");
+    if (typeof document !== "undefined") {
+      document.cookie = `${REFERRAL_COOKIE_KEY}=; path=/; max-age=0; samesite=lax`;
+    }
   };
 
   const clearReferralMessage = () => {

@@ -1,16 +1,22 @@
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
 import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-service";
 import type { CustomerInput } from "@/lib/payment-types";
+
+const REFERRAL_COOKIE_NAME = "vl_referral_code";
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const customer = sanitizeCustomerInput(body.customer as CustomerInput);
+    const cookieStore = await cookies();
+    const referralFromCookie = cookieStore.get(REFERRAL_COOKIE_NAME)?.value;
+    const referralCode = body.referralCode || referralFromCookie;
 
     const result = await createCheckoutSession({
       items: body.items,
       customer,
-      referralCode: body.referralCode,
+      referralCode,
       currency: body.currency,
       expectedTotal: body.expectedTotal,
     });

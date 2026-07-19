@@ -1,18 +1,19 @@
-import { notFound } from "next/navigation";
-import { createServerClient } from "@/lib/supabase-server";
+import { notFound, redirect } from "next/navigation";
+import { detectRoleFromUser } from "@/lib/auth-role";
+import { getAuthenticatedUser } from "@/lib/auth-session";
+import { supabaseAdmin } from "@/lib/supabase-server";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminOrderDetailPage({ params }: { params: Promise<{ orderId: string }> }) {
   const { orderId } = await params;
-  const supabase = createServerClient();
-  const { data: userData, error: userError } = await supabase.auth.getUser();
+  const user = await getAuthenticatedUser();
 
-  if (userError || !userData.user) {
-    notFound();
+  if (!user || detectRoleFromUser(user) !== "admin") {
+    redirect("/login");
   }
 
-  const { data, error } = await supabase
+  const { data, error } = await supabaseAdmin
     .from("orders")
     .select("*, order_items(*)")
     .eq("order_id", orderId)

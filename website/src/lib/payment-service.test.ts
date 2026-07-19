@@ -6,7 +6,7 @@ describe("payment service", () => {
   it("rejects altered prices", async () => {
     await expect(
       createCheckoutSession({
-        items: [{ id: "aurelium-reference-standard", quantity: 1 }],
+        items: [{ id: "bpc-157-10mg", quantity: 1 }],
         customer: {
           email: "client@example.com",
           fullName: "Alex Morgan",
@@ -37,7 +37,7 @@ describe("payment service", () => {
   it("rejects expired promotions", async () => {
     await expect(
       createCheckoutSession({
-        items: [{ id: "aurelium-reference-standard", quantity: 1 }],
+        items: [{ id: "bpc-157-10mg", quantity: 1 }],
         customer: {
           email: "client@example.com",
           fullName: "Alex Morgan",
@@ -47,7 +47,7 @@ describe("payment service", () => {
         },
         referralCode: "EXPIRED10",
       }),
-    ).rejects.toThrow("Expired referral code");
+    ).rejects.toThrow("Invalid referral code");
   });
 
   it("does not create duplicate orders from duplicate webhooks", async () => {

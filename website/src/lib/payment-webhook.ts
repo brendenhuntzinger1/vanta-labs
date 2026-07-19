@@ -284,6 +284,22 @@ async function ensureCommissionRecord(input: {
       throw error;
     }
 
+    const { error: commissionMirrorError } = await supabaseAdmin
+      .from("commissions")
+      .upsert({
+        order_id: input.orderId,
+        partner_id: input.ambassadorId,
+        referral_code: input.referralCode,
+        commission_percent: input.commissionPercent ?? 0,
+        commission_amount: commissionAmount,
+        status: "pending",
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "order_id" });
+
+    if (commissionMirrorError) {
+      throw commissionMirrorError;
+    }
+
     return { id: existingCommission.id };
   }
 
@@ -294,6 +310,23 @@ async function ensureCommissionRecord(input: {
 
   if (error) {
     throw error;
+  }
+
+  const { error: commissionMirrorError } = await supabaseAdmin
+    .from("commissions")
+    .upsert({
+      order_id: input.orderId,
+      partner_id: input.ambassadorId,
+      referral_code: input.referralCode,
+      commission_percent: input.commissionPercent ?? 0,
+      commission_amount: commissionAmount,
+      status: "pending",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }, { onConflict: "order_id" });
+
+  if (commissionMirrorError) {
+    throw commissionMirrorError;
   }
 
   return { id: data.id };
@@ -314,6 +347,18 @@ async function updateCommissionOnRefund(orderId: string, paymentStatus: OrderSta
 
   if (error) {
     throw error;
+  }
+
+  const { error: commissionMirrorError } = await supabaseAdmin
+    .from("commissions")
+    .update({
+      status: commissionState.status === "voided" ? "voided" : "pending",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("order_id", orderId);
+
+  if (commissionMirrorError) {
+    throw commissionMirrorError;
   }
 }
 

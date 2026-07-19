@@ -1,17 +1,14 @@
 import { redirect } from "next/navigation";
-import { createServerClient } from "@/lib/supabase-server";
+import { detectRoleFromUser } from "@/lib/auth-role";
+import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getAdminOrderRows, type AdminOrderRow } from "@/lib/admin-orders";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminOrdersPage() {
-  const supabase = createServerClient();
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser();
+  const user = await getAuthenticatedUser();
 
-  if (authError || !user) {
+  if (!user || detectRoleFromUser(user) !== "admin") {
     redirect("/login");
   }
 

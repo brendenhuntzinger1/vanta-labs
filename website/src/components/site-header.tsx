@@ -14,6 +14,7 @@ export function SiteHeader() {
     { href: "/coa-library", label: "COA Library" },
     { href: "/cart", label: "Cart" },
     { href: "/checkout", label: "Checkout" },
+    { href: "/partner", label: "Partner Program" },
   ];
 
   return (
