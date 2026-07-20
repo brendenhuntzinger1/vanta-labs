@@ -147,6 +147,34 @@ export default function CheckoutPage() {
     );
   }, [items.length, subtotal, total]);
 
+  useEffect(() => {
+    (async () => {
+      try {
+        const response = await fetch("/api/account/me", { cache: "no-store" });
+        if (!response.ok) return;
+        const result = await response.json() as {
+          success: boolean;
+          email?: string;
+          fullName?: string;
+          address?: { fullName: string; address: string; city: string; postalCode: string } | null;
+        };
+        if (!result.success) return;
+
+        setForm((prev) => ({
+          ...prev,
+          email: prev.email || result.email || prev.email,
+          fullName: prev.fullName || result.address?.fullName || result.fullName || prev.fullName,
+          address: prev.address || result.address?.address || prev.address,
+          city: prev.city || result.address?.city || prev.city,
+          postalCode: prev.postalCode || result.address?.postalCode || prev.postalCode,
+        }));
+      } catch {
+        // Guest checkout stays unaffected if this pre-fill lookup fails.
+      }
+    })();
+    // Runs once on mount to pre-fill from a signed-in account.
+  }, []);
+
   const handleFieldChange = (key: keyof CheckoutForm, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
     if (formErrors[key]) {

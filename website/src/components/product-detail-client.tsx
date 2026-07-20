@@ -7,6 +7,7 @@ import { SiteHeader } from "@/components/site-header";
 import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { TrustBadge, type TrustBadgeIcon } from "@/components/trust-badge";
+import { WishlistButton } from "@/components/wishlist-button";
 import type { Product } from "@/lib/catalog-types";
 import Image from "next/image";
 
@@ -387,14 +388,20 @@ export function ProductDetailClient({
               </div>
 
               {/* CTA */}
-              <button
-                onClick={(event) => handleAddToCart(event.currentTarget)}
-                type="button"
-                disabled={isOutOfStock}
-                className="vl-btn-primary vl-focus-ring mt-6 w-full px-5 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isOutOfStock ? "Currently Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
-              </button>
+              <div className="mt-6 flex gap-2">
+                <button
+                  onClick={(event) => handleAddToCart(event.currentTarget)}
+                  type="button"
+                  disabled={isOutOfStock}
+                  className="vl-btn-primary vl-focus-ring flex-1 px-5 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isOutOfStock ? "Currently Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
+                </button>
+                <WishlistButton
+                  slug={product.slug}
+                  className="vl-btn-secondary vl-focus-ring inline-flex h-[52px] w-[52px] flex-shrink-0 items-center justify-center"
+                />
+              </div>
 
               {selectedCoaUrl && (
                 <a

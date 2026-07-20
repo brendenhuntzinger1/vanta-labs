@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import type { Product } from "@/lib/catalog-types";
+import { WishlistButton } from "@/components/wishlist-button";
 
 const STOCK_STYLES: Record<Product["stockStatus"], string> = {
   "In Stock": "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
@@ -30,11 +31,13 @@ export function ProductCard({
   image,
   onAddToCart,
   priority = false,
+  initialInWishlist = false,
 }: {
   product: Product;
   image: string;
   onAddToCart?: (event: React.MouseEvent<HTMLButtonElement>) => void;
   priority?: boolean;
+  initialInWishlist?: boolean;
 }) {
   const hasRealImage = Boolean(image) && !image.includes(".svg");
   const dosePreview = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0];
@@ -48,6 +51,11 @@ export function ProductCard({
               {BADGE_LABELS[product.badge]}
             </span>
           ) : null}
+          <WishlistButton
+            slug={product.slug}
+            initialInWishlist={initialInWishlist}
+            className="absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center rounded-full border border-white/25 bg-black/60 text-white backdrop-blur transition hover:text-rose-300"
+          />
           {hasRealImage ? (
             <Image
               src={image}
