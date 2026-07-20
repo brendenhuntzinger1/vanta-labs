@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { PartnerProgramStats } from "@/lib/partner-portal";
+import { SiteHeaderV2 } from "@/components/site-header-v2";
 
 type AuthMode = "signup" | "login";
 
@@ -13,9 +14,9 @@ function currency(value: number) {
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="vl-panel rounded-2xl p-4 backdrop-blur-xl">
-      <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-white sm:text-3xl">{value}</p>
+    <div className="border border-white/10 p-4">
+      <p className="text-[11px] uppercase tracking-[0.18em] text-white/45">{label}</p>
+      <p className="mt-2 text-2xl text-white sm:text-3xl">{value}</p>
     </div>
   );
 }
@@ -239,38 +240,32 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
   };
 
   return (
-    <div className="vl-page-shell min-h-screen overflow-x-hidden bg-[radial-gradient(circle_at_10%_20%,rgba(255,255,255,0.11),transparent_35%),radial-gradient(circle_at_85%_18%,rgba(255,255,255,0.08),transparent_30%),linear-gradient(150deg,#050505_0%,#111111_45%,#070707_100%)] text-zinc-100">
-      <div className="pointer-events-none fixed inset-0">
-        <div className="absolute left-[10%] top-[16%] h-2 w-2 rounded-full bg-white/35 animate-pulse" />
-        <div className="absolute right-[14%] top-[28%] h-3 w-3 rounded-full bg-zinc-200/25 animate-pulse" />
-        <div className="absolute left-[25%] bottom-[24%] h-2 w-2 rounded-full bg-zinc-300/25 animate-pulse" />
-        <div className="absolute right-[22%] bottom-[18%] h-2 w-2 rounded-full bg-white/30 animate-pulse" />
-      </div>
+    <div className="min-h-screen overflow-x-hidden bg-[#0b0b0b] text-white">
+      <SiteHeaderV2 />
 
-      <section className="relative mx-auto max-w-7xl px-4 pb-12 pt-20 sm:px-6 lg:px-8 lg:pt-28">
+      <section className="relative mx-auto max-w-[1440px] px-6 pb-12 pt-32 lg:px-12 lg:pt-40">
         <div className="grid items-center gap-10 lg:grid-cols-[1.05fr_0.95fr]">
           <div>
-            <p className="vl-eyebrow text-xs">Vanta Labs Partner Program</p>
-            <h1 className="vl-display mt-4 text-4xl font-semibold leading-tight text-white sm:text-5xl lg:text-6xl">
-              Earn Recurring Income with Vanta Labs.
+            <p className="vl2-eyebrow">Vanta Labs Partner Program</p>
+            <h1 className="vl2-serif mt-4 text-4xl leading-[1.05] text-white sm:text-5xl lg:text-6xl">
+              Earn recurring income with Vanta Labs.
             </h1>
-            <p className="mt-5 max-w-2xl text-base leading-7 text-zinc-300 sm:text-lg">
+            <p className="mt-5 max-w-2xl text-base leading-7 text-white/60 sm:text-lg">
               Join a high-performance affiliate network built for modern e-commerce growth. Share premium products, unlock recurring commissions, and manage performance with a real-time partner dashboard.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
-              <a href="#apply" className="vl-focus-ring rounded-full bg-gradient-to-r from-white to-zinc-300 px-6 py-3 text-sm font-semibold text-zinc-950 transition hover:brightness-105">
+              <a href="#apply" className="vl2-btn-primary vl-focus-ring px-6 py-3 text-sm">
                 Become a Partner
               </a>
-              <a href="#calculator" className="vl-btn-secondary rounded-full px-6 py-3 text-sm">
+              <a href="#calculator" className="vl2-btn-secondary vl-focus-ring px-6 py-3 text-sm">
                 Estimate Earnings
               </a>
             </div>
           </div>
 
-          <div className="vl-panel relative overflow-hidden rounded-[2rem] p-6 sm:p-8">
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.14),transparent_55%)]" />
-            <h2 className="vl-eyebrow relative text-sm">Program Stats</h2>
-            <div className="relative mt-4 grid gap-3 sm:grid-cols-2">
+          <div className="vl2-glass p-6 sm:p-8">
+            <h2 className="vl2-eyebrow">Program Stats</h2>
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <StatCard label="Total Commissions Paid" value={currency(stats.totalCommissionsPaid)} />
               <StatCard label="Average Partner Earnings" value={currency(stats.averagePartnerEarnings)} />
               <StatCard label="Average Approval Time" value={`${stats.averageApprovalTimeHours.toFixed(1)} hrs`} />
@@ -282,15 +277,15 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
         </div>
       </section>
 
-      <section id="calculator" className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
-        <div className="vl-panel rounded-[2rem] p-5 sm:p-8">
-          <h2 className="vl-display text-2xl font-semibold text-white sm:text-3xl">Earnings Calculator</h2>
-          <p className="mt-2 text-sm text-zinc-400">Model your potential monthly and yearly affiliate income in real time.</p>
+      <section id="calculator" className="mx-auto max-w-[1440px] px-6 py-10 lg:px-12">
+        <div className="border border-white/10 p-5 sm:p-8">
+          <h2 className="vl2-serif text-2xl text-white sm:text-3xl">Earnings Calculator</h2>
+          <p className="mt-2 text-sm text-white/50">Model your potential monthly and yearly affiliate income in real time.</p>
 
           <div className="mt-6 grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
             <div className="space-y-5">
               <label className="block">
-                <div className="mb-2 flex justify-between text-sm text-zinc-300">
+                <div className="mb-2 flex justify-between text-sm text-white/60">
                   <span>Referrals per month</span>
                   <span>{referralsPerMonth}</span>
                 </div>
@@ -298,7 +293,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
               </label>
 
               <label className="block">
-                <div className="mb-2 flex justify-between text-sm text-zinc-300">
+                <div className="mb-2 flex justify-between text-sm text-white/60">
                   <span>Average order value</span>
                   <span>${averageOrderValue}</span>
                 </div>
@@ -306,7 +301,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
               </label>
 
               <label className="block">
-                <div className="mb-2 flex justify-between text-sm text-zinc-300">
+                <div className="mb-2 flex justify-between text-sm text-white/60">
                   <span>Customer reorder rate</span>
                   <span>{reorderRate}%</span>
                 </div>
@@ -314,7 +309,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
               </label>
 
               <label className="block">
-                <div className="mb-2 flex justify-between text-sm text-zinc-300">
+                <div className="mb-2 flex justify-between text-sm text-white/60">
                   <span>Commission percentage</span>
                   <span>{commissionPercent}%</span>
                 </div>
@@ -322,25 +317,25 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
               </label>
             </div>
 
-            <div className="rounded-2xl border border-white/20 bg-zinc-950/60 p-5">
-              <p className="vl-eyebrow text-xs">Projected Commissions</p>
-              <p className="mt-3 text-4xl font-semibold text-zinc-100">{currency(estimatedMonthlyCommission)}</p>
-              <p className="text-sm text-zinc-400">Estimated monthly</p>
+            <div className="border border-white/15 p-5">
+              <p className="vl2-eyebrow">Projected Commissions</p>
+              <p className="mt-3 text-4xl text-white">{currency(estimatedMonthlyCommission)}</p>
+              <p className="text-sm text-white/50">Estimated monthly</p>
 
-              <div className="mt-6 border-t border-zinc-800 pt-5">
-                <p className="text-3xl font-semibold text-white">{currency(estimatedYearlyCommission)}</p>
-                <p className="text-sm text-zinc-400">Estimated yearly</p>
+              <div className="mt-6 border-t border-white/10 pt-5">
+                <p className="text-3xl text-white">{currency(estimatedYearlyCommission)}</p>
+                <p className="text-sm text-white/50">Estimated yearly</p>
               </div>
 
-              <div className="mt-6 text-sm text-zinc-400">
-                Commission rate used: <span className="text-zinc-200">{commissionPercent}%</span>
+              <div className="mt-6 text-sm text-white/50">
+                Commission rate used: <span className="text-white/75">{commissionPercent}%</span>
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      <section className="mx-auto grid max-w-7xl gap-4 px-4 py-10 sm:grid-cols-2 sm:px-6 lg:grid-cols-3 lg:px-8">
+      <section className="mx-auto grid max-w-[1440px] gap-4 px-6 py-10 sm:grid-cols-2 lg:grid-cols-3 lg:px-12">
         {[
           "Lifetime recurring commissions",
           "Real-time performance dashboard",
@@ -349,65 +344,65 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
           "Personal referral link + tracking",
           "Mobile-first partner command center",
         ].map((benefit) => (
-          <div key={benefit} className="vl-panel rounded-2xl p-5">
-            <p className="text-sm text-zinc-200">{benefit}</p>
+          <div key={benefit} className="border border-white/10 p-5">
+            <p className="text-sm text-white/75">{benefit}</p>
           </div>
         ))}
       </section>
 
-      <section id="apply" className="mx-auto max-w-7xl px-4 pb-16 pt-8 sm:px-6 lg:px-8">
-        <div className="vl-panel rounded-[2rem] p-6 sm:p-8">
+      <section id="apply" className="mx-auto max-w-[1440px] px-6 pb-20 pt-8 lg:px-12">
+        <div className="border border-white/10 p-6 sm:p-8">
           <div className="mb-5 flex flex-wrap gap-2">
-            <button type="button" onClick={() => setAuthMode("signup")} className={authMode === "signup" ? "rounded-full border border-white/45 bg-white/14 px-4 py-2 text-sm text-zinc-100" : "rounded-full border border-white/15 px-4 py-2 text-sm text-zinc-400"}>Become a Partner</button>
-            <button type="button" onClick={() => setAuthMode("login")} className={authMode === "login" ? "rounded-full border border-white/45 bg-white/14 px-4 py-2 text-sm text-zinc-100" : "rounded-full border border-white/15 px-4 py-2 text-sm text-zinc-400"}>Partner Login</button>
+            <button type="button" onClick={() => setAuthMode("signup")} className={authMode === "signup" ? "border border-white bg-white/10 px-4 py-2 text-sm text-white" : "border border-white/15 px-4 py-2 text-sm text-white/45"}>Become a Partner</button>
+            <button type="button" onClick={() => setAuthMode("login")} className={authMode === "login" ? "border border-white bg-white/10 px-4 py-2 text-sm text-white" : "border border-white/15 px-4 py-2 text-sm text-white/45"}>Partner Login</button>
           </div>
 
           <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
             <div>
-              <h3 className="text-2xl font-semibold text-white">{authMode === "signup" ? "Apply in Minutes" : "Welcome Back"}</h3>
-              <p className="mt-2 text-sm text-zinc-400">
+              <h3 className="vl2-serif text-2xl text-white">{authMode === "signup" ? "Apply in Minutes" : "Welcome Back"}</h3>
+              <p className="mt-2 text-sm text-white/50">
                 {authMode === "signup"
                   ? "Create your account and submit your partner application. Approved partners unlock full dashboard access."
                   : "Sign in to access your dashboard. Pending applications will be directed to the approval status page."}
               </p>
 
               {authMode === "signup" ? (
-                <label className="mt-5 block text-sm text-zinc-400">
+                <label className="mt-5 block text-sm text-white/50">
                   <span className="mb-2 block">Full name</span>
-                  <input value={fullName} onChange={(event) => setFullName(event.target.value)} className="vl-input w-full px-4 py-3" required />
+                  <input value={fullName} onChange={(event) => setFullName(event.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
                 </label>
               ) : null}
 
-              <label className="mt-4 block text-sm text-zinc-400">
+              <label className="mt-4 block text-sm text-white/50">
                 <span className="mb-2 block">Email</span>
-                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="vl-input w-full px-4 py-3" required />
+                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
               </label>
 
-              <label className="mt-4 block text-sm text-zinc-400">
+              <label className="mt-4 block text-sm text-white/50">
                 <span className="mb-2 block">Password</span>
-                <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="vl-input w-full px-4 py-3" required />
+                <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
               </label>
 
               <button
                 type="button"
                 disabled={loading || completingVerification}
                 onClick={authMode === "signup" ? handleSignup : handleLogin}
-                className="vl-focus-ring mt-6 rounded-full bg-gradient-to-r from-white to-zinc-300 px-6 py-3 text-sm font-semibold text-zinc-950 disabled:opacity-60"
+                className="vl2-btn-primary vl-focus-ring mt-6 px-6 py-3 text-sm disabled:opacity-60"
               >
                 {(loading || completingVerification) ? "Processing..." : authMode === "signup" ? "Submit Partner Application" : "Sign In"}
               </button>
 
-              {authMessage ? <p className="mt-4 text-sm text-zinc-200">{authMessage}</p> : null}
+              {authMessage ? <p className="mt-4 text-sm text-white/75">{authMessage}</p> : null}
             </div>
 
-            <div className="rounded-2xl border border-white/12 bg-zinc-950/60 p-5 text-sm text-zinc-300">
-              <p className="vl-eyebrow text-xs">Approval Process</p>
+            <div className="border border-white/10 p-5 text-sm text-white/60">
+              <p className="vl2-eyebrow">Approval Process</p>
               <ol className="mt-4 space-y-3">
                 <li>1. Create account and submit your application.</li>
                 <li>2. Admin reviews fit and audience quality.</li>
                 <li>3. Upon approval, your dashboard unlocks instantly.</li>
               </ol>
-              <p className="mt-4 text-zinc-500">Average approval time: {stats.averageApprovalTimeHours.toFixed(1)} hours.</p>
+              <p className="mt-4 text-white/40">Average approval time: {stats.averageApprovalTimeHours.toFixed(1)} hours.</p>
             </div>
           </div>
         </div>
