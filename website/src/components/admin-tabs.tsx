@@ -95,6 +95,16 @@ const tabs: AdminTab[] = [
     href: "/admin/settings",
     match: (pathname) => pathname.startsWith("/admin/settings"),
   },
+  {
+    label: "Policies",
+    href: "/admin/policies",
+    match: (pathname) => pathname.startsWith("/admin/policies"),
+  },
+  {
+    label: "My Account",
+    href: "/admin/account",
+    match: (pathname) => pathname.startsWith("/admin/account"),
+  },
 ];
 
 export function AdminTabs() {

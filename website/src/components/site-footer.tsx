@@ -14,7 +14,10 @@ const FOOTER_COLUMNS = {
   legal: [
     { label: "Research Disclaimer", href: "/legal/research-disclaimer" },
     { label: "Privacy Policy", href: "/legal/privacy" },
-    { label: "Terms", href: "/legal/terms" },
+    { label: "Terms of Service", href: "/legal/terms" },
+    { label: "Shipping Policy", href: "/legal/shipping" },
+    { label: "Return & Refund", href: "/legal/refund" },
+    { label: "Cookie Policy", href: "/legal/cookies" },
   ],
 };
 
