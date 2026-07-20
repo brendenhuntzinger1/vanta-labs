@@ -8,11 +8,8 @@ import {
   recordAdminLoginAttempt,
   validateAdminCredentials,
 } from "@/lib/admin-auth";
-import { rateLimitPlaceholder } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
-  rateLimitPlaceholder();
-
   let payload: { username?: string; password?: string };
   try {
     payload = await request.json();

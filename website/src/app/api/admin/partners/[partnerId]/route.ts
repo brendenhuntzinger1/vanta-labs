@@ -24,6 +24,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
     if (action === "set_status") {
       const status = body?.status as "approved" | "disabled" | "pending" | "rejected";
       const commissionPercent = body?.commissionPercent !== undefined ? Number(body.commissionPercent) : undefined;
+      const referralCode = typeof body?.referralCode === "string" ? body.referralCode : undefined;
 
       if (!["approved", "disabled", "pending", "rejected"].includes(status)) {
         return NextResponse.json({ success: false, error: "Invalid status" }, { status: 400 });
@@ -34,6 +35,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
         status,
         actorUserId: undefined,
         commissionPercent,
+        referralCode,
         actorUsername: session.username,
         ipAddress,
         userAgent,

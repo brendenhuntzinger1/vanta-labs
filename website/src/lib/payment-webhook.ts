@@ -35,8 +35,10 @@ export function getOrderStatusForEventType(eventType: string): OrderStatus {
   }
 }
 
-export function getCommissionStateForRefund(commissionStatus: string | null | undefined): CommissionState {
-  if (commissionStatus === "paid" || commissionStatus === "commission_paid") {
+export function getCommissionStateForRefund(currentStatus: string | null | undefined): CommissionState {
+  const normalizedStatus = (currentStatus ?? "pending").toLowerCase();
+
+  if (normalizedStatus === "paid" || normalizedStatus === "commission_paid") {
     return {
       status: "manual_review",
       reviewRequired: true,
@@ -44,10 +46,16 @@ export function getCommissionStateForRefund(commissionStatus: string | null | un
     };
   }
 
+  const isKnownStatus =
+    normalizedStatus === "pending" ||
+    normalizedStatus === "approved_for_payout" ||
+    normalizedStatus === "reversed" ||
+    normalizedStatus === "voided";
+
   return {
     status: "reversed",
-    reviewRequired: false,
-    reviewReason: null,
+    reviewRequired: !isKnownStatus,
+    reviewReason: isKnownStatus ? null : `Refund applied to commission status: ${normalizedStatus}`,
   };
 }
 

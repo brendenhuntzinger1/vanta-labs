@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { PartnerDashboardClient } from "@/components/partner-dashboard-client";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { getSiteUrl } from "@/lib/env";
 import { getPartnerByAuthUserId, getPartnerSummary } from "@/lib/partner-portal";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +32,7 @@ export default async function PartnerDashboardPage() {
     redirect("/partner/pending");
   }
 
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+  const siteUrl = getSiteUrl();
   const summary = await getPartnerSummary(partner.id, siteUrl);
 
   return (

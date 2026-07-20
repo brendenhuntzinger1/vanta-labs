@@ -20,6 +20,19 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
+function getEmailRedirectUrl() {
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
+  if (siteUrl) {
+    return `${siteUrl.replace(/\/+$/, "")}/partner`;
+  }
+
+  if (typeof window !== "undefined") {
+    return `${window.location.origin}/partner`;
+  }
+
+  return undefined;
+}
+
 export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerProgramStats }) {
   const router = useRouter();
   const [stats, setStats] = useState(initialStats);
@@ -28,6 +41,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
+  const [completingVerification, setCompletingVerification] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
 
   const [referralsPerMonth, setReferralsPerMonth] = useState(40);
@@ -51,6 +65,76 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
     return () => window.clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    let active = true;
+
+    const completePartnerSignup = async () => {
+      try {
+        const { data } = await supabase.auth.getSession();
+        const accessToken = data.session?.access_token;
+        const user = data.session?.user;
+
+        if (!accessToken || !user) {
+          return;
+        }
+
+        const role = String(user.app_metadata?.role ?? user.user_metadata?.role ?? "").toLowerCase();
+        if (role !== "partner") {
+          return;
+        }
+
+        if (active) {
+          setCompletingVerification(true);
+        }
+
+        const fallbackName = typeof user.user_metadata?.full_name === "string"
+          ? user.user_metadata.full_name
+          : (user.email ?? "Partner").split("@")[0];
+
+        const applyResponse = await fetch("/api/partner/apply", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            accessToken,
+            fullName: String(fallbackName || "Partner").trim(),
+          }),
+        });
+        const applyJson = await applyResponse.json();
+        if (!applyResponse.ok || !applyJson.success) {
+          throw new Error(applyJson.error ?? "Unable to complete partner application");
+        }
+
+        await fetch("/api/auth/session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ accessToken }),
+        });
+
+        const status = String(applyJson.partner?.status ?? "pending");
+        if (status === "approved") {
+          router.push("/partner/dashboard");
+        } else {
+          router.push("/partner/pending");
+        }
+        router.refresh();
+      } catch (error) {
+        if (active) {
+          setAuthMessage(error instanceof Error ? error.message : "Unable to complete email verification");
+        }
+      } finally {
+        if (active) {
+          setCompletingVerification(false);
+        }
+      }
+    };
+
+    void completePartnerSignup();
+
+    return () => {
+      active = false;
+    };
+  }, [router]);
+
   const estimatedMonthlyCommission = useMemo(() => {
     const baseRevenue = referralsPerMonth * averageOrderValue;
     const reorderRevenue = baseRevenue * (reorderRate / 100);
@@ -70,6 +154,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
         password,
         options: {
           data: { full_name: fullName.trim(), role: "partner" },
+          emailRedirectTo: getEmailRedirectUrl(),
         },
       });
 
@@ -78,7 +163,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
       }
 
       if (!data.session?.access_token) {
-        setAuthMessage("Account created. Please verify your email, then sign in to complete your application.");
+        setAuthMessage("Thank you. Your ambassador application was received and is pending approval. We will be getting back to you soon.");
         return;
       }
 
@@ -304,11 +389,11 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
 
               <button
                 type="button"
-                disabled={loading}
+                disabled={loading || completingVerification}
                 onClick={authMode === "signup" ? handleSignup : handleLogin}
                 className="vl-focus-ring mt-6 rounded-full bg-gradient-to-r from-white to-zinc-300 px-6 py-3 text-sm font-semibold text-zinc-950 disabled:opacity-60"
               >
-                {loading ? "Processing..." : authMode === "signup" ? "Submit Partner Application" : "Sign In"}
+                {(loading || completingVerification) ? "Processing..." : authMode === "signup" ? "Submit Partner Application" : "Sign In"}
               </button>
 
               {authMessage ? <p className="mt-4 text-sm text-zinc-200">{authMessage}</p> : null}
