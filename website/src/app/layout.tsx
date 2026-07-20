@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Cormorant_Garamond, Geist, Geist_Mono, Manrope } from "next/font/google";
+import { Fraunces, Geist, Geist_Mono, Manrope } from "next/font/google";
 import { Suspense } from "react";
 import { AgeGate } from "@/components/age-gate";
 import { CartDrawer } from "@/components/cart-drawer";
@@ -19,10 +19,12 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-const cormorantDisplay = Cormorant_Garamond({
+const fraunces = Fraunces({
   variable: "--font-cormorant-display",
   subsets: ["latin"],
-  weight: ["500", "600", "700"],
+  weight: ["400", "500", "600"],
+  style: ["normal", "italic"],
+  axes: ["opsz", "SOFT", "WONK"],
 });
 
 const manrope = Manrope({
@@ -44,7 +46,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} ${cormorantDisplay.variable} ${manrope.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} ${manrope.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         <CartProvider>

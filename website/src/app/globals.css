@@ -1,12 +1,19 @@
 @import "tailwindcss";
 
 :root {
-  /* Surface scale — layered dark neutrals, darkest to lightest */
-  --background: #050505;
-  --surface-0: #0a0a0a;
+  /* Surface scale — matte black, layered dark neutrals, darkest to lightest */
+  --background: #0b0b0b;
+  --surface-0: #0b0b0b;
   --surface-1: #111111;
   --surface-2: #161616;
   --surface-elevated: #1c1c1c;
+
+  /* Graphite accent scale — replaces glow/gradient accents on v2 surfaces */
+  --graphite-100: #d4d4d4;
+  --graphite-300: #8a8a8a;
+  --graphite-500: #4a4a4a;
+  --hairline: rgba(255, 255, 255, 0.1);
+  --hairline-strong: rgba(255, 255, 255, 0.18);
 
   --foreground: #f4f4f4;
   --foreground-muted: rgba(244, 244, 244, 0.72);
@@ -69,10 +76,7 @@ html {
 
 body {
   margin: 0;
-  background:
-    radial-gradient(1000px 560px at 90% -10%, rgba(255, 255, 255, 0.08), transparent 56%),
-    radial-gradient(940px 520px at 0% 100%, rgba(255, 255, 255, 0.05), transparent 52%),
-    linear-gradient(145deg, #030303 0%, #090909 45%, #0e0e0e 100%);
+  background: var(--background);
   color: var(--foreground);
   font-family: var(--font-manrope), var(--font-geist-sans), "Avenir Next", "Segoe UI", sans-serif;
   overflow-x: clip;
@@ -1018,6 +1022,169 @@ textarea {
   transform: translateY(0);
 }
 
+/* ==========================================================================
+   Redesign v2 — matte-black luxury biotech surface language.
+   Additive, "vl2-" prefixed so it can be rolled out page by page without
+   touching the existing "vl-" classes still used elsewhere in the app.
+   ========================================================================== */
+
+.vl2-hairline {
+  border: 1px solid var(--hairline);
+}
+
+.vl2-nav {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 50;
+  background: transparent;
+  border-bottom: 1px solid transparent;
+  transition: background-color var(--duration-base) var(--ease-out-premium), border-color var(--duration-base) var(--ease-out-premium), backdrop-filter var(--duration-base) var(--ease-out-premium);
+}
+
+.vl2-nav[data-scrolled="true"] {
+  background: rgba(11, 11, 11, 0.72);
+  border-bottom-color: var(--hairline);
+  backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+}
+
+.vl2-glass {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--hairline);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.vl2-glass:hover {
+  border-color: var(--hairline-strong);
+}
+
+.vl2-serif {
+  font-family: var(--font-cormorant-display), "Times New Roman", serif;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+.vl2-eyebrow {
+  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--graphite-300);
+}
+
+.vl2-hero {
+  position: relative;
+  min-height: 100svh;
+  overflow: hidden;
+  background: #000;
+}
+
+.vl2-hero-video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.82;
+}
+
+.vl2-hero-scrim {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.15) 32%, rgba(0, 0, 0, 0.35) 72%, rgba(0, 0, 0, 0.85) 100%),
+    linear-gradient(90deg, rgba(0, 0, 0, 0.35) 0%, transparent 30%, transparent 70%, rgba(0, 0, 0, 0.35) 100%);
+}
+
+.vl2-hero-content {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  min-height: 100svh;
+  flex-direction: column;
+  justify-content: flex-end;
+}
+
+.vl2-vial-label {
+  animation: vl2-vial-drift 9s var(--ease-in-out-premium) infinite;
+}
+
+@keyframes vl2-vial-drift {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-10px); }
+}
+
+.vl2-fade-in {
+  animation: vl2-fade-in var(--duration-slow) var(--ease-out-premium) both;
+}
+
+@keyframes vl2-fade-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.vl2-product-card {
+  position: relative;
+  border: 1px solid var(--hairline);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), rgba(255, 255, 255, 0.005));
+  transition: transform var(--duration-base) var(--ease-out-premium), border-color var(--duration-base) var(--ease-out-premium), box-shadow var(--duration-base) var(--ease-out-premium);
+}
+
+.vl2-product-card:hover {
+  transform: translateY(-6px);
+  border-color: var(--hairline-strong);
+  box-shadow: 0 30px 60px -24px rgba(0, 0, 0, 0.7);
+}
+
+.vl2-trust-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2.5rem;
+}
+
+.vl2-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid #fff;
+  background: #fff;
+  color: #0b0b0b;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: background-color var(--duration-fast) ease, color var(--duration-fast) ease, border-color var(--duration-fast) ease;
+}
+
+.vl2-btn-primary:hover {
+  background: transparent;
+  color: #fff;
+}
+
+.vl2-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border: 1px solid var(--hairline-strong);
+  background: transparent;
+  color: var(--foreground);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: border-color var(--duration-fast) ease, background-color var(--duration-fast) ease;
+}
+
+.vl2-btn-secondary:hover {
+  border-color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .vl-float,
   .vl-float-b,
@@ -1041,7 +1208,9 @@ textarea {
   .vl-hero-particle,
   .vl-molecule-a,
   .vl-molecule-b,
-  .vl-molecule-c {
+  .vl-molecule-c,
+  .vl2-vial-label,
+  .vl2-fade-in {
     animation: none !important;
   }
 
@@ -1049,7 +1218,8 @@ textarea {
   .vl-elevate-hover,
   .vl-badge-trust,
   .vl-product-card,
-  .vl-product-card-media img {
+  .vl-product-card-media img,
+  .vl2-product-card {
     transition: border-color 0.15s ease;
   }
 
@@ -1057,7 +1227,8 @@ textarea {
   .vl-elevate-hover:hover,
   .vl-badge-trust:hover,
   .vl-product-card:hover,
-  .vl-product-card:hover .vl-product-card-media img {
+  .vl-product-card:hover .vl-product-card-media img,
+  .vl2-product-card:hover {
     transform: none;
   }
 
