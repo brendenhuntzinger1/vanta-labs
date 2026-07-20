@@ -1078,7 +1078,11 @@ textarea {
   position: relative;
   min-height: 100svh;
   overflow: hidden;
-  background: #000;
+  /* Visible whenever the video hasn't painted yet (or fails to load/decode
+     for a given browser) - keeps the hero from ever going flat black. */
+  background:
+    radial-gradient(120% 90% at 50% 0%, rgba(255, 255, 255, 0.05), transparent 60%),
+    linear-gradient(180deg, #050505 0%, #0b0b0b 55%, #000 100%);
 }
 
 .vl2-hero-video {

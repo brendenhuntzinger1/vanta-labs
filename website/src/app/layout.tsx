@@ -24,7 +24,6 @@ const fraunces = Fraunces({
   subsets: ["latin"],
   weight: ["400", "500", "600"],
   style: ["normal", "italic"],
-  axes: ["opsz", "SOFT", "WONK"],
 });
 
 const manrope = Manrope({
