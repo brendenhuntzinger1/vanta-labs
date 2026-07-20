@@ -3,6 +3,8 @@ import { getPaymentProvider } from "@/lib/payment-provider";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { calculateDiscountAmount } from "@/lib/referral-service";
 import { validateCoupon } from "@/lib/coupons";
+import { getPointsBalance } from "@/lib/membership";
+import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 import type {
@@ -39,6 +41,8 @@ export interface CreateCheckoutPayload {
  couponCode?: string;
  currency?: string;
  expectedTotal?: number;
+ customerUserId?: string;
+ pointsToRedeem?: number;
 }
 
 interface ValidatedReferral {
@@ -257,9 +261,22 @@ export async function createCheckoutSession(
          : 0,
  );
 
- const expectedTotal = roundMoney(
- subtotal + shipping - discountAmount,
- );
+ const totalBeforePoints = roundMoney(subtotal + shipping - discountAmount);
+
+ // Points redemption stacks with any of the above (it behaves like store
+ // credit, not a promo code) but can never exceed the remaining balance due
+ // or the customer's actual point balance.
+ let pointsRedeemed = 0;
+ let pointsDiscountAmount = 0;
+ if (payload.customerUserId && payload.pointsToRedeem && payload.pointsToRedeem > 0) {
+ const balance = await getPointsBalance(payload.customerUserId);
+ const requestedPoints = Math.min(Math.floor(payload.pointsToRedeem), balance);
+ const requestedDollars = pointsToDollars(requestedPoints);
+ pointsDiscountAmount = roundMoney(Math.min(requestedDollars, totalBeforePoints));
+ pointsRedeemed = dollarsToPoints(pointsDiscountAmount);
+ }
+
+ const expectedTotal = roundMoney(Math.max(0, totalBeforePoints - pointsDiscountAmount));
 
  if (
  payload.expectedTotal !== undefined &&
@@ -287,6 +304,8 @@ export async function createCheckoutSession(
    referral_code: referral?.code ?? null,
    ambassador_id: referral?.ambassadorId ?? null,
    coupon_code: coupon?.code ?? null,
+   customer_user_id: payload.customerUserId ?? null,
+   points_redeemed: pointsRedeemed,
    payment_status: "pending_payment",
    fulfillment_status: "pending",
    created_at: new Date().toISOString(),
@@ -333,8 +352,10 @@ export async function createCheckoutSession(
        : "NONE",
  originalSubtotal: subtotal.toFixed(2),
  customerDiscount: discountAmount.toFixed(2),
+ pointsRedeemed: String(pointsRedeemed),
  amountPaid: expectedTotal.toFixed(2),
  customerEmail: payload.customer.email,
+ customerUserId: payload.customerUserId ?? "",
  },
  });
 
@@ -344,7 +365,7 @@ export async function createCheckoutSession(
  total: expectedTotal,
  subtotal,
  shipping,
- discountAmount,
+ discountAmount: roundMoney(discountAmount + pointsDiscountAmount),
  paymentId: checkout.paymentId,
  hostedCheckoutUrl: checkout.hostedCheckoutUrl,
  };

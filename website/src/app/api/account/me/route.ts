@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getDefaultCustomerAddress } from "@/lib/customer-account";
+import { getActivePointsMultiplier, getCustomerMembership, getPointsBalance } from "@/lib/membership";
 
 export async function GET() {
   const user = await getAuthenticatedUser();
@@ -10,7 +11,13 @@ export async function GET() {
   }
 
   const fullName = typeof user.user_metadata?.full_name === "string" ? user.user_metadata.full_name : "";
-  const defaultAddress = await getDefaultCustomerAddress(user.id);
+
+  const [defaultAddress, pointsBalance, membership, pointsMultiplier] = await Promise.all([
+    getDefaultCustomerAddress(user.id),
+    getPointsBalance(user.id),
+    getCustomerMembership(user.id),
+    getActivePointsMultiplier(),
+  ]);
 
   return NextResponse.json({
     success: true,
@@ -24,5 +31,9 @@ export async function GET() {
           postalCode: defaultAddress.postalCode,
         }
       : null,
+    pointsBalance,
+    pointsPerDollar: membership.tier.pointsPerDollar,
+    pointsMultiplier: pointsMultiplier.multiplier,
+    tierName: membership.tier.name,
   });
 }

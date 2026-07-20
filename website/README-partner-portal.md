@@ -58,6 +58,11 @@ Run these SQL files in order from Supabase SQL Editor:
     by email, plus `customer_addresses`, `wishlist_items`, and
     `customer_preferences` tables (all owner-scoped via `auth.uid()`) for
     `/account`.
+14. `src/lib/sql/membership-rewards.sql` — **required.** Adds
+    `membership_tiers` (seeded with Research Member / Plus / Elite),
+    `customer_memberships`, `points_ledger`, `promotional_point_events`, and
+    `birthday`/`referral_code`/`referred_by_code` columns on
+    `customer_preferences` for the Membership & Rewards program (see §10).
 
 Optional follow-up hardening (run after the above, in Supabase SQL Editor,
 only if you want to apply the latest Supabase Performance/Security Advisor

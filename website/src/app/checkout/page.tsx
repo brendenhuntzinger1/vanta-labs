@@ -98,6 +98,12 @@ export default function CheckoutPage() {
     applyCouponCode,
     clearCouponCode,
     isBuy3Get1FreeActive,
+    isSignedIn,
+    pointsBalance,
+    pointsToEarn,
+    pointsToRedeem,
+    pointsRedeemedDiscount,
+    setPointsToRedeem,
   } = useCart();
 
   const [acknowledgements, setAcknowledgements] = useState<ComplianceAcknowledgements>({
@@ -235,6 +241,7 @@ export default function CheckoutPage() {
             },
         referralCode: referralCode ?? undefined,
         couponCode: couponCode ?? undefined,
+        pointsToRedeem: pointsToRedeem > 0 ? pointsToRedeem : undefined,
         expectedTotal: total,
         complianceAcknowledgements: acknowledgements,
       };
@@ -435,6 +442,46 @@ export default function CheckoutPage() {
               ) : null}
             </div>
 
+            {isSignedIn ? (
+              <div className="mt-8">
+                <p className="vl-eyebrow text-[11px]">Rewards Points</p>
+                <p className="mt-2 text-sm text-zinc-300">
+                  You have <span className="font-semibold text-white">{pointsBalance.toLocaleString()}</span> points available
+                  ({formatCartCurrency(pointsBalance / 100)} value).
+                </p>
+                {pointsBalance > 0 ? (
+                  <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <input
+                      type="number"
+                      min={0}
+                      max={pointsBalance}
+                      value={pointsToRedeem || ""}
+                      onChange={(event) => setPointsToRedeem(Number(event.target.value) || 0)}
+                      placeholder="0"
+                      className="vl-input w-full px-4 py-3 text-sm sm:w-40"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setPointsToRedeem(pointsBalance)}
+                      className="vl-btn-secondary vl-focus-ring px-4 py-2 text-xs"
+                    >
+                      Use max
+                    </button>
+                    {pointsToRedeem > 0 ? (
+                      <span className="text-xs text-emerald-300">-{formatCartCurrency(pointsRedeemedDiscount)}</span>
+                    ) : null}
+                  </div>
+                ) : null}
+                {pointsToEarn > 0 ? (
+                  <p className="mt-2 text-xs text-zinc-500">You&apos;ll earn ~{pointsToEarn.toLocaleString()} points on this order.</p>
+                ) : null}
+              </div>
+            ) : (
+              <p className="mt-8 text-xs text-zinc-500">
+                <a href="/account/login" className="text-cyan-300 underline-offset-4 hover:underline">Sign in</a> to earn and redeem rewards points on this order.
+              </p>
+            )}
+
             <div className="mt-8 space-y-4">
               <p className="vl-eyebrow text-[11px]">Required Confirmations</p>
 
@@ -513,6 +560,9 @@ export default function CheckoutPage() {
               <div className="flex justify-between"><span>Shipping</span><span>{formatCartCurrency(shipping)}</span></div>
               {serviceFee > 0 ? <div className="flex justify-between"><span>Service fee</span><span>{formatCartCurrency(serviceFee)}</span></div> : null}
               <div className="flex justify-between"><span>Discount</span><span>-{formatCartCurrency(discountAmount)}</span></div>
+              {pointsRedeemedDiscount > 0 ? (
+                <div className="flex justify-between"><span>Points redeemed</span><span>-{formatCartCurrency(pointsRedeemedDiscount)}</span></div>
+              ) : null}
               <div className="mt-3 flex justify-between border-t border-white/10 pt-3 text-base font-semibold text-white"><span>Total</span><span>{formatCartCurrency(total)}</span></div>
             </div>
 

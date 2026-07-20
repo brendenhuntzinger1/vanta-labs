@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
 import { orderConfirmationTemplate } from "@/lib/email/templates";
 import { redeemCoupon } from "@/lib/coupons";
+import { calculateEarnedPoints, getActivePointsMultiplier, getCustomerMembership, recordPointsLedgerEntry, reverseOrderPoints } from "@/lib/membership";
 
 export interface WebhookEventState {
   eventId: string;
@@ -123,6 +124,8 @@ function normalizeOrderPayload(payload: string) {
     referralCode?: string;
     ambassadorId?: string;
     couponCode?: string;
+    customerUserId?: string;
+    pointsRedeemed?: number;
     commissionPercent?: number;
     items?: Array<{
       productId?: string;
@@ -167,7 +170,7 @@ async function getExistingEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, payment_status, payment_id, referral_code, ambassador_id, amount_paid, paid_at")
+    .select("id, order_id, payment_status, payment_id, referral_code, ambassador_id, amount_paid, paid_at, customer_user_id, points_redeemed")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -194,6 +197,8 @@ async function upsertOrderRecord(input: {
   referralCode?: string;
   ambassadorId?: string;
   couponCode?: string;
+  customerUserId?: string;
+  pointsRedeemed?: number;
   paymentStatus: OrderStatus;
   fulfillmentStatus?: string;
   paidAt?: string | null;
@@ -232,6 +237,8 @@ async function upsertOrderRecord(input: {
     referral_code: input.referralCode ?? null,
     ambassador_id: input.ambassadorId ?? null,
     coupon_code: input.couponCode ?? null,
+    customer_user_id: input.customerUserId ?? null,
+    points_redeemed: input.pointsRedeemed ?? 0,
     payment_status: input.paymentStatus,
     fulfillment_status: input.fulfillmentStatus ?? "pending",
     provider_event_id: input.providerEventId ?? null,
@@ -475,6 +482,8 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     referralCode: eventPayload.referralCode,
     ambassadorId: eventPayload.ambassadorId,
     couponCode: eventPayload.couponCode,
+    customerUserId: eventPayload.customerUserId ?? orderRecord?.customer_user_id ?? undefined,
+    pointsRedeemed: eventPayload.pointsRedeemed ?? orderRecord?.points_redeemed ?? 0,
     paymentStatus: nextStatus,
     fulfillmentStatus: nextStatus === "paid" ? "awaiting_fulfillment" : orderRecord?.payment_status ?? "pending",
     paidAt: nextStatus === "paid" ? new Date().toISOString() : orderRecord?.paid_at ?? null,
@@ -509,6 +518,38 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       await redeemCoupon(eventPayload.couponCode);
     }
 
+    const customerUserId = eventPayload.customerUserId ?? orderRecord?.customer_user_id ?? null;
+    if (!wasAlreadyPaid && customerUserId) {
+      try {
+        const pointsRedeemed = Number(eventPayload.pointsRedeemed ?? orderRecord?.points_redeemed ?? 0);
+        if (pointsRedeemed > 0) {
+          await recordPointsLedgerEntry({
+            userId: customerUserId,
+            amount: -pointsRedeemed,
+            reason: "redeem",
+            orderId,
+          });
+        }
+
+        const membership = await getCustomerMembership(customerUserId);
+        const { multiplier } = await getActivePointsMultiplier();
+        const pointsEarned = calculateEarnedPoints(commissionableSubtotal, membership.tier.pointsPerDollar, multiplier);
+
+        if (pointsEarned > 0) {
+          await recordPointsLedgerEntry({
+            userId: customerUserId,
+            amount: pointsEarned,
+            reason: "order_earn",
+            orderId,
+          });
+
+          await supabaseAdmin.from("orders").update({ points_earned: pointsEarned }).eq("order_id", orderId);
+        }
+      } catch (pointsError) {
+        console.error("Unable to process membership points for order", orderId, pointsError);
+      }
+    }
+
     if (!wasAlreadyPaid && eventPayload.customer?.email) {
       try {
         const template = orderConfirmationTemplate({
@@ -533,6 +574,14 @@ export async function processPaymentWebhook(payload: string, signature: string, 
 
   if (nextStatus === "refunded" || nextStatus === "canceled" || nextStatus === "payment_failed") {
     await updateCommissionOnRefund(orderId);
+
+    if (nextStatus === "refunded") {
+      try {
+        await reverseOrderPoints(orderId);
+      } catch (pointsError) {
+        console.error("Unable to reverse membership points for order", orderId, pointsError);
+      }
+    }
 
     if (nextStatus === "refunded" || nextStatus === "canceled") {
       await logCommerceAnalyticsEvent({

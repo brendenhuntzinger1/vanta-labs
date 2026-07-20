@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-service";
+import { detectRoleFromUser } from "@/lib/auth-role";
+import { getAuthenticatedUser } from "@/lib/auth-session";
 import type { CustomerInput } from "@/lib/payment-types";
 
 const REFERRAL_COOKIE_NAME = "vl_referral_code";
@@ -35,6 +37,11 @@ export async function POST(request: Request) {
     const referralFromCookie = cookieStore.get(REFERRAL_COOKIE_NAME)?.value;
     const referralCode = body.referralCode || referralFromCookie;
 
+    const authenticatedUser = await getAuthenticatedUser();
+    const customerUserId = authenticatedUser && detectRoleFromUser(authenticatedUser) === "customer"
+      ? authenticatedUser.id
+      : undefined;
+
     const result = await createCheckoutSession({
       items: body.items,
       customer,
@@ -42,6 +49,8 @@ export async function POST(request: Request) {
       couponCode: body.couponCode,
       currency: body.currency,
       expectedTotal: body.expectedTotal,
+      customerUserId,
+      pointsToRedeem: customerUserId ? Number(body.pointsToRedeem ?? 0) : 0,
     });
 
     return NextResponse.json({

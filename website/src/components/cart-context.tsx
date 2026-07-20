@@ -4,6 +4,7 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Product } from "@/lib/catalog-types";
 import type { ReferralCode } from "@/lib/referral-codes";
 import { validateReferralCodeClient } from "@/lib/referral-client";
+import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 
 type CouponDetails = {
   code: string;
@@ -38,6 +39,12 @@ type CartContextValue = {
   couponDiscountAmount: number;
   couponError: string | null;
   couponSuccess: string | null;
+  isSignedIn: boolean;
+  pointsBalance: number;
+  pointsToEarn: number;
+  pointsToRedeem: number;
+  pointsRedeemedDiscount: number;
+  setPointsToRedeem: (points: number) => void;
   itemCount: number;
   subtotal: number;
   shipping: number;
@@ -134,6 +141,33 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [couponDetails, setCouponDetails] = useState<CouponDetails | null>(null);
   const [couponError, setCouponError] = useState<string | null>(null);
   const [couponSuccess, setCouponSuccess] = useState<string | null>(null);
+  const [isSignedIn, setIsSignedIn] = useState(false);
+  const [pointsBalance, setPointsBalance] = useState(0);
+  const [pointsPerDollar, setPointsPerDollar] = useState(0);
+  const [pointsMultiplier, setPointsMultiplier] = useState(1);
+  const [pointsToRedeem, setPointsToRedeemState] = useState(0);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const response = await fetch("/api/account/me", { cache: "no-store" });
+        if (!response.ok) return;
+        const result = await response.json() as {
+          success: boolean;
+          pointsBalance?: number;
+          pointsPerDollar?: number;
+          pointsMultiplier?: number;
+        };
+        if (!result.success) return;
+        setIsSignedIn(true);
+        setPointsBalance(result.pointsBalance ?? 0);
+        setPointsPerDollar(result.pointsPerDollar ?? 0);
+        setPointsMultiplier(result.pointsMultiplier ?? 1);
+      } catch {
+        // Guest shoppers simply see no points UI.
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -353,7 +387,24 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     return couponDiscountAmount;
   }, [buy3Get1FreeDiscount, referralDetails, subtotal, couponDiscountAmount]);
 
-  const total = Math.max(0, subtotal + shipping + serviceFee - discountAmount);
+  const pointsToEarn = useMemo(
+    () => (isSignedIn ? calculateEarnedPoints(Math.max(0, subtotal - discountAmount), pointsPerDollar, pointsMultiplier) : 0),
+    [isSignedIn, subtotal, discountAmount, pointsPerDollar, pointsMultiplier],
+  );
+
+  const totalBeforePoints = Math.max(0, subtotal + shipping + serviceFee - discountAmount);
+
+  const pointsRedeemedDiscount = useMemo(
+    () => Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints),
+    [pointsToRedeem, totalBeforePoints],
+  );
+
+  const total = Math.max(0, totalBeforePoints - pointsRedeemedDiscount);
+
+  const setPointsToRedeem = (points: number) => {
+    const clamped = Math.max(0, Math.min(Math.floor(points), pointsBalance));
+    setPointsToRedeemState(clamped);
+  };
 
   const addToCart = (
     product: Product,
@@ -471,6 +522,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setCouponDetails(null);
     setCouponError(null);
     setCouponSuccess(null);
+    setPointsToRedeemState(0);
   };
 
   const openCart = () => setIsCartOpen(true);
@@ -640,6 +692,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     couponDiscountAmount,
     couponError,
     couponSuccess,
+    isSignedIn,
+    pointsBalance,
+    pointsToEarn,
+    pointsToRedeem,
+    pointsRedeemedDiscount,
+    setPointsToRedeem,
     itemCount,
     subtotal,
     shipping,
