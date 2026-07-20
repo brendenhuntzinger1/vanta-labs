@@ -1,7 +1,14 @@
 import { randomUUID } from "crypto";
-import nodemailer from "nodemailer";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { generateReferralCode } from "@/lib/referral-code-utils";
+import { sendEmail } from "@/lib/email/send";
+import {
+  ambassadorApplicationReceivedTemplate,
+  ambassadorApprovedTemplate,
+  ambassadorDeniedTemplate,
+  referralCodeAssignedTemplate,
+} from "@/lib/email/templates";
+import { getSiteUrl } from "@/lib/env";
 
 function formatSupabaseError(error: unknown) {
   if (!error) {
@@ -133,11 +140,6 @@ function isMissingRelationError(error: unknown, relationName: string) {
   return maybeError.code === "42P01" || maybeError.code === "PGRST205" || combined.includes(relationName.toLowerCase());
 }
 
-function parseBooleanEnv(value: string | undefined, fallback = false) {
-  if (!value) return fallback;
-  return value.toLowerCase() === "true";
-}
-
 async function enqueueNotification(kind: string, recipient: string, payload: Record<string, unknown>) {
   const { data, error } = await supabaseAdmin
     .from("notification_queue")
@@ -161,62 +163,33 @@ async function sendPartnerStatusEmail(input: {
   status: "approved" | "rejected";
   referralCode?: string;
 }) {
-  const host = process.env.SMTP_HOST;
-  const user = process.env.SMTP_USER;
-  const pass = process.env.SMTP_PASSWORD;
-  const from = process.env.SMTP_FROM ?? "Vanta Labs <support@vantalabsresearch.com>";
+  const template = input.status === "approved"
+    ? ambassadorApprovedTemplate({
+        name: input.name,
+        referralCode: input.referralCode,
+        dashboardUrl: `${getSiteUrl()}/partner/dashboard`,
+      })
+    : ambassadorDeniedTemplate({ name: input.name });
 
-  if (!host || !user || !pass) {
-    return false;
-  }
+  const result = await sendEmail({ to: input.to, ...template });
+  return result.success;
+}
 
-  const port = Number(process.env.SMTP_PORT ?? "587");
-  const secure = parseBooleanEnv(process.env.SMTP_SECURE, false);
-
-  const transporter = nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: { user, pass },
+async function sendReferralCodeAssignedEmail(input: {
+  to: string;
+  name: string;
+  referralCode: string;
+  commissionPercent: number;
+}) {
+  const template = referralCodeAssignedTemplate({
+    name: input.name,
+    referralCode: input.referralCode,
+    referralLink: `${getSiteUrl()}/r/${input.referralCode}`,
+    commissionPercent: input.commissionPercent,
   });
 
-  const subject = input.status === "approved"
-    ? "Your Vanta Labs Ambassador Application Was Approved"
-    : "Update on Your Vanta Labs Ambassador Application";
-
-  const lines = input.status === "approved"
-    ? [
-      `Hi ${input.name},`,
-      "",
-      "Your ambassador application has been approved.",
-      `Referral code: ${input.referralCode ?? "(assigned in dashboard)"}`,
-      "",
-      "You can now log in to access your dashboard, referrals, commissions, and payouts.",
-      "",
-      "- Vanta Labs",
-    ]
-    : [
-      `Hi ${input.name},`,
-      "",
-      "Thank you for applying to the Vanta Labs ambassador program.",
-      "At this time, your application was not approved.",
-      "",
-      "You may reapply in the future as your audience or content evolves.",
-      "",
-      "- Vanta Labs",
-    ];
-
-  await transporter.sendMail({
-    from,
-    to: input.to,
-    subject,
-    text: lines.join("\n"),
-    html: lines
-      .map((line) => (line ? `<p>${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>` : "<br />"))
-      .join(""),
-  });
-
-  return true;
+  const result = await sendEmail({ to: input.to, ...template });
+  return result.success;
 }
 
 async function autoApproveEligibleCommissions() {
@@ -392,6 +365,13 @@ export async function createPartnerApplication(input: {
 
   if (ambassadorInsert.error) {
     assertNoSupabaseError("ambassadors.insert(create application mirror)", ambassadorInsert.error);
+  }
+
+  try {
+    const template = ambassadorApplicationReceivedTemplate({ name: input.name });
+    await sendEmail({ to: input.email, ...template });
+  } catch {
+    // Non-critical notification; the application itself already succeeded above.
   }
 
   return {
@@ -899,7 +879,7 @@ export async function createPartnerInvite(input: {
 
 export async function updatePartnerStatus(input: {
   partnerId: string;
-  status: "approved" | "disabled" | "pending" | "rejected";
+  status: "approved" | "disabled" | "pending" | "rejected" | "info_requested";
   actorUserId?: string;
   commissionPercent?: number;
   referralCode?: string;
@@ -982,20 +962,25 @@ export async function updatePartnerStatus(input: {
   assertNoSupabaseError("ambassadors.update(status mirror)", ambassadorUpdateError);
 
   const finalReferralCode = normalizedReferralCode ?? existingPartner.referral_code;
+  const referralCodeChanged = Boolean(normalizedReferralCode) && normalizedReferralCode !== existingPartner.referral_code;
 
+  // Email/notification-queue side effects must never block the status
+  // update itself or the audit log entry below — isolated in its own
+  // try/catch so a failed send (or an unconfigured provider) can't leave
+  // the admin action half-finished or skip the audit trail.
   if ((input.status === "approved" || input.status === "rejected") && existingPartner.email) {
-    const queueRowId = await enqueueNotification(
-      input.status === "approved" ? "partner_application_approved" : "partner_application_rejected",
-      existingPartner.email,
-      {
-        partnerId: input.partnerId,
-        name: existingPartner.name,
-        status: input.status,
-        referralCode: finalReferralCode,
-      },
-    );
-
     try {
+      const queueRowId = await enqueueNotification(
+        input.status === "approved" ? "partner_application_approved" : "partner_application_rejected",
+        existingPartner.email,
+        {
+          partnerId: input.partnerId,
+          name: existingPartner.name,
+          status: input.status,
+          referralCode: finalReferralCode,
+        },
+      );
+
       const emailSent = await sendPartnerStatusEmail({
         to: existingPartner.email,
         name: existingPartner.name,
@@ -1003,11 +988,7 @@ export async function updatePartnerStatus(input: {
         referralCode: finalReferralCode,
       });
 
-      if (emailSent) {
-        if (!queueRowId) {
-          return;
-        }
-
+      if (emailSent && queueRowId) {
         const { error: queueUpdateError } = await supabaseAdmin
           .from("notification_queue")
           .update({ status: "sent", sent_at: new Date().toISOString() })
@@ -1019,6 +1000,19 @@ export async function updatePartnerStatus(input: {
       }
     } catch {
       // Keep pending queue row for retry workflows.
+    }
+  }
+
+  if (referralCodeChanged && existingPartner.email) {
+    try {
+      await sendReferralCodeAssignedEmail({
+        to: existingPartner.email,
+        name: existingPartner.name,
+        referralCode: finalReferralCode,
+        commissionPercent: input.commissionPercent ?? 0,
+      });
+    } catch {
+      // Non-critical notification; the referral code change itself already succeeded above.
     }
   }
 

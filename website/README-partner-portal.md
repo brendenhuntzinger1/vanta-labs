@@ -59,6 +59,43 @@ This hashes the password with the same scrypt scheme `src/lib/admin-auth.ts`
 verifies against and upserts the row via the Supabase service role key. Re-run
 it with the same username to rotate a password.
 
+## 2b) Configure transactional email
+
+Contact form notifications, order confirmations, shipping updates, and
+ambassador emails (application received / approved / denied / referral code
+assigned) all go through `src/lib/email/` — a provider-agnostic module, not
+tied to any single vendor. Switch providers with **only an env var change**,
+no code change:
+
+Set `EMAIL_PROVIDER` to one of:
+
+- `smtp` (default) — set `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
+  `SMTP_PASSWORD`, and `SMTP_FROM`. This also covers **AWS SES**: SES
+  exposes an SMTP endpoint with its own SMTP username/password (SES Console
+  → Simple Mail Service → SMTP Settings) — point `SMTP_HOST` at that
+  endpoint and use the SES SMTP credentials.
+- `resend` — set `RESEND_API_KEY` and `EMAIL_FROM`.
+- `sendgrid` — set `SENDGRID_API_KEY` and `EMAIL_FROM`.
+
+**Until one of these is fully configured, no email actually sends.** Every
+call site treats email as a non-critical side effect — the underlying
+action (an order, an approval, a status change) always succeeds regardless,
+and a failed/unconfigured send is logged, never silently claimed as
+successful. Verify delivery by watching your provider's dashboard/logs
+after triggering one of the flows in the test checklist below — this is not
+something that can be verified without real provider credentials.
+
+Templates live in `src/lib/email/templates.ts`. Two are built but not
+wired into a live flow yet, since the flows they belong to don't exist in
+the app yet:
+- **Email verification** — Supabase Auth's own built-in confirmation email
+  is what actually runs today (configured in the Supabase Dashboard under
+  Authentication → Email Templates, not in this codebase). This template is
+  ready if you later build a custom verification flow instead.
+- **Password reset** — there's no forgot-password page in the app yet (no
+  customer-account system exists). This template is ready for when that's
+  built.
+
 ## 3) Auth + role model
 
 - Supabase Auth is used for partner/admin signup and login.
@@ -69,9 +106,16 @@ it with the same username to rotate a password.
 
 1. Visitor opens `/partner` landing page.
 2. Visitor creates account from landing page application section.
-3. `POST /api/partner/apply` creates partner record with status `pending`.
-4. User is redirected to `/partner/pending`.
-5. Admin approves in `/admin/partners`.
+3. `POST /api/partner/apply` creates partner record with status `pending` and
+   sends an "application received" email (see §2b for delivery setup).
+4. User is redirected to `/partner/pending`, which shows status-specific
+   copy (pending / info requested / rejected / disabled) fetched from
+   `/api/partner/me`.
+5. Admin reviews in `/admin/partners`: **Approve**, **Reject**, **Request
+   Info** (status `info_requested`, no automatic email — the admin follows
+   up directly), or **Disable**. Approve/Reject each send an email.
+   Setting/changing a partner's referral code (via the Approve prompt or
+   the same admin action) sends a separate "referral code assigned" email.
 6. Approved users can access `/partner/dashboard`; non-approved users remain gated.
 
 ## 5) Referral tracking flow
@@ -128,12 +172,15 @@ These are intentionally lightweight so they can be extended with your preferred 
 
 1. Open `/partner` and create a partner account.
 2. Confirm partner row exists in `public.partners` with `pending` status.
-3. Approve partner from `/admin/partners`.
-4. Open referral link `/r/<code>` in private browser.
-5. Add product to cart and complete checkout.
-6. Trigger payment webhook `payment.succeeded`.
-7. Confirm records in:
+3. With email configured (§2b), confirm the "application received" email arrived.
+4. Approve partner from `/admin/partners`; confirm the "approved" email arrived.
+5. Open referral link `/r/<code>` in private browser.
+6. Add product to cart and complete checkout.
+7. Trigger payment webhook `payment.succeeded`.
+8. Confirm records in:
    - `public.referrals` (click)
    - `public.orders` (attributed order)
    - `public.commissions` (pending commission)
-8. Mark commissions paid in admin and confirm `public.payouts` row is created.
+9. Confirm the order-confirmation email arrived at the checkout email address.
+10. From `/admin/orders/<orderId>`, update fulfillment status/tracking number and confirm a shipping-update email arrives; use "Resend confirmation" and confirm the order-confirmation email arrives again.
+11. Mark commissions paid in admin and confirm `public.payouts` row is created.

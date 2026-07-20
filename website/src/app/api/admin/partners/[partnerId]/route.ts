@@ -22,11 +22,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
     const action = String(body?.action ?? "");
 
     if (action === "set_status") {
-      const status = body?.status as "approved" | "disabled" | "pending" | "rejected";
+      const status = body?.status as "approved" | "disabled" | "pending" | "rejected" | "info_requested";
       const commissionPercent = body?.commissionPercent !== undefined ? Number(body.commissionPercent) : undefined;
       const referralCode = typeof body?.referralCode === "string" ? body.referralCode : undefined;
 
-      if (!["approved", "disabled", "pending", "rejected"].includes(status)) {
+      if (!["approved", "disabled", "pending", "rejected", "info_requested"].includes(status)) {
         return NextResponse.json({ success: false, error: "Invalid status" }, { status: 400 });
       }
 

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import nodemailer from "nodemailer";
+import { sendEmail } from "@/lib/email/send";
+import { contactFormNotificationTemplate } from "@/lib/email/templates";
 
 const SUPPORT_EMAIL = "support@vantalabsresearch.com";
 const SUBMISSION_WINDOW_MS = 3000;
@@ -28,26 +29,6 @@ type ContactBody = {
 
 function parseString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function getTransport() {
-  const host = process.env.SMTP_HOST;
-  const port = Number(process.env.SMTP_PORT ?? "587");
-  const secure = String(process.env.SMTP_SECURE ?? "false").toLowerCase() === "true";
-
-  if (!host || !process.env.SMTP_USER || !process.env.SMTP_PASSWORD) {
-    return null;
-  }
-
-  return nodemailer.createTransport({
-    host,
-    port,
-    secure,
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASSWORD,
-    },
-  });
 }
 
 function getClientKey(request: Request) {
@@ -114,35 +95,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Please wait before sending another message." }, { status: 429 });
     }
 
-    const transport = getTransport();
-    if (!transport) {
+    const template = contactFormNotificationTemplate({ firstName, lastName, email, orderNumber, subject, message });
+    const result = await sendEmail({ to: SUPPORT_EMAIL, replyTo: email, ...template });
+
+    if (!result.success) {
       return NextResponse.json(
-        {
-          success: false,
-          error: "Email delivery is not configured. Set SMTP_HOST, SMTP_PORT, SMTP_USER, and SMTP_PASSWORD.",
-        },
+        { success: false, error: result.error ?? "Email delivery is not configured." },
         { status: 500 },
       );
     }
-
-    const replyLines = [
-      `Name: ${firstName} ${lastName}`,
-      `Email: ${email}`,
-      orderNumber ? `Order Number: ${orderNumber}` : null,
-      "",
-      message,
-    ].filter((line): line is string => line !== null);
-
-    await transport.sendMail({
-      from: process.env.SMTP_FROM ?? `Vanta Labs <${SUPPORT_EMAIL}>`,
-      to: SUPPORT_EMAIL,
-      replyTo: email,
-      subject: `Vanta Labs Contact Form - ${subject}`,
-      text: replyLines.join("\n"),
-      html: replyLines
-        .map((line) => (line ? `<p>${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>` : "<br />"))
-        .join(""),
-    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

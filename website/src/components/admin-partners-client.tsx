@@ -180,6 +180,7 @@ export function AdminPartnersClient({ initialRows }: { initialRows: AdminPartner
             <option value="all">All statuses</option>
             <option value="approved">Approved</option>
             <option value="pending">Pending</option>
+            <option value="info_requested">Info Requested</option>
             <option value="rejected">Rejected</option>
             <option value="disabled">Disabled</option>
           </select>
@@ -258,6 +259,12 @@ export function AdminPartnersClient({ initialRows }: { initialRows: AdminPartner
                         }}
                         className="rounded border border-emerald-400/35 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200"
                       >Approve</button>
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => applyPartnerAction(row.id, { action: "set_status", status: "info_requested" })}
+                        className="rounded border border-sky-400/35 bg-sky-500/10 px-2 py-1 text-xs text-sky-200"
+                      >Request Info</button>
                       <button
                         type="button"
                         disabled={loading}

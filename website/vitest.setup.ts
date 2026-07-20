@@ -2,6 +2,10 @@ import { vi } from "vitest";
 
 type GenericRow = Record<string, unknown>;
 
+vi.mock("@/lib/email/send", () => ({
+  sendEmail: async () => ({ success: true }),
+}));
+
 vi.mock("@/lib/catalog", () => ({
   getCatalogProductsBySlugs: async (slugs: string[]) => slugs
     .filter((slug) => slug === "bpc-157-10mg")

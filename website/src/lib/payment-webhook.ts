@@ -2,6 +2,8 @@ import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import type { OrderStatus } from "@/lib/payment-types";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { sendEmail } from "@/lib/email/send";
+import { orderConfirmationTemplate } from "@/lib/email/templates";
 
 export interface WebhookEventState {
   eventId: string;
@@ -495,6 +497,28 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       referralCode: eventPayload.referralCode,
       ambassadorId: eventPayload.ambassadorId,
     });
+
+    const wasAlreadyPaid = orderRecord?.payment_status === "paid";
+    if (!wasAlreadyPaid && eventPayload.customer?.email) {
+      try {
+        const template = orderConfirmationTemplate({
+          customerName: eventPayload.customer.fullName ?? "",
+          orderId,
+          items: (eventPayload.items ?? []).map((item) => ({
+            name: item.productName ?? item.productId ?? "Item",
+            quantity: item.quantity ?? 0,
+            lineTotal: roundMoney(item.lineTotal ?? 0),
+          })),
+          subtotal,
+          shipping: shippingAmount,
+          discount: discountAmount,
+          total: amountPaid,
+        });
+        await sendEmail({ to: eventPayload.customer.email, ...template });
+      } catch {
+        // Order processing must not fail because a confirmation email couldn't be sent.
+      }
+    }
   }
 
   if (nextStatus === "refunded" || nextStatus === "canceled" || nextStatus === "payment_failed") {
