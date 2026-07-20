@@ -1,5 +1,37 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getControlSnapshot } from "@/lib/admin-control";
 import { calculateEarnedPoints, dollarsToPoints, pointsToDollars, POINTS_PER_DOLLAR_REDEMPTION } from "@/lib/points-math";
+
+export interface MembershipBonusSettings {
+  signupBonusEnabled: boolean;
+  referralBonusEnabled: boolean;
+  birthdayBonusEnabled: boolean;
+  signupBonusPoints: number;
+  referralSignupBonusPoints: number;
+  birthdayBonusPoints: number;
+}
+
+const DEFAULT_SIGNUP_BONUS_POINTS = 200;
+const DEFAULT_REFERRAL_SIGNUP_BONUS_POINTS = 100;
+const DEFAULT_BIRTHDAY_BONUS_POINTS = 150;
+
+// Bonus enable/disable + amount overrides live in the same generic admin
+// config store as homepage/promotions settings (src/lib/admin-control.ts) -
+// no new table needed, and it's editable from /admin/membership the same
+// way the homepage editor already works.
+export async function getMembershipBonusSettings(): Promise<MembershipBonusSettings> {
+  const snapshot = await getControlSnapshot("membership");
+  const config = snapshot.membership ?? {};
+
+  return {
+    signupBonusEnabled: config.signup_bonus_enabled !== false,
+    referralBonusEnabled: config.referral_bonus_enabled !== false,
+    birthdayBonusEnabled: config.birthday_bonus_enabled !== false,
+    signupBonusPoints: Number(config.signup_bonus_points ?? DEFAULT_SIGNUP_BONUS_POINTS),
+    referralSignupBonusPoints: Number(config.referral_bonus_points ?? DEFAULT_REFERRAL_SIGNUP_BONUS_POINTS),
+    birthdayBonusPoints: Number(config.birthday_bonus_points ?? DEFAULT_BIRTHDAY_BONUS_POINTS),
+  };
+}
 
 export { calculateEarnedPoints, dollarsToPoints, pointsToDollars, POINTS_PER_DOLLAR_REDEMPTION };
 
@@ -265,10 +297,6 @@ export function getProgressToNextReward(pointsBalance: number) {
   };
 }
 
-export const SIGNUP_BONUS_POINTS = 200;
-export const REFERRAL_SIGNUP_BONUS_POINTS = 100;
-export const BIRTHDAY_BONUS_POINTS = 150;
-
 async function hasLedgerEntryWithReason(userId: string, reason: string) {
   const { data, error } = await supabaseAdmin
     .from("points_ledger")
@@ -288,6 +316,11 @@ async function hasLedgerEntryWithReason(userId: string, reason: string) {
 // Idempotent - safe to call on every login, since it checks the ledger for
 // a prior award before writing a new one.
 export async function awardSignupBonusIfNeeded(userId: string) {
+  const settings = await getMembershipBonusSettings();
+  if (!settings.signupBonusEnabled) {
+    return;
+  }
+
   const alreadyAwarded = await hasLedgerEntryWithReason(userId, "signup_bonus");
   if (alreadyAwarded) {
     return;
@@ -295,7 +328,7 @@ export async function awardSignupBonusIfNeeded(userId: string) {
 
   await recordPointsLedgerEntry({
     userId,
-    amount: SIGNUP_BONUS_POINTS,
+    amount: settings.signupBonusPoints,
     reason: "signup_bonus",
   });
 }
@@ -304,6 +337,11 @@ export async function awardSignupBonusIfNeeded(userId: string) {
 // the new customer gets a flat bonus, and whoever referred them gets their
 // own membership tier's referral bonus. Idempotent per new customer.
 export async function awardReferralSignupBonus(newUserId: string, referrerUserId: string) {
+  const settings = await getMembershipBonusSettings();
+  if (!settings.referralBonusEnabled) {
+    return;
+  }
+
   const alreadyAwarded = await hasLedgerEntryWithReason(newUserId, "referral_bonus");
   if (alreadyAwarded) {
     return;
@@ -311,7 +349,7 @@ export async function awardReferralSignupBonus(newUserId: string, referrerUserId
 
   await recordPointsLedgerEntry({
     userId: newUserId,
-    amount: REFERRAL_SIGNUP_BONUS_POINTS,
+    amount: settings.referralSignupBonusPoints,
     reason: "referral_bonus",
     metadata: { role: "referred" },
   });
@@ -335,6 +373,11 @@ export async function checkAndAwardBirthdayBonus(userId: string, birthday: strin
     return false;
   }
 
+  const settings = await getMembershipBonusSettings();
+  if (!settings.birthdayBonusEnabled) {
+    return false;
+  }
+
   const today = new Date();
   const birthdayDate = new Date(birthday);
   const isBirthdayToday = today.getUTCMonth() === birthdayDate.getUTCMonth() && today.getUTCDate() === birthdayDate.getUTCDate();
@@ -355,7 +398,7 @@ export async function checkAndAwardBirthdayBonus(userId: string, birthday: strin
 
   await recordPointsLedgerEntry({
     userId,
-    amount: BIRTHDAY_BONUS_POINTS,
+    amount: settings.birthdayBonusPoints,
     reason: "birthday_bonus",
   });
 

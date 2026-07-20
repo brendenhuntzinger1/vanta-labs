@@ -37,3 +37,7 @@ export function canViewAuditLog(role: AdminRole) {
 export function canManageTeam(role: AdminRole) {
   return role === "super_admin";
 }
+
+export function canManageMembership(role: AdminRole) {
+  return role === "manager" || role === "super_admin";
+}

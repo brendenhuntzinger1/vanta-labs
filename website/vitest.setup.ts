@@ -13,6 +13,40 @@ vi.mock("@/lib/coupons", () => ({
   redeemCoupon: async () => {},
 }));
 
+vi.mock("@/lib/membership", () => ({
+  calculateEarnedPoints: () => 0,
+  dollarsToPoints: () => 0,
+  pointsToDollars: () => 0,
+  POINTS_PER_DOLLAR_REDEMPTION: 100,
+  getActiveMembershipTiers: async () => [],
+  getFreeTier: async () => null,
+  getCustomerMembership: async () => ({
+    tier: { id: "free", slug: "free", name: "Research Member", monthlyPriceCents: 0, annualPriceCents: 0, pointsPerDollar: 2, freeShipping: false, priorityShipping: false, earlyAccess: false, exclusivePricing: false, referralBonusPoints: 0, benefits: [], position: 0, isActive: true },
+    billingCycle: "free",
+    status: "active",
+    startedAt: new Date().toISOString(),
+    renewsAt: null,
+  }),
+  getActivePointsMultiplier: async () => ({ multiplier: 1, eventName: null }),
+  getPointsBalance: async () => 0,
+  getPointsHistory: async () => [],
+  recordPointsLedgerEntry: async () => {},
+  reverseOrderPoints: async () => {},
+  getReferralEarnedPoints: async () => 0,
+  getProgressToNextReward: () => ({ pointsIntoMilestone: 0, milestone: 500, nextMilestone: 500, progressPercent: 0 }),
+  getMembershipBonusSettings: async () => ({
+    signupBonusEnabled: true,
+    referralBonusEnabled: true,
+    birthdayBonusEnabled: true,
+    signupBonusPoints: 200,
+    referralSignupBonusPoints: 100,
+    birthdayBonusPoints: 150,
+  }),
+  awardSignupBonusIfNeeded: async () => {},
+  awardReferralSignupBonus: async () => {},
+  checkAndAwardBirthdayBonus: async () => false,
+}));
+
 vi.mock("@/lib/catalog", () => ({
   getCatalogProductsBySlugs: async (slugs: string[]) => slugs
     .filter((slug) => slug === "bpc-157-10mg")
