@@ -35,11 +35,6 @@ export function AdminControlCenterClient() {
   const [homepagePromoPills, setHomepagePromoPills] = useState("");
   const [homepageFeaturedSlugs, setHomepageFeaturedSlugs] = useState("");
 
-  const [promoCouponCode, setPromoCouponCode] = useState("");
-  const [promoDiscountType, setPromoDiscountType] = useState("percentage");
-  const [promoDiscountValue, setPromoDiscountValue] = useState("");
-  const [promoBuyX, setPromoBuyX] = useState("");
-  const [promoGetY, setPromoGetY] = useState("");
   const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
   const [promoBuy2Get1HalfEnabled, setPromoBuy2Get1HalfEnabled] = useState(false);
   const [promoFreeShippingThreshold, setPromoFreeShippingThreshold] = useState("");
@@ -90,11 +85,6 @@ export function AdminControlCenterClient() {
     setHomepageFeaturedSlugs(Array.isArray(homepage.featured_product_slugs) ? (homepage.featured_product_slugs as string[]).join(", ") : "");
 
     const promotions = next.promotions ?? {};
-    setPromoCouponCode(String(promotions.coupon_code ?? ""));
-    setPromoDiscountType(String(promotions.discount_type ?? "percentage"));
-    setPromoDiscountValue(String(promotions.discount_value ?? ""));
-    setPromoBuyX(String(promotions.buy_x ?? ""));
-    setPromoGetY(String(promotions.get_y ?? ""));
     setPromoBuy3Get1Enabled(Boolean(promotions.buy_3_get_1_enabled ?? false));
     setPromoBuy2Get1HalfEnabled(Boolean(promotions.buy_2_get_1_half_enabled ?? false));
     setPromoFreeShippingThreshold(String(promotions.free_shipping_threshold ?? ""));
@@ -175,11 +165,6 @@ export function AdminControlCenterClient() {
       { section: "homepage", key: "promo_pills", value: parseCsv(homepagePromoPills) },
       { section: "homepage", key: "featured_product_slugs", value: parseCsv(homepageFeaturedSlugs) },
 
-      { section: "promotions", key: "coupon_code", value: promoCouponCode },
-      { section: "promotions", key: "discount_type", value: promoDiscountType },
-      { section: "promotions", key: "discount_value", value: promoDiscountValue },
-      { section: "promotions", key: "buy_x", value: promoBuyX },
-      { section: "promotions", key: "get_y", value: promoGetY },
       { section: "promotions", key: "buy_3_get_1_enabled", value: promoBuy3Get1Enabled },
       { section: "promotions", key: "buy_2_get_1_half_enabled", value: promoBuy2Get1HalfEnabled },
       { section: "promotions", key: "free_shipping_threshold", value: promoFreeShippingThreshold },
@@ -317,15 +302,14 @@ export function AdminControlCenterClient() {
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">{SECTION_LABELS.promotions}</h3>
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
               <label className="text-zinc-300 sm:col-span-2">Sitewide announcement<input value={promoAnnouncement} onChange={(e) => setPromoAnnouncement(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Coupon code<input value={promoCouponCode} onChange={(e) => setPromoCouponCode(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Discount type<select value={promoDiscountType} onChange={(e) => setPromoDiscountType(e.target.value)} className="vl-input mt-1 w-full px-3 py-2"><option value="percentage">Percentage</option><option value="fixed">Fixed</option></select></label>
-              <label className="text-zinc-300">Discount value<input value={promoDiscountValue} onChange={(e) => setPromoDiscountValue(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Buy X<input value={promoBuyX} onChange={(e) => setPromoBuyX(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Get Y<input value={promoGetY} onChange={(e) => setPromoGetY(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="flex items-center gap-2 text-zinc-300 sm:col-span-2"><input type="checkbox" checked={promoBuy3Get1Enabled} onChange={(e) => setPromoBuy3Get1Enabled(e.target.checked)} /> Enable Buy 3 Get 1 Free</label>
               <label className="flex items-center gap-2 text-zinc-300 sm:col-span-2"><input type="checkbox" checked={promoBuy2Get1HalfEnabled} onChange={(e) => setPromoBuy2Get1HalfEnabled(e.target.checked)} /> Enable Buy 2 Get 1 (50% Off)</label>
               <label className="text-zinc-300">Free shipping threshold<input value={promoFreeShippingThreshold} onChange={(e) => setPromoFreeShippingThreshold(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
+            <p className="mt-3 text-xs text-zinc-500">
+              Coupon codes are managed separately with real redemption tracking — see{" "}
+              <Link href="/admin/coupons" className="text-zinc-300 underline hover:text-white">Coupons</Link>.
+            </p>
           </section>
 
           <section className="vl-panel-soft rounded-2xl p-4">

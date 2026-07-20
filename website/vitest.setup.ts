@@ -6,6 +6,13 @@ vi.mock("@/lib/email/send", () => ({
   sendEmail: async () => ({ success: true }),
 }));
 
+vi.mock("@/lib/coupons", () => ({
+  normalizeCouponCode: (code: string) => code.trim().toUpperCase().replace(/[^A-Z0-9-]/g, ""),
+  calculateCouponDiscount: () => 0,
+  validateCoupon: async () => null,
+  redeemCoupon: async () => {},
+}));
+
 vi.mock("@/lib/catalog", () => ({
   getCatalogProductsBySlugs: async (slugs: string[]) => slugs
     .filter((slug) => slug === "bpc-157-10mg")

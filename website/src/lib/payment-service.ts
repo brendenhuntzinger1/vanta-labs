@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { calculateDiscountAmount } from "@/lib/referral-service";
+import { validateCoupon } from "@/lib/coupons";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 import type {
@@ -35,6 +36,7 @@ export interface CreateCheckoutPayload {
  items: CartItemInput[];
  customer: CustomerInput;
  referralCode?: string;
+ couponCode?: string;
  currency?: string;
  expectedTotal?: number;
 }
@@ -77,6 +79,11 @@ function calculateShipping(subtotal: number) {
  return subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : subtotal > 0 ? FLAT_SHIPPING_FEE : 0;
 }
 
+// Every 4th item (cheapest-first) is free. Mirrors the client-side
+// calculation in cart-context.tsx exactly (including running unconditionally,
+// not gated by the admin "enabled" toggle) so the server total this function
+// feeds into always matches what the cart displayed - see the
+// "Altered total detected" check below.
 function calculateBuy3Get1Discount(lineItems: Array<{ product: ServerProduct; quantity: number }>) {
   const expandedPrices: number[] = [];
   for (const line of lineItems) {
@@ -224,16 +231,30 @@ export async function createCheckoutSession(
  throw new Error("Referral codes cannot be combined with Buy 3 Get 1 Free. Remove the referral code to continue.");
  }
 
+ if (isBuy3Get1Active && payload.couponCode?.trim()) {
+ throw new Error("Coupon codes cannot be combined with Buy 3 Get 1 Free. Remove the coupon code to continue.");
+ }
+
  const referral = isBuy3Get1Active
    ? null
    : await validateReferralCode(payload.referralCode);
+
+ if (referral && payload.couponCode?.trim()) {
+ throw new Error("Coupon codes cannot be combined with a referral code. Remove one to continue.");
+ }
+
+ const coupon = isBuy3Get1Active || referral
+   ? null
+   : await validateCoupon(payload.couponCode, subtotal);
 
  const discountAmount = roundMoney(
    isBuy3Get1Active
      ? buy3Get1Discount
      : referral
        ? calculateDiscountAmount(subtotal, referral.discountPercent)
-       : 0,
+       : coupon
+         ? coupon.discountAmount
+         : 0,
  );
 
  const expectedTotal = roundMoney(
@@ -265,6 +286,7 @@ export async function createCheckoutSession(
    amount_paid: expectedTotal,
    referral_code: referral?.code ?? null,
    ambassador_id: referral?.ambassadorId ?? null,
+   coupon_code: coupon?.code ?? null,
    payment_status: "pending_payment",
    fulfillment_status: "pending",
    created_at: new Date().toISOString(),
@@ -301,7 +323,14 @@ export async function createCheckoutSession(
  orderId,
  ambassadorId: referral?.ambassadorId ?? "",
  referralCode: referral?.code ?? "",
- promotionApplied: isBuy3Get1Active ? "BUY_3_GET_1" : referral ? "REFERRAL" : "NONE",
+ couponCode: coupon?.code ?? "",
+ promotionApplied: isBuy3Get1Active
+   ? "BUY_3_GET_1"
+   : referral
+     ? "REFERRAL"
+     : coupon
+       ? "COUPON"
+       : "NONE",
  originalSubtotal: subtotal.toFixed(2),
  customerDiscount: discountAmount.toFixed(2),
  amountPaid: expectedTotal.toFixed(2),

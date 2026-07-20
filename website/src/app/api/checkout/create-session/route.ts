@@ -39,6 +39,7 @@ export async function POST(request: Request) {
       items: body.items,
       customer,
       referralCode,
+      couponCode: body.couponCode,
       currency: body.currency,
       expectedTotal: body.expectedTotal,
     });

@@ -5,6 +5,12 @@ import type { Product } from "@/lib/catalog-types";
 import type { ReferralCode } from "@/lib/referral-codes";
 import { validateReferralCodeClient } from "@/lib/referral-client";
 
+type CouponDetails = {
+  code: string;
+  discountType: "percent" | "fixed";
+  discountValue: number;
+};
+
 export type CartItem = {
   key: string;
   variantId?: string;
@@ -27,6 +33,11 @@ type CartContextValue = {
   referralDetails: ReferralCode | null;
   referralError: string | null;
   referralSuccess: string | null;
+  couponCode: string | null;
+  couponDetails: CouponDetails | null;
+  couponDiscountAmount: number;
+  couponError: string | null;
+  couponSuccess: string | null;
   itemCount: number;
   subtotal: number;
   shipping: number;
@@ -59,6 +70,9 @@ type CartContextValue = {
   applyReferralCode: (code: string) => void;
   clearReferralCode: () => void;
   clearReferralMessage: () => void;
+  applyCouponCode: (code: string) => void;
+  clearCouponCode: () => void;
+  clearCouponMessage: () => void;
 };
 
 const CartContext = createContext<CartContextValue | undefined>(undefined);
@@ -96,6 +110,18 @@ function isReferralValid(code: ReferralCode) {
   return code.customerDiscountPercent === 10 && Boolean(code.ambassadorId);
 }
 
+function calculateCouponDiscountAmount(subtotal: number, coupon: CouponDetails | null) {
+  if (!coupon || subtotal <= 0 || coupon.discountValue <= 0) {
+    return 0;
+  }
+
+  const amount = coupon.discountType === "fixed"
+    ? coupon.discountValue
+    : subtotal * (coupon.discountValue / 100);
+
+  return Math.min(Math.max(amount, 0), subtotal);
+}
+
 export function CartProvider({ children }: { children: React.ReactNode }) {
   const [items, setItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
@@ -104,6 +130,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [referralDetails, setReferralDetails] = useState<ReferralCode | null>(null);
   const [referralError, setReferralError] = useState<string | null>(null);
   const [referralSuccess, setReferralSuccess] = useState<string | null>(null);
+  const [couponCode, setCouponCode] = useState<string | null>(null);
+  const [couponDetails, setCouponDetails] = useState<CouponDetails | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [couponSuccess, setCouponSuccess] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -308,15 +338,20 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const serviceFee = 0;
 
+  const couponDiscountAmount = useMemo(
+    () => (buy3Get1FreeDiscount > 0 || referralDetails ? 0 : calculateCouponDiscountAmount(subtotal, couponDetails)),
+    [buy3Get1FreeDiscount, referralDetails, couponDetails, subtotal],
+  );
+
   const discountAmount = useMemo(() => {
     if (buy3Get1FreeDiscount > 0) {
       return buy3Get1FreeDiscount;
     }
-    if (!referralDetails || !isReferralValid(referralDetails)) {
-      return 0;
+    if (referralDetails && isReferralValid(referralDetails)) {
+      return subtotal * (referralDetails.customerDiscountPercent / 100);
     }
-    return subtotal * (referralDetails.customerDiscountPercent / 100);
-  }, [buy3Get1FreeDiscount, referralDetails, subtotal]);
+    return couponDiscountAmount;
+  }, [buy3Get1FreeDiscount, referralDetails, subtotal, couponDiscountAmount]);
 
   const total = Math.max(0, subtotal + shipping + serviceFee - discountAmount);
 
@@ -432,6 +467,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setReferralDetails(null);
     setReferralError(null);
     setReferralSuccess(null);
+    setCouponCode(null);
+    setCouponDetails(null);
+    setCouponError(null);
+    setCouponSuccess(null);
   };
 
   const openCart = () => setIsCartOpen(true);
@@ -480,6 +519,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       setReferralCode(validatedReferral.referralCode);
       setReferralError(null);
       setReferralSuccess("Referral code applied — 10% off.");
+      setCouponCode(null);
+      setCouponDetails(null);
+      setCouponError(null);
+      setCouponSuccess(null);
       if (typeof document !== "undefined") {
         document.cookie = `${REFERRAL_COOKIE_KEY}=${encodeURIComponent(validatedReferral.referralCode)}; path=/; max-age=${60 * 60 * 24 * 30}; samesite=lax`;
       }
@@ -507,6 +550,83 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setReferralSuccess(null);
   };
 
+  const applyCouponCode = async (code: string) => {
+    const normalized = code.trim().toUpperCase();
+
+    if (buy3Get1FreeDiscount > 0) {
+      setCouponDetails(null);
+      setCouponCode(null);
+      setCouponError("Coupon codes cannot be combined with the Buy 3 Get 1 Free promotion.");
+      setCouponSuccess(null);
+      return;
+    }
+
+    if (!normalized) {
+      setCouponDetails(null);
+      setCouponCode(null);
+      setCouponError("Enter a coupon code.");
+      setCouponSuccess(null);
+      return;
+    }
+
+    try {
+      const response = await fetch("/api/coupons/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: normalized, subtotal }),
+      });
+      const result = await response.json() as {
+        success: boolean;
+        code?: string;
+        discountType?: "percent" | "fixed";
+        discountValue?: number;
+        error?: string;
+      };
+
+      if (!result.success || !result.code || !result.discountType) {
+        setCouponDetails(null);
+        setCouponCode(null);
+        setCouponError(result.error || "That coupon code is not valid.");
+        setCouponSuccess(null);
+        return;
+      }
+
+      setCouponDetails({
+        code: result.code,
+        discountType: result.discountType,
+        discountValue: Number(result.discountValue ?? 0),
+      });
+      setCouponCode(result.code);
+      setCouponError(null);
+      setCouponSuccess("Coupon applied.");
+      setReferralDetails(null);
+      setReferralCode(null);
+      setReferralError(null);
+      setReferralSuccess(null);
+      if (typeof document !== "undefined") {
+        document.cookie = `${REFERRAL_COOKIE_KEY}=; path=/; max-age=0; samesite=lax`;
+      }
+    } catch (error) {
+      console.error("Unable to validate coupon code", error);
+      setCouponDetails(null);
+      setCouponCode(null);
+      setCouponError("Unable to check the coupon code right now.");
+      setCouponSuccess(null);
+    }
+  };
+
+  const clearCouponCode = () => {
+    setCouponCode(null);
+    setCouponDetails(null);
+    setCouponError(null);
+    setCouponSuccess("Coupon removed.");
+  };
+
+  const clearCouponMessage = () => {
+    setCouponError(null);
+    setCouponSuccess(null);
+  };
+
   const value = {
     items,
     isCartOpen,
@@ -515,6 +635,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     referralDetails,
     referralError,
     referralSuccess,
+    couponCode,
+    couponDetails,
+    couponDiscountAmount,
+    couponError,
+    couponSuccess,
     itemCount,
     subtotal,
     shipping,
@@ -534,6 +659,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     applyReferralCode,
     clearReferralCode,
     clearReferralMessage,
+    applyCouponCode,
+    clearCouponCode,
+    clearCouponMessage,
   };
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

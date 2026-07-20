@@ -36,6 +36,13 @@ Run these SQL files in order from Supabase SQL Editor:
    it, referral-code checkouts fail with "Altered total detected" because
    the cart shows a total that doesn't include the discount the server
    applies.
+9. `src/lib/sql/admin-rbac-refunds.sql` — **required.** Adds
+   `admin_credentials.role` (`staff` | `manager` | `super_admin`, see
+   `src/lib/admin-roles.ts`) and `orders.refund_amount` /
+   `orders.refunded_at` for partial-refund tracking. Existing admin rows
+   default to `staff` on this migration — promote at least one account to
+   `super_admin` afterward (see §2a) so someone can grant roles to others
+   from `/admin/team`.
 
 Optional follow-up hardening (run after the above, in Supabase SQL Editor,
 only if you want to apply the latest Supabase Performance/Security Advisor
@@ -52,12 +59,17 @@ recommendations):
 — there is no default account. Create the first one with:
 
 ```bash
-node scripts/create-admin-credential.mjs <username> <password>
+node scripts/create-admin-credential.mjs <username> <password> [role]
 ```
 
 This hashes the password with the same scrypt scheme `src/lib/admin-auth.ts`
 verifies against and upserts the row via the Supabase service role key. Re-run
-it with the same username to rotate a password.
+it with the same username to rotate a password — omitting `role` on a rerun
+leaves the account's existing role untouched. `role` is one of `staff` |
+`manager` | `super_admin` (see `src/lib/admin-roles.ts`); a brand-new account
+defaults to `super_admin` since this script is the only way to create the
+first admin and someone needs full access to grant roles to everyone else
+from `/admin/team`.
 
 ## 2b) Configure transactional email
 

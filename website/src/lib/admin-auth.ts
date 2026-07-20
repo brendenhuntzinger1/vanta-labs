@@ -3,6 +3,7 @@ import "server-only";
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from "crypto";
 import { cookies } from "next/headers";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { normalizeAdminRole } from "@/lib/admin-roles";
 
 export const ADMIN_SESSION_COOKIE = "vl_admin_session";
 const ADMIN_SESSION_HOURS = 12;
@@ -143,12 +144,23 @@ export async function verifyAdminSessionToken(token: string | null | undefined) 
     return null;
   }
 
-  await supabaseAdmin
-    .from("admin_sessions")
-    .update({ last_seen_at: nowIso })
-    .eq("id", data.id);
+  const [, { data: credential }] = await Promise.all([
+    supabaseAdmin
+      .from("admin_sessions")
+      .update({ last_seen_at: nowIso })
+      .eq("id", data.id),
+    supabaseAdmin
+      .from("admin_credentials")
+      .select("role")
+      .eq("username", data.username)
+      .maybeSingle(),
+  ]);
 
-  return { id: String(data.id), username: String(data.username) };
+  return {
+    id: String(data.id),
+    username: String(data.username),
+    role: normalizeAdminRole(credential?.role),
+  };
 }
 
 export async function verifyAdminSessionFromCookie() {
@@ -168,7 +180,7 @@ export async function validateAdminCredentials(usernameRaw: string, passwordRaw:
 
   const { data, error } = await supabaseAdmin
     .from("admin_credentials")
-    .select("username, password_salt, password_hash, is_active")
+    .select("username, password_salt, password_hash, is_active, role")
     .eq("username", username)
     .eq("is_active", true)
     .maybeSingle();
@@ -182,7 +194,7 @@ export async function validateAdminCredentials(usernameRaw: string, passwordRaw:
     return null;
   }
 
-  return { username: String(data.username) };
+  return { username: String(data.username), role: normalizeAdminRole(data.role) };
 }
 
 export async function canAttemptAdminLogin(input: { username: string; ipAddress?: string | null }) {

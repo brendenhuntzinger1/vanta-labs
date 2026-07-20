@@ -4,6 +4,7 @@ import type { OrderStatus } from "@/lib/payment-types";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
 import { orderConfirmationTemplate } from "@/lib/email/templates";
+import { redeemCoupon } from "@/lib/coupons";
 
 export interface WebhookEventState {
   eventId: string;
@@ -121,6 +122,7 @@ function normalizeOrderPayload(payload: string) {
     currency?: string;
     referralCode?: string;
     ambassadorId?: string;
+    couponCode?: string;
     commissionPercent?: number;
     items?: Array<{
       productId?: string;
@@ -191,6 +193,7 @@ async function upsertOrderRecord(input: {
   amountPaid?: number;
   referralCode?: string;
   ambassadorId?: string;
+  couponCode?: string;
   paymentStatus: OrderStatus;
   fulfillmentStatus?: string;
   paidAt?: string | null;
@@ -228,6 +231,7 @@ async function upsertOrderRecord(input: {
     amount_paid: roundMoney(input.amountPaid ?? 0),
     referral_code: input.referralCode ?? null,
     ambassador_id: input.ambassadorId ?? null,
+    coupon_code: input.couponCode ?? null,
     payment_status: input.paymentStatus,
     fulfillment_status: input.fulfillmentStatus ?? "pending",
     provider_event_id: input.providerEventId ?? null,
@@ -470,6 +474,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     amountPaid,
     referralCode: eventPayload.referralCode,
     ambassadorId: eventPayload.ambassadorId,
+    couponCode: eventPayload.couponCode,
     paymentStatus: nextStatus,
     fulfillmentStatus: nextStatus === "paid" ? "awaiting_fulfillment" : orderRecord?.payment_status ?? "pending",
     paidAt: nextStatus === "paid" ? new Date().toISOString() : orderRecord?.paid_at ?? null,
@@ -499,6 +504,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     });
 
     const wasAlreadyPaid = orderRecord?.payment_status === "paid";
+
+    if (!wasAlreadyPaid && eventPayload.couponCode) {
+      await redeemCoupon(eventPayload.couponCode);
+    }
+
     if (!wasAlreadyPaid && eventPayload.customer?.email) {
       try {
         const template = orderConfirmationTemplate({

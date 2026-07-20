@@ -8,7 +8,13 @@
 // encoded) and upserts the credential using the Supabase service role key.
 //
 // Usage:
-//   node scripts/create-admin-credential.mjs <username> <password>
+//   node scripts/create-admin-credential.mjs <username> <password> [role]
+//
+// role is one of staff | manager | super_admin (see src/lib/admin-roles.ts).
+// Defaults to super_admin for a brand-new account, since this script is the
+// only way to create the first admin and someone needs full access to grant
+// roles to anyone else afterward. Rotating an existing account's password
+// (same username, no role argument) leaves its current role untouched.
 //
 // Requires SUPABASE_SERVICE_ROLE_KEY and NEXT_PUBLIC_SUPABASE_URL to be set
 // (loaded from .env.local if present, same as scripts/audit-partner-system.mjs).
@@ -39,14 +45,20 @@ function loadEnvFile(filePath) {
 (async () => {
   loadEnvFile(".env.local");
 
-  const [username, password] = process.argv.slice(2);
+  const [username, password, roleArg] = process.argv.slice(2);
   if (!username || !password) {
-    console.error("Usage: node scripts/create-admin-credential.mjs <username> <password>");
+    console.error("Usage: node scripts/create-admin-credential.mjs <username> <password> [role]");
     process.exit(1);
   }
 
   if (password.length < 12) {
     console.error("Password must be at least 12 characters.");
+    process.exit(1);
+  }
+
+  const validRoles = ["staff", "manager", "super_admin"];
+  if (roleArg && !validRoles.includes(roleArg)) {
+    console.error(`Invalid role "${roleArg}". Must be one of: ${validRoles.join(", ")}`);
     process.exit(1);
   }
 
@@ -66,6 +78,14 @@ function loadEnvFile(filePath) {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
+  const { data: existing } = await client
+    .from("admin_credentials")
+    .select("role")
+    .eq("username", normalizedUsername)
+    .maybeSingle();
+
+  const role = roleArg ?? existing?.role ?? "super_admin";
+
   const { error } = await client
     .from("admin_credentials")
     .upsert(
@@ -74,6 +94,7 @@ function loadEnvFile(filePath) {
         password_salt: salt,
         password_hash: hash,
         is_active: true,
+        role,
         updated_at: new Date().toISOString(),
       },
       { onConflict: "username" },
@@ -84,5 +105,5 @@ function loadEnvFile(filePath) {
     process.exit(1);
   }
 
-  console.log(`Admin credential ready for username "${normalizedUsername}". You can now log in at /admin.`);
+  console.log(`Admin credential ready for username "${normalizedUsername}" (role: ${role}). You can now log in at /admin.`);
 })();

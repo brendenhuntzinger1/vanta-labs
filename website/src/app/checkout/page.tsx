@@ -91,6 +91,12 @@ export default function CheckoutPage() {
     referralSuccess,
     applyReferralCode,
     clearReferralCode,
+    couponCode,
+    couponDetails,
+    couponError,
+    couponSuccess,
+    applyCouponCode,
+    clearCouponCode,
     isBuy3Get1FreeActive,
   } = useCart();
 
@@ -103,6 +109,7 @@ export default function CheckoutPage() {
   const [checkoutState, setCheckoutState] = useState<"idle" | "loading" | "success">("idle");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [referralInput, setReferralInput] = useState("");
+  const [couponInput, setCouponInput] = useState("");
   const [sameAsShipping, setSameAsShipping] = useState(true);
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof CheckoutForm, string>>>({});
   const [form, setForm] = useState<CheckoutForm>({
@@ -121,6 +128,7 @@ export default function CheckoutPage() {
 
   const orderCount = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
   const effectiveReferralInput = referralInput || referralCode || "";
+  const effectiveCouponInput = couponInput || couponCode || "";
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -198,6 +206,7 @@ export default function CheckoutPage() {
               postalCode: form.billingPostalCode.trim(),
             },
         referralCode: referralCode ?? undefined,
+        couponCode: couponCode ?? undefined,
         expectedTotal: total,
         complianceAcknowledgements: acknowledgements,
       };
@@ -352,6 +361,44 @@ export default function CheckoutPage() {
                   onClick={() => {
                     clearReferralCode();
                     setReferralInput("");
+                  }}
+                  className="mt-2 text-sm text-zinc-400 transition hover:text-white"
+                >
+                  Remove code
+                </button>
+              ) : null}
+            </div>
+
+            <div className="mt-8">
+              <p className="vl-eyebrow text-[11px]">Coupon Code</p>
+              {isBuy3Get1FreeActive ? (
+                <p className="mt-3 rounded-xl border border-white/24 bg-white/8 px-3 py-2 text-sm text-zinc-100">
+                  Buy 3 Get 1 Free is active. Coupon codes cannot be combined with this promotion.
+                </p>
+              ) : referralCode ? (
+                <p className="mt-3 rounded-xl border border-white/24 bg-white/8 px-3 py-2 text-sm text-zinc-100">
+                  A referral code is applied. Remove it to use a coupon instead.
+                </p>
+              ) : (
+                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                  <input type="text" value={effectiveCouponInput} onChange={(event) => setCouponInput(event.target.value)} placeholder="SAVE10" className="vl-input w-full flex-1 px-4 py-3 text-sm" />
+                  <button type="button" onClick={() => applyCouponCode(effectiveCouponInput)} className="vl-btn-secondary vl-focus-ring px-4 py-3 text-sm">Apply</button>
+                </div>
+              )}
+
+              {couponSuccess ? <p className="mt-2 text-sm text-emerald-300">{couponSuccess}</p> : null}
+              {couponError ? <p className="mt-2 text-sm text-rose-300">{couponError}</p> : null}
+              {couponDetails ? (
+                <p className="mt-2 text-sm text-zinc-300">
+                  {couponDetails.code} • {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off
+                </p>
+              ) : null}
+              {couponCode && !isBuy3Get1FreeActive ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    clearCouponCode();
+                    setCouponInput("");
                   }}
                   className="mt-2 text-sm text-zinc-400 transition hover:text-white"
                 >
