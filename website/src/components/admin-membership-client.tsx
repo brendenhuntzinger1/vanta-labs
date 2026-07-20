@@ -213,6 +213,29 @@ export function AdminMembershipClient({
     }
   };
 
+  const assignTier = async (userId: string, tierId: string) => {
+    if (!tierId) return;
+    setBusyId(userId);
+    try {
+      const response = await fetch(`/api/admin/membership/customers/${userId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "set_tier", tierId, billingCycle: "monthly" }),
+      });
+      const result = await response.json() as { success: boolean; error?: string };
+      if (!result.success) {
+        setMessage(result.error ?? "Unable to assign tier.");
+        return;
+      }
+      setMessage("Tier assigned. Billing is not connected — this is a manual activation.");
+      await loadCustomers();
+    } catch {
+      setMessage("Unable to assign tier right now.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {message ? <p className="vl-panel rounded-xl p-3 text-sm text-zinc-200">{message}</p> : null}
@@ -438,6 +461,17 @@ export function AdminMembershipClient({
                         <button type="button" onClick={() => setStatus(customer.userId, "cancelled")} disabled={busyId === customer.userId} className="vl-btn-secondary px-2.5 py-1 text-xs disabled:opacity-60">
                           Cancel
                         </button>
+                        <select
+                          defaultValue=""
+                          onChange={(e) => { assignTier(customer.userId, e.target.value); e.target.value = ""; }}
+                          disabled={busyId === customer.userId}
+                          className="vl-input px-2 py-1 text-xs disabled:opacity-60"
+                        >
+                          <option value="" disabled>Assign tier…</option>
+                          {tiers.map((tier) => (
+                            <option key={tier.id} value={tier.id}>{tier.name}</option>
+                          ))}
+                        </select>
                       </div>
                       {adjustUserId === customer.userId ? (
                         <div className="mt-2 flex flex-wrap gap-2">

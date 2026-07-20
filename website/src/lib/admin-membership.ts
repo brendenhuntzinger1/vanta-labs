@@ -201,6 +201,24 @@ export async function adminAdjustPoints(input: { userId: string; amount: number;
   }
 }
 
+// Manually activates a paid tier for a customer, since there's no billing
+// integration to do it automatically yet. Upserts rather than requiring an
+// existing row, unlike setMembershipStatus below.
+export async function assignMembershipTier(userId: string, tierId: string, billingCycle: "monthly" | "annual") {
+  const { error } = await supabaseAdmin.from("customer_memberships").upsert({
+    user_id: userId,
+    tier_id: tierId,
+    billing_cycle: billingCycle,
+    status: "active",
+    started_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }, { onConflict: "user_id" });
+
+  if (error) {
+    throw error;
+  }
+}
+
 export async function setMembershipStatus(userId: string, status: "active" | "paused" | "cancelled") {
   const { data: existing } = await supabaseAdmin
     .from("customer_memberships")

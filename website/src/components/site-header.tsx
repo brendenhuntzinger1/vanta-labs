@@ -11,6 +11,7 @@ const SHOP_LINKS = [
 ];
 
 const PRIMARY_LINKS = [
+  { href: "/membership", label: "Membership" },
   { href: "/partner", label: "Partner Program" },
   { href: "/ambassador", label: "Ambassador" },
   { href: "/contact", label: "Contact" },

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageMembership } from "@/lib/admin-roles";
-import { adminAdjustPoints, setMembershipStatus } from "@/lib/admin-membership";
+import { adminAdjustPoints, assignMembershipTier, setMembershipStatus } from "@/lib/admin-membership";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 export async function PATCH(request: Request, context: { params: Promise<{ userId: string }> }) {
@@ -18,11 +18,37 @@ export async function PATCH(request: Request, context: { params: Promise<{ userI
 
   try {
     const body = await request.json() as {
-      action?: "adjust_points" | "set_status";
+      action?: "adjust_points" | "set_status" | "set_tier";
       amount?: number;
       note?: string;
       status?: "active" | "paused" | "cancelled";
+      tierId?: string;
+      billingCycle?: "monthly" | "annual";
     };
+
+    if (body.action === "set_tier") {
+      if (!body.tierId) {
+        return NextResponse.json({ success: false, error: "tierId is required" }, { status: 400 });
+      }
+
+      await assignMembershipTier(userId, body.tierId, body.billingCycle ?? "monthly");
+
+      await supabaseAdmin.from("admin_audit_logs").insert({
+        action: "membership_tier_assign",
+        target_table: "customer_memberships",
+        target_id: userId,
+        metadata: {
+          tierId: body.tierId,
+          billingCycle: body.billingCycle ?? "monthly",
+          performedAt: new Date().toISOString(),
+          performedBy: session.username,
+          ipAddress: getRequestIpAddress(request),
+          userAgent: getRequestUserAgent(request),
+        },
+      });
+
+      return NextResponse.json({ success: true });
+    }
 
     if (body.action === "adjust_points") {
       const amount = Number(body.amount ?? 0);
