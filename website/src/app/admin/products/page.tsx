@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ChangeEvent } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -168,6 +168,8 @@ export default function AdminProductsPage() {
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<ProductStatusFilter>("all");
@@ -237,6 +239,47 @@ export default function AdminProductsPage() {
       setLoading(false);
     }
   }, [authState, categoryFilter, search, selectedProductId, statusFilter]);
+
+  const handleImportFile = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    setImporting(true);
+    setImportMessage(null);
+
+    try {
+      const csvText = await file.text();
+      const res = await fetch("/api/admin/products/import", {
+        method: "POST",
+        headers: { "Content-Type": "text/csv" },
+        body: csvText,
+      });
+      const json = await res.json() as {
+        success: boolean;
+        created?: number;
+        updated?: number;
+        errors?: Array<{ row: number; slug: string; message: string }>;
+        error?: string;
+      };
+
+      if (!res.ok || !json.success) {
+        setImportMessage(json.error ?? "Import failed.");
+        return;
+      }
+
+      const errorCount = json.errors?.length ?? 0;
+      setImportMessage(
+        `Imported: ${json.created ?? 0} created, ${json.updated ?? 0} updated`
+        + (errorCount > 0 ? `, ${errorCount} row${errorCount === 1 ? "" : "s"} failed (row ${json.errors?.[0]?.row}: ${json.errors?.[0]?.message})` : "."),
+      );
+      await loadProducts();
+    } catch {
+      setImportMessage("Unable to import CSV right now.");
+    } finally {
+      setImporting(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -585,13 +628,25 @@ export default function AdminProductsPage() {
               <p className="text-xs uppercase tracking-[0.3em] text-zinc-500">Admin</p>
               <h1 className="text-2xl font-semibold text-white">Products</h1>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Link href="/products" className="rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-300 hover:text-white">View Store</Link>
+              <Link href="/api/admin/products/export" className="rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-300 hover:text-white">Export CSV</Link>
+              <label className="cursor-pointer rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-300 hover:text-white">
+                {importing ? "Importing…" : "Import CSV"}
+                <input
+                  type="file"
+                  accept=".csv,text/csv"
+                  className="hidden"
+                  disabled={importing}
+                  onChange={handleImportFile}
+                />
+              </label>
               <button type="button" onClick={() => setIsWizardOpen(true)} className="rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-zinc-950 hover:bg-cyan-200">
                 Add Product Wizard
               </button>
             </div>
           </div>
+          {importMessage ? <p className="mt-2 text-sm text-zinc-300">{importMessage}</p> : null}
 
           <div className="mt-4 grid gap-3 md:grid-cols-[1fr_auto_auto_auto]">
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search products instantly" className="vl-input px-3 py-2" />

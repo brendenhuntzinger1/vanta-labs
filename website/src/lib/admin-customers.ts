@@ -32,7 +32,7 @@ export interface AdminCustomerListResult {
   pageCount: number;
 }
 
-export async function getAdminCustomers(filters: AdminCustomerFilters = {}): Promise<AdminCustomerListResult> {
+async function aggregateCustomers(search?: string): Promise<AdminCustomerRow[]> {
   const { data, error } = await supabaseAdmin
     .from("orders")
     .select("customer_email, customer_name, amount_paid, payment_status, created_at")
@@ -80,12 +80,18 @@ export async function getAdminCustomers(filters: AdminCustomerFilters = {}): Pro
 
   let customers = Array.from(byEmail.values());
 
-  const search = filters.search?.trim().toLowerCase();
-  if (search) {
-    customers = customers.filter((row) => row.email.includes(search) || (row.name ?? "").toLowerCase().includes(search));
+  const normalizedSearch = search?.trim().toLowerCase();
+  if (normalizedSearch) {
+    customers = customers.filter((row) => row.email.includes(normalizedSearch) || (row.name ?? "").toLowerCase().includes(normalizedSearch));
   }
 
   customers.sort((a, b) => (a.lastOrderAt < b.lastOrderAt ? 1 : -1));
+
+  return customers;
+}
+
+export async function getAdminCustomers(filters: AdminCustomerFilters = {}): Promise<AdminCustomerListResult> {
+  const customers = await aggregateCustomers(filters.search);
 
   const total = customers.length;
   const page = Math.max(1, Math.trunc(filters.page ?? 1));
@@ -99,4 +105,22 @@ export async function getAdminCustomers(filters: AdminCustomerFilters = {}): Pro
     pageSize,
     pageCount: Math.max(1, Math.ceil(total / pageSize)),
   };
+}
+
+function csvEscape(value: unknown) {
+  const text = String(value ?? "");
+  if (/[",\n]/.test(text)) {
+    return `"${text.replaceAll("\"", "\"\"")}"`;
+  }
+  return text;
+}
+
+export async function exportCustomersCsv(): Promise<string> {
+  const customers = await aggregateCustomers();
+  const header = ["email", "name", "orderCount", "totalSpent", "firstOrderAt", "lastOrderAt"];
+
+  return [
+    header.join(","),
+    ...customers.map((row) => header.map((key) => csvEscape(row[key as keyof AdminCustomerRow])).join(",")),
+  ].join("\n");
 }

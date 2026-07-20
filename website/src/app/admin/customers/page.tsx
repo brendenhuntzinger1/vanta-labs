@@ -51,6 +51,7 @@ export default async function AdminCustomersPage({
           />
           <button type="submit" className="vl-btn-primary px-4 py-2 text-xs">Search</button>
           {search ? <Link href="/admin/customers" className="vl-btn-secondary px-4 py-2 text-xs">Clear</Link> : null}
+          <Link href="/api/admin/customers/export" className="vl-btn-secondary px-4 py-2 text-xs">Export CSV</Link>
         </form>
 
         <div className="vl-panel mt-6 overflow-x-auto rounded-2xl">
