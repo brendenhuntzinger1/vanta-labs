@@ -146,6 +146,16 @@ export function SiteHeader() {
             </button>
           </form>
 
+          <Link
+            href="/account"
+            aria-label="Your account"
+            className="vl-btn-secondary vl-focus-ring inline-flex h-10 w-10 items-center justify-center"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+              <circle cx="12" cy="8" r="3.5" />
+              <path d="M4.5 20c1.4-3.6 4.4-5.5 7.5-5.5s6.1 1.9 7.5 5.5" />
+            </svg>
+          </Link>
           <button
             type="button"
             onClick={openCart}
@@ -206,6 +216,13 @@ export function SiteHeader() {
             </div>
 
             <div className="flex flex-col gap-2">
+              <Link
+                href="/account"
+                onClick={() => setMobileNavOpen(false)}
+                className="vl-panel-soft vl-focus-ring px-4 py-3 text-sm text-zinc-200 transition hover:border-white/25 hover:text-white"
+              >
+                Account
+              </Link>
               {PRIMARY_LINKS.map((link) => (
                 <Link
                   key={link.href}

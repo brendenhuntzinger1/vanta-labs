@@ -1,4 +1,4 @@
-export type PortalRole = "admin" | "partner" | "unknown";
+export type PortalRole = "admin" | "partner" | "customer" | "unknown";
 
 export function detectRoleFromUser(user: { app_metadata?: Record<string, unknown>; user_metadata?: Record<string, unknown> }): PortalRole {
   const appRole = typeof user.app_metadata?.role === "string" ? user.app_metadata.role : "";
@@ -11,6 +11,10 @@ export function detectRoleFromUser(user: { app_metadata?: Record<string, unknown
 
   if (role === "partner" || role === "ambassador") {
     return "partner";
+  }
+
+  if (role === "customer") {
+    return "customer";
   }
 
   return "unknown";

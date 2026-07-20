@@ -53,6 +53,11 @@ Run these SQL files in order from Supabase SQL Editor:
 12. `src/lib/sql/inventory-thresholds.sql` — **required.** Adds
     `low_stock_threshold` to `products` and `product_doses` so
     `/admin/inventory` can flag lines that need restocking.
+13. `src/lib/sql/customer-accounts.sql` — **required.** Adds an RLS policy
+    letting a signed-in customer read their own `orders`/`order_items` rows
+    by email, plus `customer_addresses`, `wishlist_items`, and
+    `customer_preferences` tables (all owner-scoped via `auth.uid()`) for
+    `/account`.
 
 Optional follow-up hardening (run after the above, in Supabase SQL Editor,
 only if you want to apply the latest Supabase Performance/Security Advisor
@@ -107,22 +112,42 @@ successful. Verify delivery by watching your provider's dashboard/logs
 after triggering one of the flows in the test checklist below — this is not
 something that can be verified without real provider credentials.
 
-Templates live in `src/lib/email/templates.ts`. Two are built but not
-wired into a live flow yet, since the flows they belong to don't exist in
-the app yet:
-- **Email verification** — Supabase Auth's own built-in confirmation email
-  is what actually runs today (configured in the Supabase Dashboard under
-  Authentication → Email Templates, not in this codebase). This template is
-  ready if you later build a custom verification flow instead.
-- **Password reset** — there's no forgot-password page in the app yet (no
-  customer-account system exists). This template is ready for when that's
-  built.
+Templates live in `src/lib/email/templates.ts`. Two of them
+(`emailVerificationTemplate`, `passwordResetTemplate`) are built but not
+wired into a live flow, and stay that way even now that customer accounts
+exist (`/account/login`, `/account/forgot-password`,
+`/account/reset-password`): both flows use Supabase Auth's own built-in
+emails (`supabase.auth.signUp` confirmation email and
+`supabase.auth.resetPasswordForEmail`), configured in the Supabase
+Dashboard under Authentication → Email Templates, not through this
+codebase's email module. Building a custom verification/reset flow that
+uses these two templates instead would mean replacing Supabase's own
+token issuing and validation with your own — a larger change than adding
+account pages on top of the mechanism Supabase already provides securely.
 
 ## 3) Auth + role model
 
-- Supabase Auth is used for partner/admin signup and login.
-- Set role as `admin` or `partner` in `app_metadata.role` for users.
+- Supabase Auth is used for partner/admin/customer signup and login.
+- Set role as `admin`, `partner`, or `customer` in `app_metadata.role` for users
+  (`src/lib/auth-role.ts`). `/account/login` signs customers up with
+  `role: "customer"` automatically.
 - A secure session cookie (`vl_session_token`) is established through `POST /api/auth/session`.
+
+### Customer accounts
+
+- `/account/login` — combined sign up / sign in. New accounts go through
+  Supabase's built-in email confirmation before the `vl_session_token`
+  cookie is set (see §2b's note on email verification).
+- `/account/forgot-password` + `/account/reset-password` — Supabase's
+  built-in password recovery flow.
+- `/account` (order history + reorder), `/account/addresses` (saved
+  addresses), `/account/wishlist`, `/account/settings` (profile, password,
+  email, notification preferences) all require a signed-in `customer` role
+  and live under the `(dashboard)` route group in `src/app/account/`, which
+  gates access centrally in its layout.
+- Checkout remains guest-friendly; a signed-in customer's default saved
+  address pre-fills the checkout form but nothing requires an account to
+  buy.
 
 ## 4) Partner onboarding flow
 
