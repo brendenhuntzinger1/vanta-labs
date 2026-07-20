@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 import { SiteHeader } from "@/components/site-header";
+import { TrustBadge } from "@/components/trust-badge";
 
 function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-US", {
@@ -13,9 +15,12 @@ function formatCurrency(value: number) {
 }
 
 export default function AmbassadorPage() {
+  const router = useRouter();
   const [monthlyReferrals, setMonthlyReferrals] = useState(30);
   const [averageOrderValue, setAverageOrderValue] = useState(130);
   const [commissionRate, setCommissionRate] = useState(15);
+  const [applicantName, setApplicantName] = useState("");
+  const [applicantEmail, setApplicantEmail] = useState("");
 
   const monthlyProjection = useMemo(() => {
     return monthlyReferrals * averageOrderValue * (commissionRate / 100);
@@ -33,14 +38,18 @@ export default function AmbassadorPage() {
           <div className="pointer-events-none absolute -bottom-16 left-[18%] h-56 w-56 rounded-full bg-white/8 blur-3xl" />
 
           <div className="relative max-w-3xl">
-            <p className="text-[11px] uppercase tracking-[0.34em] text-zinc-400">Vanta Ambassador Network</p>
-            <h1 className="mt-3 text-4xl font-semibold text-white sm:text-5xl">Grow with a Premium Biotech Brand</h1>
-            <p className="mt-4 text-base leading-8 text-zinc-300 sm:text-lg">
+            <p className="vl-eyebrow text-[11px]">Vanta Ambassador Network</p>
+            <h1 className="vl-display mt-3 text-4xl font-semibold text-white sm:text-5xl">Grow with a Premium Biotech Brand</h1>
+            <p className="vl-copy mt-4 text-base leading-8 text-zinc-300 sm:text-lg">
               Join a curated partner program built for creators, researchers, and communities that value precision and transparency.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
               <a href="#apply" className="vl-btn-primary vl-focus-ring px-6 py-3 text-sm">Apply as Ambassador</a>
               <Link href="/partner" className="vl-btn-secondary vl-focus-ring px-6 py-3 text-sm">Partner Dashboard</Link>
+            </div>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <TrustBadge icon="check" label="Fast Approval" />
+              <TrustBadge icon="shield" label="Reliable Payouts" />
             </div>
           </div>
         </section>
@@ -60,7 +69,7 @@ export default function AmbassadorPage() {
 
         <section className="mt-7 grid gap-6 lg:grid-cols-[1.1fr_0.9fr]" id="calculator">
           <article className="vl-panel rounded-[2rem] p-6 sm:p-7">
-            <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Earnings Estimator</p>
+            <p className="vl-eyebrow text-xs">Earnings Estimator</p>
             <h2 className="mt-3 text-2xl font-semibold text-white">Estimate Your Potential</h2>
             <p className="mt-2 text-sm leading-7 text-zinc-300">Adjust these inputs to model your monthly and yearly ambassador income.</p>
 
@@ -81,7 +90,7 @@ export default function AmbassadorPage() {
           </article>
 
           <aside className="vl-panel rounded-[2rem] p-6 sm:p-7">
-            <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Projected Commission</p>
+            <p className="vl-eyebrow text-xs">Projected Commission</p>
             <p className="mt-4 text-4xl font-semibold text-zinc-100">{formatCurrency(monthlyProjection)}</p>
             <p className="text-sm text-zinc-400">Estimated monthly earnings</p>
 
@@ -98,7 +107,7 @@ export default function AmbassadorPage() {
 
         <section className="mt-7 grid gap-5 lg:grid-cols-[0.95fr_1.05fr]">
           <article className="vl-panel rounded-[2rem] p-6 sm:p-7">
-            <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Launch Timeline</p>
+            <p className="vl-eyebrow text-xs">Launch Timeline</p>
             <ol className="mt-5 space-y-4 text-sm">
               <li className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
                 <p className="font-medium text-white">1. Application Review</p>
@@ -116,18 +125,42 @@ export default function AmbassadorPage() {
           </article>
 
           <article id="apply" className="vl-panel rounded-[2rem] p-6 sm:p-7">
-            <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Application</p>
-            <h2 className="mt-3 text-2xl font-semibold text-white">Apply to Join</h2>
-            <p className="mt-2 text-sm leading-7 text-zinc-300">Fill out your details to start the approval process. You can complete registration in the partner portal after review.</p>
+            <p className="vl-eyebrow text-xs">Application</p>
+            <h2 className="vl-display mt-3 text-2xl font-semibold text-white">Apply to Join</h2>
+            <p className="mt-2 text-sm leading-7 text-zinc-300">
+              Enter your name and email, then continue in the partner portal to create your account and submit your
+              application — your details carry over automatically.
+            </p>
 
-            <form className="mt-5 grid gap-4 sm:grid-cols-2">
+            <form
+              className="mt-5 grid gap-4 sm:grid-cols-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const params = new URLSearchParams();
+                if (applicantName.trim()) params.set("name", applicantName.trim());
+                if (applicantEmail.trim()) params.set("email", applicantEmail.trim());
+                const query = params.toString();
+                router.push(`/partner${query ? `?${query}` : ""}#apply`);
+              }}
+            >
               <label className="text-sm text-zinc-300 sm:col-span-2">
                 <span className="mb-2 block">Full name</span>
-                <input className="vl-input w-full px-4 py-3" placeholder="Your name" />
+                <input
+                  value={applicantName}
+                  onChange={(event) => setApplicantName(event.target.value)}
+                  className="vl-input w-full px-4 py-3"
+                  placeholder="Your name"
+                />
               </label>
               <label className="text-sm text-zinc-300">
                 <span className="mb-2 block">Email</span>
-                <input type="email" className="vl-input w-full px-4 py-3" placeholder="you@domain.com" />
+                <input
+                  type="email"
+                  value={applicantEmail}
+                  onChange={(event) => setApplicantEmail(event.target.value)}
+                  className="vl-input w-full px-4 py-3"
+                  placeholder="you@domain.com"
+                />
               </label>
               <label className="text-sm text-zinc-300">
                 <span className="mb-2 block">Country</span>
@@ -142,7 +175,9 @@ export default function AmbassadorPage() {
                 <textarea className="vl-input min-h-28 w-full px-4 py-3" placeholder="Tell us about your audience and traffic profile" />
               </label>
               <div className="sm:col-span-2">
-                <Link href="/partner" className="vl-btn-primary vl-focus-ring inline-flex px-6 py-3 text-sm">Continue in Partner Portal</Link>
+                <button type="submit" className="vl-btn-primary vl-focus-ring inline-flex px-6 py-3 text-sm">
+                  Continue in Partner Portal
+                </button>
               </div>
             </form>
           </article>

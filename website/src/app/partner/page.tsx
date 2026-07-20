@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { PartnerProgramLanding } from "@/components/partner-program-landing";
 import { getPartnerProgramStats } from "@/lib/partner-portal";
 
@@ -32,5 +33,9 @@ export default async function PartnerProgramPage() {
     );
   }
 
-  return <PartnerProgramLanding initialStats={stats} />;
+  return (
+    <Suspense fallback={null}>
+      <PartnerProgramLanding initialStats={stats} />
+    </Suspense>
+  );
 }

@@ -1,9 +1,8 @@
 "use client";
 import { Suspense, useEffect, useMemo, useState } from "react";
-import Image from "next/image";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { SiteHeader } from "@/components/site-header";
+import { ProductCard } from "@/components/product-card";
 import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
 
@@ -23,82 +22,6 @@ function parsePrice(price: string) {
 
 function parsePurity(purity?: string) {
   return Number((purity ?? "0").replace(/[^0-9.]/g, "")) || 0;
-}
-
-function parseDoseFromSlug(slug: string): string {
-  const match = slug.match(/(\d+(?:\.\d+)?(?:mg|iu|mcg|g|ml))$/i);
-  return match ? match[1].toUpperCase() : "";
-}
-
-function StockPill({ stockStatus }: { stockStatus: Product["stockStatus"] }) {
-  const styles: Record<Product["stockStatus"], string> = {
-    "In Stock": "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
-    Limited: "border-zinc-300/40 bg-zinc-300/14 text-zinc-100",
-    Reserved: "border-zinc-300/35 bg-zinc-300/10 text-zinc-100",
-    "Out of Stock": "border-zinc-500/40 bg-zinc-600/15 text-zinc-300",
-  };
-
-  return <span className={`rounded-full border px-2.5 py-1 text-[10px] uppercase tracking-[0.2em] ${styles[stockStatus]}`}>{stockStatus}</span>;
-}
-
-function ProductCard({
-  product,
-  image,
-  onAddToCart,
-}: {
-  product: Product;
-  image: string;
-  onAddToCart: (event: React.MouseEvent<HTMLButtonElement>) => void;
-}) {
-  const dose = parseDoseFromSlug(product.slug);
-  const hasRealImage = image && !image.includes(".svg");
-
-  return (
-    <article className="vl-panel vl-elevate-hover group overflow-hidden rounded-[1.65rem]">
-      <div className="relative h-64 border-b border-white/10 bg-[radial-gradient(circle_at_40%_10%,rgba(186,230,253,0.22),transparent_62%)]">
-        {hasRealImage ? (
-          <Image
-            src={image}
-            alt={product.name}
-            fill
-            sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 25vw"
-            className="object-contain p-7 transition duration-500 group-hover:scale-105"
-          />
-        ) : (
-          <div className="flex h-full items-center justify-center">
-            <div className="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-zinc-300">Image pending</div>
-          </div>
-        )}
-      </div>
-
-      <div className="p-5">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">{product.category}</p>
-          <StockPill stockStatus={product.stockStatus} />
-        </div>
-
-        <h2 className="mt-3 line-clamp-2 text-lg font-semibold text-white">{product.name}</h2>
-        <p className="mt-2 line-clamp-2 text-sm leading-6 text-zinc-300">{product.shortDescription ?? product.description}</p>
-
-        <div className="mt-4 flex items-end justify-between gap-2">
-          <div>
-            <p className="text-xl font-semibold text-zinc-100">{product.price}</p>
-            <p className="text-xs text-zinc-500">{dose ? `${dose} dose` : "Verified lot"}</p>
-          </div>
-          <span className="vl-chip text-[10px]">COA VERIFIED</span>
-        </div>
-
-        <div className="mt-5 grid gap-2 sm:grid-cols-2">
-          <button onClick={onAddToCart} className="vl-btn-primary vl-focus-ring px-4 py-2.5 text-sm" type="button">
-            Add to Cart
-          </button>
-          <Link href={`/products/${product.slug}`} className="vl-btn-secondary vl-focus-ring inline-flex items-center justify-center px-4 py-2.5 text-sm">
-            View Details
-          </Link>
-        </div>
-      </div>
-    </article>
-  );
 }
 
 function ProductsPageContent() {
@@ -210,9 +133,9 @@ function ProductsPageContent() {
           <div className="pointer-events-none absolute -bottom-20 left-[30%] h-52 w-52 rounded-full bg-white/10 blur-3xl" />
 
           <div className="relative max-w-3xl">
-            <p className="text-[11px] uppercase tracking-[0.34em] text-zinc-400">Vanta Labs Catalog</p>
-            <h1 className="mt-3 text-4xl font-semibold text-white sm:text-5xl">Research Storefront</h1>
-            <p className="mt-4 text-base leading-8 text-zinc-300 sm:text-lg">
+            <p className="vl-eyebrow text-[11px]">Vanta Labs Catalog</p>
+            <h1 className="vl-display mt-3 text-4xl font-semibold text-white sm:text-5xl">Research Storefront</h1>
+            <p className="vl-copy mt-4 text-base leading-8 text-zinc-300 sm:text-lg">
               Explore documented compounds with transparent purity records, mapped lot metadata, and streamlined fulfillment.
             </p>
           </div>

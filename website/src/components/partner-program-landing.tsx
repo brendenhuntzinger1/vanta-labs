@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { PartnerProgramStats } from "@/lib/partner-portal";
 
@@ -35,11 +35,12 @@ function getEmailRedirectUrl() {
 
 export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerProgramStats }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [stats, setStats] = useState(initialStats);
   const [authMode, setAuthMode] = useState<AuthMode>("signup");
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(() => searchParams.get("email") ?? "");
   const [password, setPassword] = useState("");
-  const [fullName, setFullName] = useState("");
+  const [fullName, setFullName] = useState(() => searchParams.get("name") ?? "");
   const [loading, setLoading] = useState(false);
   const [completingVerification, setCompletingVerification] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
@@ -249,8 +250,8 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
       <section className="relative mx-auto max-w-7xl px-4 pb-12 pt-20 sm:px-6 lg:px-8 lg:pt-28">
         <div className="grid items-center gap-10 lg:grid-cols-[1.05fr_0.95fr]">
           <div>
-            <p className="text-xs uppercase tracking-[0.34em] text-zinc-300">Vanta Labs Partner Program</p>
-            <h1 className="mt-4 text-4xl font-semibold leading-tight text-white sm:text-5xl lg:text-6xl">
+            <p className="vl-eyebrow text-xs">Vanta Labs Partner Program</p>
+            <h1 className="vl-display mt-4 text-4xl font-semibold leading-tight text-white sm:text-5xl lg:text-6xl">
               Earn Recurring Income with Vanta Labs.
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-7 text-zinc-300 sm:text-lg">
@@ -268,7 +269,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
 
           <div className="vl-panel relative overflow-hidden rounded-[2rem] p-6 sm:p-8">
             <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.14),transparent_55%)]" />
-            <h2 className="relative text-sm font-semibold uppercase tracking-[0.26em] text-zinc-300">Program Stats</h2>
+            <h2 className="vl-eyebrow relative text-sm">Program Stats</h2>
             <div className="relative mt-4 grid gap-3 sm:grid-cols-2">
               <StatCard label="Total Commissions Paid" value={currency(stats.totalCommissionsPaid)} />
               <StatCard label="Average Partner Earnings" value={currency(stats.averagePartnerEarnings)} />
@@ -283,7 +284,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
 
       <section id="calculator" className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
         <div className="vl-panel rounded-[2rem] p-5 sm:p-8">
-          <h2 className="text-2xl font-semibold text-white sm:text-3xl">Earnings Calculator</h2>
+          <h2 className="vl-display text-2xl font-semibold text-white sm:text-3xl">Earnings Calculator</h2>
           <p className="mt-2 text-sm text-zinc-400">Model your potential monthly and yearly affiliate income in real time.</p>
 
           <div className="mt-6 grid gap-6 lg:grid-cols-[1.05fr_0.95fr]">
@@ -322,7 +323,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
             </div>
 
             <div className="rounded-2xl border border-white/20 bg-zinc-950/60 p-5">
-              <p className="text-xs uppercase tracking-[0.26em] text-zinc-500">Projected Commissions</p>
+              <p className="vl-eyebrow text-xs">Projected Commissions</p>
               <p className="mt-3 text-4xl font-semibold text-zinc-100">{currency(estimatedMonthlyCommission)}</p>
               <p className="text-sm text-zinc-400">Estimated monthly</p>
 
@@ -400,7 +401,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
             </div>
 
             <div className="rounded-2xl border border-white/12 bg-zinc-950/60 p-5 text-sm text-zinc-300">
-              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Approval Process</p>
+              <p className="vl-eyebrow text-xs">Approval Process</p>
               <ol className="mt-4 space-y-3">
                 <li>1. Create account and submit your application.</li>
                 <li>2. Admin reviews fit and audience quality.</li>

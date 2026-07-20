@@ -1,10 +1,12 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatCartCurrency, getShippingProgress, useCart } from "@/components/cart-context";
 import { SiteHeader } from "@/components/site-header";
+import { TrustBadge } from "@/components/trust-badge";
 
 export default function CartPage() {
   const router = useRouter();
@@ -35,9 +37,9 @@ export default function CartPage() {
       <SiteHeader />
       <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8 lg:py-16">
         <div className="max-w-3xl">
-          <p className="text-xs uppercase tracking-[0.35em] text-zinc-500 sm:text-sm sm:tracking-[0.4em]">Shopping cart</p>
-          <h1 className="mt-3 text-3xl font-semibold text-white sm:text-4xl lg:text-5xl">Review your selected materials.</h1>
-          <p className="mt-4 text-base leading-7 text-zinc-400 sm:mt-6 sm:text-lg sm:leading-8">Your cart persists locally while you review or continue checkout. Approved ambassador referral codes are validated with Supabase before checkout.</p>
+          <p className="vl-eyebrow text-xs sm:text-sm">Shopping Cart</p>
+          <h1 className="vl-display mt-3 text-3xl font-semibold text-white sm:text-4xl lg:text-5xl">Review your selected materials.</h1>
+          <p className="vl-copy mt-4 text-base leading-7 text-zinc-400 sm:mt-6 sm:text-lg sm:leading-8">Your cart persists locally while you review or continue checkout. Approved ambassador referral codes are validated with Supabase before checkout.</p>
         </div>
 
         <div className="mt-8 grid gap-6 lg:mt-10 lg:gap-8 lg:grid-cols-[1.2fr_0.8fr]">
@@ -51,34 +53,46 @@ export default function CartPage() {
                 </Link>
               </div>
             ) : (
-              items.map((item) => (
-                <div key={item.key} className="vl-panel rounded-[1.25rem] p-4 sm:rounded-[1.5rem] sm:p-6">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <h2 className="text-lg font-semibold text-white sm:text-xl">{item.name}</h2>
-                      <p className="mt-2 text-sm text-zinc-400">
-                        {item.doseLabel ? `${item.doseLabel} • ` : ""}Batch {item.batchNumber}
-                      </p>
+              items.map((item) => {
+                const hasRealImage = Boolean(item.image) && !item.image.includes(".svg");
+                return (
+                  <div key={item.key} className="vl-panel rounded-[1.25rem] p-4 sm:rounded-[1.5rem] sm:p-6">
+                    <div className="flex items-start gap-4">
+                      <div className="relative h-16 w-16 flex-shrink-0 overflow-hidden rounded-xl border border-white/10 bg-zinc-900/70 sm:h-20 sm:w-20">
+                        {hasRealImage ? (
+                          <Image src={item.image} alt={item.name} fill sizes="80px" className="object-contain p-2" />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center text-[9px] uppercase tracking-[0.14em] text-zinc-600">No image</div>
+                        )}
+                      </div>
+                      <div className="flex flex-1 items-start justify-between gap-4">
+                        <div>
+                          <h2 className="text-lg font-semibold text-white sm:text-xl">{item.name}</h2>
+                          <p className="mt-2 text-sm text-zinc-400">
+                            {item.doseLabel ? `${item.doseLabel} • ` : ""}Batch {item.batchNumber}
+                          </p>
+                        </div>
+                        <button type="button" onClick={() => removeFromCart(item.key)} className="text-sm text-zinc-500 transition hover:text-white">
+                          Remove
+                        </button>
+                      </div>
                     </div>
-                    <button type="button" onClick={() => removeFromCart(item.key)} className="text-sm text-zinc-500 transition hover:text-white">
-                      Remove
-                    </button>
-                  </div>
-                  <div className="mt-5 flex flex-wrap items-center justify-between gap-4 sm:mt-6">
-                    <div className="flex items-center gap-2 rounded-full border border-zinc-700 px-2 py-1.5 text-sm text-zinc-300 sm:gap-3 sm:px-3 sm:py-2">
-                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="px-2" aria-label="Decrease quantity">−</button>
-                      <span>{item.quantity}</span>
-                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="px-2" aria-label="Increase quantity">+</button>
+                    <div className="mt-5 flex flex-wrap items-center justify-between gap-4 sm:mt-6">
+                      <div className="flex items-center gap-2 rounded-full border border-zinc-700 px-2 py-1.5 text-sm text-zinc-300 sm:gap-3 sm:px-3 sm:py-2">
+                        <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="px-2" aria-label="Decrease quantity">−</button>
+                        <span>{item.quantity}</span>
+                        <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="px-2" aria-label="Increase quantity">+</button>
+                      </div>
+                      <p className="text-base font-semibold text-white sm:text-lg">{formatCartCurrency(item.price * item.quantity)}</p>
                     </div>
-                    <p className="text-base font-semibold text-white sm:text-lg">{formatCartCurrency(item.price * item.quantity)}</p>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
 
           <div className="vl-panel rounded-[1.5rem] p-4 sm:rounded-[2rem] sm:p-6">
-            <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Order summary</p>
+            <p className="vl-eyebrow text-sm">Order Summary</p>
 
             {subtotal > 0 ? (
               <div className="vl-panel-soft mt-5 rounded-xl p-4">
@@ -138,7 +152,7 @@ export default function CartPage() {
             ) : (
               <>
                 <label className="mt-8 block text-sm text-zinc-400">
-                  <span className="mb-2 block uppercase tracking-[0.3em]">Referral code</span>
+                  <span className="vl-eyebrow mb-2 block text-[11px]">Referral Code</span>
                   <input
                     type="text"
                     value={effectiveReferralInput}
@@ -183,6 +197,11 @@ export default function CartPage() {
             >
               Continue to checkout
             </button>
+
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <TrustBadge icon="shield" label="Encrypted Checkout" />
+              <TrustBadge icon="truck" label="Fast Dispatch" />
+            </div>
           </div>
         </div>
       </main>

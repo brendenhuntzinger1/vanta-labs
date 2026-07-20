@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { SiteHeader } from "@/components/site-header";
+import { TrustBadge } from "@/components/trust-badge";
 
 async function createSecureCheckoutSession(payload: unknown) {
   const response = await fetch("/api/checkout/create-session", {
@@ -222,9 +223,9 @@ export default function CheckoutPage() {
 
       <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
         <section className="rounded-[2rem] border border-white/10 bg-[linear-gradient(145deg,rgba(10,10,10,0.95),rgba(22,22,22,0.9))] p-5 sm:p-8">
-          <p className="text-[11px] uppercase tracking-[0.32em] text-zinc-400">Secure Checkout</p>
-          <h1 className="mt-3 text-3xl font-semibold text-white sm:text-4xl">Complete Your Order</h1>
-          <p className="mt-3 max-w-3xl text-sm leading-7 text-zinc-300 sm:text-base">
+          <p className="vl-eyebrow text-[11px]">Secure Checkout</p>
+          <h1 className="vl-display mt-3 text-3xl font-semibold text-white sm:text-4xl">Complete Your Order</h1>
+          <p className="vl-copy mt-3 max-w-3xl text-sm leading-7 text-zinc-300 sm:text-base">
             Transparent totals, encrypted payment processing, and full batch traceability from cart to confirmation.
           </p>
 
@@ -238,7 +239,7 @@ export default function CheckoutPage() {
         <div className="mt-7 grid gap-7 lg:grid-cols-[1.05fr_0.95fr]">
           <section className="vl-panel rounded-[2rem] p-5 sm:p-7">
             <div>
-              <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Shipping Information</p>
+              <p className="vl-eyebrow text-[11px]">Shipping Information</p>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <label className="text-sm text-zinc-300 sm:col-span-2">
                   <span className="mb-2 block">Full name</span>
@@ -279,7 +280,7 @@ export default function CheckoutPage() {
             </div>
 
             <div className="mt-8">
-              <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Billing Information</p>
+              <p className="vl-eyebrow text-[11px]">Billing Information</p>
               <label className="mt-3 flex items-center gap-2 text-sm text-zinc-300">
                 <input type="checkbox" checked={sameAsShipping} onChange={(e) => setSameAsShipping(e.target.checked)} className="h-4 w-4 rounded border-zinc-700 bg-zinc-900" />
                 Same as shipping address
@@ -318,19 +319,19 @@ export default function CheckoutPage() {
 
             <div className="mt-8 grid gap-4 sm:grid-cols-2">
               <div className="vl-panel-soft rounded-xl p-4">
-                <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Shipping Method</p>
+                <p className="vl-eyebrow text-[11px]">Shipping Method</p>
                 <p className="mt-2 text-sm font-medium text-zinc-100">Standard secure shipping</p>
                 <p className="mt-1 text-xs text-zinc-400">Free at $250+, otherwise flat {formatCartCurrency(15)}.</p>
               </div>
               <div className="vl-panel-soft rounded-xl p-4">
-                <p className="text-xs uppercase tracking-[0.18em] text-zinc-500">Security</p>
+                <p className="vl-eyebrow text-[11px]">Security</p>
                 <p className="mt-2 text-sm font-medium text-zinc-100">Encrypted checkout session</p>
                 <p className="mt-1 text-xs text-zinc-400">Payment credentials are handled by secure provider flow.</p>
               </div>
             </div>
 
             <div className="mt-8">
-              <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Promo / Referral</p>
+              <p className="vl-eyebrow text-[11px]">Promo / Referral</p>
               {isBuy3Get1FreeActive ? (
                 <p className="mt-3 rounded-xl border border-white/24 bg-white/8 px-3 py-2 text-sm text-zinc-100">
                   Buy 3 Get 1 Free is active. Referral discounts cannot be combined with this promotion.
@@ -360,7 +361,7 @@ export default function CheckoutPage() {
             </div>
 
             <div className="mt-8 space-y-4">
-              <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Required Confirmations</p>
+              <p className="vl-eyebrow text-[11px]">Required Confirmations</p>
 
               <label className="vl-panel-soft flex items-start gap-3 rounded-xl p-4 text-sm text-zinc-300">
                 <input
@@ -410,7 +411,7 @@ export default function CheckoutPage() {
           </section>
 
           <aside className="vl-panel rounded-[2rem] p-5 sm:p-7 lg:sticky lg:top-24">
-            <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Order Summary</p>
+            <p className="vl-eyebrow text-[11px]">Order Summary</p>
 
             {items.length === 0 ? (
               <div className="mt-5 rounded-xl border border-dashed border-white/16 p-6 text-center text-sm text-zinc-400">No items in cart.</div>
@@ -440,13 +441,9 @@ export default function CheckoutPage() {
               <div className="mt-3 flex justify-between border-t border-white/10 pt-3 text-base font-semibold text-white"><span>Total</span><span>{formatCartCurrency(total)}</span></div>
             </div>
 
-            <div className="vl-panel-soft mt-5 rounded-xl p-4">
-              <p className="text-sm font-medium text-zinc-100">Secure payment</p>
-              <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                <span className="vl-chip">TLS encrypted</span>
-                <span className="vl-chip">Fraud screened</span>
-                <span className="vl-chip">PCI-ready</span>
-              </div>
+            <div className="mt-5 grid grid-cols-2 gap-2">
+              <TrustBadge icon="shield" label="TLS Encrypted" />
+              <TrustBadge icon="check" label="Fraud Screened" />
             </div>
 
             <button

@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
+import { SiteHeader } from "@/components/site-header";
 
 const SUPPORT_EMAIL = "support@vantalabsresearch.com";
 const SUPPORT_SUBJECT = "Vanta Labs Customer Support";
@@ -101,18 +102,20 @@ export default function ContactPage() {
   };
 
   return (
-    <main className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-12 text-zinc-100 sm:px-6 lg:px-8">
+    <div className="vl-page-shell min-h-screen bg-zinc-950 text-zinc-100">
+      <SiteHeader />
+      <main className="px-4 py-12 sm:px-6 lg:px-8">
       <div className="mx-auto grid max-w-6xl gap-8 lg:grid-cols-[0.92fr_1.08fr]">
         <section className="vl-panel rounded-[2rem] border border-white/15 p-6 sm:p-8">
-          <p className="text-[11px] uppercase tracking-[0.28em] text-zinc-500">Support</p>
-          <h1 className="mt-3 text-3xl font-semibold text-white sm:text-4xl">Contact Vanta Labs</h1>
-          <p className="mt-4 text-sm leading-7 text-zinc-300">
+          <p className="vl-eyebrow text-[11px]">Support</p>
+          <h1 className="vl-display mt-3 text-3xl font-semibold text-white sm:text-4xl">Contact Vanta Labs</h1>
+          <p className="vl-copy mt-4 text-sm leading-7 text-zinc-300">
             Have questions regarding your order, products, shipping, or general inquiries? Our team typically responds within one business day.
           </p>
 
           <div className="mt-8 space-y-5 rounded-[1.5rem] border border-white/10 bg-white/5 p-5">
             <div>
-              <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Email</p>
+              <p className="vl-eyebrow text-[11px]">Email</p>
               <a href={mailtoHref} className="mt-2 inline-block text-base font-medium text-white transition hover:text-zinc-300">
                 {SUPPORT_EMAIL}
               </a>
@@ -120,7 +123,7 @@ export default function ContactPage() {
             </div>
 
             <div>
-              <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Business Hours</p>
+              <p className="vl-eyebrow text-[11px]">Business Hours</p>
               <p className="mt-2 text-sm text-zinc-200">Monday–Friday</p>
               <p className="text-sm text-zinc-200">9:00 AM – 5:00 PM EST</p>
             </div>
@@ -130,7 +133,7 @@ export default function ContactPage() {
         <section className="vl-panel rounded-[2rem] border border-white/15 p-6 sm:p-8">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="text-[11px] uppercase tracking-[0.28em] text-zinc-500">Contact Form</p>
+              <p className="vl-eyebrow text-[11px]">Contact Form</p>
               <h2 className="mt-3 text-2xl font-semibold text-white">Send a message</h2>
             </div>
             <a href={mailtoHref} className="vl-btn-secondary vl-focus-ring whitespace-nowrap px-4 py-2 text-xs sm:text-sm">
@@ -243,6 +246,7 @@ export default function ContactPage() {
           </form>
         </section>
       </div>
-    </main>
+      </main>
+    </div>
   );
 }
