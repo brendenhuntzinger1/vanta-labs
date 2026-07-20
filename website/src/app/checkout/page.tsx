@@ -379,10 +379,13 @@ export default function CheckoutPage() {
             <div className="mt-8 grid gap-4 sm:grid-cols-2">
               <div className="border border-white/10 p-4">
                 <p className="vl2-eyebrow">Shipping Method</p>
-                <p className="mt-2 text-sm text-white">Standard secure shipping</p>
+                <p className="mt-2 text-sm text-white">
+                  {isDomesticCountry(form.country) ? "Standard secure shipping" : "Secure international shipping, fast arrival"}
+                </p>
                 <p className="mt-1 text-xs text-white/45">
-                  Free at $250+, otherwise flat {formatCartCurrency(15)} in the USA
-                  {isDomesticCountry(form.country) ? "" : ` (${formatCartCurrency(45)} international)`}.
+                  {isDomesticCountry(form.country)
+                    ? `Free at $250+, otherwise flat ${formatCartCurrency(15)} in the USA.`
+                    : `Free at $600+, otherwise flat ${formatCartCurrency(60)} for international orders.`}
                 </p>
               </div>
               <div className="border border-white/10 p-4">

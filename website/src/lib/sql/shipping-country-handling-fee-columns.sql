@@ -1,9 +1,9 @@
 -- Adds the columns needed for two checkout features:
 --   1. A 5% handling fee applied to every order (see calculateHandlingFee
 --      in src/lib/shipping.ts).
---   2. Country-aware shipping (flat $15 in the USA, flat $45 international,
---      free at $250+ subtotal either way - see calculateShipping in the
---      same file).
+--   2. Country-aware shipping - flat $15 in the USA (free at $250+), flat
+--      $60 international (free at $600+) - see calculateShipping in the
+--      same file.
 --
 -- Run after orders-schema.sql and coupon-checkout-columns.sql. Idempotent -
 -- safe to re-run.

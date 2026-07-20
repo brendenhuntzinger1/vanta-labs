@@ -6,7 +6,8 @@
 
 export const FREE_SHIPPING_THRESHOLD = 250;
 export const DOMESTIC_SHIPPING_FEE = 15;
-export const INTERNATIONAL_SHIPPING_FEE = 45;
+export const INTERNATIONAL_FREE_SHIPPING_THRESHOLD = 600;
+export const INTERNATIONAL_SHIPPING_FEE = 60;
 export const HANDLING_FEE_RATE = 0.05;
 
 const DOMESTIC_COUNTRY_NAMES = new Set([
@@ -31,8 +32,12 @@ export function roundMoney(value: number): number {
 
 export function calculateShipping(subtotal: number, country?: string | null): number {
   if (subtotal <= 0) return 0;
-  if (subtotal >= FREE_SHIPPING_THRESHOLD) return 0;
-  return isDomesticCountry(country) ? DOMESTIC_SHIPPING_FEE : INTERNATIONAL_SHIPPING_FEE;
+
+  if (isDomesticCountry(country)) {
+    return subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : DOMESTIC_SHIPPING_FEE;
+  }
+
+  return subtotal >= INTERNATIONAL_FREE_SHIPPING_THRESHOLD ? 0 : INTERNATIONAL_SHIPPING_FEE;
 }
 
 export function calculateHandlingFee(subtotal: number): number {
