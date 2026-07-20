@@ -29,6 +29,8 @@ alter table if exists public.orders
   add column if not exists payment_method text,
   add column if not exists card_processing_fee numeric(12,2) not null default 0,
   add column if not exists card_processing_fee_percent numeric(5,2) not null default 0,
+  -- Configurable sales tax collected on the order (0 unless an admin sets a rate).
+  add column if not exists tax_amount numeric(12,2) not null default 0,
   add column if not exists payment_reference text,
   add column if not exists payment_proof_url text,
   add column if not exists payment_submitted_at timestamptz,
@@ -45,8 +47,8 @@ create index if not exists idx_orders_payment_method on public.orders(payment_me
 
 -- Supabase Storage bucket for uploaded payment screenshots. Created here for
 -- documentation; the app also ensures it exists at runtime
--- (src/lib/payment-proof-storage.ts). If you run SQL manually, create a
--- PUBLIC bucket named 'payment-proofs' in the Supabase dashboard as well.
+-- (src/lib/payment-proof-storage.ts). PRIVATE — proofs contain PII, so admins
+-- view them through short-lived signed URLs, never a public link.
 insert into storage.buckets (id, name, public)
-values ('payment-proofs', 'payment-proofs', true)
+values ('payment-proofs', 'payment-proofs', false)
 on conflict (id) do nothing;

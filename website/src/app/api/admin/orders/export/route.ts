@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageSettings } from "@/lib/admin-roles";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 function csvEscape(value: unknown) {
@@ -14,6 +15,9 @@ export async function GET(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  }
+  if (!canManageSettings(session.role)) {
+    return NextResponse.json({ success: false, error: "Your role cannot export order data." }, { status: 403 });
   }
 
   const { data, error } = await supabaseAdmin

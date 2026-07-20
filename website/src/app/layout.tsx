@@ -32,9 +32,35 @@ const manrope = Manrope({
   weight: ["400", "500", "600", "700", "800"],
 });
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") || "http://localhost:3000";
+
 export const metadata: Metadata = {
-  title: "Vanta Labs | Premium Research Peptides",
-  description: "Premium laboratory-grade products and verified quality standards.",
+  metadataBase: new URL(siteUrl),
+  title: {
+    default: "Vanta Labs | Premium Research Peptides",
+    template: "%s | Vanta Labs",
+  },
+  description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
+  applicationName: "Vanta Labs",
+  icons: {
+    icon: "/images/vantalabs.png",
+    apple: "/images/vantalabs.png",
+  },
+  openGraph: {
+    type: "website",
+    siteName: "Vanta Labs",
+    title: "Vanta Labs | Premium Research Peptides",
+    description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
+    url: siteUrl,
+    images: [{ url: "/images/vantalabs.png" }],
+  },
+  twitter: {
+    card: "summary",
+    title: "Vanta Labs | Premium Research Peptides",
+    description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
+    images: ["/images/vantalabs.png"],
+  },
+  robots: { index: true, follow: true },
 };
 
 export default function RootLayout({

@@ -44,3 +44,12 @@ export function calculateHandlingFee(subtotal: number): number {
   if (subtotal <= 0) return 0;
   return roundMoney(subtotal * HANDLING_FEE_RATE);
 }
+
+// Configurable sales tax, applied to the post-discount merchandise total.
+// Shared client + server so the checkout preview and the authoritative server
+// total always agree (see the "Altered total detected" guard). Default rate is
+// 0 (no tax) until an admin sets one in Admin → Control Center.
+export function calculateTax(taxableBase: number, ratePercent: number): number {
+  if (taxableBase <= 0 || !ratePercent || ratePercent <= 0) return 0;
+  return roundMoney(taxableBase * (ratePercent / 100));
+}

@@ -7,10 +7,10 @@ import { getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
-import { calculateShipping, calculateHandlingFee } from "@/lib/shipping";
+import { calculateShipping, calculateHandlingFee, calculateTax } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { resolveBestDiscount } from "@/lib/discount-resolution";
-import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig } from "@/lib/admin-control";
+import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent } from "@/lib/admin-control";
 import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -254,11 +254,12 @@ export async function createCheckoutSession(
  );
 
  const handlingFee = calculateHandlingFee(subtotal);
- const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder] = await Promise.all([
+ const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent] = await Promise.all([
    getHomepageControlConfig(),
    getBulkSavingsControlConfig(),
    payload.customerUserId ? isEligibleForBulkSavings(payload.customerUserId) : Promise.resolve(false),
    payload.customerUserId ? isPriorityMember(payload.customerUserId) : Promise.resolve(false),
+   getTaxRatePercent(),
  ]);
  const bulkSavingsResult = calculateBulkSavingsDiscount(subtotal, bulkSavingsEligible, bulkSavingsConfig);
  // Free shipping is a distinct perk of reaching the bulk-savings threshold,
@@ -322,7 +323,11 @@ export async function createCheckoutSession(
  const discountAmount = roundMoney(bestDiscount?.amount ?? 0);
  const bulkDiscountTier = bestDiscount?.type === "bulk_savings" ? bulkSavingsResult.tier : null;
 
- const totalBeforePoints = roundMoney(subtotal + shipping + handlingFee - discountAmount);
+ // Sales tax on the post-discount merchandise total (0 unless an admin sets a
+ // rate). Same shared calculateTax the client preview uses, so totals agree.
+ const taxAmount = calculateTax(Math.max(0, roundMoney(subtotal - discountAmount)), taxRatePercent);
+
+ const totalBeforePoints = roundMoney(subtotal + shipping + handlingFee + taxAmount - discountAmount);
 
  // Points redemption stacks with a coupon or Buy 3 Get 1 Free (it behaves
  // like store credit, not a promo code) but never with a referral code -
@@ -393,6 +398,7 @@ export async function createCheckoutSession(
    subtotal,
    shipping_amount: shipping,
    handling_fee: handlingFee,
+   tax_amount: taxAmount,
    discount_amount: discountAmount,
    bulk_discount_tier: bulkDiscountTier,
    bulk_discount_amount: bulkDiscountTier ? discountAmount : 0,
@@ -440,7 +446,9 @@ export async function createCheckoutSession(
    const checkout = await provider.createCheckoutSession({
    orderId,
    customerEmail: payload.customer.email,
-   amount: Math.round(finalTotal),
+   // Minor units (cents) — the standard for card processors (Stripe/Square).
+   // Avoids the whole-dollar rounding that silently dropped cents before.
+   amount: Math.round(finalTotal * 100),
    currency: payload.currency ?? "USD",
 
    metadata: {

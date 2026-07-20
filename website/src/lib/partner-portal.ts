@@ -619,8 +619,13 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
   }
 
   if (input?.search) {
-    const normalizedSearch = input.search.trim();
-    query = query.or(`name.ilike.%${normalizedSearch}%,email.ilike.%${normalizedSearch}%,referral_code.ilike.%${normalizedSearch}%`);
+    // Sanitize before interpolating into PostgREST's comma-delimited .or()
+    // (same allowlist as admin-orders.ts) so a search term can't break out of
+    // the filter clause.
+    const normalizedSearch = input.search.trim().replace(/[^a-zA-Z0-9@._\- ]/g, "").slice(0, 100);
+    if (normalizedSearch) {
+      query = query.or(`name.ilike.%${normalizedSearch}%,email.ilike.%${normalizedSearch}%,referral_code.ilike.%${normalizedSearch}%`);
+    }
   }
 
   const [{ data: partners, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }] = await Promise.all([

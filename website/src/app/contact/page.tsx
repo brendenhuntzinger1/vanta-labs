@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 
 const SUPPORT_EMAIL = "support@vantalabsresearch.com";
@@ -19,10 +19,18 @@ export default function ContactPage() {
   const [subject, setSubject] = useState(SUPPORT_SUBJECT);
   const [message, setMessage] = useState("");
   const [company, setCompany] = useState("");
-  const [startedAt, setStartedAt] = useState(() => String(Date.now()));
+  const [startedAt, setStartedAt] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [statusTone, setStatusTone] = useState<"success" | "error" | null>(null);
+
+  // Set the honeypot timing stamp on the client after mount so server and
+  // client render the same initial value (no hydration mismatch). Setting
+  // state once on mount for a client-only value is the intended pattern here.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setStartedAt(String(Date.now()));
+  }, []);
 
   const mailtoHref = createSupportMailto();
 

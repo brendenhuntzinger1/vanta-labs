@@ -22,12 +22,12 @@ export default async function PartnerProgramPage() {
     return (
       <div className="min-h-screen bg-[#0b0b0b] px-4 py-12 text-white sm:px-6 lg:px-8">
         <div className="mx-auto max-w-5xl border border-white/10 p-6 sm:p-8">
-          <p className="text-xs uppercase tracking-[0.3em] text-rose-300">Partner Program Error</p>
-          <h1 className="mt-3 text-2xl text-white sm:text-3xl">Supabase Query Failed</h1>
-          <p className="mt-3 text-sm text-white/60">The full error is shown below so it can be fixed directly.</p>
-          <pre className="mt-5 overflow-x-auto whitespace-pre-wrap border border-rose-500/30 bg-black p-4 text-xs text-rose-200 sm:text-sm">
-            {errorMessage ?? "Partner stats payload was empty."}
-          </pre>
+          <p className="text-xs uppercase tracking-[0.3em] text-rose-300">Partner Program</p>
+          <h1 className="mt-3 text-2xl text-white sm:text-3xl">This page is temporarily unavailable</h1>
+          <p className="mt-3 text-sm text-white/60">
+            We couldn&apos;t load the partner program right now. Please try again shortly or{" "}
+            <a href="/contact" className="text-white underline-offset-4 hover:underline">contact us</a> if it persists.
+          </p>
         </div>
       </div>
     );

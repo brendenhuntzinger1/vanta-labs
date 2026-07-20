@@ -173,7 +173,7 @@ async function getExistingEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, payment_status, payment_id, referral_code, ambassador_id, amount_paid, paid_at, customer_user_id, points_redeemed")
+    .select("id, order_id, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, amount_paid, paid_at, customer_user_id, points_redeemed")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -518,13 +518,32 @@ export async function finalizeManualPayment(
     return { orderId, alreadyPaid: true, status: "paid" };
   }
 
+  // Only orders that have never been paid may be approved. Refunded/canceled/
+  // partially-refunded orders must NOT be re-run (that would re-award
+  // commission/points/coupons and undo the refund).
+  const APPROVABLE_STATUSES = new Set(["pending_payment", "awaiting_verification", "payment_rejected"]);
+  if (!APPROVABLE_STATUSES.has(String(order.payment_status))) {
+    throw new Error(`Cannot approve an order with status "${order.payment_status}".`);
+  }
+
+  // Manual methods only — a card order must never be approved through this
+  // path (it would double-award once the real card webhook also fires).
+  const method = String(order.payment_method ?? "");
+  if (!method || method === "card") {
+    throw new Error("This order is not a manual payment order.");
+  }
+
   const now = new Date().toISOString();
   const subtotal = roundMoney(Number(order.subtotal ?? 0));
   const discountAmount = roundMoney(Number(order.discount_amount ?? 0));
   const amountPaid = roundMoney(Number(order.amount_paid ?? 0));
   const commissionableSubtotal = roundMoney(Math.max(0, subtotal - discountAmount));
 
-  const { error: updateError } = await supabaseAdmin
+  // Atomic claim: the update only succeeds if the status is still what we
+  // read. If a concurrent approve (double-click / second admin) already
+  // flipped it to paid, zero rows update and we no-op instead of double-
+  // awarding points/commission/coupons/emails.
+  const { data: claimed, error: updateError } = await supabaseAdmin
     .from("orders")
     .update({
       payment_status: "paid",
@@ -534,10 +553,16 @@ export async function finalizeManualPayment(
       verified_by: options.verifiedBy,
       updated_at: now,
     })
-    .eq("order_id", orderId);
+    .eq("order_id", orderId)
+    .eq("payment_status", order.payment_status)
+    .select("id");
 
   if (updateError) {
     throw updateError;
+  }
+
+  if (!claimed || claimed.length === 0) {
+    return { orderId, alreadyPaid: true, status: "paid" };
   }
 
   const referralCode = order.referral_code ? String(order.referral_code) : undefined;
@@ -673,7 +698,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     customerUserId: eventPayload.customerUserId ?? orderRecord?.customer_user_id ?? undefined,
     pointsRedeemed: eventPayload.pointsRedeemed ?? orderRecord?.points_redeemed ?? 0,
     paymentStatus: nextStatus,
-    fulfillmentStatus: nextStatus === "paid" ? "awaiting_fulfillment" : orderRecord?.payment_status ?? "pending",
+    fulfillmentStatus: nextStatus === "paid" ? "awaiting_fulfillment" : orderRecord?.fulfillment_status ?? "pending",
     paidAt: nextStatus === "paid" ? new Date().toISOString() : orderRecord?.paid_at ?? null,
     providerEventId: eventId,
     items: eventPayload.items,

@@ -268,6 +268,19 @@ export async function setPaymentMethodControlValue(input: {
   });
 }
 
+// Flat sales-tax rate (percent) an admin sets in the Control Center. Applied
+// to the post-discount merchandise total at checkout. Defaults to 0.
+export async function getTaxRatePercent(): Promise<number> {
+  try {
+    const snapshot = await getControlSnapshot("shipping");
+    const value = (snapshot.shipping ?? {}).tax_rate;
+    const rate = Number(value ?? 0);
+    return Number.isFinite(rate) && rate > 0 ? rate : 0;
+  } catch {
+    return 0;
+  }
+}
+
 export async function getHomepageControlConfig(): Promise<HomepageControlConfig> {
   try {
     const snapshot = await getControlSnapshot();

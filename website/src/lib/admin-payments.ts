@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { createSignedProofUrl } from "@/lib/payment-proof-storage";
 
 export interface AdminPaymentItem {
   name: string;
@@ -128,9 +129,12 @@ export async function getManualPaymentRows(filters: AdminPaymentFilters = {}): P
 
   const total = count ?? 0;
 
-  return {
-    rows: orders.map((order) => {
+  const rows = await Promise.all(
+    orders.map(async (order) => {
       const items = itemsByOrder.get(order.order_id) ?? [];
+      // Proofs live in a private bucket — hand the admin a short-lived signed
+      // URL, never a public link.
+      const proofUrl = await createSignedProofUrl(order.payment_proof_url ? String(order.payment_proof_url) : null);
       return {
         id: String(order.id),
         order_id: String(order.order_id),
@@ -140,7 +144,7 @@ export async function getManualPaymentRows(filters: AdminPaymentFilters = {}): P
         amount_paid: Number(order.amount_paid ?? 0),
         payment_method: String(order.payment_method ?? ""),
         payment_reference: order.payment_reference,
-        payment_proof_url: order.payment_proof_url,
+        payment_proof_url: proofUrl,
         payment_status: String(order.payment_status ?? ""),
         fulfillment_status: String(order.fulfillment_status ?? ""),
         payment_submitted_at: order.payment_submitted_at,
@@ -150,6 +154,10 @@ export async function getManualPaymentRows(filters: AdminPaymentFilters = {}): P
         item_count: items.reduce((sum, item) => sum + item.quantity, 0),
       };
     }),
+  );
+
+  return {
+    rows,
     total,
     page,
     pageSize,

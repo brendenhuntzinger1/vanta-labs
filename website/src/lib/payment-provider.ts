@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from "crypto";
 import { getSiteUrl } from "@/lib/env";
 
 export type PaymentProviderName = "live";
@@ -46,8 +47,32 @@ export class LivePaymentProvider implements PaymentProvider {
     };
   }
 
+  // Real HMAC-SHA256 verification with a constant-time compare. Rejects when
+  // the secret is unset or the signature doesn't match, so the public webhook
+  // endpoint cannot be used to forge "paid" orders or rewrite order state.
+  // The expected signature is the hex HMAC of the raw request body keyed with
+  // PAYMENT_WEBHOOK_SECRET; a real processor is configured to send the same.
+  // A "sha256=" prefix (GitHub/Stripe-style) is tolerated.
   verifyWebhookSignature(payload: string, signature: string, secret: string): boolean {
-    return Boolean(payload && signature && secret);
+    if (!payload || !signature || !secret) {
+      return false;
+    }
+
+    const provided = signature.startsWith("sha256=") ? signature.slice(7) : signature;
+    const expected = createHmac("sha256", secret).update(payload, "utf8").digest("hex");
+
+    let providedBuffer: Buffer;
+    try {
+      providedBuffer = Buffer.from(provided, "hex");
+    } catch {
+      return false;
+    }
+    const expectedBuffer = Buffer.from(expected, "hex");
+
+    if (providedBuffer.length !== expectedBuffer.length) {
+      return false;
+    }
+    return timingSafeEqual(providedBuffer, expectedBuffer);
   }
 
   async processWebhookEvent(event: PaymentWebhookEvent): Promise<void> {

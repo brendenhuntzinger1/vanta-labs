@@ -122,14 +122,18 @@ export default function CoaLibraryPage() {
                     <p className="mt-1 text-white">{record.labName}</p>
                   </div>
                   <div>
-                    <a
-                      href={record.coaUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="vl2-btn-secondary vl-focus-ring inline-flex px-4 py-2 text-sm"
-                    >
-                      Open / Download COA
-                    </a>
+                    {record.coaUrl ? (
+                      <a
+                        href={record.coaUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="vl2-btn-secondary vl-focus-ring inline-flex px-4 py-2 text-sm"
+                      >
+                        Open / Download COA
+                      </a>
+                    ) : (
+                      <span className="inline-flex px-4 py-2 text-sm text-white/40">COA coming soon</span>
+                    )}
                   </div>
                 </div>
               </div>

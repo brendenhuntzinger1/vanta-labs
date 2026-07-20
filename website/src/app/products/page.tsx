@@ -139,6 +139,7 @@ function ProductsPageContent() {
           <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto]">
             <input
               type="search"
+              aria-label="Search products"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder="Search compounds, categories, or notes"
@@ -147,6 +148,7 @@ function ProductsPageContent() {
 
             <select
               value={selectedCategory}
+              aria-label="Filter by category"
               onChange={(event) => setSelectedCategory(event.target.value)}
               className="border border-white/15 bg-black/40 px-3 py-3 text-sm text-white outline-none transition focus:border-white/50 lg:w-56"
             >
@@ -157,7 +159,7 @@ function ProductsPageContent() {
               ))}
             </select>
 
-            <select value={sort} onChange={(event) => setSort(event.target.value as SortKey)} className="border border-white/15 bg-black/40 px-3 py-3 text-sm text-white outline-none transition focus:border-white/50 lg:w-52">
+            <select value={sort} aria-label="Sort products" onChange={(event) => setSort(event.target.value as SortKey)} className="border border-white/15 bg-black/40 px-3 py-3 text-sm text-white outline-none transition focus:border-white/50 lg:w-52">
               {SORT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}

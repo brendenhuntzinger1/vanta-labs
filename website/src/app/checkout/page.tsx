@@ -121,6 +121,8 @@ export default function CheckoutPage() {
     setPointsToRedeem,
     setKnownEmail,
     clearCart,
+    bulkSavingsTierReached,
+    taxAmount,
   } = useCart();
 
   const [acknowledgements, setAcknowledgements] = useState<ComplianceAcknowledgements>({
@@ -161,11 +163,13 @@ export default function CheckoutPage() {
   // recomputed here from the same shared shipping.ts formula the server
   // uses (see payment-service.ts), so expectedTotal below always matches
   // what the server independently computes for the entered country.
+  // Mirror the server's free-shipping-on-bulk-tier rule so expectedTotal
+  // always matches (see payment-service.ts and cart-context.tsx).
   const shipping = useMemo(
-    () => calculateShipping(subtotal, form.country),
-    [subtotal, form.country],
+    () => (bulkSavingsTierReached ? 0 : calculateShipping(subtotal, form.country)),
+    [bulkSavingsTierReached, subtotal, form.country],
   );
-  const totalBeforePoints = Math.max(0, subtotal + shipping + serviceFee - discountAmount);
+  const totalBeforePoints = Math.max(0, subtotal + shipping + serviceFee + taxAmount - discountAmount);
   const pointsRedeemedDiscount = useMemo(
     () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints)),
     [referralDetails, pointsToRedeem, totalBeforePoints],
@@ -722,6 +726,7 @@ export default function CheckoutPage() {
               <div className="flex justify-between"><span>Subtotal</span><span>{formatCartCurrency(subtotal)}</span></div>
               <div className="flex justify-between"><span>Shipping</span><span>{formatCartCurrency(shipping)}</span></div>
               {serviceFee > 0 ? <div className="flex justify-between"><span>Service fee</span><span>{formatCartCurrency(serviceFee)}</span></div> : null}
+              {taxAmount > 0 ? <div className="flex justify-between"><span>Tax</span><span>{formatCartCurrency(taxAmount)}</span></div> : null}
               <div className="flex justify-between"><span>Discount</span><span>-{formatCartCurrency(discountAmount)}</span></div>
               {pointsRedeemedDiscount > 0 ? (
                 <div className="flex justify-between"><span>Points redeemed</span><span>-{formatCartCurrency(pointsRedeemedDiscount)}</span></div>

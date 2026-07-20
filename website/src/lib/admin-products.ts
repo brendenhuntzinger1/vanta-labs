@@ -258,8 +258,11 @@ export async function listAdminProducts(input: {
   }
 
   if (input.search?.trim()) {
-    const term = input.search.trim();
-    query = query.or(`name.ilike.%${term}%,slug.ilike.%${term}%,category.ilike.%${term}%`);
+    // Sanitize before interpolating into PostgREST's comma-delimited .or().
+    const term = input.search.trim().replace(/[^a-zA-Z0-9@._\- ]/g, "").slice(0, 100);
+    if (term) {
+      query = query.or(`name.ilike.%${term}%,slug.ilike.%${term}%,category.ilike.%${term}%`);
+    }
   }
 
   const { data, error } = await query;

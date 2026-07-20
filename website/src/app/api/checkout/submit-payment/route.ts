@@ -51,11 +51,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "This order does not use a manual payment method." }, { status: 400 });
     }
 
-    let proofUrl: string | null = null;
+    let proofPath: string | null = null;
     let uploadWarning: string | undefined;
     if (screenshot instanceof File && screenshot.size > 0) {
       const uploaded = await uploadPaymentProof({ orderId, file: screenshot });
-      proofUrl = uploaded.url;
+      proofPath = uploaded.path;
       uploadWarning = uploaded.error;
     }
 
@@ -65,7 +65,7 @@ export async function POST(request: Request) {
       .update({
         payment_status: "awaiting_verification",
         payment_reference: transactionId.slice(0, 200),
-        payment_proof_url: proofUrl,
+        payment_proof_url: proofPath,
         payment_submitted_at: now,
         // Clear any prior rejection so a resubmission starts clean.
         rejection_reason: null,

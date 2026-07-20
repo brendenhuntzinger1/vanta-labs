@@ -7,7 +7,7 @@ import { validateReferralCodeClient } from "@/lib/referral-client";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
-import { calculateShipping, calculateHandlingFee, FREE_SHIPPING_THRESHOLD as SHIPPING_FREE_THRESHOLD } from "@/lib/shipping";
+import { calculateShipping, calculateHandlingFee, calculateTax, FREE_SHIPPING_THRESHOLD as SHIPPING_FREE_THRESHOLD } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { resolveBestDiscount } from "@/lib/discount-resolution";
 
@@ -54,11 +54,14 @@ type CartContextValue = {
   subtotal: number;
   shipping: number;
   serviceFee: number;
+  taxAmount: number;
+  taxRatePercent: number;
   discountAmount: number;
   total: number;
   isBuy3Get1FreeActive: boolean;
   isBuy3Get1FreeEligible: boolean;
   bulkSavingsApplied: boolean;
+  bulkSavingsTierReached: boolean;
   bulkSavingsPercent: number;
   bulkSavingsProgress: { nextPercent: number; amountRemaining: number } | null;
   totalQuantity: number;
@@ -156,6 +159,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [pointsMultiplier, setPointsMultiplier] = useState(1);
   const [pointsToRedeem, setPointsToRedeemState] = useState(0);
   const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
+  const [taxRatePercent, setTaxRatePercent] = useState(0);
   const [isEligibleForBulkSavings, setIsEligibleForBulkSavings] = useState(false);
   const [bulkSavingsConfig, setBulkSavingsConfig] = useState<BulkSavingsConfig>(DEFAULT_BULK_SAVINGS_CONFIG);
   const [knownEmail, setKnownEmail] = useState("");
@@ -195,9 +199,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean };
+        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; taxRatePercent?: number };
         if (result.success) {
           setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
+          setTaxRatePercent(Number(result.taxRatePercent ?? 0) || 0);
         }
       } catch {
         // Defaults to disabled (matches the server's default) if this fails.
@@ -467,11 +472,22 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [items, promoBuy3Get1Enabled],
   );
 
+  // Reaching a bulk-savings tier grants free shipping on the server
+  // (payment-service.ts) regardless of which discount ultimately wins, so the
+  // client preview must mirror that or the server total diverges and trips the
+  // "Altered total detected" guard (notably for international bulk-eligible
+  // orders). This is a distinct check from bulkSavingsApplied below (which is
+  // about which discount wins the "greatest savings" contest).
+  const bulkSavingsTierReached = useMemo(
+    () => calculateBulkSavingsDiscount(subtotal, isEligibleForBulkSavings, bulkSavingsConfig).tier != null,
+    [subtotal, isEligibleForBulkSavings, bulkSavingsConfig],
+  );
+
   // Estimate only - no shipping address is known yet in the cart, so this
   // assumes domestic. checkout/page.tsx recomputes this from the shared
   // shipping.ts formula once the customer enters their country, and that
   // recomputed value (not this one) is what's sent to the server.
-  const shipping = calculateShipping(subtotal);
+  const shipping = bulkSavingsTierReached ? 0 : calculateShipping(subtotal);
 
   const serviceFee = calculateHandlingFee(subtotal);
 
@@ -521,7 +537,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [isSignedIn, subtotal, discountAmount, pointsPerDollar, pointsMultiplier],
   );
 
-  const totalBeforePoints = Math.max(0, subtotal + shipping + serviceFee - discountAmount);
+  // Sales tax on the post-discount merchandise total — mirrors the server
+  // (payment-service.ts) using the same shared calculateTax.
+  const taxAmount = calculateTax(Math.max(0, subtotal - discountAmount), taxRatePercent);
+
+  const totalBeforePoints = Math.max(0, subtotal + shipping + serviceFee + taxAmount - discountAmount);
 
   // Referral codes are exclusive of every other discount, including
   // redeemed loyalty points - mirrors the server-side rule in
@@ -863,11 +883,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     subtotal,
     shipping,
     serviceFee,
+    taxAmount,
+    taxRatePercent,
     discountAmount,
     total,
     isBuy3Get1FreeActive: bestDiscount?.type === "buy3get1",
     isBuy3Get1FreeEligible,
     bulkSavingsApplied,
+    bulkSavingsTierReached,
     bulkSavingsPercent: bulkSavingsResult.percent,
     bulkSavingsProgress,
     totalQuantity,

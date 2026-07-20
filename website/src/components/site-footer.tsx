@@ -12,9 +12,9 @@ const FOOTER_COLUMNS = {
     { label: "Ambassador", href: "/ambassador" },
   ],
   legal: [
-    { label: "Research Disclaimer", href: "#" },
-    { label: "Privacy Policy", href: "#" },
-    { label: "Terms", href: "#" },
+    { label: "Research Disclaimer", href: "/legal/research-disclaimer" },
+    { label: "Privacy Policy", href: "/legal/privacy" },
+    { label: "Terms", href: "/legal/terms" },
   ],
 };
 

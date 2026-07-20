@@ -67,6 +67,12 @@ vi.mock("@/lib/admin-control", () => ({
     tier2Threshold: 1000,
     tier2Percent: 12,
   }),
+  getTaxRatePercent: async () => 0,
+  getCardProcessingFeeConfig: async () => ({ enabled: true, percentage: 5, label: "Card Processing Fee", noticeText: "" }),
+  getPaymentMethodsConfig: async () => ([
+    { id: "card", label: "Credit / Debit Card", kind: "card", enabled: true, order: 100, icon: "", recommended: false, badges: [], instructions: [] },
+    { id: "cashapp", label: "Cash App", kind: "manual", enabled: true, order: 10, icon: "", recommended: true, badges: [], instructions: [] },
+  ]),
 }));
 
 vi.mock("@/lib/ambassador-settings", () => ({
