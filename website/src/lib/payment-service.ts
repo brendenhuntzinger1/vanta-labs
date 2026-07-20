@@ -10,7 +10,8 @@ import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { resolveBestDiscount } from "@/lib/discount-resolution";
-import { getHomepageControlConfig, getBulkSavingsControlConfig } from "@/lib/admin-control";
+import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig } from "@/lib/admin-control";
+import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 import type {
@@ -31,11 +32,16 @@ export interface ServerProduct {
 
 export interface PendingOrder {
  orderId: string;
+ orderNumber: string;
  status: OrderStatus;
  total: number;
  subtotal: number;
  shipping: number;
  discountAmount: number;
+ paymentMethod: string;
+ isManualPayment: boolean;
+ cardProcessingFee: number;
+ cardProcessingFeePercent: number;
  paymentId: string;
  hostedCheckoutUrl: string;
 }
@@ -49,6 +55,14 @@ export interface CreateCheckoutPayload {
  expectedTotal?: number;
  customerUserId?: string;
  pointsToRedeem?: number;
+ paymentMethod?: string;
+}
+
+// Short, human-friendly order number a customer can copy into a Cash App /
+// Zelle / PayPal note. The internal order_id (a UUID) is unchanged and stays
+// the primary key everything else references.
+function generateOrderNumber() {
+ return `VL-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
 }
 
 interface ValidatedReferral {
@@ -336,12 +350,39 @@ export async function createCheckoutSession(
  throw new Error("Altered total detected");
  }
 
+ // Resolve the chosen payment method and, for card orders only, add the
+ // configurable card processing fee on top of expectedTotal. Manual methods
+ // (Cash App / Zelle / PayPal) carry no fee. Both the fee config and the
+ // method list come from the server so the client can never spoof a lower
+ // fee - the client only previews the same shared calculation.
+ const [paymentMethods, cardFeeConfig] = await Promise.all([
+   getPaymentMethodsConfig(),
+   getCardProcessingFeeConfig(),
+ ]);
+ const selectedMethodId = payload.paymentMethod?.trim() || "card";
+ const selectedMethod = getPaymentMethodById(paymentMethods, selectedMethodId);
+
+ if (!selectedMethod || !selectedMethod.enabled) {
+   throw new Error("Unavailable payment method");
+ }
+
+ const isManual = isManualPaymentMethod(selectedMethod);
+ const cardFee = isManual
+   ? { amount: 0, percentage: 0 }
+   : calculateCardProcessingFee(expectedTotal, cardFeeConfig);
+ const finalTotal = roundMoney(expectedTotal + cardFee.amount);
+
  const orderId = `order-${randomUUID()}`;
+ const orderNumber = generateOrderNumber();
  const provider = getPaymentProvider();
 
  const { error: orderInsertError } = await supabaseAdmin.from("orders").insert({
    order_id: orderId,
+   order_number: orderNumber,
    payment_id: null,
+   payment_method: selectedMethod.id,
+   card_processing_fee: cardFee.amount,
+   card_processing_fee_percent: cardFee.amount > 0 ? cardFee.percentage : 0,
    customer_email: payload.customer.email,
    customer_name: payload.customer.fullName,
    shipping_address: payload.customer.address,
@@ -356,7 +397,7 @@ export async function createCheckoutSession(
    bulk_discount_tier: bulkDiscountTier,
    bulk_discount_amount: bulkDiscountTier ? discountAmount : 0,
    priority: isPriorityOrder,
-   amount_paid: expectedTotal,
+   amount_paid: finalTotal,
    referral_code: referral?.code ?? null,
    ambassador_id: referral?.ambassadorId ?? null,
    coupon_code: coupon?.code ?? null,
@@ -388,44 +429,63 @@ export async function createCheckoutSession(
    throw new Error("Unable to create order items");
  }
 
- const checkout = await provider.createCheckoutSession({
- orderId,
- customerEmail: payload.customer.email,
- amount: Math.round(expectedTotal),
- currency: payload.currency ?? "USD",
+ // Manual methods (Cash App / Zelle / PayPal) are settled off-platform: the
+ // customer follows on-page instructions and submits a transaction id, so
+ // there's no hosted processor session. Only the card method uses the
+ // payment provider (its existing hosted-checkout flow, unchanged).
+ let paymentId = orderId;
+ let hostedCheckoutUrl = "";
 
- metadata: {
- orderId,
- ambassadorId: referral?.ambassadorId ?? "",
- referralCode: referral?.code ?? "",
- couponCode: coupon?.code ?? "",
- promotionApplied: bulkDiscountTier
-   ? "BULK_SAVINGS"
-   : isBuy3Get1Active
-     ? "BUY_3_GET_1"
-     : referral
-       ? "REFERRAL"
-       : coupon
-         ? "COUPON"
-         : "NONE",
- originalSubtotal: subtotal.toFixed(2),
- customerDiscount: discountAmount.toFixed(2),
- pointsRedeemed: String(pointsRedeemed),
- amountPaid: expectedTotal.toFixed(2),
- customerEmail: payload.customer.email,
- customerUserId: payload.customerUserId ?? "",
- },
- });
+ if (!isManual) {
+   const checkout = await provider.createCheckoutSession({
+   orderId,
+   customerEmail: payload.customer.email,
+   amount: Math.round(finalTotal),
+   currency: payload.currency ?? "USD",
+
+   metadata: {
+   orderId,
+   orderNumber,
+   paymentMethod: selectedMethod.id,
+   cardProcessingFee: cardFee.amount.toFixed(2),
+   ambassadorId: referral?.ambassadorId ?? "",
+   referralCode: referral?.code ?? "",
+   couponCode: coupon?.code ?? "",
+   promotionApplied: bulkDiscountTier
+     ? "BULK_SAVINGS"
+     : isBuy3Get1Active
+       ? "BUY_3_GET_1"
+       : referral
+         ? "REFERRAL"
+         : coupon
+           ? "COUPON"
+           : "NONE",
+   originalSubtotal: subtotal.toFixed(2),
+   customerDiscount: discountAmount.toFixed(2),
+   pointsRedeemed: String(pointsRedeemed),
+   amountPaid: finalTotal.toFixed(2),
+   customerEmail: payload.customer.email,
+   customerUserId: payload.customerUserId ?? "",
+   },
+   });
+   paymentId = checkout.paymentId;
+   hostedCheckoutUrl = checkout.hostedCheckoutUrl;
+ }
 
  return {
  orderId,
+ orderNumber,
  status: "pending_payment",
- total: expectedTotal,
+ total: finalTotal,
  subtotal,
  shipping,
  discountAmount: roundMoney(discountAmount + pointsDiscountAmount),
- paymentId: checkout.paymentId,
- hostedCheckoutUrl: checkout.hostedCheckoutUrl,
+ paymentMethod: selectedMethod.id,
+ isManualPayment: isManual,
+ cardProcessingFee: cardFee.amount,
+ cardProcessingFeePercent: cardFee.amount > 0 ? cardFee.percentage : 0,
+ paymentId,
+ hostedCheckoutUrl,
  };
 }
 

@@ -483,6 +483,148 @@ export async function updateCommissionOnRefund(orderId: string) {
   }
 }
 
+export interface ManualPaymentFinalizeResult {
+  orderId: string;
+  alreadyPaid: boolean;
+  status: OrderStatus;
+}
+
+// Reused post-paid side effects for a MANUAL payment (Cash App / Zelle /
+// PayPal) once an admin approves it. Mirrors exactly what the card webhook
+// does on payment.succeeded - flips the order to paid + awaiting_fulfillment,
+// records the ambassador commission, redeems a coupon, marks abandoned carts
+// recovered, awards/redeems membership points, and sends the order
+// confirmation email - so approving a manual payment triggers the identical
+// downstream fulfillment workflow with no extra manual steps.
+export async function finalizeManualPayment(
+  orderId: string,
+  options: { verifiedBy: string },
+): Promise<ManualPaymentFinalizeResult> {
+  const { data: order, error } = await supabaseAdmin
+    .from("orders")
+    .select("*, order_items(*)")
+    .eq("order_id", orderId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!order) {
+    throw new Error("Order not found");
+  }
+
+  if (order.payment_status === "paid") {
+    return { orderId, alreadyPaid: true, status: "paid" };
+  }
+
+  const now = new Date().toISOString();
+  const subtotal = roundMoney(Number(order.subtotal ?? 0));
+  const discountAmount = roundMoney(Number(order.discount_amount ?? 0));
+  const amountPaid = roundMoney(Number(order.amount_paid ?? 0));
+  const commissionableSubtotal = roundMoney(Math.max(0, subtotal - discountAmount));
+
+  const { error: updateError } = await supabaseAdmin
+    .from("orders")
+    .update({
+      payment_status: "paid",
+      fulfillment_status: "awaiting_fulfillment",
+      paid_at: now,
+      verified_at: now,
+      verified_by: options.verifiedBy,
+      updated_at: now,
+    })
+    .eq("order_id", orderId);
+
+  if (updateError) {
+    throw updateError;
+  }
+
+  const referralCode = order.referral_code ? String(order.referral_code) : undefined;
+  const ambassadorId = order.ambassador_id ? String(order.ambassador_id) : undefined;
+
+  await ensureCommissionRecord({
+    orderId,
+    ambassadorId,
+    referralCode,
+    commissionableSubtotal,
+    paymentStatus: "paid",
+    customerEmail: order.customer_email ? String(order.customer_email) : null,
+    shippingAddress: order.shipping_address ? String(order.shipping_address) : null,
+    city: order.city ? String(order.city) : null,
+    postalCode: order.postal_code ? String(order.postal_code) : null,
+  });
+
+  await logCommerceAnalyticsEvent({
+    eventType: "purchase",
+    orderId,
+    amountPaid,
+    referralCode,
+    ambassadorId,
+  });
+
+  if (order.coupon_code) {
+    try {
+      await redeemCoupon(String(order.coupon_code));
+    } catch (couponError) {
+      console.error("Unable to redeem coupon on manual payment", orderId, couponError);
+    }
+  }
+
+  if (order.customer_email) {
+    try {
+      await markAbandonedCartsRecovered(String(order.customer_email), orderId);
+    } catch (recoveryError) {
+      console.error("Unable to mark abandoned carts recovered for order", orderId, recoveryError);
+    }
+  }
+
+  const customerUserId = order.customer_user_id ? String(order.customer_user_id) : null;
+  if (customerUserId) {
+    try {
+      const pointsRedeemed = Number(order.points_redeemed ?? 0);
+      if (pointsRedeemed > 0) {
+        await recordPointsLedgerEntry({ userId: customerUserId, amount: -pointsRedeemed, reason: "redeem", orderId });
+      }
+
+      const membership = await getCustomerMembership(customerUserId);
+      const { multiplier } = await getActivePointsMultiplier();
+      const pointsEarned = calculateEarnedPoints(commissionableSubtotal, membership.tier.pointsPerDollar, multiplier);
+
+      if (pointsEarned > 0) {
+        await recordPointsLedgerEntry({ userId: customerUserId, amount: pointsEarned, reason: "order_earn", orderId });
+        await supabaseAdmin.from("orders").update({ points_earned: pointsEarned }).eq("order_id", orderId);
+      }
+    } catch (pointsError) {
+      console.error("Unable to process membership points for manual order", orderId, pointsError);
+    }
+  }
+
+  if (order.customer_email) {
+    try {
+      const items = (order.order_items ?? []) as Array<{ product_name?: string; product_id?: string; quantity?: number; line_total?: number }>;
+      const template = orderConfirmationTemplate({
+        customerName: String(order.customer_name ?? ""),
+        orderId: order.order_number ? String(order.order_number) : orderId,
+        items: items.map((item) => ({
+          name: item.product_name ?? item.product_id ?? "Item",
+          quantity: Number(item.quantity ?? 0),
+          lineTotal: roundMoney(Number(item.line_total ?? 0)),
+        })),
+        subtotal,
+        shipping: roundMoney(Number(order.shipping_amount ?? 0)),
+        discount: discountAmount,
+        total: amountPaid,
+      });
+      await sendEmail({ to: String(order.customer_email), ...template });
+    } catch {
+      // Confirmation email is best-effort; approval already succeeded.
+    }
+  }
+
+  return { orderId, alreadyPaid: false, status: "paid" };
+}
+
 export async function processPaymentWebhook(payload: string, signature: string, secret: string, eventId: string) {
   const provider = getPaymentProvider();
   const isValid = provider.verifyWebhookSignature(payload, signature, secret);

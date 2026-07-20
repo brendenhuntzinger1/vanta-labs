@@ -51,14 +51,21 @@ export async function POST(request: Request) {
       expectedTotal: body.expectedTotal,
       customerUserId,
       pointsToRedeem: customerUserId ? Number(body.pointsToRedeem ?? 0) : 0,
+      paymentMethod: body.paymentMethod,
     });
 
     return NextResponse.json({
       success: true,
       orderId: result.orderId,
+      orderNumber: result.orderNumber,
       hostedCheckoutUrl: result.hostedCheckoutUrl,
       paymentId: result.paymentId,
       status: result.status,
+      paymentMethod: result.paymentMethod,
+      isManualPayment: result.isManualPayment,
+      total: result.total,
+      cardProcessingFee: result.cardProcessingFee,
+      cardProcessingFeePercent: result.cardProcessingFeePercent,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to create checkout session";

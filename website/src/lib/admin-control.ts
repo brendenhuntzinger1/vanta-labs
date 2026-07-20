@@ -2,6 +2,12 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
+import {
+  DEFAULT_PAYMENT_METHODS,
+  DEFAULT_CARD_PROCESSING_FEE,
+  type PaymentMethodConfig,
+  type CardProcessingFeeConfig,
+} from "@/lib/payment-methods";
 
 const CONTROL_ACTION = "admin_control_upsert";
 
@@ -169,6 +175,97 @@ export async function getCartRecoveryControlConfig(): Promise<CartRecoveryConfig
   } catch {
     return DEFAULT_CART_RECOVERY_CONFIG;
   }
+}
+
+// -------------------------------------------------------------------------
+// Payment methods (Cash App / Zelle / PayPal / Card / future) + the card
+// processing fee.
+//
+// The code defaults in src/lib/payment-methods.ts are the placeholder base.
+// Admins can override any field per method at runtime - stored in the
+// "payment_methods" control section, keyed by method id, with a partial
+// PaymentMethodConfig as the value. The card processing fee lives under the
+// "card_processing_fee" key of the same section. This lets you tune the fee
+// and account details without a deploy while keeping the code file as the
+// fallback.
+// -------------------------------------------------------------------------
+function mergePaymentMethod(base: PaymentMethodConfig, override: unknown): PaymentMethodConfig {
+  if (!override || typeof override !== "object") {
+    return base;
+  }
+  const o = override as Record<string, unknown>;
+  const str = (key: keyof PaymentMethodConfig) =>
+    typeof o[key] === "string" ? (o[key] as string) : (base[key] as string | undefined);
+
+  return {
+    ...base,
+    label: typeof o.label === "string" ? o.label : base.label,
+    enabled: typeof o.enabled === "boolean" ? o.enabled : base.enabled,
+    order: o.order !== undefined ? Number(o.order) || base.order : base.order,
+    icon: typeof o.icon === "string" ? o.icon : base.icon,
+    recommended: typeof o.recommended === "boolean" ? o.recommended : base.recommended,
+    badges: Array.isArray(o.badges) ? (o.badges as unknown[]).map((b) => String(b)) : base.badges,
+    description: str("description"),
+    tagline: str("tagline"),
+    handle: str("handle"),
+    businessName: str("businessName"),
+    email: str("email"),
+    phone: str("phone"),
+    qrImageUrl: str("qrImageUrl"),
+    instructions: Array.isArray(o.instructions)
+      ? (o.instructions as unknown[]).map((line) => String(line))
+      : base.instructions,
+    memoNote: str("memoNote"),
+    referenceLabel: str("referenceLabel"),
+  };
+}
+
+export async function getPaymentMethodsConfig(): Promise<PaymentMethodConfig[]> {
+  try {
+    const snapshot = await getControlSnapshot("payment_methods");
+    const overrides = snapshot.payment_methods ?? {};
+    return DEFAULT_PAYMENT_METHODS.map((method) => mergePaymentMethod(method, overrides[method.id]));
+  } catch {
+    return DEFAULT_PAYMENT_METHODS;
+  }
+}
+
+export async function getCardProcessingFeeConfig(): Promise<CardProcessingFeeConfig> {
+  try {
+    const snapshot = await getControlSnapshot("payment_methods");
+    const override = (snapshot.payment_methods ?? {}).card_processing_fee;
+    if (!override || typeof override !== "object") {
+      return DEFAULT_CARD_PROCESSING_FEE;
+    }
+    const o = override as Record<string, unknown>;
+    return {
+      enabled: typeof o.enabled === "boolean" ? o.enabled : DEFAULT_CARD_PROCESSING_FEE.enabled,
+      percentage: o.percentage !== undefined ? Number(o.percentage) || 0 : DEFAULT_CARD_PROCESSING_FEE.percentage,
+      label: typeof o.label === "string" ? o.label : DEFAULT_CARD_PROCESSING_FEE.label,
+      noticeText: typeof o.noticeText === "string" ? o.noticeText : DEFAULT_CARD_PROCESSING_FEE.noticeText,
+    };
+  } catch {
+    return DEFAULT_CARD_PROCESSING_FEE;
+  }
+}
+
+export async function setPaymentMethodControlValue(input: {
+  methodId: string;
+  value: Partial<PaymentMethodConfig> | Partial<CardProcessingFeeConfig>;
+  actorUserId?: string | null;
+  actorUsername?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}) {
+  await upsertControlValue({
+    section: "payment_methods",
+    key: input.methodId,
+    value: input.value,
+    actorUserId: input.actorUserId,
+    actorUsername: input.actorUsername,
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+  });
 }
 
 export async function getHomepageControlConfig(): Promise<HomepageControlConfig> {

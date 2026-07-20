@@ -8,6 +8,15 @@ import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
 import { pointsToDollars } from "@/lib/points-math";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
+import { PaymentMethodPicker } from "@/components/payment-method-picker";
+import { ManualPaymentInstructions } from "@/components/manual-payment-instructions";
+import {
+  calculateCardProcessingFee,
+  getEnabledPaymentMethods,
+  getPaymentMethodById,
+  type CardProcessingFeeConfig,
+  type PaymentMethodConfig,
+} from "@/lib/payment-methods";
 
 async function createSecureCheckoutSession(payload: unknown) {
   const response = await fetch("/api/checkout/create-session", {
@@ -40,6 +49,13 @@ type ComplianceAcknowledgements = {
   researchResponsibility: boolean;
   researchCompliance: boolean;
   ageLegalConfirmation: boolean;
+};
+
+type CreatedManualOrder = {
+  orderId: string;
+  orderNumber: string;
+  method: PaymentMethodConfig;
+  amountDue: number;
 };
 
 function validateCheckoutForm(form: CheckoutForm, sameAsShipping: boolean) {
@@ -104,6 +120,7 @@ export default function CheckoutPage() {
     pointsToRedeem,
     setPointsToRedeem,
     setKnownEmail,
+    clearCart,
   } = useCart();
 
   const [acknowledgements, setAcknowledgements] = useState<ComplianceAcknowledgements>({
@@ -114,6 +131,10 @@ export default function CheckoutPage() {
   const [checkoutMessage, setCheckoutMessage] = useState<string | null>(null);
   const [checkoutState, setCheckoutState] = useState<"idle" | "loading" | "success">("idle");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [paymentMethods, setPaymentMethods] = useState<PaymentMethodConfig[]>([]);
+  const [cardFeeConfig, setCardFeeConfig] = useState<CardProcessingFeeConfig | null>(null);
+  const [selectedMethodId, setSelectedMethodId] = useState<string>("");
+  const [createdOrder, setCreatedOrder] = useState<CreatedManualOrder | null>(null);
   const [referralInput, setReferralInput] = useState("");
   const [couponInput, setCouponInput] = useState("");
   const [sameAsShipping, setSameAsShipping] = useState(true);
@@ -149,7 +170,46 @@ export default function CheckoutPage() {
     () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints)),
     [referralDetails, pointsToRedeem, totalBeforePoints],
   );
+  // `total` is the pre-payment-method total sent to the server as
+  // expectedTotal (matches the server's own recompute exactly). The card
+  // processing fee is then added ON TOP for the card method only; manual
+  // methods pay `total`.
   const total = Math.max(0, totalBeforePoints - pointsRedeemedDiscount);
+
+  const selectedMethod = useMemo(
+    () => getPaymentMethodById(paymentMethods, selectedMethodId),
+    [paymentMethods, selectedMethodId],
+  );
+  const cardFee = useMemo(() => {
+    if (!cardFeeConfig || !selectedMethod || selectedMethod.kind !== "card") {
+      return { amount: 0, percentage: cardFeeConfig?.percentage ?? 0 };
+    }
+    return calculateCardProcessingFee(total, cardFeeConfig);
+  }, [cardFeeConfig, selectedMethod, total]);
+  const finalTotal = Math.max(0, total + cardFee.amount);
+
+  // Load the configured payment methods + card fee, and default to the first
+  // recommended (no-fee) method.
+  useEffect(() => {
+    (async () => {
+      try {
+        const response = await fetch("/api/catalog/payment-methods", { cache: "no-store" });
+        if (!response.ok) return;
+        const result = await response.json() as {
+          success: boolean;
+          methods?: PaymentMethodConfig[];
+          cardProcessingFee?: CardProcessingFeeConfig | null;
+        };
+        if (!result.success || !Array.isArray(result.methods)) return;
+        const enabled = getEnabledPaymentMethods(result.methods);
+        setPaymentMethods(enabled);
+        setCardFeeConfig(result.cardProcessingFee ?? null);
+        setSelectedMethodId((current) => current || enabled[0]?.id || "");
+      } catch {
+        // Checkout still renders; the picker simply won't show until this loads.
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -265,10 +325,29 @@ export default function CheckoutPage() {
         couponCode: couponCode ?? undefined,
         pointsToRedeem: pointsToRedeem > 0 ? pointsToRedeem : undefined,
         expectedTotal: total,
+        paymentMethod: selectedMethodId || undefined,
         complianceAcknowledgements: acknowledgements,
       };
 
       const result = await createSecureCheckoutSession(payload);
+
+      // Manual methods (Cash App / Zelle / PayPal): stay on-page and show the
+      // premium payment instructions panel with the order number + QR.
+      if (result.isManualPayment) {
+        const method = getPaymentMethodById(paymentMethods, result.paymentMethod) ?? selectedMethod;
+        if (method) {
+          setCreatedOrder({
+            orderId: result.orderId,
+            orderNumber: result.orderNumber,
+            method,
+            amountDue: Number(result.total ?? finalTotal),
+          });
+          if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+          return;
+        }
+      }
+
+      // Card: continue to the secure processor flow, exactly as before.
       if (result.hostedCheckoutUrl) {
         window.location.assign(result.hostedCheckoutUrl);
       } else {
@@ -282,6 +361,43 @@ export default function CheckoutPage() {
       setIsSubmitting(false);
     }
   };
+
+  if (createdOrder) {
+    return (
+      <div className="min-h-screen bg-[#0b0b0b] text-white">
+        <SiteHeaderV2 />
+        <main className="mx-auto max-w-3xl px-6 pb-20 pt-32 lg:px-12">
+          <section className="border border-white/10 p-5 sm:p-8">
+            <div className="flex flex-wrap items-center gap-2">
+              <StepPill index={1} label="Details" active />
+              <StepPill index={2} label="Review" active />
+              <StepPill index={3} label="Payment" active />
+            </div>
+            <p className="vl2-eyebrow mt-5">Almost there</p>
+            <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Send your {createdOrder.method.label} payment</h1>
+            <p className="mt-3 text-sm leading-7 text-white/60">
+              Your order is reserved. Send the exact amount, then submit your payment details below so we can verify and
+              ship it.
+            </p>
+          </section>
+
+          <div className="mt-7">
+            <ManualPaymentInstructions
+              method={createdOrder.method}
+              orderId={createdOrder.orderId}
+              orderNumber={createdOrder.orderNumber}
+              amountDue={createdOrder.amountDue}
+              onSubmitted={() => clearCart()}
+            />
+          </div>
+
+          <Link href="/products" className="mt-8 inline-flex text-sm text-white/45 transition hover:text-white">
+            Continue shopping
+          </Link>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
@@ -382,6 +498,21 @@ export default function CheckoutPage() {
                 </div>
               ) : null}
             </div>
+
+            {paymentMethods.length > 0 ? (
+              <div className="mt-8">
+                <p className="vl2-eyebrow">Payment Method</p>
+                <div className="mt-4">
+                  <PaymentMethodPicker
+                    methods={paymentMethods}
+                    cardFeeConfig={cardFeeConfig}
+                    baseTotal={total}
+                    selectedMethodId={selectedMethodId}
+                    onSelect={setSelectedMethodId}
+                  />
+                </div>
+              </div>
+            ) : null}
 
             <div className="mt-8 grid gap-4 sm:grid-cols-2">
               <div className="border border-white/10 p-4">
@@ -595,7 +726,18 @@ export default function CheckoutPage() {
               {pointsRedeemedDiscount > 0 ? (
                 <div className="flex justify-between"><span>Points redeemed</span><span>-{formatCartCurrency(pointsRedeemedDiscount)}</span></div>
               ) : null}
-              <div className="mt-3 flex justify-between border-t border-white/10 pt-3 text-base text-white"><span>Total</span><span>{formatCartCurrency(total)}</span></div>
+              {cardFee.amount > 0 ? (
+                <div className="flex justify-between text-white/80">
+                  <span>{cardFeeConfig?.label ?? "Card Processing Fee"} ({cardFee.percentage}%)</span>
+                  <span>+{formatCartCurrency(cardFee.amount)}</span>
+                </div>
+              ) : null}
+              <div className="mt-3 flex justify-between border-t border-white/10 pt-3 text-base text-white"><span>Total</span><span>{formatCartCurrency(finalTotal)}</span></div>
+              {selectedMethod && selectedMethod.kind === "manual" ? (
+                <p className="flex items-center justify-center gap-1.5 rounded-lg border border-emerald-400/25 bg-emerald-400/5 py-2 text-xs font-medium text-emerald-300">
+                  ✅ No processing fee with {selectedMethod.label}
+                </p>
+              ) : null}
             </div>
 
             <div className="mt-5 flex items-center justify-center gap-6 text-[10px] uppercase tracking-[0.14em] text-white/40">
@@ -609,7 +751,11 @@ export default function CheckoutPage() {
               disabled={isSubmitting || items.length === 0}
               className="vl2-btn-primary vl-focus-ring mt-6 w-full px-5 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {checkoutState === "loading" ? "Creating secure checkout..." : "Continue to Secure Payment"}
+              {checkoutState === "loading"
+                ? "Creating secure checkout..."
+                : selectedMethod && selectedMethod.kind === "manual"
+                  ? `Continue to ${selectedMethod.label}`
+                  : "Continue to Secure Payment"}
             </button>
 
             {checkoutMessage ? <p className="mt-3 text-sm text-white/65">{checkoutMessage}</p> : null}

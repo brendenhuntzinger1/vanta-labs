@@ -147,6 +147,91 @@ export function orderConfirmationTemplate(input: {
   };
 }
 
+function paymentMethodLabel(method: string) {
+  switch (method) {
+    case "cashapp":
+      return "Cash App";
+    case "zelle":
+      return "Zelle";
+    case "paypal":
+      return "PayPal";
+    case "venmo":
+      return "Venmo";
+    case "card":
+      return "Credit / Debit Card";
+    default:
+      return method;
+  }
+}
+
+export function manualPaymentReceivedTemplate(input: {
+  customerName: string;
+  orderNumber: string;
+  amount: number;
+  paymentMethod: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.customerName || "there");
+  const method = escapeHtml(paymentMethodLabel(input.paymentMethod));
+  return {
+    subject: `Payment received — verifying order ${input.orderNumber}`,
+    html: renderLayout({
+      preheader: `We received your ${method} payment details for ${input.orderNumber}.`,
+      title: `Thanks, ${name}. We're verifying your payment.`,
+      bodyHtml: `
+        <p>We've received your <strong>${method}</strong> payment details for order <strong>${escapeHtml(input.orderNumber)}</strong>.</p>
+        <p>Amount: <strong>${money(input.amount)}</strong></p>
+        <p>Our team is verifying your payment now. You'll get another email as soon as it's approved and your order moves to fulfillment. This usually happens quickly during business hours.</p>
+      `,
+    }),
+    text: toText([
+      `Thanks, ${input.customerName || "there"}.`,
+      "",
+      `We've received your ${paymentMethodLabel(input.paymentMethod)} payment details for order ${input.orderNumber}.`,
+      `Amount: ${money(input.amount)}`,
+      "",
+      "Our team is verifying your payment now. You'll get another email as soon as it's approved.",
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
+export function manualPaymentRejectedTemplate(input: {
+  customerName: string;
+  orderNumber: string;
+  reason?: string;
+  resubmitUrl: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.customerName || "there");
+  const reasonLine = input.reason
+    ? `<p>Reason: ${escapeHtml(input.reason)}</p>`
+    : "";
+  return {
+    subject: `Action needed — payment not verified for ${input.orderNumber}`,
+    html: renderLayout({
+      preheader: `We couldn't verify the payment for order ${input.orderNumber}.`,
+      title: `${name}, we couldn't verify your payment`,
+      bodyHtml: `
+        <p>We weren't able to verify the payment for order <strong>${escapeHtml(input.orderNumber)}</strong>.</p>
+        ${reasonLine}
+        <p>Please double-check the payment and re-submit your transaction ID (and a screenshot if you have one). Make sure your Order Number is included in the payment note.</p>
+      `,
+      ctaLabel: "Re-submit Payment",
+      ctaUrl: input.resubmitUrl,
+    }),
+    text: toText([
+      `${input.customerName || "there"}, we couldn't verify your payment.`,
+      "",
+      `Order ${input.orderNumber} payment was not verified.`,
+      input.reason ? `Reason: ${input.reason}` : null,
+      "",
+      `Re-submit your payment: ${input.resubmitUrl}`,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 export function shippingUpdateTemplate(input: {
   customerName: string;
   orderId: string;
