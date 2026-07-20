@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageSettings } from "@/lib/admin-roles";
-import { upsertControlValue, getBusinessSettings } from "@/lib/admin-control";
+import { upsertControlValue, getBusinessSettings, getWelcomeOffer } from "@/lib/admin-control";
 import { getEmailAdminSettings } from "@/lib/email/settings";
 import { getPaymentProcessorAdminSettings } from "@/lib/payment-processor-config";
 import { getFulfillmentAdminSettings } from "@/lib/fulfillment/config";
@@ -20,13 +20,14 @@ export async function GET(request: Request) {
   if (!session) return unauthorizedResponse();
   if (!canManageSettings(session.role)) return forbiddenResponse();
 
-  const [email, processor, fulfillment, business] = await Promise.all([
+  const [email, processor, fulfillment, business, welcomeOffer] = await Promise.all([
     getEmailAdminSettings(),
     getPaymentProcessorAdminSettings(),
     getFulfillmentAdminSettings(),
     getBusinessSettings(),
+    getWelcomeOffer(),
   ]);
-  return NextResponse.json({ success: true, email, processor, fulfillment, business });
+  return NextResponse.json({ success: true, email, processor, fulfillment, business, welcomeOffer });
 }
 
 // Saves email + payment-processor settings. Secrets (SMTP password, Resend
@@ -47,6 +48,7 @@ export async function PATCH(request: Request) {
       processor?: Record<string, unknown>;
       fulfillment?: Record<string, unknown>;
       business?: Record<string, unknown>;
+      welcomeOffer?: Record<string, unknown>;
     };
 
     const set = async (section: string, key: string, value: unknown) => {
@@ -100,6 +102,15 @@ export async function PATCH(request: Request) {
       const b = body.business;
       if (typeof b.support_email === "string") await set("business", "support_email", b.support_email);
       if (typeof b.business_name === "string") await set("business", "business_name", b.business_name);
+    }
+
+    if (body.welcomeOffer) {
+      const w = body.welcomeOffer;
+      if (typeof w.enabled === "boolean") await set("welcome_offer", "enabled", w.enabled);
+      if (typeof w.code === "string") await set("welcome_offer", "code", w.code.trim().toUpperCase());
+      if (w.percent !== undefined) await set("welcome_offer", "percent", Number(w.percent) || 0);
+      if (typeof w.headline === "string") await set("welcome_offer", "headline", w.headline);
+      if (typeof w.subtext === "string") await set("welcome_offer", "subtext", w.subtext);
     }
 
     return NextResponse.json({ success: true });

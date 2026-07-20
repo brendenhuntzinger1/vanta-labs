@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getWelcomeOffer } from "@/lib/admin-control";
 
 export interface CouponValidationResult {
   code: string;
@@ -39,6 +40,22 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
 
   if (!normalizedCode) {
     return null;
+  }
+
+  // Welcome offer acts as a virtual coupon (no DB row) when enabled, so the
+  // owner can promote a first-order code without managing a coupon record.
+  try {
+    const welcome = await getWelcomeOffer();
+    if (welcome.enabled && welcome.percent > 0 && normalizeCouponCode(welcome.code) === normalizedCode) {
+      return {
+        code: normalizedCode,
+        discountType: "percent",
+        discountValue: welcome.percent,
+        discountAmount: calculateCouponDiscount(subtotal, "percent", welcome.percent),
+      };
+    }
+  } catch {
+    // Fall through to the normal coupon lookup.
   }
 
   const { data, error } = await supabaseAdmin

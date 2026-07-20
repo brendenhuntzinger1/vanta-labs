@@ -8,6 +8,7 @@ import { CartProvider } from "@/components/cart-context";
 import { SiteAnalyticsTracker } from "@/components/site-analytics-tracker";
 import { SiteFooter } from "@/components/site-footer";
 import { CookieConsent } from "@/components/cookie-consent";
+import { WelcomeOffer } from "@/components/welcome-offer";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -80,6 +81,7 @@ export default function RootLayout({
             <SiteAnalyticsTracker />
           </Suspense>
           <AgeGate>
+            <WelcomeOffer />
             {children}
             <SiteFooter />
             <Link

@@ -4,7 +4,7 @@ import { useState } from "react";
 import type { EmailAdminSettings } from "@/lib/email/settings";
 import type { PaymentProcessorAdminSettings } from "@/lib/payment-processor-config";
 import type { FulfillmentAdminSettings } from "@/lib/fulfillment/config";
-import type { BusinessSettings } from "@/lib/admin-control";
+import type { BusinessSettings, WelcomeOffer } from "@/lib/admin-control";
 
 function Labeled({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -21,11 +21,13 @@ export function AdminSettingsClient({
   processor,
   fulfillment,
   business,
+  welcomeOffer,
 }: {
   email: EmailAdminSettings;
   processor: PaymentProcessorAdminSettings;
   fulfillment: FulfillmentAdminSettings;
   business: BusinessSettings;
+  welcomeOffer: WelcomeOffer;
 }) {
   // Email state
   const [enabled, setEnabled] = useState(email.enabled);
@@ -60,6 +62,13 @@ export function AdminSettingsClient({
   // Business info state
   const [supportEmail, setSupportEmail] = useState(business.supportEmail);
   const [businessName, setBusinessName] = useState(business.businessName);
+
+  // Welcome offer state
+  const [woEnabled, setWoEnabled] = useState(welcomeOffer.enabled);
+  const [woCode, setWoCode] = useState(welcomeOffer.code);
+  const [woPercent, setWoPercent] = useState(String(welcomeOffer.percent));
+  const [woHeadline, setWoHeadline] = useState(welcomeOffer.headline);
+  const [woSubtext, setWoSubtext] = useState(welcomeOffer.subtext);
 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -108,6 +117,13 @@ export function AdminSettingsClient({
           business: {
             support_email: supportEmail,
             business_name: businessName,
+          },
+          welcomeOffer: {
+            enabled: woEnabled,
+            code: woCode,
+            percent: Number(woPercent) || 0,
+            headline: woHeadline,
+            subtext: woSubtext,
           },
         }),
       });
@@ -158,6 +174,25 @@ export function AdminSettingsClient({
         <div className="mt-4 grid gap-3 sm:grid-cols-2">
           <Labeled label="Support / business email"><input value={supportEmail} onChange={(e) => setSupportEmail(e.target.value)} placeholder="you@yourdomain.com" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
           <Labeled label="Business name"><input value={businessName} onChange={(e) => setBusinessName(e.target.value)} placeholder="Vanta Labs" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
+        </div>
+      </div>
+
+      {/* Welcome offer */}
+      <div className="vl-panel rounded-2xl p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold">Welcome Offer (first-order discount)</h2>
+          <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${woEnabled ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200" : "border-white/20 bg-white/5 text-zinc-300"}`}>{woEnabled ? "Live" : "Off"}</span>
+        </div>
+        <p className="mt-1 text-sm text-zinc-400">Shows a banner to new visitors with a discount code that works instantly at checkout — no coupon to create.</p>
+        <label className="mt-4 flex items-center gap-2 text-sm text-zinc-200">
+          <input type="checkbox" checked={woEnabled} onChange={(e) => setWoEnabled(e.target.checked)} className="h-4 w-4" />
+          Show the welcome banner
+        </label>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <Labeled label="Code"><input value={woCode} onChange={(e) => setWoCode(e.target.value.toUpperCase())} placeholder="WELCOME10" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
+          <Labeled label="Discount %"><input type="number" min={0} max={100} value={woPercent} onChange={(e) => setWoPercent(e.target.value)} className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
+          <Labeled label="Headline"><input value={woHeadline} onChange={(e) => setWoHeadline(e.target.value)} className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
+          <Labeled label="Subtext"><input value={woSubtext} onChange={(e) => setWoSubtext(e.target.value)} className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
         </div>
       </div>
 

@@ -293,6 +293,41 @@ export async function getBusinessSettings(): Promise<BusinessSettings> {
   }
 }
 
+// First-order welcome offer — a promo code shown in a banner to new visitors.
+// Works as a "virtual coupon" (no DB row needed): validateCoupon honors the
+// configured code when the offer is enabled. Off by default.
+export interface WelcomeOffer {
+  enabled: boolean;
+  code: string;
+  percent: number;
+  headline: string;
+  subtext: string;
+}
+
+export const DEFAULT_WELCOME_OFFER: WelcomeOffer = {
+  enabled: false,
+  code: "WELCOME10",
+  percent: 10,
+  headline: "Get 10% off your first order",
+  subtext: "New here? Use this code at checkout.",
+};
+
+export async function getWelcomeOffer(): Promise<WelcomeOffer> {
+  try {
+    const snapshot = await getControlSnapshot("welcome_offer");
+    const cfg = snapshot.welcome_offer ?? {};
+    return {
+      enabled: cfg.enabled === true,
+      code: (typeof cfg.code === "string" && cfg.code.trim().toUpperCase()) || DEFAULT_WELCOME_OFFER.code,
+      percent: Number(cfg.percent ?? DEFAULT_WELCOME_OFFER.percent) || DEFAULT_WELCOME_OFFER.percent,
+      headline: (typeof cfg.headline === "string" && cfg.headline.trim()) || DEFAULT_WELCOME_OFFER.headline,
+      subtext: (typeof cfg.subtext === "string" && cfg.subtext.trim()) || DEFAULT_WELCOME_OFFER.subtext,
+    };
+  } catch {
+    return DEFAULT_WELCOME_OFFER;
+  }
+}
+
 // Flat sales-tax rate (percent) an admin sets in the Control Center. Applied
 // to the post-discount merchandise total at checkout. Defaults to 0.
 export async function getTaxRatePercent(): Promise<number> {
