@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
 import { formatCartCurrency, useCart, getShippingProgress } from "@/components/cart-context";
+import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 
 export function CartDrawer() {
   const router = useRouter();
@@ -100,7 +101,7 @@ export function CartDrawer() {
                       <span>{item.quantity}</span>
                       <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="px-2" aria-label="Increase quantity">+</button>
                     </div>
-                    <p className="text-xs font-medium text-white sm:text-sm">{formatCartCurrency(item.price * item.quantity)}</p>
+                    <p className="text-xs font-medium text-white sm:text-sm">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity))}</p>
                   </div>
                 </div>
               ))}

@@ -6,6 +6,8 @@ import { validateCoupon } from "@/lib/coupons";
 import { getPointsBalance } from "@/lib/membership";
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
+import { getHomepageControlConfig } from "@/lib/admin-control";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 import type {
@@ -86,11 +88,12 @@ function calculateShipping(subtotal: number) {
  return subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : subtotal > 0 ? FLAT_SHIPPING_FEE : 0;
 }
 
-// Every 4th item (cheapest-first) is free. Mirrors the client-side
-// calculation in cart-context.tsx exactly (including running unconditionally,
-// not gated by the admin "enabled" toggle) so the server total this function
-// feeds into always matches what the cart displayed - see the
-// "Altered total detected" check below.
+// Every 4th item (cheapest-first) is free. The caller gates this behind
+// getHomepageControlConfig().promoBuy3Get1Enabled - mirrors the client-side
+// calculation in cart-context.tsx exactly (including that same gate, fetched
+// there via /api/catalog/promotions) so the server total this function feeds
+// into always matches what the cart displayed - see the "Altered total
+// detected" check below.
 function calculateBuy3Get1Discount(lineItems: Array<{ product: ServerProduct; quantity: number }>) {
   const expandedPrices: number[] = [];
   for (const line of lineItems) {
@@ -199,12 +202,19 @@ export async function createCheckoutSession(
    ? catalogProduct?.doses?.find((dose) => dose.id === variantId)
    : catalogProduct?.doses?.find((dose) => dose.isDefault) ?? catalogProduct?.doses?.[0];
 
+ const baseUnitPrice = selectedDose
+   ? Number((selectedDose.salePrice ?? selectedDose.price).replace(/[^0-9.]/g, ""))
+   : baseProduct.price;
+
+ // "Bundle & Save" (2 vials = 5% off, 3+ = 8% off) is applied here, at the
+ // authoritative price the server charges, so it's correct no matter what
+ // the client displayed - see getBundleDiscountedUnitPrice's callers in
+ // cart-context.tsx and product-detail-client.tsx for the matching client
+ // preview using the exact same shared formula.
  const product: ServerProduct = {
    ...baseProduct,
    id: item.id,
-   price: selectedDose
-     ? Number((selectedDose.salePrice ?? selectedDose.price).replace(/[^0-9.]/g, ""))
-     : baseProduct.price,
+   price: getBundleDiscountedUnitPrice(baseUnitPrice, item.quantity),
    stockStatus: selectedDose?.stockStatus ?? baseProduct.stockStatus,
    variantId: selectedDose?.id,
    variantLabel: selectedDose?.label,
@@ -233,7 +243,8 @@ export async function createCheckoutSession(
  );
 
  const shipping = roundMoney(calculateShipping(subtotal));
- const buy3Get1Discount = calculateBuy3Get1Discount(lineItems);
+ const { promoBuy3Get1Enabled } = await getHomepageControlConfig();
+ const buy3Get1Discount = promoBuy3Get1Enabled ? calculateBuy3Get1Discount(lineItems) : 0;
  const isBuy3Get1Active = buy3Get1Discount > 0;
 
  if (isBuy3Get1Active && payload.referralCode?.trim()) {

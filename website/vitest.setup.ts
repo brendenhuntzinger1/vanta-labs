@@ -47,6 +47,10 @@ vi.mock("@/lib/membership", () => ({
   checkAndAwardBirthdayBonus: async () => false,
 }));
 
+vi.mock("@/lib/admin-control", () => ({
+  getHomepageControlConfig: async () => ({ promoBuy3Get1Enabled: false }),
+}));
+
 vi.mock("@/lib/ambassador-settings", () => ({
   getAmbassadorProgramSettings: async () => ({
     minimumQualifyingOrder: 100,

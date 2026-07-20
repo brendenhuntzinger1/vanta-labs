@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
+import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 
 async function createSecureCheckoutSession(payload: unknown) {
@@ -551,7 +552,7 @@ export default function CheckoutPage() {
                       <p className="truncate text-sm text-white">{item.name}</p>
                       <p className="mt-1 text-xs text-white/40">Qty {item.quantity}{item.doseLabel ? ` • ${item.doseLabel}` : ""}</p>
                     </div>
-                    <p className="text-sm text-white/75">{formatCartCurrency(item.price * item.quantity)}</p>
+                    <p className="text-sm text-white/75">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity))}</p>
                   </div>
                 ))}
               </div>

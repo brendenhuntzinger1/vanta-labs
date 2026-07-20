@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { ProductDetailClient } from "@/components/product-detail-client";
 import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/catalog";
+import { getHomepageControlConfig } from "@/lib/admin-control";
 
 export const dynamic = "force-dynamic";
 
@@ -32,10 +33,13 @@ export default async function ProductDetailPage({
   }
 
   const relatedProducts = await getCatalogProductsByCategory(product.category, product.slug, 4).catch(() => []);
+  const { promoBuy3Get1Enabled } = await getHomepageControlConfig();
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100">
-      <ProductDetailClient product={product} relatedProducts={relatedProducts} />
-    </div>
+    <ProductDetailClient
+      product={product}
+      relatedProducts={relatedProducts}
+      promoBuy3Get1Enabled={Boolean(promoBuy3Get1Enabled)}
+    />
   );
 }

@@ -1240,6 +1240,138 @@ textarea {
   to { transform: translate3d(-240px, -240px, 0); }
 }
 
+/* Light "laboratory" theme, scoped to the product detail page only. The
+   top of the gradient stays dark for the height of the fixed SiteHeaderV2
+   nav so its white text/logo stay legible before the user scrolls past 24px
+   (the point .vl2-nav's own dark blur backdrop kicks in) - everything below
+   that band is the white lab surface. */
+.vl2-lab-page {
+  position: relative;
+  isolation: isolate;
+  background: linear-gradient(180deg, #0b0b0b 0%, #0b0b0b 96px, #f5f5f2 260px, #f5f5f2 100%);
+  color: #111111;
+}
+
+.vl2-lab-page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(55% 38% at 18% 8%, rgba(255, 255, 255, 0.9), transparent 60%),
+    radial-gradient(45% 30% at 88% 4%, rgba(219, 226, 234, 0.55), transparent 60%);
+}
+
+.vl2-lab-sweep {
+  position: fixed;
+  top: -30%;
+  left: -25%;
+  width: 55%;
+  height: 160%;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(100deg, transparent 42%, rgba(255, 255, 255, 0.6) 50%, transparent 58%);
+  animation: vl2-lab-sweep-move 16s ease-in-out infinite;
+  mix-blend-mode: multiply;
+}
+
+@keyframes vl2-lab-sweep-move {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(150%, 8%); }
+}
+
+.vl2-lab-orb {
+  position: fixed;
+  z-index: -1;
+  border-radius: 9999px;
+  filter: blur(70px);
+  pointer-events: none;
+}
+
+.vl2-lab-orb-a {
+  top: 10%;
+  left: 4%;
+  width: 320px;
+  height: 320px;
+  background: rgba(191, 219, 254, 0.4);
+  animation: vl2-lab-orb-a-float 22s ease-in-out infinite;
+}
+
+.vl2-lab-orb-b {
+  bottom: 6%;
+  right: 6%;
+  width: 380px;
+  height: 380px;
+  background: rgba(226, 232, 240, 0.55);
+  animation: vl2-lab-orb-b-float 26s ease-in-out infinite;
+}
+
+@keyframes vl2-lab-orb-a-float {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(36px, 26px); }
+}
+
+@keyframes vl2-lab-orb-b-float {
+  0%, 100% { transform: translate(0, 0); }
+  50% { transform: translate(-28px, -34px); }
+}
+
+.vl2-lab-eyebrow {
+  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: #6b6b64;
+}
+
+.vl2-lab-panel {
+  position: relative;
+  background: #ffffff;
+  border: 1px solid #e6e6e1;
+  box-shadow: 0 1px 2px rgba(15, 15, 10, 0.04), 0 16px 36px -18px rgba(15, 15, 10, 0.16);
+}
+
+.vl2-lab-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: #0a0a0a;
+  color: #fff;
+  border: 1px solid #0a0a0a;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: background-color var(--duration-fast) ease;
+}
+
+.vl2-lab-btn-primary:hover {
+  background: #262626;
+}
+
+.vl2-lab-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  background: transparent;
+  color: #0a0a0a;
+  border: 1px solid #d8d8d3;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: border-color var(--duration-fast) ease, background-color var(--duration-fast) ease;
+}
+
+.vl2-lab-btn-secondary:hover {
+  border-color: #0a0a0a;
+  background: rgba(10, 10, 10, 0.035);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .vl-float,
   .vl-float-b,
@@ -1267,7 +1399,10 @@ textarea {
   .vl2-vial-label,
   .vl2-fade-in,
   .vl2-galaxy::before,
-  .vl2-galaxy::after {
+  .vl2-galaxy::after,
+  .vl2-lab-sweep,
+  .vl2-lab-orb-a,
+  .vl2-lab-orb-b {
     animation: none !important;
   }
 

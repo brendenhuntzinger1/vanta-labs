@@ -7,6 +7,7 @@ import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { WishlistButton } from "@/components/wishlist-button";
+import { bundleDiscountRate, getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import type { Product } from "@/lib/catalog-types";
 import Image from "next/image";
 
@@ -69,6 +70,15 @@ const TRUST_ROW = [
     label: "COA Verified",
     detail: "Third-party batch testing",
   },
+  {
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+        <path d="M9 2h6M10 2v6.2a2 2 0 0 1-.34 1.12L4.9 17.2A2.4 2.4 0 0 0 6.9 21h10.2a2.4 2.4 0 0 0 2-3.8l-4.76-7.88A2 2 0 0 1 14 8.2V2" />
+      </svg>
+    ),
+    label: "USA Sourced",
+    detail: "Among the purest sources available",
+  },
 ] as const;
 
 const PRODUCT_FAQ = [
@@ -93,19 +103,19 @@ const PRODUCT_FAQ = [
 function FaqAccordion() {
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   return (
-    <div className="mt-3 divide-y divide-white/8">
+    <div className="mt-3 divide-y divide-zinc-200">
       {PRODUCT_FAQ.map((item, idx) => (
         <div key={idx}>
           <button
             type="button"
-            className="flex w-full items-center justify-between gap-4 py-4 text-left text-sm text-white transition hover:text-white/80"
+            className="flex w-full items-center justify-between gap-4 py-4 text-left text-sm text-[#111] transition hover:text-zinc-600"
             onClick={() => setOpenIndex(openIndex === idx ? null : idx)}
           >
             <span className="font-medium">{item.q}</span>
-            <span className={`shrink-0 text-white/40 transition-transform duration-200 ${openIndex === idx ? "rotate-180" : ""}`}>▼</span>
+            <span className={`shrink-0 text-zinc-400 transition-transform duration-200 ${openIndex === idx ? "rotate-180" : ""}`}>▼</span>
           </button>
           {openIndex === idx && (
-            <p className="pb-4 text-sm leading-7 text-white/55">{item.a}</p>
+            <p className="pb-4 text-sm leading-7 text-zinc-500">{item.a}</p>
           )}
         </div>
       ))}
@@ -118,9 +128,11 @@ type TabKey = "description" | "specs" | "coa";
 export function ProductDetailClient({
   product,
   relatedProducts = [],
+  promoBuy3Get1Enabled = false,
 }: {
   product: Product;
   relatedProducts?: Product[];
+  promoBuy3Get1Enabled?: boolean;
 }) {
   const { addToCart } = useCart();
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
@@ -140,6 +152,7 @@ export function ProductDetailClient({
   const selectedStockStatus = selectedDose?.stockStatus ?? product.stockStatus;
   const isOutOfStock = selectedStockStatus === "Out of Stock" || selectedStockStatus === "Reserved";
   const unitPrice = toPriceNumber(selectedPrice);
+  const currentBundleRate = bundleDiscountRate(quantity);
 
   const galleryItems = useMemo<GalleryItem[]>(() => {
     const fromGallery = (product.galleryImages ?? []).map((image) => ({
@@ -197,21 +210,33 @@ export function ProductDetailClient({
   ];
 
   return (
-    <div className="min-h-screen bg-[#0b0b0b] text-white">
+    <div className="vl2-lab-page min-h-screen">
+      <div className="vl2-lab-sweep" aria-hidden="true" />
+      <div className="vl2-lab-orb vl2-lab-orb-a" aria-hidden="true" />
+      <div className="vl2-lab-orb vl2-lab-orb-b" aria-hidden="true" />
+
       <SiteHeaderV2 />
 
-      <main className="mx-auto max-w-[1440px] px-6 pb-16 pt-28 lg:px-12 lg:pt-32">
-        <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-white/40">
-          <Link href="/" className="transition hover:text-white/70">Home</Link>
+      <main className="relative mx-auto max-w-[1440px] px-6 pb-16 pt-28 lg:px-12 lg:pt-32">
+        <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-zinc-500">
+          <Link href="/" className="transition hover:text-[#111]">Home</Link>
           <span>/</span>
-          <Link href="/products" className="transition hover:text-white/70">Products</Link>
+          <Link href="/products" className="transition hover:text-[#111]">Products</Link>
           <span>/</span>
-          <span className="text-white/70">{product.name}</span>
+          <span className="text-zinc-700">{product.name}</span>
         </nav>
+
+        {promoBuy3Get1Enabled ? (
+          <div className="vl2-lab-panel mt-6 flex flex-wrap items-center gap-2 border-emerald-200 bg-emerald-50 px-5 py-3 text-sm text-emerald-900">
+            <span aria-hidden="true">🎁</span>
+            <span className="font-medium">Buy 3, Get 1 Free</span>
+            <span className="text-emerald-700">— the lowest-priced item in your cart is automatically free at checkout.</span>
+          </div>
+        ) : null}
 
         <section className="mt-6 grid min-w-0 gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-start">
           <div className="min-w-0">
-            <div className="vl2-hairline overflow-hidden bg-[#111]">
+            <div className="vl2-lab-panel overflow-hidden">
               <div className="relative min-h-[340px] sm:min-h-[460px]">
                 {hasRealImage ? (
                   <Image
@@ -224,7 +249,7 @@ export function ProductDetailClient({
                   />
                 ) : (
                   <div className="flex h-full min-h-[340px] items-center justify-center">
-                    <div className="border border-white/15 px-4 py-1.5 text-xs uppercase tracking-[0.2em] text-white/45">Image pending</div>
+                    <div className="border border-zinc-200 px-4 py-1.5 text-xs uppercase tracking-[0.2em] text-zinc-400">Image pending</div>
                   </div>
                 )}
               </div>
@@ -237,7 +262,7 @@ export function ProductDetailClient({
                     key={item.id}
                     type="button"
                     onClick={() => setSelectedImageUrl(item.imageUrl)}
-                    className={`relative overflow-hidden border bg-[#111] transition ${item.imageUrl === imageToDisplay ? "border-white/50" : "border-white/10 hover:border-white/25"}`}
+                    className={`relative overflow-hidden border bg-white transition ${item.imageUrl === imageToDisplay ? "border-zinc-900" : "border-zinc-200 hover:border-zinc-400"}`}
                   >
                     <div className="relative aspect-square">
                       <Image src={item.imageUrl} alt={item.altText} fill sizes="90px" className="object-cover" />
@@ -248,13 +273,13 @@ export function ProductDetailClient({
             )}
 
             <div className="mt-8">
-              <div className="flex gap-1 border border-white/10 p-1">
+              <div className="vl2-lab-panel flex gap-1 p-1">
                 {TABS.map((tab) => (
                   <button
                     key={tab.key}
                     type="button"
                     onClick={() => setActiveTab(tab.key)}
-                    className={`min-w-0 flex-1 px-2 py-2 text-[11px] font-medium uppercase tracking-[0.1em] transition sm:px-3 sm:text-xs sm:tracking-[0.16em] ${activeTab === tab.key ? "bg-white/10 text-white" : "text-white/45 hover:text-white/70"}`}
+                    className={`min-w-0 flex-1 px-2 py-2 text-[11px] font-medium uppercase tracking-[0.1em] transition sm:px-3 sm:text-xs sm:tracking-[0.16em] ${activeTab === tab.key ? "bg-[#111] text-white" : "text-zinc-500 hover:text-[#111]"}`}
                   >
                     {tab.label}
                   </button>
@@ -263,19 +288,19 @@ export function ProductDetailClient({
 
               <div className="mt-4">
                 {activeTab === "description" && (
-                  <div className="vl2-hairline p-5">
-                    <p className="text-sm leading-7 text-white/65">{product.longDescription ?? product.description}</p>
+                  <div className="vl2-lab-panel p-5">
+                    <p className="text-sm leading-7 text-zinc-600">{product.longDescription ?? product.description}</p>
                     {product.molecularFormula && (
-                      <p className="mt-4 text-xs text-white/40">Molecular Formula: <span className="text-white/70">{product.molecularFormula}</span></p>
+                      <p className="mt-4 text-xs text-zinc-400">Molecular Formula: <span className="text-zinc-700">{product.molecularFormula}</span></p>
                     )}
-                    <div className="mt-5 border border-white/10 p-4 text-xs leading-6 text-white/55">
-                      <strong className="text-white">Research Use Only.</strong> This compound is intended strictly for laboratory research purposes. Not for human or veterinary use.
+                    <div className="mt-5 border border-zinc-200 bg-zinc-50 p-4 text-xs leading-6 text-zinc-600">
+                      <strong className="text-[#111]">Research Use Only.</strong> This compound is intended strictly for laboratory research purposes. Not for human or veterinary use.
                     </div>
                   </div>
                 )}
 
                 {activeTab === "specs" && (
-                  <div className="vl2-hairline p-5">
+                  <div className="vl2-lab-panel p-5">
                     <dl className="space-y-3 text-sm">
                       {[
                         ["Batch Number", selectedBatchNumber],
@@ -286,9 +311,9 @@ export function ProductDetailClient({
                         ["Category", product.category],
                         ["SKU", selectedDose?.sku ?? "N/A"],
                       ].map(([label, value]) => (
-                        <div key={label} className="flex justify-between border-b border-white/8 pb-2 last:border-0">
-                          <dt className="text-white/40">{label}</dt>
-                          <dd className="font-medium text-white">{value}</dd>
+                        <div key={label} className="flex justify-between border-b border-zinc-100 pb-2 last:border-0">
+                          <dt className="text-zinc-400">{label}</dt>
+                          <dd className="font-medium text-[#111]">{value}</dd>
                         </div>
                       ))}
                     </dl>
@@ -296,18 +321,18 @@ export function ProductDetailClient({
                 )}
 
                 {activeTab === "coa" && (
-                  <div className="vl2-hairline p-5">
-                    <p className="text-sm leading-7 text-white/65">
+                  <div className="vl2-lab-panel p-5">
+                    <p className="text-sm leading-7 text-zinc-600">
                       Every product lot is linked to a third-party Certificate of Analysis. The COA includes purity percentage, testing methodology, batch traceability, and lab information. Download the report matching your selected dose below.
                     </p>
                     <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                      <div className="border border-white/10 p-4">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/40">Purity</p>
-                        <p className="mt-1.5 text-xl font-semibold text-white">{selectedPurity ?? "Pending"}</p>
+                      <div className="border border-zinc-200 p-4">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-400">Purity</p>
+                        <p className="mt-1.5 text-xl font-semibold text-[#111]">{selectedPurity ?? "Pending"}</p>
                       </div>
-                      <div className="border border-white/10 p-4">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/40">Batch</p>
-                        <p className="mt-1.5 text-sm font-medium text-white">{selectedBatchNumber}</p>
+                      <div className="border border-zinc-200 p-4">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-400">Batch</p>
+                        <p className="mt-1.5 text-sm font-medium text-[#111]">{selectedBatchNumber}</p>
                       </div>
                     </div>
                     {selectedCoaUrl && (
@@ -315,7 +340,7 @@ export function ProductDetailClient({
                         href={selectedCoaUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="vl2-btn-secondary vl-focus-ring mt-5 inline-flex items-center gap-2 px-5 py-2.5"
+                        className="vl2-lab-btn-secondary vl-focus-ring mt-5 inline-flex items-center gap-2 px-5 py-2.5"
                       >
                         <span>↗</span> Download COA PDF
                       </a>
@@ -326,39 +351,42 @@ export function ProductDetailClient({
             </div>
 
             <div className="mt-8">
-              <p className="vl2-eyebrow">Frequently Asked Questions</p>
+              <p className="vl2-lab-eyebrow">Frequently Asked Questions</p>
               <FaqAccordion />
             </div>
           </div>
 
           <aside className="lg:sticky lg:top-28 space-y-4">
-            <div className="vl2-hairline p-6 sm:p-7">
+            <div className="vl2-lab-panel p-6 sm:p-7">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-[11px] uppercase tracking-[0.3em] text-white/40">{product.category}</p>
-                  <h1 className="vl2-serif mt-2 text-3xl text-white">{product.name}</h1>
+                  <p className="text-[11px] uppercase tracking-[0.3em] text-zinc-400">{product.category}</p>
+                  <h1 className="vl2-serif mt-2 text-3xl text-[#111]">{product.name}</h1>
                 </div>
-                <span className="shrink-0 border border-white/15 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-white/60">{selectedStockStatus}</span>
+                <span className="shrink-0 border border-zinc-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-zinc-600">{selectedStockStatus}</span>
               </div>
 
               {doseFromSlug && (
-                <p className="mt-1 text-xs text-white/40">{doseFromSlug} · {product.labName}</p>
+                <p className="mt-1 text-xs text-zinc-400">{doseFromSlug} · {product.labName}</p>
               )}
 
-              {selectedPurity && (
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <span className="border border-white/15 px-3 py-1 text-xs font-medium text-white/80">
+              <div className="mt-4 flex flex-wrap items-center gap-2">
+                {selectedPurity && (
+                  <span className="border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-700">
                     {selectedPurity} Purity Verified
                   </span>
-                  <span className="border border-white/10 px-3 py-1 text-xs text-white/40">
-                    Batch {selectedBatchNumber}
-                  </span>
-                </div>
-              )}
+                )}
+                <span className="border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-500">
+                  Batch {selectedBatchNumber}
+                </span>
+                <span className="border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-700">
+                  USA&apos;s Purest Source
+                </span>
+              </div>
 
               {product.doses && product.doses.length > 0 && (
                 <div className="mt-6">
-                  <p className="vl2-eyebrow">Dosage</p>
+                  <p className="vl2-lab-eyebrow">Dosage</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {product.doses.map((variant) => (
                       <button
@@ -367,8 +395,8 @@ export function ProductDetailClient({
                         onClick={() => setSelectedDoseId(variant.id)}
                         className={`border px-4 py-2 text-sm transition ${
                           selectedDose?.id === variant.id
-                            ? "border-white bg-white text-black"
-                            : "border-white/15 text-white/70 hover:border-white/35 hover:text-white"
+                            ? "border-[#111] bg-[#111] text-white"
+                            : "border-zinc-200 text-zinc-600 hover:border-zinc-400 hover:text-[#111]"
                         } ${variant.stockStatus === "Out of Stock" ? "opacity-40" : ""}`}
                       >
                         {variant.label}
@@ -380,31 +408,36 @@ export function ProductDetailClient({
               )}
 
               <div className="mt-6 flex items-end gap-3">
-                <p className="text-4xl font-semibold text-white">{selectedPrice}</p>
+                <p className="text-4xl font-semibold text-[#111]">{selectedPrice}</p>
                 {selectedCompareAtPrice && (
-                  <p className="mb-1 text-base text-white/40 line-through">{selectedCompareAtPrice}</p>
+                  <p className="mb-1 text-base text-zinc-400 line-through">{selectedCompareAtPrice}</p>
                 )}
               </div>
 
               <div className="mt-6">
-                <p className="vl2-eyebrow">Quantity</p>
+                <p className="vl2-lab-eyebrow">Quantity</p>
                 <div className="mt-3 grid grid-cols-3 gap-2">
                   {BUNDLE_OPTIONS.map((option) => {
                     const isSelected = option.quantity === 3 ? quantity >= 3 : quantity === option.quantity;
+                    const rate = bundleDiscountRate(option.quantity);
+                    const lineTotal = getBundleDiscountedLineTotal(unitPrice, option.quantity);
                     return (
                       <button
                         key={option.quantity}
                         type="button"
                         onClick={() => setQuantity(option.quantity)}
-                        className={`relative border px-2 py-3 text-center transition ${isSelected ? "border-white bg-white/10" : "border-white/12 hover:border-white/30"}`}
+                        className={`relative border px-2 py-3 text-center transition ${isSelected ? "border-[#111] bg-zinc-50" : "border-zinc-200 hover:border-zinc-400"}`}
                       >
                         {option.badge ? (
-                          <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap bg-white px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-black">
+                          <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap bg-[#111] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-white">
                             {option.badge}
                           </span>
                         ) : null}
-                        <span className="block text-sm text-white">{option.label}</span>
-                        <span className="mt-1 block text-xs text-white/45">{formatUsd(unitPrice * option.quantity)}</span>
+                        <span className="block text-sm text-[#111]">{option.label}</span>
+                        <span className="mt-1 block text-xs text-zinc-500">{formatUsd(lineTotal)}</span>
+                        {rate > 0 ? (
+                          <span className="mt-0.5 block text-[10px] font-medium text-emerald-600">Save {Math.round(rate * 100)}%</span>
+                        ) : null}
                       </button>
                     );
                   })}
@@ -414,28 +447,31 @@ export function ProductDetailClient({
                     <button
                       type="button"
                       onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                      className="h-8 w-8 border border-white/15 text-white/70 transition hover:border-white/35"
+                      className="h-8 w-8 border border-zinc-200 text-zinc-600 transition hover:border-zinc-400"
                     >−</button>
-                    <span className="text-sm text-white">{quantity} bottles</span>
+                    <span className="text-sm text-[#111]">{quantity} bottles</span>
                     <button
                       type="button"
                       onClick={() => setQuantity((q) => Math.min(10, q + 1))}
-                      className="h-8 w-8 border border-white/15 text-white/70 transition hover:border-white/35"
+                      className="h-8 w-8 border border-zinc-200 text-zinc-600 transition hover:border-zinc-400"
                     >+</button>
+                    {currentBundleRate > 0 ? (
+                      <span className="text-xs font-medium text-emerald-600">Save {Math.round(currentBundleRate * 100)}% — {formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity))} total</span>
+                    ) : null}
                   </div>
                 ) : null}
               </div>
 
-              <label className="mt-5 flex items-start gap-3 border border-white/10 p-3.5 text-sm text-white/70">
+              <label className="mt-5 flex items-start gap-3 border border-zinc-200 bg-zinc-50 p-3.5 text-sm text-zinc-600">
                 <input
                   type="checkbox"
                   checked={subscribeSelected}
                   onChange={(event) => setSubscribeSelected(event.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-white/25 bg-transparent"
+                  className="mt-0.5 h-4 w-4 rounded border-zinc-300 bg-white"
                 />
                 <span>
-                  <span className="block font-medium text-white">Subscribe &amp; Save</span>
-                  <span className="mt-0.5 block text-xs text-white/40">Recurring orders aren&apos;t live yet — this places a one-time order for now.</span>
+                  <span className="block font-medium text-[#111]">Subscribe &amp; Save</span>
+                  <span className="mt-0.5 block text-xs text-zinc-400">Recurring orders aren&apos;t live yet — this places a one-time order for now.</span>
                 </span>
               </label>
 
@@ -444,13 +480,13 @@ export function ProductDetailClient({
                   onClick={(event) => handleAddToCart(event.currentTarget)}
                   type="button"
                   disabled={isOutOfStock}
-                  className="vl2-btn-primary vl-focus-ring flex-1 px-5 py-3.5 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="vl2-lab-btn-primary vl-focus-ring flex-1 px-5 py-3.5 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isOutOfStock ? "Currently Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
                 </button>
                 <WishlistButton
                   slug={product.slug}
-                  className="vl2-btn-secondary vl-focus-ring inline-flex h-[52px] w-[52px] flex-shrink-0 items-center justify-center"
+                  className="vl2-lab-btn-secondary vl-focus-ring inline-flex h-[52px] w-[52px] flex-shrink-0 items-center justify-center"
                 />
               </div>
 
@@ -459,22 +495,22 @@ export function ProductDetailClient({
                   href={selectedCoaUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="vl2-btn-secondary vl-focus-ring mt-2 flex w-full items-center justify-center gap-2 px-5 py-2.5"
+                  className="vl2-lab-btn-secondary vl-focus-ring mt-2 flex w-full items-center justify-center gap-2 px-5 py-2.5"
                 >
                   View COA
                 </a>
               )}
 
               {message && (
-                <p className="mt-3 text-sm text-white/70">{message}</p>
+                <p className="mt-3 text-sm text-zinc-600">{message}</p>
               )}
 
-              <div className="mt-6 space-y-2 border-t border-white/10 pt-5">
+              <div className="mt-6 space-y-2 border-t border-zinc-200 pt-5">
                 {TRUST_ROW.map((item) => (
-                  <div key={item.label} className="flex items-center gap-3 text-white/60">
+                  <div key={item.label} className="flex items-center gap-3 text-zinc-500">
                     <span aria-hidden="true">{item.icon}</span>
                     <span className="text-xs">
-                      <span className="font-medium text-white/80">{item.label}</span> — {item.detail}
+                      <span className="font-medium text-zinc-700">{item.label}</span> — {item.detail}
                     </span>
                   </div>
                 ))}
@@ -485,7 +521,11 @@ export function ProductDetailClient({
 
         {relatedProducts.length > 0 && (
           <ScrollReveal className="mt-16">
-            <section>
+            {/* ProductCard is styled for the site's dark theme everywhere
+                else, so related products get their own dark panel here
+                rather than sitting directly on this page's white lab
+                background where they'd be nearly invisible. */}
+            <section className="bg-[#0b0b0b] p-6 sm:p-10">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="vl2-eyebrow">You May Also Need</p>
@@ -510,17 +550,17 @@ export function ProductDetailClient({
         )}
       </main>
 
-      <div className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-[#0b0b0b]/95 px-4 py-3 backdrop-blur-xl lg:hidden">
+      <div className="fixed inset-x-0 bottom-0 z-50 border-t border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur-xl lg:hidden">
         <div className="flex items-center gap-3">
           <div className="flex-1">
-            <p className="truncate text-xs font-medium text-white">{product.name}</p>
-            <p className="text-sm font-semibold text-white/80">{selectedPrice}</p>
+            <p className="truncate text-xs font-medium text-[#111]">{product.name}</p>
+            <p className="text-sm font-semibold text-zinc-600">{selectedPrice}</p>
           </div>
           <button
             onClick={(event) => handleAddToCart(event.currentTarget)}
             type="button"
             disabled={isOutOfStock}
-            className="vl2-btn-primary vl-focus-ring shrink-0 px-6 py-2.5 text-sm disabled:opacity-50"
+            className="vl2-lab-btn-primary vl-focus-ring shrink-0 px-6 py-2.5 text-sm disabled:opacity-50"
           >
             {isOutOfStock ? "Unavailable" : "Add to Cart"}
           </button>

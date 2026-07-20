@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatCartCurrency, getShippingProgress, useCart } from "@/components/cart-context";
+import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 
 export default function CartPage() {
@@ -84,7 +85,7 @@ export default function CartPage() {
                         <span>{item.quantity}</span>
                         <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="px-2" aria-label="Increase quantity">+</button>
                       </div>
-                      <p className="text-base text-white sm:text-lg">{formatCartCurrency(item.price * item.quantity)}</p>
+                      <p className="text-base text-white sm:text-lg">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity))}</p>
                     </div>
                   </div>
                 );

@@ -6,6 +6,7 @@ import type { ReferralCode } from "@/lib/referral-codes";
 import { validateReferralCodeClient } from "@/lib/referral-client";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
+import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 
 type CouponDetails = {
   code: string;
@@ -93,8 +94,9 @@ const FLAT_SHIPPING_FEE = 15;
 function calculateBuy3Get1Discount(items: CartItem[]) {
   const expandedPrices: number[] = [];
   for (const item of items) {
+    const discountedUnitPrice = getBundleDiscountedUnitPrice(item.price, item.quantity);
     for (let i = 0; i < item.quantity; i += 1) {
-      expandedPrices.push(item.price);
+      expandedPrices.push(discountedUnitPrice);
     }
   }
 
@@ -147,6 +149,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [pointsPerDollar, setPointsPerDollar] = useState(0);
   const [pointsMultiplier, setPointsMultiplier] = useState(1);
   const [pointsToRedeem, setPointsToRedeemState] = useState(0);
+  const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -166,6 +169,21 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         setPointsMultiplier(result.pointsMultiplier ?? 1);
       } catch {
         // Guest shoppers simply see no points UI.
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
+        if (!response.ok) return;
+        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean };
+        if (result.success) {
+          setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
+        }
+      } catch {
+        // Defaults to disabled (matches the server's default) if this fails.
       }
     })();
   }, []);
@@ -361,13 +379,19 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const itemCount = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
 
   const subtotal = useMemo(
-    () => items.reduce((sum, item) => sum + item.price * item.quantity, 0),
+    () => items.reduce((sum, item) => sum + getBundleDiscountedLineTotal(item.price, item.quantity), 0),
     [items],
   );
 
   const totalQuantity = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
-  const isBuy3Get1FreeEligible = useMemo(() => totalQuantity >= 4, [totalQuantity]);
-  const buy3Get1FreeDiscount = useMemo(() => calculateBuy3Get1Discount(items), [items]);
+  const isBuy3Get1FreeEligible = useMemo(
+    () => promoBuy3Get1Enabled && totalQuantity >= 4,
+    [totalQuantity, promoBuy3Get1Enabled],
+  );
+  const buy3Get1FreeDiscount = useMemo(
+    () => (promoBuy3Get1Enabled ? calculateBuy3Get1Discount(items) : 0),
+    [items, promoBuy3Get1Enabled],
+  );
 
   const shipping = subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : subtotal > 0 ? FLAT_SHIPPING_FEE : 0;
 
