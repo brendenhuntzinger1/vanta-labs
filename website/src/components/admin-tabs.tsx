@@ -55,6 +55,11 @@ const tabs: AdminTab[] = [
     href: "/admin/team",
     match: (pathname) => pathname.startsWith("/admin/team"),
   },
+  {
+    label: "Reconciliation",
+    href: "/admin/reconciliation",
+    match: (pathname) => pathname.startsWith("/admin/reconciliation"),
+  },
 ];
 
 export function AdminTabs() {
