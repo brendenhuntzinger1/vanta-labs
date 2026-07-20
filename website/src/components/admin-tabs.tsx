@@ -35,6 +35,11 @@ const tabs: AdminTab[] = [
     href: "/admin/coupons",
     match: (pathname) => pathname.startsWith("/admin/coupons"),
   },
+  {
+    label: "Inventory",
+    href: "/admin/inventory",
+    match: (pathname) => pathname.startsWith("/admin/inventory"),
+  },
 ];
 
 export function AdminTabs() {
@@ -42,7 +47,7 @@ export function AdminTabs() {
 
   return (
     <nav aria-label="Admin sections" className="vl-panel mx-auto mb-6 max-w-7xl rounded-2xl p-2">
-      <ul className="grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
+      <ul className="grid gap-2 sm:grid-cols-3 lg:grid-cols-6">
         {tabs.map((tab) => {
           const active = tab.match(pathname);
 

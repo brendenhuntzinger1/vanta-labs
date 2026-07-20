@@ -4,6 +4,7 @@ import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getCurrentOnlineVisitorCount, getRevenueWindowMetrics } from "@/lib/admin-analytics";
 import { getAdminOrderRows } from "@/lib/admin-orders";
 import { listAdminProducts } from "@/lib/admin-products";
+import { getLowStockCount } from "@/lib/admin-inventory";
 import { getAdminPartnerRows } from "@/lib/partner-portal";
 import { AdminControlCenterClient } from "@/components/admin-control-center-client";
 import { AdminLiveMetrics } from "@/components/admin-live-metrics";
@@ -25,12 +26,13 @@ export default async function AdminHomePage() {
     redirect("/vault");
   }
 
-  const [orderList, products, partners, onlineVisitors, revenueWindows] = await Promise.all([
+  const [orderList, products, partners, onlineVisitors, revenueWindows, lowStockCount] = await Promise.all([
     getAdminOrderRows({ pageSize: 1000 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 1000, pageCount: 1 })),
     listAdminProducts({ search: "", category: "all", status: "all" }).catch(() => []),
     getAdminPartnerRows({ status: "all" }).catch(() => []),
     getCurrentOnlineVisitorCount().catch(() => 0),
     getRevenueWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0 })),
+    getLowStockCount().catch(() => 0),
   ]);
 
   const orders = orderList.rows;
@@ -77,6 +79,10 @@ export default async function AdminHomePage() {
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Pending Partners</p>
             <p className="mt-2 text-2xl font-semibold text-white">{pendingPartners}</p>
           </div>
+          <Link href="/admin/inventory" className="vl-panel rounded-2xl p-4 transition hover:border-white/25">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Low Stock</p>
+            <p className={lowStockCount > 0 ? "mt-2 text-2xl font-semibold text-amber-300" : "mt-2 text-2xl font-semibold text-white"}>{lowStockCount}</p>
+          </Link>
           <AdminLiveMetrics
             initial={{
               onlineNow: onlineVisitors,

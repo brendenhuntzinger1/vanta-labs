@@ -50,6 +50,9 @@ Run these SQL files in order from Supabase SQL Editor:
     unique constraint on `order_shipments.order_id` so the admin order
     detail page can upsert one shipment record (carrier, tracking,
     estimated delivery) per order.
+12. `src/lib/sql/inventory-thresholds.sql` — **required.** Adds
+    `low_stock_threshold` to `products` and `product_doses` so
+    `/admin/inventory` can flag lines that need restocking.
 
 Optional follow-up hardening (run after the above, in Supabase SQL Editor,
 only if you want to apply the latest Supabase Performance/Security Advisor
