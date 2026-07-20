@@ -8,6 +8,7 @@ const FOOTER_COLUMNS = {
   ],
   company: [
     { label: "Contact", href: "/contact" },
+    { label: "Research Library", href: "/research" },
     { label: "Partner Program", href: "/partner" },
     { label: "Ambassador", href: "/ambassador" },
   ],

@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { getCatalogProducts } from "@/lib/catalog";
+import { ARTICLE_SLUGS } from "@/lib/articles";
 
 export const dynamic = "force-dynamic";
 
@@ -10,10 +11,16 @@ function siteUrl() {
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = siteUrl();
 
-  const staticRoutes = ["", "/products", "/coa-library", "/membership", "/ambassador", "/partner", "/contact"].map((path) => ({
+  const staticRoutes = ["", "/products", "/coa-library", "/membership", "/ambassador", "/partner", "/contact", "/research"].map((path) => ({
     url: `${base}${path}`,
     changeFrequency: "weekly" as const,
     priority: path === "" ? 1 : 0.7,
+  }));
+
+  const articleRoutes: MetadataRoute.Sitemap = ARTICLE_SLUGS.map((slug) => ({
+    url: `${base}/research/${slug}`,
+    changeFrequency: "monthly" as const,
+    priority: 0.5,
   }));
 
   let productRoutes: MetadataRoute.Sitemap = [];
@@ -27,5 +34,5 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     // Sitemap still returns static routes if the catalog can't be read.
   }
 
-  return [...staticRoutes, ...productRoutes];
+  return [...staticRoutes, ...articleRoutes, ...productRoutes];
 }

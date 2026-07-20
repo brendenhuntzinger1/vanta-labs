@@ -126,20 +126,26 @@ export async function adjustInventoryLine(input: { productId: string; doseId?: s
 
   const updatePayload: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
+  // Track a 0 → back-in-stock transition so we can notify waitlisted shoppers.
+  let restockedTo = 0;
+  let wasOutOfStock = false;
+
   if (input.quantity !== undefined) {
     const quantity = Math.max(0, Math.round(input.quantity));
     updatePayload.inventory_quantity = quantity;
+    restockedTo = quantity;
 
     // Only auto-flip between In Stock / Out of Stock - never clobber a
     // manually-set "Limited" or "Reserved" status, which the product editor
     // uses intentionally and this quick-adjust flow shouldn't override.
     const { data: current } = await supabaseAdmin
       .from(table)
-      .select("stock_status")
+      .select("stock_status, inventory_quantity")
       .eq("id", matchValue)
       .maybeSingle();
 
     const currentStatus = String(current?.stock_status ?? "In Stock");
+    wasOutOfStock = currentStatus === "Out of Stock" || Number(current?.inventory_quantity ?? 0) <= 0;
     if (currentStatus === "In Stock" || currentStatus === "Out of Stock") {
       updatePayload.stock_status = normalizeStockStatus(quantity);
     }
@@ -160,5 +166,24 @@ export async function adjustInventoryLine(input: { productId: string; doseId?: s
 
   if (error) {
     throw error;
+  }
+
+  // Fire back-in-stock notifications on a genuine 0 → in-stock transition.
+  if (wasOutOfStock && restockedTo > 0) {
+    try {
+      const { notifyBackInStock } = await import("@/lib/back-in-stock");
+      if (input.doseId) {
+        const { data: dose } = await supabaseAdmin.from("product_doses").select("product_id, label").eq("id", input.doseId).maybeSingle();
+        if (dose?.product_id) {
+          const { data: product } = await supabaseAdmin.from("products").select("slug, name").eq("id", dose.product_id).maybeSingle();
+          if (product?.slug) await notifyBackInStock(String(product.slug), String(product.name ?? "Product"), input.doseId);
+        }
+      } else {
+        const { data: product } = await supabaseAdmin.from("products").select("slug, name").eq("id", input.productId).maybeSingle();
+        if (product?.slug) await notifyBackInStock(String(product.slug), String(product.name ?? "Product"));
+      }
+    } catch {
+      // Notifications are best-effort; the inventory update already succeeded.
+    }
   }
 }

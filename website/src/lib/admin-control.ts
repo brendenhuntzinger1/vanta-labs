@@ -293,6 +293,38 @@ export async function getBusinessSettings(): Promise<BusinessSettings> {
   }
 }
 
+// Subscribe & Save — a recurring-order option that customers can opt into.
+// DORMANT until a recurring payment processor is connected: opt-ins are stored
+// as pending subscriptions and never charged without a processor.
+export interface SubscribeSaveConfig {
+  enabled: boolean;
+  discountPercent: number;
+  frequencyDays: number;
+  headline: string;
+}
+
+export const DEFAULT_SUBSCRIBE_SAVE: SubscribeSaveConfig = {
+  enabled: false,
+  discountPercent: 10,
+  frequencyDays: 30,
+  headline: "Subscribe & Save",
+};
+
+export async function getSubscribeSaveConfig(): Promise<SubscribeSaveConfig> {
+  try {
+    const snapshot = await getControlSnapshot("subscribe_save");
+    const cfg = snapshot.subscribe_save ?? {};
+    return {
+      enabled: cfg.enabled === true,
+      discountPercent: Number(cfg.discount_percent ?? DEFAULT_SUBSCRIBE_SAVE.discountPercent) || DEFAULT_SUBSCRIBE_SAVE.discountPercent,
+      frequencyDays: Number(cfg.frequency_days ?? DEFAULT_SUBSCRIBE_SAVE.frequencyDays) || DEFAULT_SUBSCRIBE_SAVE.frequencyDays,
+      headline: (typeof cfg.headline === "string" && cfg.headline.trim()) || DEFAULT_SUBSCRIBE_SAVE.headline,
+    };
+  } catch {
+    return DEFAULT_SUBSCRIBE_SAVE;
+  }
+}
+
 // First-order welcome offer — a promo code shown in a banner to new visitors.
 // Works as a "virtual coupon" (no DB row needed): validateCoupon honors the
 // configured code when the offer is enabled. Off by default.

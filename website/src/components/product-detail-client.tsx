@@ -7,6 +7,8 @@ import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { WishlistButton } from "@/components/wishlist-button";
+import { BackInStockForm } from "@/components/back-in-stock-form";
+import { SubscribeSave } from "@/components/subscribe-save";
 import { bundleDiscountRate, getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import type { Product } from "@/lib/catalog-types";
 import Image from "next/image";
@@ -489,6 +491,14 @@ export function ProductDetailClient({
                   className="vl2-lab-btn-secondary vl-focus-ring inline-flex h-[52px] w-[52px] flex-shrink-0 items-center justify-center"
                 />
               </div>
+
+              {isOutOfStock ? (
+                <div className="mt-4">
+                  <BackInStockForm productSlug={product.slug} variantId={selectedDose?.id} />
+                </div>
+              ) : (
+                <SubscribeSave productSlug={product.slug} variantId={selectedDose?.id} />
+              )}
 
               {selectedCoaUrl && (
                 <a
