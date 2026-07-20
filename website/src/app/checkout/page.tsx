@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
+import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
+import { pointsToDollars } from "@/lib/points-math";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 
 async function createSecureCheckoutSession(payload: unknown) {
@@ -81,10 +83,8 @@ export default function CheckoutPage() {
   const {
     items,
     subtotal,
-    shipping,
     serviceFee,
     discountAmount,
-    total,
     referralCode,
     referralDetails,
     referralError,
@@ -102,7 +102,6 @@ export default function CheckoutPage() {
     pointsBalance,
     pointsToEarn,
     pointsToRedeem,
-    pointsRedeemedDiscount,
     setPointsToRedeem,
   } = useCart();
 
@@ -135,6 +134,21 @@ export default function CheckoutPage() {
   const orderCount = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
   const effectiveReferralInput = referralInput || referralCode || "";
   const effectiveCouponInput = couponInput || couponCode || "";
+
+  // Shipping depends on destination country, which the cart doesn't know -
+  // recomputed here from the same shared shipping.ts formula the server
+  // uses (see payment-service.ts), so expectedTotal below always matches
+  // what the server independently computes for the entered country.
+  const shipping = useMemo(
+    () => calculateShipping(subtotal, form.country),
+    [subtotal, form.country],
+  );
+  const totalBeforePoints = Math.max(0, subtotal + shipping + serviceFee - discountAmount);
+  const pointsRedeemedDiscount = useMemo(
+    () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints)),
+    [referralDetails, pointsToRedeem, totalBeforePoints],
+  );
+  const total = Math.max(0, totalBeforePoints - pointsRedeemedDiscount);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -225,6 +239,7 @@ export default function CheckoutPage() {
           address: form.address.trim(),
           city: form.city.trim(),
           postalCode: form.postalCode.trim(),
+          country: form.country.trim(),
         },
         billing: sameAsShipping
           ? {
@@ -365,7 +380,10 @@ export default function CheckoutPage() {
               <div className="border border-white/10 p-4">
                 <p className="vl2-eyebrow">Shipping Method</p>
                 <p className="mt-2 text-sm text-white">Standard secure shipping</p>
-                <p className="mt-1 text-xs text-white/45">Free at $250+, otherwise flat {formatCartCurrency(15)}.</p>
+                <p className="mt-1 text-xs text-white/45">
+                  Free at $250+, otherwise flat {formatCartCurrency(15)} in the USA
+                  {isDomesticCountry(form.country) ? "" : ` (${formatCartCurrency(45)} international)`}.
+                </p>
               </div>
               <div className="border border-white/10 p-4">
                 <p className="vl2-eyebrow">Security</p>

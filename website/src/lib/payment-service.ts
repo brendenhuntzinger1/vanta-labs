@@ -7,6 +7,7 @@ import { getPointsBalance } from "@/lib/membership";
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
+import { calculateShipping, calculateHandlingFee } from "@/lib/shipping";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -58,9 +59,6 @@ interface ValidatedReferral {
  ambassadorAuthUserId: string | null;
 }
 
-const FREE_SHIPPING_THRESHOLD = 250;
-const FLAT_SHIPPING_FEE = 15;
-
 function sanitizeText(value: string) {
  return value.replace(/[<>]/g, "").trim();
 }
@@ -78,14 +76,11 @@ function validateCustomer(customer: CustomerInput) {
  !customer.fullName ||
  !customer.address ||
  !customer.city ||
- !customer.postalCode
+ !customer.postalCode ||
+ !customer.country
  ) {
  throw new Error("Incomplete customer details");
  }
-}
-
-function calculateShipping(subtotal: number) {
- return subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : subtotal > 0 ? FLAT_SHIPPING_FEE : 0;
 }
 
 // Every 4th item (cheapest-first) is free. The caller gates this behind
@@ -242,7 +237,8 @@ export async function createCheckoutSession(
  ),
  );
 
- const shipping = roundMoney(calculateShipping(subtotal));
+ const shipping = roundMoney(calculateShipping(subtotal, payload.customer.country));
+ const handlingFee = calculateHandlingFee(subtotal);
  const { promoBuy3Get1Enabled } = await getHomepageControlConfig();
  const buy3Get1Discount = promoBuy3Get1Enabled ? calculateBuy3Get1Discount(lineItems) : 0;
  const isBuy3Get1Active = buy3Get1Discount > 0;
@@ -292,7 +288,7 @@ export async function createCheckoutSession(
          : 0,
  );
 
- const totalBeforePoints = roundMoney(subtotal + shipping - discountAmount);
+ const totalBeforePoints = roundMoney(subtotal + shipping + handlingFee - discountAmount);
 
  // Points redemption stacks with a coupon or Buy 3 Get 1 Free (it behaves
  // like store credit, not a promo code) but never with a referral code -
@@ -331,9 +327,11 @@ export async function createCheckoutSession(
    shipping_address: payload.customer.address,
    city: payload.customer.city,
    postal_code: payload.customer.postalCode,
+   country: payload.customer.country,
    currency: payload.currency ?? "USD",
    subtotal,
    shipping_amount: shipping,
+   handling_fee: handlingFee,
    discount_amount: discountAmount,
    amount_paid: expectedTotal,
    referral_code: referral?.code ?? null,
@@ -413,5 +411,6 @@ export function sanitizeCustomerInput(customer: CustomerInput) {
  address: sanitizeText(customer.address),
  city: sanitizeText(customer.city),
  postalCode: sanitizeText(customer.postalCode),
+ country: sanitizeText(customer.country ?? ""),
  };
 }

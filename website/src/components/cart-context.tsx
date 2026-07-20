@@ -7,6 +7,7 @@ import { validateReferralCodeClient } from "@/lib/referral-client";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
+import { calculateShipping, calculateHandlingFee, FREE_SHIPPING_THRESHOLD as SHIPPING_FREE_THRESHOLD } from "@/lib/shipping";
 
 type CouponDetails = {
   code: string;
@@ -88,8 +89,6 @@ const CartContext = createContext<CartContextValue | undefined>(undefined);
 
 const CART_STORAGE_KEY = "vanta-labs-cart";
 const REFERRAL_COOKIE_KEY = "vl_referral_code";
-const FREE_SHIPPING_THRESHOLD = 250;
-const FLAT_SHIPPING_FEE = 15;
 
 function calculateBuy3Get1Discount(items: CartItem[]) {
   const expandedPrices: number[] = [];
@@ -393,9 +392,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [items, promoBuy3Get1Enabled],
   );
 
-  const shipping = subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : subtotal > 0 ? FLAT_SHIPPING_FEE : 0;
+  // Estimate only - no shipping address is known yet in the cart, so this
+  // assumes domestic. checkout/page.tsx recomputes this from the shared
+  // shipping.ts formula once the customer enters their country, and that
+  // recomputed value (not this one) is what's sent to the server.
+  const shipping = calculateShipping(subtotal);
 
-  const serviceFee = 0;
+  const serviceFee = calculateHandlingFee(subtotal);
 
   const couponDiscountAmount = useMemo(
     () => (buy3Get1FreeDiscount > 0 || referralDetails ? 0 : calculateCouponDiscountAmount(subtotal, couponDetails)),
@@ -771,9 +774,9 @@ export function useCart() {
 }
 
 export function getShippingProgress(subtotal: number) {
-  const isEligibleForFreeShipping = subtotal >= FREE_SHIPPING_THRESHOLD;
-  const amountToFreeShipping = Math.max(0, FREE_SHIPPING_THRESHOLD - subtotal);
-  const progressPercentage = Math.min((subtotal / FREE_SHIPPING_THRESHOLD) * 100, 100);
+  const isEligibleForFreeShipping = subtotal >= SHIPPING_FREE_THRESHOLD;
+  const amountToFreeShipping = Math.max(0, SHIPPING_FREE_THRESHOLD - subtotal);
+  const progressPercentage = Math.min((subtotal / SHIPPING_FREE_THRESHOLD) * 100, 100);
 
   return {
     isEligibleForFreeShipping,

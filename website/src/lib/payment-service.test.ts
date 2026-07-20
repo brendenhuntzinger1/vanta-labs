@@ -13,6 +13,7 @@ describe("payment service", () => {
           address: "88 Meridian Avenue",
           city: "Austin",
           postalCode: "78701",
+          country: "United States",
         },
         expectedTotal: 999999,
       }),
@@ -29,6 +30,7 @@ describe("payment service", () => {
           address: "88 Meridian Avenue",
           city: "Austin",
           postalCode: "78701",
+          country: "United States",
         },
       }),
     ).rejects.toThrow("Invalid product id");
@@ -44,6 +46,7 @@ describe("payment service", () => {
           address: "88 Meridian Avenue",
           city: "Austin",
           postalCode: "78701",
+          country: "United States",
         },
         referralCode: "EXPIRED10",
       }),

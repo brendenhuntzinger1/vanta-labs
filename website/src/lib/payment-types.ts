@@ -22,6 +22,7 @@ export interface CustomerInput {
   address: string;
   city: string;
   postalCode: string;
+  country: string;
 }
 
 export interface PromotionInput {
