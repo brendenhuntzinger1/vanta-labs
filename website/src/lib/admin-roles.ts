@@ -38,6 +38,12 @@ export function canManageTeam(role: AdminRole) {
   return role === "super_admin";
 }
 
+// Email/payment-processor infrastructure settings hold credentials, so gate
+// them to manager and above (same bar as refunds/coupons/inventory).
+export function canManageSettings(role: AdminRole) {
+  return role === "manager" || role === "super_admin";
+}
+
 export function canManageMembership(role: AdminRole) {
   return role === "manager" || role === "super_admin";
 }

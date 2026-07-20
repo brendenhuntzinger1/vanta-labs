@@ -1,15 +1,23 @@
 import "server-only";
 import type { EmailMessage, EmailProvider, EmailSendResult } from "@/lib/email/types";
 
+export interface ResendProviderConfig {
+  apiKey: string;
+  from: string;
+}
+
 export class ResendEmailProvider implements EmailProvider {
+  // Optional config for backward compatibility; falls back to env when omitted.
+  constructor(private readonly config?: ResendProviderConfig) {}
+
   async send(message: EmailMessage): Promise<EmailSendResult> {
-    const apiKey = process.env.RESEND_API_KEY;
-    const from = process.env.EMAIL_FROM ?? process.env.SMTP_FROM;
+    const apiKey = this.config?.apiKey ?? process.env.RESEND_API_KEY;
+    const from = this.config?.from ?? process.env.EMAIL_FROM ?? process.env.SMTP_FROM;
 
     if (!apiKey || !from) {
       return {
         success: false,
-        error: "Resend is not configured. Set RESEND_API_KEY and EMAIL_FROM.",
+        error: "Resend is not configured. Set the Resend API key and from address.",
       };
     }
 

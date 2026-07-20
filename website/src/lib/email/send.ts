@@ -17,7 +17,7 @@ export async function sendEmail(input: { to: string; replyTo?: string } & EmailT
   };
 
   try {
-    const provider = getEmailProvider();
+    const provider = await getEmailProvider();
     return await provider.send(message);
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : "Unable to send email" };
