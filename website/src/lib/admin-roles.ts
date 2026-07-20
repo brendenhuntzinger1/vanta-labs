@@ -1,5 +1,3 @@
-import "server-only";
-
 export type AdminRole = "staff" | "manager" | "super_admin";
 
 const ADMIN_ROLES: AdminRole[] = ["staff", "manager", "super_admin"];

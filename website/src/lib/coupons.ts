@@ -1,5 +1,3 @@
-import "server-only";
-
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 export interface CouponValidationResult {
