@@ -8,6 +8,7 @@ import { redeemCoupon } from "@/lib/coupons";
 import { calculateEarnedPoints, getActivePointsMultiplier, getCustomerMembership, recordPointsLedgerEntry, reverseOrderPoints } from "@/lib/membership";
 import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
 
 export interface WebhookEventState {
   eventId: string;
@@ -565,6 +566,14 @@ export async function processPaymentWebhook(payload: string, signature: string, 
 
     if (!wasAlreadyPaid && eventPayload.couponCode) {
       await redeemCoupon(eventPayload.couponCode);
+    }
+
+    if (!wasAlreadyPaid && eventPayload.customer?.email) {
+      try {
+        await markAbandonedCartsRecovered(eventPayload.customer.email, orderId);
+      } catch (recoveryError) {
+        console.error("Unable to mark abandoned carts recovered for order", orderId, recoveryError);
+      }
     }
 
     const customerUserId = eventPayload.customerUserId ?? orderRecord?.customer_user_id ?? null;

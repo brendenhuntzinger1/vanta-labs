@@ -103,6 +103,7 @@ export default function CheckoutPage() {
     pointsToEarn,
     pointsToRedeem,
     setPointsToRedeem,
+    setKnownEmail,
   } = useCart();
 
   const [acknowledgements, setAcknowledgements] = useState<ComplianceAcknowledgements>({
@@ -166,6 +167,12 @@ export default function CheckoutPage() {
       }),
     );
   }, [items.length, subtotal, total]);
+
+  useEffect(() => {
+    if (/^\S+@\S+\.\S+$/.test(form.email)) {
+      setKnownEmail(form.email);
+    }
+  }, [form.email, setKnownEmail]);
 
   useEffect(() => {
     (async () => {

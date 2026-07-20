@@ -12,7 +12,7 @@ import type { EmailSendResult, EmailTemplate } from "@/lib/email/types";
 // directly - they're never suppressible, per the transactional carve-out
 // most email marketing laws (CAN-SPAM, etc.) allow.
 export async function sendMarketingEmail(
-  input: { to: string; campaignType: string; referenceId?: string; templateKey: string } & EmailTemplate,
+  input: { to: string; campaignType: string; referenceId?: string; templateKey: string; openTrackingPixelUrl?: string } & EmailTemplate,
 ): Promise<EmailSendResult & { suppressed?: boolean }> {
   const email = input.to.trim().toLowerCase();
 
@@ -29,10 +29,14 @@ export async function sendMarketingEmail(
   const token = generateUnsubscribeToken(email);
   const unsubscribeUrl = `${getSiteUrl()}/api/unsubscribe?email=${encodeURIComponent(email)}&token=${token}`;
   const footerHtml = `<p style="margin:16px 0 0;font-size:11px;color:#71717a;">You're receiving this because you're a Vanta Labs customer or member. <a href="${unsubscribeUrl}" style="color:#a1a1aa;">Unsubscribe</a> from marketing emails.</p>`;
+  const pixelHtml = input.openTrackingPixelUrl
+    ? `<img src="${input.openTrackingPixelUrl}" width="1" height="1" alt="" style="display:none;" />`
+    : "";
+  const appendedHtml = `${footerHtml}${pixelHtml}`;
 
   const html = input.html.includes("</body>")
-    ? input.html.replace("</body>", `${footerHtml}</body>`)
-    : `${input.html}${footerHtml}`;
+    ? input.html.replace("</body>", `${appendedHtml}</body>`)
+    : `${input.html}${appendedHtml}`;
   const text = `${input.text}\n\nUnsubscribe: ${unsubscribeUrl}`;
 
   const result = await sendEmail({ to: input.to, subject: input.subject, html, text });

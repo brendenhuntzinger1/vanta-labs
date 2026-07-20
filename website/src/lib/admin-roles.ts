@@ -41,3 +41,7 @@ export function canManageTeam(role: AdminRole) {
 export function canManageMembership(role: AdminRole) {
   return role === "manager" || role === "super_admin";
 }
+
+export function canManageCartRecovery(role: AdminRole) {
+  return role === "manager" || role === "super_admin";
+}

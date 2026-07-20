@@ -50,6 +50,14 @@ vi.mock("@/lib/membership", () => ({
   getTierBySlug: async () => null,
 }));
 
+vi.mock("@/lib/cart-recovery", () => ({
+  markAbandonedCartsRecovered: async () => {},
+  trackCart: async () => {},
+  getAbandonedCartById: async () => null,
+  mintCartRecoveryCoupon: async () => null,
+  runAbandonedCartSweep: async () => ({ t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0 }),
+}));
+
 vi.mock("@/lib/admin-control", () => ({
   getHomepageControlConfig: async () => ({ promoBuy3Get1Enabled: false }),
   getBulkSavingsControlConfig: async () => ({

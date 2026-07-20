@@ -30,7 +30,11 @@ export function calculateCouponDiscount(subtotal: number, discountType: string, 
 // Mirrors validateReferralCode's contract: null for "no code supplied",
 // throws a user-facing Error for an invalid/expired/exhausted code so the
 // checkout API can surface a clear message instead of silently ignoring it.
-export async function validateCoupon(code: string | undefined, subtotal: number): Promise<CouponValidationResult | null> {
+// customerEmail is required to redeem a coupon assigned to a single
+// recipient (e.g. an abandoned-cart-recovery code - see
+// mintCartRecoveryCoupon in src/lib/cart-recovery.ts); store-wide coupons
+// ignore it.
+export async function validateCoupon(code: string | undefined, subtotal: number, customerEmail?: string): Promise<CouponValidationResult | null> {
   const normalizedCode = normalizeCouponCode(code ?? "");
 
   if (!normalizedCode) {
@@ -39,7 +43,7 @@ export async function validateCoupon(code: string | undefined, subtotal: number)
 
   const { data, error } = await supabaseAdmin
     .from("coupons")
-    .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active")
+    .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email")
     .eq("code", normalizedCode)
     .maybeSingle();
 
@@ -50,6 +54,10 @@ export async function validateCoupon(code: string | undefined, subtotal: number)
 
   if (!data || !data.active) {
     throw new Error("Invalid coupon code");
+  }
+
+  if (data.assigned_email && data.assigned_email.toLowerCase() !== (customerEmail ?? "").trim().toLowerCase()) {
+    throw new Error("This coupon code is tied to a different email address");
   }
 
   const now = Date.now();

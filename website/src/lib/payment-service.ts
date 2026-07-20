@@ -289,7 +289,7 @@ export async function createCheckoutSession(
 
  const coupon = isBuy3Get1Active || referral
    ? null
-   : await validateCoupon(payload.couponCode, subtotal);
+   : await validateCoupon(payload.couponCode, subtotal, payload.customer.email);
 
  const preBulkDiscount = isBuy3Get1Active
    ? { type: "buy3get1" as const, amount: buy3Get1Discount }

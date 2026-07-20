@@ -78,6 +78,7 @@ type CartContextValue = {
   ) => void;
   updateQuantity: (slug: string, quantity: number) => void;
   removeFromCart: (slug: string) => void;
+  restoreItems: (items: Array<{ slug: string; variantId?: string; name: string; quantity: number; unitPrice: number; image?: string }>) => void;
   clearCart: () => void;
   openCart: () => void;
   closeCart: () => void;
@@ -88,6 +89,7 @@ type CartContextValue = {
   applyCouponCode: (code: string) => void;
   clearCouponCode: () => void;
   clearCouponMessage: () => void;
+  setKnownEmail: (email: string) => void;
 };
 
 const CartContext = createContext<CartContextValue | undefined>(undefined);
@@ -156,6 +158,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
   const [isEligibleForBulkSavings, setIsEligibleForBulkSavings] = useState(false);
   const [bulkSavingsConfig, setBulkSavingsConfig] = useState<BulkSavingsConfig>(DEFAULT_BULK_SAVINGS_CONFIG);
+  const [knownEmail, setKnownEmail] = useState("");
+  const [customerName, setCustomerName] = useState("");
+  const [cartSessionId, setCartSessionId] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
@@ -164,6 +169,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         if (!response.ok) return;
         const result = await response.json() as {
           success: boolean;
+          email?: string;
+          fullName?: string;
           pointsBalance?: number;
           pointsPerDollar?: number;
           pointsMultiplier?: number;
@@ -175,6 +182,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         setPointsPerDollar(result.pointsPerDollar ?? 0);
         setPointsMultiplier(result.pointsMultiplier ?? 1);
         setIsEligibleForBulkSavings(Boolean(result.isEligibleForBulkSavings));
+        if (result.email) setKnownEmail(result.email);
+        if (result.fullName) setCustomerName(result.fullName);
       } catch {
         // Guest shoppers simply see no points UI.
       }
@@ -263,6 +272,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
           window.history.replaceState({}, "", nextUrl);
         }
+        const CART_SESSION_KEY = "vanta-labs-cart-session-id";
+        let sessionId = window.localStorage.getItem(CART_SESSION_KEY);
+        if (!sessionId) {
+          sessionId = crypto.randomUUID();
+          window.localStorage.setItem(CART_SESSION_KEY, sessionId);
+        }
+        setCartSessionId(sessionId);
       } catch (error) {
         console.error("Unable to read cart state", error);
       } finally {
@@ -405,6 +421,41 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     () => items.reduce((sum, item) => sum + getBundleDiscountedLineTotal(item.price, item.quantity), 0),
     [items],
   );
+
+  // Abandoned-cart-recovery tracking: fires a debounced snapshot whenever
+  // the cart has items and an email is known (signed-in account, or typed
+  // into the checkout email field via setKnownEmail). Fire-and-forget -
+  // failures here must never affect the shopping experience.
+  useEffect(() => {
+    if (!cartSessionId || items.length === 0 || !knownEmail.trim() || !/^\S+@\S+\.\S+$/.test(knownEmail)) {
+      return;
+    }
+
+    const timeout = setTimeout(() => {
+      fetch("/api/cart/track", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: cartSessionId,
+          email: knownEmail,
+          customerName: customerName || undefined,
+          items: items.map((item) => ({
+            slug: item.slug,
+            variantId: item.variantId,
+            name: item.name,
+            quantity: item.quantity,
+            unitPrice: item.price,
+            image: item.image,
+          })),
+          cartValueCents: Math.round(subtotal * 100),
+        }),
+      }).catch(() => {
+        // Non-fatal - the cart itself is unaffected either way.
+      });
+    }, 1500);
+
+    return () => clearTimeout(timeout);
+  }, [cartSessionId, items, knownEmail, customerName, subtotal]);
 
   const totalQuantity = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
   const isBuy3Get1FreeEligible = useMemo(
@@ -591,6 +642,26 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     }
 
     setItems((currentItems) => currentItems.filter((item) => item.key !== slug && item.slug !== slug));
+  };
+
+  // Used by /cart/restore - replaces the current cart with a recovered
+  // abandoned-cart snapshot. Checkout always re-resolves real price/stock
+  // from the DB server-side, so a stale display price here never affects
+  // what's actually charged.
+  const restoreItems = (restoredItems: Array<{ slug: string; variantId?: string; name: string; quantity: number; unitPrice: number; image?: string }>) => {
+    setItems(
+      restoredItems.map((item) => ({
+        key: item.variantId ? `${item.slug}::${item.variantId}` : item.slug,
+        variantId: item.variantId,
+        slug: item.slug,
+        name: item.name,
+        price: item.unitPrice,
+        quantity: item.quantity,
+        batchNumber: "",
+        image: item.image ?? "",
+        stockStatus: "In Stock",
+      })),
+    );
   };
 
   const clearCart = () => {
@@ -803,6 +874,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     addToCart,
     updateQuantity,
     removeFromCart,
+    restoreItems,
     clearCart,
     openCart,
     closeCart,
@@ -813,6 +885,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     applyCouponCode,
     clearCouponCode,
     clearCouponMessage,
+    setKnownEmail,
   };
 
   return <CartContext.Provider value={value}>{children}</CartContext.Provider>;

@@ -136,6 +136,41 @@ export async function setBulkSavingsControlValue(input: {
   await upsertControlValue({ section: "bulk_savings", ...input });
 }
 
+export interface CartRecoveryConfig {
+  t30mEnabled: boolean;
+  t12hEnabled: boolean;
+  t24hEnabled: boolean;
+  t72hEnabled: boolean;
+  discountPercent: number;
+  couponExpirationHours: number;
+}
+
+export const DEFAULT_CART_RECOVERY_CONFIG: CartRecoveryConfig = {
+  t30mEnabled: true,
+  t12hEnabled: true,
+  t24hEnabled: true,
+  t72hEnabled: true,
+  discountPercent: 5,
+  couponExpirationHours: 48,
+};
+
+export async function getCartRecoveryControlConfig(): Promise<CartRecoveryConfig> {
+  try {
+    const snapshot = await getControlSnapshot("cart_recovery");
+    const config = snapshot.cart_recovery ?? {};
+    return {
+      t30mEnabled: config.t30m_enabled !== false,
+      t12hEnabled: config.t12h_enabled !== false,
+      t24hEnabled: config.t24h_enabled !== false,
+      t72hEnabled: config.t72h_enabled !== false,
+      discountPercent: Number(config.discount_percent ?? DEFAULT_CART_RECOVERY_CONFIG.discountPercent),
+      couponExpirationHours: Number(config.coupon_expiration_hours ?? DEFAULT_CART_RECOVERY_CONFIG.couponExpirationHours),
+    };
+  } catch {
+    return DEFAULT_CART_RECOVERY_CONFIG;
+  }
+}
+
 export async function getHomepageControlConfig(): Promise<HomepageControlConfig> {
   try {
     const snapshot = await getControlSnapshot();
