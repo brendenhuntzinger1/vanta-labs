@@ -1,74 +1,121 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
-import { getAdminOrderRows, type AdminOrderRow } from "@/lib/admin-orders";
+import {
+  getAdminOrderRows,
+  type AdminOrderFulfillmentStatusFilter,
+  type AdminOrderPaymentStatusFilter,
+} from "@/lib/admin-orders";
+import { AdminOrdersClient } from "@/components/admin-orders-client";
 
 export const dynamic = "force-dynamic";
 
-export default async function AdminOrdersPage() {
+const PAYMENT_STATUS_OPTIONS: AdminOrderPaymentStatusFilter[] = [
+  "all",
+  "pending_payment",
+  "paid",
+  "partially_refunded",
+  "refunded",
+  "payment_failed",
+  "canceled",
+];
+
+const FULFILLMENT_STATUS_OPTIONS: AdminOrderFulfillmentStatusFilter[] = [
+  "all",
+  "pending",
+  "awaiting_fulfillment",
+  "shipped",
+  "delivered",
+  "cancelled",
+];
+
+function statusLabel(value: string) {
+  return value === "all" ? "All" : value.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+}
+
+export default async function AdminOrdersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}) {
   const session = await verifyAdminSessionFromCookie();
   if (!session) {
     redirect("/vault");
   }
 
-  const orders = await getAdminOrderRows();
+  const params = await searchParams;
+  const search = typeof params.search === "string" ? params.search : "";
+  const paymentStatus = (typeof params.paymentStatus === "string" ? params.paymentStatus : "all") as AdminOrderPaymentStatusFilter;
+  const fulfillmentStatus = (typeof params.fulfillmentStatus === "string" ? params.fulfillmentStatus : "all") as AdminOrderFulfillmentStatusFilter;
+  const page = Math.max(1, Number(params.page) || 1);
+
+  const result = await getAdminOrderRows({ search, paymentStatus, fulfillmentStatus, page, pageSize: 25 });
+
+  const buildPageHref = (targetPage: number) => {
+    const query = new URLSearchParams();
+    if (search) query.set("search", search);
+    if (paymentStatus !== "all") query.set("paymentStatus", paymentStatus);
+    if (fulfillmentStatus !== "all") query.set("fulfillmentStatus", fulfillmentStatus);
+    query.set("page", String(targetPage));
+    return `/admin/orders?${query.toString()}`;
+  };
 
   return (
     <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl">
-        <h1 className="text-2xl font-semibold sm:text-3xl">Admin Orders</h1>
-        <p className="mt-2 text-sm text-zinc-400">Real Supabase orders and commissions.</p>
-        <div className="mt-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold sm:text-3xl">Admin Orders</h1>
+            <p className="mt-2 text-sm text-zinc-400">{result.total} order{result.total === 1 ? "" : "s"} — real Supabase orders and commissions.</p>
+          </div>
           <Link href="/api/admin/orders/export" className="vl-btn-secondary inline-flex px-4 py-2 text-xs">
             Export Orders CSV
           </Link>
         </div>
 
-        <div className="mt-6 grid gap-3 sm:hidden">
-          {orders.map((order: AdminOrderRow) => (
-            <article key={order.id} className="vl-panel rounded-xl p-4">
-              <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Order</p>
-              <p className="mt-1 text-sm font-semibold text-white break-all">{order.order_id}</p>
-              <div className="mt-3 space-y-1.5 text-sm text-zinc-300">
-                <p><span className="text-zinc-500">Customer:</span> {order.customer_email}</p>
-                <p><span className="text-zinc-500">Items:</span> {order.item_count}</p>
-                <p><span className="text-zinc-500">Amount:</span> ${order.amount_paid.toFixed(2)}</p>
-                <p><span className="text-zinc-500">Referral:</span> {order.referral_code ?? "-"}</p>
-                <p><span className="text-zinc-500">Status:</span> {order.payment_status}</p>
-              </div>
-              <Link href={`/admin/orders/${order.order_id}`} className="mt-3 inline-flex text-xs text-zinc-200 underline-offset-4 hover:underline">
-                Open order
-              </Link>
-            </article>
-          ))}
-        </div>
+        <form method="GET" className="vl-panel mt-6 grid gap-3 rounded-2xl p-4 sm:grid-cols-4">
+          <input
+            type="text"
+            name="search"
+            defaultValue={search}
+            placeholder="Search order ID, email, or name"
+            className="vl-input px-3 py-2 text-sm sm:col-span-2"
+          />
+          <select name="paymentStatus" defaultValue={paymentStatus} className="vl-input px-3 py-2 text-sm">
+            {PAYMENT_STATUS_OPTIONS.map((status) => (
+              <option key={status} value={status}>{statusLabel(status)} payment</option>
+            ))}
+          </select>
+          <select name="fulfillmentStatus" defaultValue={fulfillmentStatus} className="vl-input px-3 py-2 text-sm">
+            {FULFILLMENT_STATUS_OPTIONS.map((status) => (
+              <option key={status} value={status}>{statusLabel(status)} fulfillment</option>
+            ))}
+          </select>
+          <div className="sm:col-span-4">
+            <button type="submit" className="vl-btn-primary px-4 py-2 text-xs">Apply filters</button>
+            {search || paymentStatus !== "all" || fulfillmentStatus !== "all" ? (
+              <Link href="/admin/orders" className="ml-3 text-xs text-zinc-400 hover:text-white">Clear</Link>
+            ) : null}
+          </div>
+        </form>
 
-        <div className="vl-panel mt-8 hidden overflow-x-auto rounded-2xl sm:block">
-          <table className="min-w-full divide-y divide-zinc-800 text-sm">
-            <thead className="bg-zinc-900/80">
-              <tr>
-                <th className="px-4 py-3 text-left">Order</th>
-                <th className="px-4 py-3 text-left">Customer</th>
-                <th className="px-4 py-3 text-left">Items</th>
-                <th className="px-4 py-3 text-left">Amount</th>
-                <th className="px-4 py-3 text-left">Referral</th>
-                <th className="px-4 py-3 text-left">Status</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-zinc-800 bg-zinc-950/70">
-              {orders.map((order: AdminOrderRow) => (
-                <tr key={order.id}>
-                  <td className="px-4 py-3"><Link href={`/admin/orders/${order.order_id}`} className="hover:underline">{order.order_id}</Link></td>
-                  <td className="px-4 py-3">{order.customer_email}</td>
-                  <td className="px-4 py-3">{order.item_count}</td>
-                  <td className="px-4 py-3">${order.amount_paid.toFixed(2)}</td>
-                  <td className="px-4 py-3">{order.referral_code ?? "—"}</td>
-                  <td className="px-4 py-3">{order.payment_status}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <AdminOrdersClient orders={result.rows} />
+
+        {result.pageCount > 1 ? (
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+            {Array.from({ length: result.pageCount }, (_, index) => index + 1).map((pageNumber) => (
+              <Link
+                key={pageNumber}
+                href={buildPageHref(pageNumber)}
+                className={pageNumber === result.page
+                  ? "rounded-lg border border-cyan-300/40 bg-cyan-400/15 px-3 py-1.5 text-xs font-semibold text-cyan-100"
+                  : "rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-300 hover:border-white/25 hover:text-white"}
+              >
+                {pageNumber}
+              </Link>
+            ))}
+          </div>
+        ) : null}
       </div>
     </div>
   );

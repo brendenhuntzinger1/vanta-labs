@@ -18,7 +18,7 @@ export async function GET(request: Request) {
 
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("order_id, customer_email, customer_name, amount_paid, payment_status, fulfillment_status, tracking_number, referral_code, created_at")
+    .select("order_id, customer_email, customer_name, amount_paid, payment_status, fulfillment_status, tracking_number, referral_code, coupon_code, refund_amount, created_at")
     .order("created_at", { ascending: false })
     .limit(5000);
 
@@ -36,6 +36,8 @@ export async function GET(request: Request) {
     "fulfillment_status",
     "tracking_number",
     "referral_code",
+    "coupon_code",
+    "refund_amount",
     "created_at",
   ];
 

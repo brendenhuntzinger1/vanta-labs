@@ -25,14 +25,15 @@ export default async function AdminHomePage() {
     redirect("/vault");
   }
 
-  const [orders, products, partners, onlineVisitors, revenueWindows] = await Promise.all([
-    getAdminOrderRows().catch(() => []),
+  const [orderList, products, partners, onlineVisitors, revenueWindows] = await Promise.all([
+    getAdminOrderRows({ pageSize: 1000 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 1000, pageCount: 1 })),
     listAdminProducts({ search: "", category: "all", status: "all" }).catch(() => []),
     getAdminPartnerRows({ status: "all" }).catch(() => []),
     getCurrentOnlineVisitorCount().catch(() => 0),
     getRevenueWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0 })),
   ]);
 
+  const orders = orderList.rows;
   const totalRevenue = orders
     .filter((row) => isPaidStatus(row.payment_status))
     .reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0);
@@ -62,7 +63,7 @@ export default async function AdminHomePage() {
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Orders</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{orders.length}</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{orderList.total}</p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Revenue</p>
