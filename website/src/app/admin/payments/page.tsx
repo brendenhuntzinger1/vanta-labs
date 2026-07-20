@@ -66,9 +66,14 @@ export default async function AdminPaymentsPage({
               {result.total} manual payment{result.total === 1 ? "" : "s"} — approve to send straight to fulfillment.
             </p>
           </div>
-          <Link href="/admin/fulfillment" className="vl-btn-secondary inline-flex px-4 py-2 text-xs">
-            Fulfillment Queue →
-          </Link>
+          <div className="flex gap-2">
+            <Link href="/admin/payments/settings" className="vl-btn-secondary inline-flex px-4 py-2 text-xs">
+              Payment Settings
+            </Link>
+            <Link href="/admin/fulfillment" className="vl-btn-secondary inline-flex px-4 py-2 text-xs">
+              Fulfillment Queue →
+            </Link>
+          </div>
         </div>
 
         <form method="GET" className="vl-panel mt-6 grid gap-3 rounded-2xl p-4 sm:grid-cols-6">
