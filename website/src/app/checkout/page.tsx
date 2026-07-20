@@ -4,8 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
-import { SiteHeader } from "@/components/site-header";
-import { TrustBadge } from "@/components/trust-badge";
+import { SiteHeaderV2 } from "@/components/site-header-v2";
 
 async function createSecureCheckoutSession(payload: unknown) {
   const response = await fetch("/api/checkout/create-session", {
@@ -71,7 +70,7 @@ function StepPill({
   active?: boolean;
 }) {
   return (
-    <div className={`rounded-full border px-3 py-1.5 text-xs uppercase tracking-[0.18em] ${active ? "border-white/45 bg-white/14 text-zinc-100" : "border-white/12 bg-white/5 text-zinc-400"}`}>
+    <div className={`border px-3 py-1.5 text-xs uppercase tracking-[0.16em] ${active ? "border-white bg-white/10 text-white" : "border-white/15 text-white/40"}`}>
       {index}. {label}
     </div>
   );
@@ -262,14 +261,14 @@ export default function CheckoutPage() {
   };
 
   return (
-    <div className="vl-page-shell min-h-screen text-zinc-100">
-      <SiteHeader />
+    <div className="min-h-screen bg-[#0b0b0b] text-white">
+      <SiteHeaderV2 />
 
-      <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8 lg:py-14">
-        <section className="rounded-[2rem] border border-white/10 bg-[linear-gradient(145deg,rgba(10,10,10,0.95),rgba(22,22,22,0.9))] p-5 sm:p-8">
-          <p className="vl-eyebrow text-[11px]">Secure Checkout</p>
-          <h1 className="vl-display mt-3 text-3xl font-semibold text-white sm:text-4xl">Complete Your Order</h1>
-          <p className="vl-copy mt-3 max-w-3xl text-sm leading-7 text-zinc-300 sm:text-base">
+      <main className="mx-auto max-w-[1440px] px-6 pb-20 pt-32 lg:px-12">
+        <section className="border border-white/10 p-5 sm:p-8">
+          <p className="vl2-eyebrow">Secure Checkout</p>
+          <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Complete your order</h1>
+          <p className="mt-3 max-w-3xl text-sm leading-7 text-white/60 sm:text-base">
             Transparent totals, encrypted payment processing, and full batch traceability from cart to confirmation.
           </p>
 
@@ -281,80 +280,80 @@ export default function CheckoutPage() {
         </section>
 
         <div className="mt-7 grid gap-7 lg:grid-cols-[1.05fr_0.95fr]">
-          <section className="vl-panel rounded-[2rem] p-5 sm:p-7">
+          <section className="border border-white/10 p-5 sm:p-7">
             <div>
-              <p className="vl-eyebrow text-[11px]">Shipping Information</p>
+              <p className="vl2-eyebrow">Shipping Information</p>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <label className="text-sm text-zinc-300 sm:col-span-2">
+                <label className="text-sm text-white/60 sm:col-span-2">
                   <span className="mb-2 block">Full name</span>
-                  <input value={form.fullName} onChange={(e) => handleFieldChange("fullName", e.target.value)} className="vl-input w-full px-4 py-3" placeholder="Alex Morgan" />
+                  <input value={form.fullName} onChange={(e) => handleFieldChange("fullName", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="Alex Morgan" />
                   {formErrors.fullName ? <span className="mt-1 block text-xs text-rose-300">{formErrors.fullName}</span> : null}
                 </label>
 
-                <label className="text-sm text-zinc-300">
+                <label className="text-sm text-white/60">
                   <span className="mb-2 block">Email</span>
-                  <input type="email" value={form.email} onChange={(e) => handleFieldChange("email", e.target.value)} className="vl-input w-full px-4 py-3" placeholder="alex@domain.com" />
+                  <input type="email" value={form.email} onChange={(e) => handleFieldChange("email", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="alex@domain.com" />
                   {formErrors.email ? <span className="mt-1 block text-xs text-rose-300">{formErrors.email}</span> : null}
                 </label>
 
-                <label className="text-sm text-zinc-300">
+                <label className="text-sm text-white/60">
                   <span className="mb-2 block">Country</span>
-                  <input value={form.country} onChange={(e) => handleFieldChange("country", e.target.value)} className="vl-input w-full px-4 py-3" placeholder="United States" />
+                  <input value={form.country} onChange={(e) => handleFieldChange("country", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="United States" />
                   {formErrors.country ? <span className="mt-1 block text-xs text-rose-300">{formErrors.country}</span> : null}
                 </label>
 
-                <label className="text-sm text-zinc-300 sm:col-span-2">
+                <label className="text-sm text-white/60 sm:col-span-2">
                   <span className="mb-2 block">Address</span>
-                  <input value={form.address} onChange={(e) => handleFieldChange("address", e.target.value)} className="vl-input w-full px-4 py-3" placeholder="88 Meridian Avenue" />
+                  <input value={form.address} onChange={(e) => handleFieldChange("address", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="88 Meridian Avenue" />
                   {formErrors.address ? <span className="mt-1 block text-xs text-rose-300">{formErrors.address}</span> : null}
                 </label>
 
-                <label className="text-sm text-zinc-300">
+                <label className="text-sm text-white/60">
                   <span className="mb-2 block">City</span>
-                  <input value={form.city} onChange={(e) => handleFieldChange("city", e.target.value)} className="vl-input w-full px-4 py-3" placeholder="Austin" />
+                  <input value={form.city} onChange={(e) => handleFieldChange("city", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="Austin" />
                   {formErrors.city ? <span className="mt-1 block text-xs text-rose-300">{formErrors.city}</span> : null}
                 </label>
 
-                <label className="text-sm text-zinc-300">
+                <label className="text-sm text-white/60">
                   <span className="mb-2 block">Postal code</span>
-                  <input value={form.postalCode} onChange={(e) => handleFieldChange("postalCode", e.target.value)} className="vl-input w-full px-4 py-3" placeholder="78701" />
+                  <input value={form.postalCode} onChange={(e) => handleFieldChange("postalCode", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="78701" />
                   {formErrors.postalCode ? <span className="mt-1 block text-xs text-rose-300">{formErrors.postalCode}</span> : null}
                 </label>
               </div>
             </div>
 
             <div className="mt-8">
-              <p className="vl-eyebrow text-[11px]">Billing Information</p>
-              <label className="mt-3 flex items-center gap-2 text-sm text-zinc-300">
-                <input type="checkbox" checked={sameAsShipping} onChange={(e) => setSameAsShipping(e.target.checked)} className="h-4 w-4 rounded border-zinc-700 bg-zinc-900" />
+              <p className="vl2-eyebrow">Billing Information</p>
+              <label className="mt-3 flex items-center gap-2 text-sm text-white/60">
+                <input type="checkbox" checked={sameAsShipping} onChange={(e) => setSameAsShipping(e.target.checked)} className="h-4 w-4 border-white/25 bg-black/40" />
                 Same as shipping address
               </label>
 
               {!sameAsShipping ? (
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <label className="text-sm text-zinc-300 sm:col-span-2">
+                  <label className="text-sm text-white/60 sm:col-span-2">
                     <span className="mb-2 block">Billing full name</span>
-                    <input value={form.billingFullName} onChange={(e) => handleFieldChange("billingFullName", e.target.value)} className="vl-input w-full px-4 py-3" />
+                    <input value={form.billingFullName} onChange={(e) => handleFieldChange("billingFullName", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
                     {formErrors.billingFullName ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingFullName}</span> : null}
                   </label>
-                  <label className="text-sm text-zinc-300 sm:col-span-2">
+                  <label className="text-sm text-white/60 sm:col-span-2">
                     <span className="mb-2 block">Billing address</span>
-                    <input value={form.billingAddress} onChange={(e) => handleFieldChange("billingAddress", e.target.value)} className="vl-input w-full px-4 py-3" />
+                    <input value={form.billingAddress} onChange={(e) => handleFieldChange("billingAddress", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
                     {formErrors.billingAddress ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingAddress}</span> : null}
                   </label>
-                  <label className="text-sm text-zinc-300">
+                  <label className="text-sm text-white/60">
                     <span className="mb-2 block">Billing city</span>
-                    <input value={form.billingCity} onChange={(e) => handleFieldChange("billingCity", e.target.value)} className="vl-input w-full px-4 py-3" />
+                    <input value={form.billingCity} onChange={(e) => handleFieldChange("billingCity", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
                     {formErrors.billingCity ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingCity}</span> : null}
                   </label>
-                  <label className="text-sm text-zinc-300">
+                  <label className="text-sm text-white/60">
                     <span className="mb-2 block">Billing postal code</span>
-                    <input value={form.billingPostalCode} onChange={(e) => handleFieldChange("billingPostalCode", e.target.value)} className="vl-input w-full px-4 py-3" />
+                    <input value={form.billingPostalCode} onChange={(e) => handleFieldChange("billingPostalCode", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
                     {formErrors.billingPostalCode ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingPostalCode}</span> : null}
                   </label>
-                  <label className="text-sm text-zinc-300 sm:col-span-2">
+                  <label className="text-sm text-white/60 sm:col-span-2">
                     <span className="mb-2 block">Billing country</span>
-                    <input value={form.billingCountry} onChange={(e) => handleFieldChange("billingCountry", e.target.value)} className="vl-input w-full px-4 py-3" />
+                    <input value={form.billingCountry} onChange={(e) => handleFieldChange("billingCountry", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
                     {formErrors.billingCountry ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingCountry}</span> : null}
                   </label>
                 </div>
@@ -362,34 +361,34 @@ export default function CheckoutPage() {
             </div>
 
             <div className="mt-8 grid gap-4 sm:grid-cols-2">
-              <div className="vl-panel-soft rounded-xl p-4">
-                <p className="vl-eyebrow text-[11px]">Shipping Method</p>
-                <p className="mt-2 text-sm font-medium text-zinc-100">Standard secure shipping</p>
-                <p className="mt-1 text-xs text-zinc-400">Free at $250+, otherwise flat {formatCartCurrency(15)}.</p>
+              <div className="border border-white/10 p-4">
+                <p className="vl2-eyebrow">Shipping Method</p>
+                <p className="mt-2 text-sm text-white">Standard secure shipping</p>
+                <p className="mt-1 text-xs text-white/45">Free at $250+, otherwise flat {formatCartCurrency(15)}.</p>
               </div>
-              <div className="vl-panel-soft rounded-xl p-4">
-                <p className="vl-eyebrow text-[11px]">Security</p>
-                <p className="mt-2 text-sm font-medium text-zinc-100">Encrypted checkout session</p>
-                <p className="mt-1 text-xs text-zinc-400">Payment credentials are handled by secure provider flow.</p>
+              <div className="border border-white/10 p-4">
+                <p className="vl2-eyebrow">Security</p>
+                <p className="mt-2 text-sm text-white">Encrypted checkout session</p>
+                <p className="mt-1 text-xs text-white/45">Payment credentials are handled by secure provider flow.</p>
               </div>
             </div>
 
             <div className="mt-8">
-              <p className="vl-eyebrow text-[11px]">Promo / Referral</p>
+              <p className="vl2-eyebrow">Promo / Referral</p>
               {isBuy3Get1FreeActive ? (
-                <p className="mt-3 rounded-xl border border-white/24 bg-white/8 px-3 py-2 text-sm text-zinc-100">
+                <p className="mt-3 border border-white/20 px-3 py-2 text-sm text-white/75">
                   Buy 3 Get 1 Free is active. Referral discounts cannot be combined with this promotion.
                 </p>
               ) : (
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                  <input type="text" value={effectiveReferralInput} onChange={(event) => setReferralInput(event.target.value)} placeholder="VANTA10" className="vl-input w-full flex-1 px-4 py-3 text-sm" />
-                  <button type="button" onClick={() => applyReferralCode(effectiveReferralInput)} className="vl-btn-secondary vl-focus-ring px-4 py-3 text-sm">Apply</button>
+                  <input type="text" value={effectiveReferralInput} onChange={(event) => setReferralInput(event.target.value)} placeholder="VANTA10" className="w-full flex-1 border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
+                  <button type="button" onClick={() => applyReferralCode(effectiveReferralInput)} className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm">Apply</button>
                 </div>
               )}
 
               {referralSuccess ? <p className="mt-2 text-sm text-emerald-300">{referralSuccess}</p> : null}
               {referralError ? <p className="mt-2 text-sm text-rose-300">{referralError}</p> : null}
-              {referralDetails ? <p className="mt-2 text-sm text-zinc-300">Ambassador {referralDetails.ambassadorName} • {referralDetails.customerDiscountPercent}% discount</p> : null}
+              {referralDetails ? <p className="mt-2 text-sm text-white/60">Ambassador {referralDetails.ambassadorName} • {referralDetails.customerDiscountPercent}% discount</p> : null}
               {referralCode && !isBuy3Get1FreeActive ? (
                 <button
                   type="button"
@@ -397,7 +396,7 @@ export default function CheckoutPage() {
                     clearReferralCode();
                     setReferralInput("");
                   }}
-                  className="mt-2 text-sm text-zinc-400 transition hover:text-white"
+                  className="mt-2 text-sm text-white/45 transition hover:text-white"
                 >
                   Remove code
                 </button>
@@ -405,26 +404,26 @@ export default function CheckoutPage() {
             </div>
 
             <div className="mt-8">
-              <p className="vl-eyebrow text-[11px]">Coupon Code</p>
+              <p className="vl2-eyebrow">Coupon Code</p>
               {isBuy3Get1FreeActive ? (
-                <p className="mt-3 rounded-xl border border-white/24 bg-white/8 px-3 py-2 text-sm text-zinc-100">
+                <p className="mt-3 border border-white/20 px-3 py-2 text-sm text-white/75">
                   Buy 3 Get 1 Free is active. Coupon codes cannot be combined with this promotion.
                 </p>
               ) : referralCode ? (
-                <p className="mt-3 rounded-xl border border-white/24 bg-white/8 px-3 py-2 text-sm text-zinc-100">
+                <p className="mt-3 border border-white/20 px-3 py-2 text-sm text-white/75">
                   A referral code is applied. Remove it to use a coupon instead.
                 </p>
               ) : (
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                  <input type="text" value={effectiveCouponInput} onChange={(event) => setCouponInput(event.target.value)} placeholder="SAVE10" className="vl-input w-full flex-1 px-4 py-3 text-sm" />
-                  <button type="button" onClick={() => applyCouponCode(effectiveCouponInput)} className="vl-btn-secondary vl-focus-ring px-4 py-3 text-sm">Apply</button>
+                  <input type="text" value={effectiveCouponInput} onChange={(event) => setCouponInput(event.target.value)} placeholder="SAVE10" className="w-full flex-1 border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
+                  <button type="button" onClick={() => applyCouponCode(effectiveCouponInput)} className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm">Apply</button>
                 </div>
               )}
 
               {couponSuccess ? <p className="mt-2 text-sm text-emerald-300">{couponSuccess}</p> : null}
               {couponError ? <p className="mt-2 text-sm text-rose-300">{couponError}</p> : null}
               {couponDetails ? (
-                <p className="mt-2 text-sm text-zinc-300">
+                <p className="mt-2 text-sm text-white/60">
                   {couponDetails.code} • {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off
                 </p>
               ) : null}
@@ -435,7 +434,7 @@ export default function CheckoutPage() {
                     clearCouponCode();
                     setCouponInput("");
                   }}
-                  className="mt-2 text-sm text-zinc-400 transition hover:text-white"
+                  className="mt-2 text-sm text-white/45 transition hover:text-white"
                 >
                   Remove code
                 </button>
@@ -444,13 +443,13 @@ export default function CheckoutPage() {
 
             {isSignedIn ? (
               <div className="mt-8">
-                <p className="vl-eyebrow text-[11px]">Rewards Points</p>
-                <p className="mt-2 text-sm text-zinc-300">
-                  You have <span className="font-semibold text-white">{pointsBalance.toLocaleString()}</span> points available
+                <p className="vl2-eyebrow">Rewards Points</p>
+                <p className="mt-2 text-sm text-white/60">
+                  You have <span className="text-white">{pointsBalance.toLocaleString()}</span> points available
                   ({formatCartCurrency(pointsBalance / 100)} value).
                 </p>
                 {referralDetails ? (
-                  <p className="mt-3 rounded-xl border border-white/24 bg-white/8 px-3 py-2 text-sm text-zinc-100">
+                  <p className="mt-3 border border-white/20 px-3 py-2 text-sm text-white/75">
                     A referral code is applied. Remove it to redeem points on this order.
                   </p>
                 ) : pointsBalance > 0 ? (
@@ -462,12 +461,12 @@ export default function CheckoutPage() {
                       value={pointsToRedeem || ""}
                       onChange={(event) => setPointsToRedeem(Number(event.target.value) || 0)}
                       placeholder="0"
-                      className="vl-input w-full px-4 py-3 text-sm sm:w-40"
+                      className="w-full border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/50 sm:w-40"
                     />
                     <button
                       type="button"
                       onClick={() => setPointsToRedeem(pointsBalance)}
-                      className="vl-btn-secondary vl-focus-ring px-4 py-2 text-xs"
+                      className="vl2-btn-secondary vl-focus-ring px-4 py-2 text-xs"
                     >
                       Use max
                     </button>
@@ -477,58 +476,58 @@ export default function CheckoutPage() {
                   </div>
                 ) : null}
                 {pointsToEarn > 0 ? (
-                  <p className="mt-2 text-xs text-zinc-500">You&apos;ll earn ~{pointsToEarn.toLocaleString()} points on this order.</p>
+                  <p className="mt-2 text-xs text-white/40">You&apos;ll earn ~{pointsToEarn.toLocaleString()} points on this order.</p>
                 ) : null}
               </div>
             ) : (
-              <p className="mt-8 text-xs text-zinc-500">
-                <a href="/account/login" className="text-cyan-300 underline-offset-4 hover:underline">Sign in</a> to earn and redeem rewards points on this order.
+              <p className="mt-8 text-xs text-white/40">
+                <a href="/account/login" className="text-white/70 underline-offset-4 hover:underline">Sign in</a> to earn and redeem rewards points on this order.
               </p>
             )}
 
             <div className="mt-8 space-y-4">
-              <p className="vl-eyebrow text-[11px]">Required Confirmations</p>
+              <p className="vl2-eyebrow">Required Confirmations</p>
 
-              <label className="vl-panel-soft flex items-start gap-3 rounded-xl p-4 text-sm text-zinc-300">
+              <label className="flex items-start gap-3 border border-white/10 p-4 text-sm text-white/60">
                 <input
                   type="checkbox"
                   checked={acknowledgements.researchResponsibility}
                   onChange={(event) => handleAcknowledgementChange("researchResponsibility", event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border-zinc-700 bg-zinc-900"
+                  className="mt-1 h-4 w-4 border-white/25 bg-black/40"
                 />
                 <span>
-                  <span className="block font-medium text-zinc-100">Research Responsibility Statement *</span>
-                  <span className="mt-1 block text-zinc-400">
+                  <span className="block text-white">Research Responsibility Statement *</span>
+                  <span className="mt-1 block text-white/50">
                     The purchaser assumes full responsibility for the proper handling, storage, and use of these laboratory materials. The seller provides products solely as research reference materials and does not provide medical or dosing guidance.
                   </span>
                 </span>
               </label>
 
-              <label className="vl-panel-soft flex items-start gap-3 rounded-xl p-4 text-sm text-zinc-300">
+              <label className="flex items-start gap-3 border border-white/10 p-4 text-sm text-white/60">
                 <input
                   type="checkbox"
                   checked={acknowledgements.researchCompliance}
                   onChange={(event) => handleAcknowledgementChange("researchCompliance", event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border-zinc-700 bg-zinc-900"
+                  className="mt-1 h-4 w-4 border-white/25 bg-black/40"
                 />
                 <span>
-                  <span className="block font-medium text-zinc-100">Research &amp; Compliance Agreement *</span>
-                  <span className="mt-1 block text-zinc-400">
+                  <span className="block text-white">Research &amp; Compliance Agreement *</span>
+                  <span className="mt-1 block text-white/50">
                     I acknowledge that the products sold on this website are intended strictly for laboratory research purposes. I confirm that I am purchasing these materials for legitimate research use and not for human or veterinary use. I understand these products are not drugs, dietary supplements, or medical products, and no instructions for preparation, dosage, or administration are provided by the seller.
                   </span>
                 </span>
               </label>
 
-              <label className="vl-panel-soft flex items-start gap-3 rounded-xl p-4 text-sm text-zinc-300">
+              <label className="flex items-start gap-3 border border-white/10 p-4 text-sm text-white/60">
                 <input
                   type="checkbox"
                   checked={acknowledgements.ageLegalConfirmation}
                   onChange={(event) => handleAcknowledgementChange("ageLegalConfirmation", event.target.checked)}
-                  className="mt-1 h-4 w-4 rounded border-zinc-700 bg-zinc-900"
+                  className="mt-1 h-4 w-4 border-white/25 bg-black/40"
                 />
                 <span>
-                  <span className="block font-medium text-zinc-100">Age &amp; Legal Confirmation *</span>
-                  <span className="mt-1 block text-zinc-400">
+                  <span className="block text-white">Age &amp; Legal Confirmation *</span>
+                  <span className="mt-1 block text-white/50">
                     I confirm that I am 21 years of age or older and legally permitted to purchase laboratory research materials.
                   </span>
                 </span>
@@ -536,29 +535,29 @@ export default function CheckoutPage() {
             </div>
           </section>
 
-          <aside className="vl-panel rounded-[2rem] p-5 sm:p-7 lg:sticky lg:top-24">
-            <p className="vl-eyebrow text-[11px]">Order Summary</p>
+          <aside className="vl2-glass h-fit p-5 sm:p-7 lg:sticky lg:top-32">
+            <p className="vl2-eyebrow">Order Summary</p>
 
             {items.length === 0 ? (
-              <div className="mt-5 rounded-xl border border-dashed border-white/16 p-6 text-center text-sm text-zinc-400">No items in cart.</div>
+              <div className="mt-5 border border-dashed border-white/15 p-6 text-center text-sm text-white/45">No items in cart.</div>
             ) : (
               <div className="mt-5 space-y-4 border-b border-white/10 pb-4">
                 {items.map((item) => (
                   <div key={item.key} className="flex items-start gap-3">
-                    <div className="relative h-16 w-16 flex-shrink-0 overflow-hidden rounded-xl border border-white/10 bg-zinc-900/70">
-                      {item.image ? <Image src={item.image} alt={item.name} fill sizes="64px" className="object-cover" /> : <div className="flex h-full w-full items-center justify-center text-[10px] text-zinc-500">No image</div>}
+                    <div className="relative h-16 w-16 flex-shrink-0 border border-white/10 bg-black/40">
+                      {item.image ? <Image src={item.image} alt={item.name} fill sizes="64px" className="object-cover" /> : <div className="flex h-full w-full items-center justify-center text-[10px] text-white/35">No image</div>}
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-zinc-100">{item.name}</p>
-                      <p className="mt-1 text-xs text-zinc-500">Qty {item.quantity}{item.doseLabel ? ` • ${item.doseLabel}` : ""}</p>
+                      <p className="truncate text-sm text-white">{item.name}</p>
+                      <p className="mt-1 text-xs text-white/40">Qty {item.quantity}{item.doseLabel ? ` • ${item.doseLabel}` : ""}</p>
                     </div>
-                    <p className="text-sm text-zinc-200">{formatCartCurrency(item.price * item.quantity)}</p>
+                    <p className="text-sm text-white/75">{formatCartCurrency(item.price * item.quantity)}</p>
                   </div>
                 ))}
               </div>
             )}
 
-            <div className="mt-5 space-y-3 text-sm text-zinc-300">
+            <div className="mt-5 space-y-3 text-sm text-white/70">
               <div className="flex justify-between"><span>Items</span><span>{orderCount}</span></div>
               <div className="flex justify-between"><span>Subtotal</span><span>{formatCartCurrency(subtotal)}</span></div>
               <div className="flex justify-between"><span>Shipping</span><span>{formatCartCurrency(shipping)}</span></div>
@@ -567,26 +566,26 @@ export default function CheckoutPage() {
               {pointsRedeemedDiscount > 0 ? (
                 <div className="flex justify-between"><span>Points redeemed</span><span>-{formatCartCurrency(pointsRedeemedDiscount)}</span></div>
               ) : null}
-              <div className="mt-3 flex justify-between border-t border-white/10 pt-3 text-base font-semibold text-white"><span>Total</span><span>{formatCartCurrency(total)}</span></div>
+              <div className="mt-3 flex justify-between border-t border-white/10 pt-3 text-base text-white"><span>Total</span><span>{formatCartCurrency(total)}</span></div>
             </div>
 
-            <div className="mt-5 grid grid-cols-2 gap-2">
-              <TrustBadge icon="shield" label="TLS Encrypted" />
-              <TrustBadge icon="check" label="Fraud Screened" />
+            <div className="mt-5 flex items-center justify-center gap-6 text-[10px] uppercase tracking-[0.14em] text-white/40">
+              <span>TLS Encrypted</span>
+              <span>Fraud Screened</span>
             </div>
 
             <button
               type="button"
               onClick={handleCheckout}
               disabled={isSubmitting || items.length === 0}
-              className="vl-btn-primary vl-focus-ring mt-6 w-full px-5 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
+              className="vl2-btn-primary vl-focus-ring mt-6 w-full px-5 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
             >
               {checkoutState === "loading" ? "Creating secure checkout..." : "Continue to Secure Payment"}
             </button>
 
-            {checkoutMessage ? <p className="mt-3 text-sm text-zinc-300">{checkoutMessage}</p> : null}
+            {checkoutMessage ? <p className="mt-3 text-sm text-white/65">{checkoutMessage}</p> : null}
 
-            <Link href="/cart" className="mt-4 inline-flex text-sm text-zinc-400 transition hover:text-white">
+            <Link href="/cart" className="mt-4 inline-flex text-sm text-white/45 transition hover:text-white">
               Back to cart
             </Link>
           </aside>

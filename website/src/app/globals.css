@@ -1136,6 +1136,10 @@ textarea {
   transition: transform var(--duration-base) var(--ease-out-premium), border-color var(--duration-base) var(--ease-out-premium), box-shadow var(--duration-base) var(--ease-out-premium);
 }
 
+.vl2-product-card .vl-product-card-media {
+  background: #0e0e0e;
+}
+
 .vl2-product-card:hover {
   transform: translateY(-6px);
   border-color: var(--hairline-strong);

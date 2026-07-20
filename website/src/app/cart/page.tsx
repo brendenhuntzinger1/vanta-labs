@@ -5,8 +5,7 @@ import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { formatCartCurrency, getShippingProgress, useCart } from "@/components/cart-context";
-import { SiteHeader } from "@/components/site-header";
-import { TrustBadge } from "@/components/trust-badge";
+import { SiteHeaderV2 } from "@/components/site-header-v2";
 
 export default function CartPage() {
   const router = useRouter();
@@ -33,22 +32,24 @@ export default function CartPage() {
   const shippingProgress = getShippingProgress(subtotal);
 
   return (
-    <div className="vl-page-shell min-h-screen bg-zinc-950 text-zinc-100">
-      <SiteHeader />
-      <main className="mx-auto max-w-7xl px-4 py-10 sm:px-6 sm:py-12 lg:px-8 lg:py-16">
-        <div className="max-w-3xl">
-          <p className="vl-eyebrow text-xs sm:text-sm">Shopping Cart</p>
-          <h1 className="vl-display mt-3 text-3xl font-semibold text-white sm:text-4xl lg:text-5xl">Review your selected materials.</h1>
-          <p className="vl-copy mt-4 text-base leading-7 text-zinc-400 sm:mt-6 sm:text-lg sm:leading-8">Your cart persists locally while you review or continue checkout. Approved ambassador referral codes are validated with Supabase before checkout.</p>
+    <div className="min-h-screen bg-[#0b0b0b] text-white">
+      <SiteHeaderV2 />
+      <main className="mx-auto max-w-[1440px] px-6 pb-20 pt-32 lg:px-12">
+        <div className="max-w-2xl">
+          <p className="vl2-eyebrow">Shopping Cart</p>
+          <h1 className="vl2-serif mt-3 text-4xl text-white sm:text-5xl">Review your materials.</h1>
+          <p className="mt-4 text-sm leading-7 text-white/60 sm:text-base">
+            Your cart persists locally while you review or continue checkout. Approved ambassador referral codes are validated before checkout.
+          </p>
         </div>
 
-        <div className="mt-8 grid gap-6 lg:mt-10 lg:gap-8 lg:grid-cols-[1.2fr_0.8fr]">
-          <div className="space-y-4">
+        <div className="mt-10 grid gap-6 lg:grid-cols-[1.2fr_0.8fr] lg:gap-10">
+          <div className="space-y-3">
             {items.length === 0 ? (
-              <div className="vl-panel rounded-[1.5rem] border-dashed p-6 text-center text-zinc-400 sm:rounded-[2rem] sm:p-10">
-                <p className="text-lg text-white sm:text-xl">No items yet.</p>
+              <div className="border border-dashed border-white/15 p-10 text-center text-white/55">
+                <p className="text-lg text-white">No items yet.</p>
                 <p className="mt-3">Visit the catalog to add products.</p>
-                <Link href="/products" className="vl-btn-primary vl-focus-ring mt-6 inline-flex px-5 py-3 text-sm">
+                <Link href="/products" className="vl2-btn-primary vl-focus-ring mt-6 inline-flex px-5 py-3 text-sm">
                   Browse products
                 </Link>
               </div>
@@ -56,34 +57,34 @@ export default function CartPage() {
               items.map((item) => {
                 const hasRealImage = Boolean(item.image) && !item.image.includes(".svg");
                 return (
-                  <div key={item.key} className="vl-panel rounded-[1.25rem] p-4 sm:rounded-[1.5rem] sm:p-6">
+                  <div key={item.key} className="border border-white/10 p-4 sm:p-6">
                     <div className="flex items-start gap-4">
-                      <div className="relative h-16 w-16 flex-shrink-0 overflow-hidden rounded-xl border border-white/10 bg-zinc-900/70 sm:h-20 sm:w-20">
+                      <div className="relative h-16 w-16 flex-shrink-0 border border-white/10 bg-black/40 sm:h-20 sm:w-20">
                         {hasRealImage ? (
                           <Image src={item.image} alt={item.name} fill sizes="80px" className="object-contain p-2" />
                         ) : (
-                          <div className="flex h-full w-full items-center justify-center text-[9px] uppercase tracking-[0.14em] text-zinc-600">No image</div>
+                          <div className="flex h-full w-full items-center justify-center text-[9px] uppercase tracking-[0.14em] text-white/30">No image</div>
                         )}
                       </div>
                       <div className="flex flex-1 items-start justify-between gap-4">
                         <div>
-                          <h2 className="text-lg font-semibold text-white sm:text-xl">{item.name}</h2>
-                          <p className="mt-2 text-sm text-zinc-400">
+                          <h2 className="text-lg text-white sm:text-xl">{item.name}</h2>
+                          <p className="mt-2 text-sm text-white/50">
                             {item.doseLabel ? `${item.doseLabel} • ` : ""}Batch {item.batchNumber}
                           </p>
                         </div>
-                        <button type="button" onClick={() => removeFromCart(item.key)} className="text-sm text-zinc-500 transition hover:text-white">
+                        <button type="button" onClick={() => removeFromCart(item.key)} className="text-sm text-white/45 transition hover:text-white">
                           Remove
                         </button>
                       </div>
                     </div>
                     <div className="mt-5 flex flex-wrap items-center justify-between gap-4 sm:mt-6">
-                      <div className="flex items-center gap-2 rounded-full border border-zinc-700 px-2 py-1.5 text-sm text-zinc-300 sm:gap-3 sm:px-3 sm:py-2">
+                      <div className="flex items-center gap-2 border border-white/15 px-2 py-1.5 text-sm text-white/75 sm:gap-3 sm:px-3 sm:py-2">
                         <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="px-2" aria-label="Decrease quantity">−</button>
                         <span>{item.quantity}</span>
                         <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="px-2" aria-label="Increase quantity">+</button>
                       </div>
-                      <p className="text-base font-semibold text-white sm:text-lg">{formatCartCurrency(item.price * item.quantity)}</p>
+                      <p className="text-base text-white sm:text-lg">{formatCartCurrency(item.price * item.quantity)}</p>
                     </div>
                   </div>
                 );
@@ -91,27 +92,25 @@ export default function CartPage() {
             )}
           </div>
 
-          <div className="vl-panel rounded-[1.5rem] p-4 sm:rounded-[2rem] sm:p-6">
-            <p className="vl-eyebrow text-sm">Order Summary</p>
+          <div className="vl2-glass h-fit p-5 sm:p-7">
+            <p className="vl2-eyebrow">Order Summary</p>
 
             {subtotal > 0 ? (
-              <div className="vl-panel-soft mt-5 rounded-xl p-4">
+              <div className="mt-5 border border-white/10 p-4">
                 {shippingProgress.isEligibleForFreeShipping ? (
                   <div>
-                    <p className="text-sm font-semibold text-emerald-400">Free shipping unlocked</p>
-                    <div className="mt-3 h-2 overflow-hidden rounded-full bg-zinc-800">
-                      <div className="h-full w-full bg-gradient-to-r from-emerald-500 to-emerald-300" />
-                    </div>
+                    <p className="text-sm text-emerald-300">Free shipping unlocked</p>
+                    <div className="mt-3 h-[2px] w-full bg-emerald-300/40" />
                   </div>
                 ) : (
                   <div>
                     <div className="mb-2 flex items-center justify-between text-sm">
-                      <span className="text-zinc-400">Free shipping at $250</span>
-                      <span className="font-semibold text-white">${shippingProgress.amountToFreeShipping.toFixed(2)} away</span>
+                      <span className="text-white/50">Free shipping at $250</span>
+                      <span className="text-white">${shippingProgress.amountToFreeShipping.toFixed(2)} away</span>
                     </div>
-                    <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
+                    <div className="h-[2px] w-full bg-white/10">
                       <div
-                        className="h-full bg-gradient-to-r from-zinc-200 to-zinc-400 transition-all duration-500"
+                        className="h-full bg-white transition-all duration-500"
                         style={{ width: `${shippingProgress.progressPercentage}%` }}
                       />
                     </div>
@@ -120,7 +119,7 @@ export default function CartPage() {
               </div>
             ) : null}
 
-            <div className="mt-6 space-y-3 text-sm text-zinc-300">
+            <div className="mt-6 space-y-3 text-sm text-white/70">
               <div className="flex justify-between">
                 <span>Subtotal</span>
                 <span>{formatCartCurrency(subtotal)}</span>
@@ -139,33 +138,33 @@ export default function CartPage() {
                 <span>Applied discount</span>
                 <span>-{formatCartCurrency(discountAmount)}</span>
               </div>
-              <div className="mt-4 flex justify-between border-t border-zinc-800 pt-4 text-base font-semibold text-white">
+              <div className="mt-4 flex justify-between border-t border-white/10 pt-4 text-base text-white">
                 <span>Final total</span>
                 <span>{formatCartCurrency(total)}</span>
               </div>
             </div>
 
             {isBuy3Get1FreeActive ? (
-              <p className="mt-8 rounded-xl border border-white/25 bg-white/8 px-3 py-2 text-sm text-zinc-200">
+              <p className="mt-8 border border-white/20 px-3 py-2 text-sm text-white/75">
                 Buy 3 Get 1 Free is active. Referral discounts cannot be combined with this promotion.
               </p>
             ) : (
               <>
-                <label className="mt-8 block text-sm text-zinc-400">
-                  <span className="vl-eyebrow mb-2 block text-[11px]">Referral Code</span>
+                <label className="mt-8 block text-sm text-white/50">
+                  <span className="vl2-eyebrow mb-2 block">Referral Code</span>
                   <input
                     type="text"
                     value={effectiveReferralInput}
                     onChange={(event) => setReferralInput(event.target.value)}
                     placeholder="VANTA10"
-                    className="vl-input w-full rounded-full px-4 py-3 text-sm"
+                    className="w-full border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
                   />
                 </label>
                 <div className="mt-4 flex flex-col gap-3 sm:flex-row">
                   <button
                     type="button"
                     onClick={() => applyReferralCode(effectiveReferralInput)}
-                    className="vl-btn-primary vl-focus-ring rounded-full px-4 py-3 text-sm"
+                    className="vl2-btn-primary vl-focus-ring px-4 py-3 text-sm"
                   >
                     Apply code
                   </button>
@@ -176,7 +175,7 @@ export default function CartPage() {
                         clearReferralCode();
                         setReferralInput("");
                       }}
-                      className="vl-btn-secondary vl-focus-ring rounded-full px-4 py-3 text-sm"
+                      className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm"
                     >
                       Clear
                     </button>
@@ -184,23 +183,23 @@ export default function CartPage() {
                 </div>
               </>
             )}
-            {referralSuccess ? <p className="mt-4 text-sm text-emerald-400">{referralSuccess}</p> : null}
-            {referralError ? <p className="mt-4 text-sm text-rose-400">{referralError}</p> : null}
+            {referralSuccess ? <p className="mt-4 text-sm text-emerald-300">{referralSuccess}</p> : null}
+            {referralError ? <p className="mt-4 text-sm text-rose-300">{referralError}</p> : null}
             {referralDetails ? (
-              <p className="mt-4 text-sm text-zinc-300">Ambassador {referralDetails.ambassadorName} • {referralDetails.customerDiscountPercent}% customer discount</p>
+              <p className="mt-4 text-sm text-white/60">Ambassador {referralDetails.ambassadorName} • {referralDetails.customerDiscountPercent}% customer discount</p>
             ) : null}
 
             <button
               type="button"
               onClick={() => router.push("/checkout")}
-              className="vl-btn-primary vl-focus-ring mt-8 inline-flex w-full justify-center px-5 py-3 text-center text-sm"
+              className="vl2-btn-primary vl-focus-ring mt-8 inline-flex w-full justify-center px-5 py-3 text-center text-sm"
             >
               Continue to checkout
             </button>
 
-            <div className="mt-5 grid grid-cols-2 gap-2">
-              <TrustBadge icon="shield" label="Encrypted Checkout" />
-              <TrustBadge icon="truck" label="Fast Dispatch" />
+            <div className="mt-5 flex items-center justify-center gap-6 text-[10px] uppercase tracking-[0.14em] text-white/40">
+              <span>Encrypted Checkout</span>
+              <span>Fast Dispatch</span>
             </div>
           </div>
         </div>

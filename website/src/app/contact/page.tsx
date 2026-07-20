@@ -1,7 +1,7 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { SiteHeader } from "@/components/site-header";
+import { SiteHeaderV2 } from "@/components/site-header-v2";
 
 const SUPPORT_EMAIL = "support@vantalabsresearch.com";
 const SUPPORT_SUBJECT = "Vanta Labs Customer Support";
@@ -102,66 +102,66 @@ export default function ContactPage() {
   };
 
   return (
-    <div className="vl-page-shell min-h-screen bg-zinc-950 text-zinc-100">
-      <SiteHeader />
-      <main className="px-4 py-12 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-[#0b0b0b] text-white">
+      <SiteHeaderV2 />
+      <main className="px-6 pb-20 pt-32 lg:px-12">
       <div className="mx-auto grid max-w-6xl gap-8 lg:grid-cols-[0.92fr_1.08fr]">
-        <section className="vl-panel rounded-[2rem] border border-white/15 p-6 sm:p-8">
-          <p className="vl-eyebrow text-[11px]">Support</p>
-          <h1 className="vl-display mt-3 text-3xl font-semibold text-white sm:text-4xl">Contact Vanta Labs</h1>
-          <p className="vl-copy mt-4 text-sm leading-7 text-zinc-300">
+        <section className="border border-white/10 p-6 sm:p-8">
+          <p className="vl2-eyebrow">Support</p>
+          <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Contact Vanta Labs</h1>
+          <p className="mt-4 text-sm leading-7 text-white/60">
             Have questions regarding your order, products, shipping, or general inquiries? Our team typically responds within one business day.
           </p>
 
-          <div className="mt-8 space-y-5 rounded-[1.5rem] border border-white/10 bg-white/5 p-5">
+          <div className="mt-8 space-y-5 border border-white/10 p-5">
             <div>
-              <p className="vl-eyebrow text-[11px]">Email</p>
-              <a href={mailtoHref} className="mt-2 inline-block text-base font-medium text-white transition hover:text-zinc-300">
+              <p className="vl2-eyebrow">Email</p>
+              <a href={mailtoHref} className="mt-2 inline-block text-base text-white transition hover:text-white/70">
                 {SUPPORT_EMAIL}
               </a>
-              <p className="mt-1 text-sm text-zinc-400">Subject defaults to {SUPPORT_SUBJECT}.</p>
+              <p className="mt-1 text-sm text-white/45">Subject defaults to {SUPPORT_SUBJECT}.</p>
             </div>
 
             <div>
-              <p className="vl-eyebrow text-[11px]">Business Hours</p>
-              <p className="mt-2 text-sm text-zinc-200">Monday–Friday</p>
-              <p className="text-sm text-zinc-200">9:00 AM – 5:00 PM EST</p>
+              <p className="vl2-eyebrow">Business Hours</p>
+              <p className="mt-2 text-sm text-white/75">Monday–Friday</p>
+              <p className="text-sm text-white/75">9:00 AM – 5:00 PM EST</p>
             </div>
           </div>
         </section>
 
-        <section className="vl-panel rounded-[2rem] border border-white/15 p-6 sm:p-8">
+        <section className="border border-white/10 p-6 sm:p-8">
           <div className="flex items-start justify-between gap-4">
             <div>
-              <p className="vl-eyebrow text-[11px]">Contact Form</p>
-              <h2 className="mt-3 text-2xl font-semibold text-white">Send a message</h2>
+              <p className="vl2-eyebrow">Contact Form</p>
+              <h2 className="vl2-serif mt-3 text-2xl text-white">Send a message</h2>
             </div>
-            <a href={mailtoHref} className="vl-btn-secondary vl-focus-ring whitespace-nowrap px-4 py-2 text-xs sm:text-sm">
+            <a href={mailtoHref} className="vl2-btn-secondary vl-focus-ring whitespace-nowrap px-4 py-2 text-xs sm:text-sm">
               Email support
             </a>
           </div>
 
           <form className="mt-6 space-y-4" onSubmit={handleSubmit}>
             <div className="grid gap-4 sm:grid-cols-2">
-              <label className="block text-sm text-zinc-300">
+              <label className="block text-sm text-white/60">
                 <span className="mb-2 block">First Name</span>
                 <input
                   type="text"
                   value={firstName}
                   onChange={(event) => setFirstName(event.target.value)}
-                  className="vl-input w-full px-4 py-3"
+                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
                   autoComplete="given-name"
                   required
                 />
               </label>
 
-              <label className="block text-sm text-zinc-300">
+              <label className="block text-sm text-white/60">
                 <span className="mb-2 block">Last Name</span>
                 <input
                   type="text"
                   value={lastName}
                   onChange={(event) => setLastName(event.target.value)}
-                  className="vl-input w-full px-4 py-3"
+                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
                   autoComplete="family-name"
                   required
                 />
@@ -169,48 +169,48 @@ export default function ContactPage() {
             </div>
 
             <div className="grid gap-4 sm:grid-cols-2">
-              <label className="block text-sm text-zinc-300">
+              <label className="block text-sm text-white/60">
                 <span className="mb-2 block">Email</span>
                 <input
                   type="email"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
-                  className="vl-input w-full px-4 py-3"
+                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
                   autoComplete="email"
                   required
                 />
               </label>
 
-              <label className="block text-sm text-zinc-300">
+              <label className="block text-sm text-white/60">
                 <span className="mb-2 block">Order Number</span>
                 <input
                   type="text"
                   value={orderNumber}
                   onChange={(event) => setOrderNumber(event.target.value)}
-                  className="vl-input w-full px-4 py-3"
+                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
                   placeholder="Optional"
                   autoComplete="off"
                 />
               </label>
             </div>
 
-            <label className="block text-sm text-zinc-300">
+            <label className="block text-sm text-white/60">
               <span className="mb-2 block">Subject</span>
               <input
                 type="text"
                 value={subject}
                 onChange={(event) => setSubject(event.target.value)}
-                className="vl-input w-full px-4 py-3"
+                className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
                 required
               />
             </label>
 
-            <label className="block text-sm text-zinc-300">
+            <label className="block text-sm text-white/60">
               <span className="mb-2 block">Message</span>
               <textarea
                 value={message}
                 onChange={(event) => setMessage(event.target.value)}
-                className="vl-input min-h-40 w-full px-4 py-3"
+                className="min-h-40 w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
                 required
               />
             </label>
@@ -225,10 +225,10 @@ export default function ContactPage() {
 
             {status ? (
               <p
-                className={`rounded-xl border px-4 py-3 text-sm ${
+                className={`border px-4 py-3 text-sm ${
                   statusTone === "success"
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
-                    : "border-rose-500/30 bg-rose-500/10 text-rose-200"
+                    ? "border-emerald-500/30 text-emerald-200"
+                    : "border-rose-500/30 text-rose-200"
                 }`}
                 aria-live="polite"
               >
@@ -239,7 +239,7 @@ export default function ContactPage() {
             <button
               type="submit"
               disabled={isSubmitting}
-              className="vl-btn-primary vl-focus-ring w-full px-5 py-3 text-sm disabled:opacity-60"
+              className="vl2-btn-primary vl-focus-ring w-full px-5 py-3 text-sm disabled:opacity-60"
             >
               {isSubmitting ? "Sending..." : "Submit"}
             </button>
