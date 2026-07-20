@@ -1,4 +1,4 @@
-import { SiteHeader } from "@/components/site-header";
+import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getActiveMembershipTiers } from "@/lib/membership";
@@ -15,8 +15,8 @@ export default async function MembershipPage() {
   const isSignedInCustomer = Boolean(user && detectRoleFromUser(user) === "customer");
 
   return (
-    <div className="min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(103,232,249,0.08),transparent_55%),linear-gradient(140deg,#05070f_0%,#0a1020_55%,#060910_100%)]">
-      <SiteHeader />
+    <div className="vl2-galaxy min-h-screen text-white">
+      <SiteHeaderV2 />
       <MembershipLanding tiers={tiers} isSignedInCustomer={isSignedInCustomer} />
     </div>
   );

@@ -107,6 +107,8 @@ export interface PartnerProgramStats {
   topPartnerPayout: number;
 }
 
+// Fallback floor shown before any admin-configured baseline exists in
+// partner_program_stats and before any real activity has happened.
 const PRELAUNCH_PARTNER_PROGRAM_STATS: PartnerProgramStats = {
   totalCommissionsPaid: 0,
   averagePartnerEarnings: 0,
@@ -394,18 +396,15 @@ export async function getPartnerProgramStats(): Promise<PartnerProgramStats> {
   await autoApproveEligibleCommissions();
 
   const [
-    { data: commissionRows, error: commissionError },
     { data: payoutRows, error: payoutError },
     { data: partnerRows, error: partnerError },
     { data: programStatsRows, error: statsError },
   ] = await Promise.all([
-    supabaseAdmin.from("referral_orders").select("commission_amount, created_at"),
     supabaseAdmin.from("partner_payouts").select("amount"),
     supabaseAdmin.from("partners").select("id, invited_at, approved_at"),
     supabaseAdmin.from("partner_program_stats").select("key, value_numeric"),
   ]);
 
-  assertNoSupabaseError("referral_orders.select(program commissions)", commissionError);
   assertNoSupabaseError("partner_payouts.select(program payouts)", payoutError);
   assertNoSupabaseError("partners.select(program partner approvals)", partnerError);
   assertNoSupabaseError("partner_program_stats.select(configurable stats)", statsError);
@@ -445,21 +444,30 @@ export async function getPartnerProgramStats(): Promise<PartnerProgramStats> {
     ? roundMoney(approvalDurations.reduce((sum, value) => sum + value, 0) / approvalDurations.length)
     : 24;
 
-  const hasLiveProgramData = (commissionRows?.length ?? 0) > 0 || (payoutRows?.length ?? 0) > 0;
-  const baseStats = hasLiveProgramData
-    ? {
-      totalCommissionsPaid,
-      averagePartnerEarnings,
-      averageApprovalTimeHours,
-      topPartnerPayout,
-    }
-    : PRELAUNCH_PARTNER_PROGRAM_STATS;
+  const hasApprovalData = approvalDurations.length > 0;
+
+  // partner_program_stats holds an admin-configured baseline (set once,
+  // e.g. before launch, to avoid showing a discouraging "$0 everything" to
+  // prospective partners). It is a FLOOR that real tracked activity builds
+  // on top of, not a static override that would hide genuine growth:
+  //   - money-sum metrics (total paid, average earnings) ADD the real
+  //     tracked total/average on top of the baseline, so every real payout
+  //     is still accurately reflected in what's displayed.
+  //   - "top payout" is a MAX against the baseline, since it represents a
+  //     single real high-water mark, not a running sum.
+  //   - approval time uses the real average once any real approval has
+  //     happened (faster or slower than the baseline), since averaging a
+  //     baseline duration with real durations wouldn't be meaningful.
+  const baselineTotalCommissionsPaid = overrides.get("total_commissions_paid_base") ?? 0;
+  const baselineAveragePartnerEarnings = overrides.get("average_partner_earnings_base") ?? 0;
+  const baselineTopPartnerPayout = overrides.get("top_partner_payout_base") ?? 0;
+  const baselineAverageApprovalTimeHours = overrides.get("average_approval_time_hours_base") ?? PRELAUNCH_PARTNER_PROGRAM_STATS.averageApprovalTimeHours;
 
   return {
-    totalCommissionsPaid: overrides.get("total_commissions_paid") ?? baseStats.totalCommissionsPaid,
-    averagePartnerEarnings: overrides.get("average_partner_earnings") ?? baseStats.averagePartnerEarnings,
-    averageApprovalTimeHours: overrides.get("average_approval_time_hours") ?? baseStats.averageApprovalTimeHours,
-    topPartnerPayout: overrides.get("top_partner_payout") ?? baseStats.topPartnerPayout,
+    totalCommissionsPaid: roundMoney(baselineTotalCommissionsPaid + totalCommissionsPaid),
+    averagePartnerEarnings: roundMoney(baselineAveragePartnerEarnings + averagePartnerEarnings),
+    averageApprovalTimeHours: hasApprovalData ? averageApprovalTimeHours : baselineAverageApprovalTimeHours,
+    topPartnerPayout: roundMoney(Math.max(baselineTopPartnerPayout, topPartnerPayout)),
   };
 }
 

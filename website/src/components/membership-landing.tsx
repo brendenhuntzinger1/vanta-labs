@@ -4,7 +4,6 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { MembershipTier } from "@/lib/membership";
 import { ScrollReveal } from "@/components/scroll-reveal";
-import { TrustBadge } from "@/components/trust-badge";
 
 type BillingCycle = "monthly" | "annual";
 
@@ -43,19 +42,19 @@ function FaqAccordion() {
       {FAQ_ITEMS.map((item, index) => {
         const isOpen = openIndex === index;
         return (
-          <div key={item.q} className="vl-panel-soft overflow-hidden rounded-2xl">
+          <div key={item.q} className="border border-white/10 bg-black/30">
             <button
               type="button"
               onClick={() => setOpenIndex(isOpen ? null : index)}
               className="vl-focus-ring flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
               aria-expanded={isOpen}
             >
-              <span className="text-sm font-medium text-zinc-100">{item.q}</span>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 flex-shrink-0 text-zinc-400 transition-transform ${isOpen ? "rotate-180" : ""}`}>
+              <span className="text-sm text-white">{item.q}</span>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 flex-shrink-0 text-white/40 transition-transform ${isOpen ? "rotate-180" : ""}`}>
                 <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </button>
-            {isOpen ? <p className="px-5 pb-4 text-sm leading-6 text-zinc-400">{item.a}</p> : null}
+            {isOpen ? <p className="px-5 pb-4 text-sm leading-6 text-white/55">{item.a}</p> : null}
           </div>
         );
       })}
@@ -73,13 +72,13 @@ function RewardsCalculator({ tiers }: { tiers: MembershipTier[] }) {
   const yearlyValue = (yearlyPoints / 100).toFixed(2);
 
   return (
-    <div className="vl-panel rounded-[1.75rem] p-6 sm:p-8">
-      <p className="vl-eyebrow text-[11px] text-cyan-300/80">Rewards Calculator</p>
-      <h3 className="mt-2 text-2xl font-semibold text-white">See what you&apos;d earn</h3>
+    <div className="vl2-glass p-6 sm:p-8">
+      <p className="vl2-eyebrow">Rewards Calculator</p>
+      <h3 className="vl2-serif mt-2 text-2xl text-white">See what you&apos;d earn</h3>
 
       <div className="mt-6 space-y-5">
-        <label className="block text-sm text-zinc-300">
-          Monthly spend: <span className="font-semibold text-white">${monthlySpend}</span>
+        <label className="block text-sm text-white/60">
+          Monthly spend: <span className="text-white">${monthlySpend}</span>
           <input
             type="range"
             min={0}
@@ -87,7 +86,7 @@ function RewardsCalculator({ tiers }: { tiers: MembershipTier[] }) {
             step={10}
             value={monthlySpend}
             onChange={(event) => setMonthlySpend(Number(event.target.value))}
-            className="mt-3 w-full accent-cyan-400"
+            className="mt-3 w-full accent-white"
           />
         </label>
 
@@ -98,8 +97,8 @@ function RewardsCalculator({ tiers }: { tiers: MembershipTier[] }) {
               type="button"
               onClick={() => setTierSlug(tier.slug)}
               className={tier.slug === tierSlug
-                ? "rounded-full border border-cyan-300/50 bg-cyan-400/15 px-4 py-2 text-xs font-semibold text-cyan-100"
-                : "rounded-full border border-white/15 bg-white/5 px-4 py-2 text-xs text-zinc-300 transition hover:border-white/30"}
+                ? "border border-white bg-white/10 px-4 py-2 text-xs text-white"
+                : "border border-white/15 px-4 py-2 text-xs text-white/55 transition hover:border-white/35 hover:text-white"}
             >
               {tier.name}
             </button>
@@ -109,12 +108,12 @@ function RewardsCalculator({ tiers }: { tiers: MembershipTier[] }) {
 
       <div className="mt-6 grid grid-cols-2 gap-4 border-t border-white/10 pt-6">
         <div>
-          <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Points / month</p>
-          <p className="mt-1 text-2xl font-semibold text-white">{monthlyPoints.toLocaleString()}</p>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-white/40">Points / month</p>
+          <p className="mt-1 text-2xl text-white">{monthlyPoints.toLocaleString()}</p>
         </div>
         <div>
-          <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Value / year</p>
-          <p className="mt-1 text-2xl font-semibold text-emerald-300">${yearlyValue}</p>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-white/40">Value / year</p>
+          <p className="mt-1 text-2xl text-emerald-300">${yearlyValue}</p>
         </div>
       </div>
     </div>
@@ -134,13 +133,13 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
   ], []);
 
   return (
-    <div className="px-4 pb-24 pt-14 sm:px-6 lg:px-8">
+    <div className="relative z-10 px-6 pb-24 pt-32 lg:px-12">
       <div className="mx-auto max-w-6xl">
         <ScrollReveal>
           <div className="text-center">
-            <p className="vl-eyebrow text-[11px] text-cyan-300/80">Vanta Labs Membership</p>
-            <h1 className="vl-display mt-4 text-4xl font-semibold text-white sm:text-5xl">Membership &amp; Rewards</h1>
-            <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-zinc-400 sm:text-base">
+            <p className="vl2-eyebrow">Vanta Labs Membership</p>
+            <h1 className="vl2-serif mt-4 text-4xl text-white sm:text-5xl">Membership &amp; Rewards</h1>
+            <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/60 sm:text-base">
               Earn points on every order, unlock free and priority shipping, and get early access to new research
               compounds. Every registered customer starts earning automatically.
             </p>
@@ -148,25 +147,25 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
         </ScrollReveal>
 
         <ScrollReveal delayMs={80}>
-          <div className="mt-8 flex justify-center gap-3">
-            <TrustBadge icon="shield" label="No Hidden Fees" detail="Transparent pricing, always" />
-            <TrustBadge icon="check" label="Automatic Tracking" detail="Points credit on every order" />
+          <div className="mt-8 flex justify-center gap-8 text-[10px] uppercase tracking-[0.14em] text-white/45">
+            <span>No Hidden Fees</span>
+            <span>Automatic Tracking</span>
           </div>
         </ScrollReveal>
 
         <div className="mt-10 flex justify-center">
-          <div className="vl-panel-soft inline-flex rounded-full p-1">
+          <div className="inline-flex border border-white/15 p-1">
             <button
               type="button"
               onClick={() => setBillingCycle("monthly")}
-              className={billingCycle === "monthly" ? "rounded-full bg-cyan-400/20 px-5 py-2 text-sm font-semibold text-cyan-100" : "rounded-full px-5 py-2 text-sm text-zinc-400"}
+              className={billingCycle === "monthly" ? "bg-white/10 px-5 py-2 text-sm text-white" : "px-5 py-2 text-sm text-white/50"}
             >
               Monthly
             </button>
             <button
               type="button"
               onClick={() => setBillingCycle("annual")}
-              className={billingCycle === "annual" ? "rounded-full bg-cyan-400/20 px-5 py-2 text-sm font-semibold text-cyan-100" : "rounded-full px-5 py-2 text-sm text-zinc-400"}
+              className={billingCycle === "annual" ? "bg-white/10 px-5 py-2 text-sm text-white" : "px-5 py-2 text-sm text-white/50"}
             >
               Annual <span className="text-emerald-300">(save ~17%)</span>
             </button>
@@ -180,24 +179,24 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
             return (
               <ScrollReveal key={tier.id} delayMs={index * 80}>
                 <div
-                  className={`vl-panel group relative flex h-full flex-col rounded-[1.75rem] p-6 transition duration-300 hover:-translate-y-1.5 hover:shadow-[0_20px_60px_-15px_rgba(103,232,249,0.35)] sm:p-8 ${isFeatured ? "border-cyan-300/40 ring-1 ring-cyan-300/30" : ""}`}
+                  className={`vl2-product-card group relative flex h-full flex-col p-6 sm:p-8 ${isFeatured ? "border-white/50" : ""}`}
                 >
                   {isFeatured ? (
-                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-cyan-400 px-3 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-zinc-950">
+                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-black">
                       Most Popular
                     </span>
                   ) : null}
 
-                  <p className="vl-eyebrow text-[11px] text-zinc-500">{tier.name}</p>
-                  <p className="mt-3 text-4xl font-semibold text-white">
+                  <p className="vl2-eyebrow">{tier.name}</p>
+                  <p className="mt-3 text-4xl text-white">
                     {money(price)}
-                    {price > 0 ? <span className="text-base font-normal text-zinc-500">/{billingCycle === "monthly" ? "mo" : "yr"}</span> : null}
+                    {price > 0 ? <span className="text-base font-normal text-white/40">/{billingCycle === "monthly" ? "mo" : "yr"}</span> : null}
                   </p>
 
-                  <ul className="mt-6 flex-1 space-y-3 text-sm text-zinc-300">
+                  <ul className="mt-6 flex-1 space-y-3 text-sm text-white/70">
                     {tier.benefits.map((benefit) => (
                       <li key={benefit} className="flex items-start gap-2">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mt-0.5 h-4 w-4 flex-shrink-0 text-cyan-300">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mt-0.5 h-4 w-4 flex-shrink-0 text-white">
                           <path d="m5 13 4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                         {benefit}
@@ -208,7 +207,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                   {tier.slug === "free" ? (
                     <Link
                       href={isSignedInCustomer ? "/account" : "/account/login"}
-                      className="vl-btn-primary vl-focus-ring mt-8 inline-flex items-center justify-center px-5 py-3 text-sm"
+                      className="vl2-btn-primary vl-focus-ring mt-8 inline-flex items-center justify-center px-5 py-3 text-sm"
                     >
                       {isSignedInCustomer ? "View my rewards" : "Get Started Free"}
                     </Link>
@@ -216,11 +215,11 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                     <div className="mt-8">
                       <Link
                         href="/contact"
-                        className="vl-btn-secondary vl-focus-ring inline-flex w-full items-center justify-center px-5 py-3 text-sm"
+                        className="vl2-btn-secondary vl-focus-ring inline-flex w-full items-center justify-center px-5 py-3 text-sm"
                       >
                         Contact to upgrade
                       </Link>
-                      <p className="mt-2 text-center text-[11px] text-zinc-500">Billing isn&apos;t connected yet — upgrades are activated manually.</p>
+                      <p className="mt-2 text-center text-[11px] text-white/40">Billing isn&apos;t connected yet — upgrades are activated manually.</p>
                     </div>
                   )}
                 </div>
@@ -231,23 +230,23 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
 
         <ScrollReveal delayMs={100}>
           <div className="mt-16">
-            <h2 className="text-center text-2xl font-semibold text-white">Compare plans</h2>
-            <div className="vl-panel mt-6 overflow-x-auto rounded-2xl">
+            <h2 className="vl2-serif text-center text-2xl text-white">Compare plans</h2>
+            <div className="mt-6 overflow-x-auto border border-white/10">
               <table className="w-full min-w-[560px] text-left text-sm">
                 <thead>
-                  <tr className="border-b border-white/10 text-zinc-400">
-                    <th className="px-5 py-4 font-medium">Benefit</th>
+                  <tr className="border-b border-white/10 text-white/45">
+                    <th className="px-5 py-4 font-normal">Benefit</th>
                     {tiers.map((tier) => (
-                      <th key={tier.id} className="px-5 py-4 text-center font-medium text-zinc-200">{tier.name}</th>
+                      <th key={tier.id} className="px-5 py-4 text-center font-normal text-white/70">{tier.name}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
                   {comparisonRows.map((row) => (
                     <tr key={row.label} className="border-b border-white/5">
-                      <td className="px-5 py-3 text-zinc-300">{row.label}</td>
+                      <td className="px-5 py-3 text-white/60">{row.label}</td>
                       {tiers.map((tier) => (
-                        <td key={tier.id} className="px-5 py-3 text-center text-zinc-200">{row.getValue(tier)}</td>
+                        <td key={tier.id} className="px-5 py-3 text-center text-white/70">{row.getValue(tier)}</td>
                       ))}
                     </tr>
                   ))}
@@ -265,7 +264,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
 
         <ScrollReveal delayMs={140}>
           <div className="mt-16">
-            <h2 className="text-center text-2xl font-semibold text-white">Frequently asked questions</h2>
+            <h2 className="vl2-serif text-center text-2xl text-white">Frequently asked questions</h2>
             <div className="mx-auto mt-6 max-w-2xl">
               <FaqAccordion />
             </div>

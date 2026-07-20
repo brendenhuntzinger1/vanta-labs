@@ -1193,6 +1193,53 @@ textarea {
   background: rgba(255, 255, 255, 0.06);
 }
 
+.vl2-galaxy {
+  position: relative;
+  overflow: hidden;
+  background: radial-gradient(ellipse 80% 60% at 50% -10%, rgba(255, 255, 255, 0.06), transparent 60%), #050505;
+}
+
+.vl2-galaxy::before,
+.vl2-galaxy::after {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  z-index: 0;
+  pointer-events: none;
+  background-repeat: repeat;
+  will-change: transform;
+}
+
+.vl2-galaxy::before {
+  background-image:
+    radial-gradient(1.6px 1.6px at 12% 22%, rgba(255, 255, 255, 0.95), transparent),
+    radial-gradient(1px 1px at 32% 62%, rgba(255, 255, 255, 0.7), transparent),
+    radial-gradient(2px 2px at 72% 32%, rgba(255, 255, 255, 0.9), transparent),
+    radial-gradient(1px 1px at 86% 76%, rgba(255, 255, 255, 0.6), transparent),
+    radial-gradient(1.6px 1.6px at 52% 86%, rgba(255, 255, 255, 0.85), transparent),
+    radial-gradient(1px 1px at 22% 92%, rgba(255, 255, 255, 0.5), transparent),
+    radial-gradient(1.6px 1.6px at 92% 16%, rgba(255, 255, 255, 0.8), transparent);
+  background-size: 240px 240px;
+  animation: vl2-galaxy-drift 100s linear infinite;
+}
+
+.vl2-galaxy::after {
+  background-image:
+    radial-gradient(1px 1px at 8% 48%, rgba(255, 255, 255, 0.55), transparent),
+    radial-gradient(1.4px 1.4px at 44% 14%, rgba(255, 255, 255, 0.7), transparent),
+    radial-gradient(1px 1px at 64% 68%, rgba(255, 255, 255, 0.5), transparent),
+    radial-gradient(1.4px 1.4px at 90% 54%, rgba(255, 255, 255, 0.65), transparent),
+    radial-gradient(1px 1px at 18% 80%, rgba(255, 255, 255, 0.45), transparent);
+  background-size: 340px 340px;
+  opacity: 0.55;
+  animation: vl2-galaxy-drift 160s linear infinite reverse;
+}
+
+@keyframes vl2-galaxy-drift {
+  from { transform: translate3d(0, 0, 0); }
+  to { transform: translate3d(-240px, -240px, 0); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .vl-float,
   .vl-float-b,
@@ -1218,7 +1265,9 @@ textarea {
   .vl-molecule-b,
   .vl-molecule-c,
   .vl2-vial-label,
-  .vl2-fade-in {
+  .vl2-fade-in,
+  .vl2-galaxy::before,
+  .vl2-galaxy::after {
     animation: none !important;
   }
 
