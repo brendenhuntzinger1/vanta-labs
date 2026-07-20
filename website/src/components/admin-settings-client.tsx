@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { EmailAdminSettings } from "@/lib/email/settings";
 import type { PaymentProcessorAdminSettings } from "@/lib/payment-processor-config";
 import type { FulfillmentAdminSettings } from "@/lib/fulfillment/config";
+import type { BusinessSettings } from "@/lib/admin-control";
 
 function Labeled({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -19,10 +20,12 @@ export function AdminSettingsClient({
   email,
   processor,
   fulfillment,
+  business,
 }: {
   email: EmailAdminSettings;
   processor: PaymentProcessorAdminSettings;
   fulfillment: FulfillmentAdminSettings;
+  business: BusinessSettings;
 }) {
   // Email state
   const [enabled, setEnabled] = useState(email.enabled);
@@ -53,6 +56,10 @@ export function AdminSettingsClient({
   const [fWebhook, setFWebhook] = useState("");
   const [fPayoutModel, setFPayoutModel] = useState(fulfillment.payoutModel);
   const [fPayoutRate, setFPayoutRate] = useState(String(fulfillment.payoutRate));
+
+  // Business info state
+  const [supportEmail, setSupportEmail] = useState(business.supportEmail);
+  const [businessName, setBusinessName] = useState(business.businessName);
 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -98,6 +105,10 @@ export function AdminSettingsClient({
             payout_model: fPayoutModel,
             payout_rate: Number(fPayoutRate) || 0,
           },
+          business: {
+            support_email: supportEmail,
+            business_name: businessName,
+          },
         }),
       });
       const json = (await res.json()) as { success: boolean; error?: string };
@@ -140,6 +151,16 @@ export function AdminSettingsClient({
 
   return (
     <div className="mt-6 space-y-4">
+      {/* Business info */}
+      <div className="vl-panel rounded-2xl p-5">
+        <h2 className="text-lg font-semibold">Business Info</h2>
+        <p className="mt-1 text-sm text-zinc-400">Your support email receives contact-form messages and new-payment alerts. Used across the site and in email footers.</p>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <Labeled label="Support / business email"><input value={supportEmail} onChange={(e) => setSupportEmail(e.target.value)} placeholder="you@yourdomain.com" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
+          <Labeled label="Business name"><input value={businessName} onChange={(e) => setBusinessName(e.target.value)} placeholder="Vanta Labs" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
+        </div>
+      </div>
+
       {/* Email */}
       <div className="vl-panel rounded-2xl p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">

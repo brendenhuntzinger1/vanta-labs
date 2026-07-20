@@ -4,6 +4,7 @@ import { canManageSettings } from "@/lib/admin-roles";
 import { getEmailAdminSettings } from "@/lib/email/settings";
 import { getPaymentProcessorAdminSettings } from "@/lib/payment-processor-config";
 import { getFulfillmentAdminSettings } from "@/lib/fulfillment/config";
+import { getBusinessSettings } from "@/lib/admin-control";
 import { AdminSettingsClient } from "@/components/admin-settings-client";
 
 export const dynamic = "force-dynamic";
@@ -24,10 +25,11 @@ export default async function AdminSettingsPage() {
     );
   }
 
-  const [email, processor, fulfillment] = await Promise.all([
+  const [email, processor, fulfillment, business] = await Promise.all([
     getEmailAdminSettings(),
     getPaymentProcessorAdminSettings(),
     getFulfillmentAdminSettings(),
+    getBusinessSettings(),
   ]);
 
   return (
@@ -35,7 +37,7 @@ export default async function AdminSettingsPage() {
       <div className="mx-auto max-w-4xl">
         <h1 className="text-2xl font-semibold sm:text-3xl">Settings</h1>
         <p className="mt-2 text-sm text-zinc-400">Connect email, your card payment processor, and your 3PL. Everything else works without these.</p>
-        <AdminSettingsClient email={email} processor={processor} fulfillment={fulfillment} />
+        <AdminSettingsClient email={email} processor={processor} fulfillment={fulfillment} business={business} />
       </div>
     </div>
   );

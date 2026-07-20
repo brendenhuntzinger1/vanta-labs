@@ -83,8 +83,8 @@ export function SiteFooter() {
         <div className="mt-10 flex flex-col gap-3 border-t border-white/10 pt-6 text-xs text-white/40 sm:flex-row sm:items-center sm:justify-between">
           <p>
             Support{" "}
-            <a href="mailto:support@vantalabsresearch.com" className="text-white/60 transition hover:text-white">
-              support@vantalabsresearch.com
+            <a href="mailto:brendenhuntzinger1@vantalabsresearch.com" className="text-white/60 transition hover:text-white">
+              brendenhuntzinger1@vantalabsresearch.com
             </a>
           </p>
           <p>© 2026 Vanta Labs. All Rights Reserved.</p>

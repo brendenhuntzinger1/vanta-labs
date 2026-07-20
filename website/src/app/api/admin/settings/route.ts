@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageSettings } from "@/lib/admin-roles";
-import { upsertControlValue } from "@/lib/admin-control";
+import { upsertControlValue, getBusinessSettings } from "@/lib/admin-control";
 import { getEmailAdminSettings } from "@/lib/email/settings";
 import { getPaymentProcessorAdminSettings } from "@/lib/payment-processor-config";
 import { getFulfillmentAdminSettings } from "@/lib/fulfillment/config";
@@ -20,12 +20,13 @@ export async function GET(request: Request) {
   if (!session) return unauthorizedResponse();
   if (!canManageSettings(session.role)) return forbiddenResponse();
 
-  const [email, processor, fulfillment] = await Promise.all([
+  const [email, processor, fulfillment, business] = await Promise.all([
     getEmailAdminSettings(),
     getPaymentProcessorAdminSettings(),
     getFulfillmentAdminSettings(),
+    getBusinessSettings(),
   ]);
-  return NextResponse.json({ success: true, email, processor, fulfillment });
+  return NextResponse.json({ success: true, email, processor, fulfillment, business });
 }
 
 // Saves email + payment-processor settings. Secrets (SMTP password, Resend
@@ -45,6 +46,7 @@ export async function PATCH(request: Request) {
       email?: Record<string, unknown>;
       processor?: Record<string, unknown>;
       fulfillment?: Record<string, unknown>;
+      business?: Record<string, unknown>;
     };
 
     const set = async (section: string, key: string, value: unknown) => {
@@ -92,6 +94,12 @@ export async function PATCH(request: Request) {
       await setIfPresent("fulfillment", "webhook_secret", f.webhook_secret);
       if (typeof f.payout_model === "string") await set("fulfillment", "payout_model", f.payout_model);
       if (f.payout_rate !== undefined) await set("fulfillment", "payout_rate", Number(f.payout_rate) || 0);
+    }
+
+    if (body.business) {
+      const b = body.business;
+      if (typeof b.support_email === "string") await set("business", "support_email", b.support_email);
+      if (typeof b.business_name === "string") await set("business", "business_name", b.business_name);
     }
 
     return NextResponse.json({ success: true });

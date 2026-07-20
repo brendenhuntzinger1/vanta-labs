@@ -268,6 +268,31 @@ export async function setPaymentMethodControlValue(input: {
   });
 }
 
+// Business identity used for outbound support/notification email. Editable in
+// Admin → Settings; defaults below.
+export interface BusinessSettings {
+  supportEmail: string;
+  businessName: string;
+}
+
+export const DEFAULT_BUSINESS_SETTINGS: BusinessSettings = {
+  supportEmail: "brendenhuntzinger1@vantalabsresearch.com",
+  businessName: "Vanta Labs",
+};
+
+export async function getBusinessSettings(): Promise<BusinessSettings> {
+  try {
+    const snapshot = await getControlSnapshot("business");
+    const cfg = snapshot.business ?? {};
+    return {
+      supportEmail: (typeof cfg.support_email === "string" && cfg.support_email.trim()) || DEFAULT_BUSINESS_SETTINGS.supportEmail,
+      businessName: (typeof cfg.business_name === "string" && cfg.business_name.trim()) || DEFAULT_BUSINESS_SETTINGS.businessName,
+    };
+  } catch {
+    return DEFAULT_BUSINESS_SETTINGS;
+  }
+}
+
 // Flat sales-tax rate (percent) an admin sets in the Control Center. Applied
 // to the post-discount merchandise total at checkout. Defaults to 0.
 export async function getTaxRatePercent(): Promise<number> {

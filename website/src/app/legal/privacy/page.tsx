@@ -38,7 +38,7 @@ export default function PrivacyPolicyPage() {
       <h2>Your choices</h2>
       <p>
         You may request access to, correction of, or deletion of your personal information, and you can unsubscribe from
-        marketing emails at any time. Contact <a href="mailto:support@vantalabsresearch.com">support@vantalabsresearch.com</a>.
+        marketing emails at any time. Contact <a href="mailto:brendenhuntzinger1@vantalabsresearch.com">brendenhuntzinger1@vantalabsresearch.com</a>.
       </p>
     </LegalPage>
   );

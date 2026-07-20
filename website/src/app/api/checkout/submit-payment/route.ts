@@ -2,7 +2,9 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { uploadPaymentProof } from "@/lib/payment-proof-storage";
 import { sendEmail } from "@/lib/email/send";
-import { manualPaymentReceivedTemplate } from "@/lib/email/templates";
+import { manualPaymentReceivedTemplate, newPaymentToVerifyTemplate } from "@/lib/email/templates";
+import { getBusinessSettings } from "@/lib/admin-control";
+import { getSiteUrl } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
 
@@ -78,14 +80,33 @@ export async function POST(request: Request) {
       throw updateError;
     }
 
+    const orderNumber = String(order.order_number ?? order.order_id);
+
     if (order.customer_email) {
       const template = manualPaymentReceivedTemplate({
         customerName: String(order.customer_name ?? ""),
-        orderNumber: String(order.order_number ?? order.order_id),
+        orderNumber,
         amount: Number(order.amount_paid ?? 0),
         paymentMethod: String(order.payment_method ?? ""),
       });
       await sendEmail({ to: String(order.customer_email), ...template });
+    }
+
+    // Alert the business owner that a payment is waiting to be verified.
+    try {
+      const { supportEmail } = await getBusinessSettings();
+      const alert = newPaymentToVerifyTemplate({
+        orderNumber,
+        customerName: String(order.customer_name ?? ""),
+        customerEmail: String(order.customer_email ?? ""),
+        amount: Number(order.amount_paid ?? 0),
+        paymentMethod: String(order.payment_method ?? ""),
+        transactionId,
+        adminUrl: `${getSiteUrl()}/admin/payments`,
+      });
+      await sendEmail({ to: supportEmail, ...alert });
+    } catch {
+      // Owner alert is best-effort; the customer's submission already succeeded.
     }
 
     return NextResponse.json({ success: true, uploadWarning });

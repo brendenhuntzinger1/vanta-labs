@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import { sendEmail } from "@/lib/email/send";
 import { contactFormNotificationTemplate } from "@/lib/email/templates";
+import { getBusinessSettings } from "@/lib/admin-control";
 
-const SUPPORT_EMAIL = "support@vantalabsresearch.com";
 const SUBMISSION_WINDOW_MS = 3000;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const MAX_SUBMISSIONS_PER_WINDOW = 3;
@@ -95,8 +95,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Please wait before sending another message." }, { status: 429 });
     }
 
+    const { supportEmail } = await getBusinessSettings();
     const template = contactFormNotificationTemplate({ firstName, lastName, email, orderNumber, subject, message });
-    const result = await sendEmail({ to: SUPPORT_EMAIL, replyTo: email, ...template });
+    const result = await sendEmail({ to: supportEmail, replyTo: email, ...template });
 
     if (!result.success) {
       return NextResponse.json(

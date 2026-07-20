@@ -36,7 +36,7 @@ function renderLayout(input: { preheader: string; title: string; bodyHtml: strin
         </td></tr>
         ${cta}
         <tr><td style="padding:28px 32px 24px;border-top:1px solid rgba(255,255,255,0.1);margin-top:24px;">
-          <p style="margin:20px 0 0;font-size:12px;color:#71717a;">Vanta Labs · Research Use Only<br/>Questions? <a href="mailto:support@vantalabsresearch.com" style="color:#a1a1aa;">support@vantalabsresearch.com</a></p>
+          <p style="margin:20px 0 0;font-size:12px;color:#71717a;">Vanta Labs · Research Use Only<br/>Questions? <a href="mailto:brendenhuntzinger1@vantalabsresearch.com" style="color:#a1a1aa;">brendenhuntzinger1@vantalabsresearch.com</a></p>
         </td></tr>
       </table>
     </td></tr>
@@ -190,6 +190,46 @@ export function manualPaymentReceivedTemplate(input: {
       `Amount: ${money(input.amount)}`,
       "",
       "Our team is verifying your payment now. You'll get another email as soon as it's approved.",
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
+// Internal alert to the business when a customer submits a manual payment that
+// needs verifying — so the owner doesn't have to keep refreshing the admin.
+export function newPaymentToVerifyTemplate(input: {
+  orderNumber: string;
+  customerName: string;
+  customerEmail: string;
+  amount: number;
+  paymentMethod: string;
+  transactionId: string;
+  adminUrl: string;
+}): EmailTemplate {
+  return {
+    subject: `New payment to verify — ${input.orderNumber} (${money(input.amount)})`,
+    html: renderLayout({
+      preheader: `${paymentMethodLabel(input.paymentMethod)} payment submitted for ${input.orderNumber}.`,
+      title: `New ${escapeHtml(paymentMethodLabel(input.paymentMethod))} payment to verify`,
+      bodyHtml: `
+        <p>Order <strong>${escapeHtml(input.orderNumber)}</strong> — <strong>${money(input.amount)}</strong></p>
+        <p>Customer: ${escapeHtml(input.customerName || "—")} (${escapeHtml(input.customerEmail)})<br/>
+        Method: ${escapeHtml(paymentMethodLabel(input.paymentMethod))}<br/>
+        Transaction ID: ${escapeHtml(input.transactionId)}</p>
+        <p>Review and approve it in your admin dashboard.</p>
+      `,
+      ctaLabel: "Open Payment Verification",
+      ctaUrl: input.adminUrl,
+    }),
+    text: toText([
+      `New ${paymentMethodLabel(input.paymentMethod)} payment to verify.`,
+      "",
+      `Order ${input.orderNumber} — ${money(input.amount)}`,
+      `Customer: ${input.customerName || "—"} (${input.customerEmail})`,
+      `Transaction ID: ${input.transactionId}`,
+      "",
+      input.adminUrl,
       "",
       "- Vanta Labs",
     ]),

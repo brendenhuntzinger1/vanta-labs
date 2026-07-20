@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 
-const SUPPORT_EMAIL = "support@vantalabsresearch.com";
+const SUPPORT_EMAIL = "brendenhuntzinger1@vantalabsresearch.com";
 const SUPPORT_SUBJECT = "Vanta Labs Customer Support";
 
 function createSupportMailto() {

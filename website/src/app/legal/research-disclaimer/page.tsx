@@ -33,7 +33,7 @@ export default function ResearchDisclaimerPage() {
       <h2>Contact</h2>
       <p>
         Questions about this disclaimer can be sent to{" "}
-        <a href="mailto:support@vantalabsresearch.com">support@vantalabsresearch.com</a>.
+        <a href="mailto:brendenhuntzinger1@vantalabsresearch.com">brendenhuntzinger1@vantalabsresearch.com</a>.
       </p>
     </LegalPage>
   );

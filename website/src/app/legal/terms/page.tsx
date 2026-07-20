@@ -45,7 +45,7 @@ export default function TermsPage() {
         damages arising from the use or misuse of any product.
       </p>
       <h2>Contact</h2>
-      <p><a href="mailto:support@vantalabsresearch.com">support@vantalabsresearch.com</a></p>
+      <p><a href="mailto:brendenhuntzinger1@vantalabsresearch.com">brendenhuntzinger1@vantalabsresearch.com</a></p>
     </LegalPage>
   );
 }
