@@ -385,7 +385,7 @@ async function ensureCommissionRecord(input: {
   return { id: data.id };
 }
 
-async function updateCommissionOnRefund(orderId: string) {
+export async function updateCommissionOnRefund(orderId: string) {
   const { data: existingCommission, error: lookupError } = await supabaseAdmin
     .from("referral_orders")
     .select("payment_status")

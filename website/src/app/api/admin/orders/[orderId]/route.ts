@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageRefunds } from "@/lib/admin-roles";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
 import { orderConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
+import { getPaymentProvider } from "@/lib/payment-provider";
+import { updateCommissionOnRefund } from "@/lib/payment-webhook";
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -44,6 +47,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       fulfillmentStatus?: string;
       trackingNumber?: string;
       note?: string;
+      refundAmount?: number;
+      carrier?: string;
+      estimatedDelivery?: string;
     };
 
     const action = String(body.action ?? "");
@@ -91,6 +97,26 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         throw auditError;
       }
 
+      if (body.fulfillmentStatus || typeof body.trackingNumber === "string" || body.carrier || body.estimatedDelivery) {
+        const { error: shipmentError } = await supabaseAdmin
+          .from("order_shipments")
+          .upsert(
+            {
+              order_id: orderId,
+              carrier: body.carrier?.trim() || null,
+              tracking_number: typeof body.trackingNumber === "string" ? body.trackingNumber.trim() || null : null,
+              shipping_status: body.fulfillmentStatus || "pending",
+              estimated_delivery: body.estimatedDelivery || null,
+              updated_at: now,
+            },
+            { onConflict: "order_id" },
+          );
+
+        if (shipmentError) {
+          throw shipmentError;
+        }
+      }
+
       if (body.fulfillmentStatus || typeof body.trackingNumber === "string") {
         try {
           const order = await getOrderWithItems(orderId);
@@ -111,17 +137,90 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       return NextResponse.json({ success: true });
     }
 
-    if (action === "refund" || action === "cancel" || action === "resend_confirmation" || action === "print_packing_slip") {
-      if (action === "refund") {
-        const { error } = await supabaseAdmin
-          .from("orders")
-          .update({ payment_status: "refunded", updated_at: now })
-          .eq("order_id", orderId);
-        if (error) {
-          throw error;
-        }
+    if (action === "refund") {
+      if (!canManageRefunds(session.role)) {
+        return NextResponse.json({ success: false, error: "Your role does not have permission to issue refunds." }, { status: 403 });
       }
 
+      const order = await getOrderWithItems(orderId);
+      if (!order) {
+        return NextResponse.json({ success: false, error: "Order not found." }, { status: 404 });
+      }
+
+      const amountPaid = roundMoney(Number(order.amount_paid ?? 0));
+      const alreadyRefunded = roundMoney(Number(order.refund_amount ?? 0));
+      const remaining = roundMoney(Math.max(0, amountPaid - alreadyRefunded));
+
+      if (remaining <= 0) {
+        return NextResponse.json({ success: false, error: "This order has already been fully refunded." }, { status: 400 });
+      }
+
+      const requestedAmount = typeof body.refundAmount === "number" && Number.isFinite(body.refundAmount)
+        ? roundMoney(body.refundAmount)
+        : remaining;
+
+      if (requestedAmount <= 0 || requestedAmount > remaining) {
+        return NextResponse.json({ success: false, error: `Refund amount must be between $0.01 and $${remaining.toFixed(2)}.` }, { status: 400 });
+      }
+
+      const newRefundTotal = roundMoney(alreadyRefunded + requestedAmount);
+      const isFullRefund = newRefundTotal >= amountPaid;
+
+      // PaymentProvider.refundPayment() is a stub until a real payment
+      // processor is connected - it does not move real money. The database
+      // is updated regardless so the store's own records stay accurate; the
+      // actual refund must currently be issued through the processor
+      // directly until that integration exists.
+      try {
+        const provider = getPaymentProvider();
+        if (order.payment_id) {
+          await provider.refundPayment(String(order.payment_id));
+        }
+      } catch {
+        // Provider refund is best-effort until a real processor is wired up.
+      }
+
+      const { error } = await supabaseAdmin
+        .from("orders")
+        .update({
+          payment_status: isFullRefund ? "refunded" : "partially_refunded",
+          refund_amount: newRefundTotal,
+          refunded_at: now,
+          updated_at: now,
+        })
+        .eq("order_id", orderId);
+      if (error) {
+        throw error;
+      }
+
+      await updateCommissionOnRefund(orderId);
+
+      const { error: auditError } = await supabaseAdmin
+        .from("admin_audit_logs")
+        .insert({
+          action: "order_refund",
+          target_table: "orders",
+          target_id: orderId,
+          metadata: {
+            amount: requestedAmount,
+            newRefundTotal,
+            isFullRefund,
+            note: body.note ?? null,
+            performedAt: now,
+            performedBy: session.username,
+            ipAddress,
+            userAgent,
+          },
+        });
+
+      if (auditError) {
+        throw auditError;
+      }
+
+      return NextResponse.json({ success: true, refundAmount: newRefundTotal, isFullRefund });
+    }
+
+    if (action === "cancel" || action === "resend_confirmation" || action === "print_packing_slip") {
       if (action === "cancel") {
         const { error } = await supabaseAdmin
           .from("orders")

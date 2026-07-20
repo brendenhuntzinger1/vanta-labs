@@ -43,6 +43,13 @@ Run these SQL files in order from Supabase SQL Editor:
    default to `staff` on this migration — promote at least one account to
    `super_admin` afterward (see §2a) so someone can grant roles to others
    from `/admin/team`.
+10. `src/lib/sql/coupon-checkout-columns.sql` — **required.** Adds
+    `orders.coupon_code` so coupon redemptions can be tracked and reported
+    on.
+11. `src/lib/sql/order-shipment-management.sql` — **required.** Adds a
+    unique constraint on `order_shipments.order_id` so the admin order
+    detail page can upsert one shipment record (carrier, tracking,
+    estimated delivery) per order.
 
 Optional follow-up hardening (run after the above, in Supabase SQL Editor,
 only if you want to apply the latest Supabase Performance/Security Advisor

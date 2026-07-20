@@ -1,7 +1,9 @@
 import { notFound, redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
+import { canManageRefunds } from "@/lib/admin-roles";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { AdminOrderActions } from "@/components/admin-order-actions";
+import { AdminOrderTimeline } from "@/components/admin-order-timeline";
 
 export const dynamic = "force-dynamic";
 
@@ -13,11 +15,25 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
     redirect("/vault");
   }
 
-  const { data, error } = await supabaseAdmin
-    .from("orders")
-    .select("*, order_items(*)")
-    .eq("order_id", orderId)
-    .maybeSingle();
+  const [{ data, error }, { data: auditRows }, { data: shipment }] = await Promise.all([
+    supabaseAdmin
+      .from("orders")
+      .select("*, order_items(*)")
+      .eq("order_id", orderId)
+      .maybeSingle(),
+    supabaseAdmin
+      .from("admin_audit_logs")
+      .select("id, action, metadata, created_at")
+      .eq("target_table", "orders")
+      .eq("target_id", orderId)
+      .order("created_at", { ascending: false })
+      .limit(50),
+    supabaseAdmin
+      .from("order_shipments")
+      .select("carrier, estimated_delivery")
+      .eq("order_id", orderId)
+      .maybeSingle(),
+  ]);
 
   if (error || !data) {
     notFound();
@@ -34,7 +50,14 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
           initialPaymentStatus={String(data.payment_status ?? "pending_payment")}
           initialFulfillmentStatus={String(data.fulfillment_status ?? "pending")}
           initialTrackingNumber={data.tracking_number ? String(data.tracking_number) : null}
+          amountPaid={Number(data.amount_paid ?? 0)}
+          refundAmount={Number(data.refund_amount ?? 0)}
+          canRefund={canManageRefunds(session.role)}
+          initialCarrier={shipment?.carrier ?? null}
+          initialEstimatedDelivery={shipment?.estimated_delivery ?? null}
         />
+
+        <AdminOrderTimeline entries={auditRows ?? []} />
 
         <pre className="mt-6 overflow-x-auto rounded-xl bg-zinc-950 p-3 text-xs text-zinc-300 sm:p-4 sm:text-sm">
 {JSON.stringify(data, null, 2)}
