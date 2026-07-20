@@ -47,6 +47,15 @@ vi.mock("@/lib/membership", () => ({
   checkAndAwardBirthdayBonus: async () => false,
 }));
 
+vi.mock("@/lib/ambassador-settings", () => ({
+  getAmbassadorProgramSettings: async () => ({
+    minimumQualifyingOrder: 100,
+    minimumPayoutThreshold: 100,
+    commissionHoldDays: 14,
+  }),
+  setAmbassadorProgramSetting: async () => {},
+}));
+
 vi.mock("@/lib/catalog", () => ({
   getCatalogProductsBySlugs: async (slugs: string[]) => slugs
     .filter((slug) => slug === "bpc-157-10mg")

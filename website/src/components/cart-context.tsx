@@ -5,6 +5,7 @@ import type { Product } from "@/lib/catalog-types";
 import type { ReferralCode } from "@/lib/referral-codes";
 import { validateReferralCodeClient } from "@/lib/referral-client";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
+import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 
 type CouponDetails = {
   code: string;
@@ -394,9 +395,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const totalBeforePoints = Math.max(0, subtotal + shipping + serviceFee - discountAmount);
 
+  // Referral codes are exclusive of every other discount, including
+  // redeemed loyalty points - mirrors the server-side rule in
+  // payment-service.ts.
   const pointsRedeemedDiscount = useMemo(
-    () => Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints),
-    [pointsToRedeem, totalBeforePoints],
+    () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints)),
+    [referralDetails, pointsToRedeem, totalBeforePoints],
   );
 
   const total = Math.max(0, totalBeforePoints - pointsRedeemedDiscount);
@@ -548,6 +552,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    if (subtotal < DEFAULT_MINIMUM_QUALIFYING_ORDER) {
+      setReferralDetails(null);
+      setReferralCode(null);
+      setReferralError(`Referral codes require a minimum order of ${formatCurrency(DEFAULT_MINIMUM_QUALIFYING_ORDER)}. Add more items to use one.`);
+      setReferralSuccess(null);
+      return;
+    }
+
     try {
       const validatedReferral = await validateReferralCodeClient(normalized);
 
@@ -575,6 +587,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       setCouponDetails(null);
       setCouponError(null);
       setCouponSuccess(null);
+      setPointsToRedeemState(0);
       if (typeof document !== "undefined") {
         document.cookie = `${REFERRAL_COOKIE_KEY}=${encodeURIComponent(validatedReferral.referralCode)}; path=/; max-age=${60 * 60 * 24 * 30}; samesite=lax`;
       }

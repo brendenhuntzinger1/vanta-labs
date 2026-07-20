@@ -9,6 +9,7 @@ import {
   referralCodeAssignedTemplate,
 } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
+import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 
 function formatSupabaseError(error: unknown) {
   if (!error) {
@@ -74,6 +75,7 @@ export interface AdminPartnerRow {
   referralCode: string;
   status: string;
   commissionPercent: number;
+  commissionPercentLocked: boolean;
   totalRevenue: number;
   totalOrders: number;
   totalCommissions: number;
@@ -194,12 +196,12 @@ async function sendReferralCodeAssignedEmail(input: {
 
 async function autoApproveEligibleCommissions() {
   const now = new Date();
-  const holdPeriodDays = Number(process.env.COMMISSION_HOLD_DAYS ?? "14");
-  const holdPeriodMs = Math.max(1, holdPeriodDays) * 24 * 60 * 60 * 1000;
+  const ambassadorSettings = await getAmbassadorProgramSettings();
+  const holdPeriodMs = Math.max(1, ambassadorSettings.commissionHoldDays) * 24 * 60 * 60 * 1000;
 
   const { data: pendingRows, error: pendingError } = await supabaseAdmin
     .from("referral_orders")
-    .select("id, order_id, created_at, payment_status")
+    .select("id, order_id, created_at, payment_status, ineligible_reason, fraud_flag")
     .eq("payment_status", "pending");
 
   assertNoSupabaseError("referral_orders.select(auto approve pending)", pendingError);
@@ -224,6 +226,13 @@ async function autoApproveEligibleCommissions() {
 
   const eligibleIds = pendingRows
     .filter((row) => {
+      // Orders below the minimum qualifying order, or flagged for fraud
+      // review, never auto-approve - an admin has to clear them manually
+      // from the Fraud & Review panel.
+      if (row.ineligible_reason || row.fraud_flag) {
+        return false;
+      }
+
       const orderStatus = orderStatusById.get(row.order_id);
       if (orderStatus !== "paid") {
         return false;
@@ -594,7 +603,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
 export async function getAdminPartnerRows(input?: { search?: string; status?: string; payoutStatus?: string }): Promise<AdminPartnerRow[]> {
   let query = supabaseAdmin
     .from("partners")
-    .select("id, name, email, referral_code, status, commission_percent, updated_at")
+    .select("id, name, email, referral_code, status, commission_percent, commission_percent_locked, updated_at")
     .order("updated_at", { ascending: false });
 
   if (input?.status && input.status !== "all") {
@@ -667,6 +676,7 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
       referralCode: partner.referral_code,
       status: partner.status,
       commissionPercent: Number(partner.commission_percent ?? 15),
+      commissionPercentLocked: Boolean(partner.commission_percent_locked),
       totalRevenue: roundMoney(order.totalRevenue),
       totalOrders: order.totalOrders,
       totalCommissions: roundMoney(commission.total),
@@ -882,6 +892,7 @@ export async function updatePartnerStatus(input: {
   status: "approved" | "disabled" | "pending" | "rejected" | "info_requested";
   actorUserId?: string;
   commissionPercent?: number;
+  commissionPercentLocked?: boolean;
   referralCode?: string;
   actorUsername?: string;
   ipAddress?: string | null;
@@ -947,6 +958,12 @@ export async function updatePartnerStatus(input: {
 
   if (typeof input.commissionPercent === "number") {
     updatePayload.commission_percent = input.commissionPercent;
+    // Manually setting a flat percent opts the ambassador out of automatic
+    // performance-tier commissions, unless the caller explicitly says
+    // otherwise (used by the "re-enable automatic tiers" admin action).
+    updatePayload.commission_percent_locked = input.commissionPercentLocked ?? true;
+  } else if (typeof input.commissionPercentLocked === "boolean") {
+    updatePayload.commission_percent_locked = input.commissionPercentLocked;
   }
 
   if (normalizedReferralCode) {
@@ -1040,6 +1057,7 @@ export async function markCommissionsPaid(input: {
   actorUsername?: string;
   ipAddress?: string | null;
   userAgent?: string | null;
+  overrideMinimumThreshold?: boolean;
 }) {
   const { data: pendingRows, error: pendingError } = await supabaseAdmin
     .from("referral_orders")
@@ -1054,6 +1072,13 @@ export async function markCommissionsPaid(input: {
   const ids = (pendingRows ?? []).map((row) => row.id);
   if (ids.length === 0) {
     return { payoutId: null, orderCount: 0 };
+  }
+
+  if (!input.overrideMinimumThreshold) {
+    const ambassadorSettings = await getAmbassadorProgramSettings();
+    if (roundMoney(input.amount) < ambassadorSettings.minimumPayoutThreshold) {
+      throw new Error(`Payout amount is below the ${ambassadorSettings.minimumPayoutThreshold.toFixed(2)} minimum payout threshold. Wait for more commissions to accrue, or explicitly override the threshold to pay out anyway.`);
+    }
   }
 
   const { error: updateError } = await supabaseAdmin

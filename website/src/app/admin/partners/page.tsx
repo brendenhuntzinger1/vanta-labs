@@ -2,6 +2,9 @@ import { redirect } from "next/navigation";
 import { AdminPartnersClient } from "@/components/admin-partners-client";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getAdminOperationsSummary, getAdminPartnerRows } from "@/lib/partner-portal";
+import { listCommissionTierRules } from "@/lib/ambassador-commission";
+import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import { getFraudReviewRows, getPayoutHistory } from "@/lib/admin-ambassadors";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -15,9 +18,13 @@ export default async function AdminPartnersPage() {
     redirect("/vault");
   }
 
-  const [rows, operations] = await Promise.all([
+  const [rows, operations, tiers, ambassadorSettings, fraudRows, payoutHistory] = await Promise.all([
     getAdminPartnerRows({ status: "all" }),
     getAdminOperationsSummary(),
+    listCommissionTierRules(),
+    getAmbassadorProgramSettings(),
+    getFraudReviewRows(),
+    getPayoutHistory(),
   ]);
 
   return (
@@ -57,7 +64,13 @@ export default async function AdminPartnersPage() {
           </div>
         </section>
 
-        <AdminPartnersClient initialRows={rows} />
+        <AdminPartnersClient
+          initialRows={rows}
+          initialTiers={tiers}
+          initialSettings={ambassadorSettings}
+          initialFraudRows={fraudRows}
+          initialPayoutHistory={payoutHistory}
+        />
       </div>
     </div>
   );

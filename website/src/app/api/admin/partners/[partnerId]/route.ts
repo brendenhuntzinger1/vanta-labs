@@ -24,6 +24,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
     if (action === "set_status") {
       const status = body?.status as "approved" | "disabled" | "pending" | "rejected" | "info_requested";
       const commissionPercent = body?.commissionPercent !== undefined ? Number(body.commissionPercent) : undefined;
+      const commissionPercentLocked = typeof body?.commissionPercentLocked === "boolean" ? body.commissionPercentLocked : undefined;
       const referralCode = typeof body?.referralCode === "string" ? body.referralCode : undefined;
 
       if (!["approved", "disabled", "pending", "rejected", "info_requested"].includes(status)) {
@@ -35,6 +36,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
         status,
         actorUserId: undefined,
         commissionPercent,
+        commissionPercentLocked,
         referralCode,
         actorUsername: session.username,
         ipAddress,
@@ -47,6 +49,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
     if (action === "mark_paid") {
       const amount = Number(body?.amount ?? 0);
       const note = typeof body?.note === "string" ? body.note : undefined;
+      const overrideMinimumThreshold = body?.overrideMinimumThreshold === true;
 
       if (!Number.isFinite(amount) || amount <= 0) {
         return NextResponse.json({ success: false, error: "Amount must be greater than 0" }, { status: 400 });
@@ -60,6 +63,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
         actorUsername: session.username,
         ipAddress,
         userAgent,
+        overrideMinimumThreshold,
       });
 
       return NextResponse.json({ success: true, payout });

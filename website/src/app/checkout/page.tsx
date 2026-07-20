@@ -449,7 +449,11 @@ export default function CheckoutPage() {
                   You have <span className="font-semibold text-white">{pointsBalance.toLocaleString()}</span> points available
                   ({formatCartCurrency(pointsBalance / 100)} value).
                 </p>
-                {pointsBalance > 0 ? (
+                {referralDetails ? (
+                  <p className="mt-3 rounded-xl border border-white/24 bg-white/8 px-3 py-2 text-sm text-zinc-100">
+                    A referral code is applied. Remove it to redeem points on this order.
+                  </p>
+                ) : pointsBalance > 0 ? (
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
                     <input
                       type="number"

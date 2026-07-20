@@ -6,6 +6,8 @@ import { sendEmail } from "@/lib/email/send";
 import { orderConfirmationTemplate } from "@/lib/email/templates";
 import { redeemCoupon } from "@/lib/coupons";
 import { calculateEarnedPoints, getActivePointsMultiplier, getCustomerMembership, recordPointsLedgerEntry, reverseOrderPoints } from "@/lib/membership";
+import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
+import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 
 export interface WebhookEventState {
   eventId: string;
@@ -308,12 +310,43 @@ async function ensureCommissionRecord(input: {
   commissionableSubtotal?: number;
   paymentStatus: OrderStatus;
   providerEventId?: string;
+  customerEmail?: string | null;
+  shippingAddress?: string | null;
+  city?: string | null;
+  postalCode?: string | null;
 }) {
   if (!input.ambassadorId || !input.referralCode) {
     return null;
   }
 
-  const commissionAmount = roundMoney((input.commissionableSubtotal ?? 0) * ((input.commissionPercent ?? 0) / 100));
+  const commissionableSubtotal = roundMoney(input.commissionableSubtotal ?? 0);
+
+  const [ambassadorSettings, effectiveCommission, fraudSignal] = await Promise.all([
+    getAmbassadorProgramSettings(),
+    getEffectiveCommissionPercent({
+      ambassadorId: input.ambassadorId,
+      fallbackPercent: input.commissionPercent ?? 0,
+    }),
+    detectCommissionFraudSignal({
+      ambassadorId: input.ambassadorId,
+      orderId: input.orderId,
+      customerEmail: input.customerEmail,
+      shippingAddress: input.shippingAddress,
+      city: input.city,
+      postalCode: input.postalCode,
+    }),
+  ]);
+
+  // Re-checked here (not just at checkout) as defense in depth - the order
+  // shouldn't be able to earn a commission below the minimum qualifying
+  // order regardless of how it reached "paid".
+  const isIneligible = commissionableSubtotal < ambassadorSettings.minimumQualifyingOrder;
+  const ineligibleReason = isIneligible
+    ? `Order subtotal ${commissionableSubtotal.toFixed(2)} is below the ${ambassadorSettings.minimumQualifyingOrder.toFixed(2)} minimum qualifying order.`
+    : null;
+
+  const commissionPercent = isIneligible ? 0 : effectiveCommission.percent;
+  const commissionAmount = isIneligible ? 0 : roundMoney(commissionableSubtotal * (commissionPercent / 100));
 
   const { data: existingCommission, error: commissionLookupError } = await supabaseAdmin
     .from("referral_orders")
@@ -329,12 +362,16 @@ async function ensureCommissionRecord(input: {
     order_id: input.orderId,
     ambassador_id: input.ambassadorId,
     referral_code: input.referralCode,
-    commission_percent: input.commissionPercent ?? 0,
+    commission_percent: commissionPercent,
     commission_amount: commissionAmount,
-    amount_paid: roundMoney(input.commissionableSubtotal ?? 0),
+    amount_paid: commissionableSubtotal,
     payment_id: null,
     payment_status: "pending",
     provider_event_id: input.providerEventId ?? null,
+    tier_name: effectiveCommission.tierName,
+    ineligible_reason: ineligibleReason,
+    fraud_flag: fraudSignal.flagged,
+    fraud_reason: fraudSignal.reason,
     updated_at: new Date().toISOString(),
   };
 
@@ -350,9 +387,13 @@ async function ensureCommissionRecord(input: {
         order_id: input.orderId,
         partner_id: input.ambassadorId,
         referral_code: input.referralCode,
-        commission_percent: input.commissionPercent ?? 0,
+        commission_percent: commissionPercent,
         commission_amount: commissionAmount,
         status: "pending",
+        tier_name: effectiveCommission.tierName,
+        ineligible_reason: ineligibleReason,
+        fraud_flag: fraudSignal.flagged,
+        fraud_reason: fraudSignal.reason,
         updated_at: new Date().toISOString(),
       }, { onConflict: "order_id" });
 
@@ -378,9 +419,13 @@ async function ensureCommissionRecord(input: {
       order_id: input.orderId,
       partner_id: input.ambassadorId,
       referral_code: input.referralCode,
-      commission_percent: input.commissionPercent ?? 0,
+      commission_percent: commissionPercent,
       commission_amount: commissionAmount,
       status: "pending",
+      tier_name: effectiveCommission.tierName,
+      ineligible_reason: ineligibleReason,
+      fraud_flag: fraudSignal.flagged,
+      fraud_reason: fraudSignal.reason,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     }, { onConflict: "order_id" });
@@ -502,6 +547,10 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       commissionableSubtotal,
       paymentStatus: nextStatus,
       providerEventId: eventId,
+      customerEmail: eventPayload.customer?.email,
+      shippingAddress: eventPayload.customer?.address,
+      city: eventPayload.customer?.city,
+      postalCode: eventPayload.customer?.postalCode,
     });
 
     await logCommerceAnalyticsEvent({

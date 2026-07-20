@@ -63,6 +63,12 @@ Run these SQL files in order from Supabase SQL Editor:
     `customer_memberships`, `points_ledger`, `promotional_point_events`, and
     `birthday`/`referral_code`/`referred_by_code` columns on
     `customer_preferences` for the Membership & Rewards program (see §10).
+15. `src/lib/sql/ambassador-commission-rules.sql` — **required.** Adds
+    `commission_tier_rules` (seeded 10% / 12.5% at 20 monthly sales / 15% at
+    50 monthly sales), `commission_percent_locked` on `partners`/
+    `ambassadors`, and `tier_name`/`ineligible_reason`/`fraud_flag`/
+    `fraud_reason` columns on `referral_orders`/`commissions` for automatic
+    performance-tier commissions and fraud review (see §11).
 
 Optional follow-up hardening (run after the above, in Supabase SQL Editor,
 only if you want to apply the latest Supabase Performance/Security Advisor
@@ -183,11 +189,37 @@ account pages on top of the mechanism Supabase already provides securely.
 
 - Approve/reject/disable partners
 - Partner performance metrics
-- Commission percentage updates
-- Mark commissions as paid
+- Commission percentage updates (locks the partner out of automatic
+  performance tiers - see below)
+- Mark commissions as paid (blocked below the minimum payout threshold)
 - Search/filter
 - CSV export via `/api/admin/partners/export-payouts`
 - Audit logs written to `admin_audit_logs`
+- Commission tier rules editor (automatic commission-percent escalation by
+  monthly qualifying sales)
+- Fraud & review panel (self-referral blocks, repeat-address/email flags,
+  refund-after-payout manual review)
+- Top performers leaderboard
+- Ambassador program settings: minimum qualifying order for a referral code
+  ($100 default, admin-configurable), minimum payout threshold ($100
+  default), commission hold/waiting period before a commission is eligible
+  for payout (14 days default)
+
+Commission rules, enforced automatically with no manual work required:
+
+- Commission is calculated on the merchandise subtotal only (after any
+  discount, before shipping) - never on shipping, service fees, or the
+  order total.
+- A referral code cannot be combined with Buy 3 Get 1 Free, a coupon code,
+  or redeemed loyalty points - each is mutually exclusive with the others.
+- Orders below the minimum qualifying order amount cannot apply a referral
+  code at all.
+- A shopper cannot refer themselves: checkout is blocked if the customer's
+  email or signed-in account matches the referring ambassador's.
+- Commissions only become payable after the configured hold/waiting period,
+  and only for orders that are still paid (not refunded/canceled) at that
+  point; a refund after payout is flagged for manual review instead of
+  silently reversing paid-out money.
 
 ## 7) Canonical Supabase table locations
 

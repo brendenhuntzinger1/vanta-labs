@@ -5,6 +5,7 @@ import { calculateDiscountAmount } from "@/lib/referral-service";
 import { validateCoupon } from "@/lib/coupons";
 import { getPointsBalance } from "@/lib/membership";
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
+import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 import type {
@@ -51,6 +52,8 @@ interface ValidatedReferral {
  discountPercent: number;
  commissionPercent: number;
  ambassadorName: string;
+ ambassadorEmail: string | null;
+ ambassadorAuthUserId: string | null;
 }
 
 const FREE_SHIPPING_THRESHOLD = 250;
@@ -116,7 +119,7 @@ async function validateReferralCode(
 
  const { data, error } = await supabaseAdmin
  .from("ambassadors")
- .select("id, name, referral_code, commission_percent, status")
+ .select("id, name, email, auth_user_id, referral_code, commission_percent, status")
  .eq("referral_code", normalizedCode)
  .maybeSingle();
 
@@ -139,6 +142,8 @@ async function validateReferralCode(
  discountPercent: 10,
  commissionPercent: Number(data.commission_percent ?? 15),
  ambassadorName: data.name,
+ ambassadorEmail: data.email ?? null,
+ ambassadorAuthUserId: data.auth_user_id ?? null,
  };
 }
 
@@ -247,6 +252,21 @@ export async function createCheckoutSession(
  throw new Error("Coupon codes cannot be combined with a referral code. Remove one to continue.");
  }
 
+ if (referral) {
+ const ambassadorSettings = await getAmbassadorProgramSettings();
+ if (subtotal < ambassadorSettings.minimumQualifyingOrder) {
+ throw new Error(`This referral code requires a minimum merchandise subtotal of $${ambassadorSettings.minimumQualifyingOrder.toFixed(2)}. Add more items or remove the referral code to continue.`);
+ }
+
+ const customerEmail = payload.customer.email.trim().toLowerCase();
+ const isSelfReferralByEmail = Boolean(referral.ambassadorEmail) && referral.ambassadorEmail!.trim().toLowerCase() === customerEmail;
+ const isSelfReferralByAccount = Boolean(referral.ambassadorAuthUserId) && Boolean(payload.customerUserId) && referral.ambassadorAuthUserId === payload.customerUserId;
+
+ if (isSelfReferralByEmail || isSelfReferralByAccount) {
+ throw new Error("You can't use your own referral code on your own order.");
+ }
+ }
+
  const coupon = isBuy3Get1Active || referral
    ? null
    : await validateCoupon(payload.couponCode, subtotal);
@@ -263,12 +283,16 @@ export async function createCheckoutSession(
 
  const totalBeforePoints = roundMoney(subtotal + shipping - discountAmount);
 
- // Points redemption stacks with any of the above (it behaves like store
- // credit, not a promo code) but can never exceed the remaining balance due
- // or the customer's actual point balance.
+ // Points redemption stacks with a coupon or Buy 3 Get 1 Free (it behaves
+ // like store credit, not a promo code) but never with a referral code -
+ // referral codes are exclusive of every other discount, so redemption is
+ // silently zeroed rather than erroring (points aren't something a shopper
+ // deliberately "combines"; the balance is just sitting on their account).
+ // Also capped to the remaining balance due and the customer's actual point
+ // balance.
  let pointsRedeemed = 0;
  let pointsDiscountAmount = 0;
- if (payload.customerUserId && payload.pointsToRedeem && payload.pointsToRedeem > 0) {
+ if (!referral && payload.customerUserId && payload.pointsToRedeem && payload.pointsToRedeem > 0) {
  const balance = await getPointsBalance(payload.customerUserId);
  const requestedPoints = Math.min(Math.floor(payload.pointsToRedeem), balance);
  const requestedDollars = pointsToDollars(requestedPoints);
