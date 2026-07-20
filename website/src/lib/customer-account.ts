@@ -1,3 +1,4 @@
+import { randomBytes } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 export interface CustomerOrderRow {
@@ -89,12 +90,15 @@ export async function getDefaultCustomerAddress(userId: string): Promise<Custome
 export interface CustomerPreferences {
   orderUpdateEmails: boolean;
   marketingEmails: boolean;
+  birthday: string | null;
+  referralCode: string | null;
+  referredByCode: string | null;
 }
 
 export async function getCustomerPreferences(userId: string): Promise<CustomerPreferences> {
   const { data, error } = await supabaseAdmin
     .from("customer_preferences")
-    .select("order_update_emails, marketing_emails")
+    .select("order_update_emails, marketing_emails, birthday, referral_code, referred_by_code")
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -105,7 +109,96 @@ export async function getCustomerPreferences(userId: string): Promise<CustomerPr
   return {
     orderUpdateEmails: data ? Boolean(data.order_update_emails) : true,
     marketingEmails: data ? Boolean(data.marketing_emails) : false,
+    birthday: data?.birthday ? String(data.birthday) : null,
+    referralCode: data?.referral_code ? String(data.referral_code) : null,
+    referredByCode: data?.referred_by_code ? String(data.referred_by_code) : null,
   };
+}
+
+function generateReferralCode() {
+  return randomBytes(5).toString("hex").toUpperCase().slice(0, 8);
+}
+
+// Lazily generates a referral code on first use rather than at signup, so
+// accounts that never share a referral link never need one.
+export async function getOrCreateReferralCode(userId: string): Promise<string> {
+  const existing = await supabaseAdmin
+    .from("customer_preferences")
+    .select("referral_code")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (existing.data?.referral_code) {
+    return String(existing.data.referral_code);
+  }
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const code = generateReferralCode();
+    const { error } = await supabaseAdmin
+      .from("customer_preferences")
+      .upsert({ user_id: userId, referral_code: code, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+
+    if (!error) {
+      return code;
+    }
+
+    if (error.code !== "23505") {
+      throw error;
+    }
+  }
+
+  throw new Error("Unable to generate a unique referral code");
+}
+
+export async function getUserIdByReferralCode(code: string): Promise<string | null> {
+  const normalized = code.trim().toUpperCase();
+  if (!normalized) {
+    return null;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("customer_preferences")
+    .select("user_id")
+    .eq("referral_code", normalized)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data ? String(data.user_id) : null;
+}
+
+export async function setReferredByCode(userId: string, referredByCode: string) {
+  const normalized = referredByCode.trim().toUpperCase();
+  if (!normalized) {
+    return;
+  }
+
+  const { data: existing } = await supabaseAdmin
+    .from("customer_preferences")
+    .select("referred_by_code")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  // Only ever set once, at signup - never overwrite an existing value.
+  if (existing?.referred_by_code) {
+    return;
+  }
+
+  await supabaseAdmin
+    .from("customer_preferences")
+    .upsert({ user_id: userId, referred_by_code: normalized, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+}
+
+export async function setCustomerBirthday(userId: string, birthday: string) {
+  const { error } = await supabaseAdmin
+    .from("customer_preferences")
+    .upsert({ user_id: userId, birthday, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+
+  if (error) {
+    throw error;
+  }
 }
 
 export async function getWishlistSlugs(userId: string): Promise<string[]> {

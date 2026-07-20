@@ -232,3 +232,136 @@ export async function reverseOrderPoints(orderId: string) {
     orderId,
   });
 }
+
+export async function getReferralEarnedPoints(userId: string): Promise<number> {
+  const { data, error } = await supabaseAdmin
+    .from("points_ledger")
+    .select("amount, metadata")
+    .eq("user_id", userId)
+    .eq("reason", "referral_bonus");
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? [])
+    .filter((row) => (row.metadata as Record<string, unknown> | null)?.role === "referrer")
+    .reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+}
+
+// A simple, always-meaningful progress indicator: how close the customer
+// is to their next $5-increment reward (500 points), regardless of tier.
+export function getProgressToNextReward(pointsBalance: number) {
+  const milestone = 500;
+  const currentMilestoneBase = Math.floor(pointsBalance / milestone) * milestone;
+  const pointsIntoMilestone = pointsBalance - currentMilestoneBase;
+  const nextMilestone = currentMilestoneBase + milestone;
+
+  return {
+    pointsIntoMilestone,
+    milestone,
+    nextMilestone,
+    progressPercent: Math.round((pointsIntoMilestone / milestone) * 100),
+  };
+}
+
+export const SIGNUP_BONUS_POINTS = 200;
+export const REFERRAL_SIGNUP_BONUS_POINTS = 100;
+export const BIRTHDAY_BONUS_POINTS = 150;
+
+async function hasLedgerEntryWithReason(userId: string, reason: string) {
+  const { data, error } = await supabaseAdmin
+    .from("points_ledger")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("reason", reason)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return Boolean(data);
+}
+
+// Idempotent - safe to call on every login, since it checks the ledger for
+// a prior award before writing a new one.
+export async function awardSignupBonusIfNeeded(userId: string) {
+  const alreadyAwarded = await hasLedgerEntryWithReason(userId, "signup_bonus");
+  if (alreadyAwarded) {
+    return;
+  }
+
+  await recordPointsLedgerEntry({
+    userId,
+    amount: SIGNUP_BONUS_POINTS,
+    reason: "signup_bonus",
+  });
+}
+
+// Awards both sides of a referral once, at the referred customer's signup:
+// the new customer gets a flat bonus, and whoever referred them gets their
+// own membership tier's referral bonus. Idempotent per new customer.
+export async function awardReferralSignupBonus(newUserId: string, referrerUserId: string) {
+  const alreadyAwarded = await hasLedgerEntryWithReason(newUserId, "referral_bonus");
+  if (alreadyAwarded) {
+    return;
+  }
+
+  await recordPointsLedgerEntry({
+    userId: newUserId,
+    amount: REFERRAL_SIGNUP_BONUS_POINTS,
+    reason: "referral_bonus",
+    metadata: { role: "referred" },
+  });
+
+  const referrerMembership = await getCustomerMembership(referrerUserId);
+  if (referrerMembership.tier.referralBonusPoints > 0) {
+    await recordPointsLedgerEntry({
+      userId: referrerUserId,
+      amount: referrerMembership.tier.referralBonusPoints,
+      reason: "referral_bonus",
+      metadata: { role: "referrer", referredUserId: newUserId },
+    });
+  }
+}
+
+// Lazy check meant to run whenever a customer visits their dashboard: since
+// there's no scheduled job runner in this app, birthdays are checked
+// on-demand rather than by a daily cron.
+export async function checkAndAwardBirthdayBonus(userId: string, birthday: string | null) {
+  if (!birthday) {
+    return false;
+  }
+
+  const today = new Date();
+  const birthdayDate = new Date(birthday);
+  const isBirthdayToday = today.getUTCMonth() === birthdayDate.getUTCMonth() && today.getUTCDate() === birthdayDate.getUTCDate();
+  if (!isBirthdayToday) {
+    return false;
+  }
+
+  const currentYear = today.getUTCFullYear();
+  const { data } = await supabaseAdmin
+    .from("customer_preferences")
+    .select("birthday_bonus_year")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (Number(data?.birthday_bonus_year) === currentYear) {
+    return false;
+  }
+
+  await recordPointsLedgerEntry({
+    userId,
+    amount: BIRTHDAY_BONUS_POINTS,
+    reason: "birthday_bonus",
+  });
+
+  await supabaseAdmin
+    .from("customer_preferences")
+    .upsert({ user_id: userId, birthday_bonus_year: currentYear, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+
+  return true;
+}

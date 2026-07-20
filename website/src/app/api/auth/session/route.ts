@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { buildAuthCookieValue, buildExpiredAuthCookie } from "@/lib/auth-session";
 import { createPartnerApplication } from "@/lib/partner-portal";
 import { createServerClient } from "@/lib/supabase-server";
+import { awardReferralSignupBonus, awardSignupBonusIfNeeded } from "@/lib/membership";
+import { getUserIdByReferralCode, setReferredByCode } from "@/lib/customer-account";
 
 export async function POST(request: Request) {
   try {
@@ -30,6 +32,28 @@ export async function POST(request: Request) {
         email: data.user.email,
         name: String(fullName || "Partner").trim(),
       });
+    }
+
+    if (role === "customer") {
+      try {
+        await awardSignupBonusIfNeeded(data.user.id);
+
+        const referredByCode = typeof data.user.user_metadata?.referred_by_code === "string"
+          ? data.user.user_metadata.referred_by_code
+          : "";
+
+        if (referredByCode) {
+          await setReferredByCode(data.user.id, referredByCode);
+          const referrerUserId = await getUserIdByReferralCode(referredByCode);
+          if (referrerUserId && referrerUserId !== data.user.id) {
+            await awardReferralSignupBonus(data.user.id, referrerUserId);
+          }
+        }
+      } catch (membershipError) {
+        // A points/membership hiccup must never block establishing the
+        // session itself.
+        console.error("Unable to process membership signup bonuses", membershipError);
+      }
     }
 
     const response = NextResponse.json({

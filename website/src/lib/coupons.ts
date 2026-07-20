@@ -108,3 +108,37 @@ export async function redeemCoupon(code: string) {
     console.error("Unable to record coupon redemption:", updateError);
   }
 }
+
+export interface ActiveCouponSummary {
+  code: string;
+  discountType: "percent" | "fixed";
+  discountValue: number;
+  endsAt: string | null;
+}
+
+// Customer-facing listing (account dashboard, checkout hints) - only the
+// fields a shopper needs to decide whether to use a code, not redemption
+// counts or internal limits.
+export async function getActiveCouponsForDisplay(): Promise<ActiveCouponSummary[]> {
+  const nowIso = new Date().toISOString();
+
+  const { data, error } = await supabaseAdmin
+    .from("coupons")
+    .select("code, discount_type, discount_value, starts_at, ends_at, active")
+    .eq("active", true)
+    .or(`starts_at.is.null,starts_at.lte.${nowIso}`)
+    .or(`ends_at.is.null,ends_at.gte.${nowIso}`)
+    .order("created_at", { ascending: false })
+    .limit(10);
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map((row) => ({
+    code: String(row.code),
+    discountType: row.discount_type === "fixed" ? "fixed" : "percent",
+    discountValue: Number(row.discount_value ?? 0),
+    endsAt: row.ends_at ? String(row.ends_at) : null,
+  }));
+}

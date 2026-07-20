@@ -18,6 +18,9 @@ export function AccountSettingsClient({
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [preferences, setPreferences] = useState(initialPreferences);
+  const [birthday, setBirthday] = useState(initialPreferences.birthday ?? "");
+  const [savingBirthday, setSavingBirthday] = useState(false);
+  const [birthdayMessage, setBirthdayMessage] = useState<string | null>(null);
 
   const [savingProfile, setSavingProfile] = useState(false);
   const [profileMessage, setProfileMessage] = useState<string | null>(null);
@@ -125,6 +128,25 @@ export function AccountSettingsClient({
     }
   };
 
+  const handleSaveBirthday = async () => {
+    setSavingBirthday(true);
+    setBirthdayMessage(null);
+
+    try {
+      const response = await fetch("/api/account/birthday", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ birthday }),
+      });
+      const result = await response.json() as { success: boolean; error?: string };
+      setBirthdayMessage(result.success ? "Birthday saved. We'll send a bonus on your next one!" : (result.error ?? "Unable to save birthday."));
+    } catch {
+      setBirthdayMessage("Unable to save birthday right now.");
+    } finally {
+      setSavingBirthday(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <section className="vl-panel rounded-2xl p-5 sm:p-6">
@@ -162,6 +184,18 @@ export function AccountSettingsClient({
         {passwordMessage ? <p className="mt-3 text-sm text-emerald-300">{passwordMessage}</p> : null}
         <button type="button" onClick={handleChangePassword} disabled={savingPassword} className="vl-btn-primary vl-focus-ring mt-4 px-5 py-2.5 text-sm disabled:opacity-60">
           {savingPassword ? "Updating…" : "Update password"}
+        </button>
+      </section>
+
+      <section className="vl-panel rounded-2xl p-5 sm:p-6">
+        <h2 className="text-lg font-semibold text-white">Birthday</h2>
+        <p className="mt-1 text-sm text-zinc-400">Optional — add your birthday for a rewards bonus on the day.</p>
+        <label className="mt-4 block text-sm text-zinc-300 sm:max-w-xs">
+          <input type="date" value={birthday} onChange={(e) => setBirthday(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" />
+        </label>
+        {birthdayMessage ? <p className="mt-3 text-sm text-zinc-300">{birthdayMessage}</p> : null}
+        <button type="button" onClick={handleSaveBirthday} disabled={savingBirthday || !birthday} className="vl-btn-primary vl-focus-ring mt-4 px-5 py-2.5 text-sm disabled:opacity-60">
+          {savingBirthday ? "Saving…" : "Save birthday"}
         </button>
       </section>
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 type AuthMode = "login" | "signup";
@@ -22,7 +22,9 @@ function getEmailRedirectUrl(path: string) {
 
 export function AccountAuthForm() {
   const router = useRouter();
-  const [mode, setMode] = useState<AuthMode>("login");
+  const searchParams = useSearchParams();
+  const referralCodeFromUrl = searchParams.get("ref") ?? "";
+  const [mode, setMode] = useState<AuthMode>(referralCodeFromUrl ? "signup" : "login");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -95,7 +97,11 @@ export function AccountAuthForm() {
         email: email.trim(),
         password,
         options: {
-          data: { full_name: fullName.trim(), role: "customer" },
+          data: {
+            full_name: fullName.trim(),
+            role: "customer",
+            referred_by_code: referralCodeFromUrl || undefined,
+          },
           emailRedirectTo: getEmailRedirectUrl("/account/login"),
         },
       });
