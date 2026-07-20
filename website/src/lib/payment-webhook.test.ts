@@ -18,11 +18,11 @@ describe("payment webhook helpers", () => {
     });
   });
 
-  it("reverses a paid commission on refund", () => {
+  it("flags a paid commission for manual review on refund", () => {
     expect(getCommissionStateForRefund("paid")).toEqual({
-      status: "reversed",
-      reviewRequired: false,
-      reviewReason: null,
+      status: "manual_review",
+      reviewRequired: true,
+      reviewReason: "Refund received after commission payment",
     });
   });
 });

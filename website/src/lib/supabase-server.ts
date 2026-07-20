@@ -25,4 +25,17 @@ export function createServerClient() {
   );
 }
 
-export const supabaseAdmin = createServerClient();
+let cachedClient: ReturnType<typeof createServerClient> | null = null;
+
+function getServerClient() {
+  if (!cachedClient) {
+    cachedClient = createServerClient();
+  }
+  return cachedClient;
+}
+
+export const supabaseAdmin = new Proxy({} as ReturnType<typeof createServerClient>, {
+  get(_target, property, receiver) {
+    return Reflect.get(getServerClient(), property, receiver);
+  },
+});

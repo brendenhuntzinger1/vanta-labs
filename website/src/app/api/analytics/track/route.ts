@@ -34,6 +34,23 @@ function normalizeIpAddress(headerValue: string | null) {
   return headerValue.split(",")[0]?.trim().slice(0, 120) || null;
 }
 
+const MAX_PAYLOAD_BYTES = 8000;
+
+function normalizePayload(value: unknown) {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized.length > MAX_PAYLOAD_BYTES) {
+      return {};
+    }
+    return value as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}
+
 export async function POST(request: Request) {
   try {
     const body = await request.json() as {
@@ -80,7 +97,7 @@ export async function POST(request: Request) {
         utm_source: normalizeText(body.utmSource, 120),
         utm_medium: normalizeText(body.utmMedium, 120),
         utm_campaign: normalizeText(body.utmCampaign, 180),
-        event_payload: body.payload ?? {},
+        event_payload: normalizePayload(body.payload),
         created_at: new Date().toISOString(),
       });
 

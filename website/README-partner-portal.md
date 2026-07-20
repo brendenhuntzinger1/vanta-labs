@@ -21,6 +21,43 @@ Run these SQL files in order from Supabase SQL Editor:
 4. `src/lib/sql/affiliate-program-rls.sql`
 5. `src/lib/sql/partner-portal-schema.sql`
 6. `src/lib/sql/partner-portal-rls.sql`
+7. `src/lib/sql/partner-system-repair.sql` — **required, not optional.** This is the
+   only migration that creates `public.products`, `public.product_images`,
+   `public.product_doses`, `public.website_analytics_events`, the base
+   `public.ambassadors` table, and the admin-login tables
+   (`public.admin_credentials`, `public.admin_sessions`,
+   `public.admin_login_attempts`). Without it the storefront catalog, site
+   analytics, referral codes, and `/admin` login will not work. It is
+   idempotent (`if not exists` / `if exists` guards throughout) and safe to
+   run after the files above, and safe to rerun.
+8. `src/lib/sql/referral-code-rpc.sql` — **required.** Creates the
+   `validate_referral_code` function the cart page calls (via
+   `supabase.rpc`) to preview a referral discount before checkout. Without
+   it, referral-code checkouts fail with "Altered total detected" because
+   the cart shows a total that doesn't include the discount the server
+   applies.
+
+Optional follow-up hardening (run after the above, in Supabase SQL Editor,
+only if you want to apply the latest Supabase Performance/Security Advisor
+recommendations):
+
+- `src/lib/sql/supabase-performance-advisor-upgrade.sql`
+- `src/lib/sql/supabase-performance-advisor-final.sql`
+- `src/lib/sql/supabase-performance-advisor-verification.sql` (read-only checks)
+- `src/lib/sql/supabase-advisor-remaining-fixes.sql`
+
+## 2a) Create the first admin login
+
+`/admin` authenticates against `public.admin_credentials`, which starts empty
+— there is no default account. Create the first one with:
+
+```bash
+node scripts/create-admin-credential.mjs <username> <password>
+```
+
+This hashes the password with the same scrypt scheme `src/lib/admin-auth.ts`
+verifies against and upserts the row via the Supabase service role key. Re-run
+it with the same username to rotate a password.
 
 ## 3) Auth + role model
 

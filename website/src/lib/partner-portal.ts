@@ -783,7 +783,15 @@ export async function updatePartnerStatus(input: {
   };
 
   if (input.status === "approved") {
-    updatePayload.approved_at = new Date().toISOString();
+    const { data: existingPartner } = await supabaseAdmin
+      .from("partners")
+      .select("status, approved_at")
+      .eq("id", input.partnerId)
+      .maybeSingle();
+
+    if (existingPartner?.status !== "approved" || !existingPartner?.approved_at) {
+      updatePayload.approved_at = new Date().toISOString();
+    }
     updatePayload.disabled_at = null;
   }
 

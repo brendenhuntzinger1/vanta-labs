@@ -122,7 +122,7 @@ export default function VaultPage() {
                 Password
                 <input
                   className="vl-input mt-2 w-full px-3 py-2"
-                  type="text"
+                  type="password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   autoComplete="off"

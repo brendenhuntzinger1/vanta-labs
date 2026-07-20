@@ -4,6 +4,8 @@ import { SiteHeader } from "@/components/site-header";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getCatalogProducts } from "@/lib/catalog";
 
+export const dynamic = "force-dynamic";
+
 const BRAND_PILLARS = [
   {
     title: "Analytical Precision",

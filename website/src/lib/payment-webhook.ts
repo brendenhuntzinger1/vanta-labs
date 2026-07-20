@@ -12,7 +12,7 @@ export interface WebhookEventState {
 }
 
 export interface CommissionState {
-  status: "pending" | "reversed";
+  status: "pending" | "reversed" | "manual_review";
   reviewRequired: boolean;
   reviewReason: string | null;
 }
@@ -35,7 +35,15 @@ export function getOrderStatusForEventType(eventType: string): OrderStatus {
   }
 }
 
-export function getCommissionStateForRefund(): CommissionState {
+export function getCommissionStateForRefund(commissionStatus: string | null | undefined): CommissionState {
+  if (commissionStatus === "paid" || commissionStatus === "commission_paid") {
+    return {
+      status: "manual_review",
+      reviewRequired: true,
+      reviewReason: "Refund received after commission payment",
+    };
+  }
+
   return {
     status: "reversed",
     reviewRequired: false,
@@ -364,7 +372,21 @@ async function ensureCommissionRecord(input: {
 }
 
 async function updateCommissionOnRefund(orderId: string) {
-  const commissionState = getCommissionStateForRefund();
+  const { data: existingCommission, error: lookupError } = await supabaseAdmin
+    .from("referral_orders")
+    .select("payment_status")
+    .eq("order_id", orderId)
+    .maybeSingle();
+
+  if (lookupError) {
+    throw lookupError;
+  }
+
+  if (!existingCommission) {
+    return;
+  }
+
+  const commissionState = getCommissionStateForRefund(existingCommission.payment_status);
 
   const { error } = await supabaseAdmin
     .from("referral_orders")
@@ -384,7 +406,7 @@ async function updateCommissionOnRefund(orderId: string) {
   const { error: commissionMirrorError } = await supabaseAdmin
     .from("commissions")
     .update({
-      status: "reversed",
+      status: commissionState.status,
       updated_at: new Date().toISOString(),
     })
     .eq("order_id", orderId);

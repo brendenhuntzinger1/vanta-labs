@@ -14,6 +14,11 @@ function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 }
 
+function isPaidStatus(value: string | null | undefined) {
+  const status = String(value ?? "").toLowerCase();
+  return status === "paid" || status === "completed" || status === "succeeded";
+}
+
 export default async function AdminHomePage() {
   const session = await verifyAdminSessionFromCookie();
   if (!session) {
@@ -28,7 +33,9 @@ export default async function AdminHomePage() {
     getRevenueWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0 })),
   ]);
 
-  const totalRevenue = orders.reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0);
+  const totalRevenue = orders
+    .filter((row) => isPaidStatus(row.payment_status))
+    .reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0);
   const publishedProducts = products.filter((product) => product.isPublished && product.isEnabled && !product.isArchived).length;
   const pendingPartners = partners.filter((partner) => partner.status === "pending").length;
 

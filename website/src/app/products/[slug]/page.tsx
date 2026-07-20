@@ -3,6 +3,8 @@ import { notFound } from "next/navigation";
 import { ProductDetailClient } from "@/components/product-detail-client";
 import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/catalog";
 
+export const dynamic = "force-dynamic";
+
 export async function generateMetadata({
   params,
 }: {

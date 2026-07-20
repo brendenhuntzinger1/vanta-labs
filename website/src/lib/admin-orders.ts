@@ -20,7 +20,7 @@ export async function getAdminOrderRows(): Promise<AdminOrderRow[]> {
     throw error;
   }
 
-  const orderIds = data.map((order) => order.id);
+  const orderIds = data.map((order) => order.order_id);
   const { data: itemData, error: itemError } = await supabaseAdmin
     .from("order_items")
     .select("order_id, quantity")
@@ -43,6 +43,6 @@ export async function getAdminOrderRows(): Promise<AdminOrderRow[]> {
     amount_paid: Number(order.amount_paid ?? 0),
     referral_code: order.referral_code,
     payment_status: order.payment_status,
-    item_count: itemCounts.get(order.id) ?? 0,
+    item_count: itemCounts.get(order.order_id) ?? 0,
   }));
 }

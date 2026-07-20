@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getPartnerProgramStats } from "@/lib/partner-portal";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   try {
     const stats = await getPartnerProgramStats();

@@ -89,7 +89,6 @@ function formatCurrency(value: number) {
   return new Intl.NumberFormat("en-US", {
     style: "currency",
     currency: "USD",
-    maximumFractionDigits: 0,
   }).format(value);
 }
 
@@ -114,30 +113,28 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     const loadPersistedCart = () => {
       try {
         const stored = window.localStorage.getItem(CART_STORAGE_KEY);
-        if (!stored) {
-          setIsHydrated(true);
-          return;
-        }
 
-        const parsed = JSON.parse(stored) as {
-          items?: CartItem[];
-          referralCode?: string | null;
-        };
+        if (stored) {
+          const parsed = JSON.parse(stored) as {
+            items?: CartItem[];
+            referralCode?: string | null;
+          };
 
-        if (Array.isArray(parsed.items)) {
-          const normalized = parsed.items.map((item) => {
-            const record = item as CartItem;
-            const fallbackKey = record.variantId ? `${record.slug}::${record.variantId}` : record.slug;
-            return {
-              ...record,
-              key: record.key ?? fallbackKey,
-            };
-          });
-          setItems(normalized);
-        }
+          if (Array.isArray(parsed.items)) {
+            const normalized = parsed.items.map((item) => {
+              const record = item as CartItem;
+              const fallbackKey = record.variantId ? `${record.slug}::${record.variantId}` : record.slug;
+              return {
+                ...record,
+                key: record.key ?? fallbackKey,
+              };
+            });
+            setItems(normalized);
+          }
 
-        if (typeof parsed.referralCode === "string") {
-          setReferralCode(parsed.referralCode);
+          if (typeof parsed.referralCode === "string") {
+            setReferralCode(parsed.referralCode);
+          }
         }
 
         const params = new URLSearchParams(window.location.search);

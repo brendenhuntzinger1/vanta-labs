@@ -8,6 +8,13 @@ const MAX_SUBMISSIONS_PER_WINDOW = 3;
 
 const submissionHistory = new Map<string, number[]>();
 
+const MAX_NAME_LENGTH = 100;
+const MAX_EMAIL_LENGTH = 200;
+const MAX_ORDER_NUMBER_LENGTH = 100;
+const MAX_SUBJECT_LENGTH = 200;
+const MAX_MESSAGE_LENGTH = 5000;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 type ContactBody = {
   firstName?: string;
   lastName?: string;
@@ -86,6 +93,21 @@ export async function POST(request: Request) {
 
     if (!firstName || !lastName || !email || !subject || !message) {
       return NextResponse.json({ success: false, error: "Please complete all required fields." }, { status: 400 });
+    }
+
+    if (
+      firstName.length > MAX_NAME_LENGTH ||
+      lastName.length > MAX_NAME_LENGTH ||
+      email.length > MAX_EMAIL_LENGTH ||
+      orderNumber.length > MAX_ORDER_NUMBER_LENGTH ||
+      subject.length > MAX_SUBJECT_LENGTH ||
+      message.length > MAX_MESSAGE_LENGTH
+    ) {
+      return NextResponse.json({ success: false, error: "One or more fields exceed the maximum allowed length." }, { status: 400 });
+    }
+
+    if (!EMAIL_PATTERN.test(email)) {
+      return NextResponse.json({ success: false, error: "Please provide a valid email address." }, { status: 400 });
     }
 
     if (isRateLimited(getClientKey(request))) {
