@@ -239,10 +239,21 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
   return { success: true };
 }
 
-export async function cancelMembership(userId: string) {
+export interface MembershipCancellationResult {
+  billingCycle: "monthly" | "annual" | "free";
+  // Access continues until the end of the term already paid for; it will not
+  // renew. For an annual plan this is up to a year out.
+  accessUntil: string | null;
+  // Memberships are non-refundable — cancelling never returns money for the
+  // current term (monthly OR annual). Annual members simply keep access for
+  // the remainder of the year they paid for.
+  refundable: false;
+}
+
+export async function cancelMembership(userId: string): Promise<MembershipCancellationResult> {
   const { data: existing, error: existingError } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status")
+    .select("user_id, tier_id, status, billing_cycle, next_billing_at, renews_at")
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -253,12 +264,19 @@ export async function cancelMembership(userId: string) {
 
   const { error } = await supabaseAdmin
     .from("customer_memberships")
+    // Non-refundable: we stop auto-renewal and let access run to the end of
+    // the already-paid term. We never issue a refund here for either cycle.
     .update({ cancel_at_period_end: true, updated_at: new Date().toISOString() })
     .eq("user_id", userId);
 
   if (error) throw error;
 
   await recordBillingEvent({ userId, tierId: existing.tier_id, eventType: "cancellation", amountCents: 0, status: "succeeded" });
+
+  const billingCycle = (existing.billing_cycle as "monthly" | "annual" | "free") ?? "monthly";
+  const accessUntil = (existing.next_billing_at as string | null) ?? (existing.renews_at as string | null) ?? null;
+
+  return { billingCycle, accessUntil, refundable: false };
 }
 
 export async function updatePaymentMethod(userId: string, paymentMethodRef: string) {

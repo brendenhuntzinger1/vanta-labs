@@ -121,6 +121,18 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
             today, then automatically every {billingCycle === "annual" ? "year" : "month"} until you cancel.
           </p>
         )}
+
+        {billingCycle === "annual" ? (
+          <p className="mt-4 rounded-lg border border-amber-300/25 bg-amber-300/5 px-3 py-2 text-xs leading-5 text-amber-200/90">
+            Annual plans are <strong>non-refundable</strong>. You can cancel anytime to stop auto-renewal and keep full
+            access for the remainder of your paid year — but the annual charge is not refunded.
+          </p>
+        ) : (
+          <p className="mt-4 text-xs leading-5 text-white/45">
+            Cancel anytime to stop auto-renewal and keep access through your current month. Membership charges are
+            non-refundable.
+          </p>
+        )}
       </div>
 
       <div className="mt-6">
@@ -135,7 +147,8 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
           className="mt-1 h-4 w-4 border-white/25 bg-black/40"
         />
         <span>
-          I agree to be charged as described above, and understand my membership renews automatically until I cancel.
+          I agree to be charged as described above, understand my membership renews automatically until I cancel, and
+          understand that {billingCycle === "annual" ? "the annual charge is non-refundable" : "membership charges are non-refundable"}.
         </span>
       </label>
 

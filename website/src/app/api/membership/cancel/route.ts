@@ -10,8 +10,13 @@ export async function POST() {
   }
 
   try {
-    await cancelMembership(user.id);
-    return NextResponse.json({ success: true });
+    const result = await cancelMembership(user.id);
+    return NextResponse.json({
+      success: true,
+      billingCycle: result.billingCycle,
+      accessUntil: result.accessUntil,
+      refundable: result.refundable,
+    });
   } catch (error) {
     return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Unable to cancel membership" }, { status: 400 });
   }

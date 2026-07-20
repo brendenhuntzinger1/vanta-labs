@@ -27,8 +27,18 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
     return null;
   }
 
+  const isAnnual = membership.billingCycle === "annual";
+  const accessUntilLabel = membership.nextBillingAt ? formatDate(membership.nextBillingAt) : "the end of your current term";
+
   const handleCancel = async () => {
-    if (!window.confirm("Cancel your membership? You'll keep access until your next renewal date.")) {
+    // Memberships are non-refundable for both cycles. Annual members keep
+    // access for the remainder of the year they already paid for; monthly
+    // members keep access to the end of the current month. Neither is refunded.
+    const confirmText = isAnnual
+      ? `Cancel your annual membership?\n\nAnnual memberships are non-refundable. You'll keep full access until ${accessUntilLabel}, and it will not renew. No refund is issued for the remaining time.`
+      : `Cancel your membership?\n\nYou'll keep access until ${accessUntilLabel}, and it will not renew. Memberships are non-refundable.`;
+
+    if (!window.confirm(confirmText)) {
       return;
     }
 
@@ -37,12 +47,17 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
 
     try {
       const response = await fetch("/api/membership/cancel", { method: "POST" });
-      const data = await response.json();
+      const data = await response.json() as { success: boolean; error?: string; accessUntil?: string | null; billingCycle?: string };
       if (!response.ok || !data.success) {
         setMessage(data.error ?? "Unable to cancel right now.");
         return;
       }
-      setMessage("Your membership will end at your next renewal date.");
+      const until = data.accessUntil ? formatDate(data.accessUntil) : accessUntilLabel;
+      setMessage(
+        data.billingCycle === "annual"
+          ? `Your annual membership won't renew. You keep access until ${until} (non-refundable).`
+          : `Your membership won't renew. You keep access until ${until}.`,
+      );
       router.refresh();
     } catch {
       setMessage("Unable to cancel right now.");
@@ -97,6 +112,12 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
       )}
 
       {message ? <p className="mt-3 text-xs text-zinc-400">{message}</p> : null}
+
+      <p className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-zinc-500">
+        {isAnnual
+          ? "Annual memberships are non-refundable. You can cancel anytime to stop auto-renewal and keep access for the remainder of your paid year."
+          : "You can cancel anytime to stop auto-renewal and keep access through your current month. Membership charges are non-refundable."}
+      </p>
     </div>
   );
 }
