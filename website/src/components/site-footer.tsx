@@ -1,10 +1,11 @@
 import Link from "next/link";
+import { TrustBadge } from "@/components/trust-badge";
 
 const FOOTER_COLUMNS = {
-  products: [
+  shop: [
     { label: "All Products", href: "/products" },
     { label: "COA Library", href: "/coa-library" },
-    { label: "Checkout", href: "/checkout" },
+    { label: "Cart", href: "/cart" },
   ],
   company: [
     { label: "Contact", href: "/contact" },
@@ -27,7 +28,7 @@ function FooterColumn({
 }) {
   return (
     <div>
-      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-zinc-400">{title}</p>
+      <p className="vl-eyebrow text-[11px] text-zinc-500">{title}</p>
       <ul className="mt-4 space-y-3">
         {links.map((link) => (
           <li key={link.label}>
@@ -51,6 +52,16 @@ export function SiteFooter() {
   return (
     <footer className="relative border-t border-white/10 bg-[linear-gradient(180deg,rgba(18,18,18,0.86),rgba(8,8,8,0.98))]">
       <div className="pointer-events-none absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-white/40 to-transparent" />
+
+      <div className="border-b border-white/8">
+        <div className="mx-auto grid max-w-7xl gap-3 px-4 py-6 sm:grid-cols-2 sm:px-6 lg:grid-cols-4 lg:px-8">
+          <TrustBadge icon="flask" label="Lab-Verified" detail="Third-party batch testing" />
+          <TrustBadge icon="check" label="COA Documented" detail="Certificate per lot" />
+          <TrustBadge icon="shield" label="Encrypted Checkout" detail="Secure order handling" />
+          <TrustBadge icon="truck" label="Fast Dispatch" detail="Tracked, discreet shipping" />
+        </div>
+      </div>
+
       <div className="mx-auto max-w-7xl px-4 py-12 sm:px-6 lg:px-8">
         <div className="grid gap-10 md:grid-cols-[1.6fr_1fr_1fr_1fr]">
           <div>
@@ -64,7 +75,7 @@ export function SiteFooter() {
             </div>
           </div>
 
-          <FooterColumn title="Products" links={FOOTER_COLUMNS.products} />
+          <FooterColumn title="Shop" links={FOOTER_COLUMNS.shop} />
           <FooterColumn title="Company" links={FOOTER_COLUMNS.company} />
           <FooterColumn title="Legal" links={FOOTER_COLUMNS.legal} />
         </div>

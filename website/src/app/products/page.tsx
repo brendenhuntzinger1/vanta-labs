@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { SiteHeader } from "@/components/site-header";
 import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
@@ -100,15 +101,34 @@ function ProductCard({
   );
 }
 
-export default function ProductsPage() {
+function ProductsPageContent() {
+  const searchParams = useSearchParams();
   const [products, setProducts] = useState<Product[]>([]);
   const [sort, setSort] = useState<SortKey>("default");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [searchQuery, setSearchQuery] = useState(() => searchParams.get("search") ?? "");
+  const [selectedCategory, setSelectedCategory] = useState(() => searchParams.get("category") ?? "All");
   const [imageOverrides, setImageOverrides] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [stockFilter, setStockFilter] = useState(false);
   const { addToCart } = useCart();
+
+  // Re-sync filters from the URL when it changes (header search, a homepage
+  // category link) without clobbering in-progress on-page filter edits.
+  // Adjusting state during render, per React's guidance, instead of an
+  // effect: https://react.dev/learn/you-might-not-need-an-effect
+  const searchParamsKey = searchParams.toString();
+  const [lastSearchParamsKey, setLastSearchParamsKey] = useState(searchParamsKey);
+  if (searchParamsKey !== lastSearchParamsKey) {
+    setLastSearchParamsKey(searchParamsKey);
+    const paramSearch = searchParams.get("search");
+    if (paramSearch !== null) {
+      setSearchQuery(paramSearch);
+    }
+    const paramCategory = searchParams.get("category");
+    if (paramCategory !== null) {
+      setSelectedCategory(paramCategory);
+    }
+  }
 
   useEffect(() => {
     fetch("/product-images.json")
@@ -359,5 +379,13 @@ export default function ProductsPage() {
         </section>
       </main>
     </div>
+  );
+}
+
+export default function ProductsPage() {
+  return (
+    <Suspense fallback={null}>
+      <ProductsPageContent />
+    </Suspense>
   );
 }

@@ -1,11 +1,14 @@
 "use client";
 
-import Image from "next/image";
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useCart } from "@/components/cart-context";
 import { SiteHeader } from "@/components/site-header";
+import { ProductCard } from "@/components/product-card";
+import { ScrollReveal } from "@/components/scroll-reveal";
+import { TrustBadge, type TrustBadgeIcon } from "@/components/trust-badge";
 import type { Product } from "@/lib/catalog-types";
+import Image from "next/image";
 
 function parseDose(slug: string) {
   const match = slug.match(/(\d+(?:\.\d+)?(?:mg|iu|mcg|g|ml))$/i);
@@ -23,11 +26,11 @@ function toPriceNumber(value?: string) {
   return Number(value.replace(/[^0-9.]/g, "")) || 0;
 }
 
-const TRUST_BADGES = [
-  { icon: "🔬", label: "Third-Party Tested" },
-  { icon: "🔒", label: "Encrypted Checkout" },
-  { icon: "📋", label: "COA Included" },
-  { icon: "🚚", label: "Fast Dispatch" },
+const TRUST_BADGES: Array<{ icon: TrustBadgeIcon; label: string }> = [
+  { icon: "flask", label: "Third-Party Tested" },
+  { icon: "shield", label: "Encrypted Checkout" },
+  { icon: "check", label: "COA Included" },
+  { icon: "truck", label: "Fast Dispatch" },
 ];
 
 const PRODUCT_FAQ = [
@@ -73,32 +76,6 @@ function FaqAccordion() {
 }
 
 type TabKey = "description" | "specs" | "coa";
-
-function RelatedProductCard({ product }: { product: Product }) {
-  const image = product.coverImage ?? product.image ?? "";
-  const hasRealImage = image && !image.includes(".svg");
-  return (
-    <Link
-      href={`/products/${product.slug}`}
-      className="vl-panel vl-elevate-hover group overflow-hidden rounded-2xl block"
-    >
-      <div className="relative h-48 border-b border-white/10 bg-[radial-gradient(circle_at_40%_10%,rgba(186,230,253,0.18),transparent_60%)]">
-        {hasRealImage ? (
-          <Image src={image} alt={product.name} fill sizes="300px" className="object-contain p-6 transition duration-500 group-hover:scale-105" />
-        ) : (
-          <div className="flex h-full items-center justify-center">
-            <span className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">Image pending</span>
-          </div>
-        )}
-      </div>
-      <div className="p-4">
-        <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500">{product.category}</p>
-        <h3 className="mt-1.5 font-semibold text-zinc-100 line-clamp-1">{product.name}</h3>
-        <p className="mt-2 text-sm font-semibold text-zinc-200">{product.price}</p>
-      </div>
-    </Link>
-  );
-}
 
 export function ProductDetailClient({
   product,
@@ -194,7 +171,7 @@ export function ProductDetailClient({
 
       <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:py-12">
         {/* Breadcrumb */}
-        <nav className="flex items-center gap-2 text-xs text-zinc-500">
+        <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-zinc-500">
           <Link href="/" className="hover:text-zinc-300 transition">Home</Link>
           <span>/</span>
           <Link href="/products" className="hover:text-zinc-300 transition">Products</Link>
@@ -202,9 +179,9 @@ export function ProductDetailClient({
           <span className="text-zinc-300">{product.name}</span>
         </nav>
 
-        <section className="mt-6 grid gap-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-start">
+        <section className="mt-6 grid min-w-0 gap-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-start">
           {/* ── Left column: image + tabs ── */}
-          <div>
+          <div className="min-w-0">
             {/* Main image */}
             <div className="vl-panel overflow-hidden rounded-[2rem]">
               <div className="relative min-h-[320px] bg-[radial-gradient(circle_at_40%_8%,rgba(255,255,255,0.12),transparent_62%)] sm:min-h-[440px]">
@@ -251,7 +228,7 @@ export function ProductDetailClient({
                     key={tab.key}
                     type="button"
                     onClick={() => setActiveTab(tab.key)}
-                    className={`flex-1 rounded-lg px-3 py-2 text-xs font-medium uppercase tracking-[0.14em] transition ${activeTab === tab.key ? "bg-white/14 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"}`}
+                    className={`min-w-0 flex-1 rounded-lg px-2 py-2 text-[11px] font-medium uppercase tracking-[0.08em] transition sm:px-3 sm:text-xs sm:tracking-[0.14em] ${activeTab === tab.key ? "bg-white/14 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"}`}
                   >
                     {tab.label}
                   </button>
@@ -437,10 +414,7 @@ export function ProductDetailClient({
               {/* Trust badges */}
               <div className="mt-6 grid grid-cols-2 gap-2">
                 {TRUST_BADGES.map((badge) => (
-                  <div key={badge.label} className="flex items-center gap-2 rounded-xl border border-white/8 bg-white/[0.03] px-3 py-2.5">
-                    <span className="text-base">{badge.icon}</span>
-                    <span className="text-[11px] text-zinc-400">{badge.label}</span>
-                  </div>
+                  <TrustBadge key={badge.label} icon={badge.icon} label={badge.label} />
                 ))}
               </div>
 
@@ -461,19 +435,29 @@ export function ProductDetailClient({
 
         {/* Related products */}
         {relatedProducts.length > 0 && (
-          <section className="mt-16">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-zinc-100">Related Products</h2>
-              <Link href="/products" className="text-xs uppercase tracking-[0.22em] text-zinc-400 transition hover:text-white">
-                View all
-              </Link>
-            </div>
-            <div className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-              {relatedProducts.map((related) => (
-                <RelatedProductCard key={related.slug} product={related} />
-              ))}
-            </div>
-          </section>
+          <ScrollReveal className="mt-16">
+            <section>
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="vl-eyebrow text-[10px]">You May Also Need</p>
+                  <h2 className="mt-1 text-lg font-semibold text-zinc-100">Related Products</h2>
+                </div>
+                <Link href="/products" className="text-xs uppercase tracking-[0.22em] text-zinc-400 transition hover:text-white">
+                  View all
+                </Link>
+              </div>
+              <div className="mt-6 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+                {relatedProducts.map((related) => (
+                  <ProductCard
+                    key={related.slug}
+                    product={related}
+                    image={related.coverImage ?? related.image}
+                    onAddToCart={(event) => addToCart(related, 1, event.currentTarget)}
+                  />
+                ))}
+              </div>
+            </section>
+          </ScrollReveal>
         )}
       </main>
 

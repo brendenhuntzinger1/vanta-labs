@@ -1,21 +1,63 @@
 @import "tailwindcss";
 
 :root {
+  /* Surface scale — layered dark neutrals, darkest to lightest */
   --background: #050505;
+  --surface-0: #0a0a0a;
+  --surface-1: #111111;
+  --surface-2: #161616;
+  --surface-elevated: #1c1c1c;
+
   --foreground: #f4f4f4;
-  --surface: #111111;
-  --surface-elevated: #1a1a1a;
-  --border-soft: rgba(255, 255, 255, 0.16);
+  --foreground-muted: rgba(244, 244, 244, 0.72);
+  --foreground-subtle: rgba(244, 244, 244, 0.52);
+
+  --border-soft: rgba(255, 255, 255, 0.14);
+  --border-strong: rgba(255, 255, 255, 0.28);
+
+  /* Brand accent — warm lab-gold, used sparingly as a signal color */
+  --accent-gold: #f2c94c;
+  --accent-gold-soft: rgba(242, 201, 76, 0.16);
+  --accent-gold-strong: #ffd873;
+
   --accent: #f4f4f4;
   --accent-strong: #ffffff;
   --accent-soft: rgba(255, 255, 255, 0.16);
-  --success: #9fe3b8;
+
+  --success: #7fdba0;
+  --success-soft: rgba(127, 219, 160, 0.14);
   --danger: #f09ca8;
+  --danger-soft: rgba(240, 156, 168, 0.14);
+  --warning: #f2c94c;
+  --warning-soft: rgba(242, 201, 76, 0.14);
+  --info: #8ec5ff;
+  --info-soft: rgba(142, 197, 255, 0.14);
+
+  /* Radius scale */
+  --radius-sm: 0.6rem;
+  --radius-md: 1rem;
+  --radius-lg: 1.5rem;
+  --radius-xl: 2rem;
+  --radius-pill: 999px;
+
+  /* Elevation scale */
+  --shadow-sm: 0 6px 16px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 16px 34px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 28px 60px rgba(0, 0, 0, 0.58);
+  --shadow-glow: 0 0 32px rgba(242, 201, 76, 0.16);
+
+  /* Motion */
+  --ease-out-premium: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out-premium: cubic-bezier(0.65, 0, 0.35, 1);
+  --duration-fast: 180ms;
+  --duration-base: 320ms;
+  --duration-slow: 560ms;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-accent-gold: var(--accent-gold);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -850,6 +892,132 @@ textarea {
   }
 }
 
+/* ---------------------------------------------------------------------- */
+/* Design foundation additions — trust badges, nav, product cards, reveal */
+/* ---------------------------------------------------------------------- */
+
+.vl-eyebrow {
+  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.32em;
+  text-transform: uppercase;
+  color: var(--accent-gold);
+}
+
+.vl-badge-trust {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-soft);
+  background: linear-gradient(160deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.01));
+  padding: 0.7rem 0.9rem;
+  transition: border-color var(--duration-base) var(--ease-out-premium), transform var(--duration-base) var(--ease-out-premium);
+}
+
+.vl-badge-trust:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-2px);
+}
+
+.vl-badge-trust-icon {
+  display: inline-flex;
+  height: 2rem;
+  width: 2rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--accent-gold-soft);
+  background: var(--accent-gold-soft);
+  color: var(--accent-gold);
+}
+
+.vl-nav-link {
+  position: relative;
+  color: var(--foreground-muted);
+  transition: color var(--duration-fast) ease;
+}
+
+.vl-nav-link::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  bottom: -0.4rem;
+  height: 1px;
+  width: 0;
+  background: var(--accent-gold);
+  transition: width var(--duration-base) var(--ease-out-premium);
+}
+
+.vl-nav-link:hover,
+.vl-nav-link[aria-current="page"] {
+  color: var(--foreground);
+}
+
+.vl-nav-link:hover::after,
+.vl-nav-link[aria-current="page"]::after {
+  width: 100%;
+}
+
+.vl-product-card {
+  position: relative;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-soft);
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01) 40%, rgba(14, 14, 14, 0.92));
+  overflow: hidden;
+  transition: transform var(--duration-base) var(--ease-out-premium), border-color var(--duration-base) var(--ease-out-premium), box-shadow var(--duration-base) var(--ease-out-premium);
+}
+
+.vl-product-card:hover {
+  transform: translateY(-6px);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-lg);
+}
+
+.vl-product-card-media {
+  position: relative;
+  aspect-ratio: 1 / 1;
+  overflow: hidden;
+  background: radial-gradient(circle at 40% 15%, rgba(242, 201, 76, 0.08), transparent 62%);
+}
+
+.vl-product-card-media img {
+  transition: transform var(--duration-slow) var(--ease-out-premium);
+}
+
+.vl-product-card:hover .vl-product-card-media img {
+  transform: scale(1.05);
+}
+
+.vl-search-input {
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-soft);
+  background: rgba(9, 9, 9, 0.7);
+  color: var(--foreground);
+  transition: border-color var(--duration-fast) ease, width var(--duration-base) var(--ease-out-premium), background var(--duration-fast) ease;
+}
+
+.vl-search-input:focus {
+  outline: none;
+  border-color: var(--border-strong);
+  background: rgba(9, 9, 9, 0.92);
+}
+
+/* Scroll-triggered reveal — paired with the ScrollReveal component, which
+   toggles data-revealed via IntersectionObserver. */
+.vl-reveal {
+  opacity: 0;
+  transform: translateY(18px);
+  transition: opacity var(--duration-slow) var(--ease-out-premium), transform var(--duration-slow) var(--ease-out-premium);
+}
+
+.vl-reveal[data-revealed="true"] {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .vl-float,
   .vl-float-b,
@@ -878,12 +1046,24 @@ textarea {
   }
 
   .vl-card,
-  .vl-elevate-hover {
+  .vl-elevate-hover,
+  .vl-badge-trust,
+  .vl-product-card,
+  .vl-product-card-media img {
     transition: border-color 0.15s ease;
   }
 
   .vl-card:hover,
-  .vl-elevate-hover:hover {
+  .vl-elevate-hover:hover,
+  .vl-badge-trust:hover,
+  .vl-product-card:hover,
+  .vl-product-card:hover .vl-product-card-media img {
     transform: none;
+  }
+
+  .vl-reveal {
+    opacity: 1;
+    transform: none;
+    transition: none;
   }
 }

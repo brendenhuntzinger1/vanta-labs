@@ -1,6 +1,8 @@
 import Link from "next/link";
-import Image from "next/image";
 import { SiteHeader } from "@/components/site-header";
+import { ProductCard } from "@/components/product-card";
+import { TrustBadge } from "@/components/trust-badge";
+import { ScrollReveal } from "@/components/scroll-reveal";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getCatalogProducts } from "@/lib/catalog";
 
@@ -36,45 +38,6 @@ const FAQ = [
   },
 ];
 
-function ProductCard({
-  name,
-  price,
-  image,
-  slug,
-  description,
-}: {
-  name: string;
-  price: string;
-  image: string;
-  slug: string;
-  description: string;
-}) {
-  return (
-    <article className="vl-panel vl-elevate-hover group overflow-hidden rounded-[1.65rem]">
-      <Link href={`/products/${slug}`} className="block">
-        <div className="relative h-60 overflow-hidden border-b border-white/10 bg-[radial-gradient(circle_at_40%_10%,rgba(186,230,253,0.2),transparent_60%)]">
-          <Image
-            src={image}
-            alt={name}
-            fill
-            sizes="(max-width: 1024px) 100vw, 33vw"
-            className="object-contain p-8 transition duration-500 group-hover:scale-105"
-          />
-        </div>
-        <div className="p-6">
-          <p className="vl-lux-kicker text-[11px] text-zinc-500">Flagship Compound</p>
-          <h3 className="vl-display mt-2 text-2xl font-semibold text-white">{name}</h3>
-          <p className="vl-copy mt-2 line-clamp-2 text-sm leading-7 text-zinc-300">{description}</p>
-          <div className="mt-4 flex items-center justify-between">
-            <p className="vl-copy text-base font-semibold text-zinc-100">{price}</p>
-            <span className="vl-lux-kicker text-xs text-zinc-400 transition group-hover:text-white">View</span>
-          </div>
-        </div>
-      </Link>
-    </article>
-  );
-}
-
 export default async function HomePage() {
   const control = await getHomepageControlConfig();
   const catalogProducts = await getCatalogProducts();
@@ -98,6 +61,8 @@ export default async function HomePage() {
     ? catalogProducts.filter((product) => control.featuredProductSlugs?.includes(product.slug))
     : catalogProducts;
 
+  const categories = Array.from(new Set(catalogProducts.map((product) => product.category))).slice(0, 4);
+
   return (
     <div className="vl-page-shell min-h-screen text-zinc-100">
       <SiteHeader />
@@ -109,7 +74,7 @@ export default async function HomePage() {
               {[...tickerItems, ...tickerItems].map((item, index) => (
                 <span key={`${item}-${index}`} className="inline-flex items-center gap-3 whitespace-nowrap">
                   {item}
-                  <span className="h-1.5 w-1.5 rounded-full bg-white/80" />
+                  <span className="h-1.5 w-1.5 rounded-full bg-[var(--accent-gold)]" />
                 </span>
               ))}
             </div>
@@ -143,7 +108,7 @@ export default async function HomePage() {
           <div className="relative mx-auto max-w-7xl px-4 pb-20 pt-16 sm:px-6 sm:pt-20 lg:px-8 lg:pb-24 lg:pt-24">
             <div className="grid items-center gap-10 lg:grid-cols-[1.04fr_0.96fr]">
               <div className="vl-hero-frame p-6 sm:p-8 lg:p-10">
-                <p className="vl-lux-kicker text-[11px] text-white/80">{control.heroKicker ?? "Premium Biotech Platform"}</p>
+                <p className="vl-eyebrow text-[11px]">{control.heroKicker ?? "Premium Biotech Platform"}</p>
                 <h1 className="vl-display mt-5 max-w-3xl text-5xl font-semibold leading-[0.96] text-white sm:text-7xl lg:text-8xl">
                   <span className="vl-gradient-text">{control.heroHeadline ?? "Premium Research Compounds."}</span>
                 </h1>
@@ -151,7 +116,7 @@ export default async function HomePage() {
                   {promoPills.map((item) => (
                     <div
                       key={item}
-                        className="rounded-xl border border-white/35 bg-white/10 px-4 py-3 text-center text-base font-black uppercase tracking-[0.14em] text-zinc-50 sm:text-lg"
+                      className="rounded-xl border border-white/35 bg-white/10 px-4 py-3 text-center text-base font-black uppercase tracking-[0.14em] text-zinc-50 sm:text-lg"
                     >
                       {item}
                     </div>
@@ -169,10 +134,16 @@ export default async function HomePage() {
                     Browse COA Library
                   </Link>
                 </div>
+
+                <div className="mt-8 flex flex-wrap gap-3 border-t border-white/10 pt-6">
+                  <TrustBadge icon="flask" label="Lab-Verified" />
+                  <TrustBadge icon="shield" label="Secure Checkout" />
+                  <TrustBadge icon="truck" label="Fast Dispatch" />
+                </div>
               </div>
 
               <div className="vl-panel rounded-[2rem] p-6 sm:p-8">
-                <p className="vl-lux-kicker text-xs text-white/80">Research Standards</p>
+                <p className="vl-eyebrow text-xs">Research Standards</p>
                 <h3 className="vl-display mt-3 text-4xl font-semibold leading-[1.02] text-white sm:text-5xl">{control.qualityPanelTitle ?? "Built for Reliable Results"}</h3>
                 <p className="vl-copy mt-4 text-sm leading-7 text-zinc-300 sm:text-base">
                   Every order is supported by documented quality controls, consistent fulfillment, and transparent reporting standards.
@@ -198,29 +169,55 @@ export default async function HomePage() {
           </div>
         </section>
 
+        {categories.length > 0 ? (
+          <section className="border-b border-white/10 py-14 sm:py-16">
+            <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+              <ScrollReveal>
+                <p className="vl-eyebrow text-[11px]">Shop By Category</p>
+                <h2 className="vl-display mt-3 text-3xl font-semibold text-white sm:text-4xl">Browse the Catalog</h2>
+              </ScrollReveal>
+              <div className="mt-7 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {categories.map((category, index) => (
+                  <ScrollReveal key={category} delayMs={index * 70}>
+                    <Link
+                      href={`/products?category=${encodeURIComponent(category)}`}
+                      className="vl-panel vl-elevate-hover vl-focus-ring flex h-full flex-col justify-between rounded-2xl p-5"
+                    >
+                      <p className="text-lg font-semibold text-white">{category}</p>
+                      <span className="mt-4 inline-flex items-center gap-1.5 text-xs uppercase tracking-[0.16em] text-zinc-400">
+                        Explore
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5">
+                          <path d="M5 12h14M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </span>
+                    </Link>
+                  </ScrollReveal>
+                ))}
+              </div>
+            </div>
+          </section>
+        ) : null}
+
         <section className="border-b border-white/10 py-16 sm:py-20">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            <div className="mb-8 flex items-end justify-between gap-4 sm:mb-10">
-              <div>
-                <p className="vl-lux-kicker text-[11px] text-zinc-500">Featured Selection</p>
-                <h2 className="vl-display mt-3 text-4xl font-semibold text-white sm:text-5xl">Most Requested Compounds</h2>
+            <ScrollReveal>
+              <div className="mb-8 flex items-end justify-between gap-4 sm:mb-10">
+                <div>
+                  <p className="vl-eyebrow text-[11px]">Featured Selection</p>
+                  <h2 className="vl-display mt-3 text-4xl font-semibold text-white sm:text-5xl">Most Requested Compounds</h2>
+                </div>
+                <Link href="/products" className="text-sm text-zinc-300 transition hover:text-white">
+                  View Full Catalog →
+                </Link>
               </div>
-              <Link href="/products" className="text-sm text-zinc-300 transition hover:text-white">
-                View Full Catalog →
-              </Link>
-            </div>
+            </ScrollReveal>
 
             {featuredForHome.length > 0 ? (
               <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-                {featuredForHome.slice(0, 6).map((product) => (
-                  <ProductCard
-                    key={product.slug}
-                    name={product.name}
-                    price={product.price}
-                    image={product.image}
-                    slug={product.slug}
-                    description={product.description}
-                  />
+                {featuredForHome.slice(0, 6).map((product, index) => (
+                  <ScrollReveal key={product.slug} delayMs={Math.min(index, 3) * 80}>
+                    <ProductCard product={product} image={product.image} priority={index < 3} />
+                  </ScrollReveal>
                 ))}
               </div>
             ) : (
@@ -233,17 +230,21 @@ export default async function HomePage() {
 
         <section className="border-b border-white/10 py-16 sm:py-20">
           <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-            <div className="mb-8 max-w-3xl">
-              <p className="vl-lux-kicker text-[11px] text-zinc-500">Platform Differentiators</p>
-              <h2 className="vl-display mt-3 text-4xl font-semibold text-white sm:text-5xl">Built Around Trust and Performance</h2>
-            </div>
+            <ScrollReveal>
+              <div className="mb-8 max-w-3xl">
+                <p className="vl-eyebrow text-[11px]">Platform Differentiators</p>
+                <h2 className="vl-display mt-3 text-4xl font-semibold text-white sm:text-5xl">Built Around Trust and Performance</h2>
+              </div>
+            </ScrollReveal>
 
             <div className="grid gap-4 md:grid-cols-3">
-              {BRAND_PILLARS.map((pillar) => (
-                <article key={pillar.title} className="vl-panel rounded-2xl p-6">
-                  <h3 className="vl-display text-2xl font-semibold text-white">{pillar.title}</h3>
-                  <p className="vl-copy mt-3 text-sm leading-7 text-zinc-300">{pillar.detail}</p>
-                </article>
+              {BRAND_PILLARS.map((pillar, index) => (
+                <ScrollReveal key={pillar.title} delayMs={index * 90}>
+                  <article className="vl-panel h-full rounded-2xl p-6">
+                    <h3 className="vl-display text-2xl font-semibold text-white">{pillar.title}</h3>
+                    <p className="vl-copy mt-3 text-sm leading-7 text-zinc-300">{pillar.detail}</p>
+                  </article>
+                </ScrollReveal>
               ))}
             </div>
           </div>
@@ -251,10 +252,12 @@ export default async function HomePage() {
 
         <section className="py-16 sm:py-20">
           <div className="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8">
-            <div className="mb-8 text-center sm:mb-10">
-              <p className="vl-lux-kicker text-[11px] text-zinc-500">FAQ</p>
-              <h2 className="vl-display mt-3 text-4xl font-semibold text-white sm:text-5xl">Everything You Need Before Ordering</h2>
-            </div>
+            <ScrollReveal>
+              <div className="mb-8 text-center sm:mb-10">
+                <p className="vl-eyebrow text-[11px]">FAQ</p>
+                <h2 className="vl-display mt-3 text-4xl font-semibold text-white sm:text-5xl">Everything You Need Before Ordering</h2>
+              </div>
+            </ScrollReveal>
             <div className="space-y-3">
               {FAQ.map((entry) => (
                 <details key={entry.q} className="vl-panel rounded-2xl p-5 open:border-white/40" open={entry.q === FAQ[0].q}>
