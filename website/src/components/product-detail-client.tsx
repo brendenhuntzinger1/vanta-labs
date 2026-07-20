@@ -3,10 +3,9 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useCart } from "@/components/cart-context";
-import { SiteHeader } from "@/components/site-header";
+import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
-import { TrustBadge, type TrustBadgeIcon } from "@/components/trust-badge";
 import { WishlistButton } from "@/components/wishlist-button";
 import type { Product } from "@/lib/catalog-types";
 import Image from "next/image";
@@ -27,12 +26,50 @@ function toPriceNumber(value?: string) {
   return Number(value.replace(/[^0-9.]/g, "")) || 0;
 }
 
-const TRUST_BADGES: Array<{ icon: TrustBadgeIcon; label: string }> = [
-  { icon: "flask", label: "Third-Party Tested" },
-  { icon: "shield", label: "Encrypted Checkout" },
-  { icon: "check", label: "COA Included" },
-  { icon: "truck", label: "Fast Dispatch" },
-];
+function formatUsd(value: number) {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
+}
+
+const BUNDLE_OPTIONS = [
+  { quantity: 1, label: "1 Bottle", badge: null },
+  { quantity: 2, label: "2 Bottles", badge: "Most Popular" },
+  { quantity: 3, label: "3+ Bottles", badge: "Best Value" },
+] as const;
+
+const TRUST_ROW = [
+  {
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+        <path d="M2 8h11v8H2z" />
+        <path d="M13 11h4l4 3v2h-8z" />
+        <circle cx="6.5" cy="18.5" r="1.6" />
+        <circle cx="17" cy="18.5" r="1.6" />
+      </svg>
+    ),
+    label: "Fast Dispatch",
+    detail: "Ships within one business day",
+  },
+  {
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+        <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
+        <path d="m9 12 2 2 4-4" />
+      </svg>
+    ),
+    label: "Secure Checkout",
+    detail: "Encrypted payment session",
+  },
+  {
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+        <circle cx="12" cy="12" r="9" />
+        <path d="m8.5 12.5 2.4 2.4L16 9.6" />
+      </svg>
+    ),
+    label: "COA Verified",
+    detail: "Third-party batch testing",
+  },
+] as const;
 
 const PRODUCT_FAQ = [
   {
@@ -61,14 +98,14 @@ function FaqAccordion() {
         <div key={idx}>
           <button
             type="button"
-            className="flex w-full items-center justify-between gap-4 py-4 text-left text-sm text-zinc-100 transition hover:text-white"
+            className="flex w-full items-center justify-between gap-4 py-4 text-left text-sm text-white transition hover:text-white/80"
             onClick={() => setOpenIndex(openIndex === idx ? null : idx)}
           >
             <span className="font-medium">{item.q}</span>
-            <span className={`shrink-0 text-zinc-400 transition-transform duration-200 ${openIndex === idx ? "rotate-180" : ""}`}>▼</span>
+            <span className={`shrink-0 text-white/40 transition-transform duration-200 ${openIndex === idx ? "rotate-180" : ""}`}>▼</span>
           </button>
           {openIndex === idx && (
-            <p className="pb-4 text-sm leading-7 text-zinc-400">{item.a}</p>
+            <p className="pb-4 text-sm leading-7 text-white/55">{item.a}</p>
           )}
         </div>
       ))}
@@ -89,6 +126,7 @@ export function ProductDetailClient({
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
   const [selectedDoseId, setSelectedDoseId] = useState<string | null>(defaultDose?.id ?? null);
   const [quantity, setQuantity] = useState(1);
+  const [subscribeSelected, setSubscribeSelected] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("description");
 
@@ -101,6 +139,7 @@ export function ProductDetailClient({
   const selectedCoaUrl = selectedDose?.coaUrl ?? product.coaUrl;
   const selectedStockStatus = selectedDose?.stockStatus ?? product.stockStatus;
   const isOutOfStock = selectedStockStatus === "Out of Stock" || selectedStockStatus === "Reserved";
+  const unitPrice = toPriceNumber(selectedPrice);
 
   const galleryItems = useMemo<GalleryItem[]>(() => {
     const fromGallery = (product.galleryImages ?? []).map((image) => ({
@@ -137,21 +176,12 @@ export function ProductDetailClient({
   const hasRealImage = Boolean(imageToDisplay);
   const doseFromSlug = parseDose(product.slug);
 
-  const stockTone =
-    selectedStockStatus === "In Stock"
-      ? "border-emerald-300/35 bg-emerald-300/10 text-emerald-100"
-      : selectedStockStatus === "Limited"
-        ? "border-amber-300/35 bg-amber-300/10 text-amber-100"
-        : selectedStockStatus === "Reserved"
-          ? "border-zinc-300/35 bg-zinc-300/12 text-zinc-100"
-          : "border-zinc-500/35 bg-zinc-500/10 text-zinc-200";
-
   const handleAddToCart = (sourceElement?: HTMLElement | null) => {
     addToCart(product, quantity, sourceElement, {
       variantId: selectedDose?.id,
       doseLabel: selectedDose?.label,
       sku: selectedDose?.sku,
-      priceOverride: toPriceNumber(selectedPrice),
+      priceOverride: unitPrice,
       imageOverride: imageToDisplay ?? product.image,
       batchNumberOverride: selectedBatchNumber,
       stockStatusOverride: selectedStockStatus,
@@ -167,43 +197,39 @@ export function ProductDetailClient({
   ];
 
   return (
-    <div className="vl-page-shell min-h-screen text-zinc-100">
-      <SiteHeader />
+    <div className="min-h-screen bg-[#0b0b0b] text-white">
+      <SiteHeaderV2 />
 
-      <main className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 lg:py-12">
-        {/* Breadcrumb */}
-        <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-zinc-500">
-          <Link href="/" className="hover:text-zinc-300 transition">Home</Link>
+      <main className="mx-auto max-w-[1440px] px-6 pb-16 pt-28 lg:px-12 lg:pt-32">
+        <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-white/40">
+          <Link href="/" className="transition hover:text-white/70">Home</Link>
           <span>/</span>
-          <Link href="/products" className="hover:text-zinc-300 transition">Products</Link>
+          <Link href="/products" className="transition hover:text-white/70">Products</Link>
           <span>/</span>
-          <span className="text-zinc-300">{product.name}</span>
+          <span className="text-white/70">{product.name}</span>
         </nav>
 
-        <section className="mt-6 grid min-w-0 gap-8 lg:grid-cols-[1.1fr_0.9fr] lg:items-start">
-          {/* ── Left column: image + tabs ── */}
+        <section className="mt-6 grid min-w-0 gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-start">
           <div className="min-w-0">
-            {/* Main image */}
-            <div className="vl-panel overflow-hidden rounded-[2rem]">
-              <div className="relative min-h-[320px] bg-[radial-gradient(circle_at_40%_8%,rgba(255,255,255,0.12),transparent_62%)] sm:min-h-[440px]">
+            <div className="vl2-hairline overflow-hidden bg-[#111]">
+              <div className="relative min-h-[340px] sm:min-h-[460px]">
                 {hasRealImage ? (
                   <Image
                     src={imageToDisplay as string}
                     alt={product.name}
                     fill
-                    sizes="(max-width: 1024px) 100vw, 58vw"
-                    className="object-contain p-8 sm:p-10"
+                    sizes="(max-width: 1024px) 100vw, 55vw"
+                    className="object-contain p-8 sm:p-12"
                     priority
                   />
                 ) : (
-                  <div className="flex h-full min-h-[320px] items-center justify-center">
-                    <div className="rounded-full border border-white/15 bg-white/5 px-4 py-1.5 text-xs uppercase tracking-[0.2em] text-zinc-300">Image pending</div>
+                  <div className="flex h-full min-h-[340px] items-center justify-center">
+                    <div className="border border-white/15 px-4 py-1.5 text-xs uppercase tracking-[0.2em] text-white/45">Image pending</div>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* Thumbnail strip */}
             {galleryItems.length > 1 && (
               <div className="mt-4 grid grid-cols-5 gap-2 sm:grid-cols-7">
                 {galleryItems.map((item) => (
@@ -211,7 +237,7 @@ export function ProductDetailClient({
                     key={item.id}
                     type="button"
                     onClick={() => setSelectedImageUrl(item.imageUrl)}
-                    className={`relative overflow-hidden rounded-xl border transition ${item.imageUrl === imageToDisplay ? "border-white/45 ring-1 ring-white/25" : "border-white/12 hover:border-white/28"} bg-zinc-900/80`}
+                    className={`relative overflow-hidden border bg-[#111] transition ${item.imageUrl === imageToDisplay ? "border-white/50" : "border-white/10 hover:border-white/25"}`}
                   >
                     <div className="relative aspect-square">
                       <Image src={item.imageUrl} alt={item.altText} fill sizes="90px" className="object-cover" />
@@ -221,15 +247,14 @@ export function ProductDetailClient({
               </div>
             )}
 
-            {/* Info tabs */}
             <div className="mt-8">
-              <div className="flex gap-1 rounded-xl border border-white/10 bg-white/5 p-1">
+              <div className="flex gap-1 border border-white/10 p-1">
                 {TABS.map((tab) => (
                   <button
                     key={tab.key}
                     type="button"
                     onClick={() => setActiveTab(tab.key)}
-                    className={`min-w-0 flex-1 rounded-lg px-2 py-2 text-[11px] font-medium uppercase tracking-[0.08em] transition sm:px-3 sm:text-xs sm:tracking-[0.14em] ${activeTab === tab.key ? "bg-white/14 text-zinc-100" : "text-zinc-400 hover:text-zinc-200"}`}
+                    className={`min-w-0 flex-1 px-2 py-2 text-[11px] font-medium uppercase tracking-[0.1em] transition sm:px-3 sm:text-xs sm:tracking-[0.16em] ${activeTab === tab.key ? "bg-white/10 text-white" : "text-white/45 hover:text-white/70"}`}
                   >
                     {tab.label}
                   </button>
@@ -238,19 +263,19 @@ export function ProductDetailClient({
 
               <div className="mt-4">
                 {activeTab === "description" && (
-                  <div className="vl-panel rounded-2xl p-5">
-                    <p className="text-sm leading-7 text-zinc-300">{product.longDescription ?? product.description}</p>
+                  <div className="vl2-hairline p-5">
+                    <p className="text-sm leading-7 text-white/65">{product.longDescription ?? product.description}</p>
                     {product.molecularFormula && (
-                      <p className="mt-4 text-xs text-zinc-500">Molecular Formula: <span className="text-zinc-300">{product.molecularFormula}</span></p>
+                      <p className="mt-4 text-xs text-white/40">Molecular Formula: <span className="text-white/70">{product.molecularFormula}</span></p>
                     )}
-                    <div className="mt-5 rounded-xl border border-amber-400/20 bg-amber-400/5 p-4 text-xs leading-6 text-amber-200/80">
-                      <strong className="text-amber-200">Research Use Only.</strong> This compound is intended strictly for laboratory research purposes. Not for human or veterinary use.
+                    <div className="mt-5 border border-white/10 p-4 text-xs leading-6 text-white/55">
+                      <strong className="text-white">Research Use Only.</strong> This compound is intended strictly for laboratory research purposes. Not for human or veterinary use.
                     </div>
                   </div>
                 )}
 
                 {activeTab === "specs" && (
-                  <div className="vl-panel rounded-2xl p-5">
+                  <div className="vl2-hairline p-5">
                     <dl className="space-y-3 text-sm">
                       {[
                         ["Batch Number", selectedBatchNumber],
@@ -262,8 +287,8 @@ export function ProductDetailClient({
                         ["SKU", selectedDose?.sku ?? "N/A"],
                       ].map(([label, value]) => (
                         <div key={label} className="flex justify-between border-b border-white/8 pb-2 last:border-0">
-                          <dt className="text-zinc-500">{label}</dt>
-                          <dd className="text-zinc-100 font-medium">{value}</dd>
+                          <dt className="text-white/40">{label}</dt>
+                          <dd className="font-medium text-white">{value}</dd>
                         </div>
                       ))}
                     </dl>
@@ -271,18 +296,18 @@ export function ProductDetailClient({
                 )}
 
                 {activeTab === "coa" && (
-                  <div className="vl-panel rounded-2xl p-5">
-                    <p className="text-sm leading-7 text-zinc-300">
+                  <div className="vl2-hairline p-5">
+                    <p className="text-sm leading-7 text-white/65">
                       Every product lot is linked to a third-party Certificate of Analysis. The COA includes purity percentage, testing methodology, batch traceability, and lab information. Download the report matching your selected dose below.
                     </p>
                     <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                      <div className="rounded-xl border border-white/10 bg-white/[0.04] p-4">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500">Purity</p>
-                        <p className="mt-1.5 text-xl font-semibold text-emerald-300">{selectedPurity ?? "Pending"}</p>
+                      <div className="border border-white/10 p-4">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/40">Purity</p>
+                        <p className="mt-1.5 text-xl font-semibold text-white">{selectedPurity ?? "Pending"}</p>
                       </div>
-                      <div className="rounded-xl border border-white/10 bg-white/[0.04] p-4">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-500">Batch</p>
-                        <p className="mt-1.5 text-sm font-medium text-zinc-100">{selectedBatchNumber}</p>
+                      <div className="border border-white/10 p-4">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/40">Batch</p>
+                        <p className="mt-1.5 text-sm font-medium text-white">{selectedBatchNumber}</p>
                       </div>
                     </div>
                     {selectedCoaUrl && (
@@ -290,7 +315,7 @@ export function ProductDetailClient({
                         href={selectedCoaUrl}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="vl-btn-secondary vl-focus-ring mt-5 inline-flex items-center gap-2 px-5 py-2.5 text-sm"
+                        className="vl2-btn-secondary vl-focus-ring mt-5 inline-flex items-center gap-2 px-5 py-2.5"
                       >
                         <span>↗</span> Download COA PDF
                       </a>
@@ -300,106 +325,132 @@ export function ProductDetailClient({
               </div>
             </div>
 
-            {/* FAQ */}
             <div className="mt-8">
-              <p className="text-xs uppercase tracking-[0.24em] text-zinc-500">Frequently Asked Questions</p>
+              <p className="vl2-eyebrow">Frequently Asked Questions</p>
               <FaqAccordion />
             </div>
           </div>
 
-          {/* ── Right column: buy panel ── */}
-          <aside className="lg:sticky lg:top-24 space-y-4">
-            <div className="vl-panel rounded-[2rem] p-6 sm:p-7">
-              {/* Header */}
+          <aside className="lg:sticky lg:top-28 space-y-4">
+            <div className="vl2-hairline p-6 sm:p-7">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-[11px] uppercase tracking-[0.3em] text-zinc-500">{product.category}</p>
-                  <h1 className="mt-2 text-2xl font-semibold text-white sm:text-3xl">{product.name}</h1>
+                  <p className="text-[11px] uppercase tracking-[0.3em] text-white/40">{product.category}</p>
+                  <h1 className="vl2-serif mt-2 text-3xl text-white">{product.name}</h1>
                 </div>
-                <span className={`shrink-0 rounded-full border px-3 py-1 text-[10px] uppercase tracking-[0.2em] ${stockTone}`}>{selectedStockStatus}</span>
+                <span className="shrink-0 border border-white/15 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-white/60">{selectedStockStatus}</span>
               </div>
 
               {doseFromSlug && (
-                <p className="mt-1 text-xs text-zinc-500">{doseFromSlug} · {product.labName}</p>
+                <p className="mt-1 text-xs text-white/40">{doseFromSlug} · {product.labName}</p>
               )}
 
-              {/* Purity badge */}
               {selectedPurity && (
-                <div className="mt-4 flex items-center gap-2">
-                  <span className="rounded-full border border-emerald-300/30 bg-emerald-300/10 px-3 py-1 text-xs font-medium text-emerald-200">
-                    ✓ {selectedPurity} Purity Verified
+                <div className="mt-4 flex flex-wrap items-center gap-2">
+                  <span className="border border-white/15 px-3 py-1 text-xs font-medium text-white/80">
+                    {selectedPurity} Purity Verified
                   </span>
-                  <span className="rounded-full border border-white/12 bg-white/5 px-3 py-1 text-xs text-zinc-400">
+                  <span className="border border-white/10 px-3 py-1 text-xs text-white/40">
                     Batch {selectedBatchNumber}
                   </span>
                 </div>
               )}
 
-              {/* Dose selection */}
               {product.doses && product.doses.length > 0 && (
                 <div className="mt-6">
-                  <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Select Dose</p>
+                  <p className="vl2-eyebrow">Dosage</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {product.doses.map((variant) => (
                       <button
                         key={variant.id}
                         type="button"
                         onClick={() => setSelectedDoseId(variant.id)}
-                        className={`rounded-full border px-4 py-2 text-sm transition ${
+                        className={`border px-4 py-2 text-sm transition ${
                           selectedDose?.id === variant.id
-                            ? "border-white/45 bg-white/14 text-zinc-100"
-                            : "border-white/12 bg-white/5 text-zinc-300 hover:border-white/25 hover:text-white"
+                            ? "border-white bg-white text-black"
+                            : "border-white/15 text-white/70 hover:border-white/35 hover:text-white"
                         } ${variant.stockStatus === "Out of Stock" ? "opacity-40" : ""}`}
                       >
                         {variant.label}
-                        {variant.stockStatus === "Out of Stock" && <span className="ml-1 text-[9px] text-zinc-500">sold out</span>}
+                        {variant.stockStatus === "Out of Stock" && <span className="ml-1 text-[9px]">sold out</span>}
                       </button>
                     ))}
                   </div>
                 </div>
               )}
 
-              {/* Price */}
               <div className="mt-6 flex items-end gap-3">
-                <p className="text-4xl font-semibold text-zinc-100">{selectedPrice}</p>
+                <p className="text-4xl font-semibold text-white">{selectedPrice}</p>
                 {selectedCompareAtPrice && (
-                  <p className="mb-1 text-base text-zinc-500 line-through">{selectedCompareAtPrice}</p>
+                  <p className="mb-1 text-base text-white/40 line-through">{selectedCompareAtPrice}</p>
                 )}
               </div>
 
-              {/* Quantity */}
-              <div className="mt-5">
-                <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Quantity</p>
-                <div className="mt-2 flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                    className="h-9 w-9 rounded-xl border border-white/15 bg-white/5 text-lg text-zinc-200 transition hover:bg-white/10 disabled:opacity-30"
-                    disabled={quantity <= 1}
-                  >−</button>
-                  <span className="w-8 text-center text-base font-semibold text-zinc-100">{quantity}</span>
-                  <button
-                    type="button"
-                    onClick={() => setQuantity((q) => Math.min(10, q + 1))}
-                    className="h-9 w-9 rounded-xl border border-white/15 bg-white/5 text-lg text-zinc-200 transition hover:bg-white/10 disabled:opacity-30"
-                    disabled={quantity >= 10}
-                  >+</button>
+              <div className="mt-6">
+                <p className="vl2-eyebrow">Quantity</p>
+                <div className="mt-3 grid grid-cols-3 gap-2">
+                  {BUNDLE_OPTIONS.map((option) => {
+                    const isSelected = option.quantity === 3 ? quantity >= 3 : quantity === option.quantity;
+                    return (
+                      <button
+                        key={option.quantity}
+                        type="button"
+                        onClick={() => setQuantity(option.quantity)}
+                        className={`relative border px-2 py-3 text-center transition ${isSelected ? "border-white bg-white/10" : "border-white/12 hover:border-white/30"}`}
+                      >
+                        {option.badge ? (
+                          <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap bg-white px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-black">
+                            {option.badge}
+                          </span>
+                        ) : null}
+                        <span className="block text-sm text-white">{option.label}</span>
+                        <span className="mt-1 block text-xs text-white/45">{formatUsd(unitPrice * option.quantity)}</span>
+                      </button>
+                    );
+                  })}
                 </div>
+                {quantity > 3 ? (
+                  <div className="mt-2 flex items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                      className="h-8 w-8 border border-white/15 text-white/70 transition hover:border-white/35"
+                    >−</button>
+                    <span className="text-sm text-white">{quantity} bottles</span>
+                    <button
+                      type="button"
+                      onClick={() => setQuantity((q) => Math.min(10, q + 1))}
+                      className="h-8 w-8 border border-white/15 text-white/70 transition hover:border-white/35"
+                    >+</button>
+                  </div>
+                ) : null}
               </div>
 
-              {/* CTA */}
-              <div className="mt-6 flex gap-2">
+              <label className="mt-5 flex items-start gap-3 border border-white/10 p-3.5 text-sm text-white/70">
+                <input
+                  type="checkbox"
+                  checked={subscribeSelected}
+                  onChange={(event) => setSubscribeSelected(event.target.checked)}
+                  className="mt-0.5 h-4 w-4 rounded border-white/25 bg-transparent"
+                />
+                <span>
+                  <span className="block font-medium text-white">Subscribe &amp; Save</span>
+                  <span className="mt-0.5 block text-xs text-white/40">Recurring orders aren&apos;t live yet — this places a one-time order for now.</span>
+                </span>
+              </label>
+
+              <div className="mt-5 flex gap-2">
                 <button
                   onClick={(event) => handleAddToCart(event.currentTarget)}
                   type="button"
                   disabled={isOutOfStock}
-                  className="vl-btn-primary vl-focus-ring flex-1 px-5 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+                  className="vl2-btn-primary vl-focus-ring flex-1 px-5 py-3.5 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isOutOfStock ? "Currently Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
                 </button>
                 <WishlistButton
                   slug={product.slug}
-                  className="vl-btn-secondary vl-focus-ring inline-flex h-[52px] w-[52px] flex-shrink-0 items-center justify-center"
+                  className="vl2-btn-secondary vl-focus-ring inline-flex h-[52px] w-[52px] flex-shrink-0 items-center justify-center"
                 />
               </div>
 
@@ -408,48 +459,39 @@ export function ProductDetailClient({
                   href={selectedCoaUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="vl-btn-secondary vl-focus-ring mt-2 flex w-full items-center justify-center gap-2 px-5 py-2.5 text-sm"
+                  className="vl2-btn-secondary vl-focus-ring mt-2 flex w-full items-center justify-center gap-2 px-5 py-2.5"
                 >
                   View COA
                 </a>
               )}
 
               {message && (
-                <p className="mt-3 text-sm text-emerald-300">{message}</p>
+                <p className="mt-3 text-sm text-white/70">{message}</p>
               )}
 
-              {/* Trust badges */}
-              <div className="mt-6 grid grid-cols-2 gap-2">
-                {TRUST_BADGES.map((badge) => (
-                  <TrustBadge key={badge.label} icon={badge.icon} label={badge.label} />
+              <div className="mt-6 space-y-2 border-t border-white/10 pt-5">
+                {TRUST_ROW.map((item) => (
+                  <div key={item.label} className="flex items-center gap-3 text-white/60">
+                    <span aria-hidden="true">{item.icon}</span>
+                    <span className="text-xs">
+                      <span className="font-medium text-white/80">{item.label}</span> — {item.detail}
+                    </span>
+                  </div>
                 ))}
-              </div>
-
-              {/* Quick spec strip */}
-              <div className="mt-5 grid grid-cols-2 gap-2">
-                <div className="rounded-xl border border-white/8 bg-white/[0.02] p-3 text-center">
-                  <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Tested</p>
-                  <p className="mt-1 text-xs font-medium text-zinc-300">{product.testingDate}</p>
-                </div>
-                <div className="rounded-xl border border-white/8 bg-white/[0.02] p-3 text-center">
-                  <p className="text-[10px] uppercase tracking-[0.16em] text-zinc-600">Lab</p>
-                  <p className="mt-1 text-xs font-medium text-zinc-300">{product.labName}</p>
-                </div>
               </div>
             </div>
           </aside>
         </section>
 
-        {/* Related products */}
         {relatedProducts.length > 0 && (
           <ScrollReveal className="mt-16">
             <section>
               <div className="flex items-center justify-between">
                 <div>
-                  <p className="vl-eyebrow text-[10px]">You May Also Need</p>
-                  <h2 className="mt-1 text-lg font-semibold text-zinc-100">Related Products</h2>
+                  <p className="vl2-eyebrow">You May Also Need</p>
+                  <h2 className="vl2-serif mt-2 text-2xl text-white">Related Products</h2>
                 </div>
-                <Link href="/products" className="text-xs uppercase tracking-[0.22em] text-zinc-400 transition hover:text-white">
+                <Link href="/products" className="text-xs uppercase tracking-[0.16em] text-white/50 transition hover:text-white">
                   View all
                 </Link>
               </div>
@@ -468,18 +510,17 @@ export function ProductDetailClient({
         )}
       </main>
 
-      {/* Sticky mobile Add to Cart */}
-      <div className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-zinc-950/95 px-4 py-3 backdrop-blur-xl lg:hidden">
+      <div className="fixed inset-x-0 bottom-0 z-50 border-t border-white/10 bg-[#0b0b0b]/95 px-4 py-3 backdrop-blur-xl lg:hidden">
         <div className="flex items-center gap-3">
           <div className="flex-1">
-            <p className="text-xs font-medium text-zinc-100 truncate">{product.name}</p>
-            <p className="text-sm font-semibold text-zinc-200">{selectedPrice}</p>
+            <p className="truncate text-xs font-medium text-white">{product.name}</p>
+            <p className="text-sm font-semibold text-white/80">{selectedPrice}</p>
           </div>
           <button
             onClick={(event) => handleAddToCart(event.currentTarget)}
             type="button"
             disabled={isOutOfStock}
-            className="vl-btn-primary vl-focus-ring shrink-0 px-6 py-2.5 text-sm disabled:opacity-50"
+            className="vl2-btn-primary vl-focus-ring shrink-0 px-6 py-2.5 text-sm disabled:opacity-50"
           >
             {isOutOfStock ? "Unavailable" : "Add to Cart"}
           </button>
