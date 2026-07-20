@@ -107,32 +107,21 @@ export default async function HomePage() {
         <div className="vl2-hero-scrim" aria-hidden="true" />
 
         <div className="vl2-hero-content mx-auto w-full max-w-[1440px] px-6 pb-20 pt-40 lg:px-12 lg:pb-28">
-          <div className="grid items-end gap-10 lg:grid-cols-[1.3fr_0.7fr]">
-            <div className="vl2-fade-in">
-              <p className="vl2-eyebrow">Research Use Only</p>
-              <h1 className="vl2-serif mt-5 max-w-2xl text-5xl leading-[1.04] text-white sm:text-6xl lg:text-7xl">
-                {control.heroHeadline ?? "Precision, in every vial."}
-              </h1>
-              <p className="mt-6 max-w-md text-sm leading-7 text-white/70 sm:text-base">
-                {control.heroSubheadline ?? "Vanta Labs sources, verifies, and ships research compounds with the discipline of a clinical laboratory."}
-              </p>
-              <div className="mt-9 flex flex-wrap gap-3">
-                <Link href="/products" className="vl2-btn-primary vl-focus-ring px-7 py-3.5">
-                  Shop the catalog
-                </Link>
-                <Link href="/coa-library" className="vl2-btn-secondary vl-focus-ring px-7 py-3.5">
-                  View Certificates of Analysis
-                </Link>
-              </div>
-            </div>
-
-            <div className="vl2-vial-label vl2-glass ml-auto hidden w-full max-w-[220px] rounded-none p-5 sm:block">
-              <p className="vl2-serif text-sm tracking-[0.05em] text-white">VANTA LABS</p>
-              <p className="mt-3 text-2xl font-semibold text-white">GLP-3</p>
-              <p className="mt-1 text-sm text-white/60">10mg</p>
-              <div className="mt-4 border-t border-white/10 pt-3">
-                <p className="text-[10px] uppercase tracking-[0.18em] text-white/45">Research Use Only</p>
-              </div>
+          <div className="vl2-fade-in">
+            <p className="vl2-eyebrow">Research Use Only</p>
+            <h1 className="vl2-serif mt-5 max-w-2xl text-5xl leading-[1.04] text-white sm:text-6xl lg:text-7xl">
+              {control.heroHeadline ?? "Precision, in every vial."}
+            </h1>
+            <p className="mt-6 max-w-md text-sm leading-7 text-white/70 sm:text-base">
+              {control.heroSubheadline ?? "Vanta Labs sources, verifies, and ships research compounds with the discipline of a clinical laboratory."}
+            </p>
+            <div className="mt-9 flex flex-wrap gap-3">
+              <Link href="/products" className="vl2-btn-primary vl-focus-ring px-7 py-3.5">
+                Shop the catalog
+              </Link>
+              <Link href="/coa-library" className="vl2-btn-secondary vl-focus-ring px-7 py-3.5">
+                View Certificates of Analysis
+              </Link>
             </div>
           </div>
         </div>
