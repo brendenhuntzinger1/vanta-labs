@@ -9,6 +9,7 @@ import { calculateEarnedPoints, getActivePointsMultiplier, getCustomerMembership
 import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
+import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
 
 export interface WebhookEventState {
   eventId: string;
@@ -647,6 +648,10 @@ export async function finalizeManualPayment(
     }
   }
 
+  // Auto-transmit the paid + verified order to the 3PL (best-effort; never
+  // blocks approval).
+  await transmitOrderToFulfillment(orderId);
+
   return { orderId, alreadyPaid: false, status: "paid" };
 }
 
@@ -794,6 +799,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       } catch {
         // Order processing must not fail because a confirmation email couldn't be sent.
       }
+    }
+
+    // Auto-transmit newly-paid card orders to the 3PL (best-effort).
+    if (!wasAlreadyPaid) {
+      await transmitOrderToFulfillment(orderId);
     }
   }
 

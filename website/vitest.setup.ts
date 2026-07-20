@@ -75,6 +75,13 @@ vi.mock("@/lib/admin-control", () => ({
   ]),
 }));
 
+vi.mock("@/lib/fulfillment/service", () => ({
+  transmitOrderToFulfillment: async () => {},
+  computePayoutOwed: () => 0,
+  countUnits: () => 0,
+  applyInboundFulfillmentEvent: async () => ({ ok: true, message: "" }),
+}));
+
 vi.mock("@/lib/ambassador-settings", () => ({
   getAmbassadorProgramSettings: async () => ({
     minimumQualifyingOrder: 100,

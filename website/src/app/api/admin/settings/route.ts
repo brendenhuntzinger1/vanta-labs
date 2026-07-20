@@ -4,6 +4,7 @@ import { canManageSettings } from "@/lib/admin-roles";
 import { upsertControlValue } from "@/lib/admin-control";
 import { getEmailAdminSettings } from "@/lib/email/settings";
 import { getPaymentProcessorAdminSettings } from "@/lib/payment-processor-config";
+import { getFulfillmentAdminSettings } from "@/lib/fulfillment/config";
 import { sendEmail } from "@/lib/email/send";
 
 function unauthorizedResponse() {
@@ -19,11 +20,12 @@ export async function GET(request: Request) {
   if (!session) return unauthorizedResponse();
   if (!canManageSettings(session.role)) return forbiddenResponse();
 
-  const [email, processor] = await Promise.all([
+  const [email, processor, fulfillment] = await Promise.all([
     getEmailAdminSettings(),
     getPaymentProcessorAdminSettings(),
+    getFulfillmentAdminSettings(),
   ]);
-  return NextResponse.json({ success: true, email, processor });
+  return NextResponse.json({ success: true, email, processor, fulfillment });
 }
 
 // Saves email + payment-processor settings. Secrets (SMTP password, Resend
@@ -42,6 +44,7 @@ export async function PATCH(request: Request) {
     const body = (await request.json()) as {
       email?: Record<string, unknown>;
       processor?: Record<string, unknown>;
+      fulfillment?: Record<string, unknown>;
     };
 
     const set = async (section: string, key: string, value: unknown) => {
@@ -76,6 +79,19 @@ export async function PATCH(request: Request) {
       if (typeof p.publishable_key === "string") await set("payment_processor", "publishable_key", p.publishable_key);
       await setIfPresent("payment_processor", "secret_key", p.secret_key);
       await setIfPresent("payment_processor", "webhook_secret", p.webhook_secret);
+    }
+
+    if (body.fulfillment) {
+      const f = body.fulfillment;
+      if (typeof f.enabled === "boolean") await set("fulfillment", "enabled", f.enabled);
+      if (typeof f.auto_transmit === "boolean") await set("fulfillment", "auto_transmit", f.auto_transmit);
+      if (typeof f.mode === "string") await set("fulfillment", "mode", f.mode);
+      if (typeof f.provider_name === "string") await set("fulfillment", "provider_name", f.provider_name);
+      if (typeof f.api_base_url === "string") await set("fulfillment", "api_base_url", f.api_base_url);
+      await setIfPresent("fulfillment", "api_key", f.api_key);
+      await setIfPresent("fulfillment", "webhook_secret", f.webhook_secret);
+      if (typeof f.payout_model === "string") await set("fulfillment", "payout_model", f.payout_model);
+      if (f.payout_rate !== undefined) await set("fulfillment", "payout_rate", Number(f.payout_rate) || 0);
     }
 
     return NextResponse.json({ success: true });

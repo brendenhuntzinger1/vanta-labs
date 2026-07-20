@@ -3,6 +3,7 @@
 import { useState } from "react";
 import type { EmailAdminSettings } from "@/lib/email/settings";
 import type { PaymentProcessorAdminSettings } from "@/lib/payment-processor-config";
+import type { FulfillmentAdminSettings } from "@/lib/fulfillment/config";
 
 function Labeled({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -17,9 +18,11 @@ function Labeled({ label, children, hint }: { label: string; children: React.Rea
 export function AdminSettingsClient({
   email,
   processor,
+  fulfillment,
 }: {
   email: EmailAdminSettings;
   processor: PaymentProcessorAdminSettings;
+  fulfillment: FulfillmentAdminSettings;
 }) {
   // Email state
   const [enabled, setEnabled] = useState(email.enabled);
@@ -39,6 +42,17 @@ export function AdminSettingsClient({
   const [procPublishable, setProcPublishable] = useState(processor.publishableKey);
   const [procSecret, setProcSecret] = useState("");
   const [procWebhook, setProcWebhook] = useState("");
+
+  // 3PL fulfillment state
+  const [fEnabled, setFEnabled] = useState(fulfillment.enabled);
+  const [fAuto, setFAuto] = useState(fulfillment.autoTransmit);
+  const [fMode, setFMode] = useState(fulfillment.mode);
+  const [fProvider, setFProvider] = useState(fulfillment.providerName);
+  const [fBaseUrl, setFBaseUrl] = useState(fulfillment.apiBaseUrl);
+  const [fApiKey, setFApiKey] = useState("");
+  const [fWebhook, setFWebhook] = useState("");
+  const [fPayoutModel, setFPayoutModel] = useState(fulfillment.payoutModel);
+  const [fPayoutRate, setFPayoutRate] = useState(String(fulfillment.payoutRate));
 
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -73,6 +87,17 @@ export function AdminSettingsClient({
             secret_key: procSecret,
             webhook_secret: procWebhook,
           },
+          fulfillment: {
+            enabled: fEnabled,
+            auto_transmit: fAuto,
+            mode: fMode,
+            provider_name: fProvider,
+            api_base_url: fBaseUrl,
+            api_key: fApiKey,
+            webhook_secret: fWebhook,
+            payout_model: fPayoutModel,
+            payout_rate: Number(fPayoutRate) || 0,
+          },
         }),
       });
       const json = (await res.json()) as { success: boolean; error?: string };
@@ -86,6 +111,8 @@ export function AdminSettingsClient({
       setResendKey("");
       setProcSecret("");
       setProcWebhook("");
+      setFApiKey("");
+      setFWebhook("");
     } catch {
       setMessage("Save failed");
     } finally {
@@ -195,6 +222,61 @@ export function AdminSettingsClient({
           <Labeled label="Publishable key" hint="Public — safe to expose to the browser."><input value={procPublishable} onChange={(e) => setProcPublishable(e.target.value)} placeholder="pk_live_…" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
           <Labeled label="Secret key" hint={processor.secretKeySet ? "A key is saved. Leave blank to keep it." : "Not set."}><input type="password" value={procSecret} onChange={(e) => setProcSecret(e.target.value)} placeholder="sk_live_…" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
           <Labeled label="Webhook signing secret" hint={processor.webhookSecretSet ? "A secret is saved. Leave blank to keep it." : "Not set."}><input type="password" value={procWebhook} onChange={(e) => setProcWebhook(e.target.value)} placeholder="whsec_…" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
+        </div>
+      </div>
+
+      {/* 3PL fulfillment */}
+      <div className="vl-panel rounded-2xl p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold">3PL / Fulfillment</h2>
+          <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${fEnabled ? (fulfillment.ready ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200" : "border-amber-300/40 bg-amber-300/10 text-amber-200") : "border-white/20 bg-white/5 text-zinc-300"}`}>
+            {fEnabled ? (fulfillment.ready ? "Connected" : "Enabled — needs credentials") : "Disabled"}
+          </span>
+        </div>
+        <p className="mt-1 text-sm text-zinc-400">
+          Paid &amp; verified orders auto-transmit to your 3PL. In <strong>Manual</strong> mode nothing is sent — orders are
+          queued and payout reports generated. In <strong>Generic REST</strong> mode, enter your 3PL&apos;s API base URL and
+          key. Switching providers later is just new credentials.
+        </p>
+
+        <div className="mt-4 flex flex-wrap gap-4">
+          <label className="flex items-center gap-2 text-sm text-zinc-200">
+            <input type="checkbox" checked={fEnabled} onChange={(e) => setFEnabled(e.target.checked)} className="h-4 w-4" />
+            Enable fulfillment
+          </label>
+          <label className="flex items-center gap-2 text-sm text-zinc-200">
+            <input type="checkbox" checked={fAuto} onChange={(e) => setFAuto(e.target.checked)} className="h-4 w-4" />
+            Auto-transmit paid orders
+          </label>
+        </div>
+
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <Labeled label="Mode">
+            <select value={fMode} onChange={(e) => setFMode(e.target.value as FulfillmentAdminSettings["mode"])} className="vl-input mt-1 w-full px-3 py-2 text-sm">
+              <option value="manual">Manual (reports / invoices, no API)</option>
+              <option value="generic_rest">Generic REST API</option>
+            </select>
+          </Labeled>
+          <Labeled label="Provider name (label)"><input value={fProvider} onChange={(e) => setFProvider(e.target.value)} placeholder="my-3pl" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
+          {fMode === "generic_rest" ? (
+            <>
+              <Labeled label="API base URL" hint="Orders are POSTed to {base}/orders."><input value={fBaseUrl} onChange={(e) => setFBaseUrl(e.target.value)} placeholder="https://api.your3pl.com/v1" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
+              <Labeled label="API key" hint={fulfillment.apiKeySet ? "A key is saved. Leave blank to keep it." : "Not set."}><input type="password" value={fApiKey} onChange={(e) => setFApiKey(e.target.value)} placeholder="••••••••" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
+              <Labeled label="Inbound webhook secret" hint={fulfillment.webhookSecretSet ? "A secret is saved. Leave blank to keep it. Point the 3PL webhook at /api/webhooks/fulfillment." : "Point the 3PL webhook at /api/webhooks/fulfillment."}><input type="password" value={fWebhook} onChange={(e) => setFWebhook(e.target.value)} placeholder="••••••••" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
+            </>
+          ) : null}
+        </div>
+
+        <div className="mt-4 grid gap-3 border-t border-white/10 pt-4 sm:grid-cols-2">
+          <Labeled label="Payout model" hint="What you owe the 3PL per order.">
+            <select value={fPayoutModel} onChange={(e) => setFPayoutModel(e.target.value as FulfillmentAdminSettings["payoutModel"])} className="vl-input mt-1 w-full px-3 py-2 text-sm">
+              <option value="per_unit">Fixed $ per vial/unit</option>
+              <option value="percent">Percentage of order total</option>
+            </select>
+          </Labeled>
+          <Labeled label={fPayoutModel === "percent" ? "Rate (% of order)" : "Rate ($ per vial)"}>
+            <input type="number" min={0} step="0.01" value={fPayoutRate} onChange={(e) => setFPayoutRate(e.target.value)} className="vl-input mt-1 w-full px-3 py-2 text-sm" />
+          </Labeled>
         </div>
       </div>
 
