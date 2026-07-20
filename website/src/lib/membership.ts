@@ -50,6 +50,10 @@ export interface MembershipTier {
   benefits: string[];
   position: number;
   isActive: boolean;
+  introPriceCents: number;
+  introDurationDays: number;
+  introOfferEnabled: boolean;
+  memberDiscountPercent: number;
 }
 
 function mapTier(row: Record<string, unknown>): MembershipTier {
@@ -68,6 +72,10 @@ function mapTier(row: Record<string, unknown>): MembershipTier {
     benefits: Array.isArray(row.benefits) ? (row.benefits as string[]) : [],
     position: Number(row.position ?? 0),
     isActive: Boolean(row.is_active),
+    introPriceCents: Number(row.intro_price_cents ?? 100),
+    introDurationDays: Number(row.intro_duration_days ?? 7),
+    introOfferEnabled: Boolean(row.intro_offer_enabled ?? true),
+    memberDiscountPercent: Number(row.member_discount_percent ?? 0),
   };
 }
 
@@ -83,6 +91,20 @@ export async function getActiveMembershipTiers(): Promise<MembershipTier[]> {
   }
 
   return (data ?? []).map(mapTier);
+}
+
+export async function getTierBySlug(slug: string): Promise<MembershipTier | null> {
+  const { data, error } = await supabaseAdmin
+    .from("membership_tiers")
+    .select("*")
+    .eq("slug", slug)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return data ? mapTier(data) : null;
 }
 
 export async function getFreeTier(): Promise<MembershipTier | null> {
@@ -102,9 +124,34 @@ export async function getFreeTier(): Promise<MembershipTier | null> {
 export interface CustomerMembership {
   tier: MembershipTier;
   billingCycle: "monthly" | "annual" | "free";
-  status: "active" | "paused" | "cancelled";
+  status: "active" | "paused" | "cancelled" | "trialing" | "past_due";
   startedAt: string;
   renewsAt: string | null;
+  introStatus: "not_applicable" | "active" | "converted" | "failed";
+  introEndsAt: string | null;
+  nextBillingAt: string | null;
+  nextBillingAmountCents: number | null;
+  cancelAtPeriodEnd: boolean;
+  hasPaymentMethod: boolean;
+}
+
+const MEMBERSHIP_SELECT_FIELDS =
+  "tier_id, billing_cycle, status, started_at, renews_at, intro_status, intro_ends_at, next_billing_at, next_billing_amount_cents, cancel_at_period_end, payment_method_ref, membership_tiers(*)";
+
+function mapCustomerMembership(data: Record<string, unknown>): CustomerMembership {
+  return {
+    tier: mapTier(data.membership_tiers as unknown as Record<string, unknown>),
+    billingCycle: (data.billing_cycle as CustomerMembership["billingCycle"]) ?? "monthly",
+    status: (data.status as CustomerMembership["status"]) ?? "active",
+    startedAt: String(data.started_at),
+    renewsAt: data.renews_at ? String(data.renews_at) : null,
+    introStatus: (data.intro_status as CustomerMembership["introStatus"]) ?? "not_applicable",
+    introEndsAt: data.intro_ends_at ? String(data.intro_ends_at) : null,
+    nextBillingAt: data.next_billing_at ? String(data.next_billing_at) : null,
+    nextBillingAmountCents: data.next_billing_amount_cents !== null && data.next_billing_amount_cents !== undefined ? Number(data.next_billing_amount_cents) : null,
+    cancelAtPeriodEnd: Boolean(data.cancel_at_period_end),
+    hasPaymentMethod: Boolean(data.payment_method_ref),
+  };
 }
 
 // Every registered customer is a Research Member (free tier) by default -
@@ -114,7 +161,7 @@ export interface CustomerMembership {
 export async function getCustomerMembership(userId: string): Promise<CustomerMembership> {
   const { data, error } = await supabaseAdmin
     .from("customer_memberships")
-    .select("tier_id, billing_cycle, status, started_at, renews_at, membership_tiers(*)")
+    .select(MEMBERSHIP_SELECT_FIELDS)
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -123,13 +170,7 @@ export async function getCustomerMembership(userId: string): Promise<CustomerMem
   }
 
   if (data && data.membership_tiers) {
-    return {
-      tier: mapTier(data.membership_tiers as unknown as Record<string, unknown>),
-      billingCycle: (data.billing_cycle as CustomerMembership["billingCycle"]) ?? "monthly",
-      status: (data.status as CustomerMembership["status"]) ?? "active",
-      startedAt: String(data.started_at),
-      renewsAt: data.renews_at ? String(data.renews_at) : null,
-    };
+    return mapCustomerMembership(data as unknown as Record<string, unknown>);
   }
 
   const freeTier = await getFreeTier();
@@ -143,7 +184,32 @@ export async function getCustomerMembership(userId: string): Promise<CustomerMem
     status: "active",
     startedAt: new Date().toISOString(),
     renewsAt: null,
+    introStatus: "not_applicable",
+    introEndsAt: null,
+    nextBillingAt: null,
+    nextBillingAmountCents: null,
+    cancelAtPeriodEnd: false,
+    hasPaymentMethod: false,
   };
+}
+
+// "Exclusive Buy In Bulk Savings" is scoped to the highest tier (by
+// position) and only to members with an actual active-paying subscription
+// - trial members (status "trialing") don't qualify yet.
+export async function isEligibleForBulkSavings(userId: string): Promise<boolean> {
+  const [membership, tiers] = await Promise.all([getCustomerMembership(userId), getActiveMembershipTiers()]);
+  if (membership.status !== "active") {
+    return false;
+  }
+  const highestTier = tiers[tiers.length - 1];
+  return Boolean(highestTier) && membership.tier.id === highestTier.id;
+}
+
+// Priority order processing - a real operational signal (orders.priority),
+// not just marketing copy, so fulfillment staff can actually filter by it.
+export async function isPriorityMember(userId: string): Promise<boolean> {
+  const membership = await getCustomerMembership(userId);
+  return membership.tier.priorityShipping && (membership.status === "active" || membership.status === "trialing");
 }
 
 export async function getActivePointsMultiplier(): Promise<{ multiplier: number; eventName: string | null }> {

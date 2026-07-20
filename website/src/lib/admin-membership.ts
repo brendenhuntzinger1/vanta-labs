@@ -19,6 +19,10 @@ function mapTier(row: Record<string, unknown>): MembershipTier {
     benefits: Array.isArray(row.benefits) ? (row.benefits as string[]) : [],
     position: Number(row.position ?? 0),
     isActive: Boolean(row.is_active),
+    introPriceCents: Number(row.intro_price_cents ?? 100),
+    introDurationDays: Number(row.intro_duration_days ?? 7),
+    introOfferEnabled: Boolean(row.intro_offer_enabled ?? true),
+    memberDiscountPercent: Number(row.member_discount_percent ?? 0),
   };
 }
 
@@ -49,6 +53,10 @@ export interface MembershipTierInput {
   benefits: string[];
   position: number;
   isActive: boolean;
+  introPriceCents: number;
+  introDurationDays: number;
+  introOfferEnabled: boolean;
+  memberDiscountPercent: number;
 }
 
 export async function updateMembershipTier(id: string, input: Partial<MembershipTierInput>) {
@@ -65,6 +73,10 @@ export async function updateMembershipTier(id: string, input: Partial<Membership
   if (input.benefits !== undefined) payload.benefits = input.benefits;
   if (input.position !== undefined) payload.position = input.position;
   if (input.isActive !== undefined) payload.is_active = input.isActive;
+  if (input.introPriceCents !== undefined) payload.intro_price_cents = Math.max(0, Math.round(input.introPriceCents));
+  if (input.introDurationDays !== undefined) payload.intro_duration_days = Math.max(1, Math.round(input.introDurationDays));
+  if (input.introOfferEnabled !== undefined) payload.intro_offer_enabled = input.introOfferEnabled;
+  if (input.memberDiscountPercent !== undefined) payload.member_discount_percent = Math.max(0, Math.min(100, input.memberDiscountPercent));
 
   const { error } = await supabaseAdmin.from("membership_tiers").update(payload).eq("id", id);
   if (error) {
@@ -248,10 +260,31 @@ export interface MembershipAnalytics {
   activeMembersByTier: Array<{ tierName: string; count: number }>;
   totalPointsOutstanding: number;
   activePromotionalEventCount: number;
+  activeIntroMembers: number;
+  trialToPaidConversionRate: number;
+  realRecurringRevenueCents30d: number;
+  cancellationsCount30d: number;
+  renewalsCount30d: number;
+  failedPaymentsCount30d: number;
+  recoveryAttemptsCount30d: number;
 }
 
+// monthlyRecurringRevenueCents / activeMembersByTier stay a projection from
+// current tier prices x active-member counts (useful "what this could be
+// worth" figure). The *30d fields below are real, computed only from
+// membership_billing_events rows a charge attempt actually produced - see
+// billing-provider.ts's header comment for why "failed" is expected and
+// honest until a real processor is connected.
 export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
-  const [{ data: memberships, error: membershipError }, { data: ledgerRows, error: ledgerError }, { data: events, error: eventsError }] = await Promise.all([
+  const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+  const [
+    { data: memberships, error: membershipError },
+    { data: ledgerRows, error: ledgerError },
+    { data: events, error: eventsError },
+    { data: introMembers, error: introError },
+    { data: billingEvents30d, error: billingEventsError },
+  ] = await Promise.all([
     supabaseAdmin
       .from("customer_memberships")
       .select("status, billing_cycle, membership_tiers(name, monthly_price_cents, annual_price_cents)")
@@ -262,11 +295,18 @@ export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
       .select("id")
       .eq("is_active", true)
       .gte("ends_at", new Date().toISOString()),
+    supabaseAdmin.from("customer_memberships").select("user_id").eq("intro_status", "active"),
+    supabaseAdmin
+      .from("membership_billing_events")
+      .select("event_type, amount_cents, status")
+      .gte("created_at", since30d),
   ]);
 
   if (membershipError) throw membershipError;
   if (ledgerError) throw ledgerError;
   if (eventsError) throw eventsError;
+  if (introError) throw introError;
+  if (billingEventsError) throw billingEventsError;
 
   let mrrCents = 0;
   const tierCounts = new Map<string, number>();
@@ -285,12 +325,62 @@ export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
 
   const totalPointsOutstanding = (ledgerRows ?? []).reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
 
+  const events30d = billingEvents30d ?? [];
+  const introAttempts = events30d.filter((row) => row.event_type === "intro_charge" || row.event_type === "first_month_remainder");
+  const introSucceeded = introAttempts.filter((row) => row.status === "succeeded");
+  const realRecurringRevenueCents30d = events30d
+    .filter((row) => row.status === "succeeded" && (row.event_type === "renewal" || row.event_type === "first_month_remainder" || row.event_type === "intro_charge"))
+    .reduce((sum, row) => sum + Number(row.amount_cents ?? 0), 0);
+
   return {
     monthlyRecurringRevenueCents: Math.round(mrrCents),
     activeMembersByTier: Array.from(tierCounts.entries()).map(([tierName, count]) => ({ tierName, count })),
     totalPointsOutstanding,
     activePromotionalEventCount: (events ?? []).length,
+    activeIntroMembers: (introMembers ?? []).length,
+    trialToPaidConversionRate: introAttempts.length > 0 ? Math.round((introSucceeded.length / introAttempts.length) * 1000) / 10 : 0,
+    realRecurringRevenueCents30d,
+    cancellationsCount30d: events30d.filter((row) => row.event_type === "cancellation").length,
+    renewalsCount30d: events30d.filter((row) => row.event_type === "renewal" && row.status === "succeeded").length,
+    failedPaymentsCount30d: events30d.filter((row) => row.status === "failed").length,
+    recoveryAttemptsCount30d: events30d.filter((row) => row.event_type === "payment_failed").length,
   };
+}
+
+export interface BulkSavingsStats {
+  tier5PercentOrders: number;
+  tier5PercentRevenueCents: number;
+  tier12PercentOrders: number;
+  tier12PercentRevenueCents: number;
+}
+
+export async function getBulkSavingsStats(): Promise<BulkSavingsStats> {
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .select("bulk_discount_tier, amount_paid")
+    .not("bulk_discount_tier", "is", null);
+
+  if (error) throw error;
+
+  const stats: BulkSavingsStats = {
+    tier5PercentOrders: 0,
+    tier5PercentRevenueCents: 0,
+    tier12PercentOrders: 0,
+    tier12PercentRevenueCents: 0,
+  };
+
+  for (const row of data ?? []) {
+    const amountCents = Math.round(Number(row.amount_paid ?? 0) * 100);
+    if (row.bulk_discount_tier === "5_percent") {
+      stats.tier5PercentOrders += 1;
+      stats.tier5PercentRevenueCents += amountCents;
+    } else if (row.bulk_discount_tier === "12_percent") {
+      stats.tier12PercentOrders += 1;
+      stats.tier12PercentRevenueCents += amountCents;
+    }
+  }
+
+  return stats;
 }
 
 function csvEscape(value: unknown) {

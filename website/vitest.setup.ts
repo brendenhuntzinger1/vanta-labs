@@ -45,10 +45,20 @@ vi.mock("@/lib/membership", () => ({
   awardSignupBonusIfNeeded: async () => {},
   awardReferralSignupBonus: async () => {},
   checkAndAwardBirthdayBonus: async () => false,
+  isEligibleForBulkSavings: async () => false,
+  isPriorityMember: async () => false,
+  getTierBySlug: async () => null,
 }));
 
 vi.mock("@/lib/admin-control", () => ({
   getHomepageControlConfig: async () => ({ promoBuy3Get1Enabled: false }),
+  getBulkSavingsControlConfig: async () => ({
+    enabled: true,
+    tier1Threshold: 500,
+    tier1Percent: 5,
+    tier2Threshold: 1000,
+    tier2Percent: 12,
+  }),
 }));
 
 vi.mock("@/lib/ambassador-settings", () => ({

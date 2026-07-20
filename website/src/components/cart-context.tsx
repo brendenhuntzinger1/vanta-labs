@@ -8,6 +8,8 @@ import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee, FREE_SHIPPING_THRESHOLD as SHIPPING_FREE_THRESHOLD } from "@/lib/shipping";
+import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
+import { resolveBestDiscount } from "@/lib/discount-resolution";
 
 type CouponDetails = {
   code: string;
@@ -56,6 +58,9 @@ type CartContextValue = {
   total: number;
   isBuy3Get1FreeActive: boolean;
   isBuy3Get1FreeEligible: boolean;
+  bulkSavingsApplied: boolean;
+  bulkSavingsPercent: number;
+  bulkSavingsProgress: { nextPercent: number; amountRemaining: number } | null;
   totalQuantity: number;
   addToCart: (
     product: Product,
@@ -149,6 +154,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [pointsMultiplier, setPointsMultiplier] = useState(1);
   const [pointsToRedeem, setPointsToRedeemState] = useState(0);
   const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
+  const [isEligibleForBulkSavings, setIsEligibleForBulkSavings] = useState(false);
+  const [bulkSavingsConfig, setBulkSavingsConfig] = useState<BulkSavingsConfig>(DEFAULT_BULK_SAVINGS_CONFIG);
 
   useEffect(() => {
     (async () => {
@@ -160,12 +167,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           pointsBalance?: number;
           pointsPerDollar?: number;
           pointsMultiplier?: number;
+          isEligibleForBulkSavings?: boolean;
         };
         if (!result.success) return;
         setIsSignedIn(true);
         setPointsBalance(result.pointsBalance ?? 0);
         setPointsPerDollar(result.pointsPerDollar ?? 0);
         setPointsMultiplier(result.pointsMultiplier ?? 1);
+        setIsEligibleForBulkSavings(Boolean(result.isEligibleForBulkSavings));
       } catch {
         // Guest shoppers simply see no points UI.
       }
@@ -183,6 +192,21 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         }
       } catch {
         // Defaults to disabled (matches the server's default) if this fails.
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const response = await fetch("/api/catalog/bulk-savings-config", { cache: "no-store" });
+        if (!response.ok) return;
+        const result = await response.json() as { success: boolean; config?: BulkSavingsConfig };
+        if (result.success && result.config) {
+          setBulkSavingsConfig(result.config);
+        }
+      } catch {
+        // Defaults to the built-in config if this fails.
       }
     })();
   }, []);
@@ -405,15 +429,41 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [buy3Get1FreeDiscount, referralDetails, couponDetails, subtotal],
   );
 
-  const discountAmount = useMemo(() => {
+  // Whichever of buy3get1 / referral / coupon the customer is actually
+  // eligible for under the existing (unchanged) mutual-exclusivity rules
+  // between those three.
+  const preBulkDiscount = useMemo(() => {
     if (buy3Get1FreeDiscount > 0) {
-      return buy3Get1FreeDiscount;
+      return { type: "buy3get1" as const, amount: buy3Get1FreeDiscount };
     }
     if (referralDetails && isReferralValid(referralDetails)) {
-      return subtotal * (referralDetails.customerDiscountPercent / 100);
+      return { type: "referral" as const, amount: subtotal * (referralDetails.customerDiscountPercent / 100) };
     }
-    return couponDiscountAmount;
+    return { type: "coupon" as const, amount: couponDiscountAmount };
   }, [buy3Get1FreeDiscount, referralDetails, subtotal, couponDiscountAmount]);
+
+  // The elite "Exclusive Buy In Bulk Savings" benefit cannot stack with
+  // anything else - it competes with whatever the customer would otherwise
+  // get, and the single largest discount wins (see src/lib/discount-resolution.ts).
+  const bulkSavingsResult = useMemo(
+    () => calculateBulkSavingsDiscount(subtotal, isEligibleForBulkSavings, bulkSavingsConfig),
+    [subtotal, isEligibleForBulkSavings, bulkSavingsConfig],
+  );
+
+  const bestDiscount = useMemo(
+    () => resolveBestDiscount([
+      { type: "bulk_savings", amount: bulkSavingsResult.amount },
+      preBulkDiscount,
+    ]),
+    [bulkSavingsResult.amount, preBulkDiscount],
+  );
+
+  const discountAmount = bestDiscount?.amount ?? 0;
+  const bulkSavingsApplied = bestDiscount?.type === "bulk_savings";
+  const bulkSavingsProgress = useMemo(
+    () => getBulkSavingsProgress(subtotal, isEligibleForBulkSavings, bulkSavingsConfig),
+    [subtotal, isEligibleForBulkSavings, bulkSavingsConfig],
+  );
 
   const pointsToEarn = useMemo(
     () => (isSignedIn ? calculateEarnedPoints(Math.max(0, subtotal - discountAmount), pointsPerDollar, pointsMultiplier) : 0),
@@ -744,8 +794,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     serviceFee,
     discountAmount,
     total,
-    isBuy3Get1FreeActive: buy3Get1FreeDiscount > 0,
+    isBuy3Get1FreeActive: bestDiscount?.type === "buy3get1",
     isBuy3Get1FreeEligible,
+    bulkSavingsApplied,
+    bulkSavingsPercent: bulkSavingsResult.percent,
+    bulkSavingsProgress,
     totalQuantity,
     addToCart,
     updateQuantity,

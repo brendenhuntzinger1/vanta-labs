@@ -3,12 +3,14 @@ import { getPaymentProvider } from "@/lib/payment-provider";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { calculateDiscountAmount } from "@/lib/referral-service";
 import { validateCoupon } from "@/lib/coupons";
-import { getPointsBalance } from "@/lib/membership";
+import { getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/lib/membership";
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee } from "@/lib/shipping";
-import { getHomepageControlConfig } from "@/lib/admin-control";
+import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
+import { resolveBestDiscount } from "@/lib/discount-resolution";
+import { getHomepageControlConfig, getBulkSavingsControlConfig } from "@/lib/admin-control";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 import type {
@@ -237,9 +239,20 @@ export async function createCheckoutSession(
  ),
  );
 
- const shipping = roundMoney(calculateShipping(subtotal, payload.customer.country));
  const handlingFee = calculateHandlingFee(subtotal);
- const { promoBuy3Get1Enabled } = await getHomepageControlConfig();
+ const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder] = await Promise.all([
+   getHomepageControlConfig(),
+   getBulkSavingsControlConfig(),
+   payload.customerUserId ? isEligibleForBulkSavings(payload.customerUserId) : Promise.resolve(false),
+   payload.customerUserId ? isPriorityMember(payload.customerUserId) : Promise.resolve(false),
+ ]);
+ const bulkSavingsResult = calculateBulkSavingsDiscount(subtotal, bulkSavingsEligible, bulkSavingsConfig);
+ // Free shipping is a distinct perk of reaching the bulk-savings threshold,
+ // not conditioned on bulk savings winning the "greatest discount" contest
+ // below - see membership-billing.sql / bulk-savings.ts.
+ const shipping = bulkSavingsResult.tier
+   ? 0
+   : roundMoney(calculateShipping(subtotal, payload.customer.country));
  const buy3Get1Discount = promoBuy3Get1Enabled ? calculateBuy3Get1Discount(lineItems) : 0;
  const isBuy3Get1Active = buy3Get1Discount > 0;
 
@@ -278,15 +291,22 @@ export async function createCheckoutSession(
    ? null
    : await validateCoupon(payload.couponCode, subtotal);
 
- const discountAmount = roundMoney(
-   isBuy3Get1Active
-     ? buy3Get1Discount
-     : referral
-       ? calculateDiscountAmount(subtotal, referral.discountPercent)
-       : coupon
-         ? coupon.discountAmount
-         : 0,
- );
+ const preBulkDiscount = isBuy3Get1Active
+   ? { type: "buy3get1" as const, amount: buy3Get1Discount }
+   : referral
+     ? { type: "referral" as const, amount: calculateDiscountAmount(subtotal, referral.discountPercent) }
+     : { type: "coupon" as const, amount: coupon ? coupon.discountAmount : 0 };
+
+ // "Cannot stack, greatest savings wins" - mirrors cart-context.tsx exactly
+ // (same shared src/lib/discount-resolution.ts function) so the client
+ // preview and this server total always agree on which discount applies.
+ const bestDiscount = resolveBestDiscount([
+   { type: "bulk_savings", amount: bulkSavingsResult.amount },
+   preBulkDiscount,
+ ]);
+
+ const discountAmount = roundMoney(bestDiscount?.amount ?? 0);
+ const bulkDiscountTier = bestDiscount?.type === "bulk_savings" ? bulkSavingsResult.tier : null;
 
  const totalBeforePoints = roundMoney(subtotal + shipping + handlingFee - discountAmount);
 
@@ -333,6 +353,9 @@ export async function createCheckoutSession(
    shipping_amount: shipping,
    handling_fee: handlingFee,
    discount_amount: discountAmount,
+   bulk_discount_tier: bulkDiscountTier,
+   bulk_discount_amount: bulkDiscountTier ? discountAmount : 0,
+   priority: isPriorityOrder,
    amount_paid: expectedTotal,
    referral_code: referral?.code ?? null,
    ambassador_id: referral?.ambassadorId ?? null,
@@ -376,13 +399,15 @@ export async function createCheckoutSession(
  ambassadorId: referral?.ambassadorId ?? "",
  referralCode: referral?.code ?? "",
  couponCode: coupon?.code ?? "",
- promotionApplied: isBuy3Get1Active
-   ? "BUY_3_GET_1"
-   : referral
-     ? "REFERRAL"
-     : coupon
-       ? "COUPON"
-       : "NONE",
+ promotionApplied: bulkDiscountTier
+   ? "BULK_SAVINGS"
+   : isBuy3Get1Active
+     ? "BUY_3_GET_1"
+     : referral
+       ? "REFERRAL"
+       : coupon
+         ? "COUPON"
+         : "NONE",
  originalSubtotal: subtotal.toFixed(2),
  customerDiscount: discountAmount.toFixed(2),
  pointsRedeemed: String(pointsRedeemed),

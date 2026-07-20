@@ -27,6 +27,9 @@ export default function CartPage() {
     applyReferralCode,
     clearReferralCode,
     isBuy3Get1FreeActive,
+    bulkSavingsApplied,
+    bulkSavingsPercent,
+    bulkSavingsProgress,
   } = useCart();
 
   const effectiveReferralInput = referralInput || referralCode || "";
@@ -117,6 +120,22 @@ export default function CartPage() {
                     </div>
                   </div>
                 )}
+              </div>
+            ) : null}
+
+            {bulkSavingsApplied ? (
+              <div className="mt-4 border border-amber-700/60 bg-amber-950/30 p-4">
+                <p className="text-sm font-semibold text-amber-300">
+                  Congratulations! Your exclusive member bulk discount has been applied.
+                </p>
+                <p className="mt-1 text-xs text-amber-200/80">{bulkSavingsPercent}% off this order.</p>
+              </div>
+            ) : bulkSavingsProgress ? (
+              <div className="mt-4 border border-white/10 p-4">
+                <p className="text-sm text-white/70">
+                  You&apos;re only {formatCartCurrency(bulkSavingsProgress.amountRemaining)} away from unlocking{" "}
+                  {bulkSavingsProgress.nextPercent}% OFF your order.
+                </p>
               </div>
             ) : null}
 

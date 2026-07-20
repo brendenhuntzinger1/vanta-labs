@@ -27,6 +27,9 @@ export function CartDrawer() {
     applyReferralCode,
     clearReferralCode,
     isBuy3Get1FreeEligible,
+    bulkSavingsApplied,
+    bulkSavingsPercent,
+    bulkSavingsProgress,
   } = useCart();
 
   const shippingProgress = getShippingProgress(subtotal);
@@ -121,6 +124,24 @@ export function CartDrawer() {
               </p>
               <p className="text-xs text-emerald-300/70 mt-1">
                 Referral discounts are disabled while this promotion is active.
+              </p>
+            </div>
+          )}
+
+          {bulkSavingsApplied && (
+            <div className="rounded-[1.25rem] border border-amber-700 bg-amber-950/40 p-4">
+              <p className="text-sm font-semibold text-amber-300">
+                Congratulations! Your exclusive member bulk discount has been applied.
+              </p>
+              <p className="text-xs text-amber-200/80 mt-1">{bulkSavingsPercent}% off this order.</p>
+            </div>
+          )}
+
+          {!bulkSavingsApplied && bulkSavingsProgress && (
+            <div className="vl-panel-soft rounded-[1.25rem] p-4">
+              <p className="text-sm text-zinc-300">
+                You&apos;re only {formatCartCurrency(bulkSavingsProgress.amountRemaining)} away from unlocking{" "}
+                {bulkSavingsProgress.nextPercent}% OFF your order.
               </p>
             </div>
           )}

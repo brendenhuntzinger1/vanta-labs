@@ -26,11 +26,11 @@ const FAQ_ITEMS = [
   },
   {
     q: "Can I cancel or change my plan?",
-    a: "Yes, any time from your account settings — reach out and we'll take care of it while automated billing is being finished.",
+    a: "Yes, any time from your account dashboard — cancel before your next renewal date and you'll keep access through the period you already paid for.",
   },
   {
     q: "Is billing live yet?",
-    a: "Not yet — Research Plus and Elite Research membership activation is currently handled manually while we finish connecting a payment processor. Free membership (Research Member) is fully active today, including points on every order.",
+    a: "The membership signup flow, billing schedule, and dashboard are fully built and active — a payment processor isn't connected yet, so a card can't be charged until that's finished. Signing up saves your membership request, and billing begins automatically the moment a processor is connected. Free membership (Research Member) is fully active today, including points on every order.",
   },
 ];
 
@@ -214,12 +214,16 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                   ) : (
                     <div className="mt-8">
                       <Link
-                        href="/contact"
+                        href={
+                          isSignedInCustomer
+                            ? `/membership/${tier.slug}/subscribe`
+                            : `/account/login?redirect=${encodeURIComponent(`/membership/${tier.slug}/subscribe`)}`
+                        }
                         className="vl2-btn-secondary vl-focus-ring inline-flex w-full items-center justify-center px-5 py-3 text-sm"
                       >
-                        Contact to upgrade
+                        Join {tier.name}
                       </Link>
-                      <p className="mt-2 text-center text-[11px] text-white/40">Billing isn&apos;t connected yet — upgrades are activated manually.</p>
+                      <p className="mt-2 text-center text-[11px] text-white/40">$1 today, {tier.introDurationDays}-day intro, then {money(tier.monthlyPriceCents)}/month.</p>
                     </div>
                   )}
                 </div>
@@ -227,6 +231,34 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
             );
           })}
         </div>
+
+        <ScrollReveal delayMs={80}>
+          <div className="mt-16 border-2 border-amber-400/70 bg-gradient-to-br from-amber-950/40 via-black to-black p-6 sm:p-10">
+            <p className="text-center text-xs font-bold uppercase tracking-[0.32em] text-amber-300">Elite Research Exclusive</p>
+            <h2 className="vl2-serif mt-3 text-center text-3xl font-bold text-white sm:text-4xl">
+              Exclusive Buy In Bulk Savings
+            </h2>
+            <div className="mx-auto mt-8 grid max-w-3xl gap-4 sm:grid-cols-3">
+              <div className="border border-amber-400/40 bg-black/40 p-5 text-center">
+                <p className="text-3xl font-bold text-amber-300">5% OFF</p>
+                <p className="mt-2 text-sm text-white/70">Orders of $500 or more</p>
+              </div>
+              <div className="border border-amber-400/40 bg-black/40 p-5 text-center">
+                <p className="text-3xl font-bold text-amber-300">12% OFF</p>
+                <p className="mt-2 text-sm text-white/70">Orders of $1,000 or more</p>
+              </div>
+              <div className="border border-amber-400/40 bg-black/40 p-5 text-center">
+                <p className="text-3xl font-bold text-amber-300">Free Shipping</p>
+                <p className="mt-2 text-sm text-white/70">Included at every bulk tier</p>
+              </div>
+            </div>
+            <ul className="mx-auto mt-8 max-w-2xl space-y-2 text-sm text-white/60">
+              <li>• Discounts are automatically applied at checkout — no code needed.</li>
+              <li>• Exclusive to active, paying Elite Research members (trial members qualify once they convert to a paying member).</li>
+              <li>• One discount per order — bulk savings automatically applies if it beats any other discount you&apos;re eligible for.</li>
+            </ul>
+          </div>
+        </ScrollReveal>
 
         <ScrollReveal delayMs={100}>
           <div className="mt-16">

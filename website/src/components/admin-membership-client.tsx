@@ -3,7 +3,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { MembershipTier } from "@/lib/membership";
-import type { MembershipAnalytics, PromotionalPointEvent, CustomerBalanceRow } from "@/lib/admin-membership";
+import type { MembershipAnalytics, PromotionalPointEvent, CustomerBalanceRow, BulkSavingsStats } from "@/lib/admin-membership";
+import type { BulkSavingsConfig } from "@/lib/bulk-savings";
 
 type BonusSettings = {
   signupBonusEnabled: boolean;
@@ -23,16 +24,23 @@ export function AdminMembershipClient({
   initialEvents,
   initialAnalytics,
   initialBonusSettings,
+  initialBulkSavingsConfig,
+  initialBulkSavingsStats,
 }: {
   initialTiers: MembershipTier[];
   initialEvents: PromotionalPointEvent[];
   initialAnalytics: MembershipAnalytics;
   initialBonusSettings: BonusSettings;
+  initialBulkSavingsConfig: BulkSavingsConfig;
+  initialBulkSavingsStats: BulkSavingsStats;
 }) {
   const [tiers, setTiers] = useState(initialTiers);
   const [events, setEvents] = useState(initialEvents);
   const [analytics] = useState(initialAnalytics);
   const [bonusSettings, setBonusSettings] = useState(initialBonusSettings);
+  const [bulkSavingsConfig, setBulkSavingsConfig] = useState(initialBulkSavingsConfig);
+  const [bulkSavingsStats] = useState(initialBulkSavingsStats);
+  const [savingBulkSavings, setSavingBulkSavings] = useState(false);
   const [customers, setCustomers] = useState<CustomerBalanceRow[] | null>(null);
   const [customerSearch, setCustomerSearch] = useState("");
   const [loadingCustomers, setLoadingCustomers] = useState(false);
@@ -144,6 +152,24 @@ export function AdminMembershipClient({
     }
   };
 
+  const saveBulkSavingsConfig = async () => {
+    setSavingBulkSavings(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/admin/membership/bulk-savings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(bulkSavingsConfig),
+      });
+      const result = await response.json() as { success: boolean; error?: string };
+      setMessage(result.success ? "Bulk savings settings saved." : (result.error ?? "Unable to save settings."));
+    } catch {
+      setMessage("Unable to save bulk savings settings right now.");
+    } finally {
+      setSavingBulkSavings(false);
+    }
+  };
+
   const loadCustomers = async () => {
     setLoadingCustomers(true);
     try {
@@ -246,7 +272,12 @@ export function AdminMembershipClient({
           <div className="vl-panel-soft rounded-xl p-4">
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Monthly Recurring Revenue</p>
             <p className="mt-2 text-2xl font-semibold text-white">{money(analytics.monthlyRecurringRevenueCents)}</p>
-            <p className="mt-1 text-xs text-amber-300">Estimate only — no billing is live yet.</p>
+            <p className="mt-1 text-xs text-amber-300">Projection from tier prices — not real captured revenue.</p>
+          </div>
+          <div className="vl-panel-soft rounded-xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Real Revenue (30d)</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{money(analytics.realRecurringRevenueCents30d)}</p>
+            <p className="mt-1 text-xs text-zinc-500">From actual successful charges. $0 until a billing processor is connected.</p>
           </div>
           <div className="vl-panel-soft rounded-xl p-4">
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Points Outstanding</p>
@@ -257,6 +288,22 @@ export function AdminMembershipClient({
             <p className="mt-2 text-2xl font-semibold text-white">{analytics.activePromotionalEventCount}</p>
           </div>
           <div className="vl-panel-soft rounded-xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Active Intro Members</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{analytics.activeIntroMembers}</p>
+          </div>
+          <div className="vl-panel-soft rounded-xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Trial → Paid Conversion (30d)</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{analytics.trialToPaidConversionRate}%</p>
+          </div>
+          <div className="vl-panel-soft rounded-xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Renewals / Cancellations (30d)</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{analytics.renewalsCount30d} / {analytics.cancellationsCount30d}</p>
+          </div>
+          <div className="vl-panel-soft rounded-xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Failed Payments / Recovery Attempts (30d)</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{analytics.failedPaymentsCount30d} / {analytics.recoveryAttemptsCount30d}</p>
+          </div>
+          <div className="vl-panel-soft rounded-xl p-4 sm:col-span-2 lg:col-span-4">
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Active Members by Tier</p>
             <div className="mt-2 space-y-1 text-sm text-zinc-300">
               {analytics.activeMembersByTier.length === 0 ? <p className="text-zinc-500">None yet</p> : null}
@@ -337,6 +384,47 @@ export function AdminMembershipClient({
                   Exclusive pricing
                 </label>
               </div>
+
+              {tier.slug !== "free" ? (
+                <div className="mt-4 border-t border-white/10 pt-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Intro offer</p>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-4">
+                    <label className="flex items-center gap-1.5 text-xs text-zinc-300">
+                      <input type="checkbox" checked={tier.introOfferEnabled} onChange={(e) => saveTier(tier, { introOfferEnabled: e.target.checked })} />
+                      Enabled
+                    </label>
+                    <label className="text-xs text-zinc-400">
+                      Intro price ($)
+                      <input
+                        type="number"
+                        step="0.01"
+                        defaultValue={(tier.introPriceCents / 100).toFixed(2)}
+                        onBlur={(e) => saveTier(tier, { introPriceCents: Math.round(Number(e.target.value) * 100) })}
+                        className="vl-input mt-1 w-full px-2 py-1.5"
+                      />
+                    </label>
+                    <label className="text-xs text-zinc-400">
+                      Intro duration (days)
+                      <input
+                        type="number"
+                        defaultValue={tier.introDurationDays}
+                        onBlur={(e) => saveTier(tier, { introDurationDays: Number(e.target.value) })}
+                        className="vl-input mt-1 w-full px-2 py-1.5"
+                      />
+                    </label>
+                    <label className="text-xs text-zinc-400">
+                      Member discount (%)
+                      <input
+                        type="number"
+                        step="0.5"
+                        defaultValue={tier.memberDiscountPercent}
+                        onBlur={(e) => saveTier(tier, { memberDiscountPercent: Number(e.target.value) })}
+                        className="vl-input mt-1 w-full px-2 py-1.5"
+                      />
+                    </label>
+                  </div>
+                </div>
+              ) : null}
             </div>
           ))}
         </div>
@@ -416,6 +504,77 @@ export function AdminMembershipClient({
         </div>
         <button type="button" onClick={saveBonusSettings} className="vl-btn-primary vl-focus-ring mt-4 px-5 py-2.5 text-sm">
           Save bonus settings
+        </button>
+      </section>
+
+      <section className="vl-panel rounded-2xl p-5 sm:p-6">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-white">Exclusive Buy In Bulk Savings (Elite Tier)</h2>
+          <label className="flex items-center gap-2 text-xs text-zinc-300">
+            <input
+              type="checkbox"
+              checked={bulkSavingsConfig.enabled}
+              onChange={(e) => setBulkSavingsConfig((prev) => ({ ...prev, enabled: e.target.checked }))}
+            />
+            Program enabled
+          </label>
+        </div>
+
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Tier 1</p>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <label className="text-xs text-zinc-400">
+                Threshold ($)
+                <input
+                  type="number"
+                  value={bulkSavingsConfig.tier1Threshold}
+                  onChange={(e) => setBulkSavingsConfig((prev) => ({ ...prev, tier1Threshold: Number(e.target.value) }))}
+                  className="vl-input mt-1 w-full px-2 py-1.5"
+                />
+              </label>
+              <label className="text-xs text-zinc-400">
+                Discount (%)
+                <input
+                  type="number"
+                  step="0.5"
+                  value={bulkSavingsConfig.tier1Percent}
+                  onChange={(e) => setBulkSavingsConfig((prev) => ({ ...prev, tier1Percent: Number(e.target.value) }))}
+                  className="vl-input mt-1 w-full px-2 py-1.5"
+                />
+              </label>
+            </div>
+            <p className="mt-3 text-xs text-zinc-500">{bulkSavingsStats.tier5PercentOrders} orders · {money(bulkSavingsStats.tier5PercentRevenueCents)} revenue</p>
+          </div>
+          <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Tier 2</p>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <label className="text-xs text-zinc-400">
+                Threshold ($)
+                <input
+                  type="number"
+                  value={bulkSavingsConfig.tier2Threshold}
+                  onChange={(e) => setBulkSavingsConfig((prev) => ({ ...prev, tier2Threshold: Number(e.target.value) }))}
+                  className="vl-input mt-1 w-full px-2 py-1.5"
+                />
+              </label>
+              <label className="text-xs text-zinc-400">
+                Discount (%)
+                <input
+                  type="number"
+                  step="0.5"
+                  value={bulkSavingsConfig.tier2Percent}
+                  onChange={(e) => setBulkSavingsConfig((prev) => ({ ...prev, tier2Percent: Number(e.target.value) }))}
+                  className="vl-input mt-1 w-full px-2 py-1.5"
+                />
+              </label>
+            </div>
+            <p className="mt-3 text-xs text-zinc-500">{bulkSavingsStats.tier12PercentOrders} orders · {money(bulkSavingsStats.tier12PercentRevenueCents)} revenue</p>
+          </div>
+        </div>
+
+        <button type="button" onClick={saveBulkSavingsConfig} disabled={savingBulkSavings} className="vl-btn-primary vl-focus-ring mt-4 px-5 py-2.5 text-sm disabled:opacity-60">
+          {savingBulkSavings ? "Saving…" : "Save bulk savings settings"}
         </button>
       </section>
 

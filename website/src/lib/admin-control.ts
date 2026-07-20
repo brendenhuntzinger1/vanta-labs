@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 
 const CONTROL_ACTION = "admin_control_upsert";
 
@@ -106,6 +107,33 @@ export async function upsertControlValue(input: {
   if (error) {
     throw error;
   }
+}
+
+export async function getBulkSavingsControlConfig(): Promise<BulkSavingsConfig> {
+  try {
+    const snapshot = await getControlSnapshot("bulk_savings");
+    const config = snapshot.bulk_savings ?? {};
+    return {
+      enabled: config.enabled !== false,
+      tier1Threshold: Number(config.tier1_threshold ?? DEFAULT_BULK_SAVINGS_CONFIG.tier1Threshold),
+      tier1Percent: Number(config.tier1_percent ?? DEFAULT_BULK_SAVINGS_CONFIG.tier1Percent),
+      tier2Threshold: Number(config.tier2_threshold ?? DEFAULT_BULK_SAVINGS_CONFIG.tier2Threshold),
+      tier2Percent: Number(config.tier2_percent ?? DEFAULT_BULK_SAVINGS_CONFIG.tier2Percent),
+    };
+  } catch {
+    return DEFAULT_BULK_SAVINGS_CONFIG;
+  }
+}
+
+export async function setBulkSavingsControlValue(input: {
+  key: "enabled" | "tier1_threshold" | "tier1_percent" | "tier2_threshold" | "tier2_percent";
+  value: unknown;
+  actorUserId?: string | null;
+  actorUsername?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}) {
+  await upsertControlValue({ section: "bulk_savings", ...input });
 }
 
 export async function getHomepageControlConfig(): Promise<HomepageControlConfig> {

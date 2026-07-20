@@ -280,6 +280,283 @@ export function referralCodeAssignedTemplate(input: {
   };
 }
 
+// ---------------------------------------------------------------------
+// Membership billing lifecycle. Trial-confirmation/remainder/renewal
+// receipts and the payment-failed notice are transactional (billing
+// disclosures/receipts) - sent via sendEmail() directly, never suppressed.
+// Welcome/monthly-benefits/birthday/win-back are marketing - sent via
+// sendMarketingEmail() (src/lib/email/marketing.ts), which appends the
+// required unsubscribe footer automatically.
+// ---------------------------------------------------------------------
+
+export function membershipWelcomeTemplate(input: { name: string; tierName: string }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: `Welcome to ${input.tierName}`,
+    html: renderLayout({
+      preheader: `Welcome to ${input.tierName} at Vanta Labs.`,
+      title: `Welcome, ${name}`,
+      bodyHtml: `<p>You're now a <strong>${escapeHtml(input.tierName)}</strong> member. Faster point earning, member pricing, early access, and priority processing are active on your account starting now.</p>`,
+    }),
+    text: toText([`Welcome, ${input.name || "there"}.`, "", `You're now a ${input.tierName} member.`, "", "- Vanta Labs"]),
+  };
+}
+
+export function membershipTrialConfirmationTemplate(input: {
+  name: string;
+  tierName: string;
+  introChargeCents: number;
+  remainderCents: number;
+  remainderChargeDate: string;
+  monthlyPriceCents: number;
+}): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: `Your ${input.tierName} billing schedule`,
+    html: renderLayout({
+      preheader: "Your exact intro billing schedule.",
+      title: `${name}, here's your exact billing schedule`,
+      bodyHtml: `
+        <p>You were charged <strong>${money(input.introChargeCents / 100)}</strong> today for your 7-day introductory period of ${escapeHtml(input.tierName)}.</p>
+        <p>On <strong>${escapeHtml(input.remainderChargeDate)}</strong>, you'll be charged the remaining balance of your first month: <strong>${money(input.remainderCents / 100)}</strong>.</p>
+        <p>After that, your membership renews automatically at <strong>${money(input.monthlyPriceCents / 100)}/month</strong> until you cancel. You can cancel anytime from your account dashboard, before your next renewal date, and keep access through the end of the period you already paid for.</p>
+      `,
+    }),
+    text: toText([
+      `${input.name || "there"}, here's your exact billing schedule.`,
+      "",
+      `Today: charged ${money(input.introChargeCents / 100)} for your 7-day intro period.`,
+      `${input.remainderChargeDate}: remaining first-month balance of ${money(input.remainderCents / 100)} charged.`,
+      `Then: ${money(input.monthlyPriceCents / 100)}/month automatically until canceled.`,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
+export function membershipRemainderReminderTemplate(input: { name: string; remainderCents: number; chargeDate: string }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: "Your first-month balance is charged in 3 days",
+    html: renderLayout({
+      preheader: `${money(input.remainderCents / 100)} will be charged on ${input.chargeDate}.`,
+      title: `${name}, a reminder about your upcoming charge`,
+      bodyHtml: `<p>In 3 days (${escapeHtml(input.chargeDate)}), we'll charge the remaining balance of your first month's membership: <strong>${money(input.remainderCents / 100)}</strong>.</p><p>No action is needed - this completes the 7-day intro offer you signed up for.</p>`,
+    }),
+    text: toText([`${input.name || "there"}, a reminder about your upcoming charge.`, "", `${input.chargeDate}: ${money(input.remainderCents / 100)} will be charged.`, "", "- Vanta Labs"]),
+  };
+}
+
+export function membershipRemainderReceiptTemplate(input: { name: string; remainderCents: number; nextBillingDate: string; monthlyPriceCents: number }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: `Receipt: ${money(input.remainderCents / 100)} charged`,
+    html: renderLayout({
+      preheader: "Your first-month balance was charged successfully.",
+      title: `${name}, your payment was successful`,
+      bodyHtml: `<p>We charged <strong>${money(input.remainderCents / 100)}</strong> to complete your first month's membership.</p><p>Your next charge of <strong>${money(input.monthlyPriceCents / 100)}</strong> is scheduled for <strong>${escapeHtml(input.nextBillingDate)}</strong>.</p>`,
+    }),
+    text: toText([`${input.name || "there"}, your payment was successful.`, "", `Charged: ${money(input.remainderCents / 100)}`, `Next charge: ${money(input.monthlyPriceCents / 100)} on ${input.nextBillingDate}`, "", "- Vanta Labs"]),
+  };
+}
+
+export function membershipRenewalReminderTemplate(input: { name: string; monthlyPriceCents: number; chargeDate: string }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: "Your membership renews in 3 days",
+    html: renderLayout({
+      preheader: `${money(input.monthlyPriceCents / 100)} will be charged on ${input.chargeDate}.`,
+      title: `${name}, your renewal is coming up`,
+      bodyHtml: `<p>In 3 days (${escapeHtml(input.chargeDate)}), your membership renews at <strong>${money(input.monthlyPriceCents / 100)}</strong>.</p><p>Want to make a change? You can cancel anytime before your renewal date from your account dashboard.</p>`,
+    }),
+    text: toText([`${input.name || "there"}, your renewal is coming up.`, "", `${input.chargeDate}: ${money(input.monthlyPriceCents / 100)} will be charged.`, "", "- Vanta Labs"]),
+  };
+}
+
+export function membershipRenewalReceiptTemplate(input: { name: string; monthlyPriceCents: number; nextBillingDate: string }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: `Receipt: ${money(input.monthlyPriceCents / 100)} charged`,
+    html: renderLayout({
+      preheader: "Your membership renewal was successful.",
+      title: `${name}, your renewal was successful`,
+      bodyHtml: `<p>We charged <strong>${money(input.monthlyPriceCents / 100)}</strong> for this month's membership.</p><p>Your next renewal is scheduled for <strong>${escapeHtml(input.nextBillingDate)}</strong>.</p>`,
+    }),
+    text: toText([`${input.name || "there"}, your renewal was successful.`, "", `Charged: ${money(input.monthlyPriceCents / 100)}`, `Next renewal: ${input.nextBillingDate}`, "", "- Vanta Labs"]),
+  };
+}
+
+export function membershipPaymentFailedTemplate(input: { name: string; amountCents: number; updatePaymentUrl: string }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: "Action needed: your payment didn't go through",
+    html: renderLayout({
+      preheader: "Update your payment method to keep your membership active.",
+      title: `${name}, we couldn't process your payment`,
+      bodyHtml: `<p>We attempted to charge <strong>${money(input.amountCents / 100)}</strong> and it didn't go through. Update your payment method to keep your membership active.</p>`,
+      ctaLabel: "Update Payment Method",
+      ctaUrl: input.updatePaymentUrl,
+    }),
+    text: toText([`${input.name || "there"}, we couldn't process your payment.`, "", `Amount: ${money(input.amountCents / 100)}`, `Update your payment method: ${input.updatePaymentUrl}`, "", "- Vanta Labs"]),
+  };
+}
+
+export function membershipBenefitsMonthlyTemplate(input: { name: string; headline: string; bodyHtml: string; ctaLabel?: string; ctaUrl?: string }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: input.headline,
+    html: renderLayout({
+      preheader: input.headline,
+      title: `${name}, ${input.headline}`,
+      bodyHtml: input.bodyHtml,
+      ctaLabel: input.ctaLabel,
+      ctaUrl: input.ctaUrl,
+    }),
+    text: toText([`${input.name || "there"}, ${input.headline}`, "", input.ctaUrl ?? null, "", "- Vanta Labs"]),
+  };
+}
+
+export function membershipBirthdayTemplate(input: { name: string; bonusPoints: number }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: "Happy birthday from Vanta Labs",
+    html: renderLayout({
+      preheader: `A birthday gift of ${input.bonusPoints} points is in your account.`,
+      title: `Happy birthday, ${name}!`,
+      bodyHtml: `<p>We've added <strong>${input.bonusPoints} bonus points</strong> to your account as a birthday gift.</p>`,
+    }),
+    text: toText([`Happy birthday, ${input.name || "there"}!`, "", `${input.bonusPoints} bonus points have been added to your account.`, "", "- Vanta Labs"]),
+  };
+}
+
+export function membershipWinBackTemplate(input: { name: string; tierName: string; offerPercent: number; resubscribeUrl: string }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: "We'd love to have you back",
+    html: renderLayout({
+      preheader: `${input.offerPercent}% off if you rejoin ${input.tierName}.`,
+      title: `${name}, come back to ${escapeHtml(input.tierName)}`,
+      bodyHtml: `<p>Your membership was canceled. As a thank-you for being a member, here's <strong>${input.offerPercent}% off</strong> your first month if you rejoin.</p>`,
+      ctaLabel: "Rejoin",
+      ctaUrl: input.resubscribeUrl,
+    }),
+    text: toText([`${input.name || "there"}, come back to ${input.tierName}.`, "", `${input.offerPercent}% off your first month: ${input.resubscribeUrl}`, "", "- Vanta Labs"]),
+  };
+}
+
+export function newProductLaunchTemplate(input: { name: string; productName: string; productUrl: string }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: `Early access: ${input.productName}`,
+    html: renderLayout({
+      preheader: `${input.productName} is available to members before public launch.`,
+      title: `${name}, you have early access to ${escapeHtml(input.productName)}`,
+      bodyHtml: `<p>As a member, you can shop <strong>${escapeHtml(input.productName)}</strong> before it's available to the public.</p>`,
+      ctaLabel: "Shop Now",
+      ctaUrl: input.productUrl,
+    }),
+    text: toText([`${input.name || "there"}, you have early access to ${input.productName}.`, "", input.productUrl, "", "- Vanta Labs"]),
+  };
+}
+
+export function backInStockTemplate(input: { name: string; productName: string; productUrl: string }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: `Back in stock: ${input.productName}`,
+    html: renderLayout({
+      preheader: `${input.productName} is back in stock.`,
+      title: `${name}, ${escapeHtml(input.productName)} is back`,
+      bodyHtml: `<p><strong>${escapeHtml(input.productName)}</strong> is back in stock.</p>`,
+      ctaLabel: "Shop Now",
+      ctaUrl: input.productUrl,
+    }),
+    text: toText([`${input.name || "there"}, ${input.productName} is back in stock.`, "", input.productUrl, "", "- Vanta Labs"]),
+  };
+}
+
+// ---------------------------------------------------------------------
+// Abandoned cart recovery sequence. All marketing-class (sent via
+// sendMarketingEmail()).
+// ---------------------------------------------------------------------
+
+function cartItemsHtml(items: Array<{ name: string; quantity: number }>) {
+  return items.map((item) => `<tr><td style="padding:4px 0;color:#e4e4e7;">${escapeHtml(item.name)} × ${item.quantity}</td></tr>`).join("");
+}
+
+export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ name: string; quantity: number }>; cartValueCents: number; restoreUrl: string }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: "You left something behind",
+    html: renderLayout({
+      preheader: "Your cart is saved and waiting for you.",
+      title: `${name}, you left something behind`,
+      bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p>`,
+      ctaLabel: "Restore My Cart",
+      ctaUrl: input.restoreUrl,
+    }),
+    text: toText([`${input.name || "there"}, you left something behind.`, "", ...input.items.map((i) => `${i.name} x ${i.quantity}`), "", `Total: ${money(input.cartValueCents / 100)}`, input.restoreUrl, "", "- Vanta Labs"]),
+  };
+}
+
+export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ name: string; quantity: number }>; cartValueCents: number; restoreUrl: string }): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: "Your cart is still waiting for you",
+    html: renderLayout({
+      preheader: "Friendly reminder - your cart hasn't gone anywhere.",
+      title: `${name}, your cart is still here`,
+      bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p>`,
+      ctaLabel: "Resume Checkout",
+      ctaUrl: input.restoreUrl,
+    }),
+    text: toText([`${input.name || "there"}, your cart is still here.`, "", ...input.items.map((i) => `${i.name} x ${i.quantity}`), "", `Total: ${money(input.cartValueCents / 100)}`, input.restoreUrl, "", "- Vanta Labs"]),
+  };
+}
+
+export function cartRecoveryT24hTemplate(input: {
+  name: string;
+  items: Array<{ name: string; quantity: number }>;
+  cartValueCents: number;
+  restoreUrl: string;
+  couponCode: string;
+  expiresAt: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: "5% off - your cart is waiting",
+    html: renderLayout({
+      preheader: `Use code ${input.couponCode} for 5% off.`,
+      title: `${name}, here's 5% off to complete your order`,
+      bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p><p>Use code <strong>${escapeHtml(input.couponCode)}</strong> for 5% off - expires ${escapeHtml(input.expiresAt)}.</p>`,
+      ctaLabel: "Resume Checkout",
+      ctaUrl: input.restoreUrl,
+    }),
+    text: toText([`${input.name || "there"}, here's 5% off to complete your order.`, "", `Code: ${input.couponCode} (expires ${input.expiresAt})`, "", ...input.items.map((i) => `${i.name} x ${i.quantity}`), "", `Total: ${money(input.cartValueCents / 100)}`, input.restoreUrl, "", "- Vanta Labs"]),
+  };
+}
+
+export function cartRecoveryT72hTemplate(input: {
+  name: string;
+  items: Array<{ name: string; quantity: number }>;
+  cartValueCents: number;
+  restoreUrl: string;
+  couponCode: string;
+  expiresAt: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  return {
+    subject: "Last chance - your cart expires soon",
+    html: renderLayout({
+      preheader: `Use code ${input.couponCode} before it expires.`,
+      title: `${name}, last chance on your cart`,
+      bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p><p>Use code <strong>${escapeHtml(input.couponCode)}</strong> for 5% off - expires ${escapeHtml(input.expiresAt)}.</p>`,
+      ctaLabel: "Resume Checkout",
+      ctaUrl: input.restoreUrl,
+    }),
+    text: toText([`${input.name || "there"}, last chance on your cart.`, "", `Code: ${input.couponCode} (expires ${input.expiresAt})`, "", ...input.items.map((i) => `${i.name} x ${i.quantity}`), "", `Total: ${money(input.cartValueCents / 100)}`, input.restoreUrl, "", "- Vanta Labs"]),
+  };
+}
+
 export function contactFormNotificationTemplate(input: {
   firstName: string;
   lastName: string;

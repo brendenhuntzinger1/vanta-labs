@@ -15,6 +15,7 @@ import {
 import { getActiveCouponsForDisplay } from "@/lib/coupons";
 import { ReorderButton } from "@/components/reorder-button";
 import { ReferralLinkCopyButton } from "@/components/referral-link-copy-button";
+import { MembershipBillingPanel } from "@/components/membership-billing-panel";
 
 function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -74,6 +75,8 @@ export default async function AccountDashboardPage() {
             {membership.tier.slug === "free" ? "Upgrade membership" : "Manage membership"}
           </a>
         </div>
+
+        <MembershipBillingPanel membership={membership} />
 
         <div className="mt-5 grid gap-4 sm:grid-cols-3">
           <div className="vl-panel-soft rounded-xl p-4">
