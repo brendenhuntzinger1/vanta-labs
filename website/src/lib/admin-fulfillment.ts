@@ -73,6 +73,8 @@ export async function getFulfillmentRows(filters: FulfillmentFilters = {}): Prom
       { count: "exact" },
     )
     .eq("payment_status", "paid")
+    // Membership orders are digital — never shipped, so keep them out of the 3PL queue.
+    .neq("order_type", "membership")
     .order("paid_at", { ascending: true, nullsFirst: false });
 
   if (status === "queue") {

@@ -1,5 +1,6 @@
 import "server-only";
 
+import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getBillingProvider } from "@/lib/billing-provider";
 import { sendEmail } from "@/lib/email/send";
@@ -110,6 +111,113 @@ async function handleChargeFailure(input: { userId: string; tier: TierRow; amoun
     status: "failed",
     failureReason: input.error ?? null,
   });
+}
+
+function roundMoney(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+// Creates a one-time ORDER for an ANNUAL membership paid via a manual method
+// (Cash App / Zelle / PayPal). It flows through the same manual-payment panel
+// and admin Payment Verification dashboard as product orders; on approval,
+// finalizeManualPayment activates the membership. No card, no fee, non-refundable.
+export async function createAnnualMembershipManualOrder(input: {
+  userId: string;
+  tierId: string;
+  paymentMethod: string;
+}): Promise<{ orderId: string; orderNumber: string; amount: number }> {
+  const tier = await getTierById(input.tierId);
+  if (!tier) {
+    throw new Error("Membership tier not found");
+  }
+
+  const amount = roundMoney((tier.annual_price_cents ?? 0) / 100);
+  if (amount <= 0) {
+    throw new Error("This membership has no annual price set.");
+  }
+
+  const contact = await getAuthUserContact(input.userId);
+  if (!contact) {
+    throw new Error("Unable to load your account details.");
+  }
+
+  const orderId = `order-${randomUUID()}`;
+  const orderNumber = `VL-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+  const now = new Date().toISOString();
+
+  const { error } = await supabaseAdmin.from("orders").insert({
+    order_id: orderId,
+    order_number: orderNumber,
+    order_type: "membership",
+    membership_tier_id: tier.id,
+    membership_cycle: "annual",
+    payment_method: input.paymentMethod,
+    customer_email: contact.email,
+    customer_name: contact.name,
+    currency: "USD",
+    subtotal: amount,
+    shipping_amount: 0,
+    handling_fee: 0,
+    tax_amount: 0,
+    discount_amount: 0,
+    amount_paid: amount,
+    customer_user_id: input.userId,
+    payment_status: "pending_payment",
+    fulfillment_status: "pending",
+    created_at: now,
+    updated_at: now,
+  });
+  if (error) throw error;
+
+  await supabaseAdmin.from("order_items").insert({
+    order_id: orderId,
+    product_id: `membership:${tier.slug ?? tier.id}`,
+    product_name: `Annual Membership — ${tier.name}`,
+    unit_price: amount,
+    quantity: 1,
+    line_total: amount,
+  });
+
+  return { orderId, orderNumber, amount };
+}
+
+// Activates an annual membership after its manual payment is approved. It's a
+// one-year, non-refundable pass paid off-platform, so it does NOT auto-renew
+// (no card on file) — it simply lapses at the end of the paid year, and perks
+// are active for the whole term.
+export async function activateAnnualMembership(userId: string, tierId: string) {
+  const tier = await getTierById(tierId);
+  if (!tier) return;
+
+  const now = new Date();
+  const nextBillingAt = new Date(now.getTime() + 365 * ONE_DAY_MS);
+
+  await supabaseAdmin.from("customer_memberships").upsert({
+    user_id: userId,
+    tier_id: tier.id,
+    billing_cycle: "annual",
+    status: "active",
+    started_at: now.toISOString(),
+    renews_at: nextBillingAt.toISOString(),
+    intro_status: "not_applicable",
+    next_billing_at: nextBillingAt.toISOString(),
+    next_billing_amount_cents: 0,
+    cancel_at_period_end: true,
+    updated_at: now.toISOString(),
+  }, { onConflict: "user_id" });
+
+  await recordBillingEvent({ userId, tierId: tier.id, eventType: "renewal", amountCents: tier.annual_price_cents ?? 0, status: "succeeded" });
+
+  const contact = await getAuthUserContact(userId);
+  if (contact) {
+    await sendMarketingEmail({
+      to: contact.email,
+      campaignType: "membership_welcome",
+      referenceId: userId,
+      templateKey: "membershipWelcomeTemplate",
+      ...membershipWelcomeTemplate({ name: contact.name, tierName: tier.name }),
+    });
+  }
 }
 
 export interface StartMembershipSignupInput {

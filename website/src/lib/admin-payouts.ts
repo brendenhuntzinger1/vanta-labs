@@ -70,6 +70,8 @@ export async function getPayoutDashboard(): Promise<PayoutDashboard> {
       .from("orders")
       .select("order_id, order_number, customer_name, payment_method, amount_paid, shipping_amount, tax_amount, handling_fee, card_processing_fee, created_at, order_items(quantity)")
       .eq("payment_status", "paid")
+      // Memberships are digital — no 3PL payout, so exclude them from the P&L.
+      .neq("order_type", "membership")
       .order("created_at", { ascending: false })
       .limit(5000),
     supabaseAdmin.from("fulfillment_payouts").select("order_id, status"),

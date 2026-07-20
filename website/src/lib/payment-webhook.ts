@@ -10,6 +10,7 @@ import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/li
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
 import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
+import { activateAnnualMembership } from "@/lib/membership-billing";
 
 export interface WebhookEventState {
   eventId: string;
@@ -540,6 +541,10 @@ export async function finalizeManualPayment(
   const amountPaid = roundMoney(Number(order.amount_paid ?? 0));
   const commissionableSubtotal = roundMoney(Math.max(0, subtotal - discountAmount));
 
+  // Membership orders are digital — nothing ships, so they go straight to
+  // "fulfilled" and are never sent to the 3PL.
+  const isMembershipOrder = String(order.order_type ?? "product") === "membership";
+
   // Atomic claim: the update only succeeds if the status is still what we
   // read. If a concurrent approve (double-click / second admin) already
   // flipped it to paid, zero rows update and we no-op instead of double-
@@ -548,7 +553,7 @@ export async function finalizeManualPayment(
     .from("orders")
     .update({
       payment_status: "paid",
-      fulfillment_status: "awaiting_fulfillment",
+      fulfillment_status: isMembershipOrder ? "fulfilled" : "awaiting_fulfillment",
       paid_at: now,
       verified_at: now,
       verified_by: options.verifiedBy,
@@ -648,9 +653,20 @@ export async function finalizeManualPayment(
     }
   }
 
-  // Auto-transmit the paid + verified order to the 3PL (best-effort; never
-  // blocks approval).
-  await transmitOrderToFulfillment(orderId);
+  if (isMembershipOrder) {
+    // Turn on the membership + perks now that payment is verified.
+    try {
+      if (order.customer_user_id && order.membership_tier_id) {
+        await activateAnnualMembership(String(order.customer_user_id), String(order.membership_tier_id));
+      }
+    } catch (membershipError) {
+      console.error("Unable to activate membership for order", orderId, membershipError);
+    }
+  } else {
+    // Auto-transmit the paid + verified order to the 3PL (best-effort; never
+    // blocks approval).
+    await transmitOrderToFulfillment(orderId);
+  }
 
   return { orderId, alreadyPaid: false, status: "paid" };
 }

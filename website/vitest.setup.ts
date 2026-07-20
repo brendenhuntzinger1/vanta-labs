@@ -75,6 +75,11 @@ vi.mock("@/lib/admin-control", () => ({
   ]),
 }));
 
+vi.mock("@/lib/membership-billing", () => ({
+  activateAnnualMembership: async () => {},
+  createAnnualMembershipManualOrder: async () => ({ orderId: "order-x", orderNumber: "VL-TEST", amount: 0 }),
+}));
+
 vi.mock("@/lib/fulfillment/service", () => ({
   transmitOrderToFulfillment: async () => {},
   computePayoutOwed: () => 0,
