@@ -12,7 +12,34 @@ export async function validateReferralCodeClient(code: string) {
   });
 
   if (error) {
-    throw error;
+    const message = String(error.message ?? "").toLowerCase();
+    const isMissingRpc = error.code === "PGRST202" || message.includes("could not find the function") || message.includes("does not exist");
+
+    if (!isMissingRpc) {
+      throw error;
+    }
+
+    const { data: ambassador, error: fallbackError } = await supabase
+      .from("ambassadors")
+      .select("id, name, referral_code, commission_percent, status")
+      .eq("referral_code", normalizedCode)
+      .maybeSingle();
+
+    if (fallbackError) {
+      throw fallbackError;
+    }
+
+    if (!ambassador || String(ambassador.status ?? "").toLowerCase() !== "approved") {
+      return null;
+    }
+
+    return {
+      referralCode: String(ambassador.referral_code ?? normalizedCode).toUpperCase(),
+      ambassadorId: String(ambassador.id),
+      ambassadorName: String(ambassador.name ?? "Ambassador"),
+      commissionPercent: Number(ambassador.commission_percent ?? 0),
+      discountPercent: 10,
+    };
   }
 
   if (!data?.valid) {

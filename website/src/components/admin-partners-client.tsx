@@ -246,7 +246,16 @@ export function AdminPartnersClient({ initialRows }: { initialRows: AdminPartner
                       <button
                         type="button"
                         disabled={loading}
-                        onClick={() => applyPartnerAction(row.id, { action: "set_status", status: "approved" })}
+                        onClick={() => {
+                          const input = window.prompt("Set referral code (leave blank to keep current)", row.referralCode);
+                          if (input === null) return;
+                          const nextCode = input.trim();
+                          applyPartnerAction(row.id, {
+                            action: "set_status",
+                            status: "approved",
+                            referralCode: nextCode || row.referralCode,
+                          });
+                        }}
                         className="rounded border border-emerald-400/35 bg-emerald-500/10 px-2 py-1 text-xs text-emerald-200"
                       >Approve</button>
                       <button

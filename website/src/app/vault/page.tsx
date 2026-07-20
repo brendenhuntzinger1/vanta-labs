@@ -51,7 +51,7 @@ export default function VaultPage() {
         return;
       }
 
-      router.replace("/admin/products");
+      router.replace("/admin/partners");
     } catch {
       setStatus("Unable to sign in right now.");
     } finally {
@@ -88,7 +88,7 @@ export default function VaultPage() {
               <div className="flex gap-3">
                 <button
                   type="button"
-                  onClick={() => router.push("/admin/products")}
+                  onClick={() => router.push("/admin/partners")}
                   className="vl-btn-primary vl-focus-ring px-4 py-2 text-sm"
                 >
                   Open Admin

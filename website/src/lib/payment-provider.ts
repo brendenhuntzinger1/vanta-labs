@@ -1,3 +1,5 @@
+import { getSiteUrl } from "@/lib/env";
+
 export type PaymentProviderName = "live";
 
 export type PaymentStatus =
@@ -36,9 +38,11 @@ export interface PaymentWebhookEvent {
 
 export class LivePaymentProvider implements PaymentProvider {
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResult> {
+    const siteUrl = getSiteUrl();
+
     return {
       paymentId: input.orderId,
-      hostedCheckoutUrl: `${process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000"}/checkout?order=${input.orderId}`,
+      hostedCheckoutUrl: `${siteUrl}/checkout?order=${input.orderId}`,
     };
   }
 

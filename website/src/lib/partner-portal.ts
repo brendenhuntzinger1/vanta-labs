@@ -1,4 +1,5 @@
 import { randomUUID } from "crypto";
+import nodemailer from "nodemailer";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { generateReferralCode } from "@/lib/referral-code-utils";
 
@@ -116,6 +117,106 @@ export interface PartnerRecord {
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+function isMissingRelationError(error: unknown, relationName: string) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const maybeError = error as { code?: string; message?: string; details?: string; hint?: string };
+  const combined = [maybeError.message, maybeError.details, maybeError.hint]
+    .filter((value): value is string => Boolean(value))
+    .join(" ")
+    .toLowerCase();
+
+  return maybeError.code === "42P01" || maybeError.code === "PGRST205" || combined.includes(relationName.toLowerCase());
+}
+
+function parseBooleanEnv(value: string | undefined, fallback = false) {
+  if (!value) return fallback;
+  return value.toLowerCase() === "true";
+}
+
+async function enqueueNotification(kind: string, recipient: string, payload: Record<string, unknown>) {
+  const { data, error } = await supabaseAdmin
+    .from("notification_queue")
+    .insert({ kind, recipient, payload, status: "pending" })
+    .select("id")
+    .single();
+
+  if (error) {
+    if (isMissingRelationError(error, "notification_queue")) {
+      return undefined;
+    }
+    assertNoSupabaseError("notification_queue.insert(partner status update)", error);
+  }
+
+  return data?.id as string | undefined;
+}
+
+async function sendPartnerStatusEmail(input: {
+  to: string;
+  name: string;
+  status: "approved" | "rejected";
+  referralCode?: string;
+}) {
+  const host = process.env.SMTP_HOST;
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASSWORD;
+  const from = process.env.SMTP_FROM ?? "Vanta Labs <support@vantalabsresearch.com>";
+
+  if (!host || !user || !pass) {
+    return false;
+  }
+
+  const port = Number(process.env.SMTP_PORT ?? "587");
+  const secure = parseBooleanEnv(process.env.SMTP_SECURE, false);
+
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure,
+    auth: { user, pass },
+  });
+
+  const subject = input.status === "approved"
+    ? "Your Vanta Labs Ambassador Application Was Approved"
+    : "Update on Your Vanta Labs Ambassador Application";
+
+  const lines = input.status === "approved"
+    ? [
+      `Hi ${input.name},`,
+      "",
+      "Your ambassador application has been approved.",
+      `Referral code: ${input.referralCode ?? "(assigned in dashboard)"}`,
+      "",
+      "You can now log in to access your dashboard, referrals, commissions, and payouts.",
+      "",
+      "- Vanta Labs",
+    ]
+    : [
+      `Hi ${input.name},`,
+      "",
+      "Thank you for applying to the Vanta Labs ambassador program.",
+      "At this time, your application was not approved.",
+      "",
+      "You may reapply in the future as your audience or content evolves.",
+      "",
+      "- Vanta Labs",
+    ];
+
+  await transporter.sendMail({
+    from,
+    to: input.to,
+    subject,
+    text: lines.join("\n"),
+    html: lines
+      .map((line) => (line ? `<p>${line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p>` : "<br />"))
+      .join(""),
+  });
+
+  return true;
 }
 
 async function autoApproveEligibleCommissions() {
@@ -650,10 +751,39 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
   assertNoSupabaseError("orders.select(live sales today)", todayError);
   assertNoSupabaseError("orders.select(live sales month)", monthError);
   assertNoSupabaseError("orders.select(customer analytics)", paidError);
-  assertNoSupabaseError("inventory_items.select(ops summary)", inventoryError);
-  assertNoSupabaseError("order_shipments.select(ops summary)", shipmentError);
-  assertNoSupabaseError("coupons.select(ops summary)", couponError);
-  assertNoSupabaseError("notification_queue.select(ops summary)", notificationError);
+
+  let lowStockItems = 0;
+
+  if (!inventoryError) {
+    lowStockItems = (inventoryRows ?? []).filter((row) => Number(row.quantity_on_hand ?? 0) <= Number(row.reorder_level ?? 0)).length;
+  } else if (isMissingRelationError(inventoryError, "inventory_items")) {
+    const { data: productInventoryRows, error: productInventoryError } = await supabaseAdmin
+      .from("products")
+      .select("inventory_quantity, stock_status")
+      .eq("is_archived", false);
+
+    assertNoSupabaseError("products.select(ops summary inventory fallback)", productInventoryError);
+
+    lowStockItems = (productInventoryRows ?? []).filter((row) => {
+      const qty = Number(row.inventory_quantity ?? 0);
+      const status = String(row.stock_status ?? "").toLowerCase();
+      return qty <= 5 || status === "out of stock" || status === "limited";
+    }).length;
+  } else {
+    assertNoSupabaseError("inventory_items.select(ops summary)", inventoryError);
+  }
+
+  if (shipmentError && !isMissingRelationError(shipmentError, "order_shipments")) {
+    assertNoSupabaseError("order_shipments.select(ops summary)", shipmentError);
+  }
+
+  if (couponError && !isMissingRelationError(couponError, "coupons")) {
+    assertNoSupabaseError("coupons.select(ops summary)", couponError);
+  }
+
+  if (notificationError && !isMissingRelationError(notificationError, "notification_queue")) {
+    assertNoSupabaseError("notification_queue.select(ops summary)", notificationError);
+  }
 
   const liveSalesToday = roundMoney((todayOrders ?? []).reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0));
   const liveSalesMonth = roundMoney((monthOrders ?? []).reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0));
@@ -669,10 +799,9 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
   const returningCustomers = Array.from(customerOrderCount.values()).filter((count) => count > 1).length;
   const totalCustomers = customerOrderCount.size;
 
-  const lowStockItems = (inventoryRows ?? []).filter((row) => Number(row.quantity_on_hand ?? 0) <= Number(row.reorder_level ?? 0)).length;
-  const pendingShipments = (shipmentRows ?? []).length;
-  const activeCoupons = (couponRows ?? []).length;
-  const pendingNotifications = (notificationRows ?? []).length;
+  const pendingShipments = shipmentError ? 0 : (shipmentRows ?? []).length;
+  const activeCoupons = couponError ? 0 : (couponRows ?? []).length;
+  const pendingNotifications = notificationError ? 0 : (notificationRows ?? []).length;
 
   return {
     liveSalesToday,
@@ -773,10 +902,43 @@ export async function updatePartnerStatus(input: {
   status: "approved" | "disabled" | "pending" | "rejected";
   actorUserId?: string;
   commissionPercent?: number;
+  referralCode?: string;
   actorUsername?: string;
   ipAddress?: string | null;
   userAgent?: string | null;
 }) {
+  const { data: existingPartner, error: partnerLookupError } = await supabaseAdmin
+    .from("partners")
+    .select("id, name, email, referral_code")
+    .eq("id", input.partnerId)
+    .maybeSingle();
+
+  assertNoSupabaseError("partners.select(status update lookup)", partnerLookupError);
+
+  if (!existingPartner) {
+    throw new Error("Partner not found");
+  }
+
+  const normalizedReferralCode = input.referralCode
+    ?.trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9_-]/g, "");
+
+  if (normalizedReferralCode) {
+    const { data: conflictPartner, error: conflictError } = await supabaseAdmin
+      .from("partners")
+      .select("id")
+      .eq("referral_code", normalizedReferralCode)
+      .neq("id", input.partnerId)
+      .maybeSingle();
+
+    assertNoSupabaseError("partners.select(referral code conflict)", conflictError);
+
+    if (conflictPartner) {
+      throw new Error("Referral code is already in use");
+    }
+  }
+
   const updatePayload: Record<string, unknown> = {
     status: input.status,
     updated_at: new Date().toISOString(),
@@ -807,6 +969,10 @@ export async function updatePartnerStatus(input: {
     updatePayload.commission_percent = input.commissionPercent;
   }
 
+  if (normalizedReferralCode) {
+    updatePayload.referral_code = normalizedReferralCode;
+  }
+
   const [{ error: partnerUpdateError }, { error: ambassadorUpdateError }] = await Promise.all([
     supabaseAdmin.from("partners").update(updatePayload).eq("id", input.partnerId),
     supabaseAdmin.from("ambassadors").update(updatePayload).eq("id", input.partnerId),
@@ -814,6 +980,47 @@ export async function updatePartnerStatus(input: {
 
   assertNoSupabaseError("partners.update(status)", partnerUpdateError);
   assertNoSupabaseError("ambassadors.update(status mirror)", ambassadorUpdateError);
+
+  const finalReferralCode = normalizedReferralCode ?? existingPartner.referral_code;
+
+  if ((input.status === "approved" || input.status === "rejected") && existingPartner.email) {
+    const queueRowId = await enqueueNotification(
+      input.status === "approved" ? "partner_application_approved" : "partner_application_rejected",
+      existingPartner.email,
+      {
+        partnerId: input.partnerId,
+        name: existingPartner.name,
+        status: input.status,
+        referralCode: finalReferralCode,
+      },
+    );
+
+    try {
+      const emailSent = await sendPartnerStatusEmail({
+        to: existingPartner.email,
+        name: existingPartner.name,
+        status: input.status,
+        referralCode: finalReferralCode,
+      });
+
+      if (emailSent) {
+        if (!queueRowId) {
+          return;
+        }
+
+        const { error: queueUpdateError } = await supabaseAdmin
+          .from("notification_queue")
+          .update({ status: "sent", sent_at: new Date().toISOString() })
+          .eq("id", queueRowId);
+
+        if (queueUpdateError && !isMissingRelationError(queueUpdateError, "notification_queue")) {
+          assertNoSupabaseError("notification_queue.update(sent)", queueUpdateError);
+        }
+      }
+    } catch {
+      // Keep pending queue row for retry workflows.
+    }
+  }
 
   await supabaseAdmin.from("admin_audit_logs").insert({
     actor_user_id: input.actorUserId ?? null,
@@ -823,6 +1030,7 @@ export async function updatePartnerStatus(input: {
     metadata: {
       status: input.status,
       commissionPercent: input.commissionPercent ?? null,
+      referralCode: finalReferralCode,
       actorUsername: input.actorUsername ?? null,
       ipAddress: input.ipAddress ?? null,
       userAgent: input.userAgent ?? null,

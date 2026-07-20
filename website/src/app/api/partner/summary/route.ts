@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { getSiteUrl } from "@/lib/env";
 import { getApprovedPartnerByAuthUserId, getPartnerSummary } from "@/lib/partner-portal";
 
 export async function GET() {
@@ -20,7 +21,7 @@ export async function GET() {
       return NextResponse.json({ success: false, error: "Partner account not approved yet" }, { status: 403 });
     }
 
-    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? "http://localhost:3000";
+    const siteUrl = getSiteUrl();
     const summary = await getPartnerSummary(partner.id, siteUrl);
     return NextResponse.json({ success: true, summary });
   } catch (error) {

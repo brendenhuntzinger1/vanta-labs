@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { buildAuthCookieValue, buildExpiredAuthCookie } from "@/lib/auth-session";
+import { createPartnerApplication } from "@/lib/partner-portal";
 import { createServerClient } from "@/lib/supabase-server";
 
 export async function POST(request: Request) {
@@ -18,12 +19,25 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Invalid session token" }, { status: 401 });
     }
 
+    const role = String(data.user.app_metadata?.role ?? data.user.user_metadata?.role ?? "").toLowerCase();
+    if (role === "partner" && data.user.email) {
+      const fullName = typeof data.user.user_metadata?.full_name === "string"
+        ? data.user.user_metadata.full_name
+        : data.user.email.split("@")[0];
+
+      await createPartnerApplication({
+        authUserId: data.user.id,
+        email: data.user.email,
+        name: String(fullName || "Partner").trim(),
+      });
+    }
+
     const response = NextResponse.json({
       success: true,
       user: {
         id: data.user.id,
         email: data.user.email,
-        role: data.user.app_metadata?.role ?? data.user.user_metadata?.role ?? "unknown",
+        role,
       },
     });
 
