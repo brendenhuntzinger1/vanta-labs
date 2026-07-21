@@ -571,10 +571,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // Membership store credit auto-applies when the merchandise subtotal meets
   // the tier's redemption minimum. Mirrors payment-service.ts exactly.
   const storeCreditApplied = useMemo(() => {
+    if (referralDetails) return 0; // referral codes are exclusive of store credit
     if (storeCreditBalanceCents <= 0) return 0;
     if (Math.round(subtotal * 100) < storeCreditMinOrderCents) return 0;
     return Math.min(storeCreditBalanceCents / 100, totalBeforePoints);
-  }, [storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforePoints]);
+  }, [referralDetails, storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforePoints]);
 
   const totalAfterCredit = Math.max(0, totalBeforePoints - storeCreditApplied);
 

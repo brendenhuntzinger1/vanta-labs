@@ -57,13 +57,55 @@ export async function grantMonthlyStoreCredit(userId: string, amountCents: numbe
   return true;
 }
 
+// On a tier change, brings THIS month's net store-credit grant in line with
+// the new tier's monthly amount: tops up on an upgrade, claws back the unspent
+// portion on a downgrade (never below what's already been redeemed this month).
+export async function reconcileMonthlyStoreCredit(userId: string, newTierMonthlyCents: number): Promise<void> {
+  const monthStart = startOfCurrentMonthIso();
+  const { data, error } = await supabaseAdmin
+    .from("store_credit_ledger")
+    .select("amount_cents, reason")
+    .eq("user_id", userId)
+    .gte("created_at", monthStart);
+
+  if (error) {
+    if (String(error.code) === "42P01") return;
+    throw error;
+  }
+
+  const rows = data ?? [];
+  const grantedThisMonth = rows
+    .filter((r) => Number(r.amount_cents ?? 0) > 0 && (r.reason === "membership_monthly_grant" || r.reason === "membership_grant_adjustment"))
+    .reduce((sum, r) => sum + Number(r.amount_cents ?? 0), 0);
+  const balance = Math.max(0, rows.reduce((sum, r) => sum + Number(r.amount_cents ?? 0), 0));
+
+  let adjustment = Math.round(newTierMonthlyCents) - grantedThisMonth;
+  if (adjustment < 0) {
+    adjustment = Math.max(adjustment, -balance); // never claw back already-spent credit
+  }
+  if (adjustment === 0) return;
+
+  await supabaseAdmin.from("store_credit_ledger").insert({
+    user_id: userId,
+    amount_cents: adjustment,
+    reason: "membership_grant_adjustment",
+    created_at: new Date().toISOString(),
+  });
+}
+
 // Records a redemption (negative) against the buyer's account for an order.
+// Capped to the LIVE remaining balance at redemption time, so two concurrent
+// pending orders that each froze the same balance can never over-spend it.
 export async function redeemStoreCredit(userId: string, amountCents: number, orderId: string): Promise<void> {
   if (amountCents <= 0) return;
 
+  const liveBalance = await getStoreCreditBalanceCents(userId);
+  const toRedeem = Math.min(Math.abs(Math.round(amountCents)), liveBalance);
+  if (toRedeem <= 0) return;
+
   const { error } = await supabaseAdmin.from("store_credit_ledger").insert({
     user_id: userId,
-    amount_cents: -Math.abs(Math.round(amountCents)),
+    amount_cents: -toRedeem,
     reason: "membership_redemption",
     order_id: orderId,
     created_at: new Date().toISOString(),
@@ -79,7 +121,7 @@ export async function redeemStoreCredit(userId: string, amountCents: number, ord
 export async function refundStoreCreditForOrder(orderId: string): Promise<void> {
   const { data, error } = await supabaseAdmin
     .from("store_credit_ledger")
-    .select("user_id, amount_cents")
+    .select("user_id, amount_cents, created_at")
     .eq("order_id", orderId)
     .eq("reason", "membership_redemption");
 
@@ -88,9 +130,14 @@ export async function refundStoreCreditForOrder(orderId: string): Promise<void> 
     throw error;
   }
 
+  const monthStart = startOfCurrentMonthIso();
   for (const row of data ?? []) {
     const returned = Math.abs(Number(row.amount_cents ?? 0));
     if (returned <= 0) continue;
+    // Only re-credit if the credit was spent in the CURRENT month — credit
+    // spent in a prior month has already expired, so refunding it would hand
+    // back money that was no longer valid.
+    if (String(row.created_at ?? "") < monthStart) continue;
     await supabaseAdmin.from("store_credit_ledger").insert({
       user_id: String(row.user_id),
       amount_cents: returned,

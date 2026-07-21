@@ -358,7 +358,9 @@ export async function createCheckoutSession(
  // before points; the actual ledger deduction is recorded once the order is
  // paid (payment-webhook), and returned if the order is later refunded.
  let storeCreditRedeemedCents = 0;
- if (memberPerks.storeCreditBalanceCents > 0 && Math.round(subtotal * 100) >= memberPerks.storeCreditMinOrderCents) {
+ // Store credit, like points, never stacks with a referral code (referral is
+ // exclusive of every other discount).
+ if (!referral && memberPerks.storeCreditBalanceCents > 0 && Math.round(subtotal * 100) >= memberPerks.storeCreditMinOrderCents) {
  storeCreditRedeemedCents = Math.max(0, Math.min(memberPerks.storeCreditBalanceCents, Math.round(totalBeforePoints * 100)));
  }
  const storeCreditDiscount = roundMoney(storeCreditRedeemedCents / 100);

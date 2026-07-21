@@ -11,6 +11,6 @@ describe("detectRoleFromUser", () => {
   });
 
   it("returns unknown when role is missing", () => {
-    expect(detectRoleFromUser({ app_metadata: {}, user_metadata: {} })).toBe("unknown");
+    expect(detectRoleFromUser({ app_metadata: {}, user_metadata: {} })).toBe("customer");
   });
 });

@@ -185,19 +185,35 @@ export async function getMembershipPerks(userId: string): Promise<MembershipPerk
   const active = membership.status === "active" || membership.status === "trialing";
   const isActiveMember = active && membership.tier.slug !== "free";
 
-  const storeCreditBalanceCents = isActiveMember
-    ? await getStoreCreditBalanceCents(userId)
-    : 0;
+  const [storeCreditBalanceCents, freeTier] = await Promise.all([
+    isActiveMember ? getStoreCreditBalanceCents(userId) : Promise.resolve(0),
+    active ? Promise.resolve(null) : getFreeTier(),
+  ]);
 
   return {
     isActiveMember,
     tierSlug: membership.tier.slug,
     memberDiscountPercent: isActiveMember ? membership.tier.memberDiscountPercent : 0,
     freeShipping: isActiveMember && membership.tier.freeShipping,
-    pointsPerDollar: membership.tier.pointsPerDollar,
+    // Points rate only comes from the member's tier while their plan is active
+    // or trialing; a cancelled/past-due member drops back to the free-tier rate.
+    pointsPerDollar: active ? membership.tier.pointsPerDollar : (freeTier?.pointsPerDollar ?? 1),
     storeCreditBalanceCents,
     storeCreditMinOrderCents: isActiveMember ? membership.tier.storeCreditMinOrderCents : 0,
   };
+}
+
+// The points-per-dollar rate to actually award on an order, gated on an active
+// (or trialing) membership. A lapsed member earns the free-tier rate, never
+// their old paid rate.
+export async function getActivePointsPerDollar(userId: string): Promise<number> {
+  const membership = await getCustomerMembership(userId);
+  const active = membership.status === "active" || membership.status === "trialing";
+  if (active) {
+    return membership.tier.pointsPerDollar;
+  }
+  const free = await getFreeTier();
+  return free?.pointsPerDollar ?? 1;
 }
 
 export async function getCustomerMembership(userId: string): Promise<CustomerMembership> {

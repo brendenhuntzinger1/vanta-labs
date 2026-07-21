@@ -6,7 +6,7 @@ import { sendEmail } from "@/lib/email/send";
 import { commissionEarnedTemplate, orderConfirmationTemplate } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
 import { redeemCoupon } from "@/lib/coupons";
-import { calculateEarnedPoints, getActivePointsMultiplier, getCustomerMembership, recordPointsLedgerEntry, reverseOrderPoints } from "@/lib/membership";
+import { calculateEarnedPoints, getActivePointsMultiplier, getActivePointsPerDollar, recordPointsLedgerEntry, reverseOrderPoints } from "@/lib/membership";
 import { redeemStoreCredit, refundStoreCreditForOrder } from "@/lib/store-credit";
 import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
@@ -696,9 +696,9 @@ export async function finalizeManualPayment(
         await redeemStoreCredit(customerUserId, storeCreditRedeemedCents, orderId);
       }
 
-      const membership = await getCustomerMembership(customerUserId);
+      const pointsRate = await getActivePointsPerDollar(customerUserId);
       const { multiplier } = await getActivePointsMultiplier();
-      const pointsEarned = calculateEarnedPoints(commissionableSubtotal, membership.tier.pointsPerDollar, multiplier);
+      const pointsEarned = calculateEarnedPoints(commissionableSubtotal, pointsRate, multiplier);
 
       if (pointsEarned > 0) {
         await recordPointsLedgerEntry({ userId: customerUserId, amount: pointsEarned, reason: "order_earn", orderId });
@@ -870,9 +870,9 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           await redeemStoreCredit(customerUserId, storeCreditRedeemedCents, orderId);
         }
 
-        const membership = await getCustomerMembership(customerUserId);
+        const pointsRate = await getActivePointsPerDollar(customerUserId);
         const { multiplier } = await getActivePointsMultiplier();
-        const pointsEarned = calculateEarnedPoints(commissionableSubtotal, membership.tier.pointsPerDollar, multiplier);
+        const pointsEarned = calculateEarnedPoints(commissionableSubtotal, pointsRate, multiplier);
 
         if (pointsEarned > 0) {
           await recordPointsLedgerEntry({

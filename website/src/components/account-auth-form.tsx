@@ -62,8 +62,11 @@ export function AccountAuthForm() {
         return;
       }
 
+      // Complete the session for any shopper — admins/partners have their own
+      // portals, but a role-less or phone-OTP account is a customer and must
+      // finish signing in (mirrors detectRoleFromUser's default-to-customer).
       const role = String(user.app_metadata?.role ?? user.user_metadata?.role ?? "").toLowerCase();
-      if (role !== "customer") {
+      if (role === "admin" || role === "partner" || role === "ambassador") {
         return;
       }
 

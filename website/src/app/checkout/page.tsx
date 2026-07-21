@@ -181,10 +181,11 @@ export default function CheckoutPage() {
   // Membership store credit auto-applies when the merchandise subtotal meets
   // the tier's redemption minimum (mirrors payment-service.ts).
   const storeCreditApplied = useMemo(() => {
+    if (referralDetails) return 0; // referral codes are exclusive of store credit
     if (storeCreditBalanceCents <= 0) return 0;
     if (Math.round(subtotal * 100) < storeCreditMinOrderCents) return 0;
     return Math.min(storeCreditBalanceCents / 100, totalBeforeCredit);
-  }, [storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforeCredit]);
+  }, [referralDetails, storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforeCredit]);
   const totalBeforePoints = Math.max(0, totalBeforeCredit - storeCreditApplied);
   const pointsRedeemedDiscount = useMemo(
     () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints)),

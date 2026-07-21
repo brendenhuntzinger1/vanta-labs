@@ -3,7 +3,7 @@ import "server-only";
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getBillingProvider } from "@/lib/billing-provider";
-import { grantMonthlyStoreCredit } from "@/lib/store-credit";
+import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { getSiteUrl } from "@/lib/env";
@@ -29,12 +29,13 @@ interface TierRow {
   intro_price_cents: number;
   intro_duration_days: number;
   intro_offer_enabled: boolean;
+  monthly_store_credit_cents?: number;
 }
 
 async function getTierById(tierId: string): Promise<TierRow | null> {
   const { data, error } = await supabaseAdmin
     .from("membership_tiers")
-    .select("id, slug, name, monthly_price_cents, annual_price_cents, intro_price_cents, intro_duration_days, intro_offer_enabled")
+    .select("id, slug, name, monthly_price_cents, annual_price_cents, intro_price_cents, intro_duration_days, intro_offer_enabled, monthly_store_credit_cents")
     .eq("id", tierId)
     .maybeSingle();
 
@@ -237,6 +238,39 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
   const now = new Date();
   const billingProvider = getBillingProvider();
 
+  // UPGRADE / DOWNGRADE, not a fresh signup: if the user already holds an
+  // active or trialing paid membership, switch the tier IN PLACE. This never
+  // re-runs the $1 intro charge, never overwrites a paid (e.g. annual) term,
+  // and never re-sends welcome/trial emails — it just changes perks and
+  // reconciles this month's store credit to the new tier.
+  const { data: existingMembership } = await supabaseAdmin
+    .from("customer_memberships")
+    .select("user_id, tier_id, status")
+    .eq("user_id", input.userId)
+    .maybeSingle();
+
+  if (
+    existingMembership &&
+    (existingMembership.status === "active" || existingMembership.status === "trialing") &&
+    existingMembership.tier_id !== tier.id
+  ) {
+    await supabaseAdmin
+      .from("customer_memberships")
+      .update({ tier_id: tier.id, updated_at: now.toISOString() })
+      .eq("user_id", input.userId);
+
+    await recordBillingEvent({ userId: input.userId, tierId: tier.id, eventType: "tier_change", amountCents: 0, status: "succeeded" });
+    await reconcileMonthlyStoreCredit(input.userId, tier.monthly_store_credit_cents ?? 0).catch(() => {});
+
+    return { success: true, changed: true };
+  }
+
+  if (existingMembership && (existingMembership.status === "active" || existingMembership.status === "trialing")) {
+    // Same tier, already active/trialing — no-op (prevents duplicate intro
+    // charges and duplicate welcome/trial emails on a double-submit).
+    return { success: true, changed: false };
+  }
+
   if (input.billingCycle === "annual" || !tier.intro_offer_enabled) {
     // No intro flow: annual signup, or a tier with the intro offer turned
     // off - charge the full period amount immediately, same honesty rule
@@ -430,10 +464,13 @@ export interface MembershipBillingSweepResult {
 // to run on every cron tick — a member only ever gets one grant per month, and
 // it stops the instant their membership is no longer active/trialing.
 export async function grantMonthlyStoreCreditSweep(): Promise<{ granted: number }> {
+  // Only fully-active (paid) members receive store credit — NOT $1 trial
+  // members (mirrors the bulk-savings rule), so a $1 trial can't immediately
+  // pull $75 of credit.
   const { data, error } = await supabaseAdmin
     .from("customer_memberships")
     .select("user_id, status, membership_tiers(slug, monthly_store_credit_cents)")
-    .in("status", ["active", "trialing"]);
+    .eq("status", "active");
 
   if (error) {
     if (String(error.code) === "42P01") return { granted: 0 };

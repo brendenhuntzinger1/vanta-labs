@@ -13,9 +13,12 @@ export function detectRoleFromUser(user: { app_metadata?: Record<string, unknown
     return "partner";
   }
 
-  if (role === "customer") {
-    return "customer";
-  }
-
-  return "unknown";
+  // Any authenticated user who is not an explicit admin or partner is treated
+  // as a customer. This is deliberate: accounts created outside the signup
+  // form (legacy, admin/SQL-created, phone-OTP logins) have no role string,
+  // and must still reach their account instead of being bounced into an
+  // infinite sign-in loop. The admin/partner portals gate on the explicit
+  // "admin"/"partner" strings above, so this default never grants elevated
+  // access.
+  return "customer";
 }
