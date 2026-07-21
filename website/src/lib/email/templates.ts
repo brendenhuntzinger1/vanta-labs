@@ -658,6 +658,45 @@ export function membershipRenewalReceiptTemplate(input: { name: string; monthlyP
   };
 }
 
+// Transactional receipt for the initial full-period charge on signup (annual
+// pass, or a monthly tier with no $1 intro). Always sent (never suppressible)
+// so the customer has a record of exactly what they paid.
+export function membershipSignupReceiptTemplate(input: {
+  name: string;
+  tierName: string;
+  amountCents: number;
+  billingCycle: "monthly" | "annual";
+  nextBillingDate: string;
+  autoRenews: boolean;
+}): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  const cycleLabel = input.billingCycle === "annual" ? "annual" : "monthly";
+  const renewLine = input.autoRenews
+    ? `<p>Your membership renews on <strong>${escapeHtml(input.nextBillingDate)}</strong>.</p>`
+    : `<p>This is a one-time ${cycleLabel} pass — it does <strong>not</strong> auto-renew. Your access runs through <strong>${escapeHtml(input.nextBillingDate)}</strong>.</p>`;
+  const renewTextLine = input.autoRenews
+    ? `Renews: ${input.nextBillingDate}`
+    : `One-time ${cycleLabel} pass (no auto-renew). Access through: ${input.nextBillingDate}`;
+  return {
+    subject: `Receipt: ${money(input.amountCents / 100)} — ${input.tierName} membership`,
+    html: renderLayout({
+      preheader: `Your ${input.tierName} membership is active.`,
+      title: `${name}, welcome to ${escapeHtml(input.tierName)}`,
+      bodyHtml: `<p>We charged <strong>${money(input.amountCents / 100)}</strong> for your ${escapeHtml(cycleLabel)} <strong>${escapeHtml(input.tierName)}</strong> membership.</p>${renewLine}<p style="margin:14px 0 0;font-size:12px;color:#a1a1aa;">Your member perks are active now and tied to your account.</p>`,
+    }),
+    text: toText([
+      `${input.name || "there"}, welcome to ${input.tierName}.`,
+      "",
+      `Charged: ${money(input.amountCents / 100)} (${cycleLabel} ${input.tierName} membership)`,
+      renewTextLine,
+      "",
+      "Your member perks are active now and tied to your account.",
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 export function membershipPaymentFailedTemplate(input: { name: string; amountCents: number; updatePaymentUrl: string }): EmailTemplate {
   const name = escapeHtml(input.name || "there");
   return {
@@ -849,5 +888,50 @@ export function contactFormNotificationTemplate(input: {
     subject: `Vanta Labs Contact Form - ${input.subject}`,
     html: lines.map((line) => (line ? `<p>${escapeHtml(line)}</p>` : "<br />")).join(""),
     text: lines.join("\n"),
+  };
+}
+
+// Sent to the customer who submitted the contact form, confirming we received
+// their message. Transactional (a direct reply to their own action), so it is
+// sent via sendEmail() and is not suppressible.
+export function contactFormAutoReplyTemplate(input: {
+  firstName: string;
+  subject: string;
+  message: string;
+}): EmailTemplate {
+  const firstName = escapeHtml(input.firstName || "there");
+  const subject = escapeHtml(input.subject);
+  const quoted = escapeHtml(input.message).replace(/\n/g, "<br />");
+
+  const bodyHtml = `
+    <p style="margin:0 0 14px;">Hi ${firstName},</p>
+    <p style="margin:0 0 14px;">Thanks for reaching out to Vanta Labs — we've received your message and a member of our team will get back to you within 1–2 business days.</p>
+    <p style="margin:0 0 6px;font-size:12px;color:#a1a1aa;">Your message:</p>
+    <div style="margin:0 0 14px;padding:12px 14px;border-left:2px solid rgba(255,255,255,0.2);color:#d4d4d4;font-size:13px;">
+      <strong>${subject}</strong><br />${quoted}
+    </div>
+    <p style="margin:0;font-size:13px;color:#a1a1aa;">If you need to add anything, just reply to this email.</p>
+  `;
+
+  return {
+    subject: `We received your message — Vanta Labs`,
+    html: renderLayout({
+      preheader: "Thanks for contacting Vanta Labs. We'll be in touch within 1–2 business days.",
+      title: "We got your message",
+      bodyHtml,
+    }),
+    text: toText([
+      `Hi ${input.firstName || "there"},`,
+      "",
+      "Thanks for reaching out to Vanta Labs — we've received your message and will get back to you within 1–2 business days.",
+      "",
+      "Your message:",
+      input.subject,
+      input.message,
+      "",
+      "If you need to add anything, just reply to this email.",
+      "",
+      "Vanta Labs · Research Use Only",
+    ]),
   };
 }

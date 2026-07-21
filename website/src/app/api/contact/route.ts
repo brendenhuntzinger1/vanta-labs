@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { sendEmail } from "@/lib/email/send";
-import { contactFormNotificationTemplate } from "@/lib/email/templates";
+import { contactFormNotificationTemplate, contactFormAutoReplyTemplate } from "@/lib/email/templates";
 import { getBusinessSettings } from "@/lib/admin-control";
 
 const SUBMISSION_WINDOW_MS = 3000;
@@ -104,6 +104,15 @@ export async function POST(request: Request) {
         { success: false, error: result.error ?? "Email delivery is not configured." },
         { status: 500 },
       );
+    }
+
+    // Best-effort confirmation to the customer. A failure here must not fail
+    // the submission — the team already received the message above.
+    try {
+      const autoReply = contactFormAutoReplyTemplate({ firstName, subject, message });
+      await sendEmail({ to: email, replyTo: supportEmail, ...autoReply });
+    } catch {
+      // Non-fatal.
     }
 
     return NextResponse.json({ success: true });

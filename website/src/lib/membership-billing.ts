@@ -9,6 +9,7 @@ import { sendMarketingEmail } from "@/lib/email/marketing";
 import { getSiteUrl } from "@/lib/env";
 import {
   membershipWelcomeTemplate,
+  membershipSignupReceiptTemplate,
   membershipTrialConfirmationTemplate,
   membershipRemainderReminderTemplate,
   membershipRemainderReceiptTemplate,
@@ -219,6 +220,19 @@ export async function activateAnnualMembership(userId: string, tierId: string) {
       templateKey: "membershipWelcomeTemplate",
       ...membershipWelcomeTemplate({ name: contact.name, tierName: tier.name }),
     });
+
+    // Transactional receipt for the real charge (always sent).
+    await sendEmail({
+      to: contact.email,
+      ...membershipSignupReceiptTemplate({
+        name: contact.name,
+        tierName: tier.name,
+        amountCents: tier.annual_price_cents ?? 0,
+        billingCycle: "annual",
+        nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+        autoRenews: false,
+      }),
+    });
   }
 }
 
@@ -310,6 +324,20 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
           referenceId: input.userId,
           templateKey: "membershipWelcomeTemplate",
           ...membershipWelcomeTemplate({ name: contact.name, tierName: tier.name }),
+        });
+
+        // Transactional receipt for the real charge (always sent). Annual is a
+        // one-year non-renewing pass; non-intro monthly auto-renews.
+        await sendEmail({
+          to: contact.email,
+          ...membershipSignupReceiptTemplate({
+            name: contact.name,
+            tierName: tier.name,
+            amountCents,
+            billingCycle: input.billingCycle,
+            nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+            autoRenews: input.billingCycle === "monthly",
+          }),
         });
       }
     } else {
