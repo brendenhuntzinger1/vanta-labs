@@ -369,18 +369,18 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
               {authMode === "signup" ? (
                 <label className="mt-5 block text-sm text-white/50">
                   <span className="mb-2 block">Full name</span>
-                  <input value={fullName} onChange={(event) => setFullName(event.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
+                  <input value={fullName} onChange={(event) => setFullName(event.target.value)} autoComplete="name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
                 </label>
               ) : null}
 
               <label className="mt-4 block text-sm text-white/50">
                 <span className="mb-2 block">Email</span>
-                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
+                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
               </label>
 
               <label className="mt-4 block text-sm text-white/50">
                 <span className="mb-2 block">Password</span>
-                <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
+                <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={authMode === "signup" ? "new-password" : "current-password"} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
               </label>
 
               <button
