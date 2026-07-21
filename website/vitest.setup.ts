@@ -68,6 +68,13 @@ vi.mock("@/lib/admin-control", () => ({
     tier2Percent: 12,
   }),
   getTaxRatePercent: async () => 0,
+  getShippingConfig: async () => ({
+    domesticFee: 15,
+    freeShippingThreshold: 250,
+    internationalFee: 60,
+    internationalFreeShippingThreshold: 600,
+    handlingFeeRate: 0.05,
+  }),
   getCardProcessingFeeConfig: async () => ({ enabled: true, percentage: 5, label: "Card Processing Fee", noticeText: "" }),
   getPaymentMethodsConfig: async () => ([
     { id: "card", label: "Credit / Debit Card", kind: "card", enabled: true, order: 100, icon: "", recommended: false, badges: [], instructions: [] },

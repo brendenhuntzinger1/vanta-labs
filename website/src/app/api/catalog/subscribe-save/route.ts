@@ -24,13 +24,20 @@ export async function POST(request: Request) {
     }
 
     const body = (await request.json()) as { productSlug?: string; variantId?: string; email?: string };
-    const productSlug = String(body.productSlug ?? "").trim();
-    const email = String(body.email ?? "").trim().toLowerCase();
+    const productSlug = String(body.productSlug ?? "").trim().slice(0, 100);
+    const variantId = body.variantId ? String(body.variantId).slice(0, 100) : null;
+    const email = String(body.email ?? "").trim().toLowerCase().slice(0, 200);
     if (!productSlug) {
       return NextResponse.json({ success: false, error: "Missing product." }, { status: 400 });
     }
     if (!email || !email.includes("@")) {
       return NextResponse.json({ success: false, error: "Enter a valid email." }, { status: 400 });
+    }
+
+    // Only allow real products (blocks arbitrary-slug DB bloat).
+    const { data: exists } = await supabaseAdmin.from("products").select("slug").eq("slug", productSlug).maybeSingle();
+    if (!exists) {
+      return NextResponse.json({ success: false, error: "Unknown product." }, { status: 400 });
     }
 
     const user = await getAuthenticatedUser();
@@ -39,7 +46,7 @@ export async function POST(request: Request) {
       user_id: user?.id ?? null,
       email,
       product_slug: productSlug,
-      variant_id: body.variantId ?? null,
+      variant_id: variantId,
       frequency_days: config.frequencyDays,
       discount_percent: config.discountPercent,
       status: "pending",

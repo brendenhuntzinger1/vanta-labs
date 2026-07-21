@@ -218,12 +218,17 @@ export interface InboundFulfillmentEvent {
 
 async function findFulfillmentOrder(event: InboundFulfillmentEvent) {
   if (event.orderRef) {
-    const { data } = await supabaseAdmin
-      .from("fulfillment_orders")
-      .select("order_id")
-      .or(`order_id.eq.${event.orderRef},order_number.eq.${event.orderRef}`)
-      .maybeSingle();
-    if (data?.order_id) return String(data.order_id);
+    // Sanitize before interpolating into PostgREST's .or() so a crafted
+    // webhook value can't break out of the filter.
+    const ref = String(event.orderRef).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 100);
+    if (ref) {
+      const { data } = await supabaseAdmin
+        .from("fulfillment_orders")
+        .select("order_id")
+        .or(`order_id.eq.${ref},order_number.eq.${ref}`)
+        .maybeSingle();
+      if (data?.order_id) return String(data.order_id);
+    }
   }
   if (event.externalId) {
     const { data } = await supabaseAdmin

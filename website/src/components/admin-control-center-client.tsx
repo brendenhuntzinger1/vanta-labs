@@ -42,8 +42,6 @@ export function AdminControlCenterClient() {
 
   const [shippingFlatRate, setShippingFlatRate] = useState("");
   const [shippingFreeThreshold, setShippingFreeThreshold] = useState("");
-  const [shippingZones, setShippingZones] = useState("");
-  const [shippingDeliveryEstimate, setShippingDeliveryEstimate] = useState("");
   const [shippingTaxRate, setShippingTaxRate] = useState("");
   const [shippingServiceFee, setShippingServiceFee] = useState("");
 
@@ -93,8 +91,6 @@ export function AdminControlCenterClient() {
     const shipping = next.shipping ?? {};
     setShippingFlatRate(String(shipping.flat_rate ?? ""));
     setShippingFreeThreshold(String(shipping.free_shipping_threshold ?? ""));
-    setShippingZones(Array.isArray(shipping.zones) ? (shipping.zones as string[]).join(", ") : "");
-    setShippingDeliveryEstimate(String(shipping.delivery_estimate ?? ""));
     setShippingTaxRate(String(shipping.tax_rate ?? ""));
     setShippingServiceFee(String(shipping.service_fee ?? ""));
 
@@ -172,8 +168,6 @@ export function AdminControlCenterClient() {
 
       { section: "shipping", key: "flat_rate", value: shippingFlatRate },
       { section: "shipping", key: "free_shipping_threshold", value: shippingFreeThreshold },
-      { section: "shipping", key: "zones", value: parseCsv(shippingZones) },
-      { section: "shipping", key: "delivery_estimate", value: shippingDeliveryEstimate },
       { section: "shipping", key: "tax_rate", value: shippingTaxRate },
       { section: "shipping", key: "service_fee", value: shippingServiceFee },
 
@@ -314,13 +308,12 @@ export function AdminControlCenterClient() {
 
           <section className="vl-panel-soft rounded-2xl p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">{SECTION_LABELS.shipping}</h3>
+            <p className="mt-2 text-xs text-zinc-400">These apply live at checkout. Leave a field blank to keep the default (domestic flat rate $15, free over $250, 5% service fee, 0% tax).</p>
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-              <label className="text-zinc-300">Flat rate<input value={shippingFlatRate} onChange={(e) => setShippingFlatRate(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Free shipping threshold<input value={shippingFreeThreshold} onChange={(e) => setShippingFreeThreshold(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300 sm:col-span-2">Shipping zones (comma-separated)<input value={shippingZones} onChange={(e) => setShippingZones(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Delivery estimate<input value={shippingDeliveryEstimate} onChange={(e) => setShippingDeliveryEstimate(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Tax rate<input value={shippingTaxRate} onChange={(e) => setShippingTaxRate(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Service fee<input value={shippingServiceFee} onChange={(e) => setShippingServiceFee(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Domestic flat rate ($)<input value={shippingFlatRate} onChange={(e) => setShippingFlatRate(e.target.value)} placeholder="15" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Free shipping over ($)<input value={shippingFreeThreshold} onChange={(e) => setShippingFreeThreshold(e.target.value)} placeholder="250" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Sales tax rate (%)<input value={shippingTaxRate} onChange={(e) => setShippingTaxRate(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Service fee (%)<input value={shippingServiceFee} onChange={(e) => setShippingServiceFee(e.target.value)} placeholder="5" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
           </section>
 

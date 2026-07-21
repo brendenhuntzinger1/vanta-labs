@@ -140,7 +140,6 @@ export function ProductDetailClient({
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
   const [selectedDoseId, setSelectedDoseId] = useState<string | null>(defaultDose?.id ?? null);
   const [quantity, setQuantity] = useState(1);
-  const [subscribeSelected, setSubscribeSelected] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabKey>("description");
 
@@ -463,19 +462,6 @@ export function ProductDetailClient({
                   </div>
                 ) : null}
               </div>
-
-              <label className="mt-5 flex items-start gap-3 border border-zinc-200 bg-zinc-50 p-3.5 text-sm text-zinc-600">
-                <input
-                  type="checkbox"
-                  checked={subscribeSelected}
-                  onChange={(event) => setSubscribeSelected(event.target.checked)}
-                  className="mt-0.5 h-4 w-4 rounded border-zinc-300 bg-white"
-                />
-                <span>
-                  <span className="block font-medium text-[#111]">Subscribe &amp; Save</span>
-                  <span className="mt-0.5 block text-xs text-zinc-400">Recurring orders aren&apos;t live yet — this places a one-time order for now.</span>
-                </span>
-              </label>
 
               <div className="mt-5 flex gap-2">
                 <button

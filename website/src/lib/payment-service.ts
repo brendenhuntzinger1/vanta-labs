@@ -10,7 +10,7 @@ import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee, calculateTax } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { resolveBestDiscount } from "@/lib/discount-resolution";
-import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent } from "@/lib/admin-control";
+import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent, getShippingConfig } from "@/lib/admin-control";
 import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -253,21 +253,22 @@ export async function createCheckoutSession(
  ),
  );
 
- const handlingFee = calculateHandlingFee(subtotal);
- const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent] = await Promise.all([
+ const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent, shippingConfig] = await Promise.all([
    getHomepageControlConfig(),
    getBulkSavingsControlConfig(),
    payload.customerUserId ? isEligibleForBulkSavings(payload.customerUserId) : Promise.resolve(false),
    payload.customerUserId ? isPriorityMember(payload.customerUserId) : Promise.resolve(false),
    getTaxRatePercent(),
+   getShippingConfig(),
  ]);
+ const handlingFee = calculateHandlingFee(subtotal, shippingConfig);
  const bulkSavingsResult = calculateBulkSavingsDiscount(subtotal, bulkSavingsEligible, bulkSavingsConfig);
  // Free shipping is a distinct perk of reaching the bulk-savings threshold,
  // not conditioned on bulk savings winning the "greatest discount" contest
  // below - see membership-billing.sql / bulk-savings.ts.
  const shipping = bulkSavingsResult.tier
    ? 0
-   : roundMoney(calculateShipping(subtotal, payload.customer.country));
+   : roundMoney(calculateShipping(subtotal, payload.customer.country, shippingConfig));
  const buy3Get1Discount = promoBuy3Get1Enabled ? calculateBuy3Get1Discount(lineItems) : 0;
  const isBuy3Get1Active = buy3Get1Discount > 0;
 

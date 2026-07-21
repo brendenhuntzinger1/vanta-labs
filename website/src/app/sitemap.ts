@@ -1,6 +1,7 @@
 import type { MetadataRoute } from "next";
 import { getCatalogProducts } from "@/lib/catalog";
 import { ARTICLE_SLUGS } from "@/lib/articles";
+import { POLICY_SLUGS } from "@/lib/legal-content";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +24,12 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: 0.5,
   }));
 
+  const legalRoutes: MetadataRoute.Sitemap = POLICY_SLUGS.map((slug) => ({
+    url: `${base}/legal/${slug}`,
+    changeFrequency: "yearly" as const,
+    priority: 0.3,
+  }));
+
   let productRoutes: MetadataRoute.Sitemap = [];
   try {
     const products = await getCatalogProducts();
@@ -34,5 +41,5 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     // Sitemap still returns static routes if the catalog can't be read.
   }
 
-  return [...staticRoutes, ...articleRoutes, ...productRoutes];
+  return [...staticRoutes, ...articleRoutes, ...legalRoutes, ...productRoutes];
 }

@@ -102,7 +102,8 @@ export default async function HomePage() {
           muted
           loop
           playsInline
-          preload="auto"
+          preload="metadata"
+          aria-hidden="true"
         />
         <div className="vl2-hero-scrim" aria-hidden="true" />
 

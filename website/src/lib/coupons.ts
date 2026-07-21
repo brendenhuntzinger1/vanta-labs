@@ -44,9 +44,24 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
 
   // Welcome offer acts as a virtual coupon (no DB row) when enabled, so the
   // owner can promote a first-order code without managing a coupon record.
+  // Enforced as first-order-only: once the customer's email has a paid order,
+  // the code stops working (checked server-side where the email is known).
   try {
     const welcome = await getWelcomeOffer();
     if (welcome.enabled && welcome.percent > 0 && normalizeCouponCode(welcome.code) === normalizedCode) {
+      const email = (customerEmail ?? "").trim().toLowerCase();
+      if (email) {
+        const { data: priorPaid } = await supabaseAdmin
+          .from("orders")
+          .select("id")
+          .eq("customer_email", email)
+          .eq("payment_status", "paid")
+          .limit(1)
+          .maybeSingle();
+        if (priorPaid) {
+          throw new Error("This welcome offer is for first orders only.");
+        }
+      }
       return {
         code: normalizedCode,
         discountType: "percent",
@@ -54,8 +69,12 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
         discountAmount: calculateCouponDiscount(subtotal, "percent", welcome.percent),
       };
     }
-  } catch {
-    // Fall through to the normal coupon lookup.
+  } catch (e) {
+    // Re-throw the user-facing first-order error; otherwise fall through to the
+    // normal coupon lookup.
+    if (e instanceof Error && e.message.includes("first orders only")) {
+      throw e;
+    }
   }
 
   const { data, error } = await supabaseAdmin

@@ -53,6 +53,7 @@ export function BackInStockForm({ productSlug, variantId }: { productSlug: strin
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           placeholder="you@email.com"
+          aria-label="Email for back-in-stock notification"
           className="w-full flex-1 border border-white/15 bg-black/40 px-4 py-2.5 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
         />
         <button type="button" onClick={submit} disabled={state === "sending"} className="vl2-btn-primary vl-focus-ring px-4 py-2.5 text-sm disabled:opacity-60">

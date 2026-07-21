@@ -16,13 +16,24 @@ export async function requestBackInStock(input: {
   variantId?: string | null;
   email: string;
 }): Promise<{ ok: boolean; error?: string }> {
-  const email = normEmail(input.email);
-  const productSlug = input.productSlug.trim();
-  if (!email || !email.includes("@")) {
+  const email = normEmail(input.email).slice(0, 200);
+  const productSlug = input.productSlug.trim().slice(0, 100);
+  const variantId = input.variantId ? String(input.variantId).slice(0, 100) : null;
+  if (!email || !email.includes("@") || email.length > 200) {
     return { ok: false, error: "Enter a valid email." };
   }
   if (!productSlug) {
     return { ok: false, error: "Missing product." };
+  }
+
+  // Only allow enrolling on real products (blocks arbitrary-slug DB bloat).
+  const { data: exists } = await supabaseAdmin
+    .from("products")
+    .select("slug")
+    .eq("slug", productSlug)
+    .maybeSingle();
+  if (!exists) {
+    return { ok: false, error: "Unknown product." };
   }
 
   const { error } = await supabaseAdmin
@@ -30,7 +41,7 @@ export async function requestBackInStock(input: {
     .upsert(
       {
         product_slug: productSlug,
-        variant_id: input.variantId ?? null,
+        variant_id: variantId,
         email,
         notified: false,
         created_at: new Date().toISOString(),

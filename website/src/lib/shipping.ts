@@ -10,6 +10,29 @@ export const INTERNATIONAL_FREE_SHIPPING_THRESHOLD = 600;
 export const INTERNATIONAL_SHIPPING_FEE = 60;
 export const HANDLING_FEE_RATE = 0.05;
 
+// Admin-editable shipping + service-fee settings. An admin sets these in
+// Admin → Control Center → Shipping (stored in the "shipping" control
+// section); the coded constants above are the defaults when a field is left
+// blank. Passed identically into calculateShipping/calculateHandlingFee on
+// both the client preview and the authoritative server total, so the two can
+// never drift apart and trip the "Altered total detected" guard.
+export interface ShippingConfig {
+  domesticFee: number;
+  freeShippingThreshold: number;
+  internationalFee: number;
+  internationalFreeShippingThreshold: number;
+  // Service/handling fee as a fraction of subtotal (0.05 = 5%). 0 disables it.
+  handlingFeeRate: number;
+}
+
+export const DEFAULT_SHIPPING_CONFIG: ShippingConfig = {
+  domesticFee: DOMESTIC_SHIPPING_FEE,
+  freeShippingThreshold: FREE_SHIPPING_THRESHOLD,
+  internationalFee: INTERNATIONAL_SHIPPING_FEE,
+  internationalFreeShippingThreshold: INTERNATIONAL_FREE_SHIPPING_THRESHOLD,
+  handlingFeeRate: HANDLING_FEE_RATE,
+};
+
 const DOMESTIC_COUNTRY_NAMES = new Set([
   "united states",
   "united states of america",
@@ -30,19 +53,26 @@ export function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-export function calculateShipping(subtotal: number, country?: string | null): number {
+export function calculateShipping(
+  subtotal: number,
+  country?: string | null,
+  config: ShippingConfig = DEFAULT_SHIPPING_CONFIG,
+): number {
   if (subtotal <= 0) return 0;
 
   if (isDomesticCountry(country)) {
-    return subtotal >= FREE_SHIPPING_THRESHOLD ? 0 : DOMESTIC_SHIPPING_FEE;
+    return subtotal >= config.freeShippingThreshold ? 0 : config.domesticFee;
   }
 
-  return subtotal >= INTERNATIONAL_FREE_SHIPPING_THRESHOLD ? 0 : INTERNATIONAL_SHIPPING_FEE;
+  return subtotal >= config.internationalFreeShippingThreshold ? 0 : config.internationalFee;
 }
 
-export function calculateHandlingFee(subtotal: number): number {
-  if (subtotal <= 0) return 0;
-  return roundMoney(subtotal * HANDLING_FEE_RATE);
+export function calculateHandlingFee(
+  subtotal: number,
+  config: ShippingConfig = DEFAULT_SHIPPING_CONFIG,
+): number {
+  if (subtotal <= 0 || !config.handlingFeeRate || config.handlingFeeRate <= 0) return 0;
+  return roundMoney(subtotal * config.handlingFeeRate);
 }
 
 // Configurable sales tax, applied to the post-discount merchandise total.

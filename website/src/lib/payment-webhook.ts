@@ -611,7 +611,9 @@ export async function finalizeManualPayment(
   }
 
   const customerUserId = order.customer_user_id ? String(order.customer_user_id) : null;
-  if (customerUserId) {
+  // Membership purchases don't earn or redeem loyalty points (it's a digital,
+  // non-refundable subscription, not a merchandise order).
+  if (customerUserId && !isMembershipOrder) {
     try {
       const pointsRedeemed = Number(order.points_redeemed ?? 0);
       if (pointsRedeemed > 0) {

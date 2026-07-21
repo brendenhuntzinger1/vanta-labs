@@ -7,7 +7,7 @@ import { validateReferralCodeClient } from "@/lib/referral-client";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
-import { calculateShipping, calculateHandlingFee, calculateTax, FREE_SHIPPING_THRESHOLD as SHIPPING_FREE_THRESHOLD } from "@/lib/shipping";
+import { calculateShipping, calculateHandlingFee, calculateTax, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { resolveBestDiscount } from "@/lib/discount-resolution";
 
@@ -56,6 +56,7 @@ type CartContextValue = {
   serviceFee: number;
   taxAmount: number;
   taxRatePercent: number;
+  shippingConfig: ShippingConfig;
   discountAmount: number;
   total: number;
   isBuy3Get1FreeActive: boolean;
@@ -160,6 +161,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [pointsToRedeem, setPointsToRedeemState] = useState(0);
   const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
   const [taxRatePercent, setTaxRatePercent] = useState(0);
+  const [shippingConfig, setShippingConfig] = useState<ShippingConfig>(DEFAULT_SHIPPING_CONFIG);
   const [isEligibleForBulkSavings, setIsEligibleForBulkSavings] = useState(false);
   const [bulkSavingsConfig, setBulkSavingsConfig] = useState<BulkSavingsConfig>(DEFAULT_BULK_SAVINGS_CONFIG);
   const [knownEmail, setKnownEmail] = useState("");
@@ -199,10 +201,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; taxRatePercent?: number };
+        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; taxRatePercent?: number; shippingConfig?: ShippingConfig };
         if (result.success) {
           setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
           setTaxRatePercent(Number(result.taxRatePercent ?? 0) || 0);
+          if (result.shippingConfig) setShippingConfig(result.shippingConfig);
         }
       } catch {
         // Defaults to disabled (matches the server's default) if this fails.
@@ -487,9 +490,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // assumes domestic. checkout/page.tsx recomputes this from the shared
   // shipping.ts formula once the customer enters their country, and that
   // recomputed value (not this one) is what's sent to the server.
-  const shipping = bulkSavingsTierReached ? 0 : calculateShipping(subtotal);
+  const shipping = bulkSavingsTierReached ? 0 : calculateShipping(subtotal, undefined, shippingConfig);
 
-  const serviceFee = calculateHandlingFee(subtotal);
+  const serviceFee = calculateHandlingFee(subtotal, shippingConfig);
 
   const couponDiscountAmount = useMemo(
     () => (buy3Get1FreeDiscount > 0 || referralDetails ? 0 : calculateCouponDiscountAmount(subtotal, couponDetails)),
@@ -885,6 +888,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     serviceFee,
     taxAmount,
     taxRatePercent,
+    shippingConfig,
     discountAmount,
     total,
     isBuy3Get1FreeActive: bestDiscount?.type === "buy3get1",
@@ -922,10 +926,10 @@ export function useCart() {
   return context;
 }
 
-export function getShippingProgress(subtotal: number) {
-  const isEligibleForFreeShipping = subtotal >= SHIPPING_FREE_THRESHOLD;
-  const amountToFreeShipping = Math.max(0, SHIPPING_FREE_THRESHOLD - subtotal);
-  const progressPercentage = Math.min((subtotal / SHIPPING_FREE_THRESHOLD) * 100, 100);
+export function getShippingProgress(subtotal: number, freeShippingThreshold: number = DEFAULT_SHIPPING_CONFIG.freeShippingThreshold) {
+  const isEligibleForFreeShipping = subtotal >= freeShippingThreshold;
+  const amountToFreeShipping = Math.max(0, freeShippingThreshold - subtotal);
+  const progressPercentage = Math.min((subtotal / freeShippingThreshold) * 100, 100);
 
   return {
     isEligibleForFreeShipping,

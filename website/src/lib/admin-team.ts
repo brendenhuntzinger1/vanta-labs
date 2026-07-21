@@ -68,19 +68,25 @@ export async function createAdminAccount(input: { username: string; password: st
 }
 
 // Sets a new password for an admin account (same scrypt scheme as login).
+// Revokes all of that account's existing sessions so a stolen session can't
+// survive a password rotation.
 export async function setAdminPassword(username: string, newPassword: string) {
   if (newPassword.length < 12) {
     throw new Error("Password must be at least 12 characters");
   }
+  const normalized = username.trim().toLowerCase();
   const salt = randomBytes(16).toString("hex");
   const hash = scryptSync(newPassword, salt, 64).toString("hex");
 
   const { error } = await supabaseAdmin
     .from("admin_credentials")
     .update({ password_salt: salt, password_hash: hash, updated_at: new Date().toISOString() })
-    .eq("username", username.trim().toLowerCase());
+    .eq("username", normalized);
 
   if (error) throw error;
+
+  // Invalidate all existing sessions for this account.
+  await supabaseAdmin.from("admin_sessions").delete().eq("username", normalized);
 }
 
 // Renames an admin account and keeps its active sessions valid by moving them

@@ -123,6 +123,7 @@ export default function CheckoutPage() {
     clearCart,
     bulkSavingsTierReached,
     taxAmount,
+    shippingConfig,
   } = useCart();
 
   const [acknowledgements, setAcknowledgements] = useState<ComplianceAcknowledgements>({
@@ -166,8 +167,8 @@ export default function CheckoutPage() {
   // Mirror the server's free-shipping-on-bulk-tier rule so expectedTotal
   // always matches (see payment-service.ts and cart-context.tsx).
   const shipping = useMemo(
-    () => (bulkSavingsTierReached ? 0 : calculateShipping(subtotal, form.country)),
-    [bulkSavingsTierReached, subtotal, form.country],
+    () => (bulkSavingsTierReached ? 0 : calculateShipping(subtotal, form.country, shippingConfig)),
+    [bulkSavingsTierReached, subtotal, form.country, shippingConfig],
   );
   const totalBeforePoints = Math.max(0, subtotal + shipping + serviceFee + taxAmount - discountAmount);
   const pointsRedeemedDiscount = useMemo(
@@ -545,7 +546,7 @@ export default function CheckoutPage() {
                 </p>
               ) : (
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                  <input type="text" value={effectiveReferralInput} onChange={(event) => setReferralInput(event.target.value)} placeholder="VANTA10" className="w-full flex-1 border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
+                  <input type="text" value={effectiveReferralInput} onChange={(event) => setReferralInput(event.target.value)} aria-label="Referral code" placeholder="VANTA10" className="w-full flex-1 border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
                   <button type="button" onClick={() => applyReferralCode(effectiveReferralInput)} className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm">Apply</button>
                 </div>
               )}
@@ -579,7 +580,7 @@ export default function CheckoutPage() {
                 </p>
               ) : (
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                  <input type="text" value={effectiveCouponInput} onChange={(event) => setCouponInput(event.target.value)} placeholder="SAVE10" className="w-full flex-1 border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
+                  <input type="text" value={effectiveCouponInput} onChange={(event) => setCouponInput(event.target.value)} aria-label="Coupon code" placeholder="SAVE10" className="w-full flex-1 border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
                   <button type="button" onClick={() => applyCouponCode(effectiveCouponInput)} className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm">Apply</button>
                 </div>
               )}
