@@ -28,7 +28,7 @@ export default async function AdminFulfillmentPage({
   const status = (typeof params.status === "string" ? params.status : "queue") as FulfillmentStatusFilter;
   const page = Math.max(1, Number(params.page) || 1);
 
-  const result = await getFulfillmentRows({ search, status, page, pageSize: 25 });
+  const result = await getFulfillmentRows({ search, status, page, pageSize: 25 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 }));
 
   const buildPageHref = (targetPage: number) => {
     const query = new URLSearchParams();

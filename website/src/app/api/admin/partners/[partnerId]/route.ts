@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageRefunds } from "@/lib/admin-roles";
 import { markCommissionsPaid, updatePartnerStatus } from "@/lib/partner-portal";
 
 function unauthorizedResponse() {
@@ -10,6 +11,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {
     return unauthorizedResponse();
+  }
+
+  // Partner approval, commission-rate changes, and marking commissions paid
+  // all move real money, so they are gated to manager+ (same bar as refunds).
+  if (!canManageRefunds(session.role)) {
+    return NextResponse.json({ success: false, error: "Your role does not have permission to manage partners." }, { status: 403 });
   }
 
   const ipAddress = getRequestIpAddress(request);

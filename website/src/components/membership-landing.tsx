@@ -153,6 +153,25 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
           </div>
         </ScrollReveal>
 
+        {tiers.length === 0 ? (
+          <ScrollReveal delayMs={80}>
+            <div className="mt-12 border border-white/10 bg-white/[0.02] p-10 text-center">
+              <p className="vl2-eyebrow">Membership</p>
+              <h2 className="vl2-serif mt-3 text-2xl text-white sm:text-3xl">Membership plans are coming soon.</h2>
+              <p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-white/55">
+                We&apos;re putting the finishing touches on our membership tiers. Check back shortly — in the meantime,
+                every registered customer already earns reward points on every order.
+              </p>
+              <Link
+                href={isSignedInCustomer ? "/account" : "/account/login"}
+                className="vl2-btn-primary vl-focus-ring mt-8 inline-flex items-center justify-center px-5 py-3 text-sm"
+              >
+                {isSignedInCustomer ? "View my rewards" : "Create a free account"}
+              </Link>
+            </div>
+          </ScrollReveal>
+        ) : (
+          <>
         <div className="mt-10 flex justify-center">
           <div className="inline-flex border border-white/15 p-1">
             <button
@@ -293,6 +312,8 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
             <RewardsCalculator tiers={tiers} />
           </div>
         </ScrollReveal>
+          </>
+        )}
 
         <ScrollReveal delayMs={140}>
           <div className="mt-16">

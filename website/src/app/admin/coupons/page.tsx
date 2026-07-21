@@ -13,7 +13,7 @@ export default async function AdminCouponsPage() {
   }
 
   const canManage = canManageCoupons(session.role);
-  const coupons = canManage ? await listAdminCoupons() : [];
+  const coupons = canManage ? await listAdminCoupons().catch(() => []) : [];
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">

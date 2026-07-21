@@ -1,11 +1,18 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageSettings } from "@/lib/admin-roles";
 import { exportRewardsCsv } from "@/lib/admin-membership";
 
 export async function GET(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  }
+
+  // Bulk customer/rewards data export is gated to manager+, matching the
+  // customers and orders export routes.
+  if (!canManageSettings(session.role)) {
+    return NextResponse.json({ success: false, error: "Your role does not have permission to export this data." }, { status: 403 });
   }
 
   try {

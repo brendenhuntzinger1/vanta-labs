@@ -8,7 +8,8 @@ import { useCart } from "@/components/cart-context";
 const NAV_LINKS = [
   { href: "/products", label: "Products" },
   { href: "/membership", label: "Membership" },
-  { href: "/coa-library", label: "Research" },
+  { href: "/coa-library", label: "COA Library" },
+  { href: "/research", label: "Research" },
   { href: "/partner", label: "Partner Program" },
   { href: "/contact", label: "Contact us" },
 ];
@@ -91,6 +92,7 @@ export function SiteHeaderV2() {
               <input
                 ref={searchInputRef}
                 type="search"
+                aria-label="Search"
                 value={searchValue}
                 onChange={(event) => setSearchValue(event.target.value)}
                 onBlur={() => {

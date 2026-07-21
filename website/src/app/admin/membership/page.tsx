@@ -18,12 +18,12 @@ export default async function AdminMembershipPage() {
 
   const [tiers, events, analytics, bonusSettings, bulkSavingsConfig, bulkSavingsStats] = canManage
     ? await Promise.all([
-        listMembershipTiersAdmin(),
-        listPromotionalEvents(),
-        getMembershipAnalytics(),
-        getMembershipBonusSettings(),
-        getBulkSavingsControlConfig(),
-        getBulkSavingsStats(),
+        listMembershipTiersAdmin().catch(() => []),
+        listPromotionalEvents().catch(() => []),
+        getMembershipAnalytics().catch(() => null),
+        getMembershipBonusSettings().catch(() => null),
+        getBulkSavingsControlConfig().catch(() => null),
+        getBulkSavingsStats().catch(() => null),
       ])
     : [[], [], null, null, null, null];
 

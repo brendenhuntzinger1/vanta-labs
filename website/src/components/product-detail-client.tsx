@@ -211,7 +211,7 @@ export function ProductDetailClient({
   ];
 
   return (
-    <div className="vl2-lab-page min-h-screen">
+    <div className="vl2-lab-page min-h-screen pb-24 lg:pb-0">
       <div className="vl2-lab-sweep" aria-hidden="true" />
       <div className="vl2-lab-orb vl2-lab-orb-a" aria-hidden="true" />
       <div className="vl2-lab-orb vl2-lab-orb-b" aria-hidden="true" />

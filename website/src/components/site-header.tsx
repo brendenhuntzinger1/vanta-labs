@@ -126,6 +126,7 @@ export function SiteHeader() {
               <input
                 ref={searchInputRef}
                 type="search"
+                aria-label="Search"
                 value={searchValue}
                 onChange={(event) => setSearchValue(event.target.value)}
                 onBlur={() => {
@@ -192,6 +193,7 @@ export function SiteHeader() {
             <form onSubmit={handleSearchSubmit} className="flex items-center gap-2">
               <input
                 type="search"
+                aria-label="Search"
                 value={searchValue}
                 onChange={(event) => setSearchValue(event.target.value)}
                 placeholder="Search compounds…"

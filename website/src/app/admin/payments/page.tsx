@@ -39,8 +39,8 @@ export default async function AdminPaymentsPage({
   const page = Math.max(1, Number(params.page) || 1);
 
   const [result, methods] = await Promise.all([
-    getManualPaymentRows({ search, paymentStatus, paymentMethod, fromDate, toDate, page, pageSize: 25 }),
-    getPaymentMethodsConfig(),
+    getManualPaymentRows({ search, paymentStatus, paymentMethod, fromDate, toDate, page, pageSize: 25 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 })),
+    getPaymentMethodsConfig().catch(() => []),
   ]);
 
   const manualMethods = getEnabledPaymentMethods(methods).filter(isManualPaymentMethod);

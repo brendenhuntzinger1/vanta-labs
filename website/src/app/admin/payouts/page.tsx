@@ -24,7 +24,20 @@ export default async function AdminPayoutsPage() {
   const session = await verifyAdminSessionFromCookie();
   if (!session) redirect("/vault");
 
-  const { summary, rows } = await getPayoutDashboard();
+  const { summary, rows } = await getPayoutDashboard().catch(() => ({
+    summary: {
+      orders: 0,
+      totalGross: 0,
+      totalNetRevenue: 0,
+      total3plOwed: 0,
+      totalProfit: 0,
+      pendingPayoutTotal: 0,
+      paidPayoutTotal: 0,
+      payoutModel: "percent",
+      payoutRate: 0,
+    },
+    rows: [],
+  }));
   const modelLabel = summary.payoutModel === "percent"
     ? `${summary.payoutRate}% of order total`
     : `${money(summary.payoutRate)} per vial/unit`;

@@ -621,6 +621,7 @@ export default function CheckoutPage() {
                   <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
                     <input
                       type="number"
+                      aria-label="Points to redeem"
                       min={0}
                       max={pointsBalance}
                       value={pointsToRedeem || ""}

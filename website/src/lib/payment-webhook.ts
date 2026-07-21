@@ -158,18 +158,33 @@ async function markEventProcessed(eventId: string, orderId: string, status: Orde
   }
 }
 
-async function getExistingEvent(eventId: string) {
-  const { data, error } = await supabaseAdmin
-    .from("payment_events")
-    .select("event_id")
-    .eq("event_id", eventId)
-    .maybeSingle();
+// Atomically claim a webhook event before running any side-effects. The
+// event_id is the primary key of payment_events, so a concurrent duplicate
+// delivery (processors retry and can fan out) loses the insert race with a
+// unique-violation (23505) and is treated as a duplicate — preventing double
+// loyalty points, double coupon redemption, and duplicate confirmation emails.
+async function claimEvent(eventId: string, orderId: string, status: OrderStatus): Promise<boolean> {
+  const { error } = await supabaseAdmin.from("payment_events").insert({
+    event_id: eventId,
+    order_id: orderId,
+    status,
+    processed_at: new Date().toISOString(),
+  });
 
   if (error) {
+    if ((error as { code?: string }).code === "23505") {
+      return false;
+    }
     throw error;
   }
 
-  return data;
+  return true;
+}
+
+// Undo a claim when processing fails partway, so the event isn't permanently
+// treated as a duplicate and a retry can reprocess it cleanly.
+async function releaseEvent(eventId: string) {
+  await supabaseAdmin.from("payment_events").delete().eq("event_id", eventId);
 }
 
 async function getOrderByOrderId(orderId: string) {
@@ -684,8 +699,10 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   const orderId = eventPayload.orderId ?? `order-${randomUUID()}`;
   const nextStatus = getOrderStatusForEventType(eventPayload.type ?? "");
 
-  const existingEvent = await getExistingEvent(eventId);
-  if (existingEvent) {
+  // Claim the event up front (atomic) so concurrent duplicate deliveries can't
+  // both run the paid side-effects below.
+  const claimed = await claimEvent(eventId, orderId, nextStatus);
+  if (!claimed) {
     return {
       duplicate: true,
       eventId,
@@ -695,6 +712,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     } satisfies WebhookEventState;
   }
 
+  try {
   const orderRecord = await getOrderByOrderId(orderId);
   const subtotal = roundMoney(eventPayload.subtotal ?? 0);
   const shippingAmount = roundMoney(eventPayload.shippingAmount ?? 0);
@@ -730,19 +748,26 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   await upsertOrderItems(orderId, eventPayload.items);
 
   if (nextStatus === "paid") {
-    await ensureCommissionRecord({
-      orderId,
-      ambassadorId: eventPayload.ambassadorId,
-      referralCode: eventPayload.referralCode,
-      commissionPercent: eventPayload.commissionPercent,
-      commissionableSubtotal,
-      paymentStatus: nextStatus,
-      providerEventId: eventId,
-      customerEmail: eventPayload.customer?.email,
-      shippingAddress: eventPayload.customer?.address,
-      city: eventPayload.customer?.city,
-      postalCode: eventPayload.customer?.postalCode,
-    });
+    // Commission recording must never strand a paid order or block the
+    // customer's confirmation email / points below (e.g. a schema mismatch on
+    // the commissions table). Best-effort: log and continue.
+    try {
+      await ensureCommissionRecord({
+        orderId,
+        ambassadorId: eventPayload.ambassadorId,
+        referralCode: eventPayload.referralCode,
+        commissionPercent: eventPayload.commissionPercent,
+        commissionableSubtotal,
+        paymentStatus: nextStatus,
+        providerEventId: eventId,
+        customerEmail: eventPayload.customer?.email,
+        shippingAddress: eventPayload.customer?.address,
+        city: eventPayload.customer?.city,
+        postalCode: eventPayload.customer?.postalCode,
+      });
+    } catch (commissionError) {
+      console.error("Unable to record commission for order", orderId, commissionError);
+    }
 
     await logCommerceAnalyticsEvent({
       eventType: "purchase",
@@ -856,4 +881,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     status: nextStatus,
     providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
   } satisfies WebhookEventState;
+  } catch (processingError) {
+    // Processing failed after the event was claimed. Release the claim so the
+    // processor's retry can reprocess it instead of being skipped as a
+    // duplicate, then rethrow so the caller returns a non-2xx and retries.
+    await releaseEvent(eventId).catch(() => {});
+    throw processingError;
+  }
 }

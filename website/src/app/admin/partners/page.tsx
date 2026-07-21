@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { AdminPartnersClient } from "@/components/admin-partners-client";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
+import { canManageRefunds } from "@/lib/admin-roles";
 import { getAdminOperationsSummary, getAdminPartnerRows } from "@/lib/partner-portal";
 import { listCommissionTierRules } from "@/lib/ambassador-commission";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
@@ -18,13 +19,37 @@ export default async function AdminPartnersPage() {
     redirect("/vault");
   }
 
+  if (!canManageRefunds(session.role)) {
+    return (
+      <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
+        <div className="vl-panel mx-auto max-w-2xl rounded-2xl p-8 text-center text-sm text-zinc-400">
+          Your role does not have permission to manage partners. Ask a manager or super admin.
+        </div>
+      </div>
+    );
+  }
+
   const [rows, operations, tiers, ambassadorSettings, fraudRows, payoutHistory] = await Promise.all([
-    getAdminPartnerRows({ status: "all" }),
-    getAdminOperationsSummary(),
-    listCommissionTierRules(),
-    getAmbassadorProgramSettings(),
-    getFraudReviewRows(),
-    getPayoutHistory(),
+    getAdminPartnerRows({ status: "all" }).catch(() => []),
+    getAdminOperationsSummary().catch(() => ({
+      liveSalesToday: 0,
+      liveSalesMonth: 0,
+      newCustomers: 0,
+      returningCustomers: 0,
+      returningCustomerRate: 0,
+      lowStockItems: 0,
+      pendingShipments: 0,
+      activeCoupons: 0,
+      pendingNotifications: 0,
+    })),
+    listCommissionTierRules().catch(() => []),
+    getAmbassadorProgramSettings().catch(() => ({
+      minimumQualifyingOrder: 0,
+      minimumPayoutThreshold: 0,
+      commissionHoldDays: 0,
+    })),
+    getFraudReviewRows().catch(() => []),
+    getPayoutHistory().catch(() => []),
   ]);
 
   return (

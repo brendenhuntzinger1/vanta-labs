@@ -25,7 +25,19 @@ export default async function AdminRevenuePage() {
     redirect("/vault");
   }
 
-  const metrics = await getRevenueMetrics();
+  const metrics = await getRevenueMetrics().catch(() => ({
+    todayRevenue: 0,
+    todayOrders: 0,
+    totalPaidRevenue: 0,
+    totalPaidOrders: 0,
+    averageOrderValue: 0,
+    processingFeesCollected: 0,
+    pendingPayments: 0,
+    approvedPayments: 0,
+    awaitingFulfillment: 0,
+    shipped: 0,
+    byMethod: [],
+  }));
   const maxMethodRevenue = Math.max(1, ...metrics.byMethod.map((m) => m.revenue));
 
   return (

@@ -8,6 +8,11 @@ export const dynamic = "force-dynamic";
 
 const METADATA_KEYS_TO_HIDE = new Set(["performedAt", "ipAddress", "userAgent", "performedBy"]);
 
+function fmtDate(v: string | null) {
+  const d = v && v !== "null" ? new Date(v) : null;
+  return d && !isNaN(d.getTime()) ? d.toLocaleString() : "—";
+}
+
 function summarizeMetadata(metadata: Record<string, unknown> | null) {
   if (!metadata) return null;
   const entries = Object.entries(metadata).filter(
@@ -46,8 +51,8 @@ export default async function AdminAuditLogPage({
   const page = Math.max(1, Number(params.page) || 1);
 
   const [result, targetTables] = await Promise.all([
-    getAuditLogRows({ action, targetTable, includeConfigSaves, page, pageSize: 30 }),
-    getAuditLogTargetTables(),
+    getAuditLogRows({ action, targetTable, includeConfigSaves, page, pageSize: 30 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 30, pageCount: 1 })),
+    getAuditLogTargetTables().catch(() => []),
   ]);
 
   const buildPageHref = (targetPage: number) => {
@@ -107,7 +112,7 @@ export default async function AdminAuditLogPage({
             <tbody className="divide-y divide-zinc-800 bg-zinc-950/70">
               {result.rows.map((row) => (
                 <tr key={row.id}>
-                  <td className="px-4 py-3 whitespace-nowrap text-xs text-zinc-400">{new Date(row.createdAt).toLocaleString()}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-xs text-zinc-400">{fmtDate(row.createdAt)}</td>
                   <td className="px-4 py-3 font-medium text-zinc-100">{row.action}</td>
                   <td className="px-4 py-3 text-xs text-zinc-400">
                     {row.targetTable ?? "—"}{row.targetId ? ` / ${row.targetId}` : ""}

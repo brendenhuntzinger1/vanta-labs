@@ -17,11 +17,11 @@ export default async function AdminCartRecoveryPage() {
 
   const [carts, stats, weeklyTrend, monthlyTrend, config] = canManage
     ? await Promise.all([
-        listAbandonedCarts(),
-        getCartRecoveryStats(),
-        getCartRecoveryTrend(7),
-        getCartRecoveryTrend(30),
-        getCartRecoveryControlConfig(),
+        listAbandonedCarts().catch(() => []),
+        getCartRecoveryStats().catch(() => null),
+        getCartRecoveryTrend(7).catch(() => []),
+        getCartRecoveryTrend(30).catch(() => []),
+        getCartRecoveryControlConfig().catch(() => null),
       ])
     : [[], null, [], [], null];
 

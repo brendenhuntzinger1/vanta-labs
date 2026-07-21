@@ -92,12 +92,13 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
       });
     }
 
-    if (paymentStatus === "pending_payment" && new Date(createdAt).getTime() < staleThreshold) {
+    const createdMs = createdAt ? new Date(createdAt).getTime() : NaN;
+    if (paymentStatus === "pending_payment" && Number.isFinite(createdMs) && createdMs < staleThreshold) {
       flags.push({
         orderId,
         customerEmail,
         type: "stale_pending",
-        detail: `Created ${new Date(createdAt).toLocaleString()}`,
+        detail: `Created ${new Date(createdMs).toLocaleString()}`,
         createdAt,
       });
     }

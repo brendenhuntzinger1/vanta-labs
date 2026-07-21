@@ -13,7 +13,7 @@ export default async function AdminReconciliationPage() {
   }
 
   const canView = canManageRefunds(session.role);
-  const flags = canView ? await getReconciliationFlags() : [];
+  const flags = canView ? await getReconciliationFlags().catch(() => []) : [];
 
   const countsByType = flags.reduce((acc, flag) => {
     acc[flag.type] = (acc[flag.type] ?? 0) + 1;

@@ -44,19 +44,25 @@ export default async function AccountDashboardPage() {
   const preferences = await getCustomerPreferences(user.id);
   await checkAndAwardBirthdayBonus(user.id, preferences.birthday).catch(() => {});
 
+  // `membership` is critical to the whole dashboard, so it stays uncaught. The
+  // remaining queries degrade to safe defaults so one failing section doesn't
+  // blank the entire page.
   const [orders, membership, pointsBalance, pointsHistory, referralEarnedPoints, referralCode, activeCoupons, pointsMultiplier] = await Promise.all([
-    getCustomerOrders(user.email),
+    getCustomerOrders(user.email).catch(() => []),
     getCustomerMembership(user.id),
-    getPointsBalance(user.id),
-    getPointsHistory(user.id, 15),
-    getReferralEarnedPoints(user.id),
-    getOrCreateReferralCode(user.id),
-    getActiveCouponsForDisplay(),
-    getActivePointsMultiplier(),
+    getPointsBalance(user.id).catch(() => 0),
+    getPointsHistory(user.id, 15).catch(() => []),
+    getReferralEarnedPoints(user.id).catch(() => 0),
+    getOrCreateReferralCode(user.id).catch(() => ""),
+    getActiveCouponsForDisplay().catch(() => []),
+    getActivePointsMultiplier().catch(() => ({ multiplier: 1, eventName: null })),
   ]);
 
   const progress = getProgressToNextReward(pointsBalance);
-  const referralUrl = `${process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") ?? ""}/account/login?ref=${referralCode}`;
+  const siteOrigin = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") ?? "";
+  const referralPath = `/account/login?ref=${referralCode}`;
+  const referralUrl = siteOrigin ? `${siteOrigin}${referralPath}` : referralPath;
+  const hasShareableReferralLink = Boolean(siteOrigin && referralCode);
 
   return (
     <div className="space-y-6">
@@ -112,7 +118,7 @@ export default async function AccountDashboardPage() {
           <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Your referral link</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <code className="break-all rounded-lg bg-black/30 px-3 py-2 text-xs text-zinc-300">{referralUrl}</code>
-            <ReferralLinkCopyButton url={referralUrl} />
+            {hasShareableReferralLink ? <ReferralLinkCopyButton url={referralUrl} /> : null}
           </div>
           <p className="mt-2 text-xs text-zinc-500">Share this link — new customers who sign up get a bonus, and so do you.</p>
         </div>

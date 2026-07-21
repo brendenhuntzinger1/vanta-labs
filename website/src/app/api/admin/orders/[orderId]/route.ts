@@ -57,6 +57,17 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
     const now = new Date().toISOString();
 
     if (action === "update_status") {
+      // Changing payment_status directly is a money-integrity action (it can
+      // fake revenue or mark an order refunded without reversing commissions
+      // and loyalty points), so it is gated to manager+. Fulfillment/tracking
+      // fields below remain available to all admins for day-to-day shipping.
+      if (body.paymentStatus && !canManageRefunds(session.role)) {
+        return NextResponse.json(
+          { success: false, error: "Your role does not have permission to change payment status." },
+          { status: 403 },
+        );
+      }
+
       const updatePayload: Record<string, unknown> = { updated_at: now };
       if (body.paymentStatus) {
         updatePayload.payment_status = String(body.paymentStatus);

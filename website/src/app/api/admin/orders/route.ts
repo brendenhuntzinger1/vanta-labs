@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageRefunds } from "@/lib/admin-roles";
 import { bulkUpdateAdminOrders, type AdminOrderBulkAction } from "@/lib/admin-orders";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -20,6 +21,16 @@ export async function PATCH(request: Request) {
 
     if (!action || orderIds.length === 0) {
       return NextResponse.json({ success: false, error: "Bulk action and orderIds are required" }, { status: 400 });
+    }
+
+    // Mass-cancel is destructive and money-adjacent, so it is gated to
+    // manager+. Bulk mark-shipped/delivered are routine fulfillment and stay
+    // available to all admins (matching the single-order fulfillment update).
+    if (action === "cancel" && !canManageRefunds(session.role)) {
+      return NextResponse.json(
+        { success: false, error: "Your role does not have permission to cancel orders." },
+        { status: 403 },
+      );
     }
 
     await bulkUpdateAdminOrders({ orderIds, action });

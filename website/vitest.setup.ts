@@ -228,6 +228,22 @@ vi.mock("@/lib/supabase-server", () => {
       insert: (payload: GenericRow | GenericRow[]) => {
         const rows = Array.isArray(payload) ? payload : [payload];
 
+        // Simulate the payment_events primary-key uniqueness so the atomic
+        // claim-based webhook idempotency (insert -> 23505 on duplicate) can be
+        // exercised in tests.
+        if (table === "payment_events") {
+          for (const row of rows) {
+            const id = String(row?.event_id ?? "");
+            if (id && state.paymentEvents.has(id)) {
+              return { data: null, error: { code: "23505", message: "duplicate key value violates unique constraint" } };
+            }
+          }
+          for (const row of rows) {
+            if (row?.event_id) state.paymentEvents.add(String(row.event_id));
+          }
+          return { data: null, error: null };
+        }
+
         if (table === "orders") {
           for (const row of rows) {
             const orderId = String(row.order_id ?? "mock-order");

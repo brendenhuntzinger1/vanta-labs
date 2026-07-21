@@ -511,14 +511,16 @@ export async function duplicateAdminProduct(productId: string) {
   });
 
   if (product.galleryImages?.length) {
-    for (const image of product.galleryImages) {
-      await addProductImageFromUrl({
-        productId: created.id ?? "",
-        imageUrl: image.imageUrl,
-        altText: image.altText ?? undefined,
-        isPrimary: image.isPrimary,
-      });
-    }
+    await Promise.all(
+      product.galleryImages.map((image) =>
+        addProductImageFromUrl({
+          productId: created.id ?? "",
+          imageUrl: image.imageUrl,
+          altText: image.altText ?? undefined,
+          isPrimary: image.isPrimary,
+        }),
+      ),
+    );
   }
 
   return getAdminProductById(created.id ?? "");

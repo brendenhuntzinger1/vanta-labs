@@ -12,7 +12,7 @@ export default async function AdminInventoryPage() {
     redirect("/vault");
   }
 
-  const rows = await getInventoryRows();
+  const rows = await getInventoryRows().catch(() => []);
   const lowStockCount = rows.filter((row) => row.isLowStock || row.isOutOfStock).length;
 
   return (

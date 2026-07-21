@@ -20,6 +20,17 @@ import type {
  OrderStatus,
 } from "@/lib/payment-types";
 
+// Parse a display price string ("$44.99") to a number, rejecting malformed
+// values (e.g. multiple dots -> NaN) so a bad price can't silently produce a
+// NaN subtotal and a confusing "Altered total detected" rejection at checkout.
+function parseProductPrice(raw: string): number {
+ const value = Number(String(raw).replace(/[^0-9.]/g, ""));
+ if (!Number.isFinite(value) || value < 0) {
+   throw new Error("This product has an invalid price and can't be purchased right now.");
+ }
+ return value;
+}
+
 export interface ServerProduct {
  id: string;
  name: string;
@@ -194,7 +205,7 @@ export async function createCheckoutSession(
      {
        id: product.slug,
        name: product.name,
-       price: Number(product.price.replace(/[^0-9.]/g, "")),
+       price: parseProductPrice(product.price),
        stockStatus: product.stockStatus,
      },
    ]),
@@ -214,7 +225,7 @@ export async function createCheckoutSession(
    : catalogProduct?.doses?.find((dose) => dose.isDefault) ?? catalogProduct?.doses?.[0];
 
  const baseUnitPrice = selectedDose
-   ? Number((selectedDose.salePrice ?? selectedDose.price).replace(/[^0-9.]/g, ""))
+   ? parseProductPrice(selectedDose.salePrice ?? selectedDose.price)
    : baseProduct.price;
 
  // "Bundle & Save" (2 vials = 5% off, 3+ = 8% off) is applied here, at the

@@ -49,7 +49,7 @@ export default async function AdminOrdersPage({
   const fulfillmentStatus = (typeof params.fulfillmentStatus === "string" ? params.fulfillmentStatus : "all") as AdminOrderFulfillmentStatusFilter;
   const page = Math.max(1, Number(params.page) || 1);
 
-  const result = await getAdminOrderRows({ search, paymentStatus, fulfillmentStatus, page, pageSize: 25 });
+  const result = await getAdminOrderRows({ search, paymentStatus, fulfillmentStatus, page, pageSize: 25 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 }));
 
   const buildPageHref = (targetPage: number) => {
     const query = new URLSearchParams();

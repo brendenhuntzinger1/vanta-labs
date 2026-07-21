@@ -9,6 +9,11 @@ function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 }
 
+function fmtDate(v: string | null) {
+  const d = v && v !== "null" ? new Date(v) : null;
+  return d && !isNaN(d.getTime()) ? d.toLocaleDateString() : "—";
+}
+
 export default async function AdminCustomersPage({
   searchParams,
 }: {
@@ -23,7 +28,7 @@ export default async function AdminCustomersPage({
   const search = typeof params.search === "string" ? params.search : "";
   const page = Math.max(1, Number(params.page) || 1);
 
-  const result = await getAdminCustomers({ search, page, pageSize: 25 });
+  const result = await getAdminCustomers({ search, page, pageSize: 25 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 }));
 
   const buildPageHref = (targetPage: number) => {
     const query = new URLSearchParams();
@@ -74,8 +79,8 @@ export default async function AdminCustomersPage({
                   <td className="px-4 py-3 text-zinc-400">{customer.email}</td>
                   <td className="px-4 py-3">{customer.orderCount}</td>
                   <td className="px-4 py-3">{money(customer.totalSpent)}</td>
-                  <td className="px-4 py-3 text-xs text-zinc-400">{new Date(customer.firstOrderAt).toLocaleDateString()}</td>
-                  <td className="px-4 py-3 text-xs text-zinc-400">{new Date(customer.lastOrderAt).toLocaleDateString()}</td>
+                  <td className="px-4 py-3 text-xs text-zinc-400">{fmtDate(customer.firstOrderAt)}</td>
+                  <td className="px-4 py-3 text-xs text-zinc-400">{fmtDate(customer.lastOrderAt)}</td>
                   <td className="px-4 py-3">
                     <Link href={`/admin/orders?search=${encodeURIComponent(customer.email)}`} className="text-xs text-cyan-300 hover:underline">
                       View orders

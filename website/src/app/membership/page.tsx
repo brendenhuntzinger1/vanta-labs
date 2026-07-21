@@ -14,7 +14,7 @@ export const metadata: Metadata = {
 
 export default async function MembershipPage() {
   const [tiers, user] = await Promise.all([
-    getActiveMembershipTiers(),
+    getActiveMembershipTiers().catch(() => []),
     getAuthenticatedUser(),
   ]);
 
