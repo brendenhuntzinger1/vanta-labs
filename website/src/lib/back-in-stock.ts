@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { sendEmail } from "@/lib/email/send";
+import { sendMarketingEmail } from "@/lib/email/marketing";
 import { backInStockTemplate } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
 
@@ -78,13 +78,23 @@ export async function notifyBackInStock(productSlug: string, productName: string
     let sent = 0;
     for (const row of data) {
       const template = backInStockTemplate({ name: "", productName, productUrl });
-      const result = await sendEmail({ to: String(row.email), ...template });
-      if (result.success) {
+      const result = await sendMarketingEmail({
+        to: String(row.email),
+        campaignType: "back_in_stock",
+        referenceId: productSlug,
+        templateKey: "back_in_stock",
+        ...template,
+      });
+      // A suppressed recipient (unsubscribed) still counts as handled — mark
+      // them notified so we don't keep re-querying and retrying them forever.
+      if (result.success || result.suppressed) {
         await supabaseAdmin
           .from("back_in_stock_requests")
           .update({ notified: true, notified_at: new Date().toISOString() })
           .eq("id", row.id);
-        sent += 1;
+        if (result.success) {
+          sent += 1;
+        }
       }
     }
     return sent;
