@@ -9,7 +9,7 @@ import {
   referralCodeAssignedTemplate,
 } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
-import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import { getAmbassadorProgramSettings, getAmbassadorMarketingResources, type AmbassadorMarketingResource } from "@/lib/ambassador-settings";
 
 function formatSupabaseError(error: unknown) {
   if (!error) {
@@ -66,6 +66,7 @@ export interface PartnerSummary {
   }>;
   monthlyRevenueSeries: Array<{ label: string; value: number }>;
   lifetimeRevenueSeries: Array<{ label: string; value: number }>;
+  marketingResources: AmbassadorMarketingResource[];
 }
 
 export interface AdminPartnerRow {
@@ -589,6 +590,8 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     };
   });
 
+  const marketingResources = await getAmbassadorMarketingResources().catch(() => []);
+
   return {
     partnerId: partner.id,
     partnerName: partner.name,
@@ -608,6 +611,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     recentOrders,
     monthlyRevenueSeries: buildRevenueSeriesByMonth(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) }))),
     lifetimeRevenueSeries: buildLifetimeSeries(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) }))),
+    marketingResources,
   };
 }
 

@@ -4,7 +4,7 @@ import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canManageRefunds } from "@/lib/admin-roles";
 import { getAdminOperationsSummary, getAdminPartnerRows } from "@/lib/partner-portal";
 import { listCommissionTierRules } from "@/lib/ambassador-commission";
-import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import { getAmbassadorMarketingResources, getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getFraudReviewRows, getPayoutHistory } from "@/lib/admin-ambassadors";
 
 function currency(value: number) {
@@ -29,7 +29,7 @@ export default async function AdminPartnersPage() {
     );
   }
 
-  const [rows, operations, tiers, ambassadorSettings, fraudRows, payoutHistory] = await Promise.all([
+  const [rows, operations, tiers, ambassadorSettings, fraudRows, payoutHistory, marketingResources] = await Promise.all([
     getAdminPartnerRows({ status: "all" }).catch(() => []),
     getAdminOperationsSummary().catch(() => ({
       liveSalesToday: 0,
@@ -50,6 +50,7 @@ export default async function AdminPartnersPage() {
     })),
     getFraudReviewRows().catch(() => []),
     getPayoutHistory().catch(() => []),
+    getAmbassadorMarketingResources().catch(() => []),
   ]);
 
   return (
@@ -95,6 +96,7 @@ export default async function AdminPartnersPage() {
           initialSettings={ambassadorSettings}
           initialFraudRows={fraudRows}
           initialPayoutHistory={payoutHistory}
+          initialMarketingResources={marketingResources}
         />
       </div>
     </div>

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds } from "@/lib/admin-roles";
-import { getAmbassadorProgramSettings, setAmbassadorProgramSetting } from "@/lib/ambassador-settings";
+import { getAmbassadorProgramSettings, setAmbassadorMarketingResources, setAmbassadorProgramSetting } from "@/lib/ambassador-settings";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -37,6 +37,18 @@ export async function PATCH(request: Request) {
 
   try {
     const body = await request.json();
+
+    // Marketing resources are a separate, list-shaped setting (title/url/desc).
+    if (Array.isArray(body?.marketingResources)) {
+      const marketingResources = await setAmbassadorMarketingResources({
+        resources: body.marketingResources,
+        actorUsername: session.username,
+        ipAddress,
+        userAgent,
+      });
+      return NextResponse.json({ success: true, marketingResources });
+    }
+
     const key = body?.key as "minimum_qualifying_order" | "minimum_payout_threshold" | "commission_hold_days";
     const value = Number(body?.value);
 

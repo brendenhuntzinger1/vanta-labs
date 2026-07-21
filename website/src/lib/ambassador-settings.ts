@@ -11,7 +11,71 @@ export interface AmbassadorProgramSettings {
   commissionHoldDays: number;
 }
 
+export interface AmbassadorMarketingResource {
+  title: string;
+  url: string;
+  description: string;
+}
+
 const SECTION = "ambassador";
+const MARKETING_KEY = "marketing_resources";
+
+// Only allow absolute http(s) links (or a same-site /path). Blocks javascript:
+// and other schemes so an admin can't store a link that runs script when an
+// ambassador clicks it in the portal.
+function isSafeResourceUrl(url: string): boolean {
+  if (url.startsWith("/")) return true;
+  return /^https?:\/\//i.test(url);
+}
+
+export async function getAmbassadorMarketingResources(): Promise<AmbassadorMarketingResource[]> {
+  try {
+    const snapshot = await getControlSnapshot(SECTION);
+    const raw = snapshot[SECTION]?.[MARKETING_KEY];
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .map((item) => {
+        const record = (item ?? {}) as Record<string, unknown>;
+        return {
+          title: String(record.title ?? "").trim(),
+          url: String(record.url ?? "").trim(),
+          description: String(record.description ?? "").trim(),
+        };
+      })
+      .filter((item) => item.title && item.url && isSafeResourceUrl(item.url));
+  } catch {
+    return [];
+  }
+}
+
+export async function setAmbassadorMarketingResources(input: {
+  resources: AmbassadorMarketingResource[];
+  actorUserId?: string | null;
+  actorUsername?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}) {
+  const cleaned = (Array.isArray(input.resources) ? input.resources : [])
+    .map((item) => ({
+      title: String(item?.title ?? "").trim().slice(0, 120),
+      url: String(item?.url ?? "").trim().slice(0, 500),
+      description: String(item?.description ?? "").trim().slice(0, 400),
+    }))
+    .filter((item) => item.title && item.url && isSafeResourceUrl(item.url))
+    .slice(0, 30);
+
+  await upsertControlValue({
+    section: SECTION,
+    key: MARKETING_KEY,
+    value: cleaned,
+    actorUserId: input.actorUserId,
+    actorUsername: input.actorUsername,
+    ipAddress: input.ipAddress,
+    userAgent: input.userAgent,
+  });
+
+  return cleaned;
+}
 
 export async function getAmbassadorProgramSettings(): Promise<AmbassadorProgramSettings> {
   try {

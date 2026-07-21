@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import type { AdminPartnerRow } from "@/lib/partner-portal";
 import type { CommissionTierRule } from "@/lib/ambassador-commission";
-import type { AmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import type { AmbassadorMarketingResource, AmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import type { FraudReviewRow, PayoutHistoryRow } from "@/lib/admin-ambassadors";
 
 function currency(value: number) {
@@ -20,12 +20,14 @@ export function AdminPartnersClient({
   initialSettings,
   initialFraudRows,
   initialPayoutHistory,
+  initialMarketingResources,
 }: {
   initialRows: AdminPartnerRow[];
   initialTiers: CommissionTierRule[];
   initialSettings: AmbassadorProgramSettings;
   initialFraudRows: FraudReviewRow[];
   initialPayoutHistory: PayoutHistoryRow[];
+  initialMarketingResources: AmbassadorMarketingResource[];
 }) {
   const [rows, setRows] = useState(initialRows);
   const [tiers, setTiers] = useState(initialTiers);
@@ -38,6 +40,10 @@ export function AdminPartnersClient({
   const [payoutFrom, setPayoutFrom] = useState("");
   const [payoutTo, setPayoutTo] = useState("");
   const [payoutSearch, setPayoutSearch] = useState("");
+  const [marketingResources, setMarketingResources] = useState<AmbassadorMarketingResource[]>(initialMarketingResources);
+  const [newResourceTitle, setNewResourceTitle] = useState("");
+  const [newResourceUrl, setNewResourceUrl] = useState("");
+  const [newResourceDescription, setNewResourceDescription] = useState("");
   const [inviteName, setInviteName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteCommission, setInviteCommission] = useState("10");
@@ -309,6 +315,50 @@ export function AdminPartnersClient({
     } finally {
       setLoading(false);
     }
+  };
+
+  const saveMarketingResources = async (resources: AmbassadorMarketingResource[]) => {
+    setLoading(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/admin/ambassadors/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ marketingResources: resources }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success) {
+        throw new Error(json.error ?? "Unable to save marketing resources");
+      }
+      setMarketingResources(json.marketingResources ?? []);
+      setMessage("Marketing resources saved.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save marketing resources");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const addMarketingResource = () => {
+    const title = newResourceTitle.trim();
+    const url = newResourceUrl.trim();
+    if (!title || !url) {
+      setMessage("A marketing resource needs a title and a link.");
+      return;
+    }
+    if (!/^https?:\/\//i.test(url) && !url.startsWith("/")) {
+      setMessage("Resource links must start with http:// or https://");
+      return;
+    }
+    const next = [...marketingResources, { title, url, description: newResourceDescription.trim() }];
+    setNewResourceTitle("");
+    setNewResourceUrl("");
+    setNewResourceDescription("");
+    void saveMarketingResources(next);
+  };
+
+  const removeMarketingResource = (index: number) => {
+    void saveMarketingResources(marketingResources.filter((_, i) => i !== index));
   };
 
   const clearFraudFlag = async (referralOrderId: string) => {
@@ -585,6 +635,40 @@ export function AdminPartnersClient({
             />
             <span className="mt-1 block text-xs text-zinc-500">Waiting period before a paid, non-refunded order&apos;s commission is eligible for payout.</span>
           </label>
+        </div>
+      </section>
+
+      <section className="vl-panel rounded-2xl p-4 sm:p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Marketing Resources</h2>
+        <p className="mt-1 text-xs text-zinc-500">Links and assets shown to approved ambassadors on their dashboard (banners, brand kit, swipe copy, etc.). Leave empty to hide the section.</p>
+
+        {marketingResources.length > 0 ? (
+          <ul className="mt-3 space-y-2">
+            {marketingResources.map((resource, index) => (
+              <li key={`${resource.title}-${resource.url}`} className="flex items-start justify-between gap-3 rounded-xl border border-zinc-800/70 bg-zinc-900/40 p-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-white">{resource.title}</p>
+                  {resource.description ? <p className="text-xs text-zinc-400">{resource.description}</p> : null}
+                  <p className="truncate text-xs text-cyan-300/80">{resource.url}</p>
+                </div>
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => removeMarketingResource(index)}
+                  className="rounded border border-rose-400/35 bg-rose-500/10 px-2 py-1 text-xs text-rose-200 disabled:opacity-50"
+                >Remove</button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-sm text-zinc-500">No marketing resources yet.</p>
+        )}
+
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <input value={newResourceTitle} onChange={(e) => setNewResourceTitle(e.target.value)} placeholder="Title (e.g. Brand Kit)" className="vl-input px-3 py-2 text-sm" />
+          <input value={newResourceUrl} onChange={(e) => setNewResourceUrl(e.target.value)} placeholder="https://link-to-asset" className="vl-input px-3 py-2 text-sm" />
+          <input value={newResourceDescription} onChange={(e) => setNewResourceDescription(e.target.value)} placeholder="Short description (optional)" className="vl-input px-3 py-2 text-sm" />
+          <button type="button" disabled={loading} onClick={addMarketingResource} className="vl-btn-secondary px-4 py-2 text-sm disabled:opacity-50">Add Resource</button>
         </div>
       </section>
 

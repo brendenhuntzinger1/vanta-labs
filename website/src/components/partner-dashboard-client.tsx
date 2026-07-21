@@ -125,6 +125,28 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
           </table>
         </div>
       </section>
+
+      {liveSummary.marketingResources.length > 0 ? (
+        <section className="vl-panel rounded-2xl p-4 sm:p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Marketing Resources</h2>
+          <p className="mt-1 text-xs text-zinc-500">Approved assets and links to help you promote — provided by the Vanta Labs team.</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {liveSummary.marketingResources.map((resource) => (
+              <a
+                key={`${resource.title}-${resource.url}`}
+                href={resource.url}
+                target="_blank"
+                rel="noreferrer"
+                className="vl-focus-ring rounded-xl border border-zinc-800/70 bg-zinc-900/40 p-4 transition hover:border-cyan-400/40"
+              >
+                <p className="text-sm font-semibold text-white">{resource.title}</p>
+                {resource.description ? <p className="mt-1 text-xs text-zinc-400">{resource.description}</p> : null}
+                <p className="mt-2 truncate text-xs text-cyan-300/80">{resource.url}</p>
+              </a>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </div>
   );
 }
