@@ -35,6 +35,9 @@ export function AdminPartnersClient({
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState("all");
   const [payoutStatus, setPayoutStatus] = useState("all");
+  const [payoutFrom, setPayoutFrom] = useState("");
+  const [payoutTo, setPayoutTo] = useState("");
+  const [payoutSearch, setPayoutSearch] = useState("");
   const [inviteName, setInviteName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteCommission, setInviteCommission] = useState("10");
@@ -81,6 +84,20 @@ export function AdminPartnersClient({
   const balanceOwed = pendingCommissions + approvedForPayoutCommissions;
   const programAov = totalOrders > 0 ? liveSales / totalOrders : 0;
   const programConversionRate = totalClicks > 0 ? (totalOrders / totalClicks) * 100 : 0;
+
+  const filteredPayouts = useMemo(() => {
+    const fromTime = payoutFrom ? new Date(payoutFrom).getTime() : null;
+    const toTime = payoutTo ? new Date(payoutTo).getTime() + 24 * 60 * 60 * 1000 - 1 : null;
+    const q = payoutSearch.trim().toLowerCase();
+    return payoutHistory.filter((row) => {
+      if (q && !row.ambassadorName.toLowerCase().includes(q)) return false;
+      const time = new Date(row.createdAt).getTime();
+      if (fromTime !== null && !Number.isNaN(fromTime) && time < fromTime) return false;
+      if (toTime !== null && !Number.isNaN(toTime) && time > toTime) return false;
+      return true;
+    });
+  }, [payoutHistory, payoutFrom, payoutTo, payoutSearch]);
+  const filteredPayoutTotal = useMemo(() => filteredPayouts.reduce((sum, row) => sum + row.amount, 0), [filteredPayouts]);
 
   const filteredRows = useMemo(() => rows.filter((row) => {
     const statusMatch = status === "all" || row.status === status;
@@ -641,7 +658,7 @@ export function AdminPartnersClient({
             }}
             className="vl-btn-secondary px-4 py-2 text-sm text-center"
           >
-            Export CSV
+            Export Balances CSV
           </button>
         </div>
 
@@ -774,27 +791,70 @@ export function AdminPartnersClient({
       </section>
 
       <section className="vl-panel rounded-2xl p-4 sm:p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Payout History</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Payout History</h2>
+          <p className="text-xs text-zinc-400">Showing {filteredPayouts.length} of {payoutHistory.length} · {currency(filteredPayoutTotal)} total</p>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <label className="text-xs text-zinc-500">
+            <span className="mb-1 block">From</span>
+            <input type="date" value={payoutFrom} onChange={(e) => setPayoutFrom(e.target.value)} className="vl-input rounded-lg px-2 py-1.5 text-sm" />
+          </label>
+          <label className="text-xs text-zinc-500">
+            <span className="mb-1 block">To</span>
+            <input type="date" value={payoutTo} onChange={(e) => setPayoutTo(e.target.value)} className="vl-input rounded-lg px-2 py-1.5 text-sm" />
+          </label>
+          <label className="text-xs text-zinc-500">
+            <span className="mb-1 block">Ambassador</span>
+            <input type="text" value={payoutSearch} onChange={(e) => setPayoutSearch(e.target.value)} placeholder="Filter by name" className="vl-input rounded-lg px-2 py-1.5 text-sm" />
+          </label>
+          {(payoutFrom || payoutTo || payoutSearch) ? (
+            <button
+              type="button"
+              onClick={() => { setPayoutFrom(""); setPayoutTo(""); setPayoutSearch(""); }}
+              className="vl-btn-secondary px-3 py-1.5 text-xs"
+            >Clear</button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              const params = new URLSearchParams();
+              if (payoutFrom) params.set("from", payoutFrom);
+              if (payoutTo) params.set("to", payoutTo);
+              if (payoutSearch.trim()) {
+                const match = payoutHistory.find((row) => row.ambassadorName.toLowerCase().includes(payoutSearch.trim().toLowerCase()));
+                if (match) params.set("ambassadorId", match.ambassadorId);
+              }
+              const query = params.toString();
+              window.location.href = `/api/admin/partners/export-payout-history${query ? `?${query}` : ""}`;
+            }}
+            className="vl-btn-secondary px-3 py-1.5 text-xs"
+          >Export History CSV</button>
+        </div>
+
         {payoutHistory.length === 0 ? (
           <p className="mt-3 text-sm text-zinc-500">No payouts recorded yet.</p>
+        ) : filteredPayouts.length === 0 ? (
+          <p className="mt-3 text-sm text-zinc-500">No payouts match these filters.</p>
         ) : (
           <div className="mt-4 overflow-x-auto">
             <table className="min-w-full text-sm">
               <thead>
                 <tr className="text-left text-zinc-500">
+                  <th className="px-2 py-2">Date Paid</th>
                   <th className="px-2 py-2">Ambassador</th>
                   <th className="px-2 py-2">Amount</th>
                   <th className="px-2 py-2">Note</th>
-                  <th className="px-2 py-2">Date</th>
                 </tr>
               </thead>
               <tbody>
-                {payoutHistory.map((row) => (
+                {filteredPayouts.map((row) => (
                   <tr key={row.id} className="border-t border-zinc-800/70 text-zinc-200">
+                    <td className="px-2 py-2 text-xs text-zinc-400">{formatDate(row.createdAt)}</td>
                     <td className="px-2 py-2">{row.ambassadorName}</td>
-                    <td className="px-2 py-2">{currency(row.amount)}</td>
+                    <td className="px-2 py-2 font-semibold text-white">{currency(row.amount)}</td>
                     <td className="px-2 py-2 text-xs text-zinc-400">{row.note ?? "-"}</td>
-                    <td className="px-2 py-2 text-xs text-zinc-500">{formatDate(row.createdAt)}</td>
                   </tr>
                 ))}
               </tbody>

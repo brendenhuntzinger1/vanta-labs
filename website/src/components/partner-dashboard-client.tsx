@@ -39,14 +39,15 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
   }, []);
 
   const topCards = useMemo(() => [
+    { label: "Sales Generated", value: currency(liveSummary.totalRevenue) },
     { label: "Total Earnings", value: currency(liveSummary.totalEarnings) },
-    { label: "Pending Commissions", value: currency(liveSummary.pendingCommissions) },
+    { label: "Unpaid Balance", value: currency(liveSummary.pendingCommissions) },
     { label: "Paid Commissions", value: currency(liveSummary.paidCommissions) },
     { label: "Total Orders", value: String(liveSummary.totalOrders) },
     { label: "Average Order Value", value: currency(liveSummary.averageOrderValue) },
-    { label: "Returning Customer Rate", value: `${liveSummary.returningCustomerRate.toFixed(1)}%` },
     { label: "Clicks", value: String(liveSummary.totalClicks) },
     { label: "Conversion Rate", value: `${liveSummary.conversionRate.toFixed(2)}%` },
+    { label: "Returning Customer Rate", value: `${liveSummary.returningCustomerRate.toFixed(1)}%` },
   ], [liveSummary]);
 
   return (
