@@ -6,9 +6,11 @@ import {
   ambassadorApplicationReceivedTemplate,
   ambassadorApprovedTemplate,
   ambassadorDeniedTemplate,
+  newAmbassadorApplicationTemplate,
   referralCodeAssignedTemplate,
 } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
+import { getBusinessSettings } from "@/lib/admin-control";
 import { getAmbassadorProgramSettings, getAmbassadorMarketingResources, type AmbassadorMarketingResource } from "@/lib/ambassador-settings";
 
 function formatSupabaseError(error: unknown) {
@@ -67,6 +69,8 @@ export interface PartnerSummary {
   monthlyRevenueSeries: Array<{ label: string; value: number }>;
   lifetimeRevenueSeries: Array<{ label: string; value: number }>;
   marketingResources: AmbassadorMarketingResource[];
+  accountStatus: string;
+  payoutHistory: Array<{ id: string; amount: number; note: string | null; createdAt: string }>;
 }
 
 export interface AdminPartnerRow {
@@ -172,7 +176,7 @@ async function sendPartnerStatusEmail(input: {
     ? ambassadorApprovedTemplate({
         name: input.name,
         referralCode: input.referralCode,
-        dashboardUrl: `${getSiteUrl()}/partner/dashboard`,
+        dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
       })
     : ambassadorDeniedTemplate({ name: input.name });
 
@@ -386,6 +390,28 @@ export async function createPartnerApplication(input: {
     // Non-critical notification; the application itself already succeeded above.
   }
 
+  // Notify the admin: queue a dashboard notification AND email the owner so a
+  // new application is never missed. Best-effort — never blocks the application.
+  try {
+    await enqueueNotification("partner_application_received", input.email, {
+      partnerId,
+      name: input.name,
+      email: input.email,
+    });
+
+    const { supportEmail } = await getBusinessSettings();
+    if (supportEmail) {
+      const ownerAlert = newAmbassadorApplicationTemplate({
+        applicantName: input.name,
+        applicantEmail: input.email,
+        adminUrl: `${getSiteUrl().replace(/\/$/, "")}/admin/partners`,
+      });
+      await sendEmail({ to: supportEmail, ...ownerAlert });
+    }
+  } catch {
+    // Admin alert is best-effort; the application itself already succeeded.
+  }
+
   return {
     partnerId,
     status: "pending",
@@ -511,10 +537,10 @@ function buildLifetimeSeries(orderRows: Array<{ created_at: string; amount_paid:
 }
 
 export async function getPartnerSummary(partnerId: string, siteUrl: string): Promise<PartnerSummary> {
-  const [{ data: partner, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }] = await Promise.all([
+  const [{ data: partner, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }, { data: payoutRows, error: payoutError }] = await Promise.all([
     supabaseAdmin
       .from("partners")
-      .select("id, name, referral_code, commission_percent")
+      .select("id, name, referral_code, commission_percent, status")
       .eq("id", partnerId)
       .single(),
     supabaseAdmin
@@ -531,12 +557,18 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
       .from("partner_clicks")
       .select("created_at")
       .eq("ambassador_id", partnerId),
+    supabaseAdmin
+      .from("partner_payouts")
+      .select("id, amount, note, created_at")
+      .eq("ambassador_id", partnerId)
+      .order("created_at", { ascending: false }),
   ]);
 
   assertNoSupabaseError("partners.select(partner summary)", partnerError);
   assertNoSupabaseError("referral_orders.select(partner summary commissions)", commissionError);
   assertNoSupabaseError("orders.select(partner summary orders)", orderError);
   assertNoSupabaseError("partner_clicks.select(partner summary clicks)", clickError);
+  assertNoSupabaseError("partner_payouts.select(partner summary payouts)", payoutError);
 
   if (!partner) {
     throw new Error(`Partner not found for id ${partnerId}`);
@@ -546,7 +578,12 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   const orders = orderRows ?? [];
   const clicks = clickRows ?? [];
 
-  const totalEarnings = roundMoney(commissions.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
+  // Reversed/refunded (and under-review) commissions must NOT inflate the
+  // ambassador's displayed lifetime earnings — only genuinely earned
+  // commissions count.
+  const REVERSED_COMMISSION_STATUSES = new Set(["reversed", "voided", "manual_review"]);
+  const earnedCommissions = commissions.filter((row) => !REVERSED_COMMISSION_STATUSES.has(String(row.payment_status)));
+  const totalEarnings = roundMoney(earnedCommissions.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
   // Unpaid balance = commissions still owed to the partner. This must exclude
   // already-paid commissions (previously "paid" was wrongly counted here, so
   // the partner's dashboard showed paid money as still-pending).
@@ -612,6 +649,13 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     monthlyRevenueSeries: buildRevenueSeriesByMonth(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) }))),
     lifetimeRevenueSeries: buildLifetimeSeries(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) }))),
     marketingResources,
+    accountStatus: String(partner.status ?? "approved"),
+    payoutHistory: (payoutRows ?? []).map((row) => ({
+      id: String(row.id),
+      amount: roundMoney(Number(row.amount ?? 0)),
+      note: row.note ? String(row.note) : null,
+      createdAt: String(row.created_at),
+    })),
   };
 }
 

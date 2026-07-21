@@ -3,7 +3,8 @@ import { getPaymentProvider } from "@/lib/payment-provider";
 import type { OrderStatus } from "@/lib/payment-types";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
-import { orderConfirmationTemplate } from "@/lib/email/templates";
+import { commissionEarnedTemplate, orderConfirmationTemplate } from "@/lib/email/templates";
+import { getSiteUrl } from "@/lib/env";
 import { redeemCoupon } from "@/lib/coupons";
 import { calculateEarnedPoints, getActivePointsMultiplier, getCustomerMembership, recordPointsLedgerEntry, reverseOrderPoints } from "@/lib/membership";
 import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
@@ -452,7 +453,61 @@ async function ensureCommissionRecord(input: {
     throw commissionMirrorError;
   }
 
+  // Notify the ambassador of the new commission — only on a genuinely NEW
+  // commission row (never on webhook retries, which hit the existingCommission
+  // branch above), and only when a real, eligible, non-fraud commission was
+  // earned. Best-effort: a failed send must never break order processing.
+  if (commissionAmount > 0 && !isIneligible && !fraudSignal.flagged) {
+    await notifyAmbassadorOfNewCommission({
+      ambassadorId: input.ambassadorId,
+      referralCode: input.referralCode,
+      commissionAmount,
+    }).catch(() => {});
+  }
+
   return { id: data.id };
+}
+
+// Sends the ambassador the minimal "you earned a commission" email. Contains
+// ONLY commission earned, running unpaid balance, referral code, and the
+// biweekly-payout reminder — no order totals, customer data, or revenue.
+async function notifyAmbassadorOfNewCommission(input: {
+  ambassadorId: string;
+  referralCode: string;
+  commissionAmount: number;
+}) {
+  const { data: ambassador } = await supabaseAdmin
+    .from("partners")
+    .select("name, email")
+    .eq("id", input.ambassadorId)
+    .maybeSingle();
+
+  if (!ambassador?.email) {
+    return;
+  }
+
+  // Running unpaid balance = every commission still owed (pending or approved
+  // for payout, not yet paid) for this ambassador. The row just inserted is
+  // "pending", so it's already included.
+  const { data: unpaidRows } = await supabaseAdmin
+    .from("referral_orders")
+    .select("commission_amount, payment_status")
+    .eq("ambassador_id", input.ambassadorId)
+    .in("payment_status", ["pending", "approved_for_payout"]);
+
+  const unpaidBalance = roundMoney(
+    (unpaidRows ?? []).reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0),
+  );
+
+  const template = commissionEarnedTemplate({
+    name: String(ambassador.name ?? ""),
+    commissionAmount: roundMoney(input.commissionAmount),
+    unpaidBalance,
+    referralCode: input.referralCode,
+    dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
+  });
+
+  await sendEmail({ to: String(ambassador.email), ...template });
 }
 
 export async function updateCommissionOnRefund(orderId: string) {
