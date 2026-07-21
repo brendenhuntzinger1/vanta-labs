@@ -142,6 +142,10 @@ export default function CheckoutPage() {
   const [couponInput, setCouponInput] = useState("");
   const [sameAsShipping, setSameAsShipping] = useState(true);
   const [formErrors, setFormErrors] = useState<Partial<Record<keyof CheckoutForm, string>>>({});
+  // Locked (read-only) only when the signed-in account already has an email on
+  // file. Phone-only accounts have no email, so they must enter one here to
+  // receive their order confirmation / receipt.
+  const [emailLockedToAccount, setEmailLockedToAccount] = useState(false);
   const [form, setForm] = useState<CheckoutForm>({
     fullName: "",
     email: "",
@@ -256,6 +260,10 @@ export default function CheckoutPage() {
           address?: { fullName: string; address: string; city: string; postalCode: string } | null;
         };
         if (!result.success) return;
+
+        if (result.email) {
+          setEmailLockedToAccount(true);
+        }
 
         setForm((prev) => ({
           ...prev,
@@ -441,7 +449,7 @@ export default function CheckoutPage() {
 
                 <label className="text-sm text-white/60">
                   <span className="mb-2 block">Email</span>
-                  <input type="email" value={form.email} readOnly aria-readonly autoComplete="email" className="w-full cursor-not-allowed border border-white/15 bg-black/60 px-4 py-3 text-white/70 outline-none" placeholder="alex@domain.com" title="Your order uses your account email" />
+                  <input type="email" value={form.email} onChange={(e) => handleFieldChange("email", e.target.value)} readOnly={emailLockedToAccount} aria-readonly={emailLockedToAccount} autoComplete="email" className={emailLockedToAccount ? "w-full cursor-not-allowed border border-white/15 bg-black/60 px-4 py-3 text-white/70 outline-none" : "w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"} placeholder="alex@domain.com" title={emailLockedToAccount ? "Your order uses your account email" : "Where we'll send your order confirmation"} />
                   {formErrors.email ? <span className="mt-1 block text-xs text-rose-300">{formErrors.email}</span> : null}
                 </label>
 
