@@ -198,7 +198,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
           </div>
         </div>
 
-        <div className="mt-8 grid gap-6 lg:grid-cols-3">
+        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {tiers.filter((tier) => tier.slug !== "free").map((tier, index) => {
             const price = billingCycle === "monthly" ? tier.monthlyPriceCents : tier.annualPriceCents;
             const isFeatured = tier.slug === "pro";
@@ -208,7 +208,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
             return (
               <ScrollReveal key={tier.id} delayMs={index * 80}>
                 <div
-                  className={`vl2-product-card group relative flex h-full flex-col p-6 sm:p-8 ${isFeatured ? "border-white/50" : ""}`}
+                  className={`vl2-product-card group relative flex h-full flex-col p-5 ${isFeatured ? "border-white/50" : ""}`}
                 >
                   {isFeatured ? (
                     <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-black">
@@ -217,12 +217,12 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                   ) : null}
 
                   <p className="vl2-eyebrow">{tier.name}</p>
-                  <p className="mt-3 flex items-baseline gap-2 text-4xl text-white">
+                  <p className="mt-3 flex flex-wrap items-baseline gap-x-2 text-3xl text-white">
                     {showComparePrice ? (
-                      <span className="text-lg font-normal text-white/35 line-through">{money(tier.compareMonthlyPriceCents)}</span>
+                      <span className="text-base font-normal text-white/35 line-through">{money(tier.compareMonthlyPriceCents)}</span>
                     ) : null}
                     <span>{money(price)}</span>
-                    {price > 0 ? <span className="text-base font-normal text-white/40">/{billingCycle === "monthly" ? "mo" : "yr"}</span> : null}
+                    {price > 0 ? <span className="text-sm font-normal text-white/40">/{billingCycle === "monthly" ? "mo" : "yr"}</span> : null}
                   </p>
                   {showAnnualSavings ? (
                     <p className="mt-1 text-xs font-semibold text-emerald-300">Save {money(annualSavingsCents)} vs monthly</p>
