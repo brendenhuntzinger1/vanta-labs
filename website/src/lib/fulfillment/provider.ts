@@ -7,7 +7,11 @@ export interface NormalizedFulfillmentOrder {
   orderNumber: string;
   customer: { name: string; email: string };
   shipping: { address: string; city: string; postalCode: string; country: string };
-  items: Array<{ sku: string | null; name: string; quantity: number; unitPrice: number }>;
+  // `sku` is the base product SKU (product slug) — the SAME key the inbound
+  // inventory-sync webhook matches on, so stock stays consistent. `variant`
+  // carries the specific dose/option when the product has variants, so the 3PL
+  // can pick the right pack without the SKU itself changing.
+  items: Array<{ sku: string | null; variant: string | null; name: string; quantity: number; unitPrice: number }>;
   notes: string;
   totals: { subtotal: number; shipping: number; tax: number; total: number };
 }
@@ -67,6 +71,7 @@ export class GenericRestFulfillmentProvider implements FulfillmentProvider {
           shipping_address: order.shipping,
           line_items: order.items.map((item) => ({
             sku: item.sku,
+            variant: item.variant,
             name: item.name,
             quantity: item.quantity,
             unit_price: item.unitPrice,

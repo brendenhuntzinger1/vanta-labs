@@ -22,12 +22,14 @@ export function AdminSettingsClient({
   fulfillment,
   business,
   welcomeOffer,
+  siteUrl,
 }: {
   email: EmailAdminSettings;
   processor: PaymentProcessorAdminSettings;
   fulfillment: FulfillmentAdminSettings;
   business: BusinessSettings;
   welcomeOffer: WelcomeOffer;
+  siteUrl: string;
 }) {
   // Email state
   const [enabled, setEnabled] = useState(email.enabled);
@@ -58,6 +60,71 @@ export function AdminSettingsClient({
   const [fWebhook, setFWebhook] = useState("");
   const [fPayoutModel, setFPayoutModel] = useState(fulfillment.payoutModel);
   const [fPayoutRate, setFPayoutRate] = useState(String(fulfillment.payoutRate));
+
+  // 3PL onboarding / self-test tools
+  const webhookUrl = `${siteUrl.replace(/\/+$/, "")}/api/webhooks/fulfillment`;
+  const [busyAction, setBusyAction] = useState<string | null>(null);
+  const [generatedSecret, setGeneratedSecret] = useState<string | null>(null);
+  const [skuText, setSkuText] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const copy = async (value: string, key: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(key);
+      setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500);
+    } catch {
+      // Clipboard can be blocked; the value is still visible to copy manually.
+    }
+  };
+
+  const runOnboarding = async (action: string) => {
+    setBusyAction(action);
+    setTestResult(null);
+    if (action === "generate_secret") setGeneratedSecret(null);
+    if (action === "sku_list") setSkuText(null);
+    try {
+      const res = await fetch("/api/admin/fulfillment/onboarding", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      const json = await res.json();
+      if (action === "generate_secret") {
+        if (json.success) setGeneratedSecret(String(json.secret));
+        else setTestResult({ ok: false, text: json.error ?? "Could not generate a secret." });
+      } else if (action === "sku_list") {
+        if (json.success) {
+          const lines = (json.skus as Array<{ sku: string; name: string; stock: number }>).map(
+            (s) => `${s.sku}\t${s.name}\t(stock: ${s.stock})`,
+          );
+          setSkuText(lines.length ? lines.join("\n") : "No enabled products found.");
+        } else {
+          setTestResult({ ok: false, text: json.error ?? "Could not load SKUs." });
+        }
+      } else if (action === "test_connection") {
+        const o = json.outbound;
+        setTestResult({
+          ok: Boolean(json.success),
+          text: json.success
+            ? `✅ 3PL reached and accepted the test order${o?.externalId ? ` (their ref: ${o.externalId})` : ""}. You can cancel that test order on their side.`
+            : `❌ ${o?.message ?? json.error ?? "Could not reach the 3PL."}${o?.statusCode ? ` (HTTP ${o.statusCode})` : ""}`,
+        });
+      } else if (action === "self_test_webhook") {
+        setTestResult({
+          ok: Boolean(json.success),
+          text: json.success
+            ? "✅ Inbound webhook works: signature verified and the event was accepted end-to-end (no data changed — test SKU)."
+            : `❌ ${json.inbound?.message ?? json.error ?? "Self-test failed."}`,
+        });
+      }
+    } catch {
+      setTestResult({ ok: false, text: "Request failed. Try again." });
+    } finally {
+      setBusyAction(null);
+    }
+  };
 
   // Business info state
   const [supportEmail, setSupportEmail] = useState(business.supportEmail);
@@ -333,6 +400,69 @@ export function AdminSettingsClient({
           <Labeled label={fPayoutModel === "percent" ? "Rate (% of order)" : "Rate ($ per vial)"}>
             <input type="number" min={0} step="0.01" value={fPayoutRate} onChange={(e) => setFPayoutRate(e.target.value)} className="vl-input mt-1 w-full px-3 py-2 text-sm" />
           </Labeled>
+        </div>
+
+        {/* Onboarding & self-test toolkit */}
+        <div className="mt-5 rounded-xl border border-cyan-300/25 bg-cyan-400/[0.04] p-4">
+          <h3 className="text-sm font-semibold text-cyan-100">Connect a 3PL / dropshipper — onboarding &amp; tests</h3>
+          <p className="mt-1 text-[13px] text-zinc-400">
+            Give the 3PL the two items below, paste their API URL + key above, then run the two tests. No credentials needed to generate your side.
+          </p>
+
+          {/* 1. Webhook URL to hand over */}
+          <div className="mt-4">
+            <p className="text-xs font-semibold text-zinc-300">1. Send the 3PL your webhook URL</p>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <code className="min-w-0 flex-1 truncate rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[12px] text-zinc-200">{webhookUrl}</code>
+              <button type="button" onClick={() => copy(webhookUrl, "url")} className="vl-btn-secondary px-3 py-2 text-xs">{copied === "url" ? "✓ Copied" : "Copy"}</button>
+            </div>
+          </div>
+
+          {/* 2. Shared secret */}
+          <div className="mt-4">
+            <p className="text-xs font-semibold text-zinc-300">2. Generate a shared signing secret</p>
+            <p className="text-[11px] text-zinc-500">They sign every webhook with this. Shown once — copy it now and give it to them. Saving happens automatically.</p>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <button type="button" disabled={busyAction === "generate_secret"} onClick={() => runOnboarding("generate_secret")} className="vl-btn-secondary px-3 py-2 text-xs disabled:opacity-50">
+                {busyAction === "generate_secret" ? "Generating…" : (fulfillment.webhookSecretSet ? "Regenerate secret" : "Generate secret")}
+              </button>
+              {generatedSecret ? (
+                <>
+                  <code className="min-w-0 flex-1 truncate rounded-lg border border-emerald-300/30 bg-black/40 px-3 py-2 text-[12px] text-emerald-200">{generatedSecret}</code>
+                  <button type="button" onClick={() => copy(generatedSecret, "secret")} className="vl-btn-secondary px-3 py-2 text-xs">{copied === "secret" ? "✓ Copied" : "Copy"}</button>
+                </>
+              ) : null}
+            </div>
+          </div>
+
+          {/* 3. SKU list */}
+          <div className="mt-4">
+            <p className="text-xs font-semibold text-zinc-300">3. Share your product SKU list</p>
+            <p className="text-[11px] text-zinc-500">The 3PL must use these exact SKUs so tracking + inventory match your products.</p>
+            <div className="mt-1 flex flex-wrap items-center gap-2">
+              <button type="button" disabled={busyAction === "sku_list"} onClick={() => runOnboarding("sku_list")} className="vl-btn-secondary px-3 py-2 text-xs disabled:opacity-50">
+                {busyAction === "sku_list" ? "Loading…" : "Load SKU list"}
+              </button>
+              {skuText ? <button type="button" onClick={() => copy(skuText, "skus")} className="vl-btn-secondary px-3 py-2 text-xs">{copied === "skus" ? "✓ Copied" : "Copy all"}</button> : null}
+            </div>
+            {skuText ? <pre className="mt-2 max-h-48 overflow-auto whitespace-pre rounded-lg border border-white/10 bg-black/40 p-3 text-[12px] text-zinc-300">{skuText}</pre> : null}
+          </div>
+
+          {/* 4. Tests */}
+          <div className="mt-4 border-t border-white/10 pt-4">
+            <p className="text-xs font-semibold text-zinc-300">4. Test the connection (both directions)</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button type="button" disabled={busyAction === "test_connection"} onClick={() => runOnboarding("test_connection")} className="vl-btn-secondary px-3 py-2 text-xs disabled:opacity-50">
+                {busyAction === "test_connection" ? "Sending…" : "Send test order → 3PL"}
+              </button>
+              <button type="button" disabled={busyAction === "self_test_webhook"} onClick={() => runOnboarding("self_test_webhook")} className="vl-btn-secondary px-3 py-2 text-xs disabled:opacity-50">
+                {busyAction === "self_test_webhook" ? "Testing…" : "Test inbound webhook ← 3PL"}
+              </button>
+            </div>
+            {testResult ? (
+              <p className={`mt-2 rounded-lg border px-3 py-2 text-[13px] ${testResult.ok ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-100" : "border-rose-300/30 bg-rose-300/10 text-rose-100"}`}>{testResult.text}</p>
+            ) : null}
+          </div>
         </div>
       </div>
 

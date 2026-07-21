@@ -76,12 +76,20 @@ function normalizeOrder(order: OrderRow): NormalizedFulfillmentOrder {
       postalCode: order.postal_code ?? "",
       country: order.country ?? "",
     },
-    items: (order.order_items ?? []).map((item) => ({
-      sku: item.product_id ?? null,
-      name: item.product_name ?? "Item",
-      quantity: Number(item.quantity ?? 0),
-      unitPrice: Number(item.unit_price ?? 0),
-    })),
+    items: (order.order_items ?? []).map((item) => {
+      // product_id is stored as either "slug" or "slug::variantId". The base
+      // slug is the real SKU (and what inventory sync matches on); the suffix,
+      // if any, is the chosen variant.
+      const rawId = item.product_id ?? "";
+      const [baseSku, variant] = rawId.split("::");
+      return {
+        sku: baseSku || null,
+        variant: variant || null,
+        name: item.product_name ?? "Item",
+        quantity: Number(item.quantity ?? 0),
+        unitPrice: Number(item.unit_price ?? 0),
+      };
+    }),
     notes: "",
     totals: {
       subtotal: Number(order.subtotal ?? 0),
