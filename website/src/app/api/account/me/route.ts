@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getDefaultCustomerAddress } from "@/lib/customer-account";
-import { getActivePointsMultiplier, getCustomerMembership, getPointsBalance, isEligibleForBulkSavings } from "@/lib/membership";
+import { getActivePointsMultiplier, getCustomerMembership, getMembershipPerks, getPointsBalance, isEligibleForBulkSavings } from "@/lib/membership";
 
 export async function GET() {
   const user = await getAuthenticatedUser();
@@ -12,12 +12,13 @@ export async function GET() {
 
   const fullName = typeof user.user_metadata?.full_name === "string" ? user.user_metadata.full_name : "";
 
-  const [defaultAddress, pointsBalance, membership, pointsMultiplier, isEligibleForBulk] = await Promise.all([
+  const [defaultAddress, pointsBalance, membership, pointsMultiplier, isEligibleForBulk, perks] = await Promise.all([
     getDefaultCustomerAddress(user.id),
     getPointsBalance(user.id),
     getCustomerMembership(user.id),
     getActivePointsMultiplier(),
     isEligibleForBulkSavings(user.id),
+    getMembershipPerks(user.id),
   ]);
 
   return NextResponse.json({
@@ -37,5 +38,11 @@ export async function GET() {
     pointsMultiplier: pointsMultiplier.multiplier,
     tierName: membership.tier.name,
     isEligibleForBulkSavings: isEligibleForBulk,
+    // Active-membership perks the checkout applies. All zero/false for
+    // non-members and for members whose plan is no longer active.
+    memberDiscountPercent: perks.memberDiscountPercent,
+    memberFreeShipping: perks.freeShipping,
+    storeCreditBalanceCents: perks.storeCreditBalanceCents,
+    storeCreditMinOrderCents: perks.storeCreditMinOrderCents,
   });
 }

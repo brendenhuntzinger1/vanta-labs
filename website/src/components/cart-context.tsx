@@ -63,6 +63,10 @@ type CartContextValue = {
   isBuy3Get1FreeEligible: boolean;
   bulkSavingsApplied: boolean;
   bulkSavingsTierReached: boolean;
+  memberFreeShipping: boolean;
+  storeCreditApplied: number;
+  storeCreditBalanceCents: number;
+  storeCreditMinOrderCents: number;
   bulkSavingsPercent: number;
   bulkSavingsProgress: { nextPercent: number; amountRemaining: number } | null;
   totalQuantity: number;
@@ -167,6 +171,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [knownEmail, setKnownEmail] = useState("");
   const [customerName, setCustomerName] = useState("");
   const [cartSessionId, setCartSessionId] = useState<string | null>(null);
+  const [memberDiscountPercent, setMemberDiscountPercent] = useState(0);
+  const [memberFreeShipping, setMemberFreeShipping] = useState(false);
+  const [storeCreditBalanceCents, setStoreCreditBalanceCents] = useState(0);
+  const [storeCreditMinOrderCents, setStoreCreditMinOrderCents] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -181,6 +189,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           pointsPerDollar?: number;
           pointsMultiplier?: number;
           isEligibleForBulkSavings?: boolean;
+          memberDiscountPercent?: number;
+          memberFreeShipping?: boolean;
+          storeCreditBalanceCents?: number;
+          storeCreditMinOrderCents?: number;
         };
         if (!result.success) return;
         setIsSignedIn(true);
@@ -188,6 +200,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         setPointsPerDollar(result.pointsPerDollar ?? 0);
         setPointsMultiplier(result.pointsMultiplier ?? 1);
         setIsEligibleForBulkSavings(Boolean(result.isEligibleForBulkSavings));
+        setMemberDiscountPercent(Number(result.memberDiscountPercent ?? 0) || 0);
+        setMemberFreeShipping(Boolean(result.memberFreeShipping));
+        setStoreCreditBalanceCents(Number(result.storeCreditBalanceCents ?? 0) || 0);
+        setStoreCreditMinOrderCents(Number(result.storeCreditMinOrderCents ?? 0) || 0);
         if (result.email) setKnownEmail(result.email);
         if (result.fullName) setCustomerName(result.fullName);
       } catch {
@@ -490,7 +506,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // assumes domestic. checkout/page.tsx recomputes this from the shared
   // shipping.ts formula once the customer enters their country, and that
   // recomputed value (not this one) is what's sent to the server.
-  const shipping = bulkSavingsTierReached ? 0 : calculateShipping(subtotal, undefined, shippingConfig);
+  const shipping = (bulkSavingsTierReached || memberFreeShipping) ? 0 : calculateShipping(subtotal, undefined, shippingConfig);
 
   const serviceFee = calculateHandlingFee(subtotal, shippingConfig);
 
@@ -520,12 +536,18 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [subtotal, isEligibleForBulkSavings, bulkSavingsConfig],
   );
 
+  const memberPricingAmount = useMemo(
+    () => (memberDiscountPercent > 0 ? subtotal * (memberDiscountPercent / 100) : 0),
+    [memberDiscountPercent, subtotal],
+  );
+
   const bestDiscount = useMemo(
     () => resolveBestDiscount([
       { type: "bulk_savings", amount: bulkSavingsResult.amount },
+      { type: "member_pricing", amount: memberPricingAmount },
       preBulkDiscount,
     ]),
-    [bulkSavingsResult.amount, preBulkDiscount],
+    [bulkSavingsResult.amount, memberPricingAmount, preBulkDiscount],
   );
 
   const discountAmount = bestDiscount?.amount ?? 0;
@@ -546,15 +568,25 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const totalBeforePoints = Math.max(0, subtotal + shipping + serviceFee + taxAmount - discountAmount);
 
+  // Membership store credit auto-applies when the merchandise subtotal meets
+  // the tier's redemption minimum. Mirrors payment-service.ts exactly.
+  const storeCreditApplied = useMemo(() => {
+    if (storeCreditBalanceCents <= 0) return 0;
+    if (Math.round(subtotal * 100) < storeCreditMinOrderCents) return 0;
+    return Math.min(storeCreditBalanceCents / 100, totalBeforePoints);
+  }, [storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforePoints]);
+
+  const totalAfterCredit = Math.max(0, totalBeforePoints - storeCreditApplied);
+
   // Referral codes are exclusive of every other discount, including
   // redeemed loyalty points - mirrors the server-side rule in
   // payment-service.ts.
   const pointsRedeemedDiscount = useMemo(
-    () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints)),
-    [referralDetails, pointsToRedeem, totalBeforePoints],
+    () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalAfterCredit)),
+    [referralDetails, pointsToRedeem, totalAfterCredit],
   );
 
-  const total = Math.max(0, totalBeforePoints - pointsRedeemedDiscount);
+  const total = Math.max(0, totalAfterCredit - pointsRedeemedDiscount);
 
   const setPointsToRedeem = (points: number) => {
     const clamped = Math.max(0, Math.min(Math.floor(points), pointsBalance));
@@ -895,6 +927,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     isBuy3Get1FreeEligible,
     bulkSavingsApplied,
     bulkSavingsTierReached,
+    memberFreeShipping,
+    storeCreditApplied,
+    storeCreditBalanceCents,
+    storeCreditMinOrderCents,
     bulkSavingsPercent: bulkSavingsResult.percent,
     bulkSavingsProgress,
     totalQuantity,

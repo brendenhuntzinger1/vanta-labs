@@ -53,13 +53,13 @@ describe("payment methods", () => {
     expect(isManualPaymentMethod(cashapp)).toBe(true);
   });
 
-  it("lists enabled methods with recommended (no-fee) ones first", () => {
+  it("offers only the card method (debit/credit/Apple Pay); manual methods are off", () => {
     const enabled = getEnabledPaymentMethods(DEFAULT_PAYMENT_METHODS);
-    expect(enabled[0].recommended).toBe(true);
-    expect(enabled[0].id).toBe("cashapp");
-    // Card is offered but ordered last (secondary).
-    expect(enabled[enabled.length - 1].id).toBe("card");
-    // Disabled example methods (venmo) are excluded.
-    expect(enabled.some((m) => m.id === "venmo")).toBe(false);
+    // Card (debit/credit/Apple Pay) is the only enabled method.
+    expect(enabled.map((m) => m.id)).toEqual(["card"]);
+    // Manual methods (Cash App / Zelle / PayPal / Venmo) are all disabled.
+    for (const id of ["cashapp", "zelle", "paypal", "venmo"]) {
+      expect(enabled.some((m) => m.id === id)).toBe(false);
+    }
   });
 });

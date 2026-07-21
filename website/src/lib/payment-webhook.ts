@@ -7,6 +7,7 @@ import { commissionEarnedTemplate, orderConfirmationTemplate } from "@/lib/email
 import { getSiteUrl } from "@/lib/env";
 import { redeemCoupon } from "@/lib/coupons";
 import { calculateEarnedPoints, getActivePointsMultiplier, getCustomerMembership, recordPointsLedgerEntry, reverseOrderPoints } from "@/lib/membership";
+import { redeemStoreCredit, refundStoreCreditForOrder } from "@/lib/store-credit";
 import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
@@ -191,7 +192,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, amount_paid, paid_at, customer_user_id, points_redeemed")
+    .select("id, order_id, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, amount_paid, paid_at, customer_user_id, points_redeemed, store_credit_redeemed_cents")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -690,6 +691,11 @@ export async function finalizeManualPayment(
         await recordPointsLedgerEntry({ userId: customerUserId, amount: -pointsRedeemed, reason: "redeem", orderId });
       }
 
+      const storeCreditRedeemedCents = Number(order.store_credit_redeemed_cents ?? 0);
+      if (storeCreditRedeemedCents > 0) {
+        await redeemStoreCredit(customerUserId, storeCreditRedeemedCents, orderId);
+      }
+
       const membership = await getCustomerMembership(customerUserId);
       const { multiplier } = await getActivePointsMultiplier();
       const pointsEarned = calculateEarnedPoints(commissionableSubtotal, membership.tier.pointsPerDollar, multiplier);
@@ -859,6 +865,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           });
         }
 
+        const storeCreditRedeemedCents = Number(orderRecord?.store_credit_redeemed_cents ?? 0);
+        if (storeCreditRedeemedCents > 0) {
+          await redeemStoreCredit(customerUserId, storeCreditRedeemedCents, orderId);
+        }
+
         const membership = await getCustomerMembership(customerUserId);
         const { multiplier } = await getActivePointsMultiplier();
         const pointsEarned = calculateEarnedPoints(commissionableSubtotal, membership.tier.pointsPerDollar, multiplier);
@@ -913,6 +924,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         await reverseOrderPoints(orderId);
       } catch (pointsError) {
         console.error("Unable to reverse membership points for order", orderId, pointsError);
+      }
+      try {
+        await refundStoreCreditForOrder(orderId);
+      } catch (creditError) {
+        console.error("Unable to return store credit for order", orderId, creditError);
       }
     }
 

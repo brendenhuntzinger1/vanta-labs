@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getControlSnapshot } from "@/lib/admin-control";
 import { calculateEarnedPoints, dollarsToPoints, pointsToDollars, POINTS_PER_DOLLAR_REDEMPTION } from "@/lib/points-math";
+import { getStoreCreditBalanceCents } from "@/lib/store-credit";
 
 export interface MembershipBonusSettings {
   signupBonusEnabled: boolean;
@@ -164,6 +165,41 @@ function mapCustomerMembership(data: Record<string, unknown>): CustomerMembershi
 // there is no row in customer_memberships until they upgrade, so this
 // synthesizes one from the free tier rather than requiring a signup-time
 // insert for every account.
+export interface MembershipPerks {
+  isActiveMember: boolean;
+  tierSlug: string;
+  memberDiscountPercent: number;
+  freeShipping: boolean;
+  pointsPerDollar: number;
+  storeCreditBalanceCents: number;
+  storeCreditMinOrderCents: number;
+}
+
+// The single source of truth for what perks a buyer's account currently
+// receives. Discount, free shipping, and store credit apply ONLY while the
+// membership is an active paying (or trialing) PAID tier — so the moment a
+// member stops paying (status leaves active/trialing) every perk switches off
+// automatically. For annual members the status stays active for the paid year.
+export async function getMembershipPerks(userId: string): Promise<MembershipPerks> {
+  const membership = await getCustomerMembership(userId);
+  const active = membership.status === "active" || membership.status === "trialing";
+  const isActiveMember = active && membership.tier.slug !== "free";
+
+  const storeCreditBalanceCents = isActiveMember
+    ? await getStoreCreditBalanceCents(userId)
+    : 0;
+
+  return {
+    isActiveMember,
+    tierSlug: membership.tier.slug,
+    memberDiscountPercent: isActiveMember ? membership.tier.memberDiscountPercent : 0,
+    freeShipping: isActiveMember && membership.tier.freeShipping,
+    pointsPerDollar: membership.tier.pointsPerDollar,
+    storeCreditBalanceCents,
+    storeCreditMinOrderCents: isActiveMember ? membership.tier.storeCreditMinOrderCents : 0,
+  };
+}
+
 export async function getCustomerMembership(userId: string): Promise<CustomerMembership> {
   const { data, error } = await supabaseAdmin
     .from("customer_memberships")
@@ -203,12 +239,13 @@ export async function getCustomerMembership(userId: string): Promise<CustomerMem
 // position) and only to members with an actual active-paying subscription
 // - trial members (status "trialing") don't qualify yet.
 export async function isEligibleForBulkSavings(userId: string): Promise<boolean> {
-  const [membership, tiers] = await Promise.all([getCustomerMembership(userId), getActiveMembershipTiers()]);
-  if (membership.status !== "active") {
+  const membership = await getCustomerMembership(userId);
+  if (membership.status !== "active" && membership.status !== "trialing") {
     return false;
   }
-  const highestTier = tiers[tiers.length - 1];
-  return Boolean(highestTier) && membership.tier.id === highestTier.id;
+  // Bulk savings apply to the Elite and Black tiers (the tiers whose plans
+  // advertise "Exclusive Bulk Discounts"). Tied to the account's active tier.
+  return membership.tier.slug === "elite" || membership.tier.slug === "black";
 }
 
 // Priority order processing - a real operational signal (orders.priority),

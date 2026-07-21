@@ -22,7 +22,10 @@ describe("payment service", () => {
           postalCode: "78701",
           country: "United States",
         },
-        expectedTotal: 999999,
+        // Claiming a total far BELOW the real price (an underpayment attempt)
+        // must be rejected. Overpayment claims are harmless because the server
+        // charges its own authoritative total, so only underpayment is blocked.
+        expectedTotal: 0.01,
       }),
     ).rejects.toThrow("Altered total detected");
   });

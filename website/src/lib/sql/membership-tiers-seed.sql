@@ -14,6 +14,38 @@ alter table if exists public.membership_tiers
   add column if not exists store_credit_min_order_cents integer not null default 0,
   add column if not exists compare_monthly_price_cents integer not null default 0;
 
+-- Records how much membership store credit an order redeemed (deducted from the
+-- ledger when the order is paid; returned if refunded).
+alter table if exists public.orders
+  add column if not exists store_credit_redeemed_cents integer not null default 0;
+
+-- Store-credit ledger. Balance is the sum of the CURRENT calendar month's rows
+-- (grants positive, redemptions negative), which gives monthly use-it-or-lose-it
+-- expiry for free — prior months simply don't count toward the balance. Tied to
+-- the buyer's auth user id.
+create table if not exists public.store_credit_ledger (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  amount_cents integer not null,
+  reason text not null,
+  order_id text,
+  period_month text,          -- 'YYYY-MM' of the grant, for idempotent monthly grants
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_store_credit_ledger_user on public.store_credit_ledger(user_id, created_at desc);
+create unique index if not exists idx_store_credit_ledger_monthly_grant
+  on public.store_credit_ledger(user_id, period_month)
+  where reason = 'membership_monthly_grant';
+alter table public.store_credit_ledger enable row level security;
+do $$
+begin
+  if not exists (select 1 from pg_policies where tablename = 'store_credit_ledger' and policyname = 'store_credit_select_own') then
+    create policy store_credit_select_own on public.store_credit_ledger
+      for select using (user_id = auth.uid());
+  end if;
+end;
+$$;
+
 -- Retire any previously-seeded paid tiers that aren't in the new lineup.
 update public.membership_tiers set is_active = false
   where slug in ('plus') and slug not in ('essential', 'pro', 'elite', 'black');

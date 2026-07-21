@@ -3,6 +3,7 @@ import "server-only";
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getBillingProvider } from "@/lib/billing-provider";
+import { grantMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { getSiteUrl } from "@/lib/env";
@@ -424,6 +425,37 @@ export interface MembershipBillingSweepResult {
 // rows that are actually due and haven't already been handled, so a
 // coarser cron interval just means coarser timing, never a double-charge
 // or double-send.
+// Grants the current month's store credit to every active paying member.
+// Idempotent per member per month (unique index on the grant), so it's safe
+// to run on every cron tick — a member only ever gets one grant per month, and
+// it stops the instant their membership is no longer active/trialing.
+export async function grantMonthlyStoreCreditSweep(): Promise<{ granted: number }> {
+  const { data, error } = await supabaseAdmin
+    .from("customer_memberships")
+    .select("user_id, status, membership_tiers(slug, monthly_store_credit_cents)")
+    .in("status", ["active", "trialing"]);
+
+  if (error) {
+    if (String(error.code) === "42P01") return { granted: 0 };
+    throw error;
+  }
+
+  let granted = 0;
+  for (const row of (data ?? []) as unknown as Array<{ user_id: string; membership_tiers: { slug: string; monthly_store_credit_cents: number } | null }>) {
+    const tier = row.membership_tiers;
+    if (!tier || tier.slug === "free") continue;
+    const cents = Number(tier.monthly_store_credit_cents ?? 0);
+    if (cents <= 0) continue;
+    try {
+      if (await grantMonthlyStoreCredit(String(row.user_id), cents)) granted += 1;
+    } catch {
+      // One member's grant failing must not stop the rest of the sweep.
+    }
+  }
+
+  return { granted };
+}
+
 export async function runMembershipBillingSweep(): Promise<MembershipBillingSweepResult> {
   const now = new Date();
   const in3Days = new Date(now.getTime() + 3 * ONE_DAY_MS);

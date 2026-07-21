@@ -122,6 +122,9 @@ export default function CheckoutPage() {
     setKnownEmail,
     clearCart,
     bulkSavingsTierReached,
+    memberFreeShipping,
+    storeCreditBalanceCents,
+    storeCreditMinOrderCents,
     taxAmount,
     shippingConfig,
   } = useCart();
@@ -171,10 +174,18 @@ export default function CheckoutPage() {
   // Mirror the server's free-shipping-on-bulk-tier rule so expectedTotal
   // always matches (see payment-service.ts and cart-context.tsx).
   const shipping = useMemo(
-    () => (bulkSavingsTierReached ? 0 : calculateShipping(subtotal, form.country, shippingConfig)),
-    [bulkSavingsTierReached, subtotal, form.country, shippingConfig],
+    () => ((bulkSavingsTierReached || memberFreeShipping) ? 0 : calculateShipping(subtotal, form.country, shippingConfig)),
+    [bulkSavingsTierReached, memberFreeShipping, subtotal, form.country, shippingConfig],
   );
-  const totalBeforePoints = Math.max(0, subtotal + shipping + serviceFee + taxAmount - discountAmount);
+  const totalBeforeCredit = Math.max(0, subtotal + shipping + serviceFee + taxAmount - discountAmount);
+  // Membership store credit auto-applies when the merchandise subtotal meets
+  // the tier's redemption minimum (mirrors payment-service.ts).
+  const storeCreditApplied = useMemo(() => {
+    if (storeCreditBalanceCents <= 0) return 0;
+    if (Math.round(subtotal * 100) < storeCreditMinOrderCents) return 0;
+    return Math.min(storeCreditBalanceCents / 100, totalBeforeCredit);
+  }, [storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforeCredit]);
+  const totalBeforePoints = Math.max(0, totalBeforeCredit - storeCreditApplied);
   const pointsRedeemedDiscount = useMemo(
     () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints)),
     [referralDetails, pointsToRedeem, totalBeforePoints],
@@ -739,10 +750,16 @@ export default function CheckoutPage() {
             <div className="mt-5 space-y-3 text-sm text-white/70">
               <div className="flex justify-between"><span>Items</span><span>{orderCount}</span></div>
               <div className="flex justify-between"><span>Subtotal</span><span>{formatCartCurrency(subtotal)}</span></div>
-              <div className="flex justify-between"><span>Shipping</span><span>{formatCartCurrency(shipping)}</span></div>
+              <div className="flex justify-between">
+                <span>Shipping</span>
+                <span>{shipping === 0 && memberFreeShipping ? "Free (member)" : formatCartCurrency(shipping)}</span>
+              </div>
               {serviceFee > 0 ? <div className="flex justify-between"><span>Service fee</span><span>{formatCartCurrency(serviceFee)}</span></div> : null}
               {taxAmount > 0 ? <div className="flex justify-between"><span>Tax</span><span>{formatCartCurrency(taxAmount)}</span></div> : null}
               <div className="flex justify-between"><span>Discount</span><span>-{formatCartCurrency(discountAmount)}</span></div>
+              {storeCreditApplied > 0 ? (
+                <div className="flex justify-between text-emerald-300"><span>Member store credit</span><span>-{formatCartCurrency(storeCreditApplied)}</span></div>
+              ) : null}
               {pointsRedeemedDiscount > 0 ? (
                 <div className="flex justify-between"><span>Points redeemed</span><span>-{formatCartCurrency(pointsRedeemedDiscount)}</span></div>
               ) : null}

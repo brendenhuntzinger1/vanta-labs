@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { runMembershipBillingSweep } from "@/lib/membership-billing";
+import { grantMonthlyStoreCreditSweep, runMembershipBillingSweep } from "@/lib/membership-billing";
 import { runAbandonedCartSweep } from "@/lib/cart-recovery";
 
 export const dynamic = "force-dynamic";
@@ -21,14 +21,16 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const [membershipResult, cartRecoveryResult] = await Promise.allSettled([
+  const [membershipResult, cartRecoveryResult, storeCreditResult] = await Promise.allSettled([
     runMembershipBillingSweep(),
     runAbandonedCartSweep(),
+    grantMonthlyStoreCreditSweep(),
   ]);
 
   return NextResponse.json({
     success: true,
     membershipBilling: membershipResult.status === "fulfilled" ? membershipResult.value : { error: String(membershipResult.reason) },
     cartRecovery: cartRecoveryResult.status === "fulfilled" ? cartRecoveryResult.value : { error: String(cartRecoveryResult.reason) },
+    storeCredit: storeCreditResult.status === "fulfilled" ? storeCreditResult.value : { error: String(storeCreditResult.reason) },
   });
 }

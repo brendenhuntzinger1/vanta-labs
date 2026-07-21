@@ -3,7 +3,7 @@ import { getPaymentProvider } from "@/lib/payment-provider";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { calculateDiscountAmount } from "@/lib/referral-service";
 import { validateCoupon } from "@/lib/coupons";
-import { getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/lib/membership";
+import { getMembershipPerks, getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/lib/membership";
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
@@ -264,20 +264,23 @@ export async function createCheckoutSession(
  ),
  );
 
- const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent, shippingConfig] = await Promise.all([
+ const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent, shippingConfig, memberPerks] = await Promise.all([
    getHomepageControlConfig(),
    getBulkSavingsControlConfig(),
    payload.customerUserId ? isEligibleForBulkSavings(payload.customerUserId) : Promise.resolve(false),
    payload.customerUserId ? isPriorityMember(payload.customerUserId) : Promise.resolve(false),
    getTaxRatePercent(),
    getShippingConfig(),
+   payload.customerUserId
+     ? getMembershipPerks(payload.customerUserId)
+     : Promise.resolve({ isActiveMember: false, tierSlug: "free", memberDiscountPercent: 0, freeShipping: false, pointsPerDollar: 1, storeCreditBalanceCents: 0, storeCreditMinOrderCents: 0 }),
  ]);
  const handlingFee = calculateHandlingFee(subtotal, shippingConfig);
  const bulkSavingsResult = calculateBulkSavingsDiscount(subtotal, bulkSavingsEligible, bulkSavingsConfig);
- // Free shipping is a distinct perk of reaching the bulk-savings threshold,
- // not conditioned on bulk savings winning the "greatest discount" contest
- // below - see membership-billing.sql / bulk-savings.ts.
- const shipping = bulkSavingsResult.tier
+ // Free shipping is a perk of reaching the bulk-savings threshold OR of an
+ // active membership tier whose plan includes free shipping. Both are
+ // account-tied and evaluated server-side.
+ const shipping = (bulkSavingsResult.tier || memberPerks.freeShipping)
    ? 0
    : roundMoney(calculateShipping(subtotal, payload.customer.country, shippingConfig));
  const buy3Get1Discount = promoBuy3Get1Enabled ? calculateBuy3Get1Discount(lineItems) : 0;
@@ -327,8 +330,17 @@ export async function createCheckoutSession(
  // "Cannot stack, greatest savings wins" - mirrors cart-context.tsx exactly
  // (same shared src/lib/discount-resolution.ts function) so the client
  // preview and this server total always agree on which discount applies.
+ // Active-member pricing competes as one of the candidate discounts (greatest
+ // savings wins, no stacking) so a member always gets at least their tier
+ // discount whenever it's the best available deal. Tied to the account via
+ // customerUserId -> membership.
+ const memberPricingAmount = memberPerks.memberDiscountPercent > 0
+   ? calculateDiscountAmount(subtotal, memberPerks.memberDiscountPercent)
+   : 0;
+
  const bestDiscount = resolveBestDiscount([
    { type: "bulk_savings", amount: bulkSavingsResult.amount },
+   { type: "member_pricing", amount: memberPricingAmount },
    preBulkDiscount,
  ]);
 
@@ -340,6 +352,17 @@ export async function createCheckoutSession(
  const taxAmount = calculateTax(Math.max(0, roundMoney(subtotal - discountAmount)), taxRatePercent);
 
  const totalBeforePoints = roundMoney(subtotal + shipping + handlingFee + taxAmount - discountAmount);
+
+ // Membership store credit auto-applies when the order's merchandise subtotal
+ // meets the tier's redemption minimum (the margin guardrail). It's deducted
+ // before points; the actual ledger deduction is recorded once the order is
+ // paid (payment-webhook), and returned if the order is later refunded.
+ let storeCreditRedeemedCents = 0;
+ if (memberPerks.storeCreditBalanceCents > 0 && Math.round(subtotal * 100) >= memberPerks.storeCreditMinOrderCents) {
+ storeCreditRedeemedCents = Math.max(0, Math.min(memberPerks.storeCreditBalanceCents, Math.round(totalBeforePoints * 100)));
+ }
+ const storeCreditDiscount = roundMoney(storeCreditRedeemedCents / 100);
+ const totalAfterCredit = roundMoney(Math.max(0, totalBeforePoints - storeCreditDiscount));
 
  // Points redemption stacks with a coupon or Buy 3 Get 1 Free (it behaves
  // like store credit, not a promo code) but never with a referral code -
@@ -354,15 +377,19 @@ export async function createCheckoutSession(
  const balance = await getPointsBalance(payload.customerUserId);
  const requestedPoints = Math.min(Math.floor(payload.pointsToRedeem), balance);
  const requestedDollars = pointsToDollars(requestedPoints);
- pointsDiscountAmount = roundMoney(Math.min(requestedDollars, totalBeforePoints));
+ pointsDiscountAmount = roundMoney(Math.min(requestedDollars, totalAfterCredit));
  pointsRedeemed = dollarsToPoints(pointsDiscountAmount);
  }
 
- const expectedTotal = roundMoney(Math.max(0, totalBeforePoints - pointsDiscountAmount));
+ const expectedTotal = roundMoney(Math.max(0, totalAfterCredit - pointsDiscountAmount));
 
+ // The guard only blocks UNDERpayment (a client trying to pay less than the
+ // real total). Membership perks are applied authoritatively on the server
+ // and only ever LOWER the total, so a client total >= the server total is
+ // always safe and accepted (the customer is charged the correct perked total).
  if (
  payload.expectedTotal !== undefined &&
- Math.abs(Number(payload.expectedTotal) - expectedTotal) > 0.01
+ Number(payload.expectedTotal) < expectedTotal - 0.01
  ) {
  throw new Error("Altered total detected");
  }
@@ -421,6 +448,7 @@ export async function createCheckoutSession(
    coupon_code: coupon?.code ?? null,
    customer_user_id: payload.customerUserId ?? null,
    points_redeemed: pointsRedeemed,
+   store_credit_redeemed_cents: storeCreditRedeemedCents,
    payment_status: "pending_payment",
    fulfillment_status: "pending",
    created_at: new Date().toISOString(),

@@ -2,7 +2,7 @@
 // client cart preview and the server checkout total so both always agree
 // on which single discount is actually applied.
 
-export type DiscountType = "bulk_savings" | "buy3get1" | "referral" | "coupon";
+export type DiscountType = "bulk_savings" | "buy3get1" | "referral" | "coupon" | "member_pricing";
 
 export interface DiscountCandidate {
   type: DiscountType;
