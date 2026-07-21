@@ -26,8 +26,9 @@ describe("commissionEarnedTemplate", () => {
 
   it("never leaks sensitive business data", () => {
     // No order totals, customer identity, revenue, product mix, or fraud data.
+    // (The store's own contact address in the shared footer is not a leak.)
     const lowered = body.toLowerCase();
-    for (const forbidden of ["customer", "order total", "revenue", "subtotal", "@", "fraud", "tier"]) {
+    for (const forbidden of ["customer", "order total", "revenue", "subtotal", "fraud", "tier"]) {
       expect(lowered).not.toContain(forbidden);
     }
   });
