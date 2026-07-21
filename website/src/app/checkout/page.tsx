@@ -441,7 +441,7 @@ export default function CheckoutPage() {
 
                 <label className="text-sm text-white/60">
                   <span className="mb-2 block">Email</span>
-                  <input type="email" value={form.email} onChange={(e) => handleFieldChange("email", e.target.value)} autoComplete="email" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="alex@domain.com" />
+                  <input type="email" value={form.email} readOnly aria-readonly autoComplete="email" className="w-full cursor-not-allowed border border-white/15 bg-black/60 px-4 py-3 text-white/70 outline-none" placeholder="alex@domain.com" title="Your order uses your account email" />
                   {formErrors.email ? <span className="mt-1 block text-xs text-rose-300">{formErrors.email}</span> : null}
                 </label>
 

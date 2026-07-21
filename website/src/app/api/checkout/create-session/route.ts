@@ -32,15 +32,26 @@ export async function POST(request: Request) {
       );
     }
 
+    // Checkout requires a signed-in customer account — guest checkout is off.
+    // Enforced server-side so it can't be bypassed by calling the API directly.
+    const authenticatedUser = await getAuthenticatedUser();
+    if (!authenticatedUser || detectRoleFromUser(authenticatedUser) !== "customer") {
+      return NextResponse.json(
+        { success: false, error: "Please sign in to your account to complete checkout." },
+        { status: 401 },
+      );
+    }
+    const customerUserId = authenticatedUser.id;
+
     const customer = sanitizeCustomerInput(body.customer as CustomerInput);
+    // The order is always tied to the account's own email — this is the single
+    // email used for confirmations, shipping, receipts, etc.
+    if (authenticatedUser.email) {
+      customer.email = authenticatedUser.email.trim().toLowerCase();
+    }
     const cookieStore = await cookies();
     const referralFromCookie = cookieStore.get(REFERRAL_COOKIE_NAME)?.value;
     const referralCode = body.referralCode || referralFromCookie;
-
-    const authenticatedUser = await getAuthenticatedUser();
-    const customerUserId = authenticatedUser && detectRoleFromUser(authenticatedUser) === "customer"
-      ? authenticatedUser.id
-      : undefined;
 
     const result = await createCheckoutSession({
       items: body.items,

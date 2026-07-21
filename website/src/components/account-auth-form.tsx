@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 
 type AuthMode = "login" | "signup";
+type AuthMethod = "email" | "phone";
 
 function getEmailRedirectUrl(path: string) {
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
@@ -20,14 +21,26 @@ function getEmailRedirectUrl(path: string) {
   return undefined;
 }
 
+function safeNextPath(value: string | null): string {
+  if (value && value.startsWith("/") && !value.startsWith("//")) {
+    return value;
+  }
+  return "/account";
+}
+
 export function AccountAuthForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const referralCodeFromUrl = searchParams.get("ref") ?? "";
+  const nextPath = safeNextPath(searchParams.get("next"));
   const [mode, setMode] = useState<AuthMode>(referralCodeFromUrl ? "signup" : "login");
+  const [method, setMethod] = useState<AuthMethod>("email");
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [phone, setPhone] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
   const [loading, setLoading] = useState(false);
   const [completingVerification, setCompletingVerification] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -69,7 +82,7 @@ export function AccountAuthForm() {
           throw new Error(sessionJson.error ?? "Unable to establish session");
         }
 
-        router.push("/account");
+        router.push(nextPath);
         router.refresh();
       } catch (verifyError) {
         if (active) {
@@ -85,7 +98,21 @@ export function AccountAuthForm() {
     return () => {
       active = false;
     };
-  }, [router]);
+  }, [router, nextPath]);
+
+  const establishSessionAndGo = async (accessToken: string) => {
+    const sessionResponse = await fetch("/api/auth/session", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ accessToken }),
+    });
+    const sessionJson = await sessionResponse.json();
+    if (!sessionResponse.ok || !sessionJson.success) {
+      throw new Error(sessionJson.error ?? "Unable to establish session");
+    }
+    router.push(nextPath);
+    router.refresh();
+  };
 
   const handleSignup = async () => {
     setLoading(true);
@@ -102,7 +129,7 @@ export function AccountAuthForm() {
             role: "customer",
             referred_by_code: referralCodeFromUrl || undefined,
           },
-          emailRedirectTo: getEmailRedirectUrl("/account/login"),
+          emailRedirectTo: getEmailRedirectUrl(`/account/login?next=${encodeURIComponent(nextPath)}`),
         },
       });
 
@@ -115,18 +142,7 @@ export function AccountAuthForm() {
         return;
       }
 
-      const sessionResponse = await fetch("/api/auth/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accessToken: data.session.access_token }),
-      });
-      const sessionJson = await sessionResponse.json();
-      if (!sessionResponse.ok || !sessionJson.success) {
-        throw new Error(sessionJson.error ?? "Unable to establish session");
-      }
-
-      router.push("/account");
-      router.refresh();
+      await establishSessionAndGo(data.session.access_token);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to create account");
     } finally {
@@ -149,20 +165,69 @@ export function AccountAuthForm() {
         throw new Error(signInError?.message ?? "Unable to sign in");
       }
 
-      const sessionResponse = await fetch("/api/auth/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accessToken: data.session.access_token }),
-      });
-      const sessionJson = await sessionResponse.json();
-      if (!sessionResponse.ok || !sessionJson.success) {
-        throw new Error(sessionJson.error ?? "Unable to establish session");
-      }
-
-      router.push("/account");
-      router.refresh();
+      await establishSessionAndGo(data.session.access_token);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to sign in");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Phone auth (SMS one-time code). Requires an SMS provider (e.g. Twilio)
+  // configured in the Supabase dashboard for texts to actually send.
+  const handleSendCode = async () => {
+    setLoading(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const normalizedPhone = phone.trim();
+      const { error: otpError } = await supabase.auth.signInWithOtp({
+        phone: normalizedPhone,
+        options: mode === "signup"
+          ? {
+              shouldCreateUser: true,
+              data: {
+                full_name: fullName.trim(),
+                role: "customer",
+                referred_by_code: referralCodeFromUrl || undefined,
+              },
+            }
+          : { shouldCreateUser: false },
+      });
+
+      if (otpError) {
+        throw new Error(otpError.message);
+      }
+
+      setOtpSent(true);
+      setMessage("We sent a 6-digit code to your phone. Enter it below to continue.");
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Unable to send code");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyCode = async () => {
+    setLoading(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const { data, error: verifyError } = await supabase.auth.verifyOtp({
+        phone: phone.trim(),
+        token: otpCode.trim(),
+        type: "sms",
+      });
+
+      if (verifyError || !data.session?.access_token) {
+        throw new Error(verifyError?.message ?? "Invalid or expired code");
+      }
+
+      await establishSessionAndGo(data.session.access_token);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Unable to verify code");
     } finally {
       setLoading(false);
     }
@@ -171,7 +236,18 @@ export function AccountAuthForm() {
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     if (loading) return;
+    if (method === "phone") {
+      void (otpSent ? handleVerifyCode() : handleSendCode());
+      return;
+    }
     void (mode === "signup" ? handleSignup() : handleLogin());
+  };
+
+  const resetTransientState = () => {
+    setError(null);
+    setMessage(null);
+    setOtpSent(false);
+    setOtpCode("");
   };
 
   if (completingVerification) {
@@ -182,17 +258,42 @@ export function AccountAuthForm() {
     );
   }
 
+  const primaryLabel = method === "phone"
+    ? (otpSent ? "Verify code" : "Send code")
+    : (mode === "signup" ? "Create Account" : "Sign In");
+
   return (
     <form onSubmit={handleSubmit} className="vl-panel mx-auto w-full max-w-md rounded-[1.75rem] p-6 sm:p-8">
       <p className="text-[11px] uppercase tracking-[0.35em] text-zinc-300">My Account</p>
       <h1 className="mt-3 text-3xl font-semibold text-white">{mode === "signup" ? "Create your account" : "Sign In"}</h1>
       <p className="mt-2 text-sm text-zinc-400">
         {mode === "signup"
-          ? "Track orders, save addresses, and build a wishlist."
+          ? "Track orders, save addresses, and check out faster."
           : "Access your order history, saved addresses, and wishlist."}
       </p>
 
-      <div className="mt-6 space-y-4">
+      <div className="mt-5 flex gap-2">
+        <button
+          type="button"
+          onClick={() => { setMethod("email"); resetTransientState(); }}
+          className={method === "email"
+            ? "flex-1 rounded-xl border border-cyan-300/40 bg-cyan-400/15 px-4 py-2 text-sm font-semibold text-cyan-100"
+            : "flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-300 transition hover:text-white"}
+        >
+          Email
+        </button>
+        <button
+          type="button"
+          onClick={() => { setMethod("phone"); resetTransientState(); }}
+          className={method === "phone"
+            ? "flex-1 rounded-xl border border-cyan-300/40 bg-cyan-400/15 px-4 py-2 text-sm font-semibold text-cyan-100"
+            : "flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-300 transition hover:text-white"}
+        >
+          Phone
+        </button>
+      </div>
+
+      <div className="mt-5 space-y-4">
         {mode === "signup" ? (
           <label className="block text-sm text-zinc-400">
             <span className="mb-2 block">Full name</span>
@@ -207,30 +308,74 @@ export function AccountAuthForm() {
           </label>
         ) : null}
 
-        <label className="block text-sm text-zinc-400">
-          <span className="mb-2 block">Email</span>
-          <input
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            className="vl-input w-full px-4 py-3"
-            autoComplete="email"
-            required
-          />
-        </label>
+        {method === "email" ? (
+          <>
+            <label className="block text-sm text-zinc-400">
+              <span className="mb-2 block">Email</span>
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                className="vl-input w-full px-4 py-3"
+                autoComplete="email"
+                required
+              />
+            </label>
 
-        <label className="block text-sm text-zinc-400">
-          <span className="mb-2 block">Password</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            className="vl-input w-full px-4 py-3"
-            autoComplete={mode === "signup" ? "new-password" : "current-password"}
-            minLength={8}
-            required
-          />
-        </label>
+            <label className="block text-sm text-zinc-400">
+              <span className="mb-2 block">Password</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className="vl-input w-full px-4 py-3"
+                autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                minLength={8}
+                required
+              />
+            </label>
+          </>
+        ) : (
+          <>
+            <label className="block text-sm text-zinc-400">
+              <span className="mb-2 block">Phone number</span>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(event) => setPhone(event.target.value)}
+                className="vl-input w-full px-4 py-3"
+                autoComplete="tel"
+                placeholder="+1 555 123 4567"
+                disabled={otpSent}
+                required
+              />
+              <span className="mt-1 block text-xs text-zinc-500">Include your country code, e.g. +1 for the US.</span>
+            </label>
+
+            {otpSent ? (
+              <label className="block text-sm text-zinc-400">
+                <span className="mb-2 block">6-digit code</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={otpCode}
+                  onChange={(event) => setOtpCode(event.target.value)}
+                  className="vl-input w-full px-4 py-3 tracking-[0.4em]"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => { setOtpSent(false); setOtpCode(""); }}
+                  className="vl-focus-ring mt-2 text-xs text-zinc-400 underline-offset-4 hover:underline"
+                >
+                  Use a different number
+                </button>
+              </label>
+            ) : null}
+          </>
+        )}
       </div>
 
       {message ? <p className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{message}</p> : null}
@@ -241,7 +386,7 @@ export function AccountAuthForm() {
         disabled={loading}
         className="vl-focus-ring mt-6 inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-white to-zinc-300 px-6 py-3 text-sm font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {loading ? "Please wait…" : mode === "signup" ? "Create Account" : "Sign In"}
+        {loading ? "Please wait…" : primaryLabel}
       </button>
 
       <div className="mt-4 flex items-center justify-between text-xs text-zinc-500">
@@ -249,14 +394,13 @@ export function AccountAuthForm() {
           type="button"
           onClick={() => {
             setMode((current) => (current === "signup" ? "login" : "signup"));
-            setError(null);
-            setMessage(null);
+            resetTransientState();
           }}
           className="vl-focus-ring text-zinc-300 underline-offset-4 hover:underline"
         >
           {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
         </button>
-        {mode === "login" ? (
+        {mode === "login" && method === "email" ? (
           <Link href="/account/forgot-password" className="vl-focus-ring text-zinc-300 underline-offset-4 hover:underline">
             Forgot password?
           </Link>

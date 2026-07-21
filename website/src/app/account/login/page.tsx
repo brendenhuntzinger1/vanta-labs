@@ -7,11 +7,27 @@ import { getAuthenticatedUser } from "@/lib/auth-session";
 
 export const dynamic = "force-dynamic";
 
-export default async function AccountLoginPage() {
+// Only allow internal, single-slash paths as a post-login destination — never
+// an absolute URL — to prevent open-redirect abuse.
+function safeNext(next: string | string[] | undefined): string {
+  const value = Array.isArray(next) ? next[0] : next;
+  if (typeof value === "string" && value.startsWith("/") && !value.startsWith("//")) {
+    return value;
+  }
+  return "/account";
+}
+
+export default async function AccountLoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ next?: string | string[] }>;
+}) {
+  const { next } = await searchParams;
+  const destination = safeNext(next);
   const user = await getAuthenticatedUser();
 
   if (user && detectRoleFromUser(user) === "customer") {
-    redirect("/account");
+    redirect(destination);
   }
 
   return (
