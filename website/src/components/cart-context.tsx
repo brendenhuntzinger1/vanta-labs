@@ -678,10 +678,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     }
 
     setItems((currentItems) => {
+      // Match on the unique cart key ONLY. Matching on slug too would let an
+      // action on a no-variant item collide with that product's variant row.
       if (quantity <= 0) {
-        return currentItems.filter((item) => item.key !== slug && item.slug !== slug);
+        return currentItems.filter((item) => item.key !== slug);
       }
-      return currentItems.map((item) => (item.key === slug || item.slug === slug ? { ...item, quantity } : item));
+      return currentItems.map((item) => (item.key === slug ? { ...item, quantity } : item));
     });
   };
 
@@ -697,7 +699,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       );
     }
 
-    setItems((currentItems) => currentItems.filter((item) => item.key !== slug && item.slug !== slug));
+    setItems((currentItems) => currentItems.filter((item) => item.key !== slug));
   };
 
   // Used by /cart/restore - replaces the current cart with a recovered

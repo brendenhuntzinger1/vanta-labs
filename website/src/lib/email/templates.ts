@@ -349,6 +349,29 @@ export function shippingUpdateTemplate(input: {
   };
 }
 
+export function deliveryConfirmationTemplate(input: {
+  customerName: string;
+  orderId: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.customerName || "there");
+  return {
+    subject: `Delivered — order ${input.orderId}`,
+    html: renderLayout({
+      preheader: `Your order ${input.orderId} has been delivered.`,
+      title: `${name}, your order was delivered`,
+      bodyHtml: `<p>Order <strong>${escapeHtml(input.orderId)}</strong> has been marked <strong>delivered</strong>. We hope everything arrived in great shape.</p><p>If anything's not right, just reply to this email and we'll help.</p>`,
+    }),
+    text: toText([
+      `${input.customerName || "there"}, your order was delivered.`,
+      "",
+      `Order ${input.orderId} has been marked delivered.`,
+      "If anything's not right, reply to this email and we'll help.",
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 export function ambassadorApplicationReceivedTemplate(input: { name: string }): EmailTemplate {
   const name = escapeHtml(input.name);
   return {

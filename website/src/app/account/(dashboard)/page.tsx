@@ -38,7 +38,7 @@ const LEDGER_REASON_LABELS: Record<string, string> = {
 
 export default async function AccountDashboardPage() {
   const user = await getAuthenticatedUser();
-  if (!user || detectRoleFromUser(user) !== "customer" || !user.email) {
+  if (!user || detectRoleFromUser(user) !== "customer") {
     redirect("/account/login");
   }
 
@@ -49,7 +49,7 @@ export default async function AccountDashboardPage() {
   // remaining queries degrade to safe defaults so one failing section doesn't
   // blank the entire page.
   const [orders, membership, pointsBalance, pointsHistory, referralEarnedPoints, referralCode, activeCoupons, pointsMultiplier] = await Promise.all([
-    getCustomerOrders(user.email).catch(() => []),
+    getCustomerOrders(user.id, user.email).catch(() => []),
     getCustomerMembership(user.id),
     getPointsBalance(user.id).catch(() => 0),
     getPointsHistory(user.id, 15).catch(() => []),

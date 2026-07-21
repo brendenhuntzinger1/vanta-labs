@@ -6,7 +6,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 
 export async function POST(request: Request) {
   const user = await getAuthenticatedUser();
-  if (!user || detectRoleFromUser(user) !== "customer" || !user.email) {
+  if (!user || detectRoleFromUser(user) !== "customer") {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
 
@@ -19,7 +19,7 @@ export async function POST(request: Request) {
 
     const { data: order, error: orderError } = await supabaseAdmin
       .from("orders")
-      .select("order_id, customer_email, order_items(product_id, quantity)")
+      .select("order_id, customer_email, customer_user_id, order_items(product_id, quantity)")
       .eq("order_id", orderId)
       .maybeSingle();
 
@@ -27,7 +27,11 @@ export async function POST(request: Request) {
       throw orderError;
     }
 
-    if (!order || String(order.customer_email ?? "").toLowerCase() !== user.email.toLowerCase()) {
+    // The order must belong to THIS account — by account id (survives email
+    // change / phone accounts) or by the current email for legacy rows.
+    const ownsByUserId = order?.customer_user_id && String(order.customer_user_id) === user.id;
+    const ownsByEmail = user.email && String(order?.customer_email ?? "").toLowerCase() === user.email.toLowerCase();
+    if (!order || (!ownsByUserId && !ownsByEmail)) {
       return NextResponse.json({ success: false, error: "Order not found" }, { status: 404 });
     }
 

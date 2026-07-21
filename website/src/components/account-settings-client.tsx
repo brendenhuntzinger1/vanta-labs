@@ -15,6 +15,7 @@ export function AccountSettingsClient({
 }) {
   const [fullName, setFullName] = useState(initialFullName);
   const [email, setEmail] = useState(initialEmail);
+  const [emailChangePassword, setEmailChangePassword] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [preferences, setPreferences] = useState(initialPreferences);
@@ -50,6 +51,24 @@ export function AccountSettingsClient({
       if (Object.keys(updates).length === 0) {
         setProfileMessage("Nothing to update.");
         return;
+      }
+
+      // Changing the email is a security-sensitive action: require the current
+      // password first (mirrors the password-change flow) so a hijacked open
+      // session can't silently take over the account by swapping the email.
+      if (updates.email && initialEmail) {
+        if (!emailChangePassword) {
+          setProfileError("Enter your current password to change your email.");
+          return;
+        }
+        const { error: reauthError } = await supabase.auth.signInWithPassword({
+          email: initialEmail,
+          password: emailChangePassword,
+        });
+        if (reauthError) {
+          setProfileError("Current password is incorrect.");
+          return;
+        }
       }
 
       const { error } = await supabase.auth.updateUser(updates);
@@ -161,6 +180,12 @@ export function AccountSettingsClient({
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" />
           </label>
         </div>
+        {email.trim().toLowerCase() !== initialEmail.toLowerCase() && initialEmail ? (
+          <label className="mt-3 block text-sm text-zinc-300 sm:max-w-sm">
+            Current password (required to change email)
+            <input type="password" value={emailChangePassword} onChange={(e) => setEmailChangePassword(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" autoComplete="current-password" />
+          </label>
+        ) : null}
         {profileError ? <p className="mt-3 text-sm text-rose-300">{profileError}</p> : null}
         {profileMessage ? <p className="mt-3 text-sm text-emerald-300">{profileMessage}</p> : null}
         <button type="button" onClick={handleSaveProfile} disabled={savingProfile} className="vl-btn-primary vl-focus-ring mt-4 px-5 py-2.5 text-sm disabled:opacity-60">

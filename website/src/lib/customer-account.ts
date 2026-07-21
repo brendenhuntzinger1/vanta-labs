@@ -15,16 +15,19 @@ export interface CustomerOrderRow {
 // explicitly by the caller-supplied email rather than relying solely on the
 // customer_accounts.sql RLS policy (that policy exists for any future
 // client-side/anon-key access path).
-export async function getCustomerOrders(email: string): Promise<CustomerOrderRow[]> {
-  const normalizedEmail = email.trim().toLowerCase();
-  if (!normalizedEmail) {
-    return [];
-  }
+export async function getCustomerOrders(userId: string, email?: string | null): Promise<CustomerOrderRow[]> {
+  const normalizedEmail = (email ?? "").trim().toLowerCase();
+  // Match on the account id first (survives an email change and works for
+  // phone-only accounts that have no email), OR the current email for legacy
+  // orders placed before customer_user_id was stored.
+  const orFilter = normalizedEmail
+    ? `customer_user_id.eq.${userId},customer_email.ilike.${normalizedEmail}`
+    : `customer_user_id.eq.${userId}`;
 
   const { data, error } = await supabaseAdmin
     .from("orders")
     .select("order_id, amount_paid, payment_status, fulfillment_status, tracking_number, created_at, order_items(product_id, product_name, quantity, line_total, unit_price)")
-    .ilike("customer_email", normalizedEmail)
+    .or(orFilter)
     .order("created_at", { ascending: false })
     .limit(200);
 

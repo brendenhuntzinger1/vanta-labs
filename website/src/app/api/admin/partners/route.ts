@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageRefunds } from "@/lib/admin-roles";
 import { createPartnerInvite, getAdminPartnerRows } from "@/lib/partner-portal";
 
 function unauthorizedResponse() {
@@ -30,6 +31,11 @@ export async function POST(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {
     return unauthorizedResponse();
+  }
+  // Creating a partner invite sets a commission rate — a manager-level money
+  // action, not something a staff-tier admin should do.
+  if (!canManageRefunds(session.role)) {
+    return NextResponse.json({ success: false, error: "Your role does not have permission to manage partners." }, { status: 403 });
   }
 
   const ipAddress = getRequestIpAddress(request);

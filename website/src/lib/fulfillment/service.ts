@@ -1,6 +1,8 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { sendEmail } from "@/lib/email/send";
+import { deliveryConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { getFulfillmentRuntimeConfig, type FulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
 import { getFulfillmentProvider, type NormalizedFulfillmentOrder } from "@/lib/fulfillment/provider";
 
@@ -291,8 +293,47 @@ export async function applyInboundFulfillmentEvent(event: InboundFulfillmentEven
     }
   }
 
+  // Read the order's current status + contact BEFORE updating, so we can email
+  // the customer exactly once when it transitions into shipped/delivered.
+  const { data: priorOrder } = await supabaseAdmin
+    .from("orders")
+    .select("fulfillment_status, customer_email, customer_name, order_number")
+    .eq("order_id", orderId)
+    .maybeSingle();
+
   await supabaseAdmin.from("fulfillment_orders").update(fulfillmentUpdate).eq("order_id", orderId);
   await supabaseAdmin.from("orders").update(orderUpdate).eq("order_id", orderId);
+
+  // Customer shipping / delivery notifications — only on a genuine status
+  // transition (prev !== new), so repeated 3PL webhooks never re-send.
+  const newStatus = typeof orderUpdate.fulfillment_status === "string" ? orderUpdate.fulfillment_status : null;
+  const prevStatus = priorOrder?.fulfillment_status ? String(priorOrder.fulfillment_status) : null;
+  const customerEmail = priorOrder?.customer_email ? String(priorOrder.customer_email) : null;
+  if (customerEmail && newStatus && newStatus !== prevStatus) {
+    const displayOrderId = priorOrder?.order_number ? String(priorOrder.order_number) : orderId;
+    try {
+      if (newStatus === "shipped") {
+        await sendEmail({
+          to: customerEmail,
+          ...shippingUpdateTemplate({
+            customerName: String(priorOrder?.customer_name ?? ""),
+            orderId: displayOrderId,
+            status: "Shipped",
+            carrier: event.carrier ?? undefined,
+            trackingNumber: event.trackingNumber ?? undefined,
+            trackingUrl: event.trackingUrl ?? undefined,
+          }),
+        });
+      } else if (newStatus === "delivered") {
+        await sendEmail({
+          to: customerEmail,
+          ...deliveryConfirmationTemplate({ customerName: String(priorOrder?.customer_name ?? ""), orderId: displayOrderId }),
+        });
+      }
+    } catch {
+      // Notification is best-effort; the status update already persisted.
+    }
+  }
 
   // Mirror tracking into order_shipments so the existing admin order view and
   // customer shipping emails stay consistent.
