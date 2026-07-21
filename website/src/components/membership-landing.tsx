@@ -184,31 +184,37 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
             <button
               type="button"
               onClick={() => setBillingCycle("monthly")}
-              className={billingCycle === "monthly" ? "bg-white/10 px-5 py-2 text-sm text-white" : "px-5 py-2 text-sm text-white/50"}
+              className={billingCycle === "monthly" ? "inline-flex items-center justify-center bg-white/10 px-4 py-2.5 text-sm min-h-[44px] text-white sm:px-5" : "inline-flex items-center justify-center px-4 py-2.5 text-sm min-h-[44px] text-white/50 sm:px-5"}
             >
               Monthly
             </button>
             <button
               type="button"
               onClick={() => setBillingCycle("annual")}
-              className={billingCycle === "annual" ? "bg-white/10 px-5 py-2 text-sm text-white" : "px-5 py-2 text-sm text-white/50"}
+              className={billingCycle === "annual" ? "inline-flex items-center justify-center bg-white/10 px-4 py-2.5 text-sm min-h-[44px] text-white sm:px-5" : "inline-flex items-center justify-center px-4 py-2.5 text-sm min-h-[44px] text-white/50 sm:px-5"}
             >
               Annual <span className="text-emerald-300">(save ~17%)</span>
             </button>
           </div>
         </div>
 
-        <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-          {tiers.filter((tier) => tier.slug !== "free").map((tier, index) => {
+        {/* On phones this is a snap-scrolling carousel (one plan at a time, next
+            one peeking) so every tier is easy to see and compare without an
+            endless vertical scroll; sm+ keeps the original 2-/4-up grid. The
+            tier cards intentionally skip ScrollReveal here — its viewport
+            IntersectionObserver would keep the off-screen carousel cards hidden
+            until swiped into view. */}
+        <div className="mt-8 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-pl-4 px-1 pb-2 pt-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:grid sm:snap-none sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pb-0 sm:pt-0 lg:grid-cols-4">
+          {tiers.filter((tier) => tier.slug !== "free").map((tier) => {
             const price = billingCycle === "monthly" ? tier.monthlyPriceCents : tier.annualPriceCents;
             const isFeatured = tier.slug === "pro";
             const annualSavingsCents = tier.monthlyPriceCents * 12 - tier.annualPriceCents;
             const showAnnualSavings = billingCycle === "annual" && price > 0 && annualSavingsCents > 0;
             const showComparePrice = billingCycle === "monthly" && tier.compareMonthlyPriceCents > tier.monthlyPriceCents;
             return (
-              <ScrollReveal key={tier.id} delayMs={index * 80}>
+              <div key={tier.id} className="w-[82%] shrink-0 snap-center sm:w-auto sm:shrink">
                 <div
-                  className={`vl2-product-card group relative flex h-full flex-col p-5 ${isFeatured ? "border-white/50" : ""}`}
+                  className={`vl2-product-card group relative flex h-full flex-col p-5 ${isFeatured ? "border-white/60 ring-1 ring-white/20" : ""}`}
                 >
                   {isFeatured ? (
                     <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-black">
@@ -273,10 +279,11 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                     </div>
                   )}
                 </div>
-              </ScrollReveal>
+              </div>
             );
           })}
         </div>
+        <p className="mt-3 text-center text-[11px] uppercase tracking-[0.24em] text-white/40 sm:hidden">← Swipe to compare plans →</p>
 
         <ScrollReveal delayMs={80}>
           <div className="mt-16 border-2 border-amber-400/70 bg-gradient-to-br from-amber-950/40 via-black to-black p-6 sm:p-10">
