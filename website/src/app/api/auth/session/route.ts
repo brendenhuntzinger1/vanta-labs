@@ -9,6 +9,9 @@ export async function POST(request: Request) {
   try {
     const body = await request.json();
     const accessToken = typeof body?.accessToken === "string" ? body.accessToken : "";
+    // Default to remembering (persistent cookie); an explicit `false` makes it
+    // a session-only cookie that clears when the browser closes.
+    const rememberMe = body?.rememberMe !== false;
 
     if (!accessToken) {
       return NextResponse.json({ success: false, error: "Missing access token" }, { status: 400 });
@@ -58,7 +61,7 @@ export async function POST(request: Request) {
       },
     });
 
-    const authCookie = buildAuthCookieValue(accessToken);
+    const authCookie = buildAuthCookieValue(accessToken, rememberMe);
     response.cookies.set(authCookie.name, authCookie.value, authCookie.options);
 
     return response;

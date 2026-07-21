@@ -82,6 +82,20 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
           <p className="mt-2 text-xs text-zinc-500">Referral code: {liveSummary.referralCode} • Commission: {liveSummary.commissionPercent}%</p>
           <p className="mt-1 text-xs text-zinc-500">Coupon code (share for customers to use at checkout): <span className="font-semibold text-zinc-300">{liveSummary.referralCode}</span></p>
         </div>
+
+        <div className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-400/[0.05] p-4">
+          <p className="text-[11px] uppercase tracking-[0.25em] text-amber-300">Ambassador Requirements</p>
+          <ul className="mt-3 space-y-2 text-sm text-zinc-300">
+            <li className="flex items-start gap-2">
+              <span className="mt-0.5 text-amber-300">•</span>
+              <span><span className="font-semibold text-white">To stay active:</span> post at least <span className="font-semibold text-white">1 promotional video per month</span>.</span>
+            </li>
+            <li className="flex items-start gap-2">
+              <span className="mt-0.5 text-amber-300">•</span>
+              <span><span className="font-semibold text-white">Earn more:</span> consistently create around <span className="font-semibold text-white">5+ quality videos per month</span> and your commission rate or bonuses can be negotiated. Reach out to discuss an upgrade.</span>
+            </li>
+          </ul>
+        </div>
       </section>
 
       <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

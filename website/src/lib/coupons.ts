@@ -51,6 +51,10 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
     if (welcome.enabled && welcome.percent > 0 && normalizeCouponCode(welcome.code) === normalizedCode) {
       const email = (customerEmail ?? "").trim().toLowerCase();
       if (email) {
+        // Once-per-customer: block if this email already has ANY paid order
+        // (first-order-only), OR any earlier order that already used this
+        // welcome code and isn't cancelled — this also closes the loophole of
+        // stacking the code across several simultaneous unpaid orders.
         const { data: priorPaid } = await supabaseAdmin
           .from("orders")
           .select("id")
@@ -59,6 +63,18 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
           .limit(1)
           .maybeSingle();
         if (priorPaid) {
+          throw new Error("This welcome offer is for first orders only.");
+        }
+
+        const { data: priorWelcomeUse } = await supabaseAdmin
+          .from("orders")
+          .select("id")
+          .eq("customer_email", email)
+          .ilike("coupon_code", normalizedCode)
+          .neq("payment_status", "cancelled")
+          .limit(1)
+          .maybeSingle();
+        if (priorWelcomeUse) {
           throw new Error("This welcome offer is for first orders only.");
         }
       }

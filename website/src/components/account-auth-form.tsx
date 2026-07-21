@@ -25,7 +25,27 @@ function safeNextPath(value: string | null): string {
   if (value && value.startsWith("/") && !value.startsWith("//")) {
     return value;
   }
-  return "/account";
+  // After a normal sign-in (no explicit destination) send shoppers to the
+  // home page rather than leaving them on the login screen.
+  return "/";
+}
+
+// Normalizes a typed phone number to E.164, which is what Supabase phone-OTP
+// requires. A bare 10-digit US number gets a +1; an 11-digit number starting
+// with 1 gets a +. Anything already starting with + is trusted as-is.
+function normalizePhoneNumber(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("+")) {
+    return "+" + trimmed.slice(1).replace(/\D/g, "");
+  }
+  const digits = trimmed.replace(/\D/g, "");
+  if (digits.length === 10) {
+    return `+1${digits}`;
+  }
+  if (digits.length === 11 && digits.startsWith("1")) {
+    return `+${digits}`;
+  }
+  return `+${digits}`;
 }
 
 export function AccountAuthForm() {
@@ -41,6 +61,7 @@ export function AccountAuthForm() {
   const [phone, setPhone] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [otpSent, setOtpSent] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [completingVerification, setCompletingVerification] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -78,14 +99,14 @@ export function AccountAuthForm() {
         const sessionResponse = await fetch("/api/auth/session", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ accessToken }),
+          body: JSON.stringify({ accessToken, rememberMe: true }),
         });
         const sessionJson = await sessionResponse.json();
         if (!sessionResponse.ok || !sessionJson.success) {
           throw new Error(sessionJson.error ?? "Unable to establish session");
         }
 
-        router.push(nextPath);
+        router.replace(nextPath);
         router.refresh();
       } catch (verifyError) {
         if (active) {
@@ -107,13 +128,15 @@ export function AccountAuthForm() {
     const sessionResponse = await fetch("/api/auth/session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ accessToken }),
+      body: JSON.stringify({ accessToken, rememberMe }),
     });
     const sessionJson = await sessionResponse.json();
     if (!sessionResponse.ok || !sessionJson.success) {
       throw new Error(sessionJson.error ?? "Unable to establish session");
     }
-    router.push(nextPath);
+    // replace() so the login page isn't left in history (back button won't
+    // bounce the now-signed-in user back onto the form).
+    router.replace(nextPath);
     router.refresh();
   };
 
@@ -138,6 +161,16 @@ export function AccountAuthForm() {
 
       if (signUpError || !data.user) {
         throw new Error(signUpError?.message ?? "Unable to create account");
+      }
+
+      // Supabase's anti-enumeration behavior returns an obfuscated user with an
+      // empty identities array (and sends NO email) when the address is already
+      // registered. Detect that and point them to sign in instead of telling
+      // them to check for an email that will never arrive.
+      if (Array.isArray(data.user.identities) && data.user.identities.length === 0) {
+        setMode("login");
+        setMessage("That email is already registered. Please sign in below.");
+        return;
       }
 
       if (!data.session?.access_token) {
@@ -184,7 +217,7 @@ export function AccountAuthForm() {
     setMessage(null);
 
     try {
-      const normalizedPhone = phone.trim();
+      const normalizedPhone = normalizePhoneNumber(phone);
       const { error: otpError } = await supabase.auth.signInWithOtp({
         phone: normalizedPhone,
         options: mode === "signup"
@@ -380,6 +413,18 @@ export function AccountAuthForm() {
           </>
         )}
       </div>
+
+      {!otpSent ? (
+        <label className="mt-4 flex min-h-[44px] cursor-pointer items-center gap-3 text-sm text-zinc-300">
+          <input
+            type="checkbox"
+            checked={rememberMe}
+            onChange={(event) => setRememberMe(event.target.checked)}
+            className="h-5 w-5 shrink-0 accent-cyan-400"
+          />
+          Keep me signed in on this device
+        </label>
+      ) : null}
 
       {message ? <p className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{message}</p> : null}
       {error ? <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p> : null}

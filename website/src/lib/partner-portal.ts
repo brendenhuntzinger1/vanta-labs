@@ -91,6 +91,10 @@ export interface AdminPartnerRow {
   clicks: number;
   conversionRate: number;
   updatedAt: string;
+  phone: string | null;
+  social: string | null;
+  followerCount: number | null;
+  preferredReferralCode: string | null;
 }
 
 export interface AdminOperationsSummary {
@@ -324,6 +328,12 @@ export async function createPartnerApplication(input: {
   authUserId: string;
   name: string;
   email: string;
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  social?: string;
+  followerCount?: number | null;
+  preferredReferralCode?: string;
 }) {
   const { data: existingPartner, error: existingPartnerError } = await supabaseAdmin
     .from("partners")
@@ -344,8 +354,32 @@ export async function createPartnerApplication(input: {
   }
 
   const partnerId = randomUUID();
-  const referralCode = generateReferralCode(input.name);
   const now = new Date().toISOString();
+
+  // Honor the applicant's preferred referral code when it's provided and not
+  // already taken; otherwise fall back to an auto-generated one. The admin can
+  // still override it at approval.
+  const preferred = (input.preferredReferralCode ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
+  let referralCode = generateReferralCode(input.name);
+  if (preferred) {
+    const { data: codeTaken } = await supabaseAdmin
+      .from("partners")
+      .select("id")
+      .eq("referral_code", preferred)
+      .maybeSingle();
+    if (!codeTaken) {
+      referralCode = preferred;
+    }
+  }
+
+  const applicantFields = {
+    first_name: input.firstName?.trim() || null,
+    last_name: input.lastName?.trim() || null,
+    phone: input.phone?.trim() || null,
+    social: input.social?.trim() || null,
+    follower_count: typeof input.followerCount === "number" && Number.isFinite(input.followerCount) ? Math.max(0, Math.round(input.followerCount)) : null,
+    preferred_referral_code: preferred || null,
+  };
 
   const partnerInsert = await supabaseAdmin
     .from("partners")
@@ -359,6 +393,7 @@ export async function createPartnerApplication(input: {
       auth_user_id: input.authUserId,
       invited_at: now,
       updated_at: now,
+      ...applicantFields,
     });
 
   if (partnerInsert.error) {
@@ -377,6 +412,7 @@ export async function createPartnerApplication(input: {
       auth_user_id: input.authUserId,
       invited_at: now,
       updated_at: now,
+      ...applicantFields,
     });
 
   if (ambassadorInsert.error) {
@@ -660,9 +696,12 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
 }
 
 export async function getAdminPartnerRows(input?: { search?: string; status?: string; payoutStatus?: string }): Promise<AdminPartnerRow[]> {
+  // select("*") (rather than an explicit column list) so this keeps working
+  // whether or not the ambassador-application-fields.sql migration has been
+  // applied yet — a missing column would otherwise error the whole query.
   let query = supabaseAdmin
     .from("partners")
-    .select("id, name, email, referral_code, status, commission_percent, commission_percent_locked, updated_at")
+    .select("*")
     .order("updated_at", { ascending: false });
 
   if (input?.status && input.status !== "all") {
@@ -751,6 +790,10 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
       clicks,
       conversionRate,
       updatedAt: partner.updated_at,
+      phone: partner.phone ? String(partner.phone) : null,
+      social: partner.social ? String(partner.social) : null,
+      followerCount: partner.follower_count != null ? Number(partner.follower_count) : null,
+      preferredReferralCode: partner.preferred_referral_code ? String(partner.preferred_referral_code) : null,
     };
   });
 

@@ -34,7 +34,9 @@ const manrope = Manrope({
   weight: ["400", "500", "600", "700", "800"],
 });
 
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") || "http://localhost:3000";
+// Falls back to the production domain (never localhost) so link-preview crawlers
+// always resolve absolute Open Graph image URLs even if the env var is unset.
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") || "https://vantalabsresearch.com";
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
@@ -54,10 +56,10 @@ export const metadata: Metadata = {
     title: "Vanta Labs | Premium Research Peptides",
     description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
     url: siteUrl,
-    images: [{ url: "/images/vantalabs.png" }],
+    images: [{ url: "/images/vantalabs.png", width: 1200, height: 630, alt: "Vanta Labs — Premium Research Peptides" }],
   },
   twitter: {
-    card: "summary",
+    card: "summary_large_image",
     title: "Vanta Labs | Premium Research Peptides",
     description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
     images: ["/images/vantalabs.png"],

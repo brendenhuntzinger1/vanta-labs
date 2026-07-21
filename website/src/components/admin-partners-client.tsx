@@ -800,6 +800,9 @@ export function AdminPartnersClient({
                   <td className="px-2 py-2">
                     <a href={`/admin/partners/${row.id}`} className="font-semibold text-white hover:text-cyan-200">{row.name}</a>
                     <p className="text-xs text-zinc-500">{row.email ?? "-"}</p>
+                    {row.phone ? <p className="text-xs text-zinc-500">📞 {row.phone}</p> : null}
+                    {row.social ? <p className="text-xs text-zinc-500 break-all">🔗 {row.social}</p> : null}
+                    {row.followerCount != null ? <p className="text-xs text-zinc-500">👥 {row.followerCount.toLocaleString()} followers</p> : null}
                     <p className="mt-1 font-mono text-xs text-cyan-300/80">/r/{row.referralCode}</p>
                   </td>
                   <td className="px-2 py-2">{row.status}</td>

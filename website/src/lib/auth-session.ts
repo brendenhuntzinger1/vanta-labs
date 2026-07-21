@@ -4,7 +4,8 @@ import { cookies } from "next/headers";
 import { createServerClient } from "@/lib/supabase-server";
 
 export const AUTH_COOKIE_NAME = "vl_session_token";
-const AUTH_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
+// "Remember me" keeps the session cookie for 30 days on a trusted device.
+const AUTH_COOKIE_REMEMBER_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
 
 export async function getSessionAccessToken() {
   const store = await cookies();
@@ -27,7 +28,7 @@ export async function getAuthenticatedUser() {
   return data.user;
 }
 
-export function buildAuthCookieValue(accessToken: string) {
+export function buildAuthCookieValue(accessToken: string, rememberMe = true) {
   return {
     name: AUTH_COOKIE_NAME,
     value: accessToken,
@@ -36,7 +37,9 @@ export function buildAuthCookieValue(accessToken: string) {
       secure: process.env.NODE_ENV === "production",
       sameSite: "lax" as const,
       path: "/",
-      maxAge: AUTH_COOKIE_MAX_AGE_SECONDS,
+      // Remember me → a persistent 30-day cookie. Otherwise a session cookie
+      // (no maxAge) that clears when the browser fully closes.
+      ...(rememberMe ? { maxAge: AUTH_COOKIE_REMEMBER_MAX_AGE_SECONDS } : {}),
     },
   };
 }

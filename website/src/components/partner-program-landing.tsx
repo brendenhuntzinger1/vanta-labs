@@ -25,6 +25,13 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
   const searchParams = useSearchParams();
   const [stats, setStats] = useState(initialStats);
   const [fullName, setFullName] = useState(() => searchParams.get("name") ?? "");
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [applicantEmail, setApplicantEmail] = useState("");
+  const [applicantPhone, setApplicantPhone] = useState("");
+  const [social, setSocial] = useState("");
+  const [preferredCode, setPreferredCode] = useState("");
+  const [followerCount, setFollowerCount] = useState("");
   const [loading, setLoading] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
   const [sessionStatus, setSessionStatus] = useState<SessionStatus>("loading");
@@ -70,6 +77,14 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
           : "";
         if (active && prefillName) {
           setFullName((current) => current || prefillName);
+          const parts = prefillName.trim().split(/\s+/);
+          if (parts.length > 0) {
+            setFirstName((current) => current || parts[0]);
+            if (parts.length > 1) setLastName((current) => current || parts.slice(1).join(" "));
+          }
+        }
+        if (active && data.session.user.email) {
+          setApplicantEmail((current) => current || data.session.user.email || "");
         }
 
         const meResponse = await fetch("/api/partner/me", { cache: "no-store" });
@@ -134,7 +149,16 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
       const applyResponse = await fetch("/api/partner/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accessToken, fullName: fullName.trim() }),
+        body: JSON.stringify({
+          accessToken,
+          firstName: firstName.trim(),
+          lastName: lastName.trim(),
+          fullName: `${firstName.trim()} ${lastName.trim()}`.trim() || fullName.trim(),
+          phone: applicantPhone.trim(),
+          social: social.trim(),
+          preferredReferralCode: preferredCode.trim(),
+          followerCount: followerCount.trim() ? Number(followerCount.replace(/[^\d]/g, "")) : null,
+        }),
       });
       const applyJson = await applyResponse.json();
       if (!applyResponse.ok || !applyJson.success) {
@@ -159,7 +183,97 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
     <div className="min-h-screen overflow-x-hidden bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
 
-      <section className="relative mx-auto max-w-[1440px] px-4 sm:px-6 pb-12 pt-32 lg:px-12 lg:pt-40">
+      <section id="apply" className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-14 pt-28 sm:pt-32 lg:px-12">
+        <div className="border border-white/10 p-6 sm:p-8">
+          <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+            <div>
+              <h3 className="vl2-serif text-2xl text-white">Become an Ambassador</h3>
+
+              {sessionStatus === "loading" ? (
+                <p className="mt-3 text-sm text-white/50">Checking your account…</p>
+              ) : sessionStatus === "guest" ? (
+                <>
+                  <p className="mt-2 text-sm text-white/50">
+                    The ambassador program is for Vanta Labs account holders. Sign in or create your free account, then come back here to apply — approval adds an <span className="text-white/80">Ambassador Stats</span> tab right inside your account.
+                  </p>
+                  <div className="mt-6 flex flex-wrap gap-3">
+                    <a href="/account/login?next=/partner" className="vl2-btn-primary vl-focus-ring px-6 py-3 text-sm">Sign in / Create account</a>
+                  </div>
+                </>
+              ) : sessionStatus === "approved" ? (
+                <>
+                  <p className="mt-2 text-sm text-white/50">You&apos;re an approved ambassador. Your live stats, referral link, and payouts live in your account.</p>
+                  <div className="mt-6 flex flex-wrap gap-3">
+                    <a href="/account/ambassador" className="vl2-btn-primary vl-focus-ring px-6 py-3 text-sm">Open Ambassador Stats</a>
+                  </div>
+                </>
+              ) : sessionStatus === "pending" ? (
+                <p className="mt-3 text-sm text-white/70">Your application is under review. We&apos;ll email you when a decision is made, and your Ambassador Stats tab will appear in your account once approved.</p>
+              ) : sessionStatus === "rejected" || sessionStatus === "disabled" ? (
+                <p className="mt-3 text-sm text-white/70">Your ambassador application isn&apos;t active right now. If you think this is a mistake, please reach out via the contact page.</p>
+              ) : (
+                <>
+                  <p className="mt-2 text-sm text-white/50">You&apos;re signed in. Submit your application below — approved ambassadors get an Ambassador Stats tab in this same account.</p>
+                  <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                    <label className="block text-sm text-white/50">
+                      <span className="mb-2 block">First name</span>
+                      <input value={firstName} onChange={(event) => setFirstName(event.target.value)} autoComplete="given-name" className="vl-input w-full px-4 py-3" required />
+                    </label>
+                    <label className="block text-sm text-white/50">
+                      <span className="mb-2 block">Last name</span>
+                      <input value={lastName} onChange={(event) => setLastName(event.target.value)} autoComplete="family-name" className="vl-input w-full px-4 py-3" required />
+                    </label>
+                    <label className="block text-sm text-white/50">
+                      <span className="mb-2 block">Email</span>
+                      <input type="email" value={applicantEmail} onChange={(event) => setApplicantEmail(event.target.value)} autoComplete="email" className="vl-input w-full px-4 py-3" />
+                    </label>
+                    <label className="block text-sm text-white/50">
+                      <span className="mb-2 block">Phone number</span>
+                      <input type="tel" value={applicantPhone} onChange={(event) => setApplicantPhone(event.target.value)} autoComplete="tel" placeholder="(555) 123-4567" className="vl-input w-full px-4 py-3" required />
+                    </label>
+                    <label className="block text-sm text-white/50 sm:col-span-2">
+                      <span className="mb-2 block">Instagram / TikTok / social <span className="text-white/30">(optional)</span></span>
+                      <input value={social} onChange={(event) => setSocial(event.target.value)} placeholder="@yourhandle or profile link" className="vl-input w-full px-4 py-3" />
+                    </label>
+                    <label className="block text-sm text-white/50">
+                      <span className="mb-2 block">Preferred referral code</span>
+                      <input value={preferredCode} onChange={(event) => setPreferredCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))} placeholder="e.g. JORDAN10" maxLength={20} className="vl-input w-full px-4 py-3" />
+                    </label>
+                    <label className="block text-sm text-white/50">
+                      <span className="mb-2 block">Follower count <span className="text-white/30">(optional)</span></span>
+                      <input type="text" inputMode="numeric" value={followerCount} onChange={(event) => setFollowerCount(event.target.value.replace(/[^\d,]/g, ""))} placeholder="e.g. 12,500" className="vl-input w-full px-4 py-3" />
+                    </label>
+                  </div>
+                  <p className="mt-3 text-xs text-white/35">Your preferred code is used if it&apos;s available — otherwise we&apos;ll assign one and an admin can adjust it on approval.</p>
+                  <button
+                    type="button"
+                    disabled={loading || !firstName.trim() || !lastName.trim() || !applicantPhone.trim()}
+                    onClick={handleApply}
+                    className="vl2-btn-primary vl-focus-ring mt-6 px-6 py-3 text-sm disabled:opacity-60"
+                  >
+                    {loading ? "Submitting…" : "Submit Application"}
+                  </button>
+                </>
+              )}
+
+              {authMessage ? <p className="mt-4 text-sm text-white/75">{authMessage}</p> : null}
+            </div>
+
+            <div className="border border-white/10 p-5 text-sm text-white/60">
+              <p className="vl2-eyebrow">Approval Process</p>
+              <ol className="mt-4 space-y-3">
+                <li>1. Sign in to your Vanta Labs account.</li>
+                <li>2. Submit your ambassador application here.</li>
+                <li>3. Admin reviews fit and audience quality.</li>
+                <li>4. On approval, your Ambassador Stats tab unlocks in your account.</li>
+              </ol>
+              <p className="mt-4 text-white/40">Average approval time: {stats.averageApprovalTimeHours.toFixed(1)} hours.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="relative mx-auto max-w-[1440px] px-4 sm:px-6 pb-12 pt-6 lg:px-12 lg:pt-10">
         <div className="grid items-center gap-10 lg:grid-cols-[1.05fr_0.95fr]">
           <div>
             <p className="vl2-eyebrow">Vanta Labs Partner Program</p>
@@ -266,68 +380,6 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
         ))}
       </section>
 
-      <section id="apply" className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-8 lg:px-12">
-        <div className="border border-white/10 p-6 sm:p-8">
-          <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-            <div>
-              <h3 className="vl2-serif text-2xl text-white">Become an Ambassador</h3>
-
-              {sessionStatus === "loading" ? (
-                <p className="mt-3 text-sm text-white/50">Checking your account…</p>
-              ) : sessionStatus === "guest" ? (
-                <>
-                  <p className="mt-2 text-sm text-white/50">
-                    The ambassador program is for Vanta Labs account holders. Sign in or create your free account, then come back here to apply — approval adds an <span className="text-white/80">Ambassador Stats</span> tab right inside your account.
-                  </p>
-                  <div className="mt-6 flex flex-wrap gap-3">
-                    <a href="/account/login?next=/partner" className="vl2-btn-primary vl-focus-ring px-6 py-3 text-sm">Sign in / Create account</a>
-                  </div>
-                </>
-              ) : sessionStatus === "approved" ? (
-                <>
-                  <p className="mt-2 text-sm text-white/50">You&apos;re an approved ambassador. Your live stats, referral link, and payouts live in your account.</p>
-                  <div className="mt-6 flex flex-wrap gap-3">
-                    <a href="/account/ambassador" className="vl2-btn-primary vl-focus-ring px-6 py-3 text-sm">Open Ambassador Stats</a>
-                  </div>
-                </>
-              ) : sessionStatus === "pending" ? (
-                <p className="mt-3 text-sm text-white/70">Your application is under review. We&apos;ll email you when a decision is made, and your Ambassador Stats tab will appear in your account once approved.</p>
-              ) : sessionStatus === "rejected" || sessionStatus === "disabled" ? (
-                <p className="mt-3 text-sm text-white/70">Your ambassador application isn&apos;t active right now. If you think this is a mistake, please reach out via the contact page.</p>
-              ) : (
-                <>
-                  <p className="mt-2 text-sm text-white/50">You&apos;re signed in. Submit your application below — approved ambassadors get an Ambassador Stats tab in this same account.</p>
-                  <label className="mt-5 block text-sm text-white/50">
-                    <span className="mb-2 block">Full name</span>
-                    <input value={fullName} onChange={(event) => setFullName(event.target.value)} autoComplete="name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
-                  </label>
-                  <button
-                    type="button"
-                    disabled={loading || !fullName.trim()}
-                    onClick={handleApply}
-                    className="vl2-btn-primary vl-focus-ring mt-6 px-6 py-3 text-sm disabled:opacity-60"
-                  >
-                    {loading ? "Submitting…" : "Submit Application"}
-                  </button>
-                </>
-              )}
-
-              {authMessage ? <p className="mt-4 text-sm text-white/75">{authMessage}</p> : null}
-            </div>
-
-            <div className="border border-white/10 p-5 text-sm text-white/60">
-              <p className="vl2-eyebrow">Approval Process</p>
-              <ol className="mt-4 space-y-3">
-                <li>1. Sign in to your Vanta Labs account.</li>
-                <li>2. Submit your ambassador application here.</li>
-                <li>3. Admin reviews fit and audience quality.</li>
-                <li>4. On approval, your Ambassador Stats tab unlocks in your account.</li>
-              </ol>
-              <p className="mt-4 text-white/40">Average approval time: {stats.averageApprovalTimeHours.toFixed(1)} hours.</p>
-            </div>
-          </div>
-        </div>
-      </section>
     </div>
   );
 }

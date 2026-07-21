@@ -135,7 +135,7 @@ function ProductsPageContent() {
           </p>
         </div>
 
-        <section className="vl2-glass static z-40 mt-10 p-4 lg:sticky lg:top-[92px]">
+        <section className="sticky top-[60px] z-40 mt-10 border border-white/12 bg-[#0b0b0b]/95 p-4 backdrop-blur-xl lg:top-[76px]">
           <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto]">
             <input
               type="search"
