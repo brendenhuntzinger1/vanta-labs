@@ -117,6 +117,15 @@ export function AdminTabs() {
 
   return (
     <nav aria-label="Admin sections" className="vl-panel mx-auto mb-6 max-w-7xl rounded-2xl p-2">
+      <div className="mb-2 flex items-center justify-between gap-2 px-1">
+        <Link
+          href="/"
+          className="inline-flex items-center gap-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs font-semibold text-zinc-300 transition hover:border-white/25 hover:text-white"
+        >
+          ← Back to Website
+        </Link>
+        <span className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Admin</span>
+      </div>
       <ul className="grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
         {tabs.map((tab) => {
           const active = tab.match(pathname);

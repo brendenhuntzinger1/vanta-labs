@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds } from "@/lib/admin-roles";
-import { markCommissionsPaid, updatePartnerStatus } from "@/lib/partner-portal";
+import { deleteAmbassador, markCommissionsPaid, updatePartnerStatus } from "@/lib/partner-portal";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -79,6 +79,31 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
     return NextResponse.json({ success: false, error: "Unknown action" }, { status: 400 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to update partner";
+    return NextResponse.json({ success: false, error: message }, { status: 400 });
+  }
+}
+
+export async function DELETE(request: Request, context: { params: Promise<{ partnerId: string }> }) {
+  const session = await verifyAdminSessionFromRequest(request);
+  if (!session) {
+    return unauthorizedResponse();
+  }
+  if (!canManageRefunds(session.role)) {
+    return NextResponse.json({ success: false, error: "Your role does not have permission to manage partners." }, { status: 403 });
+  }
+
+  const { partnerId } = await context.params;
+
+  try {
+    await deleteAmbassador({
+      partnerId,
+      actorUsername: session.username,
+      ipAddress: getRequestIpAddress(request),
+      userAgent: getRequestUserAgent(request),
+    });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to remove ambassador";
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

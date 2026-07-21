@@ -223,6 +223,30 @@ export function AdminPartnersClient({
     });
   };
 
+  const handleRemove = async (row: AdminPartnerRow) => {
+    const confirmed = window.confirm(
+      `Remove ambassador "${row.name}" (${row.referralCode})? They'll disappear from this list. This can't be undone. Ambassadors with recorded orders can't be removed — Disable them instead.`,
+    );
+    if (!confirmed) return;
+
+    setLoading(true);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/admin/partners/${row.id}`, { method: "DELETE" });
+      const json = await response.json();
+      if (!response.ok || !json.success) {
+        throw new Error(json.error ?? "Unable to remove ambassador");
+      }
+      await refreshRows();
+      await refreshFraudAndPayouts();
+      setMessage(`Ambassador "${row.name}" removed.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to remove ambassador");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleCreateTier = async (event: React.FormEvent) => {
     event.preventDefault();
     if (loading) return;
@@ -865,6 +889,12 @@ export function AdminPartnersClient({
                         onClick={() => handleMarkPaid(row)}
                         className="rounded border border-cyan-400/35 bg-cyan-500/10 px-2 py-1 text-xs text-cyan-100 disabled:opacity-50"
                       >Mark Paid</button>
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => handleRemove(row)}
+                        className="rounded border border-rose-500/40 bg-rose-600/10 px-2 py-1 text-xs text-rose-200 disabled:opacity-50"
+                      >Remove</button>
                     </div>
                   </td>
                 </tr>

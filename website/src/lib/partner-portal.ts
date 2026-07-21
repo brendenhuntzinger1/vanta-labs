@@ -1069,6 +1069,65 @@ export async function updatePartnerStatus(input: {
   });
 }
 
+// Permanently removes an ambassador so they disappear from the admin list.
+// Guarded: an ambassador who has generated referral orders is NOT deleted -
+// that would erase commission/revenue history. Those should be Disabled
+// instead. Deletion is for test entries, spam, or rejected applicants with no
+// financial history. Removes the click rows and both profile mirrors
+// (ambassadors + partners); their auth login (if any) is left untouched.
+export async function deleteAmbassador(input: {
+  partnerId: string;
+  actorUserId?: string | null;
+  actorUsername?: string | null;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+}) {
+  const { data: existing, error: existingError } = await supabaseAdmin
+    .from("partners")
+    .select("id, name, email")
+    .eq("id", input.partnerId)
+    .maybeSingle();
+  assertNoSupabaseError("partners.select(delete lookup)", existingError);
+  if (!existing) {
+    throw new Error("Ambassador not found.");
+  }
+
+  const { data: orders, error: ordersError } = await supabaseAdmin
+    .from("referral_orders")
+    .select("id")
+    .eq("ambassador_id", input.partnerId)
+    .limit(1);
+  assertNoSupabaseError("referral_orders.select(delete guard)", ordersError);
+  if ((orders ?? []).length > 0) {
+    throw new Error("This ambassador has recorded orders. Disable them instead of deleting, so their commission and revenue history is preserved.");
+  }
+
+  // No financial history - safe to remove. Clear click rows first, then both
+  // profile mirrors.
+  await supabaseAdmin.from("partner_clicks").delete().eq("ambassador_id", input.partnerId);
+  await supabaseAdmin.from("referrals").delete().eq("partner_id", input.partnerId);
+
+  const { error: ambassadorDeleteError } = await supabaseAdmin.from("ambassadors").delete().eq("id", input.partnerId);
+  assertNoSupabaseError("ambassadors.delete", ambassadorDeleteError);
+
+  const { error: partnerDeleteError } = await supabaseAdmin.from("partners").delete().eq("id", input.partnerId);
+  assertNoSupabaseError("partners.delete", partnerDeleteError);
+
+  await supabaseAdmin.from("admin_audit_logs").insert({
+    actor_user_id: input.actorUserId ?? null,
+    action: "partner_deleted",
+    target_table: "partners",
+    target_id: input.partnerId,
+    metadata: {
+      name: existing.name ?? null,
+      email: existing.email ?? null,
+      actorUsername: input.actorUsername ?? null,
+      ipAddress: input.ipAddress ?? null,
+      userAgent: input.userAgent ?? null,
+    },
+  });
+}
+
 export async function markCommissionsPaid(input: {
   partnerId: string;
   actorUserId?: string;
