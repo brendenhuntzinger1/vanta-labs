@@ -17,6 +17,19 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ success: false, error: "Enter a valid date (YYYY-MM-DD)." }, { status: 400 });
     }
 
+    // The regex only checks shape, so reject impossible dates (e.g. 2099-13-40)
+    // and anything in the future. round-tripping through Date and comparing the
+    // parts back catches month/day overflow that the pattern alone allows.
+    const [year, month, day] = birthday.split("-").map(Number);
+    const parsed = new Date(Date.UTC(year, month - 1, day));
+    const isRealDate =
+      parsed.getUTCFullYear() === year &&
+      parsed.getUTCMonth() === month - 1 &&
+      parsed.getUTCDate() === day;
+    if (!isRealDate || parsed.getTime() > Date.now() || year < 1900) {
+      return NextResponse.json({ success: false, error: "Enter a valid past date." }, { status: 400 });
+    }
+
     await setCustomerBirthday(user.id, birthday);
     return NextResponse.json({ success: true });
   } catch (error) {

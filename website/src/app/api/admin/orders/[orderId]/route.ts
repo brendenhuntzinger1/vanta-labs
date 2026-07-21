@@ -83,6 +83,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         );
       }
 
+      // Snapshot the pre-update state so the shipping email below only fires on
+      // an actual transition, not on every save of the admin form.
+      const { data: priorOrder } = await supabaseAdmin
+        .from("orders")
+        .select("fulfillment_status, tracking_number")
+        .eq("order_id", orderId)
+        .maybeSingle();
+      const priorStatus = String(priorOrder?.fulfillment_status ?? "");
+      const priorTracking = priorOrder?.tracking_number ? String(priorOrder.tracking_number) : "";
+
       const updatePayload: Record<string, unknown> = { updated_at: now };
       if (body.paymentStatus) {
         updatePayload.payment_status = String(body.paymentStatus);
@@ -144,11 +154,24 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         }
       }
 
-      if (body.fulfillmentStatus || typeof body.trackingNumber === "string") {
+      // Only notify the customer when something they'd care about actually
+      // changed: the fulfillment status moved to a new customer-facing shipping
+      // state (shipped / out for delivery / delivered), or a tracking number
+      // was newly added or changed. Re-saving the same values sends nothing, so
+      // there are no duplicate "your order shipped" emails.
+      const NOTIFY_STATUSES = new Set(["shipped", "out_for_delivery", "delivered"]);
+      const newStatus = String(updatePayload.fulfillment_status ?? priorStatus);
+      const newTracking = updatePayload.tracking_number !== undefined
+        ? (updatePayload.tracking_number ? String(updatePayload.tracking_number) : "")
+        : priorTracking;
+      const statusTransitioned = newStatus !== priorStatus && NOTIFY_STATUSES.has(newStatus.toLowerCase());
+      const trackingAddedOrChanged = newTracking !== "" && newTracking !== priorTracking;
+
+      if (statusTransitioned || trackingAddedOrChanged) {
         try {
           const order = await getOrderWithItems(orderId);
           if (order?.customer_email) {
-            const trackingNumber = updatePayload.tracking_number ? String(updatePayload.tracking_number) : undefined;
+            const trackingNumber = newTracking || undefined;
             const carrier = body.carrier?.trim() || undefined;
             const template = shippingUpdateTemplate({
               customerName: String(order.customer_name ?? ""),
