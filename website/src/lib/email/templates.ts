@@ -49,6 +49,48 @@ function toText(lines: Array<string | null | false | undefined>) {
   return lines.filter((line): line is string => Boolean(line) || line === "").join("\n");
 }
 
+export function couponAnnouncementTemplate(input: {
+  headline: string;
+  code: string;
+  discountLabel: string;
+  message?: string;
+  endsAt?: string | null;
+  shopUrl: string;
+}): EmailTemplate {
+  const code = escapeHtml(input.code);
+  const discountLabel = escapeHtml(input.discountLabel);
+  const headline = escapeHtml(input.headline);
+  const message = input.message ? `<p>${escapeHtml(input.message)}</p>` : "";
+  const expiryHuman = input.endsAt
+    ? new Date(input.endsAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
+    : null;
+  const expiryHtml = expiryHuman ? `<p style="margin:12px 0 0;font-size:12px;color:#a1a1aa;">Offer ends ${escapeHtml(expiryHuman)}.</p>` : "";
+  const codeBlock = `<div style="margin:18px 0 4px;padding:14px;border:1px dashed rgba(255,255,255,0.35);border-radius:12px;text-align:center;"><span style="font-size:20px;font-weight:800;letter-spacing:0.14em;color:#ffffff;">${code}</span></div>`;
+
+  return {
+    subject: `${input.headline} — use code ${input.code}`,
+    html: renderLayout({
+      preheader: `${input.discountLabel} with code ${input.code}`,
+      title: headline,
+      bodyHtml: `${message}<p>Use this code at checkout for <strong style="color:#ffffff;">${discountLabel}</strong>:</p>${codeBlock}${expiryHtml}`,
+      ctaLabel: "Shop Now",
+      ctaUrl: input.shopUrl,
+    }),
+    text: toText([
+      input.headline,
+      "",
+      input.message || false,
+      input.message ? "" : false,
+      `Use code ${input.code} at checkout for ${input.discountLabel}.`,
+      expiryHuman ? `Offer ends ${expiryHuman}.` : false,
+      "",
+      `Shop now: ${input.shopUrl}`,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 export function emailVerificationTemplate(input: { name: string; verifyUrl: string }): EmailTemplate {
   const name = escapeHtml(input.name);
   return {

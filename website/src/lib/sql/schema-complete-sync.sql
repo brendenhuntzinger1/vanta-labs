@@ -633,6 +633,14 @@ create index if not exists idx_membership_billing_events_user_id
 create index if not exists idx_membership_billing_events_type
   on public.membership_billing_events(event_type, created_at desc);
 
+-- Marketing unsubscribe list. sendMarketingEmail() checks this before every
+-- promotional send (coupon announcements, win-back, cart recovery, ...).
+create table if not exists public.email_suppressions (
+  email text primary key,
+  reason text not null default 'unsubscribed',
+  created_at timestamptz not null default now()
+);
+
 create table if not exists public.email_send_log (
   id uuid primary key default gen_random_uuid(),
   campaign_type text not null, -- membership_welcome | membership_trial_confirmation | ... | cart_recovery_t30m | ...

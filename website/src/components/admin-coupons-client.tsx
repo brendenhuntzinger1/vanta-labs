@@ -111,6 +111,36 @@ export function AdminCouponsClient({ initialCoupons }: { initialCoupons: AdminCo
     }
   };
 
+  const handleAnnounce = async (coupon: AdminCoupon) => {
+    const headline = window.prompt(
+      `Email all customers who opted into marketing about coupon "${coupon.code}".\n\nSubject/headline for the email:`,
+      `New offer: ${coupon.discountType === "fixed" ? `$${coupon.discountValue} off` : `${coupon.discountValue}% off`}`,
+    );
+    if (headline === null) return;
+    const messageText = window.prompt("Optional short message to include (leave blank to skip):", "") ?? "";
+
+    setBusyId(coupon.id);
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/admin/coupons/${coupon.id}/announce`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ headline: headline.trim(), message: messageText.trim() }),
+      });
+      const result = await response.json() as { success: boolean; error?: string; sent?: number; recipients?: number; skipped?: number; failed?: number };
+      if (!result.success) {
+        setError(result.error ?? "Unable to send announcement.");
+        return;
+      }
+      setMessage(`Announcement sent: ${result.sent ?? 0} emailed of ${result.recipients ?? 0} opted-in customers (${result.skipped ?? 0} skipped, ${result.failed ?? 0} failed).`);
+    } catch {
+      setError("Unable to send announcement right now.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const handleDelete = async (coupon: AdminCoupon) => {
     if (!window.confirm(`Delete coupon "${coupon.code}"? This cannot be undone.`)) {
       return;
@@ -249,6 +279,15 @@ export function AdminCouponsClient({ initialCoupons }: { initialCoupons: AdminCo
                         className="vl-btn-secondary px-3 py-1.5 text-xs disabled:opacity-60"
                       >
                         {coupon.active ? "Disable" : "Enable"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleAnnounce(coupon)}
+                        disabled={busyId === coupon.id}
+                        className="vl-btn-secondary px-3 py-1.5 text-xs text-cyan-200 disabled:opacity-60"
+                        title="Email all opted-in customers about this coupon"
+                      >
+                        Email customers
                       </button>
                       <button
                         type="button"
