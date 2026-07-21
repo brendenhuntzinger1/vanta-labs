@@ -133,27 +133,16 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
   ], []);
 
   return (
-    <div className="relative z-10 px-6 pb-24 pt-32 lg:px-12">
+    <div className="relative z-10 px-4 pb-24 pt-24 sm:px-6 sm:pt-28 lg:px-12">
       <div className="mx-auto max-w-6xl">
-        <ScrollReveal>
-          <div className="text-center">
-            <p className="vl2-eyebrow">Vanta Labs Membership</p>
-            <h1 className="vl2-serif mt-4 text-4xl text-white sm:text-5xl">Membership &amp; Rewards</h1>
-            <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/60 sm:text-base">
-              Earn points on every order, unlock free and priority shipping, and get early access to new research
-              compounds. Every registered customer starts earning automatically.
-            </p>
-          </div>
-        </ScrollReveal>
-
-        <ScrollReveal delayMs={80}>
-          <div className="mt-8 flex justify-center gap-8 text-[10px] uppercase tracking-[0.14em] text-white/45">
-            <span>No Hidden Fees</span>
-            <span>Automatic Tracking</span>
-          </div>
-        </ScrollReveal>
-
         {tiers.length === 0 ? (
+          <>
+          <ScrollReveal>
+            <div className="text-center">
+              <p className="vl2-eyebrow">Vanta Labs Membership</p>
+              <h1 className="vl2-serif mt-4 text-4xl text-white sm:text-5xl">Membership &amp; Rewards</h1>
+            </div>
+          </ScrollReveal>
           <ScrollReveal delayMs={80}>
             <div className="mt-12 border border-white/10 bg-white/[0.02] p-10 text-center">
               <p className="vl2-eyebrow">Membership</p>
@@ -170,16 +159,20 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
               </Link>
             </div>
           </ScrollReveal>
+          </>
         ) : (
           <>
+        {/* Plans first: the pricing cards are the top of the page, with the
+            explainer + all supporting info moved below them. */}
         <div className="mx-auto max-w-2xl text-center">
-          <h2 className="vl2-serif text-3xl text-white sm:text-4xl">Unlock Exclusive Researcher Benefits</h2>
+          <p className="vl2-eyebrow">Vanta Labs Membership</p>
+          <h1 className="vl2-serif mt-4 text-4xl text-white sm:text-5xl">Unlock Exclusive Researcher Benefits</h1>
           <p className="mt-3 text-sm leading-7 text-white/55">
             Save on every order, receive monthly store credit, get early access to limited releases, and enjoy premium member-only perks.
           </p>
         </div>
 
-        <div className="mt-10 flex justify-center">
+        <div className="mt-8 flex justify-center">
           <div className="inline-flex border border-white/15 p-1">
             <button
               type="button"
@@ -284,6 +277,20 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
           })}
         </div>
         <p className="mt-3 text-center text-[11px] uppercase tracking-[0.24em] text-white/40 sm:hidden">← Swipe to compare plans →</p>
+
+        <ScrollReveal delayMs={80}>
+          <div className="mt-14 border-t border-white/10 pt-10 text-center">
+            <p className="vl2-eyebrow">How membership works</p>
+            <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/60 sm:text-base">
+              Earn points on every order, unlock free and priority shipping, and get early access to new research
+              compounds. Every registered customer starts earning automatically.
+            </p>
+            <div className="mt-6 flex justify-center gap-8 text-[10px] uppercase tracking-[0.14em] text-white/45">
+              <span>No Hidden Fees</span>
+              <span>Automatic Tracking</span>
+            </div>
+          </div>
+        </ScrollReveal>
 
         <ScrollReveal delayMs={80}>
           <div className="mt-16 border-2 border-amber-400/70 bg-gradient-to-br from-amber-950/40 via-black to-black p-6 sm:p-10">
