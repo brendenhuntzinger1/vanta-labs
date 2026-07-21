@@ -43,17 +43,32 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
   );
   const isVerified = isVerifiedFromStorage || localVerified;
 
-  const handleEnter = () => {
-    if (!agreed) {
-      setShowPrompt(true);
-      return;
-    }
+  const markVerified = () => {
     try {
       window.localStorage.setItem("vanta-labs-age-verified", "true");
     } catch (error) {
       console.error("Unable to save age verification state", error);
     }
     setLocalVerified(true);
+  };
+
+  const handleEnter = () => {
+    if (!agreed) {
+      setShowPrompt(true);
+      return;
+    }
+    markVerified();
+  };
+
+  // Confirm age first (same gate), then send the visitor to the account
+  // sign-up / sign-in page instead of straight into the storefront.
+  const handleAccount = () => {
+    if (!agreed) {
+      setShowPrompt(true);
+      return;
+    }
+    markVerified();
+    window.location.assign("/account/login");
   };
 
   const handleExit = () => {
@@ -96,20 +111,32 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
             <button
               type="button"
-              onClick={handleEnter}
+              onClick={handleAccount}
               disabled={!agreed}
               className="vl-btn-primary vl-focus-ring rounded-full px-6 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Enter Site
+              Create Account / Sign In
             </button>
             <button
               type="button"
-              onClick={handleExit}
-              className="vl-btn-secondary vl-focus-ring rounded-full px-6 py-3 text-sm"
+              onClick={handleEnter}
+              disabled={!agreed}
+              className="vl-btn-secondary vl-focus-ring rounded-full px-6 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Exit Site
+              Continue as Guest
             </button>
           </div>
+          <p className="mt-5 text-xs leading-6 text-zinc-400">
+            Create a free account to track orders and reorders, save your cart, and get member-only offers — or continue
+            as a guest and check out with just your email.
+          </p>
+          <button
+            type="button"
+            onClick={handleExit}
+            className="vl-focus-ring mt-4 text-xs text-zinc-500 underline-offset-4 transition hover:text-zinc-300 hover:underline"
+          >
+            I am under 21 — exit
+          </button>
         </div>
       </div>
     );
