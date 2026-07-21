@@ -868,3 +868,32 @@ create index if not exists idx_bis_product on public.back_in_stock_requests(prod
 create index if not exists idx_product_subscriptions_user on public.product_subscriptions(user_id);
 
 create index if not exists idx_product_subscriptions_status on public.product_subscriptions(status);
+
+-- ---- from coupon-redeem-rpc.sql ----
+-- Atomic coupon redemption so simultaneous redemptions at a coupon's exact
+-- limit can't over-count (redeemCoupon() in src/lib/coupons.ts).
+create or replace function public.redeem_coupon(input_code text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  new_count integer;
+begin
+  update public.coupons
+     set redemptions_count = coalesce(redemptions_count, 0) + 1
+   where code = upper(trim(input_code))
+     and active = true
+     and (max_redemptions is null or coalesce(redemptions_count, 0) < max_redemptions)
+   returning redemptions_count into new_count;
+
+  if new_count is null then
+    return jsonb_build_object('redeemed', false);
+  end if;
+
+  return jsonb_build_object('redeemed', true, 'redemptions_count', new_count);
+end;
+$$;
+
+grant execute on function public.redeem_coupon(text) to service_role;

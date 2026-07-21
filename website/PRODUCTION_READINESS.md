@@ -99,12 +99,14 @@ check against your live database once deployed:
 
 ---
 
-## 4. Known low-risk item (documented, not blocking)
-- **Coupon redemption counter** is a read-modify-write. Under simultaneous
-  redemptions of a coupon at its exact limit, it could over-count by one. Proper
-  fix is an atomic SQL increment (RPC); deferred to avoid adding another
-  required migration. Low real-world risk pre-launch (low coupon volume, no live
-  processor yet).
+## 4. Known low-risk item (now fixed)
+- **Coupon redemption counter** was a read-modify-write. Under simultaneous
+  redemptions of a coupon at its exact limit, it could over-count by one. Fixed
+  with an atomic SQL increment RPC (`src/lib/sql/coupon-redeem-rpc.sql`, also
+  folded into `schema-complete-sync.sql`): the count and the max-check happen in
+  a single locked statement, so the race is gone. `redeemCoupon()` calls the RPC
+  and falls back to the old read-modify-write only if the migration hasn't run
+  yet, so this is optional hardening rather than a hard requirement.
 
 ---
 

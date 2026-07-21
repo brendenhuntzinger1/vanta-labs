@@ -128,14 +128,33 @@ export async function redeemCoupon(code: string) {
     return;
   }
 
-  const { data, error } = await supabaseAdmin
+  // Atomic increment (single SQL statement) so simultaneous redemptions of a
+  // coupon at its exact limit can't over-count - see coupon-redeem-rpc.sql.
+  const { error } = await supabaseAdmin.rpc("redeem_coupon", { input_code: normalizedCode });
+
+  if (!error) {
+    return;
+  }
+
+  const message = String(error.message ?? "").toLowerCase();
+  const isMissingRpc = error.code === "PGRST202" || message.includes("could not find the function") || message.includes("does not exist");
+
+  if (!isMissingRpc) {
+    console.error("Unable to record coupon redemption:", error);
+    return;
+  }
+
+  // Fallback: the RPC migration hasn't been run yet. Best-effort
+  // read-modify-write so redemption still records on a partially-migrated
+  // database (has a benign over-count race the RPC eliminates).
+  const { data, error: loadError } = await supabaseAdmin
     .from("coupons")
     .select("id, redemptions_count")
     .eq("code", normalizedCode)
     .maybeSingle();
 
-  if (error) {
-    console.error("Unable to load coupon for redemption:", error);
+  if (loadError) {
+    console.error("Unable to load coupon for redemption:", loadError);
     return;
   }
 
