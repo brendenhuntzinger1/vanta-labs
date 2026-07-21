@@ -546,8 +546,11 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   const clicks = clickRows ?? [];
 
   const totalEarnings = roundMoney(commissions.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
+  // Unpaid balance = commissions still owed to the partner. This must exclude
+  // already-paid commissions (previously "paid" was wrongly counted here, so
+  // the partner's dashboard showed paid money as still-pending).
   const pendingCommissions = roundMoney(commissions
-    .filter((row) => row.payment_status === "pending" || row.payment_status === "approved_for_payout" || row.payment_status === "paid")
+    .filter((row) => row.payment_status === "pending" || row.payment_status === "approved_for_payout")
     .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
   const paidCommissions = roundMoney(commissions
     .filter((row) => row.payment_status === "commission_paid" || row.payment_status === "paid")
@@ -1107,7 +1110,11 @@ export async function markCommissionsPaid(input: {
     .from("commissions")
     .update({ status: "paid", updated_at: new Date().toISOString() })
     .eq("partner_id", input.partnerId)
-    .in("status", ["pending", "approved_for_payout"]);
+    // Mirror only what the authoritative referral_orders update above actually
+    // pays (approved_for_payout). Previously this also flipped "pending" rows,
+    // so the two ledgers drifted - pending commissions that were never paid out
+    // showed as paid in the mirror.
+    .in("status", ["approved_for_payout"]);
 
   if (commissionMirrorError) {
     assertNoSupabaseError("commissions.update(mark paid mirror)", commissionMirrorError);

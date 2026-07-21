@@ -1,5 +1,22 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 
+// Count of an ambassador's referral orders that were refunded/voided or pulled
+// into manual review - i.e. orders that no longer earn (or clawed back) a
+// commission. Used on the admin ambassador profile.
+export async function getAmbassadorRefundedOrderCount(partnerId: string): Promise<number> {
+  const { data, error } = await supabaseAdmin
+    .from("referral_orders")
+    .select("id")
+    .eq("ambassador_id", partnerId)
+    .in("payment_status", ["reversed", "voided", "manual_review"]);
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).length;
+}
+
 export interface FraudReviewRow {
   id: string;
   orderId: string;

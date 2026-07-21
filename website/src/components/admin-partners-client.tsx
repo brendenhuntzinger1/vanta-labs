@@ -58,16 +58,47 @@ export function AdminPartnersClient({
     [rows],
   );
 
+  // Approved ambassadors who have actually produced at least one paid order -
+  // "lowest" here means the ones who most need attention/coaching.
+  const lowestPerformers = useMemo(
+    () => [...rows]
+      .filter((row) => row.status === "approved" && row.totalOrders > 0)
+      .sort((a, b) => (a.totalRevenue + a.paidCommissions) - (b.totalRevenue + b.paidCommissions))
+      .slice(0, 5),
+    [rows],
+  );
+
+  // Program-wide rollups derived from the already-loaded rows (no extra query),
+  // so every number updates automatically as orders complete.
+  const totalAmbassadors = rows.length;
+  const approvedCount = useMemo(() => rows.filter((row) => row.status === "approved").length, [rows]);
+  const pendingCount = useMemo(() => rows.filter((row) => row.status === "pending").length, [rows]);
+  const disabledCount = useMemo(() => rows.filter((row) => row.status === "disabled").length, [rows]);
+  // "Active" = approved and actually generating orders, vs merely approved.
+  const activeCount = useMemo(() => rows.filter((row) => row.status === "approved" && row.totalOrders > 0).length, [rows]);
+  const totalOrders = useMemo(() => rows.reduce((sum, row) => sum + row.totalOrders, 0), [rows]);
+  const totalClicks = useMemo(() => rows.reduce((sum, row) => sum + row.clicks, 0), [rows]);
+  const balanceOwed = pendingCommissions + approvedForPayoutCommissions;
+  const programAov = totalOrders > 0 ? liveSales / totalOrders : 0;
+  const programConversionRate = totalClicks > 0 ? (totalOrders / totalClicks) * 100 : 0;
+
   const filteredRows = useMemo(() => rows.filter((row) => {
     const statusMatch = status === "all" || row.status === status;
+    // Filter by which commission bucket the ambassador currently has money in,
+    // so "unpaid" (approved_for_payout / pending) instantly narrows the table.
+    const payoutMatch =
+      payoutStatus === "all"
+      || (payoutStatus === "pending" && row.pendingCommissions > 0)
+      || (payoutStatus === "approved_for_payout" && row.approvedForPayoutCommissions > 0)
+      || (payoutStatus === "paid" && row.paidCommissions > 0)
+      || (payoutStatus === "reversed" && row.reversedCommissions > 0);
     const q = search.trim().toLowerCase();
-    if (!q) return statusMatch;
-    return statusMatch && (
-      row.name.toLowerCase().includes(q)
+    const searchMatch = !q
+      || row.name.toLowerCase().includes(q)
       || (row.email ?? "").toLowerCase().includes(q)
-      || row.referralCode.toLowerCase().includes(q)
-    );
-  }), [rows, search, status]);
+      || row.referralCode.toLowerCase().includes(q);
+    return statusMatch && payoutMatch && searchMatch;
+  }), [rows, search, status, payoutStatus]);
 
   const refreshRows = async () => {
     const params = new URLSearchParams();
@@ -287,30 +318,61 @@ export function AdminPartnersClient({
 
   return (
     <div className="space-y-6">
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
-        <div className="vl-panel rounded-2xl p-4">
-          <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Live Sales</p>
-          <p className="mt-2 text-2xl font-semibold text-white">{currency(liveSales)}</p>
+      <section>
+        <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Ambassadors</h2>
+        <div className="mt-3 grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Total</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{totalAmbassadors}</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Approved</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{approvedCount}</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Active (selling)</p>
+            <p className="mt-2 text-2xl font-semibold text-emerald-300">{activeCount}</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Pending</p>
+            <p className="mt-2 text-2xl font-semibold text-amber-300">{pendingCount}</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Disabled</p>
+            <p className="mt-2 text-2xl font-semibold text-zinc-400">{disabledCount}</p>
+          </div>
         </div>
-        <div className="vl-panel rounded-2xl p-4">
-          <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Pending Commissions</p>
-          <p className="mt-2 text-2xl font-semibold text-white">{currency(pendingCommissions)}</p>
-        </div>
-        <div className="vl-panel rounded-2xl p-4">
-          <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Paid Commissions</p>
-          <p className="mt-2 text-2xl font-semibold text-white">{currency(paidCommissions)}</p>
-        </div>
-        <div className="vl-panel rounded-2xl p-4">
-          <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Approved For Payout</p>
-          <p className="mt-2 text-2xl font-semibold text-white">{currency(approvedForPayoutCommissions)}</p>
-        </div>
-        <div className="vl-panel rounded-2xl p-4">
-          <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Reversed Commissions</p>
-          <p className="mt-2 text-2xl font-semibold text-white">{currency(reversedCommissions)}</p>
-        </div>
-        <div className="vl-panel rounded-2xl p-4">
-          <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Active Partners</p>
-          <p className="mt-2 text-2xl font-semibold text-white">{rows.filter((row) => row.status === "approved").length}</p>
+      </section>
+
+      <section>
+        <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Sales &amp; Commissions</h2>
+        <div className="mt-3 grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Lifetime Sales</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{currency(liveSales)}</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Avg Order Value</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{currency(programAov)}</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Conversion Rate</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{programConversionRate.toFixed(1)}%</p>
+            <p className="mt-1 text-[11px] text-zinc-500">{totalOrders} orders / {totalClicks} clicks</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Balance Owed</p>
+            <p className="mt-2 text-2xl font-semibold text-cyan-300">{currency(balanceOwed)}</p>
+            <p className="mt-1 text-[11px] text-zinc-500">{currency(approvedForPayoutCommissions)} ready · {currency(pendingCommissions)} holding</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Paid Commissions</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{currency(paidCommissions)}</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Reversed</p>
+            <p className="mt-2 text-2xl font-semibold text-zinc-400">{currency(reversedCommissions)}</p>
+          </div>
         </div>
       </section>
 
@@ -331,6 +393,22 @@ export function AdminPartnersClient({
           </div>
         )}
       </section>
+
+      {lowestPerformers.length > 0 ? (
+        <section className="vl-panel rounded-2xl p-4 sm:p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Needs Attention</h2>
+          <p className="mt-1 text-xs text-zinc-500">Approved ambassadors with the lowest sales so far - candidates for a check-in or coaching.</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+            {lowestPerformers.map((row) => (
+              <div key={row.id} className="rounded-xl border border-zinc-800/70 bg-zinc-900/40 p-3">
+                <p className="truncate text-sm font-semibold text-white">{row.name}</p>
+                <p className="mt-1 text-xs text-zinc-400">{currency(row.totalRevenue)} revenue</p>
+                <p className="text-xs text-zinc-500">{row.totalOrders} orders · {row.clicks} clicks</p>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <section className="vl-panel rounded-2xl p-4 sm:p-5">
         <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Fraud &amp; Review</h2>
@@ -574,29 +652,38 @@ export function AdminPartnersClient({
             <thead>
               <tr className="text-left text-zinc-500">
                 <th className="px-2 py-2">Partner</th>
-                <th className="px-2 py-2">Code</th>
                 <th className="px-2 py-2">Status</th>
                 <th className="px-2 py-2">Revenue</th>
+                <th className="px-2 py-2">Orders</th>
                 <th className="px-2 py-2">Commission</th>
+                <th className="px-2 py-2">Owed</th>
                 <th className="px-2 py-2">Clicks</th>
                 <th className="px-2 py-2">Conv %</th>
                 <th className="px-2 py-2">Actions</th>
               </tr>
             </thead>
             <tbody>
+              {filteredRows.length === 0 ? (
+                <tr>
+                  <td colSpan={9} className="px-2 py-6 text-center text-sm text-zinc-500">
+                    No ambassadors match these filters.
+                  </td>
+                </tr>
+              ) : null}
               {filteredRows.map((row) => (
                 <tr key={row.id} className="border-t border-zinc-800/70 text-zinc-200">
                   <td className="px-2 py-2">
-                    <p className="font-semibold text-white">{row.name}</p>
+                    <a href={`/admin/partners/${row.id}`} className="font-semibold text-white hover:text-cyan-200">{row.name}</a>
                     <p className="text-xs text-zinc-500">{row.email ?? "-"}</p>
+                    <p className="mt-1 font-mono text-xs text-cyan-300/80">/r/{row.referralCode}</p>
                   </td>
-                  <td className="px-2 py-2">{row.referralCode}</td>
                   <td className="px-2 py-2">{row.status}</td>
                   <td className="px-2 py-2">{currency(row.totalRevenue)}</td>
+                  <td className="px-2 py-2">{row.totalOrders}</td>
                   <td className="px-2 py-2">
-                    <p>{currency(row.pendingCommissions)} pending</p>
+                    <p>{currency(row.paidCommissions)} paid</p>
+                    <p className="text-xs text-zinc-500">{currency(row.pendingCommissions)} pending</p>
                     <p className="text-xs text-zinc-500">{currency(row.approvedForPayoutCommissions)} approved</p>
-                    <p className="text-xs text-zinc-500">{currency(row.paidCommissions)} paid</p>
                     <p className="text-xs text-zinc-500">{currency(row.reversedCommissions)} reversed</p>
                     <p className="mt-1 text-xs">
                       {row.commissionPercentLocked ? (
@@ -606,6 +693,7 @@ export function AdminPartnersClient({
                       )}
                     </p>
                   </td>
+                  <td className="px-2 py-2 font-semibold text-cyan-200">{currency(row.pendingCommissions + row.approvedForPayoutCommissions)}</td>
                   <td className="px-2 py-2">{row.clicks}</td>
                   <td className="px-2 py-2">{row.conversionRate.toFixed(2)}%</td>
                   <td className="px-2 py-2">
