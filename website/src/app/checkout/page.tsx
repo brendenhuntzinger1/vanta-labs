@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
@@ -216,11 +216,16 @@ export default function CheckoutPage() {
     })();
   }, []);
 
+  // Fire begin_checkout exactly once, when the cart first has items. Depending
+  // on `total`/`subtotal` would re-dispatch every time the shopper edits points,
+  // country, or shipping, inflating the funnel.
+  const beganCheckoutRef = useRef(false);
   useEffect(() => {
-    if (typeof window === "undefined") {
+    if (typeof window === "undefined" || beganCheckoutRef.current || items.length === 0) {
       return;
     }
 
+    beganCheckoutRef.current = true;
     window.dispatchEvent(
       new CustomEvent("vanta:analytics", {
         detail: {
@@ -430,37 +435,37 @@ export default function CheckoutPage() {
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <label className="text-sm text-white/60 sm:col-span-2">
                   <span className="mb-2 block">Full name</span>
-                  <input value={form.fullName} onChange={(e) => handleFieldChange("fullName", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="Alex Morgan" />
+                  <input value={form.fullName} onChange={(e) => handleFieldChange("fullName", e.target.value)} autoComplete="shipping name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="Alex Morgan" />
                   {formErrors.fullName ? <span className="mt-1 block text-xs text-rose-300">{formErrors.fullName}</span> : null}
                 </label>
 
                 <label className="text-sm text-white/60">
                   <span className="mb-2 block">Email</span>
-                  <input type="email" value={form.email} onChange={(e) => handleFieldChange("email", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="alex@domain.com" />
+                  <input type="email" value={form.email} onChange={(e) => handleFieldChange("email", e.target.value)} autoComplete="email" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="alex@domain.com" />
                   {formErrors.email ? <span className="mt-1 block text-xs text-rose-300">{formErrors.email}</span> : null}
                 </label>
 
                 <label className="text-sm text-white/60">
                   <span className="mb-2 block">Country</span>
-                  <input value={form.country} onChange={(e) => handleFieldChange("country", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="United States" />
+                  <input value={form.country} onChange={(e) => handleFieldChange("country", e.target.value)} autoComplete="shipping country-name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="United States" />
                   {formErrors.country ? <span className="mt-1 block text-xs text-rose-300">{formErrors.country}</span> : null}
                 </label>
 
                 <label className="text-sm text-white/60 sm:col-span-2">
                   <span className="mb-2 block">Address</span>
-                  <input value={form.address} onChange={(e) => handleFieldChange("address", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="88 Meridian Avenue" />
+                  <input value={form.address} onChange={(e) => handleFieldChange("address", e.target.value)} autoComplete="shipping street-address" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="88 Meridian Avenue" />
                   {formErrors.address ? <span className="mt-1 block text-xs text-rose-300">{formErrors.address}</span> : null}
                 </label>
 
                 <label className="text-sm text-white/60">
                   <span className="mb-2 block">City</span>
-                  <input value={form.city} onChange={(e) => handleFieldChange("city", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="Austin" />
+                  <input value={form.city} onChange={(e) => handleFieldChange("city", e.target.value)} autoComplete="shipping address-level2" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="Austin" />
                   {formErrors.city ? <span className="mt-1 block text-xs text-rose-300">{formErrors.city}</span> : null}
                 </label>
 
                 <label className="text-sm text-white/60">
                   <span className="mb-2 block">Postal code</span>
-                  <input value={form.postalCode} onChange={(e) => handleFieldChange("postalCode", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="78701" />
+                  <input value={form.postalCode} onChange={(e) => handleFieldChange("postalCode", e.target.value)} autoComplete="shipping postal-code" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="78701" />
                   {formErrors.postalCode ? <span className="mt-1 block text-xs text-rose-300">{formErrors.postalCode}</span> : null}
                 </label>
               </div>
@@ -477,27 +482,27 @@ export default function CheckoutPage() {
                 <div className="mt-4 grid gap-4 sm:grid-cols-2">
                   <label className="text-sm text-white/60 sm:col-span-2">
                     <span className="mb-2 block">Billing full name</span>
-                    <input value={form.billingFullName} onChange={(e) => handleFieldChange("billingFullName", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
+                    <input value={form.billingFullName} onChange={(e) => handleFieldChange("billingFullName", e.target.value)} autoComplete="billing name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
                     {formErrors.billingFullName ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingFullName}</span> : null}
                   </label>
                   <label className="text-sm text-white/60 sm:col-span-2">
                     <span className="mb-2 block">Billing address</span>
-                    <input value={form.billingAddress} onChange={(e) => handleFieldChange("billingAddress", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
+                    <input value={form.billingAddress} onChange={(e) => handleFieldChange("billingAddress", e.target.value)} autoComplete="billing street-address" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
                     {formErrors.billingAddress ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingAddress}</span> : null}
                   </label>
                   <label className="text-sm text-white/60">
                     <span className="mb-2 block">Billing city</span>
-                    <input value={form.billingCity} onChange={(e) => handleFieldChange("billingCity", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
+                    <input value={form.billingCity} onChange={(e) => handleFieldChange("billingCity", e.target.value)} autoComplete="billing address-level2" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
                     {formErrors.billingCity ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingCity}</span> : null}
                   </label>
                   <label className="text-sm text-white/60">
                     <span className="mb-2 block">Billing postal code</span>
-                    <input value={form.billingPostalCode} onChange={(e) => handleFieldChange("billingPostalCode", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
+                    <input value={form.billingPostalCode} onChange={(e) => handleFieldChange("billingPostalCode", e.target.value)} autoComplete="billing postal-code" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
                     {formErrors.billingPostalCode ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingPostalCode}</span> : null}
                   </label>
                   <label className="text-sm text-white/60 sm:col-span-2">
                     <span className="mb-2 block">Billing country</span>
-                    <input value={form.billingCountry} onChange={(e) => handleFieldChange("billingCountry", e.target.value)} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
+                    <input value={form.billingCountry} onChange={(e) => handleFieldChange("billingCountry", e.target.value)} autoComplete="billing country-name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" />
                     {formErrors.billingCountry ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingCountry}</span> : null}
                   </label>
                 </div>
@@ -647,7 +652,7 @@ export default function CheckoutPage() {
               </div>
             ) : (
               <p className="mt-8 text-xs text-white/40">
-                <a href="/account/login" className="text-white/70 underline-offset-4 hover:underline">Sign in</a> to earn and redeem rewards points on this order.
+                <Link href="/account/login" className="text-white/70 underline-offset-4 hover:underline">Sign in</Link> to earn and redeem rewards points on this order.
               </p>
             )}
 

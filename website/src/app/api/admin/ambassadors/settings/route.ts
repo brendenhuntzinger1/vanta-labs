@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageRefunds } from "@/lib/admin-roles";
 import { getAmbassadorProgramSettings, setAmbassadorProgramSetting } from "@/lib/ambassador-settings";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+}
+
+function forbiddenResponse() {
+  return NextResponse.json({ success: false, error: "Your role does not have permission to manage the ambassador program." }, { status: 403 });
 }
 
 export async function GET(request: Request) {
@@ -20,6 +25,11 @@ export async function PATCH(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {
     return unauthorizedResponse();
+  }
+  // These settings (qualifying-order minimum, payout threshold, hold days)
+  // directly govern how much partners are paid, so they are manager+ only.
+  if (!canManageRefunds(session.role)) {
+    return forbiddenResponse();
   }
 
   const ipAddress = getRequestIpAddress(request);

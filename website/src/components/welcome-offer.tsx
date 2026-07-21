@@ -63,9 +63,10 @@ export function WelcomeOffer() {
       <button
         type="button"
         onClick={copy}
+        aria-label={`Copy discount code ${offer.code}`}
         className="rounded-full border border-[color:var(--accent-gold)] px-3 py-0.5 text-xs font-bold uppercase tracking-[0.08em] text-[color:var(--accent-gold)]"
       >
-        {copied ? "✓ Copied" : `Code: ${offer.code}`}
+        <span aria-live="polite">{copied ? "✓ Copied" : `Code: ${offer.code}`}</span>
       </button>
       <Link href="/products" className="text-xs font-semibold text-white underline underline-offset-4">Shop now</Link>
       <button type="button" onClick={dismiss} aria-label="Dismiss offer" className="absolute right-2 top-1.5 text-white/50 hover:text-white">×</button>

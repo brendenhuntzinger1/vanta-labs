@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageRefunds } from "@/lib/admin-roles";
 import { createCommissionTierRule, listCommissionTierRules } from "@/lib/ambassador-commission";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+}
+
+function forbiddenResponse() {
+  return NextResponse.json({ success: false, error: "Your role does not have permission to manage the ambassador program." }, { status: 403 });
 }
 
 export async function GET(request: Request) {
@@ -20,6 +25,11 @@ export async function POST(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {
     return unauthorizedResponse();
+  }
+  // Commission tiers set the percentages that determine partner payouts, so
+  // creating them is gated to manager+ (same bar as per-partner changes).
+  if (!canManageRefunds(session.role)) {
+    return forbiddenResponse();
   }
 
   try {

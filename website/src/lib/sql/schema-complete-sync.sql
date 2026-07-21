@@ -556,6 +556,10 @@ create table if not exists public.order_shipments (
 
 create index if not exists idx_order_shipments_order_id on public.order_shipments(order_id);
 
+-- ---- from orders-paid-at-index.sql ----
+-- Speeds up the admin revenue dashboard's paid_at date-window scans.
+create index if not exists idx_orders_paid_at on public.orders(paid_at) where paid_at is not null;
+
 create table if not exists public.coupons (
   id uuid primary key default gen_random_uuid(),
   code text not null unique,

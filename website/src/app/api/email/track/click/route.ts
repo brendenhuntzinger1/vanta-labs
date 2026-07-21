@@ -8,7 +8,20 @@ export async function GET(request: NextRequest) {
   const id = request.nextUrl.searchParams.get("id");
   const url = request.nextUrl.searchParams.get("url");
 
-  const destination = url && url.startsWith(getSiteUrl()) ? url : "/cart";
+  // Only redirect to our own origin. A prefix check (startsWith) is unsafe:
+  // "https://site.com.evil.com" and "https://site.com@evil.com" both pass it.
+  // Compare parsed origins instead, and always redirect to an absolute URL.
+  const base = getSiteUrl();
+  let destination = `${base}/cart`;
+  if (url) {
+    try {
+      if (new URL(url).origin === new URL(base).origin) {
+        destination = url;
+      }
+    } catch {
+      // Malformed url param - fall through to the cart default.
+    }
+  }
 
   if (id) {
     try {

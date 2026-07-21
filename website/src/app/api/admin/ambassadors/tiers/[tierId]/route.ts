@@ -1,15 +1,23 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageRefunds } from "@/lib/admin-roles";
 import { deleteCommissionTierRule, listCommissionTierRules, updateCommissionTierRule } from "@/lib/ambassador-commission";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
 }
 
+function forbiddenResponse() {
+  return NextResponse.json({ success: false, error: "Your role does not have permission to manage the ambassador program." }, { status: 403 });
+}
+
 export async function PATCH(request: Request, context: { params: Promise<{ tierId: string }> }) {
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {
     return unauthorizedResponse();
+  }
+  if (!canManageRefunds(session.role)) {
+    return forbiddenResponse();
   }
 
   const { tierId } = await context.params;
@@ -37,6 +45,9 @@ export async function DELETE(request: Request, context: { params: Promise<{ tier
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {
     return unauthorizedResponse();
+  }
+  if (!canManageRefunds(session.role)) {
+    return forbiddenResponse();
   }
 
   const { tierId } = await context.params;

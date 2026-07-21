@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
@@ -77,9 +78,9 @@ export default async function AccountDashboardPage() {
                 : `${membership.billingCycle === "annual" ? "Annual" : "Monthly"} plan, status: ${membership.status}${membership.renewsAt ? ` · renews ${new Date(membership.renewsAt).toLocaleDateString()}` : ""}`}
             </p>
           </div>
-          <a href="/membership" className="vl-btn-secondary px-4 py-2 text-xs">
+          <Link href="/membership" className="vl-btn-secondary px-4 py-2 text-xs">
             {membership.tier.slug === "free" ? "Upgrade membership" : "Manage membership"}
-          </a>
+          </Link>
         </div>
 
         <MembershipBillingPanel membership={membership} />

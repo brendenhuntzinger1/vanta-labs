@@ -99,6 +99,8 @@ export function SiteHeaderV2() {
                   if (!searchValue.trim()) setSearchOpen(false);
                 }}
                 placeholder="Search"
+                tabIndex={searchOpen ? 0 : -1}
+                aria-hidden={!searchOpen}
                 className="w-full border-b border-white/25 bg-transparent px-1 py-1.5 text-sm text-white placeholder:text-white/40 focus:outline-none"
               />
             </div>

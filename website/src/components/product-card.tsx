@@ -43,7 +43,14 @@ export function ProductCard({
   const dosePreview = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0];
 
   return (
-    <article className="vl2-product-card group flex h-full flex-col">
+    <article className="vl2-product-card group relative flex h-full flex-col">
+      {/* Kept outside the card <Link> so we don't nest a <button> inside an <a>
+          (invalid HTML / hydration + a11y hazard). Positioned to the card. */}
+      <WishlistButton
+        slug={product.slug}
+        initialInWishlist={initialInWishlist}
+        className="absolute right-3 top-3 z-20 inline-flex h-9 w-9 items-center justify-center border border-white/20 bg-black/70 text-white backdrop-blur transition hover:text-rose-300"
+      />
       <Link href={`/products/${product.slug}`} className="vl-focus-ring flex flex-1 flex-col">
         <div className="vl-product-card-media border-b border-white/10">
           {product.badge ? (
@@ -51,11 +58,6 @@ export function ProductCard({
               {BADGE_LABELS[product.badge]}
             </span>
           ) : null}
-          <WishlistButton
-            slug={product.slug}
-            initialInWishlist={initialInWishlist}
-            className="absolute right-3 top-3 z-10 inline-flex h-9 w-9 items-center justify-center border border-white/20 bg-black/70 text-white backdrop-blur transition hover:text-rose-300"
-          />
           {hasRealImage ? (
             <Image
               src={image}

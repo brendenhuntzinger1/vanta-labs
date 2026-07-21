@@ -558,7 +558,7 @@ export function ProductDetailClient({
             disabled={isOutOfStock}
             className="vl2-lab-btn-primary vl-focus-ring shrink-0 px-6 py-2.5 text-sm disabled:opacity-50"
           >
-            {isOutOfStock ? "Unavailable" : "Add to Cart"}
+            {isOutOfStock ? "Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
           </button>
         </div>
       </div>

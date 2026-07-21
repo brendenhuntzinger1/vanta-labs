@@ -168,6 +168,7 @@ export function AmbassadorPageClient() {
                 <input
                   value={applicantName}
                   onChange={(event) => setApplicantName(event.target.value)}
+                  autoComplete="name"
                   className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
                   placeholder="Your name"
                 />
@@ -178,22 +179,15 @@ export function AmbassadorPageClient() {
                   type="email"
                   value={applicantEmail}
                   onChange={(event) => setApplicantEmail(event.target.value)}
+                  autoComplete="email"
                   className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
                   placeholder="you@domain.com"
                 />
               </label>
-              <label className="text-sm text-white/60">
-                <span className="mb-2 block">Country</span>
-                <input className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="United States" />
-              </label>
-              <label className="text-sm text-white/60 sm:col-span-2">
-                <span className="mb-2 block">Primary platform</span>
-                <input className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="Website, social handle, or newsletter" />
-              </label>
-              <label className="text-sm text-white/60 sm:col-span-2">
-                <span className="mb-2 block">Audience overview</span>
-                <textarea className="min-h-28 w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="Tell us about your audience and traffic profile" />
-              </label>
+              <p className="text-sm leading-6 text-white/45 sm:col-span-2">
+                You&apos;ll add your platform, audience, and payout details in the partner portal after creating your
+                account.
+              </p>
               <div className="sm:col-span-2">
                 <button type="submit" className="vl2-btn-primary vl-focus-ring inline-flex px-6 py-3 text-sm">
                   Continue in Partner Portal

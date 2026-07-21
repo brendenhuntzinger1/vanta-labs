@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { Suspense } from "react";
 import { PartnerProgramLanding } from "@/components/partner-program-landing";
 import { getPartnerProgramStats } from "@/lib/partner-portal";
@@ -32,7 +33,7 @@ export default async function PartnerProgramPage() {
           <h1 className="mt-3 text-2xl text-white sm:text-3xl">This page is temporarily unavailable</h1>
           <p className="mt-3 text-sm text-white/60">
             We couldn&apos;t load the partner program right now. Please try again shortly or{" "}
-            <a href="/contact" className="text-white underline-offset-4 hover:underline">contact us</a> if it persists.
+            <Link href="/contact" className="text-white underline-offset-4 hover:underline">contact us</Link> if it persists.
           </p>
         </div>
       </div>

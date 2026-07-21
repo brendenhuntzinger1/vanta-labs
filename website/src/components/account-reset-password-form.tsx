@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
@@ -73,7 +74,7 @@ export function AccountResetPasswordForm() {
       <div className="vl-panel mx-auto w-full max-w-md rounded-[1.75rem] p-6 text-center sm:p-8">
         <p className="text-sm text-zinc-300">
           This reset link is invalid or has expired. Request a new one from the{" "}
-          <a href="/account/forgot-password" className="text-cyan-300 underline-offset-4 hover:underline">forgot password</a> page.
+          <Link href="/account/forgot-password" className="text-cyan-300 underline-offset-4 hover:underline">forgot password</Link> page.
         </p>
       </div>
     );
