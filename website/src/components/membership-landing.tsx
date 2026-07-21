@@ -195,6 +195,8 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
           {tiers.map((tier, index) => {
             const price = billingCycle === "monthly" ? tier.monthlyPriceCents : tier.annualPriceCents;
             const isFeatured = tier.slug === "plus";
+            const annualSavingsCents = tier.monthlyPriceCents * 12 - tier.annualPriceCents;
+            const showAnnualSavings = billingCycle === "annual" && price > 0 && annualSavingsCents > 0;
             return (
               <ScrollReveal key={tier.id} delayMs={index * 80}>
                 <div
@@ -211,6 +213,16 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                     {money(price)}
                     {price > 0 ? <span className="text-base font-normal text-white/40">/{billingCycle === "monthly" ? "mo" : "yr"}</span> : null}
                   </p>
+                  {showAnnualSavings ? (
+                    <p className="mt-1 text-xs font-semibold text-emerald-300">Save {money(annualSavingsCents)} vs monthly</p>
+                  ) : null}
+
+                  {price > 0 && tier.memberDiscountPercent > 0 ? (
+                    <div className="mt-4 rounded-lg border border-emerald-400/30 bg-emerald-400/[0.06] px-4 py-3">
+                      <p className="text-base font-bold text-emerald-300">{tier.memberDiscountPercent}% member pricing</p>
+                      <p className="text-[11px] text-white/45">applied automatically on every order</p>
+                    </div>
+                  ) : null}
 
                   <ul className="mt-6 flex-1 space-y-3 text-sm text-white/70">
                     {tier.benefits.map((benefit) => (
