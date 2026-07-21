@@ -1,5 +1,4 @@
 import { NextResponse } from "next/server";
-import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getSiteUrl } from "@/lib/env";
 import { getApprovedPartnerByAuthUserId, getPartnerSummary } from "@/lib/partner-portal";
@@ -10,11 +9,9 @@ export async function GET() {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const role = detectRoleFromUser(user);
-  if (role !== "partner" && role !== "admin") {
-    return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 });
-  }
-
+  // Authorization is by APPROVED ambassador profile keyed to this auth user —
+  // not by role — because an ambassador is now a normal customer account with
+  // an approved partner profile. A user can only ever load their own summary.
   try {
     const partner = await getApprovedPartnerByAuthUserId(user.id);
     if (!partner) {

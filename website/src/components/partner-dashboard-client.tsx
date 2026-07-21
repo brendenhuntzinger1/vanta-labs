@@ -54,7 +54,12 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
     <div className="space-y-6">
       <section className="vl-panel relative overflow-hidden rounded-[1.8rem] p-5 sm:p-8">
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(255,255,255,0.1),transparent_50%)]" />
-        <p className="text-xs uppercase tracking-[0.28em] text-zinc-300">Partner Command Center</p>
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-xs uppercase tracking-[0.28em] text-zinc-300">Partner Command Center</p>
+          <span className="rounded-full border border-emerald-400/40 bg-emerald-400/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-emerald-200">
+            {liveSummary.accountStatus === "approved" ? "Active" : liveSummary.accountStatus}
+          </span>
+        </div>
         <h1 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Welcome back, {liveSummary.partnerName}</h1>
         <p className="mt-3 max-w-3xl text-sm text-zinc-400 sm:text-base">Performance updates are connected to your live referral orders and payment events in Supabase.</p>
 
@@ -74,7 +79,8 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
               {copied ? "Copied" : "Copy Link"}
             </button>
           </div>
-          <p className="mt-2 text-xs text-zinc-500">Code: {liveSummary.referralCode} • Commission: {liveSummary.commissionPercent}%</p>
+          <p className="mt-2 text-xs text-zinc-500">Referral code: {liveSummary.referralCode} • Commission: {liveSummary.commissionPercent}%</p>
+          <p className="mt-1 text-xs text-zinc-500">Coupon code (share for customers to use at checkout): <span className="font-semibold text-zinc-300">{liveSummary.referralCode}</span></p>
         </div>
       </section>
 
@@ -124,6 +130,37 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
             </tbody>
           </table>
         </div>
+      </section>
+
+      <section className="vl-panel rounded-2xl p-4 sm:p-5">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Payout History</h2>
+          <span className="text-xs text-zinc-500">Paid every two weeks</span>
+        </div>
+        {liveSummary.payoutHistory.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-sm">
+              <thead>
+                <tr className="text-left text-zinc-500">
+                  <th className="px-2 py-2">Date</th>
+                  <th className="px-2 py-2">Amount</th>
+                  <th className="px-2 py-2">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {liveSummary.payoutHistory.map((row) => (
+                  <tr key={row.id} className="border-t border-zinc-800/70 text-zinc-200">
+                    <td className="px-2 py-2">{new Date(row.createdAt).toLocaleDateString()}</td>
+                    <td className="px-2 py-2">{currency(row.amount)}</td>
+                    <td className="px-2 py-2">{row.note ?? "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-sm text-zinc-500">No payouts yet. Commissions are held for 14 days, then paid out on a biweekly basis.</p>
+        )}
       </section>
 
       {liveSummary.marketingResources.length > 0 ? (
