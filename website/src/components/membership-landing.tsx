@@ -172,6 +172,13 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
           </ScrollReveal>
         ) : (
           <>
+        <div className="mx-auto max-w-2xl text-center">
+          <h2 className="vl2-serif text-3xl text-white sm:text-4xl">Unlock Exclusive Researcher Benefits</h2>
+          <p className="mt-3 text-sm leading-7 text-white/55">
+            Save on every order, receive monthly store credit, get early access to limited releases, and enjoy premium member-only perks.
+          </p>
+        </div>
+
         <div className="mt-10 flex justify-center">
           <div className="inline-flex border border-white/15 p-1">
             <button
@@ -192,11 +199,12 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
         </div>
 
         <div className="mt-8 grid gap-6 lg:grid-cols-3">
-          {tiers.map((tier, index) => {
+          {tiers.filter((tier) => tier.slug !== "free").map((tier, index) => {
             const price = billingCycle === "monthly" ? tier.monthlyPriceCents : tier.annualPriceCents;
-            const isFeatured = tier.slug === "plus";
+            const isFeatured = tier.slug === "pro";
             const annualSavingsCents = tier.monthlyPriceCents * 12 - tier.annualPriceCents;
             const showAnnualSavings = billingCycle === "annual" && price > 0 && annualSavingsCents > 0;
+            const showComparePrice = billingCycle === "monthly" && tier.compareMonthlyPriceCents > tier.monthlyPriceCents;
             return (
               <ScrollReveal key={tier.id} delayMs={index * 80}>
                 <div
@@ -209,18 +217,25 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                   ) : null}
 
                   <p className="vl2-eyebrow">{tier.name}</p>
-                  <p className="mt-3 text-4xl text-white">
-                    {money(price)}
+                  <p className="mt-3 flex items-baseline gap-2 text-4xl text-white">
+                    {showComparePrice ? (
+                      <span className="text-lg font-normal text-white/35 line-through">{money(tier.compareMonthlyPriceCents)}</span>
+                    ) : null}
+                    <span>{money(price)}</span>
                     {price > 0 ? <span className="text-base font-normal text-white/40">/{billingCycle === "monthly" ? "mo" : "yr"}</span> : null}
                   </p>
                   {showAnnualSavings ? (
                     <p className="mt-1 text-xs font-semibold text-emerald-300">Save {money(annualSavingsCents)} vs monthly</p>
                   ) : null}
 
-                  {price > 0 && tier.memberDiscountPercent > 0 ? (
+                  {price > 0 && tier.monthlyStoreCreditCents > 0 ? (
                     <div className="mt-4 rounded-lg border border-emerald-400/30 bg-emerald-400/[0.06] px-4 py-3">
-                      <p className="text-base font-bold text-emerald-300">{tier.memberDiscountPercent}% member pricing</p>
-                      <p className="text-[11px] text-white/45">applied automatically on every order</p>
+                      <p className="text-base font-bold text-emerald-300">{money(tier.monthlyStoreCreditCents)}/mo store credit</p>
+                      <p className="text-[11px] text-white/45">
+                        {tier.storeCreditMinOrderCents > 0
+                          ? `redeem on orders of ${money(tier.storeCreditMinOrderCents)}+`
+                          : "redeem on any order"}
+                      </p>
                     </div>
                   ) : null}
 

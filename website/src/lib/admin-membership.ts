@@ -23,6 +23,9 @@ function mapTier(row: Record<string, unknown>): MembershipTier {
     introDurationDays: Number(row.intro_duration_days ?? 7),
     introOfferEnabled: Boolean(row.intro_offer_enabled ?? true),
     memberDiscountPercent: Number(row.member_discount_percent ?? 0),
+    monthlyStoreCreditCents: Number(row.monthly_store_credit_cents ?? 0),
+    storeCreditMinOrderCents: Number(row.store_credit_min_order_cents ?? 0),
+    compareMonthlyPriceCents: Number(row.compare_monthly_price_cents ?? 0),
   };
 }
 
