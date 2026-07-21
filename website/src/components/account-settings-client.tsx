@@ -15,6 +15,7 @@ export function AccountSettingsClient({
 }) {
   const [fullName, setFullName] = useState(initialFullName);
   const [email, setEmail] = useState(initialEmail);
+  const [phone, setPhone] = useState(initialPreferences.phone ?? "");
   const [emailChangePassword, setEmailChangePassword] = useState("");
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -47,8 +48,9 @@ export function AccountSettingsClient({
       if (email.trim().toLowerCase() !== initialEmail.toLowerCase()) {
         updates.email = email.trim();
       }
+      const phoneChanged = phone.trim() !== (initialPreferences.phone ?? "");
 
-      if (Object.keys(updates).length === 0) {
+      if (Object.keys(updates).length === 0 && !phoneChanged) {
         setProfileMessage("Nothing to update.");
         return;
       }
@@ -71,9 +73,25 @@ export function AccountSettingsClient({
         }
       }
 
-      const { error } = await supabase.auth.updateUser(updates);
-      if (error) {
-        throw new Error(error.message);
+      if (Object.keys(updates).length > 0) {
+        const { error } = await supabase.auth.updateUser(updates);
+        if (error) {
+          throw new Error(error.message);
+        }
+      }
+
+      // Phone is stored on the account profile (not the auth user), so it saves
+      // through its own endpoint.
+      if (phoneChanged) {
+        const response = await fetch("/api/account/phone", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ phone: phone.trim() }),
+        });
+        const result = (await response.json()) as { success: boolean; error?: string };
+        if (!result.success) {
+          throw new Error(result.error ?? "Unable to save phone number.");
+        }
       }
 
       setProfileMessage(
@@ -178,6 +196,10 @@ export function AccountSettingsClient({
           <label className="text-sm text-zinc-300">
             Email
             <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" />
+          </label>
+          <label className="text-sm text-zinc-300">
+            Phone <span className="text-zinc-500">(optional)</span>
+            <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="(555) 123-4567" autoComplete="tel" className="vl-input mt-1 w-full px-3 py-2" />
           </label>
         </div>
         {email.trim().toLowerCase() !== initialEmail.toLowerCase() && initialEmail ? (

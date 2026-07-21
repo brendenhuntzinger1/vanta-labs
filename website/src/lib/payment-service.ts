@@ -251,6 +251,24 @@ export async function createCheckoutSession(
  throw new Error(`Product is out of stock: ${product.name}`);
  }
 
+ // Oversell guard. This ONLY fires when a real, positive stock count is on
+ // record for the item being purchased (a specific dose's count if a variant
+ // was chosen, otherwise the product-level count). When the count is 0 or
+ // absent - i.e. inventory isn't tracked numerically, or the 3PL is the
+ // source of truth - we fall back entirely to the stockStatus checks above
+ // and change nothing. That keeps an untracked catalog fully purchasable
+ // while still blocking an order for more units than actually exist.
+ const trackedInventory = selectedDose
+   ? selectedDose.inventoryQuantity
+   : catalogProduct?.inventoryQuantity;
+ if (typeof trackedInventory === "number" && Number.isFinite(trackedInventory) && trackedInventory > 0) {
+   if (item.quantity > trackedInventory) {
+     throw new Error(
+       `Only ${trackedInventory} of ${product.name} ${trackedInventory === 1 ? "is" : "are"} in stock.`,
+     );
+   }
+ }
+
  return {
  product,
  quantity: item.quantity,

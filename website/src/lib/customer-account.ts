@@ -94,25 +94,42 @@ export interface CustomerPreferences {
   orderUpdateEmails: boolean;
   marketingEmails: boolean;
   birthday: string | null;
+  phone: string | null;
   referralCode: string | null;
   referredByCode: string | null;
 }
 
 export async function getCustomerPreferences(userId: string): Promise<CustomerPreferences> {
-  const { data, error } = await supabaseAdmin
+  // `phone` is read tolerantly: if the customer-phone.sql migration hasn't been
+  // applied yet, selecting the column would error and break the whole settings
+  // page. Trying it first and falling back to the pre-phone column set makes
+  // the deploy order (code vs. SQL) not matter.
+  let data: Record<string, unknown> | null = null;
+  const withPhone = await supabaseAdmin
     .from("customer_preferences")
-    .select("order_update_emails, marketing_emails, birthday, referral_code, referred_by_code")
+    .select("order_update_emails, marketing_emails, birthday, phone, referral_code, referred_by_code")
     .eq("user_id", userId)
     .maybeSingle();
 
-  if (error) {
-    throw error;
+  if (withPhone.error) {
+    const fallback = await supabaseAdmin
+      .from("customer_preferences")
+      .select("order_update_emails, marketing_emails, birthday, referral_code, referred_by_code")
+      .eq("user_id", userId)
+      .maybeSingle();
+    if (fallback.error) {
+      throw fallback.error;
+    }
+    data = fallback.data as Record<string, unknown> | null;
+  } else {
+    data = withPhone.data as Record<string, unknown> | null;
   }
 
   return {
     orderUpdateEmails: data ? Boolean(data.order_update_emails) : true,
     marketingEmails: data ? Boolean(data.marketing_emails) : false,
     birthday: data?.birthday ? String(data.birthday) : null,
+    phone: data?.phone ? String(data.phone) : null,
     referralCode: data?.referral_code ? String(data.referral_code) : null,
     referredByCode: data?.referred_by_code ? String(data.referred_by_code) : null,
   };
@@ -198,6 +215,19 @@ export async function setCustomerBirthday(userId: string, birthday: string) {
   const { error } = await supabaseAdmin
     .from("customer_preferences")
     .upsert({ user_id: userId, birthday, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
+
+  if (error) {
+    throw error;
+  }
+}
+
+// Saves (or clears, when passed an empty string) an optional contact phone
+// number. The caller is responsible for validating format; this only stores
+// the already-normalized value.
+export async function setCustomerPhone(userId: string, phone: string) {
+  const { error } = await supabaseAdmin
+    .from("customer_preferences")
+    .upsert({ user_id: userId, phone: phone || null, updated_at: new Date().toISOString() }, { onConflict: "user_id" });
 
   if (error) {
     throw error;
