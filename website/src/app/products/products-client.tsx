@@ -126,7 +126,7 @@ function ProductsPageContent() {
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
 
-      <main className="mx-auto max-w-[1440px] px-6 pb-20 pt-32 lg:px-12">
+      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-32 lg:px-12">
         <div className="max-w-2xl">
           <p className="vl2-eyebrow">Vanta Labs Catalog</p>
           <h1 className="vl2-serif mt-3 text-4xl text-white sm:text-5xl">Research storefront</h1>
@@ -135,7 +135,7 @@ function ProductsPageContent() {
           </p>
         </div>
 
-        <section className="vl2-glass sticky top-[92px] z-40 mt-10 p-4">
+        <section className="vl2-glass static z-40 mt-10 p-4 lg:sticky lg:top-[92px]">
           <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto]">
             <input
               type="search"
@@ -174,7 +174,7 @@ function ProductsPageContent() {
                 key={category}
                 onClick={() => setSelectedCategory(category)}
                 type="button"
-                className={`border px-3 py-1.5 text-xs uppercase tracking-[0.14em] transition ${
+                className={`border px-3 py-2.5 text-xs uppercase tracking-[0.14em] transition ${
                   selectedCategory === category
                     ? "border-white bg-white/10 text-white"
                     : "border-white/15 text-white/55 hover:border-white/35 hover:text-white"
@@ -186,7 +186,7 @@ function ProductsPageContent() {
             <button
               type="button"
               onClick={() => setStockFilter((prev) => !prev)}
-              className={`ml-auto border px-3 py-1.5 text-xs uppercase tracking-[0.14em] transition ${
+              className={`ml-auto border px-3 py-2.5 text-xs uppercase tracking-[0.14em] transition ${
                 stockFilter
                   ? "border-emerald-300/40 text-emerald-200"
                   : "border-white/15 text-white/45 hover:text-white"
@@ -202,19 +202,19 @@ function ProductsPageContent() {
               {selectedCategory !== "All" && (
                 <span className="flex items-center gap-1.5 border border-white/15 px-2.5 py-1 text-xs text-white/75">
                   {selectedCategory}
-                  <button type="button" onClick={() => setSelectedCategory("All")} className="text-white/45 hover:text-white">×</button>
+                  <button type="button" aria-label="Clear category filter" onClick={() => setSelectedCategory("All")} className="-mr-1 inline-flex h-6 w-6 items-center justify-center text-white/45 hover:text-white">×</button>
                 </span>
               )}
               {searchQuery.trim() && (
                 <span className="flex items-center gap-1.5 border border-white/15 px-2.5 py-1 text-xs text-white/75">
                   &ldquo;{searchQuery}&rdquo;
-                  <button type="button" onClick={() => setSearchQuery("")} className="text-white/45 hover:text-white">×</button>
+                  <button type="button" aria-label="Clear search" onClick={() => setSearchQuery("")} className="-mr-1 inline-flex h-6 w-6 items-center justify-center text-white/45 hover:text-white">×</button>
                 </span>
               )}
               {stockFilter && (
                 <span className="flex items-center gap-1.5 border border-emerald-300/25 px-2.5 py-1 text-xs text-emerald-200">
                   In Stock
-                  <button type="button" onClick={() => setStockFilter(false)} className="text-emerald-300/70 hover:text-emerald-100">×</button>
+                  <button type="button" aria-label="Clear in-stock filter" onClick={() => setStockFilter(false)} className="-mr-1 inline-flex h-6 w-6 items-center justify-center text-emerald-300/70 hover:text-emerald-100">×</button>
                 </span>
               )}
               <button
@@ -249,7 +249,7 @@ function ProductsPageContent() {
           </div>
 
           {isLoading ? (
-            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-4">
               {Array.from({ length: 8 }).map((_, index) => (
                 <div key={index} className="animate-pulse border border-white/10">
                   <div className="aspect-square border-b border-white/10 bg-white/5" />
@@ -281,7 +281,7 @@ function ProductsPageContent() {
               </button>
             </div>
           ) : (
-            <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-4">
               {visibleProducts.map((product) => {
                 const productImage = imageOverrides[product.slug] || product.coverImage || product.image;
                 return (

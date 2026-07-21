@@ -126,7 +126,7 @@ export function AdminTabs() {
         </Link>
         <span className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Admin</span>
       </div>
-      <ul className="grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
+      <ul className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5">
         {tabs.map((tab) => {
           const active = tab.match(pathname);
 

@@ -315,7 +315,7 @@ export function AdminSettingsClient({
         )}
 
         <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-white/10 pt-4">
-          <input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="you@email.com" className="vl-input w-56 px-3 py-2 text-sm" />
+          <input value={testTo} onChange={(e) => setTestTo(e.target.value)} placeholder="you@email.com" className="vl-input w-full px-3 py-2 text-sm sm:w-56" />
           <button type="button" disabled={testing} onClick={sendTest} className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-50">{testing ? "Sending…" : "Send test email"}</button>
           {testMessage ? <span className="text-xs text-zinc-300">{testMessage}</span> : null}
         </div>

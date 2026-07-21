@@ -396,7 +396,7 @@ export default function CheckoutPage() {
     return (
       <div className="min-h-screen bg-[#0b0b0b] text-white">
         <SiteHeaderV2 />
-        <main className="mx-auto max-w-3xl px-6 pb-20 pt-32 lg:px-12">
+        <main className="mx-auto max-w-3xl px-6 pb-20 pt-24 sm:pt-32 lg:px-12">
           <section className="border border-white/10 p-5 sm:p-8">
             <div className="flex flex-wrap items-center gap-2">
               <StepPill index={1} label="Details" active />
@@ -433,7 +433,7 @@ export default function CheckoutPage() {
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
 
-      <main className="mx-auto max-w-[1440px] px-6 pb-20 pt-32 lg:px-12">
+      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-24 sm:pt-32 lg:px-12">
         <section className="border border-white/10 p-5 sm:p-8">
           <p className="vl2-eyebrow">Secure Checkout</p>
           <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Complete your order</h1>

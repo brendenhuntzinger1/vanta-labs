@@ -51,8 +51,8 @@ export function AccountNav({ showAmbassadorTab = false }: { showAmbassadorTab?: 
               <Link
                 href={tab.href}
                 className={active
-                  ? "block rounded-xl border border-cyan-300/40 bg-cyan-400/15 px-4 py-2.5 text-sm font-semibold text-cyan-100"
-                  : "block rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2.5 text-sm text-zinc-300 transition hover:border-white/25 hover:text-white"}
+                  ? "block rounded-xl border border-cyan-300/40 bg-cyan-400/15 px-4 py-3 text-sm font-semibold text-cyan-100"
+                  : "block rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300 transition hover:border-white/25 hover:text-white"}
               >
                 {tab.label}
               </Link>
@@ -64,7 +64,7 @@ export function AccountNav({ showAmbassadorTab = false }: { showAmbassadorTab?: 
         type="button"
         onClick={handleSignOut}
         disabled={signingOut}
-        className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60"
+        className="vl-btn-secondary px-4 py-2.5 text-xs disabled:opacity-60"
       >
         {signingOut ? "Signing out…" : "Sign out"}
       </button>

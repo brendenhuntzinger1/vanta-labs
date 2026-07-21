@@ -40,8 +40,8 @@ export function CookieConsent() {
         <Link href="/legal/cookies" className="text-white underline underline-offset-4">Cookie Policy</Link>.
       </p>
       <div className="mt-3 flex gap-2 sm:mt-0">
-        <button type="button" onClick={() => dismiss("declined")} className="vl2-btn-secondary vl-focus-ring px-3 py-2 text-xs">Decline</button>
-        <button type="button" onClick={() => dismiss("accepted")} className="vl2-btn-primary vl-focus-ring px-4 py-2 text-xs">Accept</button>
+        <button type="button" onClick={() => dismiss("declined")} className="vl2-btn-secondary vl-focus-ring flex-1 px-4 py-2.5 text-xs sm:flex-none">Decline</button>
+        <button type="button" onClick={() => dismiss("accepted")} className="vl2-btn-primary vl-focus-ring flex-1 px-5 py-2.5 text-xs sm:flex-none">Accept</button>
       </div>
     </div>
   );

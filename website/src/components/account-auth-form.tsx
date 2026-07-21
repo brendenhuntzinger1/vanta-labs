@@ -280,8 +280,8 @@ export function AccountAuthForm() {
           type="button"
           onClick={() => { setMethod("email"); resetTransientState(); }}
           className={method === "email"
-            ? "flex-1 rounded-xl border border-cyan-300/40 bg-cyan-400/15 px-4 py-2 text-sm font-semibold text-cyan-100"
-            : "flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-300 transition hover:text-white"}
+            ? "flex-1 rounded-xl border border-cyan-300/40 bg-cyan-400/15 px-4 py-3 text-sm font-semibold text-cyan-100"
+            : "flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300 transition hover:text-white"}
         >
           Email
         </button>
@@ -289,8 +289,8 @@ export function AccountAuthForm() {
           type="button"
           onClick={() => { setMethod("phone"); resetTransientState(); }}
           className={method === "phone"
-            ? "flex-1 rounded-xl border border-cyan-300/40 bg-cyan-400/15 px-4 py-2 text-sm font-semibold text-cyan-100"
-            : "flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm text-zinc-300 transition hover:text-white"}
+            ? "flex-1 rounded-xl border border-cyan-300/40 bg-cyan-400/15 px-4 py-3 text-sm font-semibold text-cyan-100"
+            : "flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-zinc-300 transition hover:text-white"}
         >
           Phone
         </button>
@@ -392,7 +392,7 @@ export function AccountAuthForm() {
         {loading ? "Please wait…" : primaryLabel}
       </button>
 
-      <div className="mt-4 flex items-center justify-between text-xs text-zinc-500">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-zinc-500">
         <button
           type="button"
           onClick={() => {

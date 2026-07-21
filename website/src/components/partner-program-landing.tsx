@@ -159,7 +159,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
     <div className="min-h-screen overflow-x-hidden bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
 
-      <section className="relative mx-auto max-w-[1440px] px-6 pb-12 pt-32 lg:px-12 lg:pt-40">
+      <section className="relative mx-auto max-w-[1440px] px-4 sm:px-6 pb-12 pt-32 lg:px-12 lg:pt-40">
         <div className="grid items-center gap-10 lg:grid-cols-[1.05fr_0.95fr]">
           <div>
             <p className="vl2-eyebrow">Vanta Labs Partner Program</p>
@@ -193,7 +193,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
         </div>
       </section>
 
-      <section id="calculator" className="mx-auto max-w-[1440px] px-6 py-10 lg:px-12">
+      <section id="calculator" className="mx-auto max-w-[1440px] px-4 sm:px-6 py-10 lg:px-12">
         <div className="border border-white/10 p-5 sm:p-8">
           <h2 className="vl2-serif text-2xl text-white sm:text-3xl">Earnings Calculator</h2>
           <p className="mt-2 text-sm text-white/50">Model your potential monthly and yearly affiliate income in real time.</p>
@@ -235,7 +235,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
 
             <div className="border border-white/15 p-5">
               <p className="vl2-eyebrow">Projected Commissions</p>
-              <p className="mt-3 text-4xl text-white">{currency(estimatedMonthlyCommission)}</p>
+              <p className="mt-3 break-words text-3xl text-white sm:text-4xl">{currency(estimatedMonthlyCommission)}</p>
               <p className="text-sm text-white/50">Estimated monthly</p>
 
               <div className="mt-6 border-t border-white/10 pt-5">
@@ -266,7 +266,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
         ))}
       </section>
 
-      <section id="apply" className="mx-auto max-w-[1440px] px-6 pb-20 pt-8 lg:px-12">
+      <section id="apply" className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-8 lg:px-12">
         <div className="border border-white/10 p-6 sm:p-8">
           <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
             <div>

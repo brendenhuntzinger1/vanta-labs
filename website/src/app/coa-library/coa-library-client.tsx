@@ -44,7 +44,7 @@ export function CoaLibraryPageClient() {
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
 
-      <main className="mx-auto max-w-[1440px] px-6 pb-20 pt-32 lg:px-12">
+      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-32 lg:px-12">
         <div className="max-w-2xl">
           <p className="vl2-eyebrow">COA Archive</p>
           <h1 className="vl2-serif mt-3 text-4xl text-white sm:text-5xl">

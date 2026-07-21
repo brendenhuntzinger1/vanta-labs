@@ -31,7 +31,7 @@ export function AmbassadorPageClient() {
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
 
-      <main className="mx-auto max-w-[1440px] px-6 pb-20 pt-32 lg:px-12">
+      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-32 lg:px-12">
         <section className="border border-white/10 px-5 py-10 sm:px-8 sm:py-12">
           <div className="max-w-3xl">
             <p className="vl2-eyebrow">Vanta Ambassador Network</p>

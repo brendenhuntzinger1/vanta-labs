@@ -49,7 +49,7 @@ export function ProductCard({
       <WishlistButton
         slug={product.slug}
         initialInWishlist={initialInWishlist}
-        className="absolute right-3 top-3 z-20 inline-flex h-9 w-9 items-center justify-center border border-white/20 bg-black/70 text-white backdrop-blur transition hover:text-rose-300"
+        className="absolute right-2.5 top-2.5 z-20 inline-flex h-10 w-10 items-center justify-center border border-white/20 bg-black/70 text-white backdrop-blur transition hover:text-rose-300"
       />
       <Link href={`/products/${product.slug}`} className="vl-focus-ring flex flex-1 flex-col">
         <div className="vl-product-card-media border-b border-white/10">
@@ -64,8 +64,9 @@ export function ProductCard({
               alt={product.name}
               fill
               priority={priority}
-              sizes="(max-width: 768px) 100vw, (max-width: 1280px) 50vw, 25vw"
-              className="object-contain p-7"
+              loading={priority ? undefined : "lazy"}
+              sizes="(max-width: 640px) 50vw, (max-width: 1280px) 50vw, 25vw"
+              className="object-contain p-4 sm:p-7"
             />
           ) : (
             <div className="flex h-full items-center justify-center">
@@ -76,33 +77,33 @@ export function ProductCard({
           )}
         </div>
 
-        <div className="flex flex-1 flex-col p-5">
-          <div className="flex items-center justify-between gap-3">
+        <div className="flex flex-1 flex-col p-3 sm:p-5">
+          <div className="flex items-center justify-between gap-2">
             <p className="vl2-eyebrow text-[10px] text-white/45">{product.category}</p>
             <StockPill stockStatus={product.stockStatus} />
           </div>
 
-          <h3 className="mt-3 line-clamp-2 text-lg text-white">{product.name}</h3>
-          <p className="mt-2 line-clamp-2 text-sm leading-6 text-white/55">
+          <h3 className="mt-2.5 line-clamp-2 text-base text-white sm:mt-3 sm:text-lg">{product.name}</h3>
+          <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-white/55 sm:mt-2 sm:text-sm sm:leading-6">
             {product.shortDescription ?? product.description}
           </p>
 
-          <div className="mt-4 flex items-end justify-between gap-2">
-            <div>
-              <div className="flex items-baseline gap-2">
-                <p className="text-xl text-white">{product.salePrice ?? product.price}</p>
+          <div className="mt-3 flex items-end justify-between gap-2 sm:mt-4">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-baseline gap-x-2">
+                <p className="text-lg text-white sm:text-xl">{product.salePrice ?? product.price}</p>
                 {product.salePrice && product.compareAtPrice ? (
-                  <p className="text-sm text-white/40 line-through">{product.compareAtPrice}</p>
+                  <p className="text-xs text-white/40 line-through sm:text-sm">{product.compareAtPrice}</p>
                 ) : null}
               </div>
               <p className="text-xs text-white/45">{dosePreview?.label ?? "Verified lot"}</p>
             </div>
-            <span className="border border-white/15 px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-white/50">COA Verified</span>
+            <span className="hidden shrink-0 border border-white/15 px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-white/50 min-[420px]:inline-block">COA Verified</span>
           </div>
         </div>
       </Link>
 
-      <div className="grid gap-2 p-5 pt-0 sm:grid-cols-2">
+      <div className="grid gap-2 p-3 pt-0 sm:grid-cols-2 sm:p-5 sm:pt-0">
         {onAddToCart ? (
           <button onClick={onAddToCart} className="vl2-btn-primary vl-focus-ring px-4 py-2.5 text-sm" type="button">
             Add to Cart

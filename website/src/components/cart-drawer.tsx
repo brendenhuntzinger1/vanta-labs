@@ -60,8 +60,8 @@ export function CartDrawer() {
             <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Cart</p>
             <h2 className="mt-2 text-2xl font-semibold text-white">Your order</h2>
           </div>
-          <button type="button" onClick={closeCart} className="text-sm text-zinc-400 transition hover:text-white">
-            Close
+          <button type="button" onClick={closeCart} aria-label="Close cart" className="-mr-2 inline-flex h-11 w-11 items-center justify-center text-sm text-zinc-400 transition hover:text-white">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" className="h-5 w-5"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
 
@@ -91,7 +91,7 @@ export function CartDrawer() {
                           <h3 className="text-xs font-semibold text-white sm:text-sm">{item.name}</h3>
                           <p className="mt-1 text-xs text-zinc-400">{item.doseLabel ? `${item.doseLabel} • ` : ""}Batch {item.batchNumber}</p>
                         </div>
-                        <button type="button" onClick={() => removeFromCart(item.key)} className="text-xs text-zinc-500 transition hover:text-white flex-shrink-0">
+                        <button type="button" onClick={() => removeFromCart(item.key)} className="-my-1 flex-shrink-0 px-1 py-2 text-xs text-zinc-500 transition hover:text-white">
                           Remove
                         </button>
                       </div>
@@ -99,10 +99,10 @@ export function CartDrawer() {
                   </div>
                   
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2 rounded-full border border-zinc-700 px-2 py-1.5 text-xs text-zinc-300 sm:px-3 sm:py-2">
-                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="px-2" aria-label="Decrease quantity">−</button>
-                      <span>{item.quantity}</span>
-                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="px-2" aria-label="Increase quantity">+</button>
+                    <div className="flex items-center gap-1 rounded-full border border-zinc-700 text-xs text-zinc-300">
+                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="inline-flex h-10 w-10 items-center justify-center text-base" aria-label="Decrease quantity">−</button>
+                      <span className="min-w-5 text-center tabular-nums">{item.quantity}</span>
+                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="inline-flex h-10 w-10 items-center justify-center text-base" aria-label="Increase quantity">+</button>
                     </div>
                     <p className="text-xs font-medium text-white sm:text-sm">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity))}</p>
                   </div>

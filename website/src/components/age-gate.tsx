@@ -83,7 +83,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
 
   if (!isVerified) {
     return (
-      <div className="flex min-h-screen items-center justify-center overflow-hidden bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.16),_transparent_55%),linear-gradient(135deg,_#020202_0%,_#111111_50%,_#050505_100%)] px-4 py-8 text-zinc-100 sm:px-6 sm:py-10">
+      <div className="flex min-h-screen items-start justify-center overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.16),_transparent_55%),linear-gradient(135deg,_#020202_0%,_#111111_50%,_#050505_100%)] px-4 py-8 text-zinc-100 sm:items-center sm:px-6 sm:py-10">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_30%_20%,_rgba(242,201,76,0.10),_transparent_55%),radial-gradient(ellipse_at_80%_80%,_rgba(140,180,255,0.08),_transparent_50%)] opacity-70" />
         <div className="vl-panel relative w-full max-w-2xl rounded-[1.75rem] p-5 text-center sm:rounded-[2rem] sm:p-8 xl:p-10">
           <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-full border border-white/20 bg-white/10 text-2xl font-semibold tracking-[0.3em] text-white">

@@ -38,7 +38,7 @@ export function CartPageClient() {
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
-      <main className="mx-auto max-w-[1440px] px-6 pb-20 pt-32 lg:px-12">
+      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-24 sm:pt-32 lg:px-12">
         <div className="max-w-2xl">
           <p className="vl2-eyebrow">Shopping Cart</p>
           <h1 className="vl2-serif mt-3 text-4xl text-white sm:text-5xl">Review your materials.</h1>
@@ -77,16 +77,16 @@ export function CartPageClient() {
                             {item.doseLabel ? `${item.doseLabel} • ` : ""}Batch {item.batchNumber}
                           </p>
                         </div>
-                        <button type="button" onClick={() => removeFromCart(item.key)} className="text-sm text-white/45 transition hover:text-white">
+                        <button type="button" onClick={() => removeFromCart(item.key)} className="-my-2 px-1 py-2 text-sm text-white/45 transition hover:text-white">
                           Remove
                         </button>
                       </div>
                     </div>
                     <div className="mt-5 flex flex-wrap items-center justify-between gap-4 sm:mt-6">
-                      <div className="flex items-center gap-2 border border-white/15 px-2 py-1.5 text-sm text-white/75 sm:gap-3 sm:px-3 sm:py-2">
-                        <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="px-2" aria-label="Decrease quantity">−</button>
-                        <span>{item.quantity}</span>
-                        <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="px-2" aria-label="Increase quantity">+</button>
+                      <div className="flex items-center gap-1 border border-white/15 text-sm text-white/75">
+                        <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="inline-flex h-11 w-11 items-center justify-center text-base" aria-label="Decrease quantity">−</button>
+                        <span className="min-w-6 text-center tabular-nums">{item.quantity}</span>
+                        <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="inline-flex h-11 w-11 items-center justify-center text-base" aria-label="Increase quantity">+</button>
                       </div>
                       <p className="text-base text-white sm:text-lg">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity))}</p>
                     </div>

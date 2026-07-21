@@ -218,7 +218,7 @@ export function ProductDetailClient({
 
       <SiteHeaderV2 />
 
-      <main className="relative mx-auto max-w-[1440px] px-6 pb-16 pt-28 lg:px-12 lg:pt-32">
+      <main className="relative mx-auto max-w-[1440px] px-4 sm:px-6 pb-16 pt-28 lg:px-12 lg:pt-32">
         <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-zinc-500">
           <Link href="/" className="transition hover:text-[#111]">Home</Link>
           <span>/</span>
@@ -280,7 +280,7 @@ export function ProductDetailClient({
                     key={tab.key}
                     type="button"
                     onClick={() => setActiveTab(tab.key)}
-                    className={`min-w-0 flex-1 px-2 py-2 text-[11px] font-medium uppercase tracking-[0.1em] transition sm:px-3 sm:text-xs sm:tracking-[0.16em] ${activeTab === tab.key ? "bg-[#111] text-white" : "text-zinc-500 hover:text-[#111]"}`}
+                    className={`min-w-0 flex-1 px-2 py-2.5 text-[11px] font-medium uppercase tracking-normal transition sm:px-3 sm:text-xs sm:tracking-[0.16em] ${activeTab === tab.key ? "bg-[#111] text-white" : "text-zinc-500 hover:text-[#111]"}`}
                   >
                     {tab.label}
                   </button>
@@ -312,9 +312,9 @@ export function ProductDetailClient({
                         ["Category", product.category],
                         ["SKU", selectedDose?.sku ?? "N/A"],
                       ].map(([label, value]) => (
-                        <div key={label} className="flex justify-between border-b border-zinc-100 pb-2 last:border-0">
+                        <div key={label} className="flex justify-between gap-3 border-b border-zinc-100 pb-2 last:border-0">
                           <dt className="text-zinc-400">{label}</dt>
-                          <dd className="font-medium text-[#111]">{value}</dd>
+                          <dd className="min-w-0 break-words text-right font-medium text-[#111]">{value}</dd>
                         </div>
                       ))}
                     </dl>
@@ -448,13 +448,13 @@ export function ProductDetailClient({
                     <button
                       type="button"
                       onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                      className="h-8 w-8 border border-zinc-200 text-zinc-600 transition hover:border-zinc-400"
+                      className="inline-flex h-11 w-11 items-center justify-center border border-zinc-200 text-lg text-zinc-600 transition hover:border-zinc-400"
                     >−</button>
                     <span className="text-sm text-[#111]">{quantity} bottles</span>
                     <button
                       type="button"
                       onClick={() => setQuantity((q) => Math.min(10, q + 1))}
-                      className="h-8 w-8 border border-zinc-200 text-zinc-600 transition hover:border-zinc-400"
+                      className="inline-flex h-11 w-11 items-center justify-center border border-zinc-200 text-lg text-zinc-600 transition hover:border-zinc-400"
                     >+</button>
                     {currentBundleRate > 0 ? (
                       <span className="text-xs font-medium text-emerald-600">Save {Math.round(currentBundleRate * 100)}% — {formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity))} total</span>
@@ -556,7 +556,7 @@ export function ProductDetailClient({
             onClick={(event) => handleAddToCart(event.currentTarget)}
             type="button"
             disabled={isOutOfStock}
-            className="vl2-lab-btn-primary vl-focus-ring shrink-0 px-6 py-2.5 text-sm disabled:opacity-50"
+            className="vl2-lab-btn-primary vl-focus-ring shrink-0 px-6 py-3.5 text-sm disabled:opacity-50"
           >
             {isOutOfStock ? "Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
           </button>

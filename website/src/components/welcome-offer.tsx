@@ -57,7 +57,7 @@ export function WelcomeOffer() {
   };
 
   return (
-    <div className="relative z-30 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 border-b border-[color:var(--accent-gold-soft)] bg-[color:var(--accent-gold-soft)] px-4 py-2 text-center text-sm text-white">
+    <div className="relative z-30 flex flex-wrap items-center justify-center gap-x-4 gap-y-1 border-b border-[color:var(--accent-gold-soft)] bg-[color:var(--accent-gold-soft)] py-2 pl-4 pr-12 text-center text-sm text-white">
       <span className="font-semibold">{offer.headline}</span>
       <span className="text-white/70">{offer.subtext}</span>
       <button
@@ -69,7 +69,7 @@ export function WelcomeOffer() {
         <span aria-live="polite">{copied ? "✓ Copied" : `Code: ${offer.code}`}</span>
       </button>
       <Link href="/products" className="text-xs font-semibold text-white underline underline-offset-4">Shop now</Link>
-      <button type="button" onClick={dismiss} aria-label="Dismiss offer" className="absolute right-2 top-1.5 text-white/50 hover:text-white">×</button>
+      <button type="button" onClick={dismiss} aria-label="Dismiss offer" className="absolute right-1 top-1/2 inline-flex h-9 w-9 -translate-y-1/2 items-center justify-center text-lg text-white/60 hover:text-white">×</button>
     </div>
   );
 }

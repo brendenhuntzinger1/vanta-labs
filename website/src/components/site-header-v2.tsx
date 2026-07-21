@@ -56,6 +56,16 @@ export function SiteHeaderV2() {
     }
   }, [searchOpen]);
 
+  // Lock the page behind the open mobile menu so the body doesn't scroll under it.
+  useEffect(() => {
+    if (!mobileNavOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [mobileNavOpen]);
+
   const handleSearchSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     const query = searchValue.trim();
@@ -68,7 +78,7 @@ export function SiteHeaderV2() {
 
   return (
     <header className="vl2-nav" data-scrolled={scrolled}>
-      <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-4 px-6 py-5 lg:px-12">
+      <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-2 px-4 py-4 sm:gap-4 sm:px-6 sm:py-5 lg:px-12">
         <Link href="/" className="vl-focus-ring vl2-serif text-lg tracking-[0.08em] text-white" onClick={() => setMobileNavOpen(false)}>
           VANTA LABS
         </Link>
@@ -119,7 +129,7 @@ export function SiteHeaderV2() {
             </button>
           </form>
 
-          <Link href="/account" aria-label="Your account" className="vl-focus-ring inline-flex h-9 w-9 items-center justify-center text-white/80 transition hover:text-white">
+          <Link href="/account" aria-label="Your account" className="vl-focus-ring inline-flex h-11 w-11 items-center justify-center text-white/80 transition hover:text-white">
             <AccountIcon />
           </Link>
 
@@ -128,7 +138,7 @@ export function SiteHeaderV2() {
             onClick={openCart}
             id="site-cart-trigger"
             aria-label={`Open cart with ${itemCount} items`}
-            className="vl-focus-ring relative inline-flex h-9 w-9 items-center justify-center text-white/80 transition hover:text-white"
+            className="vl-focus-ring relative inline-flex h-11 w-11 items-center justify-center text-white/80 transition hover:text-white"
           >
             <CartIcon />
             {itemCount > 0 ? (
@@ -141,7 +151,7 @@ export function SiteHeaderV2() {
           <button
             type="button"
             onClick={() => setMobileNavOpen((open) => !open)}
-            className="vl-focus-ring inline-flex h-9 w-9 items-center justify-center text-white/80 lg:hidden"
+            className="vl-focus-ring inline-flex h-11 w-11 items-center justify-center text-white/80 lg:hidden"
             aria-label="Toggle navigation"
             aria-expanded={mobileNavOpen}
           >
@@ -151,18 +161,41 @@ export function SiteHeaderV2() {
       </div>
 
       {mobileNavOpen ? (
-        <nav className="border-t border-white/10 bg-black/95 px-6 py-6 backdrop-blur-2xl lg:hidden">
+        <nav className="max-h-[calc(100svh-64px)] overflow-y-auto border-t border-white/10 bg-black/95 px-4 py-5 backdrop-blur-2xl lg:hidden">
+          <form onSubmit={handleSearchSubmit} className="mb-4 flex items-center gap-2">
+            <input
+              type="search"
+              aria-label="Search products"
+              value={searchValue}
+              onChange={(event) => setSearchValue(event.target.value)}
+              placeholder="Search products"
+              className="vl-input min-w-0 flex-1 px-3 py-3 text-white placeholder:text-white/40"
+            />
+            <button type="submit" aria-label="Search" className="vl2-btn-secondary vl-focus-ring inline-flex h-11 w-11 shrink-0 items-center justify-center">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px]">
+                <circle cx="11" cy="11" r="7" />
+                <path d="m20 20-3.2-3.2" />
+              </svg>
+            </button>
+          </form>
           <div className="flex flex-col gap-1">
             {NAV_LINKS.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
                 onClick={() => setMobileNavOpen(false)}
-                className="vl-focus-ring rounded-lg px-3 py-3 text-sm uppercase tracking-[0.12em] text-white/85 transition hover:bg-white/5 hover:text-white"
+                className="vl-focus-ring flex min-h-[44px] items-center rounded-lg px-3 py-3 text-sm uppercase tracking-[0.12em] text-white/85 transition hover:bg-white/5 hover:text-white"
               >
                 {link.label}
               </Link>
             ))}
+            <Link
+              href="/account"
+              onClick={() => setMobileNavOpen(false)}
+              className="vl-focus-ring mt-1 flex min-h-[44px] items-center gap-2 rounded-lg border-t border-white/10 px-3 pt-4 text-sm uppercase tracking-[0.12em] text-white/85 transition hover:text-white"
+            >
+              <AccountIcon /> Your account
+            </Link>
           </div>
         </nav>
       ) : null}

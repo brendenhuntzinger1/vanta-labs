@@ -29,9 +29,9 @@ function CopyButton({ value, label }: { value: string; label: string }) {
 function DetailRow({ label, value, copyLabel }: { label: string; value: string; copyLabel?: string }) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-white/10 py-2.5 last:border-b-0">
-      <span className="text-xs uppercase tracking-[0.12em] text-white/45">{label}</span>
-      <span className="flex items-center gap-2">
-        <span className="text-sm font-medium text-white">{value}</span>
+      <span className="shrink-0 text-xs uppercase tracking-[0.12em] text-white/45">{label}</span>
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="min-w-0 break-all text-right text-sm font-medium text-white">{value}</span>
         {copyLabel ? <CopyButton value={value} label={copyLabel} /> : null}
       </span>
     </div>

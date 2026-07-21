@@ -107,10 +107,10 @@ export default async function HomePage() {
         />
         <div className="vl2-hero-scrim" aria-hidden="true" />
 
-        <div className="vl2-hero-content mx-auto w-full max-w-[1440px] px-6 pb-20 pt-40 lg:px-12 lg:pb-28">
+        <div className="vl2-hero-content mx-auto w-full max-w-[1440px] px-4 sm:px-6 pb-20 pt-40 lg:px-12 lg:pb-28">
           <div className="vl2-fade-in">
             <p className="vl2-eyebrow">Research Use Only</p>
-            <h1 className="vl2-serif mt-5 max-w-2xl text-5xl leading-[1.04] text-white sm:text-6xl lg:text-7xl">
+            <h1 className="vl2-serif mt-5 max-w-2xl text-4xl leading-[1.05] text-white sm:text-5xl md:text-6xl lg:text-7xl">
               {control.heroHeadline ?? "Precision, in every vial."}
             </h1>
             <p className="mt-6 max-w-md text-sm leading-7 text-white/70 sm:text-base">
@@ -129,7 +129,7 @@ export default async function HomePage() {
       </section>
 
       <section className="border-t border-white/10 py-14">
-        <div className="mx-auto max-w-[1440px] px-6 lg:px-12">
+        <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
           <ScrollReveal>
             <div className="vl2-trust-row justify-center">
               {TRUST_POINTS.map((point) => (
@@ -144,8 +144,8 @@ export default async function HomePage() {
       </section>
 
       {categories.length > 0 ? (
-        <section className="border-t border-white/10 py-20">
-          <div className="mx-auto max-w-[1440px] px-6 lg:px-12">
+        <section className="border-t border-white/10 py-12 sm:py-20">
+          <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
             <ScrollReveal>
               <p className="vl2-eyebrow">Catalog</p>
               <h2 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Browse by category</h2>
@@ -172,8 +172,8 @@ export default async function HomePage() {
         </section>
       ) : null}
 
-      <section className="border-t border-white/10 py-20">
-        <div className="mx-auto max-w-[1440px] px-6 lg:px-12">
+      <section className="border-t border-white/10 py-12 sm:py-20">
+        <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
           <ScrollReveal>
             <div className="mb-10 flex items-end justify-between gap-4">
               <div>
@@ -187,7 +187,7 @@ export default async function HomePage() {
           </ScrollReveal>
 
           {featuredForHome.length > 0 ? (
-            <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+            <div className="grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-3">
               {featuredForHome.slice(0, 6).map((product, index) => (
                 <ScrollReveal key={product.slug} delayMs={Math.min(index, 3) * 80}>
                   <ProductCard product={product} image={product.image} priority={index < 3} />
@@ -202,8 +202,8 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="border-t border-white/10 py-20">
-        <div className="mx-auto max-w-[1440px] px-6 lg:px-12">
+      <section className="border-t border-white/10 py-12 sm:py-20">
+        <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
           <ScrollReveal>
             <div className="mb-10 max-w-2xl">
               <p className="vl2-eyebrow">Standards</p>
@@ -224,7 +224,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="border-t border-white/10 py-20">
+      <section className="border-t border-white/10 py-12 sm:py-20">
         <div className="mx-auto max-w-3xl px-6 lg:px-12">
           <ScrollReveal>
             <div className="mb-10 text-center">

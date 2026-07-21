@@ -154,10 +154,10 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
       <h1 className="vl2-serif mt-3 text-3xl">Confirm your membership</h1>
 
       <div className="mt-8 flex gap-2">
-        <button type="button" onClick={() => { setBillingCycle("annual"); setAgreedToTerms(false); }} className={`flex-1 rounded-full border px-4 py-2 text-sm ${billingCycle === "annual" ? "border-white bg-white text-black" : "border-white/20 text-white/70"}`}>
+        <button type="button" onClick={() => { setBillingCycle("annual"); setAgreedToTerms(false); }} className={`flex-1 rounded-full border px-4 py-2.5 text-sm min-h-[44px] ${billingCycle === "annual" ? "border-white bg-white text-black" : "border-white/20 text-white/70"}`}>
           Annual · no fee
         </button>
-        <button type="button" onClick={() => { setBillingCycle("monthly"); setAgreedToTerms(false); }} className={`flex-1 rounded-full border px-4 py-2 text-sm ${billingCycle === "monthly" ? "border-white bg-white text-black" : "border-white/20 text-white/70"}`}>
+        <button type="button" onClick={() => { setBillingCycle("monthly"); setAgreedToTerms(false); }} className={`flex-1 rounded-full border px-4 py-2.5 text-sm min-h-[44px] ${billingCycle === "monthly" ? "border-white bg-white text-black" : "border-white/20 text-white/70"}`}>
           Monthly
         </button>
       </div>

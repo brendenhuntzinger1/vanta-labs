@@ -66,7 +66,7 @@ export function SiteFooter() {
         </div>
       </div>
 
-      <div className="mx-auto max-w-[1440px] px-6 py-14 lg:px-12">
+      <div className="mx-auto max-w-[1440px] px-4 sm:px-6 py-14 lg:px-12">
         <div className="grid gap-10 md:grid-cols-[1.6fr_1fr_1fr_1fr]">
           <div>
             <p className="vl2-serif text-lg tracking-[0.08em] text-white">Vanta Labs</p>
