@@ -417,6 +417,88 @@ export function ambassadorDeniedTemplate(input: { name: string }): EmailTemplate
   };
 }
 
+// Sent to an ambassador when one of their referred orders is paid and a
+// commission is recorded. Deliberately minimal: it must NEVER expose sensitive
+// business data (order totals, customer identity, product mix, revenue). Only
+// the four fields the owner approved: commission earned on this sale, the
+// running unpaid balance, the referral code used, and the biweekly-payout
+// reminder.
+export function commissionEarnedTemplate(input: {
+  name: string;
+  commissionAmount: number;
+  unpaidBalance: number;
+  referralCode?: string;
+  dashboardUrl: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.name || "there");
+  const codeLine = input.referralCode
+    ? `<p style="margin:4px 0 0;font-size:13px;color:#a1a1aa;">Referral code used: <strong style="color:#e4e4e7;">${escapeHtml(input.referralCode)}</strong></p>`
+    : "";
+  return {
+    subject: `You earned a commission — ${money(input.commissionAmount)}`,
+    html: renderLayout({
+      preheader: `You earned ${money(input.commissionAmount)} from a new sale.`,
+      title: `Nice work, ${name} — you earned a commission`,
+      bodyHtml: `
+        <p>A new sale came through your referral. Here's what you earned:</p>
+        <p style="margin:14px 0 2px;font-size:22px;font-weight:800;color:#ffffff;">${money(input.commissionAmount)}</p>
+        <p style="margin:0;font-size:13px;color:#a1a1aa;">earned on this sale</p>
+        <p style="margin:16px 0 0;font-size:15px;color:#e4e4e7;">Running unpaid balance: <strong style="color:#ffffff;">${money(input.unpaidBalance)}</strong></p>
+        ${codeLine}
+        <p style="margin:16px 0 0;font-size:13px;color:#a1a1aa;">Payouts are processed every two weeks.</p>
+      `,
+      ctaLabel: "Open Ambassador Dashboard",
+      ctaUrl: input.dashboardUrl,
+    }),
+    text: toText([
+      `Nice work, ${input.name || "there"} — you earned a commission.`,
+      "",
+      `Commission earned on this sale: ${money(input.commissionAmount)}`,
+      `Running unpaid balance: ${money(input.unpaidBalance)}`,
+      input.referralCode ? `Referral code used: ${input.referralCode}` : null,
+      "",
+      "Payouts are processed every two weeks.",
+      "",
+      `Dashboard: ${input.dashboardUrl}`,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
+// Internal alert to the business owner when a new ambassador application is
+// submitted, so they don't have to keep refreshing the admin dashboard.
+export function newAmbassadorApplicationTemplate(input: {
+  applicantName: string;
+  applicantEmail: string;
+  adminUrl: string;
+}): EmailTemplate {
+  return {
+    subject: `New ambassador application — ${input.applicantName || input.applicantEmail}`,
+    html: renderLayout({
+      preheader: `${input.applicantName || input.applicantEmail} applied to the ambassador program.`,
+      title: "New ambassador application",
+      bodyHtml: `
+        <p>A new ambassador application is awaiting review.</p>
+        <p>Applicant: ${escapeHtml(input.applicantName || "—")}<br/>Email: ${escapeHtml(input.applicantEmail)}</p>
+        <p>Review and approve or decline it in your admin dashboard.</p>
+      `,
+      ctaLabel: "Review Applications",
+      ctaUrl: input.adminUrl,
+    }),
+    text: toText([
+      "New ambassador application awaiting review.",
+      "",
+      `Applicant: ${input.applicantName || "—"}`,
+      `Email: ${input.applicantEmail}`,
+      "",
+      input.adminUrl,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 export function referralCodeAssignedTemplate(input: {
   name: string;
   referralCode: string;

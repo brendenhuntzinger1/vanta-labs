@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { buildAuthCookieValue, buildExpiredAuthCookie } from "@/lib/auth-session";
-import { createPartnerApplication } from "@/lib/partner-portal";
+import { detectRoleFromUser } from "@/lib/auth-role";
 import { createServerClient } from "@/lib/supabase-server";
 import { awardReferralSignupBonus, awardSignupBonusIfNeeded } from "@/lib/membership";
 import { getUserIdByReferralCode, setReferredByCode } from "@/lib/customer-account";
@@ -21,18 +21,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Invalid session token" }, { status: 401 });
     }
 
-    const role = String(data.user.app_metadata?.role ?? data.user.user_metadata?.role ?? "").toLowerCase();
-    if (role === "partner" && data.user.email) {
-      const fullName = typeof data.user.user_metadata?.full_name === "string"
-        ? data.user.user_metadata.full_name
-        : data.user.email.split("@")[0];
-
-      await createPartnerApplication({
-        authUserId: data.user.id,
-        email: data.user.email,
-        name: String(fullName || "Partner").trim(),
-      });
-    }
+    // Establishing a login session NEVER creates an ambassador/partner record.
+    // Becoming an ambassador is an explicit, separate action (POST
+    // /api/partner/apply) so a normal customer signup can never trigger the
+    // ambassador application flow or its "application received" email.
+    const role = detectRoleFromUser(data.user);
 
     if (role === "customer") {
       try {
