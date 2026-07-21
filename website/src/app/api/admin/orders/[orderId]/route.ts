@@ -12,6 +12,21 @@ function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+// Build a clickable carrier tracking URL from the carrier name + tracking
+// number so shipping emails can render a working "Track Package" button.
+// Unknown carriers fall back to a Google-based lookup rather than no link.
+function buildTrackingUrl(carrier: string | null | undefined, trackingNumber: string | null | undefined): string | undefined {
+  const tn = (trackingNumber ?? "").trim();
+  if (!tn) return undefined;
+  const key = (carrier ?? "").trim().toLowerCase();
+  const encoded = encodeURIComponent(tn);
+  if (key.includes("usps")) return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encoded}`;
+  if (key.includes("ups")) return `https://www.ups.com/track?tracknum=${encoded}`;
+  if (key.includes("fedex")) return `https://www.fedex.com/fedextrack/?trknbr=${encoded}`;
+  if (key.includes("dhl")) return `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${encoded}`;
+  return `https://www.google.com/search?q=${encoded}`;
+}
+
 async function getOrderWithItems(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
@@ -133,11 +148,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         try {
           const order = await getOrderWithItems(orderId);
           if (order?.customer_email) {
+            const trackingNumber = updatePayload.tracking_number ? String(updatePayload.tracking_number) : undefined;
+            const carrier = body.carrier?.trim() || undefined;
             const template = shippingUpdateTemplate({
               customerName: String(order.customer_name ?? ""),
               orderId,
               status: String(updatePayload.fulfillment_status ?? order.fulfillment_status ?? "updated"),
-              trackingNumber: updatePayload.tracking_number ? String(updatePayload.tracking_number) : undefined,
+              carrier,
+              trackingNumber,
+              trackingUrl: buildTrackingUrl(carrier, trackingNumber),
             });
             await sendEmail({ to: String(order.customer_email), ...template });
           }

@@ -202,14 +202,9 @@ export function AccountSettingsClient({
       <section className="vl-panel rounded-2xl p-5 sm:p-6">
         <h2 className="text-lg font-semibold text-white">Email notifications</h2>
         <div className="mt-4 space-y-3">
-          <label className="flex items-center gap-3 text-sm text-zinc-300">
-            <input
-              type="checkbox"
-              checked={preferences.orderUpdateEmails}
-              onChange={(e) => setPreferences((prev) => ({ ...prev, orderUpdateEmails: e.target.checked }))}
-            />
-            Order confirmations and shipping updates
-          </label>
+          <p className="text-sm text-zinc-400">
+            Order confirmations, payment receipts, and shipping updates are always sent — these keep you informed about purchases you make.
+          </p>
           <label className="flex items-center gap-3 text-sm text-zinc-300">
             <input
               type="checkbox"

@@ -27,6 +27,26 @@ export async function PATCH(request: Request) {
       throw error;
     }
 
+    // Mirror the marketing toggle into email_suppressions, which is the
+    // authoritative gate every marketing send checks (coupon broadcasts,
+    // cart-recovery, win-back, etc.). Without this, unchecking "promotions"
+    // in the account changed the preference row but marketing emails still
+    // went out. Best-effort — the preference above already saved.
+    const email = user.email?.trim().toLowerCase();
+    if (email) {
+      try {
+        if (body.marketingEmails === false) {
+          await supabaseAdmin
+            .from("email_suppressions")
+            .upsert({ email, reason: "account_preference", created_at: new Date().toISOString() }, { onConflict: "email" });
+        } else if (body.marketingEmails === true) {
+          await supabaseAdmin.from("email_suppressions").delete().eq("email", email);
+        }
+      } catch {
+        // Non-fatal; the preference row is saved regardless.
+      }
+    }
+
     return NextResponse.json({ success: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to save preferences";

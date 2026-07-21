@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { PartnerProgramStats } from "@/lib/partner-portal";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 
-type AuthMode = "signup" | "login";
+type SessionStatus = "loading" | "guest" | "customer" | "pending" | "approved" | "rejected" | "disabled";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(value);
@@ -21,30 +21,13 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-function getEmailRedirectUrl() {
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
-  if (siteUrl) {
-    return `${siteUrl.replace(/\/+$/, "")}/partner`;
-  }
-
-  if (typeof window !== "undefined") {
-    return `${window.location.origin}/partner`;
-  }
-
-  return undefined;
-}
-
 export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerProgramStats }) {
-  const router = useRouter();
   const searchParams = useSearchParams();
   const [stats, setStats] = useState(initialStats);
-  const [authMode, setAuthMode] = useState<AuthMode>("signup");
-  const [email, setEmail] = useState(() => searchParams.get("email") ?? "");
-  const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState(() => searchParams.get("name") ?? "");
   const [loading, setLoading] = useState(false);
-  const [completingVerification, setCompletingVerification] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const [sessionStatus, setSessionStatus] = useState<SessionStatus>("loading");
 
   const [referralsPerMonth, setReferralsPerMonth] = useState(40);
   const [averageOrderValue, setAverageOrderValue] = useState(130);
@@ -67,75 +50,57 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
     return () => window.clearInterval(interval);
   }, []);
 
+  // Detect who is viewing: a guest (must create/sign into a customer account
+  // first), a plain customer (can apply), or an existing applicant/ambassador
+  // (show their current status). Ambassadors are customers with an approved
+  // partner profile — there is no separate ambassador login.
   useEffect(() => {
     let active = true;
 
-    const completePartnerSignup = async () => {
+    (async () => {
       try {
         const { data } = await supabase.auth.getSession();
-        const accessToken = data.session?.access_token;
-        const user = data.session?.user;
-
-        if (!accessToken || !user) {
+        if (!data.session?.user) {
+          if (active) setSessionStatus("guest");
           return;
         }
 
-        const role = String(user.app_metadata?.role ?? user.user_metadata?.role ?? "").toLowerCase();
-        if (role !== "partner") {
+        const prefillName = typeof data.session.user.user_metadata?.full_name === "string"
+          ? data.session.user.user_metadata.full_name
+          : "";
+        if (active && prefillName) {
+          setFullName((current) => current || prefillName);
+        }
+
+        const meResponse = await fetch("/api/partner/me", { cache: "no-store" });
+        if (meResponse.status === 401) {
+          if (active) setSessionStatus("customer");
           return;
         }
+        const meJson = await meResponse.json();
+        const status = meJson?.partner?.status as string | undefined;
 
-        if (active) {
-          setCompletingVerification(true);
-        }
-
-        const fallbackName = typeof user.user_metadata?.full_name === "string"
-          ? user.user_metadata.full_name
-          : (user.email ?? "Partner").split("@")[0];
-
-        const applyResponse = await fetch("/api/partner/apply", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            accessToken,
-            fullName: String(fallbackName || "Partner").trim(),
-          }),
-        });
-        const applyJson = await applyResponse.json();
-        if (!applyResponse.ok || !applyJson.success) {
-          throw new Error(applyJson.error ?? "Unable to complete partner application");
-        }
-
-        await fetch("/api/auth/session", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ accessToken }),
-        });
-
-        const status = String(applyJson.partner?.status ?? "pending");
-        if (status === "approved") {
-          router.push("/partner/dashboard");
+        if (!active) return;
+        if (!status) {
+          setSessionStatus("customer");
+        } else if (status === "approved") {
+          setSessionStatus("approved");
+        } else if (status === "rejected") {
+          setSessionStatus("rejected");
+        } else if (status === "disabled") {
+          setSessionStatus("disabled");
         } else {
-          router.push("/partner/pending");
+          setSessionStatus("pending");
         }
-        router.refresh();
-      } catch (error) {
-        if (active) {
-          setAuthMessage(error instanceof Error ? error.message : "Unable to complete email verification");
-        }
-      } finally {
-        if (active) {
-          setCompletingVerification(false);
-        }
+      } catch {
+        if (active) setSessionStatus("guest");
       }
-    };
-
-    void completePartnerSignup();
+    })();
 
     return () => {
       active = false;
     };
-  }, [router]);
+  }, []);
 
   const estimatedMonthlyCommission = useMemo(() => {
     const baseRevenue = referralsPerMonth * averageOrderValue;
@@ -146,94 +111,45 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
 
   const estimatedYearlyCommission = estimatedMonthlyCommission * 12;
 
-  const handleSignup = async () => {
+  const handleApply = async () => {
     setLoading(true);
     setAuthMessage(null);
 
     try {
-      const { data, error } = await supabase.auth.signUp({
-        email: email.trim(),
-        password,
-        options: {
-          data: { full_name: fullName.trim(), role: "partner" },
-          emailRedirectTo: getEmailRedirectUrl(),
-        },
+      const { data } = await supabase.auth.getSession();
+      const accessToken = data.session?.access_token;
+      if (!accessToken) {
+        setSessionStatus("guest");
+        throw new Error("Please sign in to your account first, then apply.");
+      }
+
+      // Ensure the httpOnly session cookie exists so /api/partner/apply can
+      // authenticate the request.
+      await fetch("/api/auth/session", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accessToken }),
       });
-
-      if (error || !data.user) {
-        throw new Error(error?.message ?? "Unable to create account");
-      }
-
-      if (!data.session?.access_token) {
-        setAuthMessage("Thank you. Your ambassador application was received and is pending approval. We will be getting back to you soon.");
-        return;
-      }
 
       const applyResponse = await fetch("/api/partner/apply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accessToken: data.session.access_token,
-          fullName: fullName.trim(),
-        }),
+        body: JSON.stringify({ accessToken, fullName: fullName.trim() }),
       });
-
       const applyJson = await applyResponse.json();
       if (!applyResponse.ok || !applyJson.success) {
-        throw new Error(applyJson.error ?? "Unable to submit partner application");
+        throw new Error(applyJson.error ?? "Unable to submit your application");
       }
 
-      await fetch("/api/auth/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accessToken: data.session.access_token }),
-      });
-
-      router.push("/partner/pending");
-      router.refresh();
+      const status = String(applyJson.partner?.status ?? "pending");
+      setSessionStatus(status === "approved" ? "approved" : "pending");
+      setAuthMessage(
+        status === "approved"
+          ? "You're approved! Your Ambassador Stats tab is available in your account."
+          : "Application received. It's under review — you'll get an email when a decision is made, and your Ambassador Stats tab will appear in your account once approved.",
+      );
     } catch (error) {
-      setAuthMessage(error instanceof Error ? error.message : "Unable to complete signup");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleLogin = async () => {
-    setLoading(true);
-    setAuthMessage(null);
-
-    try {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(),
-        password,
-      });
-
-      if (error || !data.session?.access_token) {
-        throw new Error(error?.message ?? "Unable to sign in");
-      }
-
-      const sessionResponse = await fetch("/api/auth/session", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ accessToken: data.session.access_token }),
-      });
-      const sessionJson = await sessionResponse.json();
-      if (!sessionResponse.ok || !sessionJson.success) {
-        throw new Error(sessionJson.error ?? "Unable to establish session");
-      }
-
-      const meResponse = await fetch("/api/partner/me", { cache: "no-store" });
-      const meJson = await meResponse.json();
-      const status = meJson?.partner?.status;
-
-      if (status === "approved") {
-        router.push("/partner/dashboard");
-      } else {
-        router.push("/partner/pending");
-      }
-      router.refresh();
-    } catch (error) {
-      setAuthMessage(error instanceof Error ? error.message : "Unable to sign in");
+      setAuthMessage(error instanceof Error ? error.message : "Unable to submit your application");
     } finally {
       setLoading(false);
     }
@@ -352,45 +268,49 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
 
       <section id="apply" className="mx-auto max-w-[1440px] px-6 pb-20 pt-8 lg:px-12">
         <div className="border border-white/10 p-6 sm:p-8">
-          <div className="mb-5 flex flex-wrap gap-2">
-            <button type="button" onClick={() => setAuthMode("signup")} className={authMode === "signup" ? "border border-white bg-white/10 px-4 py-2 text-sm text-white" : "border border-white/15 px-4 py-2 text-sm text-white/45"}>Become a Partner</button>
-            <button type="button" onClick={() => setAuthMode("login")} className={authMode === "login" ? "border border-white bg-white/10 px-4 py-2 text-sm text-white" : "border border-white/15 px-4 py-2 text-sm text-white/45"}>Partner Login</button>
-          </div>
-
           <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
             <div>
-              <h3 className="vl2-serif text-2xl text-white">{authMode === "signup" ? "Apply in Minutes" : "Welcome Back"}</h3>
-              <p className="mt-2 text-sm text-white/50">
-                {authMode === "signup"
-                  ? "Create your account and submit your partner application. Approved partners unlock full dashboard access."
-                  : "Sign in to access your dashboard. Pending applications will be directed to the approval status page."}
-              </p>
+              <h3 className="vl2-serif text-2xl text-white">Become an Ambassador</h3>
 
-              {authMode === "signup" ? (
-                <label className="mt-5 block text-sm text-white/50">
-                  <span className="mb-2 block">Full name</span>
-                  <input value={fullName} onChange={(event) => setFullName(event.target.value)} autoComplete="name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
-                </label>
-              ) : null}
-
-              <label className="mt-4 block text-sm text-white/50">
-                <span className="mb-2 block">Email</span>
-                <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="email" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
-              </label>
-
-              <label className="mt-4 block text-sm text-white/50">
-                <span className="mb-2 block">Password</span>
-                <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete={authMode === "signup" ? "new-password" : "current-password"} className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
-              </label>
-
-              <button
-                type="button"
-                disabled={loading || completingVerification}
-                onClick={authMode === "signup" ? handleSignup : handleLogin}
-                className="vl2-btn-primary vl-focus-ring mt-6 px-6 py-3 text-sm disabled:opacity-60"
-              >
-                {(loading || completingVerification) ? "Processing..." : authMode === "signup" ? "Submit Partner Application" : "Sign In"}
-              </button>
+              {sessionStatus === "loading" ? (
+                <p className="mt-3 text-sm text-white/50">Checking your account…</p>
+              ) : sessionStatus === "guest" ? (
+                <>
+                  <p className="mt-2 text-sm text-white/50">
+                    The ambassador program is for Vanta Labs account holders. Sign in or create your free account, then come back here to apply — approval adds an <span className="text-white/80">Ambassador Stats</span> tab right inside your account.
+                  </p>
+                  <div className="mt-6 flex flex-wrap gap-3">
+                    <a href="/account/login?next=/partner" className="vl2-btn-primary vl-focus-ring px-6 py-3 text-sm">Sign in / Create account</a>
+                  </div>
+                </>
+              ) : sessionStatus === "approved" ? (
+                <>
+                  <p className="mt-2 text-sm text-white/50">You&apos;re an approved ambassador. Your live stats, referral link, and payouts live in your account.</p>
+                  <div className="mt-6 flex flex-wrap gap-3">
+                    <a href="/account/ambassador" className="vl2-btn-primary vl-focus-ring px-6 py-3 text-sm">Open Ambassador Stats</a>
+                  </div>
+                </>
+              ) : sessionStatus === "pending" ? (
+                <p className="mt-3 text-sm text-white/70">Your application is under review. We&apos;ll email you when a decision is made, and your Ambassador Stats tab will appear in your account once approved.</p>
+              ) : sessionStatus === "rejected" || sessionStatus === "disabled" ? (
+                <p className="mt-3 text-sm text-white/70">Your ambassador application isn&apos;t active right now. If you think this is a mistake, please reach out via the contact page.</p>
+              ) : (
+                <>
+                  <p className="mt-2 text-sm text-white/50">You&apos;re signed in. Submit your application below — approved ambassadors get an Ambassador Stats tab in this same account.</p>
+                  <label className="mt-5 block text-sm text-white/50">
+                    <span className="mb-2 block">Full name</span>
+                    <input value={fullName} onChange={(event) => setFullName(event.target.value)} autoComplete="name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" required />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={loading || !fullName.trim()}
+                    onClick={handleApply}
+                    className="vl2-btn-primary vl-focus-ring mt-6 px-6 py-3 text-sm disabled:opacity-60"
+                  >
+                    {loading ? "Submitting…" : "Submit Application"}
+                  </button>
+                </>
+              )}
 
               {authMessage ? <p className="mt-4 text-sm text-white/75">{authMessage}</p> : null}
             </div>
@@ -398,9 +318,10 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
             <div className="border border-white/10 p-5 text-sm text-white/60">
               <p className="vl2-eyebrow">Approval Process</p>
               <ol className="mt-4 space-y-3">
-                <li>1. Create account and submit your application.</li>
-                <li>2. Admin reviews fit and audience quality.</li>
-                <li>3. Upon approval, your dashboard unlocks instantly.</li>
+                <li>1. Sign in to your Vanta Labs account.</li>
+                <li>2. Submit your ambassador application here.</li>
+                <li>3. Admin reviews fit and audience quality.</li>
+                <li>4. On approval, your Ambassador Stats tab unlocks in your account.</li>
               </ol>
               <p className="mt-4 text-white/40">Average approval time: {stats.averageApprovalTimeHours.toFixed(1)} hours.</p>
             </div>
