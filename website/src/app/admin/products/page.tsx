@@ -937,6 +937,14 @@ function ProductEditor({
                 Open verify page ↗
               </a>
               <a
+                href={`/coa/${encodeURIComponent(draft.batchNumber.trim())}/label`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="rounded-md border border-zinc-700 px-2 py-1 text-zinc-200"
+              >
+                Print label
+              </a>
+              <a
                 href={`/api/catalog/coa-qr?batch=${encodeURIComponent(draft.batchNumber.trim())}`}
                 className="rounded-md border border-zinc-700 px-2 py-1 text-zinc-200"
               >
@@ -1039,6 +1047,14 @@ function ProductEditor({
                   className="text-cyan-300 underline underline-offset-4"
                 >
                   Open verify page ↗
+                </a>
+                <a
+                  href={`/coa/${encodeURIComponent(dose.batchNumber.trim())}/label`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-md border border-zinc-700 px-2 py-1 text-zinc-200"
+                >
+                  Print label
                 </a>
                 <a
                   href={`/api/catalog/coa-qr?batch=${encodeURIComponent(dose.batchNumber.trim())}`}
