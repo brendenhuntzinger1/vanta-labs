@@ -43,6 +43,10 @@ export function AmbassadorPageClient() {
               <a href="#apply" className="vl2-btn-primary vl-focus-ring px-6 py-3 text-sm">Apply as Ambassador</a>
               <Link href="/partner" className="vl2-btn-secondary vl-focus-ring px-6 py-3 text-sm">Partner Dashboard</Link>
             </div>
+            <div className="mt-4 flex flex-wrap gap-4 text-xs text-white/50">
+              <Link href="/ambassador/terms" className="underline underline-offset-4 hover:text-white">Terms &amp; Conditions</Link>
+              <Link href="/ambassador/faq" className="underline underline-offset-4 hover:text-white">FAQ</Link>
+            </div>
             <div className="mt-6 flex flex-wrap gap-6 text-[10px] uppercase tracking-[0.14em] text-white/40">
               <span>Fast Approval</span>
               <span>Reliable Payouts</span>

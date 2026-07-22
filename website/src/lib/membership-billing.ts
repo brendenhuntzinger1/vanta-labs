@@ -17,6 +17,7 @@ import {
   membershipRenewalReceiptTemplate,
   membershipPaymentFailedTemplate,
   membershipWinBackTemplate,
+  membershipCancellationTemplate,
 } from "@/lib/email/templates";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
@@ -446,6 +447,24 @@ export async function cancelMembership(userId: string): Promise<MembershipCancel
 
   const billingCycle = (existing.billing_cycle as "monthly" | "annual" | "free") ?? "monthly";
   const accessUntil = (existing.next_billing_at as string | null) ?? (existing.renews_at as string | null) ?? null;
+
+  // Confirm the cancellation by email (best-effort — never blocks the cancel).
+  try {
+    const [contact, tier] = await Promise.all([getAuthUserContact(userId), getTierById(existing.tier_id)]);
+    if (contact) {
+      await sendEmail({
+        to: contact.email,
+        ...membershipCancellationTemplate({
+          name: contact.name,
+          tierName: tier?.name,
+          accessUntil: accessUntil ? new Date(accessUntil).toLocaleDateString() : undefined,
+          resubscribeUrl: `${getSiteUrl().replace(/\/$/, "")}/membership`,
+        }),
+      });
+    }
+  } catch (emailError) {
+    console.error("Unable to send membership cancellation email", userId, emailError);
+  }
 
   return { billingCycle, accessUntil, refundable: false };
 }

@@ -146,6 +146,8 @@ export function AdminControlCenterClient() {
       { title: "Products", href: "/admin/products", detail: "Catalog, variants, pricing, inventory" },
       { title: "Orders", href: "/admin/orders", detail: "Payments, shipping status, exports" },
       { title: "Partners", href: "/admin/partners", detail: "Applications, commissions, payouts" },
+      { title: "Promotions", href: "/admin/promotions", detail: "Stacking rules, priority, live preview" },
+      { title: "Launch Checklist", href: "/admin/launch-checklist", detail: "Pre-launch readiness at a glance" },
       { title: "Control Center", href: "#control-editor", detail: "Homepage, promos, content, settings" },
     ];
   }, []);

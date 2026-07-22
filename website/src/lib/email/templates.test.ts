@@ -5,6 +5,8 @@ import {
   orderConfirmationTemplate,
   passwordResetTemplate,
   shippingUpdateTemplate,
+  membershipCancellationTemplate,
+  ambassadorPayoutTemplate,
 } from "@/lib/email/templates";
 
 describe("commissionEarnedTemplate", () => {
@@ -31,6 +33,33 @@ describe("commissionEarnedTemplate", () => {
     for (const forbidden of ["customer", "order total", "revenue", "subtotal", "fraud", "tier"]) {
       expect(lowered).not.toContain(forbidden);
     }
+  });
+});
+
+describe("membershipCancellationTemplate", () => {
+  it("confirms cancellation and shows the access-until date", () => {
+    const t = membershipCancellationTemplate({ name: "Sam", tierName: "Priority", accessUntil: "Aug 1, 2026", resubscribeUrl: "https://vantalabsresearch.com/membership" });
+    const body = `${t.subject}\n${t.html}\n${t.text}`;
+    expect(body.toLowerCase()).toContain("cancel");
+    expect(body).toContain("Priority");
+    expect(body).toContain("Aug 1, 2026");
+  });
+});
+
+describe("ambassadorPayoutTemplate", () => {
+  it("cash payout mentions the amount", () => {
+    const t = ambassadorPayoutTemplate({ name: "Jordan", amount: 120, method: "cash", dashboardUrl: "https://vantalabsresearch.com/account/ambassador" });
+    const body = `${t.subject}\n${t.html}\n${t.text}`;
+    expect(body).toContain("$120.00");
+    expect(body.toLowerCase()).toContain("payout");
+  });
+
+  it("store-credit payout shows both the basis and the credited amount", () => {
+    const t = ambassadorPayoutTemplate({ name: "Jordan", amount: 100, method: "store_credit", creditAmount: 125, dashboardUrl: "https://vantalabsresearch.com/account/ambassador" });
+    const body = `${t.subject}\n${t.html}\n${t.text}`;
+    expect(body).toContain("$100.00");
+    expect(body).toContain("$125.00");
+    expect(body.toLowerCase()).toContain("store credit");
   });
 });
 

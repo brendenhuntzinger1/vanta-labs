@@ -6,6 +6,7 @@ import {
   ambassadorApplicationReceivedTemplate,
   ambassadorApprovedTemplate,
   ambassadorDeniedTemplate,
+  ambassadorPayoutTemplate,
   newAmbassadorApplicationTemplate,
   referralCodeAssignedTemplate,
 } from "@/lib/email/templates";
@@ -1331,16 +1332,18 @@ export async function markCommissionsPaid(input: {
   // basis for accounting, annotated with the credit granted.
   const { data: partnerRow } = await supabaseAdmin
     .from("partners")
-    .select("auth_user_id, payout_method")
+    .select("auth_user_id, payout_method, name, email")
     .eq("id", input.partnerId)
     .maybeSingle();
   const payoutMethod = String(partnerRow?.payout_method ?? "cash");
   const baseAmount = roundMoney(input.amount);
   let payoutNote = input.note ?? null;
+  let creditAmountForEmail: number | undefined;
 
   if (payoutMethod === "store_credit" && partnerRow?.auth_user_id) {
     const settings = await getAmbassadorProgramSettings();
     const creditCents = Math.round(baseAmount * 100 * (settings.storeCreditMultiplierPercent / 100));
+    creditAmountForEmail = creditCents / 100;
     await grantAmbassadorCredit({
       userId: String(partnerRow.auth_user_id),
       amountCents: creditCents,
@@ -1395,6 +1398,22 @@ export async function markCommissionsPaid(input: {
       userAgent: input.userAgent ?? null,
     },
   });
+
+  // Notify the ambassador of their payout (best-effort — never blocks the payout).
+  if (partnerRow?.email) {
+    try {
+      const template = ambassadorPayoutTemplate({
+        name: String(partnerRow.name ?? "there"),
+        amount: baseAmount,
+        method: payoutMethod === "store_credit" ? "store_credit" : "cash",
+        creditAmount: creditAmountForEmail,
+        dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
+      });
+      await sendEmail({ to: String(partnerRow.email), ...template });
+    } catch (emailError) {
+      console.error("Unable to send ambassador payout email", input.partnerId, emailError);
+    }
+  }
 
   return {
     payoutId,

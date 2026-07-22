@@ -454,6 +454,71 @@ export function ambassadorApprovedTemplate(input: {
   };
 }
 
+export function membershipCancellationTemplate(input: { name: string; tierName?: string; accessUntil?: string; resubscribeUrl: string }): EmailTemplate {
+  const name = escapeHtml(input.name);
+  const tier = input.tierName ? escapeHtml(input.tierName) : "membership";
+  return {
+    subject: "Your Vanta Labs membership has been cancelled",
+    html: renderLayout({
+      preheader: "Your membership cancellation is confirmed.",
+      title: `Cancellation confirmed, ${name}`,
+      bodyHtml: `
+        <p>Your <strong>${tier}</strong> has been cancelled and will not renew.</p>
+        ${input.accessUntil ? `<p>You'll keep your membership benefits until <strong>${escapeHtml(input.accessUntil)}</strong>. After that, benefits like member pricing, free shipping, and monthly store credit end.</p>` : `<p>Your membership benefits have ended.</p>`}
+        <p>You can rejoin anytime — your account, points, and order history stay intact.</p>
+      `,
+      ctaLabel: "Rejoin",
+      ctaUrl: input.resubscribeUrl,
+    }),
+    text: toText([
+      `Hi ${input.name},`,
+      "",
+      `Your ${input.tierName ?? "membership"} has been cancelled and will not renew.`,
+      input.accessUntil ? `You'll keep benefits until ${input.accessUntil}.` : "Your membership benefits have ended.",
+      "",
+      `Rejoin anytime: ${input.resubscribeUrl}`,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
+export function ambassadorPayoutTemplate(input: {
+  name: string;
+  amount: number;
+  method: "cash" | "store_credit";
+  creditAmount?: number;
+  dashboardUrl: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.name);
+  const amountStr = `$${input.amount.toFixed(2)}`;
+  const isCredit = input.method === "store_credit";
+  const creditStr = input.creditAmount != null ? `$${input.creditAmount.toFixed(2)}` : amountStr;
+  return {
+    subject: isCredit ? "Store credit added to your ambassador account" : "Your ambassador payout has been sent",
+    html: renderLayout({
+      preheader: isCredit ? "Your commission was added as store credit." : "Your commission payout is on its way.",
+      title: isCredit ? `Store credit added, ${name}` : `Payout sent, ${name}`,
+      bodyHtml: isCredit
+        ? `<p>Your commission of <strong>${amountStr}</strong> has been added to your account as <strong>${creditStr}</strong> in store credit. It never expires — spend it at checkout on your own orders.</p>`
+        : `<p>Your commission payout of <strong>${amountStr}</strong> has been processed. See your dashboard for the full payout history.</p>`,
+      ctaLabel: "Open Dashboard",
+      ctaUrl: input.dashboardUrl,
+    }),
+    text: toText([
+      `Hi ${input.name},`,
+      "",
+      isCredit
+        ? `Your commission of ${amountStr} was added as ${creditStr} in store credit (never expires).`
+        : `Your commission payout of ${amountStr} has been processed.`,
+      "",
+      `Dashboard: ${input.dashboardUrl}`,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 export function ambassadorDeniedTemplate(input: { name: string }): EmailTemplate {
   const name = escapeHtml(input.name);
   return {
