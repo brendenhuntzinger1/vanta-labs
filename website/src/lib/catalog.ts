@@ -1,7 +1,28 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getFulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
 import type { CoaRecord, Product, ProductDose, ProductImage } from "@/lib/catalog-types";
+
+// A stored "Out of Stock" is only honored once the 3PL integration is live and
+// feeding real inventory. Until then every product is treated as In Stock, so
+// the whole catalog stays purchasable and nothing shows "Out of Stock" /
+// "Unavailable" — exactly one source of truth for availability: the 3PL.
+function resolveStockStatus(rawStatus: string, inventoryActive: boolean): Product["stockStatus"] {
+  if (!inventoryActive) {
+    return "In Stock";
+  }
+  return (rawStatus || "In Stock") as Product["stockStatus"];
+}
+
+async function isInventoryActive(): Promise<boolean> {
+  try {
+    const config = await getFulfillmentRuntimeConfig();
+    return Boolean(config.enabled);
+  } catch {
+    return false;
+  }
+}
 
 function formatPriceFromCents(priceCents: number) {
   return `$${(priceCents / 100).toFixed(2)}`;
@@ -25,10 +46,12 @@ function buildProductMaps(rows: Array<Record<string, unknown>>) {
 }
 
 async function fetchProductRelations(productIds: string[]) {
+  const inventoryActive = await isInventoryActive();
   if (productIds.length === 0) {
     return {
       imagesByProductId: new Map<string, ProductImage[]>(),
       dosesByProductId: new Map<string, ProductDose[]>(),
+      inventoryActive,
     };
   }
 
@@ -89,7 +112,7 @@ async function fetchProductRelations(productIds: string[]) {
       compareAtPrice: compareAtCents > 0 ? formatPriceFromCents(compareAtCents) : undefined,
       salePrice: salePriceCents > 0 ? formatPriceFromCents(salePriceCents) : undefined,
       inventoryQuantity: parseNumber(row.inventory_quantity, 0),
-      stockStatus: String(row.stock_status ?? "In Stock") as ProductDose["stockStatus"],
+      stockStatus: resolveStockStatus(String(row.stock_status ?? "In Stock"), inventoryActive) as ProductDose["stockStatus"],
       batchNumber: row.batch_number ? String(row.batch_number) : undefined,
       coaUrl: row.coa_url ? String(row.coa_url) : undefined,
       imageUrl: row.image_url ? String(row.image_url) : undefined,
@@ -102,13 +125,14 @@ async function fetchProductRelations(productIds: string[]) {
     dosesByProductId.set(productId, current);
   }
 
-  return { imagesByProductId, dosesByProductId };
+  return { imagesByProductId, dosesByProductId, inventoryActive };
 }
 
 function mapProductRow(
   row: Record<string, unknown>,
   images: ProductImage[],
   doses: ProductDose[],
+  inventoryActive = false,
 ): Product {
   const primaryImage = images.find((image) => image.isPrimary) ?? images[0];
   const defaultDose = doses.find((dose) => dose.isDefault) ?? doses[0];
@@ -120,14 +144,13 @@ function mapProductRow(
 
   const displayPrice = defaultDose?.salePrice ?? defaultDose?.price ?? formatPriceFromCents(rowPrice);
   const defaultInventoryQuantity = defaultDose?.inventoryQuantity ?? parseNumber(row.inventory_quantity, 0);
-  // Stock status comes ONLY from an explicit stock_status value (set by an
-  // admin or pushed by the 3PL inventory sync). We deliberately do NOT derive
-  // "Out of Stock" from a 0 inventory_quantity, because until the 3PL is
-  // connected every product's quantity is an untracked 0 — treating that as
-  // sold out would wrongly block the whole catalog. Everything is purchasable
-  // until real inventory data says otherwise.
-  const stockStatus = (defaultDose?.stockStatus
-    ?? (String(row.stock_status ?? "In Stock") as Product["stockStatus"]));
+  // Availability has exactly one source of truth: the 3PL. Until it's live
+  // (inventoryActive === false) everything is In Stock; the doses were already
+  // resolved the same way in fetchProductRelations.
+  const stockStatus = resolveStockStatus(
+    String(defaultDose?.stockStatus ?? row.stock_status ?? "In Stock"),
+    inventoryActive,
+  );
   const effectiveImage = defaultDose?.imageUrl ?? primaryImage?.imageUrl ?? String(row.image_url ?? "/images/vantalabs.png");
   const effectiveBatchNumber = defaultDose?.batchNumber ?? String(row.batch_number ?? "");
   const effectiveCoaUrl = defaultDose?.coaUrl ?? String(row.coa_url ?? "");
@@ -189,7 +212,7 @@ async function fetchPublicProductRows() {
 export async function getCatalogProducts() {
   const productRows = await fetchPublicProductRows();
   const { productIds } = buildProductMaps(productRows);
-  const { imagesByProductId, dosesByProductId } = await fetchProductRelations(productIds);
+  const { imagesByProductId, dosesByProductId, inventoryActive } = await fetchProductRelations(productIds);
 
   return productRows.map((row) => {
     const productId = String(row.id);
@@ -197,6 +220,7 @@ export async function getCatalogProducts() {
       row,
       imagesByProductId.get(productId) ?? [],
       dosesByProductId.get(productId) ?? [],
+      inventoryActive,
     );
   });
 }
@@ -221,11 +245,12 @@ export async function getCatalogProductBySlug(slug: string) {
   }
 
   const productId = String(data.id);
-  const { imagesByProductId, dosesByProductId } = await fetchProductRelations([productId]);
+  const { imagesByProductId, dosesByProductId, inventoryActive } = await fetchProductRelations([productId]);
   return mapProductRow(
     data as Record<string, unknown>,
     imagesByProductId.get(productId) ?? [],
     dosesByProductId.get(productId) ?? [],
+    inventoryActive,
   );
 }
 
@@ -249,7 +274,7 @@ export async function getCatalogProductsBySlugs(slugs: string[]) {
 
   const rows = (data ?? []) as Array<Record<string, unknown>>;
   const { productIds } = buildProductMaps(rows);
-  const { imagesByProductId, dosesByProductId } = await fetchProductRelations(productIds);
+  const { imagesByProductId, dosesByProductId, inventoryActive } = await fetchProductRelations(productIds);
 
   const bySlug = new Map(rows.map((row) => {
     const productId = String(row.id);
@@ -259,6 +284,7 @@ export async function getCatalogProductsBySlugs(slugs: string[]) {
         row,
         imagesByProductId.get(productId) ?? [],
         dosesByProductId.get(productId) ?? [],
+        inventoryActive,
       ),
     ];
   }));
@@ -288,7 +314,7 @@ export async function getCatalogProductsByCategory(category: string, excludeSlug
   ).slice(0, limit);
 
   const { productIds } = buildProductMaps(rows);
-  const { imagesByProductId, dosesByProductId } = await fetchProductRelations(productIds);
+  const { imagesByProductId, dosesByProductId, inventoryActive } = await fetchProductRelations(productIds);
 
   return rows.map((row) => {
     const productId = String(row.id);
@@ -296,6 +322,7 @@ export async function getCatalogProductsByCategory(category: string, excludeSlug
       row,
       imagesByProductId.get(productId) ?? [],
       dosesByProductId.get(productId) ?? [],
+      inventoryActive,
     );
   });
 }

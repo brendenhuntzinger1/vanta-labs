@@ -141,7 +141,8 @@ export function ProductDetailClient({
   const [selectedDoseId, setSelectedDoseId] = useState<string | null>(defaultDose?.id ?? null);
   const [quantity, setQuantity] = useState(1);
   const [message, setMessage] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<TabKey>("description");
+  // Collapsed by default — no panel is shown until the shopper taps a tab.
+  const [activeTab, setActiveTab] = useState<TabKey | null>(null);
 
   const selectedDose = product.doses?.find((dose) => dose.id === selectedDoseId) ?? defaultDose;
 
@@ -235,21 +236,22 @@ export function ProductDetailClient({
           </div>
         ) : null}
 
-        <section className="mt-6 grid min-w-0 gap-10 lg:grid-cols-[1.05fr_0.95fr] lg:items-start">
-          <div className="min-w-0">
+        <section className="mt-6 grid min-w-0 gap-6 lg:grid-cols-[1.05fr_0.95fr] lg:items-start lg:gap-10">
+          {/* Block A — product image. Mobile order 1; desktop top-left. */}
+          <div className="order-1 min-w-0 lg:col-start-1 lg:row-start-1">
             <div className="vl2-lab-panel overflow-hidden">
-              <div className="relative min-h-[340px] sm:min-h-[460px]">
+              <div className="relative min-h-[260px] sm:min-h-[460px]">
                 {hasRealImage ? (
                   <Image
                     src={imageToDisplay as string}
                     alt={product.name}
                     fill
                     sizes="(max-width: 1024px) 100vw, 55vw"
-                    className="object-contain p-8 sm:p-12"
+                    className="object-contain p-6 sm:p-12"
                     priority
                   />
                 ) : (
-                  <div className="flex h-full min-h-[340px] items-center justify-center">
+                  <div className="flex h-full min-h-[260px] items-center justify-center">
                     <div className="border border-zinc-200 px-4 py-1.5 text-xs uppercase tracking-[0.2em] text-zinc-400">Image pending</div>
                   </div>
                 )}
@@ -272,14 +274,19 @@ export function ProductDetailClient({
                 ))}
               </div>
             )}
+          </div>
 
-            <div className="mt-8">
+          {/* Block C — details/COA/FAQ. Mobile order 3 (below the buy panel);
+              desktop bottom-left, under the image. */}
+          <div className="order-3 min-w-0 lg:col-start-1 lg:row-start-2 lg:order-none">
+            <div className="mt-2 lg:mt-0">
               <div className="vl2-lab-panel flex gap-1 p-1">
                 {TABS.map((tab) => (
                   <button
                     key={tab.key}
                     type="button"
-                    onClick={() => setActiveTab(tab.key)}
+                    onClick={() => setActiveTab((current) => (current === tab.key ? null : tab.key))}
+                    aria-expanded={activeTab === tab.key}
                     className={`min-w-0 flex-1 px-2 py-2.5 text-[11px] font-medium uppercase tracking-normal transition sm:px-3 sm:text-xs sm:tracking-[0.16em] ${activeTab === tab.key ? "bg-[#111] text-white" : "text-zinc-500 hover:text-[#111]"}`}
                   >
                     {tab.label}
@@ -357,7 +364,10 @@ export function ProductDetailClient({
             </div>
           </div>
 
-          <aside className="lg:sticky lg:top-28 space-y-4">
+          {/* Block B — buy panel. Mobile order 2 (right under the image, so
+              price + bundle + Add to Cart are visible without scrolling past
+              the description); desktop it's the sticky right column. */}
+          <aside className="order-2 space-y-4 lg:order-none lg:col-start-2 lg:row-start-1 lg:row-span-2 lg:sticky lg:top-28">
             <div className="vl2-lab-panel p-6 sm:p-7">
               <div className="flex items-start justify-between gap-3">
                 <div>
