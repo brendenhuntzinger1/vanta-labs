@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageInventory } from "@/lib/admin-roles";
 import { duplicateAdminProduct } from "@/lib/admin-products";
 
 function unauthorizedResponse() {
@@ -10,6 +11,9 @@ export async function POST(_: Request, context: { params: Promise<{ productId: s
   const session = await verifyAdminSessionFromRequest(_);
   if (!session) {
     return unauthorizedResponse();
+  }
+  if (!canManageInventory(session.role)) {
+    return NextResponse.json({ success: false, error: "Your role does not have permission to manage products." }, { status: 403 });
   }
 
   try {

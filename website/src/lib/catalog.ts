@@ -406,6 +406,12 @@ export async function getCoaRecords() {
   return records;
 }
 
+// Escape PostgREST/SQL LIKE metacharacters (%, _, \) so a value used with
+// `.ilike` matches literally instead of as a wildcard pattern.
+function escapeLikePattern(value: string): string {
+  return value.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
 // Look up a single published COA by its batch/lot number for the public
 // verification page (`/coa/[batch]`). Matched case-insensitively and trimmed so
 // a QR scan or hand-typed lot resolves regardless of spacing/case. Blank batch
@@ -416,6 +422,11 @@ export async function getCoaRecordByBatch(batch: string): Promise<CoaRecord | nu
     return null;
   }
 
+  // Escape LIKE wildcards so a scanned/typed value like "%" or "_" can't match
+  // an arbitrary batch — ilike then behaves as a case-insensitive EXACT match,
+  // which is the intended lookup for a specific lot number.
+  const exact = escapeLikePattern(normalized);
+
   const { data, error } = await supabaseAdmin
     .from("products")
     .select("slug, name, category, batch_number, purity_result, testing_date, lab_name, coa_url")
@@ -423,7 +434,7 @@ export async function getCoaRecordByBatch(batch: string): Promise<CoaRecord | nu
     .eq("is_enabled", true)
     .eq("is_published", true)
     .eq("is_archived", false)
-    .ilike("batch_number", normalized)
+    .ilike("batch_number", exact)
     .limit(1)
     .maybeSingle();
 
@@ -451,7 +462,7 @@ export async function getCoaRecordByBatch(batch: string): Promise<CoaRecord | nu
     .from("product_doses")
     .select("product_id, label, batch_number, coa_url, purity_result")
     .eq("is_enabled", true)
-    .ilike("batch_number", normalized)
+    .ilike("batch_number", exact)
     .limit(1)
     .maybeSingle();
 

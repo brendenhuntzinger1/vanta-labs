@@ -6,7 +6,7 @@ import type { ReferralCode } from "@/lib/referral-codes";
 import { validateReferralCodeClient } from "@/lib/referral-client";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
-import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
+import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice, roundMoney } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee, calculateTax, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { resolveBestDiscount } from "@/lib/discount-resolution";
@@ -550,8 +550,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [subtotal, isEligibleForBulkSavings, bulkSavingsConfig],
   );
 
+  // Round every percentage candidate to whole cents so the client total is
+  // byte-for-byte identical to the server (payment-service.ts uses
+  // calculateDiscountAmount / roundMoney). Without this, an unrounded fraction
+  // of a cent can trip the server's "Altered total detected" guard once a tax
+  // rate is configured, and can make the amount a manual-pay customer is shown
+  // differ from the real total.
   const memberPricingAmount = useMemo(
-    () => (memberDiscountPercent > 0 ? subtotal * (memberDiscountPercent / 100) : 0),
+    () => (memberDiscountPercent > 0 ? roundMoney(subtotal * (memberDiscountPercent / 100)) : 0),
     [memberDiscountPercent, subtotal],
   );
 
@@ -560,7 +566,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // the client total and the server total always agree.
   const ambassadorSelfDiscountAmount = useMemo(
     () => (ambassadorDiscountPercent > 0 && !referralDetails && buy3Get1FreeDiscount <= 0
-      ? subtotal * (ambassadorDiscountPercent / 100)
+      ? roundMoney(subtotal * (ambassadorDiscountPercent / 100))
       : 0),
     [ambassadorDiscountPercent, referralDetails, buy3Get1FreeDiscount, subtotal],
   );
@@ -575,7 +581,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [bulkSavingsResult.amount, memberPricingAmount, ambassadorSelfDiscountAmount, preBulkDiscount],
   );
 
-  const discountAmount = bestDiscount?.amount ?? 0;
+  const discountAmount = roundMoney(bestDiscount?.amount ?? 0);
   const bulkSavingsApplied = bestDiscount?.type === "bulk_savings";
   const bulkSavingsProgress = useMemo(
     () => getBulkSavingsProgress(subtotal, isEligibleForBulkSavings, bulkSavingsConfig),

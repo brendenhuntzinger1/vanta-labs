@@ -368,6 +368,11 @@ async function ensureCommissionRecord(input: {
   const commissionPercent = isIneligible ? 0 : effectiveCommission.percent;
   const commissionAmount = isIneligible ? 0 : roundMoney(commissionableSubtotal * (commissionPercent / 100));
 
+  // A fraud-flagged commission is held in "manual_review" instead of the payable
+  // "pending" state, so it can never be auto-approved or paid out until an admin
+  // clears it in the Fraud & Review panel (which returns it to "pending").
+  const commissionStatus = fraudSignal.flagged ? "manual_review" : "pending";
+
   const { data: existingCommission, error: commissionLookupError } = await supabaseAdmin
     .from("referral_orders")
     .select("id, payment_status")
@@ -386,7 +391,7 @@ async function ensureCommissionRecord(input: {
     commission_amount: commissionAmount,
     amount_paid: commissionableSubtotal,
     payment_id: null,
-    payment_status: "pending",
+    payment_status: commissionStatus,
     provider_event_id: input.providerEventId ?? null,
     tier_name: effectiveCommission.tierName,
     ineligible_reason: ineligibleReason,
@@ -409,7 +414,7 @@ async function ensureCommissionRecord(input: {
         referral_code: input.referralCode,
         commission_percent: commissionPercent,
         commission_amount: commissionAmount,
-        status: "pending",
+        status: commissionStatus,
         tier_name: effectiveCommission.tierName,
         ineligible_reason: ineligibleReason,
         fraud_flag: fraudSignal.flagged,
@@ -441,7 +446,7 @@ async function ensureCommissionRecord(input: {
       referral_code: input.referralCode,
       commission_percent: commissionPercent,
       commission_amount: commissionAmount,
-      status: "pending",
+      status: commissionStatus,
       tier_name: effectiveCommission.tierName,
       ineligible_reason: ineligibleReason,
       fraud_flag: fraudSignal.flagged,

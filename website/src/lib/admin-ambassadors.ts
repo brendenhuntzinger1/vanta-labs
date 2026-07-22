@@ -78,7 +78,7 @@ export async function getFraudReviewRows(): Promise<FraudReviewRow[]> {
 export async function clearFraudFlag(referralOrderId: string) {
   const { data: row, error: lookupError } = await supabaseAdmin
     .from("referral_orders")
-    .select("order_id")
+    .select("order_id, payment_status")
     .eq("id", referralOrderId)
     .maybeSingle();
 
@@ -90,9 +90,24 @@ export async function clearFraudFlag(referralOrderId: string) {
     throw new Error("Referral order not found");
   }
 
+  // Fraud-flagged commissions are held in "manual_review" and never pay out.
+  // Clearing the flag must return the row to the normal "pending" hold flow so
+  // the commission can auto-approve and be paid; a row that was manual_review
+  // for another reason (e.g. refund-after-payment) is left as-is.
+  const now = new Date().toISOString();
+  const returnsToPending = row.payment_status === "manual_review";
+  const referralUpdate: Record<string, unknown> = { fraud_flag: false, fraud_reason: null, updated_at: now };
+  const mirrorUpdate: Record<string, unknown> = { fraud_flag: false, fraud_reason: null, updated_at: now };
+  if (returnsToPending) {
+    referralUpdate.payment_status = "pending";
+    referralUpdate.review_required = false;
+    referralUpdate.review_reason = null;
+    mirrorUpdate.status = "pending";
+  }
+
   const { error } = await supabaseAdmin
     .from("referral_orders")
-    .update({ fraud_flag: false, fraud_reason: null, updated_at: new Date().toISOString() })
+    .update(referralUpdate)
     .eq("id", referralOrderId);
 
   if (error) {
@@ -101,7 +116,7 @@ export async function clearFraudFlag(referralOrderId: string) {
 
   const { error: mirrorError } = await supabaseAdmin
     .from("commissions")
-    .update({ fraud_flag: false, fraud_reason: null, updated_at: new Date().toISOString() })
+    .update(mirrorUpdate)
     .eq("order_id", row.order_id);
 
   if (mirrorError) {

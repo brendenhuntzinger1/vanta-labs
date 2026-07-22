@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { calculateDiscountAmount } from "@/lib/referral-service";
+import { DEFAULT_COMMISSION_PERCENT } from "@/lib/referral-config";
 import { validateCoupon } from "@/lib/coupons";
 import { getMembershipPerks, getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/lib/membership";
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
@@ -166,7 +167,7 @@ async function validateReferralCode(
  ambassadorId: data.id,
  code: data.referral_code.toUpperCase(),
  discountPercent: 10,
- commissionPercent: Number(data.commission_percent ?? 15),
+ commissionPercent: Number(data.commission_percent ?? DEFAULT_COMMISSION_PERCENT),
  ambassadorName: data.name,
  ambassadorEmail: data.email ?? null,
  ambassadorAuthUserId: data.auth_user_id ?? null,
@@ -361,9 +362,9 @@ export async function createCheckoutSession(
  // Approved ambassadors get a fixed discount on their OWN orders, applied
  // automatically when logged into their ambassador account. This is not a
  // referral, so no commission is ever created for their own purchases. It
- // competes as a single discount candidate (greatest savings wins, no stacking)
- // and, like membership pricing, only ever lowers the total — safe past the
- // underpayment tripwire even though the client preview may not show it.
+ // competes as a single discount candidate (greatest savings wins, no stacking).
+ // The client (cart-context.tsx) mirrors this exact candidate + gating so the
+ // displayed total matches the server total.
  const ambassadorSelfDiscountAmount = ambassadorSelf && !referral && !isBuy3Get1Active
    ? calculateDiscountAmount(subtotal, ambassadorSettings.ambassadorDiscountPercent)
    : 0;
