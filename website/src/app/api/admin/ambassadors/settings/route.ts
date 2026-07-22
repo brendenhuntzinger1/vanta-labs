@@ -49,11 +49,28 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ success: true, marketingResources });
     }
 
-    const key = body?.key as "minimum_qualifying_order" | "minimum_payout_threshold" | "commission_hold_days";
+    const ALLOWED_KEYS = [
+      "minimum_qualifying_order",
+      "minimum_payout_threshold",
+      "commission_hold_days",
+      "store_credit_multiplier_percent",
+      "ambassador_discount_percent",
+    ] as const;
+    const key = body?.key as (typeof ALLOWED_KEYS)[number];
     const value = Number(body?.value);
 
-    if (!["minimum_qualifying_order", "minimum_payout_threshold", "commission_hold_days"].includes(key)) {
+    if (!ALLOWED_KEYS.includes(key)) {
       return NextResponse.json({ success: false, error: "Invalid setting key" }, { status: 400 });
+    }
+
+    // Store credit worth less than cash would turn the "bonus" into a penalty.
+    if (key === "store_credit_multiplier_percent" && value < 100) {
+      return NextResponse.json({ success: false, error: "Store credit multiplier must be at least 100%" }, { status: 400 });
+    }
+
+    // A discount over 100% would make orders free / negative.
+    if (key === "ambassador_discount_percent" && value > 100) {
+      return NextResponse.json({ success: false, error: "Ambassador discount can't exceed 100%" }, { status: 400 });
     }
 
     if (!Number.isFinite(value) || value < 0) {

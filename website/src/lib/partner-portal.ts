@@ -10,6 +10,7 @@ import {
   referralCodeAssignedTemplate,
 } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
+import { DEFAULT_COMMISSION_PERCENT } from "@/lib/referral-config";
 import { getBusinessSettings } from "@/lib/admin-control";
 import { getAmbassadorProgramSettings, getAmbassadorMarketingResources, type AmbassadorMarketingResource } from "@/lib/ambassador-settings";
 
@@ -389,7 +390,7 @@ export async function createPartnerApplication(input: {
       email: input.email,
       referral_code: referralCode,
       status: "pending",
-      commission_percent: 15,
+      commission_percent: DEFAULT_COMMISSION_PERCENT,
       auth_user_id: input.authUserId,
       invited_at: now,
       updated_at: now,
@@ -408,7 +409,7 @@ export async function createPartnerApplication(input: {
       email: input.email,
       referral_code: referralCode,
       status: "pending",
-      commission_percent: 15,
+      commission_percent: DEFAULT_COMMISSION_PERCENT,
       auth_user_id: input.authUserId,
       invited_at: now,
       updated_at: now,
@@ -670,7 +671,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     partnerName: partner.name,
     referralCode: partner.referral_code,
     referralLink: `${siteUrl.replace(/\/$/, "")}/r/${partner.referral_code}`,
-    commissionPercent: Number(partner.commission_percent ?? 15),
+    commissionPercent: Number(partner.commission_percent ?? DEFAULT_COMMISSION_PERCENT),
     totalEarnings,
     pendingCommissions,
     paidCommissions,
@@ -778,7 +779,7 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
       email: partner.email,
       referralCode: partner.referral_code,
       status: partner.status,
-      commissionPercent: Number(partner.commission_percent ?? 15),
+      commissionPercent: Number(partner.commission_percent ?? DEFAULT_COMMISSION_PERCENT),
       commissionPercentLocked: Boolean(partner.commission_percent_locked),
       totalRevenue: roundMoney(order.totalRevenue),
       totalOrders: order.totalOrders,

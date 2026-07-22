@@ -6,6 +6,7 @@ import { getAdminOperationsSummary, getAdminPartnerRows } from "@/lib/partner-po
 import { listCommissionTierRules } from "@/lib/ambassador-commission";
 import { getAmbassadorMarketingResources, getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getFraudReviewRows, getPayoutHistory } from "@/lib/admin-ambassadors";
+import { DEFAULT_AMBASSADOR_DISCOUNT_PERCENT, DEFAULT_STORE_CREDIT_MULTIPLIER_PERCENT } from "@/lib/referral-config";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -47,6 +48,8 @@ export default async function AdminPartnersPage() {
       minimumQualifyingOrder: 0,
       minimumPayoutThreshold: 0,
       commissionHoldDays: 0,
+      storeCreditMultiplierPercent: DEFAULT_STORE_CREDIT_MULTIPLIER_PERCENT,
+      ambassadorDiscountPercent: DEFAULT_AMBASSADOR_DISCOUNT_PERCENT,
     })),
     getFraudReviewRows().catch(() => []),
     getPayoutHistory().catch(() => []),

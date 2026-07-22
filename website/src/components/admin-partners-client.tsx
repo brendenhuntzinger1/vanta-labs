@@ -319,7 +319,7 @@ export function AdminPartnersClient({
     }
   };
 
-  const updateSetting = async (key: "minimum_qualifying_order" | "minimum_payout_threshold" | "commission_hold_days", value: number) => {
+  const updateSetting = async (key: "minimum_qualifying_order" | "minimum_payout_threshold" | "commission_hold_days" | "store_credit_multiplier_percent" | "ambassador_discount_percent", value: number) => {
     setLoading(true);
     setMessage(null);
     try {
@@ -658,6 +658,29 @@ export function AdminPartnersClient({
               className="vl-input w-full px-3 py-2 text-sm"
             />
             <span className="mt-1 block text-xs text-zinc-500">Waiting period before a paid, non-refunded order&apos;s commission is eligible for payout.</span>
+          </label>
+          <label className="text-sm text-zinc-300">
+            <span className="mb-2 block text-xs uppercase tracking-[0.18em] text-zinc-500">Store credit multiplier (%)</span>
+            <input
+              type="number"
+              min={100}
+              defaultValue={settings.storeCreditMultiplierPercent}
+              onBlur={(event) => Number(event.target.value) !== settings.storeCreditMultiplierPercent && updateSetting("store_credit_multiplier_percent", Number(event.target.value))}
+              className="vl-input w-full px-3 py-2 text-sm"
+            />
+            <span className="mt-1 block text-xs text-zinc-500">If an ambassador takes their payout as store credit, it&apos;s worth this % of the cash amount (e.g. 125 = $125 credit per $100 earned).</span>
+          </label>
+          <label className="text-sm text-zinc-300">
+            <span className="mb-2 block text-xs uppercase tracking-[0.18em] text-zinc-500">Ambassador discount (%)</span>
+            <input
+              type="number"
+              min={0}
+              max={100}
+              defaultValue={settings.ambassadorDiscountPercent}
+              onBlur={(event) => Number(event.target.value) !== settings.ambassadorDiscountPercent && updateSetting("ambassador_discount_percent", Number(event.target.value))}
+              className="vl-input w-full px-3 py-2 text-sm"
+            />
+            <span className="mt-1 block text-xs text-zinc-500">Discount ambassadors get on their own orders. They earn no commission on their own orders.</span>
           </label>
         </div>
       </section>

@@ -1,14 +1,18 @@
 import { getControlSnapshot, upsertControlValue } from "@/lib/admin-control";
 import {
+  DEFAULT_AMBASSADOR_DISCOUNT_PERCENT,
   DEFAULT_COMMISSION_HOLD_DAYS,
   DEFAULT_MINIMUM_PAYOUT_THRESHOLD,
   DEFAULT_MINIMUM_QUALIFYING_ORDER,
+  DEFAULT_STORE_CREDIT_MULTIPLIER_PERCENT,
 } from "@/lib/referral-config";
 
 export interface AmbassadorProgramSettings {
   minimumQualifyingOrder: number;
   minimumPayoutThreshold: number;
   commissionHoldDays: number;
+  storeCreditMultiplierPercent: number;
+  ambassadorDiscountPercent: number;
 }
 
 export interface AmbassadorMarketingResource {
@@ -85,23 +89,37 @@ export async function getAmbassadorProgramSettings(): Promise<AmbassadorProgramS
     const minimumQualifyingOrder = Number(settings.minimum_qualifying_order);
     const minimumPayoutThreshold = Number(settings.minimum_payout_threshold);
     const commissionHoldDays = Number(settings.commission_hold_days ?? process.env.COMMISSION_HOLD_DAYS ?? DEFAULT_COMMISSION_HOLD_DAYS);
+    const storeCreditMultiplierPercent = Number(settings.store_credit_multiplier_percent);
+    const ambassadorDiscountPercent = Number(settings.ambassador_discount_percent);
 
     return {
       minimumQualifyingOrder: Number.isFinite(minimumQualifyingOrder) && minimumQualifyingOrder >= 0 ? minimumQualifyingOrder : DEFAULT_MINIMUM_QUALIFYING_ORDER,
       minimumPayoutThreshold: Number.isFinite(minimumPayoutThreshold) && minimumPayoutThreshold >= 0 ? minimumPayoutThreshold : DEFAULT_MINIMUM_PAYOUT_THRESHOLD,
       commissionHoldDays: Number.isFinite(commissionHoldDays) && commissionHoldDays >= 0 ? commissionHoldDays : DEFAULT_COMMISSION_HOLD_DAYS,
+      // Clamp the multiplier to at least 100% so store credit is never worth
+      // less than cash (that would make the "bonus" a penalty).
+      storeCreditMultiplierPercent: Number.isFinite(storeCreditMultiplierPercent) && storeCreditMultiplierPercent >= 100 ? storeCreditMultiplierPercent : DEFAULT_STORE_CREDIT_MULTIPLIER_PERCENT,
+      // 0–100% guard; anything out of range falls back to the default.
+      ambassadorDiscountPercent: Number.isFinite(ambassadorDiscountPercent) && ambassadorDiscountPercent >= 0 && ambassadorDiscountPercent <= 100 ? ambassadorDiscountPercent : DEFAULT_AMBASSADOR_DISCOUNT_PERCENT,
     };
   } catch {
     return {
       minimumQualifyingOrder: DEFAULT_MINIMUM_QUALIFYING_ORDER,
       minimumPayoutThreshold: DEFAULT_MINIMUM_PAYOUT_THRESHOLD,
       commissionHoldDays: DEFAULT_COMMISSION_HOLD_DAYS,
+      storeCreditMultiplierPercent: DEFAULT_STORE_CREDIT_MULTIPLIER_PERCENT,
+      ambassadorDiscountPercent: DEFAULT_AMBASSADOR_DISCOUNT_PERCENT,
     };
   }
 }
 
 export async function setAmbassadorProgramSetting(input: {
-  key: "minimum_qualifying_order" | "minimum_payout_threshold" | "commission_hold_days";
+  key:
+    | "minimum_qualifying_order"
+    | "minimum_payout_threshold"
+    | "commission_hold_days"
+    | "store_credit_multiplier_percent"
+    | "ambassador_discount_percent";
   value: number;
   actorUserId?: string | null;
   actorUsername?: string | null;
