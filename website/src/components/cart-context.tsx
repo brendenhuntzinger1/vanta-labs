@@ -61,6 +61,7 @@ type CartContextValue = {
   total: number;
   isBuy3Get1FreeActive: boolean;
   isBuy3Get1FreeEligible: boolean;
+  buy3Get1UntilNextFree: number;
   bulkSavingsApplied: boolean;
   bulkSavingsTierReached: boolean;
   memberFreeShipping: boolean;
@@ -486,6 +487,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     () => promoBuy3Get1Enabled && totalQuantity >= 4,
     [totalQuantity, promoBuy3Get1Enabled],
   );
+  // How many more items unlock the next free one (0 when the promo is off, the
+  // cart is empty, or a group of 4 is already complete).
+  const buy3Get1UntilNextFree = useMemo(() => {
+    if (!promoBuy3Get1Enabled || totalQuantity <= 0) return 0;
+    const remainder = totalQuantity % 4;
+    return remainder === 0 ? 0 : 4 - remainder;
+  }, [promoBuy3Get1Enabled, totalQuantity]);
   const buy3Get1FreeDiscount = useMemo(
     () => (promoBuy3Get1Enabled ? calculateBuy3Get1Discount(items) : 0),
     [items, promoBuy3Get1Enabled],
@@ -928,6 +936,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     total,
     isBuy3Get1FreeActive: bestDiscount?.type === "buy3get1",
     isBuy3Get1FreeEligible,
+    buy3Get1UntilNextFree,
     bulkSavingsApplied,
     bulkSavingsTierReached,
     memberFreeShipping,

@@ -511,10 +511,27 @@ async function notifyAmbassadorOfNewCommission(input: {
   await sendEmail({ to: String(ambassador.email), ...template });
 }
 
-export async function updateCommissionOnRefund(orderId: string) {
+// Computes the commission that should remain after a refund. A FULL refund
+// (refundedFraction >= ~1) voids the commission entirely; a PARTIAL refund
+// reduces it proportionally to the share of the order value that was refunded,
+// so the ambassador keeps commission on the merchandise the customer kept.
+export function computeRetainedCommission(input: {
+  base: number; // commissionable (discounted merchandise) subtotal
+  percent: number;
+  refundedFraction: number;
+}): number {
+  const fraction = Math.min(1, Math.max(0, input.refundedFraction));
+  const original = roundMoney(input.base * (input.percent / 100));
+  return roundMoney(original * (1 - fraction));
+}
+
+export async function updateCommissionOnRefund(
+  orderId: string,
+  options?: { refundedFraction?: number },
+) {
   const { data: existingCommission, error: lookupError } = await supabaseAdmin
     .from("referral_orders")
-    .select("payment_status")
+    .select("payment_status, commission_amount, commission_percent, amount_paid")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -526,29 +543,64 @@ export async function updateCommissionOnRefund(orderId: string) {
     return;
   }
 
-  const commissionState = getCommissionStateForRefund(existingCommission.payment_status);
+  // Default to a full reversal when no fraction is supplied (webhook refund/
+  // cancel paths that don't carry an amount) — preserves prior behavior.
+  const refundedFraction = Math.min(1, Math.max(0, options?.refundedFraction ?? 1));
+  const isFullRefund = refundedFraction >= 0.999;
+  const now = new Date().toISOString();
+  const currentStatus = (existingCommission.payment_status ?? "pending").toLowerCase();
+  const alreadyPaid = currentStatus === "paid" || currentStatus === "commission_paid";
+
+  let referralUpdate: Record<string, unknown>;
+  let commissionStatus: string;
+
+  if (isFullRefund) {
+    const commissionState = getCommissionStateForRefund(existingCommission.payment_status);
+    commissionStatus = commissionState.status;
+    referralUpdate = {
+      payment_status: commissionState.status,
+      reversed_at: now,
+      review_required: commissionState.reviewRequired,
+      review_reason: commissionState.reviewReason,
+      updated_at: now,
+    };
+  } else {
+    // Partial refund → keep a proportional commission. Recompute from the stored
+    // base + percent so repeated partials don't compound off the mutated amount.
+    const retained = computeRetainedCommission({
+      base: Number(existingCommission.amount_paid ?? 0),
+      percent: Number(existingCommission.commission_percent ?? 0),
+      refundedFraction,
+    });
+    // If it was already paid out, we can't silently claw money back — flag for
+    // an admin to reconcile; otherwise just lower the payable amount.
+    commissionStatus = alreadyPaid ? "manual_review" : String(existingCommission.payment_status ?? "pending");
+    referralUpdate = {
+      commission_amount: retained,
+      payment_status: commissionStatus,
+      review_required: alreadyPaid,
+      review_reason: alreadyPaid ? "Partial refund after commission was paid — reconcile overpayment" : null,
+      updated_at: now,
+    };
+  }
 
   const { error } = await supabaseAdmin
     .from("referral_orders")
-    .update({
-      payment_status: commissionState.status,
-      reversed_at: new Date().toISOString(),
-      review_required: commissionState.reviewRequired,
-      review_reason: commissionState.reviewReason,
-      updated_at: new Date().toISOString(),
-    })
+    .update(referralUpdate)
     .eq("order_id", orderId);
 
   if (error) {
     throw error;
   }
 
+  const commissionMirror: Record<string, unknown> = { status: commissionStatus, updated_at: now };
+  if (!isFullRefund && referralUpdate.commission_amount !== undefined) {
+    commissionMirror.commission_amount = referralUpdate.commission_amount;
+  }
+
   const { error: commissionMirrorError } = await supabaseAdmin
     .from("commissions")
-    .update({
-      status: commissionState.status,
-      updated_at: new Date().toISOString(),
-    })
+    .update(commissionMirror)
     .eq("order_id", orderId);
 
   if (commissionMirrorError) {

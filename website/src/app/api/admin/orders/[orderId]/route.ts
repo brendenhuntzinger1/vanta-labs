@@ -7,6 +7,7 @@ import { orderConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/t
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { updateCommissionOnRefund } from "@/lib/payment-webhook";
 import { reverseOrderPoints } from "@/lib/membership";
+import { refundStoreCreditForOrder } from "@/lib/store-credit";
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -247,15 +248,26 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         throw error;
       }
 
-      await updateCommissionOnRefund(orderId);
+      // Reduce the ambassador commission in proportion to how much of the order
+      // value was refunded (cumulative). A full refund voids it; a partial
+      // refund keeps commission on the retained portion.
+      await updateCommissionOnRefund(orderId, {
+        refundedFraction: amountPaid > 0 ? newRefundTotal / amountPaid : 1,
+      });
 
-      // Only reverses membership points on a full refund - a partial refund
-      // leaves earned points untouched rather than pro-rating them.
+      // Only reverse membership points and re-credit spent store credit on a
+      // full refund - a partial refund leaves earned points untouched rather
+      // than pro-rating them.
       if (isFullRefund) {
         try {
           await reverseOrderPoints(orderId);
         } catch {
           // Points reversal must not block the refund itself from completing.
+        }
+        try {
+          await refundStoreCreditForOrder(orderId);
+        } catch {
+          // Store-credit re-credit is best-effort; never block the refund.
         }
       }
 

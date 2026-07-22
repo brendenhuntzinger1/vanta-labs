@@ -56,6 +56,11 @@ const tabs: AdminTab[] = [
     match: (pathname) => pathname.startsWith("/admin/coupons"),
   },
   {
+    label: "Promotions",
+    href: "/admin/promotions",
+    match: (pathname) => pathname.startsWith("/admin/promotions"),
+  },
+  {
     label: "Inventory",
     href: "/admin/inventory",
     match: (pathname) => pathname.startsWith("/admin/inventory"),

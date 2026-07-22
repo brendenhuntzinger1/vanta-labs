@@ -27,6 +27,7 @@ export function CartDrawer() {
     applyReferralCode,
     clearReferralCode,
     isBuy3Get1FreeEligible,
+    buy3Get1UntilNextFree,
     bulkSavingsApplied,
     bulkSavingsPercent,
     bulkSavingsProgress,
@@ -124,6 +125,15 @@ export function CartDrawer() {
               </p>
               <p className="text-xs text-emerald-300/70 mt-1">
                 Referral discounts are disabled while this promotion is active.
+              </p>
+            </div>
+          )}
+
+          {/* Nudge: how many more items unlock the next free one */}
+          {buy3Get1UntilNextFree > 0 && (
+            <div className="vl-panel-soft rounded-[1.25rem] p-4">
+              <p className="text-sm text-zinc-200">
+                🎁 Add <span className="font-semibold text-emerald-300">{buy3Get1UntilNextFree} more {buy3Get1UntilNextFree === 1 ? "item" : "items"}</span> to unlock a <span className="font-semibold text-emerald-300">FREE item</span>.
               </p>
             </div>
           )}
