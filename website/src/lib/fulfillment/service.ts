@@ -262,11 +262,29 @@ const STATUS_TO_FULFILLMENT: Record<string, string> = {
 export async function applyInboundFulfillmentEvent(event: InboundFulfillmentEvent): Promise<{ ok: boolean; message: string }> {
   const now = new Date().toISOString();
 
-  // Inventory sync isn't tied to a single order.
+  // Inventory sync isn't tied to a single order. The 3PL is the source of
+  // truth for quantity AND stock status: a reported quantity of 0 (or less)
+  // flips the product — and all of its variants — to "Out of Stock"; anything
+  // positive flips it back to "In Stock". This is the ONLY thing that marks a
+  // product out of stock, so no manual inventory entry is ever required.
   if (event.type === "inventory" && event.inventory?.length) {
     for (const item of event.inventory) {
       if (!item.sku) continue;
-      await supabaseAdmin.from("products").update({ inventory_quantity: item.quantity, updated_at: now }).eq("slug", item.sku);
+      const stockStatus = item.quantity <= 0 ? "Out of Stock" : "In Stock";
+      const { data: product } = await supabaseAdmin
+        .from("products")
+        .update({ inventory_quantity: item.quantity, stock_status: stockStatus, updated_at: now })
+        .eq("slug", item.sku)
+        .select("id")
+        .maybeSingle();
+      // Keep variants in sync with the product-level report so the storefront's
+      // variant-aware stock status reflects the 3PL data too.
+      if (product?.id) {
+        await supabaseAdmin
+          .from("product_doses")
+          .update({ inventory_quantity: item.quantity, stock_status: stockStatus, updated_at: now })
+          .eq("product_id", product.id);
+      }
     }
     await logEvent({ direction: "inbound", eventType: "inventory.sync", ok: true, payload: event as unknown as Record<string, unknown> });
     return { ok: true, message: "Inventory synced." };

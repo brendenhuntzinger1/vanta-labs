@@ -5,26 +5,11 @@ import Link from "next/link";
 import type { Product } from "@/lib/catalog-types";
 import { WishlistButton } from "@/components/wishlist-button";
 
-const STOCK_STYLES: Record<Product["stockStatus"], string> = {
-  "In Stock": "border-emerald-300/30 text-emerald-200",
-  Limited: "border-amber-300/35 text-amber-200",
-  Reserved: "border-white/20 text-white/60",
-  "Out of Stock": "border-white/15 text-white/40",
-};
-
 const BADGE_LABELS: Record<NonNullable<Product["badge"]>, string> = {
   new: "New",
   best_seller: "Best Seller",
   sale: "Sale",
 };
-
-function StockPill({ stockStatus }: { stockStatus: Product["stockStatus"] }) {
-  return (
-    <span className={`border px-2.5 py-1 text-[10px] uppercase tracking-[0.18em] ${STOCK_STYLES[stockStatus]}`}>
-      {stockStatus}
-    </span>
-  );
-}
 
 export function ProductCard({
   product,
@@ -80,7 +65,6 @@ export function ProductCard({
         <div className="flex flex-1 flex-col p-3 sm:p-5">
           <div className="flex items-center justify-between gap-2">
             <p className="vl2-eyebrow text-[10px] text-white/45">{product.category}</p>
-            <StockPill stockStatus={product.stockStatus} />
           </div>
 
           <h3 className="mt-2.5 line-clamp-2 text-base text-white sm:mt-3 sm:text-lg">{product.name}</h3>

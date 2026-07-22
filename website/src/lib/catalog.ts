@@ -120,9 +120,14 @@ function mapProductRow(
 
   const displayPrice = defaultDose?.salePrice ?? defaultDose?.price ?? formatPriceFromCents(rowPrice);
   const defaultInventoryQuantity = defaultDose?.inventoryQuantity ?? parseNumber(row.inventory_quantity, 0);
-  const stockStatus = defaultDose?.stockStatus ?? (defaultInventoryQuantity <= 0
-    ? "Out of Stock"
-    : (String(row.stock_status ?? "In Stock") as Product["stockStatus"]));
+  // Stock status comes ONLY from an explicit stock_status value (set by an
+  // admin or pushed by the 3PL inventory sync). We deliberately do NOT derive
+  // "Out of Stock" from a 0 inventory_quantity, because until the 3PL is
+  // connected every product's quantity is an untracked 0 — treating that as
+  // sold out would wrongly block the whole catalog. Everything is purchasable
+  // until real inventory data says otherwise.
+  const stockStatus = (defaultDose?.stockStatus
+    ?? (String(row.stock_status ?? "In Stock") as Product["stockStatus"]));
   const effectiveImage = defaultDose?.imageUrl ?? primaryImage?.imageUrl ?? String(row.image_url ?? "/images/vantalabs.png");
   const effectiveBatchNumber = defaultDose?.batchNumber ?? String(row.batch_number ?? "");
   const effectiveCoaUrl = defaultDose?.coaUrl ?? String(row.coa_url ?? "");
