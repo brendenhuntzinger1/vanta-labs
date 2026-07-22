@@ -88,11 +88,11 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
           <ul className="mt-3 space-y-2 text-sm text-zinc-300">
             <li className="flex items-start gap-2">
               <span className="mt-0.5 text-amber-300">•</span>
-              <span><span className="font-semibold text-white">To stay active:</span> post at least <span className="font-semibold text-white">1 promotional video per month</span>.</span>
+              <span><span className="font-semibold text-white">To stay active:</span> publish at least <span className="font-semibold text-white">{liveSummary.monthlyPostRequirement} promotional posts, videos, or advertisements per month</span> featuring Vanta Labs.</span>
             </li>
             <li className="flex items-start gap-2">
               <span className="mt-0.5 text-amber-300">•</span>
-              <span><span className="font-semibold text-white">Earn more:</span> consistently create around <span className="font-semibold text-white">5+ quality videos per month</span> and your commission rate or bonuses can be negotiated. Reach out to discuss an upgrade.</span>
+              <span><span className="font-semibold text-white">Earn more:</span> consistently exceed the monthly minimum with quality content and your commission rate or bonuses can be negotiated. Reach out to discuss an upgrade.</span>
             </li>
           </ul>
         </div>

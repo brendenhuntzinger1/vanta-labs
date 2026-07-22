@@ -73,7 +73,7 @@ export function AmbassadorPageClient() {
               { k: "15% off your own orders", v: "Ambassadors get 15% off their own purchases. You don't earn commission on your own orders." },
               { k: "Cash or store credit", v: "Take your payout as cash, or as store credit worth 125% of what you earned." },
               { k: "Monthly top-seller bonus", v: "The top-selling ambassador each month earns a bonus on top of commissions." },
-              { k: "Post 1 video / month", v: "To keep your perks active, share at least one promotional video each month." },
+              { k: "Post 3× / month", v: "To keep your perks active, publish at least 3 promotional posts, videos, or ads each month featuring Vanta Labs." },
             ].map((item) => (
               <div key={item.k} className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
                 <p className="text-sm font-semibold text-white">{item.k}</p>

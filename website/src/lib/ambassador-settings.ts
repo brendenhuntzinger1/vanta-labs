@@ -4,6 +4,7 @@ import {
   DEFAULT_COMMISSION_HOLD_DAYS,
   DEFAULT_MINIMUM_PAYOUT_THRESHOLD,
   DEFAULT_MINIMUM_QUALIFYING_ORDER,
+  DEFAULT_MONTHLY_POST_REQUIREMENT,
   DEFAULT_STORE_CREDIT_MULTIPLIER_PERCENT,
 } from "@/lib/referral-config";
 
@@ -13,6 +14,7 @@ export interface AmbassadorProgramSettings {
   commissionHoldDays: number;
   storeCreditMultiplierPercent: number;
   ambassadorDiscountPercent: number;
+  monthlyPostRequirement: number;
 }
 
 export interface AmbassadorMarketingResource {
@@ -91,6 +93,7 @@ export async function getAmbassadorProgramSettings(): Promise<AmbassadorProgramS
     const commissionHoldDays = Number(settings.commission_hold_days ?? process.env.COMMISSION_HOLD_DAYS ?? DEFAULT_COMMISSION_HOLD_DAYS);
     const storeCreditMultiplierPercent = Number(settings.store_credit_multiplier_percent);
     const ambassadorDiscountPercent = Number(settings.ambassador_discount_percent);
+    const monthlyPostRequirement = Number(settings.monthly_post_requirement);
 
     return {
       minimumQualifyingOrder: Number.isFinite(minimumQualifyingOrder) && minimumQualifyingOrder >= 0 ? minimumQualifyingOrder : DEFAULT_MINIMUM_QUALIFYING_ORDER,
@@ -101,6 +104,8 @@ export async function getAmbassadorProgramSettings(): Promise<AmbassadorProgramS
       storeCreditMultiplierPercent: Number.isFinite(storeCreditMultiplierPercent) && storeCreditMultiplierPercent >= 100 ? storeCreditMultiplierPercent : DEFAULT_STORE_CREDIT_MULTIPLIER_PERCENT,
       // 0–100% guard; anything out of range falls back to the default.
       ambassadorDiscountPercent: Number.isFinite(ambassadorDiscountPercent) && ambassadorDiscountPercent >= 0 && ambassadorDiscountPercent <= 100 ? ambassadorDiscountPercent : DEFAULT_AMBASSADOR_DISCOUNT_PERCENT,
+      // At least 0 posts; anything invalid falls back to the default of 3.
+      monthlyPostRequirement: Number.isFinite(monthlyPostRequirement) && monthlyPostRequirement >= 0 ? Math.round(monthlyPostRequirement) : DEFAULT_MONTHLY_POST_REQUIREMENT,
     };
   } catch {
     return {
@@ -109,6 +114,7 @@ export async function getAmbassadorProgramSettings(): Promise<AmbassadorProgramS
       commissionHoldDays: DEFAULT_COMMISSION_HOLD_DAYS,
       storeCreditMultiplierPercent: DEFAULT_STORE_CREDIT_MULTIPLIER_PERCENT,
       ambassadorDiscountPercent: DEFAULT_AMBASSADOR_DISCOUNT_PERCENT,
+      monthlyPostRequirement: DEFAULT_MONTHLY_POST_REQUIREMENT,
     };
   }
 }
@@ -119,7 +125,8 @@ export async function setAmbassadorProgramSetting(input: {
     | "minimum_payout_threshold"
     | "commission_hold_days"
     | "store_credit_multiplier_percent"
-    | "ambassador_discount_percent";
+    | "ambassador_discount_percent"
+    | "monthly_post_requirement";
   value: number;
   actorUserId?: string | null;
   actorUsername?: string | null;

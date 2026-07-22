@@ -399,11 +399,13 @@ export function ambassadorApprovedTemplate(input: {
   commissionPercent?: number;
   discountPercent?: number;
   storeCreditMultiplierPercent?: number;
+  monthlyPostRequirement?: number;
 }): EmailTemplate {
   const name = escapeHtml(input.name);
   const commission = input.commissionPercent ?? 10;
   const discount = input.discountPercent ?? 15;
   const creditMultiplier = input.storeCreditMultiplierPercent ?? 125;
+  const monthlyPosts = input.monthlyPostRequirement ?? 3;
 
   const perks = [
     `<strong>${commission}% commission</strong> on every order placed with your code.`,
@@ -428,7 +430,7 @@ export function ambassadorApprovedTemplate(input: {
         <p>Welcome to the Vanta Labs Ambassador program. Here's what you get:</p>
         <ul>${perks.map((perk) => `<li>${perk}</li>`).join("")}</ul>
         ${input.referralCode ? `<p>Your referral code: <strong>${escapeHtml(input.referralCode)}</strong></p>` : ""}
-        <p><strong>To keep your perks:</strong> post at least <strong>1 promotional video per month</strong>. Consistent promoters earn higher rates and bigger bonuses.</p>
+        <p><strong>To keep your perks:</strong> publish at least <strong>${monthlyPosts} promotional posts, videos, or advertisements per month</strong> featuring Vanta Labs. Consistent promoters earn higher rates and bigger bonuses.</p>
         <p>Open your dashboard to grab your referral link, track commissions, and choose how you get paid.</p>
       `,
       ctaLabel: "Open Dashboard",
@@ -442,7 +444,7 @@ export function ambassadorApprovedTemplate(input: {
       "",
       input.referralCode ? `Your referral code: ${input.referralCode}` : null,
       "",
-      "To keep your perks: post at least 1 promotional video per month.",
+      `To keep your perks: publish at least ${monthlyPosts} promotional posts, videos, or advertisements per month featuring Vanta Labs.`,
       "Consistent promoters earn higher rates and bigger bonuses.",
       "",
       `Dashboard: ${input.dashboardUrl}`,

@@ -372,7 +372,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
           "Cash payout, or store credit worth 125%",
           "Monthly bonus for the top-selling ambassador",
           "Real-time dashboard with clear payout history",
-          "Post 1 promotional video a month to keep your perks",
+          "Publish at least 3 promotional posts a month to keep your perks",
         ].map((benefit) => (
           <div key={benefit} className="border border-white/10 p-5">
             <p className="text-sm text-white/75">{benefit}</p>

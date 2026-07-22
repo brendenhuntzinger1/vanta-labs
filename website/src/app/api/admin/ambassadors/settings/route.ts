@@ -55,6 +55,7 @@ export async function PATCH(request: Request) {
       "commission_hold_days",
       "store_credit_multiplier_percent",
       "ambassador_discount_percent",
+      "monthly_post_requirement",
     ] as const;
     const key = body?.key as (typeof ALLOWED_KEYS)[number];
     const value = Number(body?.value);

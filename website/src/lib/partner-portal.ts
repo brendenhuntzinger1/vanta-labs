@@ -10,7 +10,7 @@ import {
   referralCodeAssignedTemplate,
 } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
-import { DEFAULT_COMMISSION_PERCENT } from "@/lib/referral-config";
+import { DEFAULT_COMMISSION_PERCENT, DEFAULT_MONTHLY_POST_REQUIREMENT } from "@/lib/referral-config";
 import { getBusinessSettings } from "@/lib/admin-control";
 import { getAmbassadorProgramSettings, getAmbassadorMarketingResources, type AmbassadorMarketingResource } from "@/lib/ambassador-settings";
 
@@ -72,6 +72,7 @@ export interface PartnerSummary {
   marketingResources: AmbassadorMarketingResource[];
   accountStatus: string;
   payoutHistory: Array<{ id: string; amount: number; note: string | null; createdAt: string }>;
+  monthlyPostRequirement: number;
 }
 
 export interface AdminPartnerRow {
@@ -187,6 +188,7 @@ async function sendPartnerStatusEmail(input: {
       commissionPercent: DEFAULT_COMMISSION_PERCENT,
       discountPercent: settings?.ambassadorDiscountPercent,
       storeCreditMultiplierPercent: settings?.storeCreditMultiplierPercent,
+      monthlyPostRequirement: settings?.monthlyPostRequirement,
     });
   } else {
     template = ambassadorDeniedTemplate({ name: input.name });
@@ -672,6 +674,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   });
 
   const marketingResources = await getAmbassadorMarketingResources().catch(() => []);
+  const programSettings = await getAmbassadorProgramSettings().catch(() => null);
 
   return {
     partnerId: partner.id,
@@ -700,6 +703,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
       note: row.note ? String(row.note) : null,
       createdAt: String(row.created_at),
     })),
+    monthlyPostRequirement: programSettings?.monthlyPostRequirement ?? DEFAULT_MONTHLY_POST_REQUIREMENT,
   };
 }
 

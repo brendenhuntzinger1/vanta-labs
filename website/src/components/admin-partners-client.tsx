@@ -319,7 +319,7 @@ export function AdminPartnersClient({
     }
   };
 
-  const updateSetting = async (key: "minimum_qualifying_order" | "minimum_payout_threshold" | "commission_hold_days" | "store_credit_multiplier_percent" | "ambassador_discount_percent", value: number) => {
+  const updateSetting = async (key: "minimum_qualifying_order" | "minimum_payout_threshold" | "commission_hold_days" | "store_credit_multiplier_percent" | "ambassador_discount_percent" | "monthly_post_requirement", value: number) => {
     setLoading(true);
     setMessage(null);
     try {
@@ -681,6 +681,17 @@ export function AdminPartnersClient({
               className="vl-input w-full px-3 py-2 text-sm"
             />
             <span className="mt-1 block text-xs text-zinc-500">Discount ambassadors get on their own orders. They earn no commission on their own orders.</span>
+          </label>
+          <label className="text-sm text-zinc-300">
+            <span className="mb-2 block text-xs uppercase tracking-[0.18em] text-zinc-500">Monthly post requirement</span>
+            <input
+              type="number"
+              min={0}
+              defaultValue={settings.monthlyPostRequirement}
+              onBlur={(event) => Number(event.target.value) !== settings.monthlyPostRequirement && updateSetting("monthly_post_requirement", Number(event.target.value))}
+              className="vl-input w-full px-3 py-2 text-sm"
+            />
+            <span className="mt-1 block text-xs text-zinc-500">Promotional posts/videos/ads an ambassador must publish each month to stay active. Shown across the program and in the welcome email.</span>
           </label>
         </div>
       </section>

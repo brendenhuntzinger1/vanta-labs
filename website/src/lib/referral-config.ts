@@ -12,6 +12,10 @@ export const DEFAULT_STORE_CREDIT_MULTIPLIER_PERCENT = 125 as const;
 // would otherwise be blocked from. Admin-configurable.
 export const DEFAULT_AMBASSADOR_DISCOUNT_PERCENT = 15 as const;
 
+// Minimum number of promotional posts/videos/ads an ambassador must publish each
+// month featuring Vanta Labs to stay active. Admin-configurable.
+export const DEFAULT_MONTHLY_POST_REQUIREMENT = 3 as const;
+
 // Admin-configurable via src/lib/ambassador-settings.ts (falls back to
 // these values). Kept here too so client components that can't import
 // server-only code (cart-context.tsx) have a same-shaped default to give
