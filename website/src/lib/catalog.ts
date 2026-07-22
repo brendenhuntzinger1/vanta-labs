@@ -352,3 +352,44 @@ export async function getCoaRecords() {
     coaUrl: String(row.coa_url ?? ""),
   })) satisfies CoaRecord[];
 }
+
+// Look up a single published COA by its batch/lot number for the public
+// verification page (`/coa/[batch]`). Matched case-insensitively and trimmed so
+// a QR scan or hand-typed lot resolves regardless of spacing/case. Blank batch
+// numbers never match, so unverified products can't be reached by an empty URL.
+export async function getCoaRecordByBatch(batch: string): Promise<CoaRecord | null> {
+  const normalized = batch.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("products")
+    .select("slug, name, category, batch_number, purity_result, testing_date, lab_name, coa_url")
+    .eq("is_active", true)
+    .eq("is_enabled", true)
+    .eq("is_published", true)
+    .eq("is_archived", false)
+    .ilike("batch_number", normalized)
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  if (!data || !String(data.batch_number ?? "").trim()) {
+    return null;
+  }
+
+  return {
+    slug: String(data.slug),
+    productName: String(data.name),
+    category: String(data.category ?? "Research Peptides"),
+    batchNumber: String(data.batch_number ?? ""),
+    purityResult: String(data.purity_result ?? "Pending"),
+    testingDate: String(data.testing_date ?? ""),
+    labName: String(data.lab_name ?? ""),
+    coaUrl: String(data.coa_url ?? ""),
+  } satisfies CoaRecord;
+}

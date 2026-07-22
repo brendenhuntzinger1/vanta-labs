@@ -116,6 +116,14 @@ export function CoaLibraryPageClient() {
                   <p className="vl2-eyebrow">{record.category}</p>
                   <h2 className="mt-2 text-xl text-white sm:text-2xl">{record.productName}</h2>
                   <p className="mt-2 text-sm text-white/45">Batch {record.batchNumber}</p>
+                  {record.batchNumber ? (
+                    <a
+                      href={`/coa/${encodeURIComponent(record.batchNumber)}`}
+                      className="mt-2 inline-flex text-xs text-white/50 underline underline-offset-4 transition hover:text-white"
+                    >
+                      Verify batch & QR →
+                    </a>
+                  ) : null}
                 </div>
                 <div className="grid gap-3 text-sm text-white/70 sm:grid-cols-2 lg:w-[420px] lg:min-w-0">
                   <div>
