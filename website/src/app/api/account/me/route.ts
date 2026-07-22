@@ -3,6 +3,8 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getDefaultCustomerAddress } from "@/lib/customer-account";
 import { getActivePointsMultiplier, getCustomerMembership, getMembershipPerks, getPointsBalance, isEligibleForBulkSavings } from "@/lib/membership";
+import { getApprovedPartnerByAuthUserId } from "@/lib/partner-portal";
+import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 
 export async function GET() {
   const user = await getAuthenticatedUser();
@@ -12,14 +14,19 @@ export async function GET() {
 
   const fullName = typeof user.user_metadata?.full_name === "string" ? user.user_metadata.full_name : "";
 
-  const [defaultAddress, pointsBalance, membership, pointsMultiplier, isEligibleForBulk, perks] = await Promise.all([
+  const [defaultAddress, pointsBalance, membership, pointsMultiplier, isEligibleForBulk, perks, approvedPartner, ambassadorSettings] = await Promise.all([
     getDefaultCustomerAddress(user.id),
     getPointsBalance(user.id),
     getCustomerMembership(user.id),
     getActivePointsMultiplier(),
     isEligibleForBulkSavings(user.id),
     getMembershipPerks(user.id),
+    getApprovedPartnerByAuthUserId(user.id).catch(() => null),
+    getAmbassadorProgramSettings().catch(() => null),
   ]);
+
+  // Approved ambassadors get this discount on their own orders (0 otherwise).
+  const ambassadorDiscountPercent = approvedPartner ? (ambassadorSettings?.ambassadorDiscountPercent ?? 0) : 0;
 
   return NextResponse.json({
     success: true,
@@ -44,5 +51,6 @@ export async function GET() {
     memberFreeShipping: perks.freeShipping,
     storeCreditBalanceCents: perks.storeCreditBalanceCents,
     storeCreditMinOrderCents: perks.storeCreditMinOrderCents,
+    ambassadorDiscountPercent,
   });
 }

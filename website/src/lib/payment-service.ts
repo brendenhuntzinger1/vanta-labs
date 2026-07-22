@@ -6,6 +6,7 @@ import { validateCoupon } from "@/lib/coupons";
 import { getMembershipPerks, getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/lib/membership";
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import { getApprovedPartnerByAuthUserId } from "@/lib/partner-portal";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee, calculateTax } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
@@ -282,7 +283,7 @@ export async function createCheckoutSession(
  ),
  );
 
- const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent, shippingConfig, memberPerks] = await Promise.all([
+ const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent, shippingConfig, memberPerks, ambassadorSettings, ambassadorSelf] = await Promise.all([
    getHomepageControlConfig(),
    getBulkSavingsControlConfig(),
    payload.customerUserId ? isEligibleForBulkSavings(payload.customerUserId) : Promise.resolve(false),
@@ -292,6 +293,8 @@ export async function createCheckoutSession(
    payload.customerUserId
      ? getMembershipPerks(payload.customerUserId)
      : Promise.resolve({ isActiveMember: false, tierSlug: "free", memberDiscountPercent: 0, freeShipping: false, pointsPerDollar: 1, storeCreditBalanceCents: 0, storeCreditMinOrderCents: 0 }),
+   getAmbassadorProgramSettings(),
+   payload.customerUserId ? getApprovedPartnerByAuthUserId(payload.customerUserId).catch(() => null) : Promise.resolve(null),
  ]);
  const handlingFee = calculateHandlingFee(subtotal, shippingConfig);
  const bulkSavingsResult = calculateBulkSavingsDiscount(subtotal, bulkSavingsEligible, bulkSavingsConfig);
@@ -321,7 +324,6 @@ export async function createCheckoutSession(
  }
 
  if (referral) {
- const ambassadorSettings = await getAmbassadorProgramSettings();
  if (subtotal < ambassadorSettings.minimumQualifyingOrder) {
  throw new Error(`This referral code requires a minimum merchandise subtotal of $${ambassadorSettings.minimumQualifyingOrder.toFixed(2)}. Add more items or remove the referral code to continue.`);
  }
@@ -356,9 +358,20 @@ export async function createCheckoutSession(
    ? calculateDiscountAmount(subtotal, memberPerks.memberDiscountPercent)
    : 0;
 
+ // Approved ambassadors get a fixed discount on their OWN orders, applied
+ // automatically when logged into their ambassador account. This is not a
+ // referral, so no commission is ever created for their own purchases. It
+ // competes as a single discount candidate (greatest savings wins, no stacking)
+ // and, like membership pricing, only ever lowers the total — safe past the
+ // underpayment tripwire even though the client preview may not show it.
+ const ambassadorSelfDiscountAmount = ambassadorSelf && !referral && !isBuy3Get1Active
+   ? calculateDiscountAmount(subtotal, ambassadorSettings.ambassadorDiscountPercent)
+   : 0;
+
  const bestDiscount = resolveBestDiscount([
    { type: "bulk_savings", amount: bulkSavingsResult.amount },
    { type: "member_pricing", amount: memberPricingAmount },
+   { type: "ambassador", amount: ambassadorSelfDiscountAmount },
    preBulkDiscount,
  ]);
 

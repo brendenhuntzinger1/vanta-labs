@@ -176,6 +176,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [memberFreeShipping, setMemberFreeShipping] = useState(false);
   const [storeCreditBalanceCents, setStoreCreditBalanceCents] = useState(0);
   const [storeCreditMinOrderCents, setStoreCreditMinOrderCents] = useState(0);
+  // Non-zero only when the signed-in customer is an approved ambassador — the
+  // discount they get on their own orders (mirrors the server so the displayed
+  // total, which manual-pay customers actually send, is correct).
+  const [ambassadorDiscountPercent, setAmbassadorDiscountPercent] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -194,6 +198,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           memberFreeShipping?: boolean;
           storeCreditBalanceCents?: number;
           storeCreditMinOrderCents?: number;
+          ambassadorDiscountPercent?: number;
         };
         if (!result.success) return;
         setIsSignedIn(true);
@@ -205,6 +210,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         setMemberFreeShipping(Boolean(result.memberFreeShipping));
         setStoreCreditBalanceCents(Number(result.storeCreditBalanceCents ?? 0) || 0);
         setStoreCreditMinOrderCents(Number(result.storeCreditMinOrderCents ?? 0) || 0);
+        setAmbassadorDiscountPercent(Number(result.ambassadorDiscountPercent ?? 0) || 0);
         if (result.email) setKnownEmail(result.email);
         if (result.fullName) setCustomerName(result.fullName);
       } catch {
@@ -549,13 +555,24 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [memberDiscountPercent, subtotal],
   );
 
+  // Ambassadors' own-order discount competes as a single candidate. Gated off
+  // when a referral or Buy-3-Get-1 is active, mirroring payment-service.ts so
+  // the client total and the server total always agree.
+  const ambassadorSelfDiscountAmount = useMemo(
+    () => (ambassadorDiscountPercent > 0 && !referralDetails && buy3Get1FreeDiscount <= 0
+      ? subtotal * (ambassadorDiscountPercent / 100)
+      : 0),
+    [ambassadorDiscountPercent, referralDetails, buy3Get1FreeDiscount, subtotal],
+  );
+
   const bestDiscount = useMemo(
     () => resolveBestDiscount([
       { type: "bulk_savings", amount: bulkSavingsResult.amount },
       { type: "member_pricing", amount: memberPricingAmount },
+      { type: "ambassador", amount: ambassadorSelfDiscountAmount },
       preBulkDiscount,
     ]),
-    [bulkSavingsResult.amount, memberPricingAmount, preBulkDiscount],
+    [bulkSavingsResult.amount, memberPricingAmount, ambassadorSelfDiscountAmount, preBulkDiscount],
   );
 
   const discountAmount = bestDiscount?.amount ?? 0;
