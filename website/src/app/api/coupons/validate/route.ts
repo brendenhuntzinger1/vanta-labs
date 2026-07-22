@@ -1,9 +1,20 @@
 import { NextResponse } from "next/server";
 import { validateCoupon } from "@/lib/coupons";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { checkRateLimit, rateLimitedResponseBody } from "@/lib/rate-limit";
+
+function clientIp(request: Request) {
+  return request.headers.get("x-forwarded-for")?.split(",")[0].trim() || request.headers.get("x-real-ip") || "unknown";
+}
 
 export async function POST(request: Request) {
   try {
+    // Throttle to prevent coupon-code enumeration.
+    const rl = await checkRateLimit({ action: "coupon_validate", identifier: clientIp(request), limit: 20, windowSeconds: 60 });
+    if (!rl.allowed) {
+      return NextResponse.json(rateLimitedResponseBody(), { status: 429 });
+    }
+
     const body = await request.json() as { code?: string; subtotal?: number };
     const code = String(body.code ?? "").slice(0, 40);
     const subtotal = Number(body.subtotal ?? 0);

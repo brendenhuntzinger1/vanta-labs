@@ -2,12 +2,9 @@ import { NextResponse } from "next/server";
 import { sendEmail } from "@/lib/email/send";
 import { contactFormNotificationTemplate, contactFormAutoReplyTemplate } from "@/lib/email/templates";
 import { getBusinessSettings } from "@/lib/admin-control";
+import { checkRateLimit, rateLimitedResponseBody } from "@/lib/rate-limit";
 
 const SUBMISSION_WINDOW_MS = 3000;
-const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
-const MAX_SUBMISSIONS_PER_WINDOW = 3;
-
-const submissionHistory = new Map<string, number[]>();
 
 const MAX_NAME_LENGTH = 100;
 const MAX_EMAIL_LENGTH = 200;
@@ -34,21 +31,6 @@ function parseString(value: unknown) {
 function getClientKey(request: Request) {
   const forwardedFor = request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip") ?? "unknown";
   return forwardedFor.split(",")[0].trim() || "unknown";
-}
-
-function isRateLimited(clientKey: string) {
-  const now = Date.now();
-  const history = submissionHistory.get(clientKey) ?? [];
-  const recentHistory = history.filter((timestamp) => now - timestamp < RATE_LIMIT_WINDOW_MS);
-
-  if (recentHistory.length >= MAX_SUBMISSIONS_PER_WINDOW) {
-    submissionHistory.set(clientKey, recentHistory);
-    return true;
-  }
-
-  recentHistory.push(now);
-  submissionHistory.set(clientKey, recentHistory);
-  return false;
 }
 
 export async function POST(request: Request) {
@@ -91,8 +73,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Please provide a valid email address." }, { status: 400 });
     }
 
-    if (isRateLimited(getClientKey(request))) {
-      return NextResponse.json({ success: false, error: "Please wait before sending another message." }, { status: 429 });
+    const limit = await checkRateLimit({ action: "contact", identifier: getClientKey(request), limit: 3, windowSeconds: 600 });
+    if (!limit.allowed) {
+      return NextResponse.json(rateLimitedResponseBody("Please wait before sending another message."), { status: 429 });
     }
 
     const { supportEmail } = await getBusinessSettings();

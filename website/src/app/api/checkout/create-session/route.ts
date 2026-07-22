@@ -4,6 +4,7 @@ import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-serv
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import type { CustomerInput } from "@/lib/payment-types";
+import { checkRateLimit, rateLimitedResponseBody } from "@/lib/rate-limit";
 
 const REFERRAL_COOKIE_NAME = "vl_referral_code";
 
@@ -23,6 +24,12 @@ function hasRequiredAcknowledgements(value: unknown) {
 
 export async function POST(request: Request) {
   try {
+    const ip = request.headers.get("x-forwarded-for")?.split(",")[0].trim() || request.headers.get("x-real-ip") || "unknown";
+    const rl = await checkRateLimit({ action: "checkout_session", identifier: ip, limit: 12, windowSeconds: 60 });
+    if (!rl.allowed) {
+      return NextResponse.json(rateLimitedResponseBody(), { status: 429 });
+    }
+
     const body = await request.json();
 
     if (!hasRequiredAcknowledgements(body.complianceAcknowledgements)) {

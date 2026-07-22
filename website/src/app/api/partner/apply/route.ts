@@ -1,9 +1,16 @@
 import { NextResponse } from "next/server";
 import { createPartnerApplication } from "@/lib/partner-portal";
 import { createServerClient } from "@/lib/supabase-server";
+import { checkRateLimit, rateLimitedResponseBody } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   try {
+    const ip = request.headers.get("x-forwarded-for")?.split(",")[0].trim() || request.headers.get("x-real-ip") || "unknown";
+    const rl = await checkRateLimit({ action: "partner_apply", identifier: ip, limit: 5, windowSeconds: 600 });
+    if (!rl.allowed) {
+      return NextResponse.json(rateLimitedResponseBody(), { status: 429 });
+    }
+
     const body = await request.json();
     const accessToken = typeof body?.accessToken === "string" ? body.accessToken : "";
     const firstName = String(body?.firstName ?? "").trim().slice(0, 80);
