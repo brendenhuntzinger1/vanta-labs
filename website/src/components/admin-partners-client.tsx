@@ -5,6 +5,7 @@ import type { AdminPartnerRow } from "@/lib/partner-portal";
 import type { CommissionTierRule } from "@/lib/ambassador-commission";
 import type { AmbassadorMarketingResource, AmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import type { FraudReviewRow, PayoutHistoryRow } from "@/lib/admin-ambassadors";
+import type { LeaderboardEntry } from "@/lib/ambassador-leaderboard";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -21,6 +22,8 @@ export function AdminPartnersClient({
   initialFraudRows,
   initialPayoutHistory,
   initialMarketingResources,
+  currentLeaderboard,
+  previousLeaderboard,
 }: {
   initialRows: AdminPartnerRow[];
   initialTiers: CommissionTierRule[];
@@ -28,6 +31,8 @@ export function AdminPartnersClient({
   initialFraudRows: FraudReviewRow[];
   initialPayoutHistory: PayoutHistoryRow[];
   initialMarketingResources: AmbassadorMarketingResource[];
+  currentLeaderboard: LeaderboardEntry[];
+  previousLeaderboard: LeaderboardEntry[];
 }) {
   const [rows, setRows] = useState(initialRows);
   const [tiers, setTiers] = useState(initialTiers);
@@ -41,6 +46,45 @@ export function AdminPartnersClient({
   const [payoutTo, setPayoutTo] = useState("");
   const [payoutSearch, setPayoutSearch] = useState("");
   const [marketingResources, setMarketingResources] = useState<AmbassadorMarketingResource[]>(initialMarketingResources);
+  const [awardPartnerId, setAwardPartnerId] = useState("");
+  const [awardAmount, setAwardAmount] = useState("");
+  const [awardMethod, setAwardMethod] = useState<"store_credit" | "cash">("store_credit");
+  const [awardNote, setAwardNote] = useState("");
+  const [awardBusy, setAwardBusy] = useState(false);
+  const [awardMessage, setAwardMessage] = useState<string | null>(null);
+
+  const awardBonus = async () => {
+    const dollars = Number(awardAmount);
+    if (!awardPartnerId || !Number.isFinite(dollars) || dollars <= 0) {
+      setAwardMessage("Pick an ambassador and a positive amount.");
+      return;
+    }
+    setAwardBusy(true);
+    setAwardMessage(null);
+    try {
+      const response = await fetch("/api/admin/ambassadors/wallet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          partnerId: awardPartnerId,
+          action: awardMethod === "cash" ? "bonus_cash" : "bonus_credit",
+          amountCents: Math.round(dollars * 100),
+          note: awardNote.trim() || null,
+        }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success) {
+        throw new Error(json.error ?? "Unable to award bonus");
+      }
+      setAwardMessage(`Bonus awarded (${awardMethod === "cash" ? "cash" : "store credit"}).`);
+      setAwardAmount("");
+      setAwardNote("");
+    } catch (error) {
+      setAwardMessage(error instanceof Error ? error.message : "Unable to award bonus");
+    } finally {
+      setAwardBusy(false);
+    }
+  };
   const [newResourceTitle, setNewResourceTitle] = useState("");
   const [newResourceUrl, setNewResourceUrl] = useState("");
   const [newResourceDescription, setNewResourceDescription] = useState("");
@@ -693,6 +737,61 @@ export function AdminPartnersClient({
             />
             <span className="mt-1 block text-xs text-zinc-500">Promotional posts/videos/ads an ambassador must publish each month to stay active. Shown across the program and in the welcome email.</span>
           </label>
+        </div>
+      </section>
+
+      <section className="vl-panel rounded-2xl p-4 sm:p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Monthly Leaderboard &amp; Bonuses</h2>
+        <p className="mt-1 text-xs text-zinc-500">Top sellers by sales generated. Rankings reset each calendar month automatically; lifetime totals are unaffected.</p>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          {[
+            { title: "This month", data: currentLeaderboard },
+            { title: "Last month", data: previousLeaderboard },
+          ].map((board) => (
+            <div key={board.title} className="rounded-xl border border-zinc-800/70 bg-zinc-900/40 p-3">
+              <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">{board.title}</p>
+              {board.data.length === 0 ? (
+                <p className="mt-2 text-sm text-zinc-500">No sales yet.</p>
+              ) : (
+                <ol className="mt-2 space-y-1 text-sm">
+                  {board.data.map((entry) => (
+                    <li key={entry.ambassadorId} className="flex items-center justify-between gap-2">
+                      <span className="text-zinc-200">
+                        {entry.rank === 1 ? "🏆 " : `${entry.rank}. `}
+                        {entry.name} <span className="text-zinc-500">({entry.referralCode})</span>
+                      </span>
+                      <span className="text-zinc-400">{currency(entry.salesTotal)} · {entry.orderCount} orders</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-5 rounded-xl border border-zinc-800/70 bg-zinc-900/40 p-3">
+          <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Award a bonus</p>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <select value={awardPartnerId} onChange={(e) => setAwardPartnerId(e.target.value)} className="vl-input px-3 py-2 text-sm">
+              <option value="">Select ambassador…</option>
+              {rows.filter((row) => row.status === "approved").map((row) => (
+                <option key={row.id} value={row.id}>{row.name} ({row.referralCode})</option>
+              ))}
+            </select>
+            <input type="number" min={0} step="0.01" value={awardAmount} onChange={(e) => setAwardAmount(e.target.value)} placeholder="Amount ($)" className="vl-input px-3 py-2 text-sm" />
+            <select value={awardMethod} onChange={(e) => setAwardMethod(e.target.value === "cash" ? "cash" : "store_credit")} className="vl-input px-3 py-2 text-sm">
+              <option value="store_credit">Store credit</option>
+              <option value="cash">Cash</option>
+            </select>
+            <input value={awardNote} onChange={(e) => setAwardNote(e.target.value)} placeholder="Note (optional)" className="vl-input px-3 py-2 text-sm" />
+          </div>
+          <div className="mt-2 flex flex-wrap items-center gap-3">
+            <button type="button" onClick={awardBonus} disabled={awardBusy} className="vl-focus-ring rounded-lg bg-cyan-300 px-4 py-2 text-sm font-semibold text-zinc-950 disabled:opacity-60">
+              {awardBusy ? "Awarding…" : "Award bonus"}
+            </button>
+            {awardMessage ? <span className="text-xs text-zinc-300">{awardMessage}</span> : null}
+          </div>
         </div>
       </section>
 

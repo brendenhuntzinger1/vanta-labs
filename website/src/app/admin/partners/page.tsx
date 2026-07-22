@@ -7,6 +7,7 @@ import { listCommissionTierRules } from "@/lib/ambassador-commission";
 import { getAmbassadorMarketingResources, getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getFraudReviewRows, getPayoutHistory } from "@/lib/admin-ambassadors";
 import { DEFAULT_AMBASSADOR_DISCOUNT_PERCENT, DEFAULT_MONTHLY_POST_REQUIREMENT, DEFAULT_STORE_CREDIT_MULTIPLIER_PERCENT } from "@/lib/referral-config";
+import { getMonthlyLeaderboard, currentMonthKey, previousMonthKey } from "@/lib/ambassador-leaderboard";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -57,6 +58,11 @@ export default async function AdminPartnersPage() {
     getAmbassadorMarketingResources().catch(() => []),
   ]);
 
+  const [currentLeaderboard, previousLeaderboard] = await Promise.all([
+    getMonthlyLeaderboard(currentMonthKey()).catch(() => []),
+    getMonthlyLeaderboard(previousMonthKey()).catch(() => []),
+  ]);
+
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
       <div className="mx-auto max-w-7xl space-y-6">
@@ -101,6 +107,8 @@ export default async function AdminPartnersPage() {
           initialFraudRows={fraudRows}
           initialPayoutHistory={payoutHistory}
           initialMarketingResources={marketingResources}
+          currentLeaderboard={currentLeaderboard}
+          previousLeaderboard={previousLeaderboard}
         />
       </div>
     </div>
