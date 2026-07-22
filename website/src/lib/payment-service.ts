@@ -12,7 +12,8 @@ import { getAmbassadorWalletBalanceCents } from "@/lib/ambassador-wallet";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee, calculateTax } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
-import { resolveBestDiscount } from "@/lib/discount-resolution";
+import { resolvePromotions, type PromotionCandidate } from "@/lib/promotion-engine";
+import { getPromotionRules } from "@/lib/promotion-rules";
 import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent, getShippingConfig } from "@/lib/admin-control";
 import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -285,7 +286,7 @@ export async function createCheckoutSession(
  ),
  );
 
- const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent, shippingConfig, memberPerks, ambassadorSettings, ambassadorSelf] = await Promise.all([
+ const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent, shippingConfig, memberPerks, ambassadorSettings, ambassadorSelf, promotionRules] = await Promise.all([
    getHomepageControlConfig(),
    getBulkSavingsControlConfig(),
    payload.customerUserId ? isEligibleForBulkSavings(payload.customerUserId) : Promise.resolve(false),
@@ -297,6 +298,7 @@ export async function createCheckoutSession(
      : Promise.resolve({ isActiveMember: false, tierSlug: "free", memberDiscountPercent: 0, freeShipping: false, pointsPerDollar: 1, storeCreditBalanceCents: 0, storeCreditMinOrderCents: 0 }),
    getAmbassadorProgramSettings(),
    payload.customerUserId ? getApprovedPartnerByAuthUserId(payload.customerUserId).catch(() => null) : Promise.resolve(null),
+   getPromotionRules(),
  ]);
  const handlingFee = calculateHandlingFee(subtotal, shippingConfig);
  const bulkSavingsResult = calculateBulkSavingsDiscount(subtotal, bulkSavingsEligible, bulkSavingsConfig);
@@ -313,7 +315,7 @@ export async function createCheckoutSession(
  throw new Error("Referral codes cannot be combined with Buy 3 Get 1 Free. Remove the referral code to continue.");
  }
 
- if (isBuy3Get1Active && payload.couponCode?.trim()) {
+ if (isBuy3Get1Active && payload.couponCode?.trim() && !promotionRules.stacking.coupon_promotions) {
  throw new Error("Coupon codes cannot be combined with Buy 3 Get 1 Free. Remove the coupon code to continue.");
  }
 
@@ -339,46 +341,42 @@ export async function createCheckoutSession(
  }
  }
 
- const coupon = isBuy3Get1Active || referral
+ // Coupon is validated unless a referral is present, or Buy-3-Get-1 is active
+ // and coupon+promo stacking is off. When the admin enables coupon+promotions,
+ // a coupon can coexist with Buy-3-Get-1 and both feed the promotion engine.
+ const coupon = referral || (isBuy3Get1Active && !promotionRules.stacking.coupon_promotions)
    ? null
    : await validateCoupon(payload.couponCode, subtotal, payload.customer.email);
 
- const preBulkDiscount = isBuy3Get1Active
-   ? { type: "buy3get1" as const, amount: buy3Get1Discount }
-   : referral
-     ? { type: "referral" as const, amount: calculateDiscountAmount(subtotal, referral.discountPercent) }
-     : { type: "coupon" as const, amount: coupon ? coupon.discountAmount : 0 };
-
- // "Cannot stack, greatest savings wins" - mirrors cart-context.tsx exactly
- // (same shared src/lib/discount-resolution.ts function) so the client
- // preview and this server total always agree on which discount applies.
- // Active-member pricing competes as one of the candidate discounts (greatest
- // savings wins, no stacking) so a member always gets at least their tier
- // discount whenever it's the best available deal. Tied to the account via
- // customerUserId -> membership.
+ // Membership tier pricing competes as one of the promotion candidates.
  const memberPricingAmount = memberPerks.memberDiscountPercent > 0
    ? calculateDiscountAmount(subtotal, memberPerks.memberDiscountPercent)
    : 0;
 
- // Approved ambassadors get a fixed discount on their OWN orders, applied
- // automatically when logged into their ambassador account. This is not a
- // referral, so no commission is ever created for their own purchases. It
- // competes as a single discount candidate (greatest savings wins, no stacking).
- // The client (cart-context.tsx) mirrors this exact candidate + gating so the
- // displayed total matches the server total.
- const ambassadorSelfDiscountAmount = ambassadorSelf && !referral && !isBuy3Get1Active
+ // Approved ambassadors get a fixed discount on their OWN orders (never a
+ // referral, so no commission is created). It competes / stacks per the
+ // promotion rules; the client mirrors this exactly.
+ const ambassadorSelfDiscountAmount = ambassadorSelf && !referral
    ? calculateDiscountAmount(subtotal, ambassadorSettings.ambassadorDiscountPercent)
    : 0;
 
- const bestDiscount = resolveBestDiscount([
+ // Which single discount applies, and what may stack, is decided by the shared
+ // promotion engine using the admin-configured rules. With the default config
+ // this is exactly "one discount, greatest savings wins". The client
+ // (cart-context.tsx) feeds the same candidates into the same engine so the two
+ // totals always agree.
+ const promotionCandidates: PromotionCandidate[] = [
    { type: "bulk_savings", amount: bulkSavingsResult.amount },
    { type: "member_pricing", amount: memberPricingAmount },
    { type: "ambassador", amount: ambassadorSelfDiscountAmount },
-   preBulkDiscount,
- ]);
+ ];
+ if (isBuy3Get1Active) promotionCandidates.push({ type: "buy3get1", amount: buy3Get1Discount });
+ if (referral) promotionCandidates.push({ type: "referral", amount: calculateDiscountAmount(subtotal, referral.discountPercent) });
+ if (coupon) promotionCandidates.push({ type: "coupon", amount: coupon.discountAmount });
 
- const discountAmount = roundMoney(bestDiscount?.amount ?? 0);
- const bulkDiscountTier = bestDiscount?.type === "bulk_savings" ? bulkSavingsResult.tier : null;
+ const promotionResult = resolvePromotions(promotionCandidates, promotionRules);
+ const discountAmount = roundMoney(promotionResult.totalDiscount);
+ const bulkDiscountTier = promotionResult.applied.includes("bulk_savings") ? bulkSavingsResult.tier : null;
 
  // Sales tax on the post-discount merchandise total (0 unless an admin sets a
  // rate). Same shared calculateTax the client preview uses, so totals agree.

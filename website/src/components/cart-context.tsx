@@ -9,7 +9,7 @@ import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice, roundMoney } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee, calculateTax, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
-import { resolveBestDiscount } from "@/lib/discount-resolution";
+import { resolvePromotions, normalizePromotionRules, DEFAULT_PROMOTION_RULES, type PromotionCandidate, type PromotionRulesConfig } from "@/lib/promotion-engine";
 
 type CouponDetails = {
   code: string;
@@ -167,6 +167,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [pointsMultiplier, setPointsMultiplier] = useState(1);
   const [pointsToRedeem, setPointsToRedeemState] = useState(0);
   const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
+  const [promotionRules, setPromotionRules] = useState<PromotionRulesConfig>(DEFAULT_PROMOTION_RULES);
   const [taxRatePercent, setTaxRatePercent] = useState(0);
   const [shippingConfig, setShippingConfig] = useState<ShippingConfig>(DEFAULT_SHIPPING_CONFIG);
   const [isEligibleForBulkSavings, setIsEligibleForBulkSavings] = useState(false);
@@ -231,10 +232,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; taxRatePercent?: number; shippingConfig?: ShippingConfig };
+        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; taxRatePercent?: number; shippingConfig?: ShippingConfig; promotionRules?: PromotionRulesConfig };
         if (result.success) {
           setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
           setTaxRatePercent(Number(result.taxRatePercent ?? 0) || 0);
+          if (result.promotionRules) setPromotionRules(normalizePromotionRules(result.promotionRules));
           if (result.shippingConfig) setShippingConfig(result.shippingConfig);
         }
       } catch {
@@ -568,28 +570,34 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [memberDiscountPercent, subtotal],
   );
 
-  // Ambassadors' own-order discount competes as a single candidate. Gated off
-  // when a referral or Buy-3-Get-1 is active, mirroring payment-service.ts so
-  // the client total and the server total always agree.
+  // Ambassadors' own-order discount competes / stacks per the promotion rules.
+  // Gated off only when a referral is present (referral is exclusive); the
+  // engine decides how it interacts with Buy-3-Get-1. Mirrors payment-service.ts.
   const ambassadorSelfDiscountAmount = useMemo(
-    () => (ambassadorDiscountPercent > 0 && !referralDetails && buy3Get1FreeDiscount <= 0
+    () => (ambassadorDiscountPercent > 0 && !referralDetails
       ? roundMoney(subtotal * (ambassadorDiscountPercent / 100))
       : 0),
-    [ambassadorDiscountPercent, referralDetails, buy3Get1FreeDiscount, subtotal],
+    [ambassadorDiscountPercent, referralDetails, subtotal],
   );
 
-  const bestDiscount = useMemo(
-    () => resolveBestDiscount([
+  // Same shared promotion engine + admin rules as the server, fed the same
+  // candidate set, so the client preview total always matches the server total.
+  const promotionResult = useMemo(() => {
+    const candidates: PromotionCandidate[] = [
       { type: "bulk_savings", amount: bulkSavingsResult.amount },
       { type: "member_pricing", amount: memberPricingAmount },
       { type: "ambassador", amount: ambassadorSelfDiscountAmount },
-      preBulkDiscount,
-    ]),
-    [bulkSavingsResult.amount, memberPricingAmount, ambassadorSelfDiscountAmount, preBulkDiscount],
-  );
+    ];
+    if (preBulkDiscount.amount > 0) candidates.push({ type: preBulkDiscount.type, amount: preBulkDiscount.amount });
+    // When coupon+promotions stacking is on, a coupon can accompany Buy-3-Get-1.
+    if (promotionRules.stacking.coupon_promotions && buy3Get1FreeDiscount > 0 && couponDiscountAmount > 0 && preBulkDiscount.type !== "coupon") {
+      candidates.push({ type: "coupon", amount: couponDiscountAmount });
+    }
+    return resolvePromotions(candidates, promotionRules);
+  }, [bulkSavingsResult.amount, memberPricingAmount, ambassadorSelfDiscountAmount, preBulkDiscount, promotionRules, buy3Get1FreeDiscount, couponDiscountAmount]);
 
-  const discountAmount = roundMoney(bestDiscount?.amount ?? 0);
-  const bulkSavingsApplied = bestDiscount?.type === "bulk_savings";
+  const discountAmount = roundMoney(promotionResult.totalDiscount);
+  const bulkSavingsApplied = promotionResult.applied.includes("bulk_savings");
   const bulkSavingsProgress = useMemo(
     () => getBulkSavingsProgress(subtotal, isEligibleForBulkSavings, bulkSavingsConfig),
     [subtotal, isEligibleForBulkSavings, bulkSavingsConfig],
@@ -977,7 +985,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     shippingConfig,
     discountAmount,
     total,
-    isBuy3Get1FreeActive: bestDiscount?.type === "buy3get1",
+    isBuy3Get1FreeActive: promotionResult.applied.includes("buy3get1"),
     isBuy3Get1FreeEligible,
     buy3Get1UntilNextFree,
     bulkSavingsApplied,
