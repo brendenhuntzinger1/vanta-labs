@@ -70,4 +70,8 @@ export type CoaRecord = {
   testingDate: string;
   labName: string;
   coaUrl: string;
+  // Set when this record represents a specific dosage variant (e.g. "10mg")
+  // whose batch differs from the product-level batch. Undefined for
+  // product-level records.
+  doseLabel?: string;
 };

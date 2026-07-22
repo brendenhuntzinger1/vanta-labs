@@ -1029,6 +1029,26 @@ function ProductEditor({
               </label>
             </div>
 
+            {dose.batchNumber?.trim() ? (
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                <span className="text-zinc-500">Batch {dose.batchNumber.trim()}:</span>
+                <a
+                  href={`/coa/${encodeURIComponent(dose.batchNumber.trim())}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-cyan-300 underline underline-offset-4"
+                >
+                  Open verify page ↗
+                </a>
+                <a
+                  href={`/api/catalog/coa-qr?batch=${encodeURIComponent(dose.batchNumber.trim())}`}
+                  className="rounded-md border border-zinc-700 px-2 py-1 text-zinc-200"
+                >
+                  Download QR (SVG)
+                </a>
+              </div>
+            ) : null}
+
             <div className="flex flex-wrap items-center gap-2">
               <label className="flex items-center gap-2 rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-300">
                 <input type="checkbox" checked={Boolean(dose.isEnabled)} onChange={(e) => setDose(dose.id, (prev) => ({ ...prev, isEnabled: e.target.checked }))} />

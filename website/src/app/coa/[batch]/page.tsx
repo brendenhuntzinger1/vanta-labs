@@ -45,6 +45,7 @@ export default async function CoaVerifyPage({
 
   const details: Array<{ label: string; value: string }> = [
     { label: "Product", value: record.productName },
+    ...(record.doseLabel ? [{ label: "Variant / strength", value: record.doseLabel }] : []),
     { label: "Category", value: record.category },
     { label: "Batch / Lot", value: record.batchNumber },
     { label: "Purity result", value: record.purityResult },
@@ -69,7 +70,10 @@ export default async function CoaVerifyPage({
         </div>
 
         <p className="vl2-eyebrow mt-6">Certificate of Analysis</p>
-        <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">{record.productName}</h1>
+        <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">
+          {record.productName}
+          {record.doseLabel ? <span className="text-white/50"> · {record.doseLabel}</span> : null}
+        </h1>
         <p className="mt-2 text-sm text-white/45">Batch {record.batchNumber}</p>
 
         <div className="mt-10 grid gap-8 lg:grid-cols-[1.4fr_0.6fr]">

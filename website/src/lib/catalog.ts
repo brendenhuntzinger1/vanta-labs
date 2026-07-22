@@ -330,7 +330,7 @@ export async function getCatalogProductsByCategory(category: string, excludeSlug
 export async function getCoaRecords() {
   const { data, error } = await supabaseAdmin
     .from("products")
-    .select("slug, name, category, batch_number, purity_result, testing_date, lab_name, coa_url")
+    .select("id, slug, name, category, batch_number, purity_result, testing_date, lab_name, coa_url")
     .eq("is_active", true)
     .eq("is_enabled", true)
     .eq("is_published", true)
@@ -341,16 +341,69 @@ export async function getCoaRecords() {
     throw error;
   }
 
-  return (data ?? []).map((row) => ({
-    slug: String(row.slug),
-    productName: String(row.name),
-    category: String(row.category ?? "Research Peptides"),
-    batchNumber: String(row.batch_number ?? ""),
-    purityResult: String(row.purity_result ?? "Pending"),
-    testingDate: String(row.testing_date ?? ""),
-    labName: String(row.lab_name ?? ""),
-    coaUrl: String(row.coa_url ?? ""),
-  })) satisfies CoaRecord[];
+  const productRows = data ?? [];
+  // Meta a variant inherits from its parent (testing date / lab live only on
+  // the product row, not on product_doses).
+  const productMetaById = new Map(productRows.map((row) => [String(row.id), row]));
+
+  const records: CoaRecord[] = [];
+  const seenBatches = new Set<string>();
+
+  for (const row of productRows) {
+    const batch = String(row.batch_number ?? "");
+    records.push({
+      slug: String(row.slug),
+      productName: String(row.name),
+      category: String(row.category ?? "Research Peptides"),
+      batchNumber: batch,
+      purityResult: String(row.purity_result ?? "Pending"),
+      testingDate: String(row.testing_date ?? ""),
+      labName: String(row.lab_name ?? ""),
+      coaUrl: String(row.coa_url ?? ""),
+    });
+    if (batch.trim()) {
+      seenBatches.add(batch.trim().toLowerCase());
+    }
+  }
+
+  // Add per-variant (dosage) batches so each strength with its own lot shows up
+  // and is searchable by batch. Variants inherit testing date / lab from the
+  // parent product; batch, purity, and COA come from the variant when set.
+  const { data: doseData, error: doseError } = await supabaseAdmin
+    .from("product_doses")
+    .select("product_id, label, batch_number, coa_url, purity_result")
+    .eq("is_enabled", true)
+    .not("batch_number", "is", null);
+
+  if (doseError) {
+    throw doseError;
+  }
+
+  for (const dose of doseData ?? []) {
+    const product = productMetaById.get(String(dose.product_id));
+    if (!product) {
+      continue; // parent product isn't public
+    }
+    const batch = String(dose.batch_number ?? "").trim();
+    if (!batch || seenBatches.has(batch.toLowerCase())) {
+      continue; // blank, or already covered by the product-level batch
+    }
+    seenBatches.add(batch.toLowerCase());
+    const label = dose.label ? String(dose.label) : undefined;
+    records.push({
+      slug: String(product.slug),
+      productName: label ? `${String(product.name)} — ${label}` : String(product.name),
+      category: String(product.category ?? "Research Peptides"),
+      batchNumber: batch,
+      purityResult: String(dose.purity_result ?? product.purity_result ?? "Pending"),
+      testingDate: String(product.testing_date ?? ""),
+      labName: String(product.lab_name ?? ""),
+      coaUrl: String(dose.coa_url ?? product.coa_url ?? ""),
+      doseLabel: label,
+    });
+  }
+
+  return records;
 }
 
 // Look up a single published COA by its batch/lot number for the public
@@ -378,18 +431,66 @@ export async function getCoaRecordByBatch(batch: string): Promise<CoaRecord | nu
     throw error;
   }
 
-  if (!data || !String(data.batch_number ?? "").trim()) {
+  if (data && String(data.batch_number ?? "").trim()) {
+    return {
+      slug: String(data.slug),
+      productName: String(data.name),
+      category: String(data.category ?? "Research Peptides"),
+      batchNumber: String(data.batch_number ?? ""),
+      purityResult: String(data.purity_result ?? "Pending"),
+      testingDate: String(data.testing_date ?? ""),
+      labName: String(data.lab_name ?? ""),
+      coaUrl: String(data.coa_url ?? ""),
+    } satisfies CoaRecord;
+  }
+
+  // Fall back to a dosage-variant batch. Variants carry their own batch / purity
+  // / COA but inherit testing date + lab from the parent product, so we look the
+  // parent up second and enforce the same "publicly visible" checks on it.
+  const { data: dose, error: doseError } = await supabaseAdmin
+    .from("product_doses")
+    .select("product_id, label, batch_number, coa_url, purity_result")
+    .eq("is_enabled", true)
+    .ilike("batch_number", normalized)
+    .limit(1)
+    .maybeSingle();
+
+  if (doseError) {
+    throw doseError;
+  }
+
+  if (!dose || !String(dose.batch_number ?? "").trim()) {
     return null;
   }
 
+  const { data: parent, error: parentError } = await supabaseAdmin
+    .from("products")
+    .select("slug, name, category, purity_result, testing_date, lab_name, coa_url")
+    .eq("id", dose.product_id)
+    .eq("is_active", true)
+    .eq("is_enabled", true)
+    .eq("is_published", true)
+    .eq("is_archived", false)
+    .maybeSingle();
+
+  if (parentError) {
+    throw parentError;
+  }
+
+  if (!parent) {
+    return null; // variant exists but its product isn't public
+  }
+
+  const label = dose.label ? String(dose.label) : undefined;
   return {
-    slug: String(data.slug),
-    productName: String(data.name),
-    category: String(data.category ?? "Research Peptides"),
-    batchNumber: String(data.batch_number ?? ""),
-    purityResult: String(data.purity_result ?? "Pending"),
-    testingDate: String(data.testing_date ?? ""),
-    labName: String(data.lab_name ?? ""),
-    coaUrl: String(data.coa_url ?? ""),
+    slug: String(parent.slug),
+    productName: String(parent.name),
+    category: String(parent.category ?? "Research Peptides"),
+    batchNumber: String(dose.batch_number ?? ""),
+    purityResult: String(dose.purity_result ?? parent.purity_result ?? "Pending"),
+    testingDate: String(parent.testing_date ?? ""),
+    labName: String(parent.lab_name ?? ""),
+    coaUrl: String(dose.coa_url ?? parent.coa_url ?? ""),
+    doseLabel: label,
   } satisfies CoaRecord;
 }
