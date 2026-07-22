@@ -392,17 +392,44 @@ export function ambassadorApplicationReceivedTemplate(input: { name: string }): 
   };
 }
 
-export function ambassadorApprovedTemplate(input: { name: string; referralCode?: string; dashboardUrl: string }): EmailTemplate {
+export function ambassadorApprovedTemplate(input: {
+  name: string;
+  referralCode?: string;
+  dashboardUrl: string;
+  commissionPercent?: number;
+  discountPercent?: number;
+  storeCreditMultiplierPercent?: number;
+}): EmailTemplate {
   const name = escapeHtml(input.name);
+  const commission = input.commissionPercent ?? 10;
+  const discount = input.discountPercent ?? 15;
+  const creditMultiplier = input.storeCreditMultiplierPercent ?? 125;
+
+  const perks = [
+    `<strong>${commission}% commission</strong> on every order placed with your code.`,
+    `<strong>${discount}% off your own orders</strong> (you don't earn commission on your own orders).`,
+    `Get paid in <strong>cash</strong>, or take <strong>store credit worth ${creditMultiplier}%</strong> of your earnings.`,
+    `Top-selling ambassador each month earns a <strong>bonus</strong>.`,
+  ];
+
+  const perksText = [
+    `- ${commission}% commission on every order placed with your code.`,
+    `- ${discount}% off your own orders (no commission on your own orders).`,
+    `- Get paid in cash, or take store credit worth ${creditMultiplier}% of your earnings.`,
+    `- Top-selling ambassador each month earns a bonus.`,
+  ];
+
   return {
-    subject: "Your Vanta Labs Ambassador Application Was Approved",
+    subject: "You're approved — welcome to the Vanta Labs Ambassador program",
     html: renderLayout({
-      preheader: "You're approved. Your dashboard is ready.",
+      preheader: "You're approved. Here's how it works.",
       title: `You're approved, ${name}!`,
       bodyHtml: `
-        <p>Your ambassador application has been approved.</p>
+        <p>Welcome to the Vanta Labs Ambassador program. Here's what you get:</p>
+        <ul>${perks.map((perk) => `<li>${perk}</li>`).join("")}</ul>
         ${input.referralCode ? `<p>Your referral code: <strong>${escapeHtml(input.referralCode)}</strong></p>` : ""}
-        <p>Log in to access your dashboard, referral link, commissions, and payouts.</p>
+        <p><strong>To keep your perks:</strong> post at least <strong>1 promotional video per month</strong>. Consistent promoters earn higher rates and bigger bonuses.</p>
+        <p>Open your dashboard to grab your referral link, track commissions, and choose how you get paid.</p>
       `,
       ctaLabel: "Open Dashboard",
       ctaUrl: input.dashboardUrl,
@@ -410,8 +437,13 @@ export function ambassadorApprovedTemplate(input: { name: string; referralCode?:
     text: toText([
       `Hi ${input.name},`,
       "",
-      "Your ambassador application has been approved.",
-      input.referralCode ? `Referral code: ${input.referralCode}` : null,
+      "Welcome to the Vanta Labs Ambassador program. Here's what you get:",
+      ...perksText,
+      "",
+      input.referralCode ? `Your referral code: ${input.referralCode}` : null,
+      "",
+      "To keep your perks: post at least 1 promotional video per month.",
+      "Consistent promoters earn higher rates and bigger bonuses.",
       "",
       `Dashboard: ${input.dashboardUrl}`,
       "",

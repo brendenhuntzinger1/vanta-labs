@@ -367,12 +367,12 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
 
       <section className="mx-auto grid max-w-[1440px] gap-4 px-6 py-10 sm:grid-cols-2 lg:grid-cols-3 lg:px-12">
         {[
-          "Lifetime recurring commissions",
-          "Real-time performance dashboard",
-          "Fast payouts and clear payout history",
-          "Premium marketing assets",
-          "Personal referral link + tracking",
-          "Mobile-first partner command center",
+          "10% commission on every order with your code",
+          "15% off your own orders",
+          "Cash payout, or store credit worth 125%",
+          "Monthly bonus for the top-selling ambassador",
+          "Real-time dashboard with clear payout history",
+          "Post 1 promotional video a month to keep your perks",
         ].map((benefit) => (
           <div key={benefit} className="border border-white/10 p-5">
             <p className="text-sm text-white/75">{benefit}</p>

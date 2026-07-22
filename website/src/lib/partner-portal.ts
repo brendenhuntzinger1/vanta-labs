@@ -177,13 +177,20 @@ async function sendPartnerStatusEmail(input: {
   status: "approved" | "rejected";
   referralCode?: string;
 }) {
-  const template = input.status === "approved"
-    ? ambassadorApprovedTemplate({
-        name: input.name,
-        referralCode: input.referralCode,
-        dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
-      })
-    : ambassadorDeniedTemplate({ name: input.name });
+  let template;
+  if (input.status === "approved") {
+    const settings = await getAmbassadorProgramSettings().catch(() => null);
+    template = ambassadorApprovedTemplate({
+      name: input.name,
+      referralCode: input.referralCode,
+      dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
+      commissionPercent: DEFAULT_COMMISSION_PERCENT,
+      discountPercent: settings?.ambassadorDiscountPercent,
+      storeCreditMultiplierPercent: settings?.storeCreditMultiplierPercent,
+    });
+  } else {
+    template = ambassadorDeniedTemplate({ name: input.name });
+  }
 
   const result = await sendEmail({ to: input.to, ...template });
   return result.success;

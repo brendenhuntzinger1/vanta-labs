@@ -52,8 +52,8 @@ export function AmbassadorPageClient() {
 
         <section className="mt-7 grid gap-4 md:grid-cols-3">
           {[
-            { title: "15% Base Commission", text: "Tiered rates available for high-volume ambassadors." },
-            { title: "Recurring Revenue", text: "Earn from repeat customer orders tied to your referral stream." },
+            { title: "10% Commission", text: "Earn 10% on every order placed with your referral code." },
+            { title: "Cash or Store Credit", text: "Get paid in cash, or take store credit worth 125% of your earnings." },
             { title: "Fast Approval", text: "Most qualified applications are reviewed in under 24 hours." },
           ].map((item) => (
             <article key={item.title} className="border border-white/10 p-5">
@@ -68,12 +68,12 @@ export function AmbassadorPageClient() {
           <h2 className="vl2-serif mt-3 text-2xl text-white">Everything you earn, and how</h2>
           <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {[
-              { k: "You earn 15%", v: "15% commission on every qualifying order placed with your code. Higher tiers unlock as your volume grows." },
+              { k: "You earn 10%", v: "10% commission on every qualifying order placed with your referral code." },
               { k: "Your audience saves 10%", v: "Anyone who uses your referral code gets 10% off their order — a real reason for them to buy through you." },
-              { k: "$100 minimum order", v: "Orders must be at least $100 (before shipping) to earn a commission, so every payout is on a real sale." },
-              { k: "14-day hold", v: "Commissions are held 14 days after an order to clear the return window, then become payable." },
-              { k: "$100 payout minimum", v: "Once your cleared balance reaches $100, you can be paid out." },
-              { k: "Fair & transparent", v: "One discount per order, no self-referrals, live tracking in your dashboard. What you see is what you earn." },
+              { k: "15% off your own orders", v: "Ambassadors get 15% off their own purchases. You don't earn commission on your own orders." },
+              { k: "Cash or store credit", v: "Take your payout as cash, or as store credit worth 125% of what you earned." },
+              { k: "Monthly top-seller bonus", v: "The top-selling ambassador each month earns a bonus on top of commissions." },
+              { k: "Post 1 video / month", v: "To keep your perks active, share at least one promotional video each month." },
             ].map((item) => (
               <div key={item.k} className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
                 <p className="text-sm font-semibold text-white">{item.k}</p>
@@ -83,7 +83,8 @@ export function AmbassadorPageClient() {
           </div>
           <p className="mt-5 text-xs leading-6 text-white/40">
             Commission is calculated on the order subtotal after the customer&apos;s 10% discount (excluding shipping and
-            fees). Exact rate and thresholds may vary by tier and are shown in your dashboard.
+            fees). Orders must be at least $100 to earn a commission; commissions clear after a 14-day return window, and
+            payouts are available once your cleared balance reaches $100. Exact rates and bonuses are shown in your dashboard.
           </p>
         </section>
 
