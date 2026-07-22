@@ -93,10 +93,18 @@ function ProductsPageContent() {
     if (searchQuery.trim()) {
       const query = searchQuery.trim().toLowerCase();
       result = result.filter((product) => {
+        const doseMatch = (product.doses ?? []).some(
+          (dose) =>
+            (dose.sku ?? "").toLowerCase().includes(query) ||
+            (dose.batchNumber ?? "").toLowerCase().includes(query) ||
+            (dose.label ?? "").toLowerCase().includes(query),
+        );
         return (
           product.name.toLowerCase().includes(query) ||
           product.category.toLowerCase().includes(query) ||
-          product.description.toLowerCase().includes(query)
+          product.description.toLowerCase().includes(query) ||
+          (product.batchNumber ?? "").toLowerCase().includes(query) ||
+          doseMatch
         );
       });
     }

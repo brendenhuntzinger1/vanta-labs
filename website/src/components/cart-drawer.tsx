@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import Image from "next/image";
 import { formatCartCurrency, useCart, getShippingProgress } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
@@ -71,6 +72,13 @@ export function CartDrawer() {
             <div className="rounded-[1.5rem] border border-dashed border-zinc-700 bg-zinc-900/70 p-8 text-center text-zinc-400">
               <p className="text-lg text-white">Your cart is currently empty.</p>
               <p className="mt-3">Add products to begin building an order.</p>
+              <Link
+                href="/products"
+                onClick={closeCart}
+                className="vl2-btn-primary vl-focus-ring mt-6 inline-flex px-6 py-3 text-sm"
+              >
+                Browse products
+              </Link>
             </div>
           ) : (
               <div className="space-y-3 sm:space-y-4">

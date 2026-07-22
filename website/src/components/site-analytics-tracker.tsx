@@ -59,6 +59,16 @@ export function SiteAnalyticsTracker() {
       return;
     }
 
+    // Honor the cookie-consent choice: if the visitor declined, don't track.
+    // (Matches the STORAGE_KEY used by cookie-consent.tsx.)
+    try {
+      if (window.localStorage.getItem("vl_cookie_consent") === "declined") {
+        return;
+      }
+    } catch {
+      // If storage is unreadable, fall through (no consent stored = default on).
+    }
+
     const sessionId = getOrCreateStorageValue(SESSION_KEY);
     const visitorId = getOrCreateStorageValue(VISITOR_KEY);
 
@@ -95,6 +105,16 @@ export function SiteAnalyticsTracker() {
     const isEnabled = process.env.NODE_ENV === "production" || process.env.NEXT_PUBLIC_ENABLE_ANALYTICS === "true";
     if (!isEnabled) {
       return;
+    }
+
+    // Honor the cookie-consent choice: if the visitor declined, don't track.
+    // (Matches the STORAGE_KEY used by cookie-consent.tsx.)
+    try {
+      if (window.localStorage.getItem("vl_cookie_consent") === "declined") {
+        return;
+      }
+    } catch {
+      // If storage is unreadable, fall through (no consent stored = default on).
     }
 
     const handler = (event: Event) => {

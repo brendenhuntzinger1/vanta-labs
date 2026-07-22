@@ -188,6 +188,11 @@ export default async function AccountDashboardPage() {
                   {order.trackingNumber ? (
                     <p className="mt-1 text-xs text-cyan-300">Tracking: {order.trackingNumber}</p>
                   ) : null}
+                  {["pending", "pending_payment", "awaiting_verification", "unverified", "unpaid"].includes(String(order.paymentStatus).toLowerCase()) ? (
+                    <Link href={`/pay/${order.orderId}`} className="mt-2 inline-flex rounded-full border border-amber-300/50 bg-amber-300/10 px-3 py-1.5 text-xs font-semibold text-amber-200 transition hover:bg-amber-300/20">
+                      Complete payment →
+                    </Link>
+                  ) : null}
                 </div>
               </div>
 

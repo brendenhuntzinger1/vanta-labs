@@ -109,6 +109,11 @@ export default async function HomePage() {
 
         <div className="vl2-hero-content mx-auto w-full max-w-[1440px] px-4 sm:px-6 pb-20 pt-40 lg:px-12 lg:pb-28">
           <div className="vl2-fade-in">
+            {control.promoBuy3Get1Enabled ? (
+              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-300/40 bg-emerald-400/15 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-200">
+                🎁 Buy 3 Get 1 Free — Limited Time
+              </div>
+            ) : null}
             <p className="vl2-eyebrow">Research Use Only</p>
             <h1 className="vl2-serif mt-5 max-w-2xl text-4xl leading-[1.05] text-white sm:text-5xl md:text-6xl lg:text-7xl">
               {control.heroHeadline ?? "Precision, in every vial."}
