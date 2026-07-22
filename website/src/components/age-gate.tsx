@@ -8,9 +8,17 @@ function getAgeVerifiedSnapshot() {
   }
 
   try {
-    return window.localStorage.getItem("vanta-labs-age-verified") === "true";
+    if (window.localStorage.getItem("vanta-labs-age-verified") === "true") {
+      return true;
+    }
   } catch (error) {
     console.error("Unable to read age verification state", error);
+  }
+
+  // Fall back to the cookie mirror when localStorage is unavailable/blocked.
+  try {
+    return document.cookie.split("; ").some((c) => c === "vl_age_verified=true");
+  } catch {
     return false;
   }
 }
@@ -46,6 +54,10 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
   const markVerified = () => {
     try {
       window.localStorage.setItem("vanta-labs-age-verified", "true");
+      // A cookie mirrors the flag so verification survives localStorage being
+      // unavailable (private mode, some in-app browsers) and is consistent
+      // across tabs. 30-day attestation window.
+      document.cookie = "vl_age_verified=true; path=/; max-age=" + 60 * 60 * 24 * 30 + "; samesite=lax";
     } catch (error) {
       console.error("Unable to save age verification state", error);
     }
@@ -75,6 +87,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
     setLocalVerified(false);
     try {
       window.localStorage.removeItem("vanta-labs-age-verified");
+      document.cookie = "vl_age_verified=; path=/; max-age=0; samesite=lax";
     } catch (error) {
       console.error("Unable to clear age verification state", error);
     }
