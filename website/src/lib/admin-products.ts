@@ -40,6 +40,9 @@ export type ProductCreateInput = {
   badge?: ProductBadge;
   batchNumber?: string;
   coaUrl?: string;
+  testingDate?: string;
+  labName?: string;
+  purityResult?: string;
   seoTitle?: string;
   seoDescription?: string;
   imageUrl?: string;
@@ -363,6 +366,9 @@ export async function createAdminProduct(input: ProductCreateInput) {
       is_featured: input.isFeatured ?? false,
       badge: input.badge ?? null,
       batch_number: input.batchNumber ?? null,
+      testing_date: input.testingDate ?? null,
+      lab_name: input.labName ?? null,
+      purity_result: input.purityResult ?? null,
       image_url: input.imageUrl ?? null,
       coa_url: input.coaUrl ?? null,
       seo_title: input.seoTitle ?? null,
@@ -436,6 +442,9 @@ export async function updateAdminProduct(productId: string, input: ProductUpdate
   if (input.badge !== undefined) payload.badge = input.badge;
   if (input.batchNumber !== undefined) payload.batch_number = input.batchNumber;
   if (input.coaUrl !== undefined) payload.coa_url = input.coaUrl;
+  if (input.testingDate !== undefined) payload.testing_date = input.testingDate || null;
+  if (input.labName !== undefined) payload.lab_name = input.labName || null;
+  if (input.purityResult !== undefined) payload.purity_result = input.purityResult || null;
   if (input.imageUrl !== undefined) payload.image_url = input.imageUrl;
   if (input.seoTitle !== undefined) payload.seo_title = input.seoTitle;
   if (input.seoDescription !== undefined) payload.seo_description = input.seoDescription;

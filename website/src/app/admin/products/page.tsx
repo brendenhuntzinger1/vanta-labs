@@ -521,6 +521,9 @@ export default function AdminProductsPage() {
           badge: nextProduct.badge,
           batchNumber: nextProduct.batchNumber,
           coaUrl: nextProduct.coaUrl,
+          testingDate: nextProduct.testingDate,
+          labName: nextProduct.labName,
+          purityResult: nextProduct.purityResult,
           imageUrl: nextProduct.coverImage,
           seoTitle: nextProduct.seoTitle,
           seoDescription: nextProduct.seoDescription,
@@ -919,6 +922,52 @@ function ProductEditor({
       <label className="text-xs text-zinc-400">SEO description
         <textarea value={draft.seoDescription ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, seoDescription: e.target.value }))} className="vl-input mt-1 min-h-20 w-full px-3 py-2" />
       </label>
+
+      <div className="space-y-3 rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-white">Batch &amp; COA (public verification)</h3>
+          {draft.batchNumber?.trim() ? (
+            <div className="flex items-center gap-3 text-xs">
+              <a
+                href={`/coa/${encodeURIComponent(draft.batchNumber.trim())}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-cyan-300 underline underline-offset-4"
+              >
+                Open verify page ↗
+              </a>
+              <a
+                href={`/api/catalog/coa-qr?batch=${encodeURIComponent(draft.batchNumber.trim())}`}
+                className="rounded-md border border-zinc-700 px-2 py-1 text-zinc-200"
+              >
+                Download QR (SVG)
+              </a>
+            </div>
+          ) : null}
+        </div>
+        <p className="text-xs text-zinc-500">
+          These fields drive the public COA library and the <code>/coa/&lt;batch&gt;</code>{" "}
+          verification page a customer reaches by scanning the QR. The verify page and QR only
+          resolve after you <strong>Save</strong> and the product is <strong>Published</strong>.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <label className="text-xs text-zinc-400">Batch / lot number
+            <input value={draft.batchNumber ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, batchNumber: e.target.value }))} placeholder="AR-2407A" className="vl-input mt-1 w-full px-3 py-2" />
+          </label>
+          <label className="text-xs text-zinc-400">Purity result
+            <input value={draft.purityResult ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, purityResult: e.target.value }))} placeholder="99.1%" className="vl-input mt-1 w-full px-3 py-2" />
+          </label>
+          <label className="text-xs text-zinc-400">Testing date
+            <input value={draft.testingDate ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, testingDate: e.target.value }))} placeholder="2026-07-01" className="vl-input mt-1 w-full px-3 py-2" />
+          </label>
+          <label className="text-xs text-zinc-400">Testing laboratory
+            <input value={draft.labName ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, labName: e.target.value }))} placeholder="Janoshik Analytical" className="vl-input mt-1 w-full px-3 py-2" />
+          </label>
+          <label className="text-xs text-zinc-400 sm:col-span-2">Lab report URL (COA PDF)
+            <input value={draft.coaUrl ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, coaUrl: e.target.value }))} placeholder="https://…/report.pdf" className="vl-input mt-1 w-full px-3 py-2" />
+          </label>
+        </div>
+      </div>
 
       <div className="space-y-3">
         <div className="flex items-center justify-between">
