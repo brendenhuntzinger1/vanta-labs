@@ -440,7 +440,7 @@ export async function createCheckoutSession(
  const orderNumber = generateOrderNumber();
  const provider = getPaymentProvider();
 
- const { error: orderInsertError } = await supabaseAdmin.from("orders").insert({
+ const baseOrderRow: Record<string, unknown> = {
    order_id: orderId,
    order_number: orderNumber,
    payment_id: null,
@@ -473,7 +473,25 @@ export async function createCheckoutSession(
    fulfillment_status: "pending",
    created_at: new Date().toISOString(),
    updated_at: new Date().toISOString(),
- });
+ };
+
+ // state/phone are new columns (see orders-state-phone.sql). Try to store them,
+ // but if the migration hasn't been applied yet, fall back to inserting without
+ // them so checkout NEVER breaks over a missing column.
+ const orderRowWithContact = {
+   ...baseOrderRow,
+   state: payload.customer.state ?? null,
+   phone: payload.customer.phone ?? null,
+ };
+
+ let orderInsertError = (await supabaseAdmin.from("orders").insert(orderRowWithContact)).error;
+ if (orderInsertError) {
+   const message = String(orderInsertError.message ?? "").toLowerCase();
+   const missingColumn = orderInsertError.code === "PGRST204" || message.includes("state") || message.includes("phone") || message.includes("column");
+   if (missingColumn) {
+     orderInsertError = (await supabaseAdmin.from("orders").insert(baseOrderRow)).error;
+   }
+ }
 
  if (orderInsertError) {
    console.error("Unable to create order record", orderInsertError);
@@ -563,7 +581,9 @@ export function sanitizeCustomerInput(customer: CustomerInput) {
  fullName: sanitizeText(customer.fullName),
  address: sanitizeText(customer.address),
  city: sanitizeText(customer.city),
+ state: sanitizeText(customer.state ?? ""),
  postalCode: sanitizeText(customer.postalCode),
  country: sanitizeText(customer.country ?? ""),
+ phone: sanitizeText(customer.phone ?? ""),
  };
 }

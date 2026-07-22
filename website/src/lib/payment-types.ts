@@ -23,6 +23,8 @@ export interface CustomerInput {
   city: string;
   postalCode: string;
   country: string;
+  state?: string;
+  phone?: string;
 }
 
 export interface PromotionInput {

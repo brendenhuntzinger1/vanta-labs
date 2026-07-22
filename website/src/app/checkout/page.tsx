@@ -34,8 +34,10 @@ async function createSecureCheckoutSession(payload: unknown) {
 type CheckoutForm = {
   fullName: string;
   email: string;
+  phone: string;
   address: string;
   city: string;
+  state: string;
   postalCode: string;
   country: string;
   billingFullName: string;
@@ -44,6 +46,35 @@ type CheckoutForm = {
   billingPostalCode: string;
   billingCountry: string;
 };
+
+// A curated country list. "United States" matches isDomesticCountry() so it
+// gets the domestic shipping tier; everything else is international.
+const COUNTRY_OPTIONS = [
+  "United States",
+  "Canada",
+  "United Kingdom",
+  "Australia",
+  "Germany",
+  "France",
+  "Netherlands",
+  "Spain",
+  "Italy",
+  "Ireland",
+  "New Zealand",
+  "Mexico",
+  "Other",
+];
+
+const US_STATE_OPTIONS = [
+  "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA", "KS",
+  "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY",
+  "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
+  "WI", "WY", "DC", "PR",
+];
+
+function isUnitedStates(country: string) {
+  return ["united states", "usa", "us", "u.s.", "u.s.a."].includes(country.trim().toLowerCase());
+}
 
 type ComplianceAcknowledgements = {
   researchResponsibility: boolean;
@@ -63,8 +94,10 @@ function validateCheckoutForm(form: CheckoutForm, sameAsShipping: boolean) {
 
   if (!form.fullName.trim()) errors.fullName = "Full name is required.";
   if (!form.email.trim() || !/^\S+@\S+\.\S+$/.test(form.email)) errors.email = "Enter a valid email.";
+  if (form.phone.trim().replace(/\D/g, "").length < 7) errors.phone = "A phone number is required for delivery.";
   if (!form.address.trim()) errors.address = "Shipping address is required.";
   if (!form.city.trim()) errors.city = "City is required.";
+  if (isUnitedStates(form.country) && !form.state.trim()) errors.state = "State is required.";
   if (!form.postalCode.trim()) errors.postalCode = "Postal code is required.";
   if (!form.country.trim()) errors.country = "Country is required.";
 
@@ -152,8 +185,10 @@ export default function CheckoutPage() {
   const [form, setForm] = useState<CheckoutForm>({
     fullName: "",
     email: "",
+    phone: "",
     address: "",
     city: "",
+    state: "",
     postalCode: "",
     country: "United States",
     billingFullName: "",
@@ -335,8 +370,10 @@ export default function CheckoutPage() {
           fullName: form.fullName.trim(),
           address: form.address.trim(),
           city: form.city.trim(),
+          state: form.state.trim(),
           postalCode: form.postalCode.trim(),
           country: form.country.trim(),
+          phone: form.phone.trim(),
         },
         billing: sameAsShipping
           ? {
@@ -377,12 +414,15 @@ export default function CheckoutPage() {
         }
       }
 
-      // Card: continue to the secure processor flow, exactly as before.
+      // Card: continue to the secure processor flow when one is connected.
+      // Otherwise (test mode / no live processor) treat the order as placed:
+      // clear the cart and send the shopper to the confirmation page so they
+      // always get a proper thank-you + order number instead of a dead end.
       if (result.hostedCheckoutUrl) {
         window.location.assign(result.hostedCheckoutUrl);
       } else {
-        setCheckoutState("success");
-        setCheckoutMessage("Payment integration is in test mode. No real payment will be processed.");
+        clearCart();
+        window.location.assign(`/order-confirmation/${result.orderId}`);
       }
     } catch (error) {
       setCheckoutState("idle");
@@ -466,8 +506,18 @@ export default function CheckoutPage() {
                 </label>
 
                 <label className="text-sm text-white/60">
+                  <span className="mb-2 block">Phone</span>
+                  <input type="tel" value={form.phone} onChange={(e) => handleFieldChange("phone", e.target.value)} autoComplete="tel" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="(555) 123-4567" title="Carriers require a phone number for delivery" />
+                  {formErrors.phone ? <span className="mt-1 block text-xs text-rose-300">{formErrors.phone}</span> : null}
+                </label>
+
+                <label className="text-sm text-white/60">
                   <span className="mb-2 block">Country</span>
-                  <input value={form.country} onChange={(e) => handleFieldChange("country", e.target.value)} autoComplete="shipping country-name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="United States" />
+                  <select value={form.country} onChange={(e) => handleFieldChange("country", e.target.value)} autoComplete="shipping country-name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white outline-none transition focus:border-white/50">
+                    {COUNTRY_OPTIONS.map((c) => (
+                      <option key={c} value={c} className="bg-black text-white">{c}</option>
+                    ))}
+                  </select>
                   {formErrors.country ? <span className="mt-1 block text-xs text-rose-300">{formErrors.country}</span> : null}
                 </label>
 
@@ -481,6 +531,21 @@ export default function CheckoutPage() {
                   <span className="mb-2 block">City</span>
                   <input value={form.city} onChange={(e) => handleFieldChange("city", e.target.value)} autoComplete="shipping address-level2" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="Austin" />
                   {formErrors.city ? <span className="mt-1 block text-xs text-rose-300">{formErrors.city}</span> : null}
+                </label>
+
+                <label className="text-sm text-white/60">
+                  <span className="mb-2 block">{isUnitedStates(form.country) ? "State" : "State / Province"}</span>
+                  {isUnitedStates(form.country) ? (
+                    <select value={form.state} onChange={(e) => handleFieldChange("state", e.target.value)} autoComplete="shipping address-level1" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white outline-none transition focus:border-white/50">
+                      <option value="" className="bg-black text-white/50">Select…</option>
+                      {US_STATE_OPTIONS.map((s) => (
+                        <option key={s} value={s} className="bg-black text-white">{s}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input value={form.state} onChange={(e) => handleFieldChange("state", e.target.value)} autoComplete="shipping address-level1" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50" placeholder="Region / Province" />
+                  )}
+                  {formErrors.state ? <span className="mt-1 block text-xs text-rose-300">{formErrors.state}</span> : null}
                 </label>
 
                 <label className="text-sm text-white/60">
