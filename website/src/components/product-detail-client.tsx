@@ -364,12 +364,20 @@ export function ProductDetailClient({
                   <p className="text-[11px] uppercase tracking-[0.3em] text-zinc-400">{product.category}</p>
                   <h1 className="vl2-serif mt-2 text-3xl text-[#111]">{product.name}</h1>
                 </div>
-                <span className="shrink-0 border border-zinc-200 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-zinc-600">{selectedStockStatus}</span>
+                {/* Only shown when the 3PL has reported the item as sold out —
+                    never an "In Stock" badge, per product spec. */}
+                {isOutOfStock ? (
+                  <span className="shrink-0 border border-zinc-300 bg-zinc-100 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-zinc-600">Out of Stock</span>
+                ) : null}
               </div>
 
               {doseFromSlug && (
                 <p className="mt-1 text-xs text-zinc-400">{doseFromSlug} · {product.labName}</p>
               )}
+
+              {(product.shortDescription ?? product.description) ? (
+                <p className="mt-4 text-sm leading-6 text-zinc-600">{product.shortDescription ?? product.description}</p>
+              ) : null}
 
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 {selectedPurity && (

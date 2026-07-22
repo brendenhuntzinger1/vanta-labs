@@ -67,23 +67,15 @@ export function ProductCard({
             <p className="vl2-eyebrow text-[10px] text-white/45">{product.category}</p>
           </div>
 
-          <h3 className="mt-2.5 line-clamp-2 text-base text-white sm:mt-3 sm:text-lg">{product.name}</h3>
-          <p className="mt-1.5 line-clamp-2 text-xs leading-5 text-white/55 sm:mt-2 sm:text-sm sm:leading-6">
-            {product.shortDescription ?? product.description}
-          </p>
+          <h3 className="mt-2 line-clamp-2 text-base text-white sm:text-lg">{product.name}</h3>
 
-          <div className="mt-3 flex items-end justify-between gap-2 sm:mt-4">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-baseline gap-x-2">
-                <p className="text-lg text-white sm:text-xl">{product.salePrice ?? product.price}</p>
-                {product.salePrice && product.compareAtPrice ? (
-                  <p className="text-xs text-white/40 line-through sm:text-sm">{product.compareAtPrice}</p>
-                ) : null}
-              </div>
-              <p className="text-xs text-white/45">{dosePreview?.label ?? "Verified lot"}</p>
-            </div>
-            <span className="hidden shrink-0 border border-white/15 px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-white/50 min-[420px]:inline-block">COA Verified</span>
+          <div className="mt-3 flex items-baseline gap-x-2">
+            <p className="text-lg text-white sm:text-xl">{product.salePrice ?? product.price}</p>
+            {product.salePrice && product.compareAtPrice ? (
+              <p className="text-xs text-white/40 line-through sm:text-sm">{product.compareAtPrice}</p>
+            ) : null}
           </div>
+          <p className="mt-1 text-xs text-white/45">{dosePreview?.label ?? "Verified lot"} · Batch tested</p>
         </div>
       </Link>
 
