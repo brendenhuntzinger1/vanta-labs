@@ -68,6 +68,8 @@ type CartContextValue = {
   storeCreditApplied: number;
   storeCreditBalanceCents: number;
   storeCreditMinOrderCents: number;
+  ambassadorWalletBalanceCents: number;
+  ambassadorCreditApplied: number;
   bulkSavingsPercent: number;
   bulkSavingsProgress: { nextPercent: number; amountRemaining: number } | null;
   totalQuantity: number;
@@ -180,6 +182,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // discount they get on their own orders (mirrors the server so the displayed
   // total, which manual-pay customers actually send, is correct).
   const [ambassadorDiscountPercent, setAmbassadorDiscountPercent] = useState(0);
+  // Non-expiring ambassador store-credit wallet balance (cents), spendable at
+  // checkout — mirrored here so the displayed total matches the server.
+  const [ambassadorWalletBalanceCents, setAmbassadorWalletBalanceCents] = useState(0);
 
   useEffect(() => {
     (async () => {
@@ -199,6 +204,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           storeCreditBalanceCents?: number;
           storeCreditMinOrderCents?: number;
           ambassadorDiscountPercent?: number;
+          ambassadorWalletBalanceCents?: number;
         };
         if (!result.success) return;
         setIsSignedIn(true);
@@ -211,6 +217,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         setStoreCreditBalanceCents(Number(result.storeCreditBalanceCents ?? 0) || 0);
         setStoreCreditMinOrderCents(Number(result.storeCreditMinOrderCents ?? 0) || 0);
         setAmbassadorDiscountPercent(Number(result.ambassadorDiscountPercent ?? 0) || 0);
+        setAmbassadorWalletBalanceCents(Number(result.ambassadorWalletBalanceCents ?? 0) || 0);
         if (result.email) setKnownEmail(result.email);
         if (result.fullName) setCustomerName(result.fullName);
       } catch {
@@ -610,15 +617,25 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const totalAfterCredit = Math.max(0, totalBeforePoints - storeCreditApplied);
 
+  // Non-expiring ambassador wallet applies after membership store credit and
+  // before points, and never with a referral — mirrors payment-service.ts.
+  const ambassadorCreditApplied = useMemo(() => {
+    if (referralDetails) return 0;
+    if (ambassadorWalletBalanceCents <= 0) return 0;
+    return Math.min(ambassadorWalletBalanceCents / 100, totalAfterCredit);
+  }, [referralDetails, ambassadorWalletBalanceCents, totalAfterCredit]);
+
+  const totalAfterAmbassadorCredit = Math.max(0, totalAfterCredit - ambassadorCreditApplied);
+
   // Referral codes are exclusive of every other discount, including
   // redeemed loyalty points - mirrors the server-side rule in
   // payment-service.ts.
   const pointsRedeemedDiscount = useMemo(
-    () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalAfterCredit)),
-    [referralDetails, pointsToRedeem, totalAfterCredit],
+    () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalAfterAmbassadorCredit)),
+    [referralDetails, pointsToRedeem, totalAfterAmbassadorCredit],
   );
 
-  const total = Math.max(0, totalAfterCredit - pointsRedeemedDiscount);
+  const total = Math.max(0, totalAfterAmbassadorCredit - pointsRedeemedDiscount);
 
   const setPointsToRedeem = (points: number) => {
     const clamped = Math.max(0, Math.min(Math.floor(points), pointsBalance));
@@ -969,6 +986,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     storeCreditApplied,
     storeCreditBalanceCents,
     storeCreditMinOrderCents,
+    ambassadorWalletBalanceCents,
+    ambassadorCreditApplied,
     bulkSavingsPercent: bulkSavingsResult.percent,
     bulkSavingsProgress,
     totalQuantity,

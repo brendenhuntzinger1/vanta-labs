@@ -10,7 +10,8 @@ import {
   referralCodeAssignedTemplate,
 } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
-import { DEFAULT_COMMISSION_PERCENT, DEFAULT_MONTHLY_POST_REQUIREMENT } from "@/lib/referral-config";
+import { DEFAULT_COMMISSION_PERCENT, DEFAULT_MONTHLY_POST_REQUIREMENT, DEFAULT_STORE_CREDIT_MULTIPLIER_PERCENT } from "@/lib/referral-config";
+import { grantAmbassadorCredit, getAmbassadorWalletBalanceCents, getAmbassadorWalletHistory } from "@/lib/ambassador-wallet";
 import { getBusinessSettings } from "@/lib/admin-control";
 import { getAmbassadorProgramSettings, getAmbassadorMarketingResources, type AmbassadorMarketingResource } from "@/lib/ambassador-settings";
 
@@ -73,6 +74,10 @@ export interface PartnerSummary {
   accountStatus: string;
   payoutHistory: Array<{ id: string; amount: number; note: string | null; createdAt: string }>;
   monthlyPostRequirement: number;
+  payoutMethod: "cash" | "store_credit";
+  walletBalanceCents: number;
+  walletHistory: Array<{ id: string; amountCents: number; reason: string; note: string | null; createdAt: string }>;
+  storeCreditMultiplierPercent: number;
 }
 
 export interface AdminPartnerRow {
@@ -305,6 +310,29 @@ function toDateLabel(dateIso: string) {
     day: "numeric",
     timeZone: "UTC",
   });
+}
+
+// Set an approved ambassador's payout preference. Updates both the canonical
+// partners row and the ambassadors mirror. Returns the applied method.
+export async function setPartnerPayoutMethod(authUserId: string, method: "cash" | "store_credit"): Promise<"cash" | "store_credit"> {
+  const normalized = method === "store_credit" ? "store_credit" : "cash";
+  const partner = await getApprovedPartnerByAuthUserId(authUserId);
+  if (!partner) {
+    throw new Error("No approved ambassador account for this user");
+  }
+
+  const now = new Date().toISOString();
+  const { error } = await supabaseAdmin
+    .from("partners")
+    .update({ payout_method: normalized, updated_at: now })
+    .eq("id", partner.id);
+  if (error) {
+    throw error;
+  }
+  // Mirror to the legacy ambassadors table; ignore if the column/table is absent.
+  await supabaseAdmin.from("ambassadors").update({ payout_method: normalized, updated_at: now }).eq("id", partner.id);
+
+  return normalized;
 }
 
 export async function getApprovedPartnerByAuthUserId(userId: string) {
@@ -586,7 +614,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   const [{ data: partner, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }, { data: payoutRows, error: payoutError }] = await Promise.all([
     supabaseAdmin
       .from("partners")
-      .select("id, name, referral_code, commission_percent, status")
+      .select("id, name, referral_code, commission_percent, status, auth_user_id, payout_method")
       .eq("id", partnerId)
       .single(),
     supabaseAdmin
@@ -675,6 +703,11 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
 
   const marketingResources = await getAmbassadorMarketingResources().catch(() => []);
   const programSettings = await getAmbassadorProgramSettings().catch(() => null);
+  const walletUserId = partner.auth_user_id ? String(partner.auth_user_id) : "";
+  const [walletBalanceCents, walletEntries] = await Promise.all([
+    walletUserId ? getAmbassadorWalletBalanceCents(walletUserId).catch(() => 0) : Promise.resolve(0),
+    walletUserId ? getAmbassadorWalletHistory(walletUserId, 50).catch(() => []) : Promise.resolve([]),
+  ]);
 
   return {
     partnerId: partner.id,
@@ -704,6 +737,16 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
       createdAt: String(row.created_at),
     })),
     monthlyPostRequirement: programSettings?.monthlyPostRequirement ?? DEFAULT_MONTHLY_POST_REQUIREMENT,
+    payoutMethod: partner.payout_method === "store_credit" ? "store_credit" : "cash",
+    storeCreditMultiplierPercent: programSettings?.storeCreditMultiplierPercent ?? DEFAULT_STORE_CREDIT_MULTIPLIER_PERCENT,
+    walletBalanceCents,
+    walletHistory: walletEntries.map((entry) => ({
+      id: entry.id,
+      amountCents: entry.amountCents,
+      reason: entry.reason,
+      note: entry.note,
+      createdAt: entry.createdAt,
+    })),
   };
 }
 
@@ -1282,6 +1325,32 @@ export async function markCommissionsPaid(input: {
     assertNoSupabaseError("commissions.update(mark paid mirror)", commissionMirrorError);
   }
 
+  // Honor the ambassador's payout preference: cash (default) or store credit
+  // worth the configured multiplier (e.g. 125%). When store credit is chosen we
+  // grant a non-expiring wallet credit; the payout row still records the cash
+  // basis for accounting, annotated with the credit granted.
+  const { data: partnerRow } = await supabaseAdmin
+    .from("partners")
+    .select("auth_user_id, payout_method")
+    .eq("id", input.partnerId)
+    .maybeSingle();
+  const payoutMethod = String(partnerRow?.payout_method ?? "cash");
+  const baseAmount = roundMoney(input.amount);
+  let payoutNote = input.note ?? null;
+
+  if (payoutMethod === "store_credit" && partnerRow?.auth_user_id) {
+    const settings = await getAmbassadorProgramSettings();
+    const creditCents = Math.round(baseAmount * 100 * (settings.storeCreditMultiplierPercent / 100));
+    await grantAmbassadorCredit({
+      userId: String(partnerRow.auth_user_id),
+      amountCents: creditCents,
+      reason: "payout",
+      note: `Payout basis $${baseAmount.toFixed(2)} taken as store credit @ ${settings.storeCreditMultiplierPercent}%`,
+      createdBy: input.actorUsername ?? null,
+    });
+    payoutNote = `${payoutNote ? `${payoutNote} — ` : ""}Paid as store credit: $${(creditCents / 100).toFixed(2)} (${settings.storeCreditMultiplierPercent}% of $${baseAmount.toFixed(2)})`;
+  }
+
   const payoutId = randomUUID();
 
   const { error: payoutError } = await supabaseAdmin
@@ -1289,8 +1358,8 @@ export async function markCommissionsPaid(input: {
     .insert({
       id: payoutId,
       ambassador_id: input.partnerId,
-      amount: roundMoney(input.amount),
-      note: input.note ?? null,
+      amount: baseAmount,
+      note: payoutNote,
       processed_by: input.actorUserId ?? null,
     });
 
@@ -1303,8 +1372,8 @@ export async function markCommissionsPaid(input: {
     .insert({
       id: payoutId,
       partner_id: input.partnerId,
-      amount: roundMoney(input.amount),
-      note: input.note ?? null,
+      amount: baseAmount,
+      note: payoutNote,
       processed_by: input.actorUserId ?? null,
     });
 

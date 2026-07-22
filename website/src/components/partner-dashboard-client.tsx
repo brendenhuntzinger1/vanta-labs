@@ -15,6 +15,33 @@ async function copyText(value: string) {
 export function PartnerDashboardClient({ summary }: { summary: PartnerSummary }) {
   const [liveSummary, setLiveSummary] = useState(summary);
   const [copied, setCopied] = useState(false);
+  const [savingPayout, setSavingPayout] = useState(false);
+  const [payoutMessage, setPayoutMessage] = useState<string | null>(null);
+
+  const updatePayoutMethod = async (method: "cash" | "store_credit") => {
+    if (savingPayout || liveSummary.payoutMethod === method) return;
+    setSavingPayout(true);
+    setPayoutMessage(null);
+    // Optimistic: reflect the choice immediately, revert on failure.
+    setLiveSummary((prev) => ({ ...prev, payoutMethod: method }));
+    try {
+      const response = await fetch("/api/partner/payout-method", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ method }),
+      });
+      const json = await response.json();
+      if (!response.ok || !json.success) {
+        throw new Error(json.error ?? "Unable to update");
+      }
+      setPayoutMessage("Saved");
+    } catch {
+      setLiveSummary((prev) => ({ ...prev, payoutMethod: method === "cash" ? "store_credit" : "cash" }));
+      setPayoutMessage("Couldn't save — try again");
+    } finally {
+      setSavingPayout(false);
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -174,6 +201,61 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
           </div>
         ) : (
           <p className="text-sm text-zinc-500">No payouts yet. Commissions are held for 14 days, then paid out on a biweekly basis.</p>
+        )}
+      </section>
+
+      <section className="vl-panel rounded-2xl p-4 sm:p-5">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Payout &amp; Store Credit</h2>
+          <span className="text-sm text-zinc-300">Store credit balance: <span className="font-semibold text-emerald-300">{currency(liveSummary.walletBalanceCents / 100)}</span></span>
+        </div>
+        <p className="mt-1 text-xs text-zinc-500">Choose how you get paid. Store credit is worth <span className="font-semibold text-zinc-300">{liveSummary.storeCreditMultiplierPercent}%</span> of your cash commission and never expires — spend it at checkout on your own orders.</p>
+
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={savingPayout}
+            onClick={() => updatePayoutMethod("cash")}
+            className={`vl-focus-ring rounded-lg px-4 py-2 text-sm ${liveSummary.payoutMethod === "cash" ? "bg-cyan-300 font-semibold text-zinc-950" : "border border-zinc-700 text-zinc-200"}`}
+          >
+            Cash payout
+          </button>
+          <button
+            type="button"
+            disabled={savingPayout}
+            onClick={() => updatePayoutMethod("store_credit")}
+            className={`vl-focus-ring rounded-lg px-4 py-2 text-sm ${liveSummary.payoutMethod === "store_credit" ? "bg-cyan-300 font-semibold text-zinc-950" : "border border-zinc-700 text-zinc-200"}`}
+          >
+            Store credit ({liveSummary.storeCreditMultiplierPercent}%)
+          </button>
+          {payoutMessage ? <span className="self-center text-xs text-emerald-300">{payoutMessage}</span> : null}
+        </div>
+
+        {liveSummary.walletHistory.length > 0 ? (
+          <div className="mt-4 overflow-x-auto">
+            <table className="w-full min-w-[420px] text-left text-xs">
+              <thead className="text-zinc-500">
+                <tr>
+                  <th className="px-2 py-2">Date</th>
+                  <th className="px-2 py-2">Type</th>
+                  <th className="px-2 py-2">Amount</th>
+                  <th className="px-2 py-2">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {liveSummary.walletHistory.map((row) => (
+                  <tr key={row.id} className="border-t border-zinc-800/70 text-zinc-200">
+                    <td className="px-2 py-2">{new Date(row.createdAt).toLocaleDateString()}</td>
+                    <td className="px-2 py-2 capitalize">{row.reason.replace(/_/g, " ")}</td>
+                    <td className={`px-2 py-2 ${row.amountCents < 0 ? "text-zinc-400" : "text-emerald-300"}`}>{row.amountCents < 0 ? "-" : "+"}{currency(Math.abs(row.amountCents) / 100)}</td>
+                    <td className="px-2 py-2">{row.note ?? "-"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="mt-3 text-sm text-zinc-500">No store-credit activity yet.</p>
         )}
       </section>
 

@@ -157,6 +157,7 @@ export default function CheckoutPage() {
     bulkSavingsTierReached,
     memberFreeShipping,
     storeCreditBalanceCents,
+    ambassadorWalletBalanceCents,
     storeCreditMinOrderCents,
     taxAmount,
     shippingConfig,
@@ -221,7 +222,15 @@ export default function CheckoutPage() {
     if (Math.round(subtotal * 100) < storeCreditMinOrderCents) return 0;
     return Math.min(storeCreditBalanceCents / 100, totalBeforeCredit);
   }, [referralDetails, storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforeCredit]);
-  const totalBeforePoints = Math.max(0, totalBeforeCredit - storeCreditApplied);
+  const totalAfterMemberCredit = Math.max(0, totalBeforeCredit - storeCreditApplied);
+  // Non-expiring ambassador wallet — mirrors payment-service.ts (after member
+  // store credit, before points, never with a referral).
+  const ambassadorCreditApplied = useMemo(() => {
+    if (referralDetails) return 0;
+    if (ambassadorWalletBalanceCents <= 0) return 0;
+    return Math.min(ambassadorWalletBalanceCents / 100, totalAfterMemberCredit);
+  }, [referralDetails, ambassadorWalletBalanceCents, totalAfterMemberCredit]);
+  const totalBeforePoints = Math.max(0, totalAfterMemberCredit - ambassadorCreditApplied);
   const pointsRedeemedDiscount = useMemo(
     () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints)),
     [referralDetails, pointsToRedeem, totalBeforePoints],
@@ -825,6 +834,9 @@ export default function CheckoutPage() {
               <div className="flex justify-between"><span>Discount</span><span>-{formatCartCurrency(discountAmount)}</span></div>
               {storeCreditApplied > 0 ? (
                 <div className="flex justify-between text-emerald-300"><span>Member store credit</span><span>-{formatCartCurrency(storeCreditApplied)}</span></div>
+              ) : null}
+              {ambassadorCreditApplied > 0 ? (
+                <div className="flex justify-between text-emerald-300"><span>Ambassador store credit</span><span>-{formatCartCurrency(ambassadorCreditApplied)}</span></div>
               ) : null}
               {pointsRedeemedDiscount > 0 ? (
                 <div className="flex justify-between"><span>Points redeemed</span><span>-{formatCartCurrency(pointsRedeemedDiscount)}</span></div>

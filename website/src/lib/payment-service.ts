@@ -8,6 +8,7 @@ import { getMembershipPerks, getPointsBalance, isEligibleForBulkSavings, isPrior
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getApprovedPartnerByAuthUserId } from "@/lib/partner-portal";
+import { getAmbassadorWalletBalanceCents } from "@/lib/ambassador-wallet";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee, calculateTax } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
@@ -398,6 +399,20 @@ export async function createCheckoutSession(
  const storeCreditDiscount = roundMoney(storeCreditRedeemedCents / 100);
  const totalAfterCredit = roundMoney(Math.max(0, totalBeforePoints - storeCreditDiscount));
 
+ // Ambassador store-credit wallet (non-expiring, earned money). Applies for an
+ // approved ambassador buying on their own account, after membership store
+ // credit and before points, and never with a referral (referral is exclusive).
+ // Only ever lowers the total, so it's safe past the underpayment tripwire.
+ let ambassadorCreditRedeemedCents = 0;
+ if (!referral && ambassadorSelf && payload.customerUserId) {
+   const walletBalance = await getAmbassadorWalletBalanceCents(payload.customerUserId);
+   if (walletBalance > 0) {
+     ambassadorCreditRedeemedCents = Math.max(0, Math.min(walletBalance, Math.round(totalAfterCredit * 100)));
+   }
+ }
+ const ambassadorCreditDiscount = roundMoney(ambassadorCreditRedeemedCents / 100);
+ const totalAfterAmbassadorCredit = roundMoney(Math.max(0, totalAfterCredit - ambassadorCreditDiscount));
+
  // Points redemption stacks with a coupon or Buy 3 Get 1 Free (it behaves
  // like store credit, not a promo code) but never with a referral code -
  // referral codes are exclusive of every other discount, so redemption is
@@ -411,11 +426,11 @@ export async function createCheckoutSession(
  const balance = await getPointsBalance(payload.customerUserId);
  const requestedPoints = Math.min(Math.floor(payload.pointsToRedeem), balance);
  const requestedDollars = pointsToDollars(requestedPoints);
- pointsDiscountAmount = roundMoney(Math.min(requestedDollars, totalAfterCredit));
+ pointsDiscountAmount = roundMoney(Math.min(requestedDollars, totalAfterAmbassadorCredit));
  pointsRedeemed = dollarsToPoints(pointsDiscountAmount);
  }
 
- const expectedTotal = roundMoney(Math.max(0, totalAfterCredit - pointsDiscountAmount));
+ const expectedTotal = roundMoney(Math.max(0, totalAfterAmbassadorCredit - pointsDiscountAmount));
 
  // The guard only blocks UNDERpayment (a client trying to pay less than the
  // real total). Membership perks are applied authoritatively on the server
@@ -483,6 +498,7 @@ export async function createCheckoutSession(
    customer_user_id: payload.customerUserId ?? null,
    points_redeemed: pointsRedeemed,
    store_credit_redeemed_cents: storeCreditRedeemedCents,
+   ambassador_credit_redeemed_cents: ambassadorCreditRedeemedCents,
    payment_status: "pending_payment",
    fulfillment_status: "pending",
    created_at: new Date().toISOString(),

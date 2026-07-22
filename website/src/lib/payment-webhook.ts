@@ -8,6 +8,7 @@ import { getSiteUrl } from "@/lib/env";
 import { redeemCoupon } from "@/lib/coupons";
 import { calculateEarnedPoints, getActivePointsMultiplier, getActivePointsPerDollar, recordPointsLedgerEntry, reverseOrderPoints } from "@/lib/membership";
 import { redeemStoreCredit, refundStoreCreditForOrder } from "@/lib/store-credit";
+import { redeemAmbassadorCredit, refundAmbassadorRedemption } from "@/lib/ambassador-wallet";
 import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
@@ -192,7 +193,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, amount_paid, paid_at, customer_user_id, points_redeemed, store_credit_redeemed_cents")
+    .select("id, order_id, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, amount_paid, paid_at, customer_user_id, points_redeemed, store_credit_redeemed_cents, ambassador_credit_redeemed_cents")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -753,6 +754,11 @@ export async function finalizeManualPayment(
         await redeemStoreCredit(customerUserId, storeCreditRedeemedCents, orderId);
       }
 
+      const ambassadorCreditRedeemedCents = Number(order.ambassador_credit_redeemed_cents ?? 0);
+      if (ambassadorCreditRedeemedCents > 0) {
+        await redeemAmbassadorCredit(customerUserId, ambassadorCreditRedeemedCents, orderId);
+      }
+
       const pointsRate = await getActivePointsPerDollar(customerUserId);
       const { multiplier } = await getActivePointsMultiplier();
       const pointsEarned = calculateEarnedPoints(commissionableSubtotal, pointsRate, multiplier);
@@ -927,6 +933,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           await redeemStoreCredit(customerUserId, storeCreditRedeemedCents, orderId);
         }
 
+        const ambassadorCreditRedeemedCents = Number(orderRecord?.ambassador_credit_redeemed_cents ?? 0);
+        if (ambassadorCreditRedeemedCents > 0) {
+          await redeemAmbassadorCredit(customerUserId, ambassadorCreditRedeemedCents, orderId);
+        }
+
         const pointsRate = await getActivePointsPerDollar(customerUserId);
         const { multiplier } = await getActivePointsMultiplier();
         const pointsEarned = calculateEarnedPoints(commissionableSubtotal, pointsRate, multiplier);
@@ -986,6 +997,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         await refundStoreCreditForOrder(orderId);
       } catch (creditError) {
         console.error("Unable to return store credit for order", orderId, creditError);
+      }
+      try {
+        await refundAmbassadorRedemption(orderId);
+      } catch (walletError) {
+        console.error("Unable to return ambassador wallet credit for order", orderId, walletError);
       }
     }
 

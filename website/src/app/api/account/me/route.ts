@@ -5,6 +5,7 @@ import { getDefaultCustomerAddress } from "@/lib/customer-account";
 import { getActivePointsMultiplier, getCustomerMembership, getMembershipPerks, getPointsBalance, isEligibleForBulkSavings } from "@/lib/membership";
 import { getApprovedPartnerByAuthUserId } from "@/lib/partner-portal";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import { getAmbassadorWalletBalanceCents } from "@/lib/ambassador-wallet";
 
 export async function GET() {
   const user = await getAuthenticatedUser();
@@ -27,6 +28,10 @@ export async function GET() {
 
   // Approved ambassadors get this discount on their own orders (0 otherwise).
   const ambassadorDiscountPercent = approvedPartner ? (ambassadorSettings?.ambassadorDiscountPercent ?? 0) : 0;
+  // Non-expiring ambassador store-credit wallet balance, spendable at checkout.
+  const ambassadorWalletBalanceCents = approvedPartner
+    ? await getAmbassadorWalletBalanceCents(user.id).catch(() => 0)
+    : 0;
 
   return NextResponse.json({
     success: true,
@@ -52,5 +57,6 @@ export async function GET() {
     storeCreditBalanceCents: perks.storeCreditBalanceCents,
     storeCreditMinOrderCents: perks.storeCreditMinOrderCents,
     ambassadorDiscountPercent,
+    ambassadorWalletBalanceCents,
   });
 }
