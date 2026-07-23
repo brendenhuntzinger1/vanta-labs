@@ -6,7 +6,7 @@ import { sendEmail } from "@/lib/email/send";
 import { commissionEarnedTemplate, orderConfirmationTemplate } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
 import { redeemCoupon } from "@/lib/coupons";
-import { calculateEarnedPoints, getActivePointsMultiplier, getActivePointsPerDollar, recordPointsLedgerEntry, restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
+import { calculateEarnedPoints, getActivePointsMultiplier, getActivePointsPerDollar, recordPointsLedgerEntry, redeemPoints, restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
 import { redeemStoreCredit, refundStoreCreditForOrder } from "@/lib/store-credit";
 import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
@@ -194,7 +194,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_type, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, amount_paid, paid_at, customer_user_id, points_redeemed, store_credit_redeemed_cents")
+    .select("id, order_id, order_type, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, amount_paid, paid_at, customer_user_id, points_redeemed, store_credit_redeemed_cents")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -765,7 +765,7 @@ export async function finalizeManualPayment(
     try {
       const pointsRedeemed = Number(order.points_redeemed ?? 0);
       if (pointsRedeemed > 0) {
-        await recordPointsLedgerEntry({ userId: customerUserId, amount: -pointsRedeemed, reason: "redeem", orderId });
+        await redeemPoints(customerUserId, pointsRedeemed, orderId);
       }
 
       const storeCreditRedeemedCents = Number(order.store_credit_redeemed_cents ?? 0);
@@ -876,11 +876,83 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     } satisfies WebhookEventState;
   }
 
-  const subtotal = roundMoney(eventPayload.subtotal ?? 0);
-  const shippingAmount = roundMoney(eventPayload.shippingAmount ?? 0);
-  const discountAmount = roundMoney(eventPayload.discountAmount ?? 0);
-  const amountPaid = roundMoney(eventPayload.amount ?? 0);
+  // A late/out-of-order payment.failed or payment.canceled must NOT demote an
+  // order that is already PAID — that would void the ambassador's earned
+  // commission and restock sold inventory. Only a genuine refund/chargeback
+  // (nextStatus "refunded") may leave the paid state. Record against paid + stop.
+  if (priorPaymentStatus === "paid" && (nextStatus === "payment_failed" || nextStatus === "canceled")) {
+    await markEventProcessed(eventId, orderId, "paid");
+    return {
+      duplicate: false,
+      eventId,
+      orderId,
+      status: "paid",
+      providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
+    } satisfies WebhookEventState;
+  }
+
+  // Repeated refund/chargeback events for the same order (distinct event_ids —
+  // e.g. refund.completed then chargeback.lost — so not caught by the claim
+  // dedup) must not re-run refund side-effects (double restock, double points/
+  // store-credit reversal). If already in a refund-terminal state, record + stop.
+  if (
+    (nextStatus === "refunded" || nextStatus === "canceled" || nextStatus === "payment_failed") &&
+    priorPaymentStatus &&
+    REFUND_TERMINAL_STATES.has(priorPaymentStatus)
+  ) {
+    await markEventProcessed(eventId, orderId, priorPaymentStatus as OrderStatus);
+    return {
+      duplicate: false,
+      eventId,
+      orderId,
+      status: priorPaymentStatus as OrderStatus,
+      providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
+    } satisfies WebhookEventState;
+  }
+
+  // Money fields are DB-authoritative: they were computed and persisted at
+  // checkout, so we trust the stored order over the webhook event payload (a
+  // real processor's callback may omit them, which would otherwise zero the
+  // recorded revenue and the ambassador commission). Fall back to the payload
+  // only for a brand-new webhook-created order that has no prior row.
+  const subtotal = roundMoney(Number(orderRecord?.subtotal ?? eventPayload.subtotal ?? 0));
+  const shippingAmount = roundMoney(Number(orderRecord?.shipping_amount ?? eventPayload.shippingAmount ?? 0));
+  const discountAmount = roundMoney(Number(orderRecord?.discount_amount ?? eventPayload.discountAmount ?? 0));
+  const amountPaid = roundMoney(Number(orderRecord?.amount_paid ?? eventPayload.amount ?? 0));
   const commissionableSubtotal = roundMoney(Math.max(0, subtotal - discountAmount));
+  const effectiveCouponCode = orderRecord?.coupon_code ? String(orderRecord.coupon_code) : eventPayload.couponCode;
+
+  // Atomic paid-claim (H1): exactly one webhook event may flip a not-yet-paid
+  // order to "paid" and therefore run the paid side-effects below. A concurrent
+  // SECOND distinct success event (different event_id, so not caught by the
+  // event-claim dedup) updates zero rows here and skips the side-effects,
+  // preventing double commission / points / coupon redemption / confirmation
+  // email / inventory decrement / 3PL transmit. Mirrors finalizeManualPayment.
+  let wonPaidClaim = false;
+  if (nextStatus === "paid") {
+    if (!orderRecord) {
+      wonPaidClaim = true; // first time we've seen this order
+    } else {
+      const nowIso = new Date().toISOString();
+      const { data: claimed, error: claimError } = await supabaseAdmin
+        .from("orders")
+        .update({
+          payment_status: "paid",
+          fulfillment_status: "awaiting_fulfillment",
+          paid_at: nowIso,
+          payment_id: eventPayload.paymentId ?? orderRecord.payment_id ?? null,
+          provider_event_id: eventId,
+          updated_at: nowIso,
+        })
+        .eq("order_id", orderId)
+        .neq("payment_status", "paid")
+        .select("id");
+      if (claimError) {
+        throw claimError;
+      }
+      wonPaidClaim = Boolean(claimed && claimed.length > 0);
+    }
+  }
 
   await upsertOrderRecord({
     orderId,
@@ -940,13 +1012,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       ambassadorId: eventPayload.ambassadorId,
     });
 
-    const wasAlreadyPaid = orderRecord?.payment_status === "paid";
-
-    if (!wasAlreadyPaid && eventPayload.couponCode) {
-      await redeemCoupon(eventPayload.couponCode);
+    if (wonPaidClaim && effectiveCouponCode) {
+      await redeemCoupon(effectiveCouponCode);
     }
 
-    if (!wasAlreadyPaid && eventPayload.customer?.email) {
+    if (wonPaidClaim && eventPayload.customer?.email) {
       try {
         await markAbandonedCartsRecovered(eventPayload.customer.email, orderId);
       } catch (recoveryError) {
@@ -955,16 +1025,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     }
 
     const customerUserId = eventPayload.customerUserId ?? orderRecord?.customer_user_id ?? null;
-    if (!wasAlreadyPaid && customerUserId) {
+    if (wonPaidClaim && customerUserId) {
       try {
-        const pointsRedeemed = Number(eventPayload.pointsRedeemed ?? orderRecord?.points_redeemed ?? 0);
+        const pointsRedeemed = Number(orderRecord?.points_redeemed ?? eventPayload.pointsRedeemed ?? 0);
         if (pointsRedeemed > 0) {
-          await recordPointsLedgerEntry({
-            userId: customerUserId,
-            amount: -pointsRedeemed,
-            reason: "redeem",
-            orderId,
-          });
+          await redeemPoints(customerUserId, pointsRedeemed, orderId);
         }
 
         const storeCreditRedeemedCents = Number(orderRecord?.store_credit_redeemed_cents ?? 0);
@@ -991,7 +1056,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       }
     }
 
-    if (!wasAlreadyPaid && eventPayload.customer?.email) {
+    if (wonPaidClaim && eventPayload.customer?.email) {
       try {
         const template = orderConfirmationTemplate({
           customerName: eventPayload.customer.fullName ?? "",
@@ -1015,14 +1080,14 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // Commit stock exactly once, on the first paid transition. Membership
     // orders are digital and hold no inventory, so they are skipped.
     const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
-    if (!wasAlreadyPaid && !isMembershipOrder) {
+    if (wonPaidClaim && !isMembershipOrder) {
       await decrementInventoryForOrder(
         (eventPayload.items ?? []).map((item) => ({ product_id: item.productId, quantity: item.quantity })),
       );
     }
 
     // Auto-transmit newly-paid card orders to the 3PL (best-effort).
-    if (!wasAlreadyPaid) {
+    if (wonPaidClaim) {
       await transmitOrderToFulfillment(orderId);
     }
   }
