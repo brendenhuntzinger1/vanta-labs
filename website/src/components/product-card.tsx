@@ -75,7 +75,26 @@ export function ProductCard({
               <p className="text-xs text-white/40 line-through sm:text-sm">{product.compareAtPrice}</p>
             ) : null}
           </div>
-          <p className="mt-1 text-xs text-white/45">{dosePreview?.label ?? "Verified lot"} · Batch tested</p>
+          {/* Trust badges — data-driven, so they only appear when the real
+              purity / COA / batch data is entered in Admin (no fabricated claims). */}
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] leading-none">
+            {product.purityResult ? (
+              <span className="border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-1 text-emerald-300">
+                {product.purityResult.includes("%") ? product.purityResult : `${product.purityResult} pure`}
+              </span>
+            ) : null}
+            {product.coaUrl ? (
+              <span className="border border-sky-400/30 bg-sky-400/10 px-1.5 py-1 text-sky-300">
+                COA verified
+              </span>
+            ) : null}
+            {product.batchNumber ? (
+              <span className="border border-white/15 px-1.5 py-1 text-white/50">
+                Batch {product.batchNumber}
+              </span>
+            ) : null}
+            <span className="text-white/40">{dosePreview?.label ?? "Verified lot"}</span>
+          </div>
         </div>
       </Link>
 
