@@ -612,6 +612,22 @@ alter table if exists public.payment_events
 alter table if exists public.payment_events
   alter column processed_at drop not null;
 
+-- Ambassador payout method (see ambassador-payout-method.sql).
+alter table if exists public.partners
+  add column if not exists payout_method text,
+  add column if not exists payout_handle text,
+  add column if not exists payout_updated_at timestamptz;
+alter table if exists public.ambassadors
+  add column if not exists payout_method text,
+  add column if not exists payout_handle text,
+  add column if not exists payout_updated_at timestamptz;
+alter table if exists public.partner_payouts
+  add column if not exists payout_method text,
+  add column if not exists payout_handle text;
+alter table if exists public.payouts
+  add column if not exists payout_method text,
+  add column if not exists payout_handle text;
+
 alter table if exists public.ambassadors
   add column if not exists commission_percent_locked boolean not null default false,
   add column if not exists updated_at timestamptz not null default now();

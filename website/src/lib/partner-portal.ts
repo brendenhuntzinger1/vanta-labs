@@ -6,6 +6,7 @@ import {
   ambassadorApplicationReceivedTemplate,
   ambassadorApprovedTemplate,
   ambassadorDeniedTemplate,
+  ambassadorPayoutSentTemplate,
   newAmbassadorApplicationTemplate,
   referralCodeAssignedTemplate,
 } from "@/lib/email/templates";
@@ -49,7 +50,11 @@ export interface PartnerSummary {
   commissionPercent: number;
   totalEarnings: number;
   pendingCommissions: number;
+  pendingOnlyCommissions: number;
+  approvedCommissions: number;
   paidCommissions: number;
+  payoutMethod: string | null;
+  payoutHandle: string | null;
   totalOrders: number;
   averageOrderValue: number;
   returningCustomerRate: number;
@@ -175,14 +180,28 @@ async function sendPartnerStatusEmail(input: {
   name: string;
   status: "approved" | "rejected";
   referralCode?: string;
+  commissionPercent?: number;
 }) {
-  const template = input.status === "approved"
-    ? ambassadorApprovedTemplate({
-        name: input.name,
-        referralCode: input.referralCode,
-        dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
-      })
-    : ambassadorDeniedTemplate({ name: input.name });
+  let template;
+  if (input.status === "approved") {
+    // Enrich the approval email with the live program terms so the ambassador
+    // gets the full onboarding: their rates, the 14-day hold, biweekly payouts.
+    const [referralProgram, ambassadorSettings] = await Promise.all([
+      getReferralProgramConfig().catch(() => null),
+      getAmbassadorProgramSettings().catch(() => null),
+    ]);
+    template = ambassadorApprovedTemplate({
+      name: input.name,
+      referralCode: input.referralCode,
+      dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
+      commissionPercent: input.commissionPercent ?? referralProgram?.defaultCommissionPercent,
+      personalDiscountPercent: referralProgram?.personalDiscountPercent,
+      referralDiscountPercent: referralProgram?.discountPercent,
+      holdDays: ambassadorSettings?.commissionHoldDays,
+    });
+  } else {
+    template = ambassadorDeniedTemplate({ name: input.name });
+  }
 
   const result = await sendEmail({ to: input.to, ...template });
   return result.success;
@@ -600,11 +619,54 @@ function buildLifetimeSeries(orderRows: Array<{ created_at: string; amount_paid:
   return allPoints.filter((_, index) => index % step === 0 || index === allPoints.length - 1);
 }
 
+// How the business pays an ambassador (not a customer payment method).
+export const AMBASSADOR_PAYOUT_METHODS = ["paypal", "venmo", "cashapp"] as const;
+export type AmbassadorPayoutMethod = (typeof AMBASSADOR_PAYOUT_METHODS)[number];
+
+export const AMBASSADOR_PAYOUT_METHOD_LABELS: Record<AmbassadorPayoutMethod, string> = {
+  paypal: "PayPal",
+  venmo: "Venmo",
+  cashapp: "Cash App",
+};
+
+export function isValidPayoutMethod(value: string): value is AmbassadorPayoutMethod {
+  return (AMBASSADOR_PAYOUT_METHODS as readonly string[]).includes(value);
+}
+
+// Set/update the signed-in ambassador's preferred payout destination. Validates
+// the method and handle, and mirrors to both partners + ambassadors tables.
+// Keyed by auth_user_id so a user can only ever set their OWN payout info.
+export async function updatePartnerPayoutMethod(authUserId: string, method: string, handle: string): Promise<void> {
+  const normalizedMethod = method.trim().toLowerCase();
+  if (!isValidPayoutMethod(normalizedMethod)) {
+    throw new Error("Choose a valid payout method: PayPal, Venmo, or Cash App.");
+  }
+  const normalizedHandle = handle.trim().slice(0, 200);
+  if (!normalizedHandle) {
+    throw new Error("Enter your payout username, email, or handle.");
+  }
+
+  const now = new Date().toISOString();
+  const payload = {
+    payout_method: normalizedMethod,
+    payout_handle: normalizedHandle,
+    payout_updated_at: now,
+    updated_at: now,
+  };
+
+  const { error } = await supabaseAdmin.from("partners").update(payload).eq("auth_user_id", authUserId);
+  if (error) {
+    throw error;
+  }
+  // Mirror to the ambassadors table (best-effort — never block the save).
+  await supabaseAdmin.from("ambassadors").update(payload).eq("auth_user_id", authUserId).then(() => {}, () => {});
+}
+
 export async function getPartnerSummary(partnerId: string, siteUrl: string): Promise<PartnerSummary> {
   const [{ data: partner, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }, { data: payoutRows, error: payoutError }] = await Promise.all([
     supabaseAdmin
       .from("partners")
-      .select("id, name, referral_code, commission_percent, status")
+      .select("id, name, referral_code, commission_percent, status, payout_method, payout_handle")
       .eq("id", partnerId)
       .single(),
     supabaseAdmin
@@ -654,6 +716,14 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   const pendingCommissions = roundMoney(commissions
     .filter((row) => row.payment_status === "pending" || row.payment_status === "approved_for_payout")
     .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
+  // Pending (still in the 14-day hold) vs Approved (hold cleared, awaiting the
+  // next payout) shown as distinct buckets per the spec.
+  const pendingOnlyCommissions = roundMoney(commissions
+    .filter((row) => row.payment_status === "pending")
+    .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
+  const approvedCommissions = roundMoney(commissions
+    .filter((row) => row.payment_status === "approved_for_payout")
+    .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
   const paidCommissions = roundMoney(commissions
     .filter((row) => row.payment_status === "commission_paid" || row.payment_status === "paid")
     .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
@@ -701,7 +771,11 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     commissionPercent: Number(partner.commission_percent ?? 15),
     totalEarnings,
     pendingCommissions,
+    pendingOnlyCommissions,
+    approvedCommissions,
     paidCommissions,
+    payoutMethod: partner.payout_method ? String(partner.payout_method) : null,
+    payoutHandle: partner.payout_handle ? String(partner.payout_handle) : null,
     totalOrders,
     averageOrderValue,
     returningCustomerRate,
@@ -1026,7 +1100,7 @@ export async function updatePartnerStatus(input: {
 }) {
   const { data: existingPartner, error: partnerLookupError } = await supabaseAdmin
     .from("partners")
-    .select("id, name, email, referral_code")
+    .select("id, name, email, referral_code, commission_percent")
     .eq("id", input.partnerId)
     .maybeSingle();
 
@@ -1129,6 +1203,7 @@ export async function updatePartnerStatus(input: {
         name: existingPartner.name,
         status: input.status,
         referralCode: finalReferralCode,
+        commissionPercent: existingPartner.commission_percent != null ? Number(existingPartner.commission_percent) : undefined,
       });
 
       if (emailSent && queueRowId) {
@@ -1299,6 +1374,16 @@ export async function markCommissionsPaid(input: {
     claimed.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0),
   );
 
+  // Load the ambassador's recorded payout destination so we can stamp it on the
+  // payout record (accounting history) and confirm it in the email.
+  const { data: partner } = await supabaseAdmin
+    .from("partners")
+    .select("name, email, payout_method, payout_handle")
+    .eq("id", input.partnerId)
+    .maybeSingle();
+  const payoutMethod = partner?.payout_method ? String(partner.payout_method) : null;
+  const payoutHandle = partner?.payout_handle ? String(partner.payout_handle) : null;
+
   const { error: commissionMirrorError } = await supabaseAdmin
     .from("commissions")
     .update({ status: "paid", updated_at: new Date().toISOString() })
@@ -1323,6 +1408,8 @@ export async function markCommissionsPaid(input: {
       amount: payoutAmount,
       note: input.note ?? null,
       processed_by: input.actorUserId ?? null,
+      payout_method: payoutMethod,
+      payout_handle: payoutHandle,
     });
 
   if (payoutError) {
@@ -1337,6 +1424,8 @@ export async function markCommissionsPaid(input: {
       amount: payoutAmount,
       note: input.note ?? null,
       processed_by: input.actorUserId ?? null,
+      payout_method: payoutMethod,
+      payout_handle: payoutHandle,
     });
 
   if (payoutsMirrorError) {
@@ -1357,6 +1446,29 @@ export async function markCommissionsPaid(input: {
       userAgent: input.userAgent ?? null,
     },
   });
+
+  // Confirm the payment to the ambassador (best-effort — a failed email must
+  // never undo a completed payout).
+  if (partner?.email) {
+    try {
+      const methodLabel = payoutMethod && isValidPayoutMethod(payoutMethod)
+        ? AMBASSADOR_PAYOUT_METHOD_LABELS[payoutMethod]
+        : (payoutMethod ?? "your chosen method");
+      await sendEmail({
+        to: String(partner.email),
+        ...ambassadorPayoutSentTemplate({
+          name: String(partner.name ?? ""),
+          amount: payoutAmount,
+          method: methodLabel,
+          handle: payoutHandle,
+          orderCount: claimed.length,
+          dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
+        }),
+      });
+    } catch {
+      // Payout already recorded; email is non-critical.
+    }
+  }
 
   return {
     payoutId,

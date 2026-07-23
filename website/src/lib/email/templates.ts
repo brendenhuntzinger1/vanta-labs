@@ -384,28 +384,140 @@ export function ambassadorApplicationReceivedTemplate(input: { name: string }): 
   };
 }
 
-export function ambassadorApprovedTemplate(input: { name: string; referralCode?: string; dashboardUrl: string }): EmailTemplate {
+export function ambassadorApprovedTemplate(input: {
+  name: string;
+  referralCode?: string;
+  dashboardUrl: string;
+  commissionPercent?: number;
+  personalDiscountPercent?: number;
+  referralDiscountPercent?: number;
+  holdDays?: number;
+}): EmailTemplate {
   const name = escapeHtml(input.name);
+  const code = input.referralCode ? escapeHtml(input.referralCode) : null;
+  const commissionPct = Number.isFinite(input.commissionPercent) ? Number(input.commissionPercent) : 15;
+  const personalPct = Number.isFinite(input.personalDiscountPercent) ? Number(input.personalDiscountPercent) : 15;
+  const referralPct = Number.isFinite(input.referralDiscountPercent) ? Number(input.referralDiscountPercent) : 10;
+  const holdDays = Number.isFinite(input.holdDays) ? Number(input.holdDays) : 14;
+
+  const bodyHtml = `
+    <p>Congratulations, ${name} — your application to the Vanta Labs Ambassador Program has been <strong>approved</strong>. Welcome aboard.</p>
+    ${code ? `<p><strong>Your referral code:</strong> ${code} — customers who use it get <strong>${referralPct}% off</strong>.</p>` : ""}
+    <p><strong>Your personal discount:</strong> while you're an approved ambassador you automatically get <strong>${personalPct}% off your own purchases</strong> — just sign in and check out; it applies at the cart, no code needed.</p>
+
+    <p style="margin-top:20px"><strong>Your benefits</strong></p>
+    <ul>
+      <li>${personalPct}% off all of your own purchases (active while approved).</li>
+      <li>A personal referral code that gives your audience ${referralPct}% off.</li>
+      <li>${commissionPct}% commission on every completed order placed with your code.</li>
+      <li>A real-time dashboard: pending, approved, and paid commissions, referral orders, and total earnings.</li>
+      <li>Payouts every two weeks.</li>
+      <li>Opportunities for performance bonuses and a higher commission rate.</li>
+      <li>Early access to new products and promotions.</li>
+    </ul>
+
+    <p style="margin-top:16px"><strong>Your responsibilities</strong></p>
+    <ul>
+      <li>Share Vanta Labs in at least 3 social posts per month.</li>
+      <li>Represent Vanta Labs professionally.</li>
+      <li>Never make medical or human-use claims about research products.</li>
+      <li>Don't advertise in prohibited ways.</li>
+      <li>Keep your referral code active through continued participation.</li>
+      <li>Follow all affiliate program rules.</li>
+    </ul>
+
+    <p style="margin-top:16px"><strong>How commissions work</strong></p>
+    <p>You earn ${commissionPct}% on the merchandise total of each completed order placed with your code. A commission is <em>pending</em> for ${holdDays} days after the order completes (this protects against refunds and chargebacks), then becomes <em>approved</em> and is included in the next payout. Payouts run every two weeks. You'll never be paid on a refunded or cancelled order.</p>
+    <p>Track everything — pending, approved, and paid commissions plus your referral orders — anytime from your dashboard.</p>
+
+    <p style="margin-top:16px"><strong>Getting paid</strong></p>
+    <p>We pay via <strong>PayPal, Venmo, or Cash App</strong>. Open your dashboard to choose your payout method and enter your handle so we can pay you on the next cycle.</p>
+  `;
+
   return {
-    subject: "Your Vanta Labs Ambassador Application Was Approved",
+    subject: "You're approved — welcome to the Vanta Labs Ambassador Program",
     html: renderLayout({
-      preheader: "You're approved. Your dashboard is ready.",
+      preheader: "You're approved. Set your payout method and start sharing.",
       title: `You're approved, ${name}!`,
-      bodyHtml: `
-        <p>Your ambassador application has been approved.</p>
-        ${input.referralCode ? `<p>Your referral code: <strong>${escapeHtml(input.referralCode)}</strong></p>` : ""}
-        <p>Log in to access your dashboard, referral link, commissions, and payouts.</p>
-      `,
-      ctaLabel: "Open Dashboard",
+      bodyHtml,
+      ctaLabel: "Open Your Dashboard",
       ctaUrl: input.dashboardUrl,
     }),
     text: toText([
       `Hi ${input.name},`,
       "",
-      "Your ambassador application has been approved.",
-      input.referralCode ? `Referral code: ${input.referralCode}` : null,
+      "Congratulations — your Vanta Labs Ambassador application has been approved.",
+      code ? `Your referral code: ${input.referralCode} (customers get ${referralPct}% off).` : null,
+      `Personal discount: ${personalPct}% off your own purchases while approved (auto-applied at checkout when signed in).`,
+      "",
+      "Benefits:",
+      `- ${personalPct}% off your own purchases`,
+      `- Referral code giving your audience ${referralPct}% off`,
+      `- ${commissionPct}% commission on completed orders with your code`,
+      "- Real-time dashboard (pending/approved/paid commissions, referral orders, earnings)",
+      "- Payouts every two weeks",
+      "- Performance bonuses and higher commission potential",
+      "- Early access to new products and promotions",
+      "",
+      "Responsibilities:",
+      "- At least 3 social posts per month",
+      "- Represent Vanta Labs professionally",
+      "- No medical / human-use claims",
+      "- No prohibited advertising",
+      "- Keep your code active",
+      "- Follow all program rules",
+      "",
+      `How commissions work: you earn ${commissionPct}% on each completed order's merchandise total. A commission is pending for ${holdDays} days after completion (protects against refunds/chargebacks), then approved and paid in the next biweekly payout. Refunded/cancelled orders never pay.`,
+      "",
+      "Getting paid: we pay via PayPal, Venmo, or Cash App — set your payout method in your dashboard.",
       "",
       `Dashboard: ${input.dashboardUrl}`,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
+// Sent to an ambassador when their commissions are paid out. Confirms the
+// amount, the method used, the number of orders covered, and the date.
+export function ambassadorPayoutSentTemplate(input: {
+  name: string;
+  amount: number;
+  method: string;
+  handle?: string | null;
+  orderCount: number;
+  dashboardUrl: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.name);
+  const amount = `$${Number(input.amount ?? 0).toFixed(2)}`;
+  const method = escapeHtml(input.method || "your chosen method");
+  const handle = input.handle ? escapeHtml(input.handle) : null;
+  return {
+    subject: `Your Vanta Labs payout of ${amount} is on the way`,
+    html: renderLayout({
+      preheader: `We've sent your ${amount} ambassador payout.`,
+      title: `Payment sent, ${name}`,
+      bodyHtml: `
+        <p>Good news — we've sent your ambassador payout.</p>
+        <ul>
+          <li><strong>Amount:</strong> ${amount}</li>
+          <li><strong>Method:</strong> ${method}${handle ? ` (${handle})` : ""}</li>
+          <li><strong>Orders covered:</strong> ${Number(input.orderCount ?? 0)}</li>
+        </ul>
+        <p>The paid commissions have moved to your payout history. Thank you for representing Vanta Labs.</p>
+      `,
+      ctaLabel: "View Payout History",
+      ctaUrl: input.dashboardUrl,
+    }),
+    text: toText([
+      `Hi ${input.name},`,
+      "",
+      "We've sent your ambassador payout.",
+      `Amount: ${amount}`,
+      `Method: ${input.method}${input.handle ? ` (${input.handle})` : ""}`,
+      `Orders covered: ${Number(input.orderCount ?? 0)}`,
+      "",
+      `Payout history: ${input.dashboardUrl}`,
       "",
       "- Vanta Labs",
     ]),
