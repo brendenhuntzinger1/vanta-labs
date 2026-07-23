@@ -165,7 +165,7 @@ async function validateReferralCode(
  ambassadorId: data.id,
  code: data.referral_code.toUpperCase(),
  discountPercent: 10,
- commissionPercent: Number(data.commission_percent ?? 15),
+ commissionPercent: Number(data.commission_percent ?? 10),
  ambassadorName: data.name,
  ambassadorEmail: data.email ?? null,
  ambassadorAuthUserId: data.auth_user_id ?? null,

@@ -348,13 +348,9 @@ async function ensureCommissionRecord(input: {
   const commissionableSubtotal = roundMoney(input.commissionableSubtotal ?? 0);
   const qualifyingSubtotal = roundMoney(input.qualifyingSubtotal ?? commissionableSubtotal);
 
-  const [ambassadorSettings, referralProgram, effectiveCommission, fraudSignal, ambassadorRow] = await Promise.all([
+  const [ambassadorSettings, referralProgram, fraudSignal, ambassadorRow] = await Promise.all([
     getAmbassadorProgramSettings(),
     getReferralProgramConfig(),
-    getEffectiveCommissionPercent({
-      ambassadorId: input.ambassadorId,
-      fallbackPercent: input.commissionPercent ?? 0,
-    }),
     detectCommissionFraudSignal({
       ambassadorId: input.ambassadorId,
       orderId: input.orderId,
@@ -365,6 +361,13 @@ async function ensureCommissionRecord(input: {
     }),
     supabaseAdmin.from("ambassadors").select("status").eq("id", input.ambassadorId).maybeSingle(),
   ]);
+
+  // Fall back to the admin's default commission rate (Control Center) when the
+  // order/ambassador carries no explicit rate, instead of a hardcoded number.
+  const effectiveCommission = await getEffectiveCommissionPercent({
+    ambassadorId: input.ambassadorId,
+    fallbackPercent: input.commissionPercent ?? referralProgram.defaultCommissionPercent,
+  });
 
   // Eligibility is re-checked here (not just at checkout) as defense in depth,
   // and now also enforces live ambassador state: a commission never accrues if
