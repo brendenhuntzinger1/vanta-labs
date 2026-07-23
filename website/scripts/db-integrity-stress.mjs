@@ -131,6 +131,33 @@ console.log("\n[6] Unique constraints hold");
   check("duplicate coupon code rejected (23505)", dup === "23505", `got ${dup}`);
 }
 
+console.log("\n[7] Paid side-effects run EXACTLY ONCE per order (no duplicate commission/payout/stock)");
+{
+  // Mirrors the webhook's atomic side-effects claim:
+  //   UPDATE orders SET paid_side_effects_at=now() WHERE order_id=X AND paid_side_effects_at IS NULL RETURNING id
+  // Under concurrent/duplicate/replayed deliveries exactly one may win.
+  await q(`delete from orders where order_id='seff-stress'`).catch(() => {});
+  await q(
+    `insert into orders (order_id, order_number, payment_status, amount_paid, currency) values ('seff-stress','VL-SEFF','paid',100,'USD')`,
+  );
+  const claim = () =>
+    q(`update orders set paid_side_effects_at=now() where order_id='seff-stress' and paid_side_effects_at is null returning id`)
+      .then((r) => r.rowCount)
+      .catch(() => 0);
+  const wins = (await Promise.all(Array.from({ length: 50 }, claim))).reduce((a, b) => a + b, 0);
+  check("exactly 1 of 50 concurrent side-effect claims wins (side-effects run once)", wins === 1, `wins=${wins}`);
+
+  // The paid-flip must likewise transition pending->paid only once.
+  await q(`update orders set payment_status='pending_payment', paid_at=null where order_id='seff-stress'`);
+  const flip = () =>
+    q(`update orders set payment_status='paid', paid_at=now() where order_id='seff-stress' and payment_status <> 'paid' returning id`)
+      .then((r) => r.rowCount)
+      .catch(() => 0);
+  const flips = (await Promise.all(Array.from({ length: 50 }, flip))).reduce((a, b) => a + b, 0);
+  check("exactly 1 of 50 concurrent paid-flips wins (no fulfillment revert)", flips === 1, `flips=${flips}`);
+  await q(`delete from orders where order_id='seff-stress'`).catch(() => {});
+}
+
 console.log(`\n==== DB STRESS RESULTS: ${pass} passed, ${fail} failed ====`);
 if (fail) console.log("FAILED:", fails.join(", "));
 await pool.end();

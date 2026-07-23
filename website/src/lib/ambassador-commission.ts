@@ -87,7 +87,7 @@ async function getQualifyingMonthlySalesCount(ambassadorId: string): Promise<num
 
   const { data, error } = await supabaseAdmin
     .from("referral_orders")
-    .select("created_at, payment_status, ineligible_reason, commission_amount")
+    .select("created_at, payment_status, ineligible_reason, commission_amount, fraud_flag")
     .eq("ambassador_id", ambassadorId)
     .order("created_at", { ascending: false });
 
@@ -103,9 +103,10 @@ async function getQualifyingMonthlySalesCount(ambassadorId: string): Promise<num
 
     // Only GENUINELY qualifying orders advance the performance tier. Orders that
     // earned $0 — below the minimum qualifying subtotal, program paused, etc.
-    // (ineligible_reason set / commission_amount 0) — must not inflate the count
-    // and push the ambassador into a higher commission-percent tier.
-    if (row.ineligible_reason || Number(row.commission_amount ?? 0) <= 0) {
+    // (ineligible_reason set / commission_amount 0) — or that are FRAUD-FLAGGED
+    // (self-dealing) must not inflate the count and push the ambassador into a
+    // higher commission-percent tier.
+    if (row.ineligible_reason || Number(row.commission_amount ?? 0) <= 0 || row.fraud_flag === true) {
       return false;
     }
 

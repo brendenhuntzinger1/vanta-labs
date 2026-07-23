@@ -612,6 +612,10 @@ alter table if exists public.payment_events
 alter table if exists public.payment_events
   alter column processed_at drop not null;
 
+-- Exactly-once paid side-effects gate (see order-paid-side-effects.sql).
+alter table if exists public.orders
+  add column if not exists paid_side_effects_at timestamptz;
+
 -- Ambassador payout method (see ambassador-payout-method.sql).
 alter table if exists public.partners
   add column if not exists payout_method text,
