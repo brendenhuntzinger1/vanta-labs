@@ -662,6 +662,97 @@ export async function updatePartnerPayoutMethod(authUserId: string, method: stri
   await supabaseAdmin.from("ambassadors").update(payload).eq("auth_user_id", authUserId).then(() => {}, () => {});
 }
 
+export interface PayoutQueueRow {
+  partnerId: string;
+  name: string;
+  amountOwed: number;
+  approvedOrderCount: number;
+  payoutMethod: string | null;
+  payoutHandle: string | null;
+  eligibleSince: string | null; // earliest approved_for_payout_at
+  meetsMinimum: boolean;
+}
+
+export interface PayoutQueue {
+  rows: PayoutQueueRow[];
+  readyCount: number; // ambassadors whose approved balance meets the minimum payout
+  totalOwed: number;
+  minimumPayoutThreshold: number;
+}
+
+// Builds the admin payout queue: every ambassador with commissions that have
+// cleared the hold period (approved_for_payout) and are awaiting the next
+// payout, with the amount owed, order count, when they became eligible, and
+// their chosen payout method + handle. `readyCount` drives the "N ambassadors
+// ready for payout" notification badge.
+export async function getPayoutQueue(): Promise<PayoutQueue> {
+  const [{ data: rows, error }, ambassadorSettings] = await Promise.all([
+    supabaseAdmin
+      .from("referral_orders")
+      .select("ambassador_id, commission_amount, approved_for_payout_at")
+      .eq("payment_status", "approved_for_payout"),
+    getAmbassadorProgramSettings(),
+  ]);
+
+  if (error) {
+    assertNoSupabaseError("referral_orders.select(payout queue)", error);
+  }
+
+  const minimum = ambassadorSettings.minimumPayoutThreshold;
+  const byPartner = new Map<string, { amount: number; count: number; earliest: string | null }>();
+  for (const row of rows ?? []) {
+    const id = String(row.ambassador_id);
+    if (!id) continue;
+    const agg = byPartner.get(id) ?? { amount: 0, count: 0, earliest: null };
+    agg.amount += Number(row.commission_amount ?? 0);
+    agg.count += 1;
+    const at = row.approved_for_payout_at ? String(row.approved_for_payout_at) : null;
+    if (at && (!agg.earliest || at < agg.earliest)) {
+      agg.earliest = at;
+    }
+    byPartner.set(id, agg);
+  }
+
+  const partnerIds = Array.from(byPartner.keys());
+  const partnerInfo = new Map<string, { name: string; payout_method: string | null; payout_handle: string | null }>();
+  if (partnerIds.length > 0) {
+    const { data: partners } = await supabaseAdmin
+      .from("partners")
+      .select("id, name, payout_method, payout_handle")
+      .in("id", partnerIds);
+    for (const p of partners ?? []) {
+      partnerInfo.set(String(p.id), {
+        name: String(p.name ?? ""),
+        payout_method: p.payout_method ? String(p.payout_method) : null,
+        payout_handle: p.payout_handle ? String(p.payout_handle) : null,
+      });
+    }
+  }
+
+  const queueRows: PayoutQueueRow[] = partnerIds.map((id) => {
+    const agg = byPartner.get(id)!;
+    const info = partnerInfo.get(id);
+    const amountOwed = roundMoney(agg.amount);
+    return {
+      partnerId: id,
+      name: info?.name ?? "Unknown",
+      amountOwed,
+      approvedOrderCount: agg.count,
+      payoutMethod: info?.payout_method ?? null,
+      payoutHandle: info?.payout_handle ?? null,
+      eligibleSince: agg.earliest,
+      meetsMinimum: amountOwed >= minimum,
+    };
+  }).sort((a, b) => b.amountOwed - a.amountOwed);
+
+  return {
+    rows: queueRows,
+    readyCount: queueRows.filter((r) => r.meetsMinimum).length,
+    totalOwed: roundMoney(queueRows.reduce((sum, r) => sum + r.amountOwed, 0)),
+    minimumPayoutThreshold: minimum,
+  };
+}
+
 export async function getPartnerSummary(partnerId: string, siteUrl: string): Promise<PartnerSummary> {
   const [{ data: partner, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }, { data: payoutRows, error: payoutError }] = await Promise.all([
     supabaseAdmin

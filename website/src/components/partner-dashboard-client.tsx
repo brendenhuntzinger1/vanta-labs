@@ -12,6 +12,86 @@ async function copyText(value: string) {
   await navigator.clipboard.writeText(value);
 }
 
+const PAYOUT_METHOD_OPTIONS: Array<{ value: string; label: string; hint: string }> = [
+  { value: "paypal", label: "PayPal", hint: "PayPal email" },
+  { value: "venmo", label: "Venmo", hint: "@username" },
+  { value: "cashapp", label: "Cash App", hint: "$cashtag" },
+];
+
+// Lets the ambassador choose how they get paid (PayPal / Venmo / Cash App) and
+// enter their handle. Saves to /api/partner/payout-method. Prompts prominently
+// when nothing is set yet so payouts are never blocked on missing info.
+function PayoutMethodEditor({ initialMethod, initialHandle }: { initialMethod: string | null; initialHandle: string | null }) {
+  const [method, setMethod] = useState(initialMethod ?? "paypal");
+  const [handle, setHandle] = useState(initialHandle ?? "");
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+  const isSet = Boolean(initialMethod && initialHandle);
+  const hint = PAYOUT_METHOD_OPTIONS.find((o) => o.value === method)?.hint ?? "";
+
+  async function save() {
+    setSaving(true);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/partner/payout-method", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ method, handle }),
+      });
+      const json = (await res.json()) as { success: boolean; error?: string };
+      if (!res.ok || !json.success) {
+        throw new Error(json.error ?? "Could not save your payout method.");
+      }
+      setMessage("Saved. We'll pay you here on the next cycle.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Could not save your payout method.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className={`mt-4 rounded-2xl border p-4 ${isSet ? "border-white/15 bg-white/[0.03]" : "border-emerald-400/40 bg-emerald-400/[0.06]"}`}>
+      <p className="text-[11px] uppercase tracking-[0.25em] text-zinc-400">Payout Method</p>
+      {!isSet ? (
+        <p className="mt-1 text-xs text-emerald-200">Choose how you&apos;d like to get paid so we can send your commissions.</p>
+      ) : null}
+      <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
+        <label className="text-xs text-zinc-400">
+          Platform
+          <select
+            value={method}
+            onChange={(e) => setMethod(e.target.value)}
+            className="vl-input mt-1 w-full px-3 py-2 sm:w-40"
+          >
+            {PAYOUT_METHOD_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </select>
+        </label>
+        <label className="flex-1 text-xs text-zinc-400">
+          Your {PAYOUT_METHOD_OPTIONS.find((o) => o.value === method)?.label} handle
+          <input
+            value={handle}
+            onChange={(e) => setHandle(e.target.value)}
+            placeholder={hint}
+            className="vl-input mt-1 w-full px-3 py-2"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={save}
+          disabled={saving || !handle.trim()}
+          className="vl-focus-ring rounded-full border border-white/30 bg-white/10 px-4 py-2 text-xs font-semibold text-zinc-100 transition hover:bg-white/20 disabled:opacity-50"
+        >
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+      {message ? <p className="mt-2 text-xs text-zinc-300">{message}</p> : null}
+    </div>
+  );
+}
+
 export function PartnerDashboardClient({ summary }: { summary: PartnerSummary }) {
   const [liveSummary, setLiveSummary] = useState(summary);
   const [copied, setCopied] = useState(false);
@@ -41,7 +121,8 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
   const topCards = useMemo(() => [
     { label: "Sales Generated", value: currency(liveSummary.totalRevenue) },
     { label: "Total Earnings", value: currency(liveSummary.totalEarnings) },
-    { label: "Unpaid Balance", value: currency(liveSummary.pendingCommissions) },
+    { label: "Pending (14-day hold)", value: currency(liveSummary.pendingOnlyCommissions) },
+    { label: "Approved (next payout)", value: currency(liveSummary.approvedCommissions) },
     { label: "Paid Commissions", value: currency(liveSummary.paidCommissions) },
     { label: "Total Orders", value: String(liveSummary.totalOrders) },
     { label: "Average Order Value", value: currency(liveSummary.averageOrderValue) },
@@ -81,14 +162,20 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
           </div>
           <p className="mt-2 text-xs text-zinc-500">Referral code: {liveSummary.referralCode} • Commission: {liveSummary.commissionPercent}%</p>
           <p className="mt-1 text-xs text-zinc-500">Coupon code (share for customers to use at checkout): <span className="font-semibold text-zinc-300">{liveSummary.referralCode}</span></p>
+          <p className="mt-2 text-xs text-emerald-300/90">Your personal perk: you automatically get <span className="font-semibold">15% off your own purchases</span> while approved — just sign in and check out, no code needed.</p>
         </div>
+
+        <PayoutMethodEditor
+          initialMethod={liveSummary.payoutMethod}
+          initialHandle={liveSummary.payoutHandle}
+        />
 
         <div className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-400/[0.05] p-4">
           <p className="text-[11px] uppercase tracking-[0.25em] text-amber-300">Ambassador Requirements</p>
           <ul className="mt-3 space-y-2 text-sm text-zinc-300">
             <li className="flex items-start gap-2">
               <span className="mt-0.5 text-amber-300">•</span>
-              <span><span className="font-semibold text-white">To stay active:</span> post at least <span className="font-semibold text-white">1 promotional video per month</span>.</span>
+              <span><span className="font-semibold text-white">To stay active:</span> share Vanta Labs in at least <span className="font-semibold text-white">3 social media posts per month</span>.</span>
             </li>
             <li className="flex items-start gap-2">
               <span className="mt-0.5 text-amber-300">•</span>
