@@ -78,6 +78,10 @@ export interface OrderInputs {
   membershipPercent: number;
   /** Coupon discount dollars (0 when no valid coupon). */
   couponDiscount: number;
+  /** Bulk-savings discount dollars (a member perk; competes for best value). */
+  bulkSavingsAmount?: number;
+  /** Personal ambassador discount dollars (competes for best value). */
+  personalDiscountAmount?: number;
   /** Admin: may a coupon combine with a referral/bundle? */
   allowCouponStacking: boolean;
   /** Ambassador commission percent (admin-set). */
@@ -101,20 +105,24 @@ export interface DiscountBreakdown {
   label: string;
 }
 
-// Resolves the single customer discount "bucket" for a given set of enabled
-// components. `enabled` lets the profit guard recompute with some promos peeled
-// off. Membership, when present, is exclusive and wins for the customer.
+// Resolves the SINGLE customer discount for an order — the one shared rulebook
+// used by both the live checkout and the profit guard:
+//   • ONE customer discount applies, whichever gives the best value, among:
+//     the referral discount, membership pricing, bulk savings, the personal
+//     ambassador discount, and (when it doesn't stack) a coupon.
+//   • The ONE intentional stack: a BUNDLE (Buy 3 Get 1) order with a code gets
+//     the bundle discount PLUS a reduced referral % (default 5%).
+//   • A coupon competes as a candidate when stacking is off; when the admin
+//     enables stacking it adds on top of the best promo.
+// Ambassador commission is NOT a customer discount — it is computed separately
+// and is never affected by which discount wins here.
+// `enabled` lets the profit guard recompute with the removable promos (coupon,
+// referral, bundle) peeled off; membership/bulk/personal are perks and stay.
 export function resolveCustomerDiscount(
   inputs: OrderInputs,
   enabled: Set<DiscountComponent>,
 ): DiscountBreakdown {
   const { subtotal } = inputs;
-
-  // Members get membership pricing only — no bundle/referral customer discount.
-  if (inputs.isMember && inputs.membershipPercent > 0 && enabled.has("membership")) {
-    return { amount: pct(subtotal, inputs.membershipPercent), components: ["membership"], label: "Membership pricing" };
-  }
-
   const isBundle = enabled.has("bundle") && inputs.bundleDiscount > 0;
   const hasReferral = enabled.has("referral") && inputs.referralAccepted;
 
@@ -128,41 +136,47 @@ export function resolveCustomerDiscount(
     bundleComponents.push("bundle");
     bundleLabel = "Bundle";
     if (hasReferral) {
-      const extra = pct(subtotal, inputs.bundleReferralPercent);
-      bundleBucket += extra;
+      bundleBucket += pct(subtotal, inputs.bundleReferralPercent);
       bundleComponents.push("referral");
       bundleLabel = `Bundle + ${inputs.bundleReferralPercent}% referral`;
     }
   }
 
   // The plain referral bucket (non-bundle order with a code).
-  let referralBucket = 0;
-  if (!isBundle && hasReferral) {
-    referralBucket = pct(subtotal, inputs.referralPercent);
-  }
+  const referralBucket = !isBundle && hasReferral ? pct(subtotal, inputs.referralPercent) : 0;
 
-  // Coupon: stands alone unless stacking is enabled. When stacking is off it
-  // competes as its own single discount against the bundle/referral bucket.
+  // Perk candidates that compete for best value (never stack, never removed by
+  // the profit guard — they carry no removable component).
+  const membershipAmount = enabled.has("membership") && inputs.isMember && inputs.membershipPercent > 0
+    ? pct(subtotal, inputs.membershipPercent) : 0;
+  const bulkAmount = Math.max(0, inputs.bulkSavingsAmount ?? 0);
+  const personalAmount = Math.max(0, inputs.personalDiscountAmount ?? 0);
+
   const couponEnabled = enabled.has("coupon") && inputs.couponDiscount > 0;
 
-  if (inputs.allowCouponStacking && couponEnabled) {
-    const base = isBundle ? bundleBucket : referralBucket;
-    const baseComponents = isBundle ? bundleComponents : hasReferral ? (["referral"] as DiscountComponent[]) : [];
-    const amount = round(Math.min(subtotal, base + inputs.couponDiscount));
-    const parts = [...baseComponents, "coupon" as DiscountComponent];
-    return { amount, components: parts, label: parts.length > 1 ? "Stacked (coupon + promo)" : "Coupon" };
-  }
-
-  // No stacking: the single best of { bundle bucket, referral bucket, coupon }.
+  // The single best discount among every competing candidate.
   const candidates: DiscountBreakdown[] = [];
   if (bundleBucket > 0) candidates.push({ amount: bundleBucket, components: bundleComponents, label: bundleLabel });
   if (referralBucket > 0) candidates.push({ amount: referralBucket, components: ["referral"], label: `${inputs.referralPercent}% referral` });
-  if (couponEnabled) candidates.push({ amount: inputs.couponDiscount, components: ["coupon"], label: "Coupon" });
+  if (membershipAmount > 0) candidates.push({ amount: membershipAmount, components: ["membership"], label: "Membership pricing" });
+  if (bulkAmount > 0) candidates.push({ amount: bulkAmount, components: [], label: "Bulk savings" });
+  if (personalAmount > 0) candidates.push({ amount: personalAmount, components: [], label: "Ambassador personal" });
+  if (couponEnabled && !inputs.allowCouponStacking) candidates.push({ amount: inputs.couponDiscount, components: ["coupon"], label: "Coupon" });
 
   let best: DiscountBreakdown = { amount: 0, components: [], label: "None" };
   for (const candidate of candidates) {
     if (candidate.amount > best.amount) best = candidate;
   }
+
+  // When stacking is enabled, a coupon adds on top of the best promo.
+  if (inputs.allowCouponStacking && couponEnabled) {
+    return {
+      amount: round(Math.min(subtotal, best.amount + inputs.couponDiscount)),
+      components: [...best.components, "coupon"],
+      label: best.amount > 0 ? `${best.label} + coupon` : "Coupon",
+    };
+  }
+
   return { amount: round(Math.min(subtotal, best.amount)), components: best.components, label: best.label };
 }
 

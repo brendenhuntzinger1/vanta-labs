@@ -71,6 +71,47 @@ describe("discount composition rules", () => {
     expect(d.components).toEqual(["referral", "coupon"]);
     expect(d.amount).toBe(31); // 26 + 5
   });
+
+  it("membership competes for best value — it wins when largest, loses when not", () => {
+    // Membership 15% ($39) beats bundle+5% on a $20-bundle order ($33) → wins.
+    const wins = resolveCustomerDiscount(
+      makeOrder({ isMember: true, membershipPercent: 15, referralAccepted: true, bundleDiscount: 20 }),
+      ALL,
+    );
+    expect(wins.components).toEqual(["membership"]);
+    // Membership 5% ($13) loses to a $40 bundle → bundle wins (best value).
+    const loses = resolveCustomerDiscount(
+      makeOrder({ isMember: true, membershipPercent: 5, bundleDiscount: 40 }),
+      ALL,
+    );
+    expect(loses.components).toContain("bundle");
+    expect(loses.amount).toBe(40);
+  });
+
+  it("bulk savings and the personal ambassador discount compete for best value", () => {
+    const d = resolveCustomerDiscount(makeOrder({ bulkSavingsAmount: 45, referralAccepted: true }), ALL);
+    expect(d.label).toBe("Bulk savings"); // 45 beats the 26 referral
+    expect(d.amount).toBe(45);
+  });
+});
+
+describe("commission is separate from customer discounts (always paid on a valid code)", () => {
+  it("is paid on the discounted subtotal no matter which customer discount won", () => {
+    // Membership pricing wins the customer discount, but the ambassador whose
+    // code was used still earns commission on the discounted subtotal.
+    const order = makeOrder({ isMember: true, membershipPercent: 15, referralAccepted: true });
+    const d = resolveCustomerDiscount(order, ALL);
+    const p = computeProfit(order, d);
+    expect(d.components).toEqual(["membership"]);
+    expect(p.commission).toBe(Math.round(p.discountedSubtotal * (order.commissionPercent / 100) * 100) / 100);
+    expect(p.commission).toBeGreaterThan(0);
+  });
+
+  it("is never reduced or removed just because a bigger discount applied", () => {
+    const withCode = computeProfit(makeOrder({ referralAccepted: true, bulkSavingsAmount: 45 }), resolveCustomerDiscount(makeOrder({ referralAccepted: true, bulkSavingsAmount: 45 }), ALL));
+    // Bulk savings won the customer discount; commission still paid on the net.
+    expect(withCode.commission).toBeGreaterThan(0);
+  });
 });
 
 describe("ambassador commission", () => {

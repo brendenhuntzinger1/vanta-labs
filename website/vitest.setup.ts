@@ -79,11 +79,13 @@ vi.mock("@/lib/admin-control", () => ({
   getReferralProgramConfig: async () => ({
     enabled: true,
     discountPercent: 10,
+    bundleReferralPercent: 5,
     personalDiscountPercent: 10,
     defaultCommissionPercent: 10,
     commissionsPaused: false,
   }),
   getCouponPolicyConfig: async () => ({ couponsEnabled: true, allowStacking: false }),
+  getProfitSettings: async () => ({ minProfitPercent: 0, minProfitDollars: 0, worstCaseUnitCost: 33, processingFeePercent: 10 }),
   getPaymentMethodsConfig: async () => ([
     { id: "card", label: "Credit / Debit Card", kind: "card", enabled: true, order: 100, icon: "", recommended: false, badges: [], instructions: [] },
     { id: "cashapp", label: "Cash App", kind: "manual", enabled: true, order: 10, icon: "", recommended: true, badges: [], instructions: [] },
