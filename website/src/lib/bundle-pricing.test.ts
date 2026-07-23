@@ -12,7 +12,7 @@ describe("bundleDiscountRate defaults (unchanged behavior)", () => {
     expect(bundleDiscountRate(1)).toBe(0);
     expect(bundleDiscountRate(2)).toBe(0.05);
     expect(bundleDiscountRate(3)).toBe(0.08);
-    expect(bundleDiscountRate(10)).toBe(0.08);
+    expect(bundleDiscountRate(10)).toBe(0.15);
   });
 });
 
@@ -36,6 +36,8 @@ describe("resolveBundleConfig (admin whole-number percents -> rates)", () => {
     expect(resolveBundleConfig({ twoUnitPercent: 5, threePlusPercent: 8 })).toEqual({
       twoUnitPercent: 0.05,
       threePlusPercent: 0.08,
+      fiveUnitPercent: DEFAULT_BUNDLE_CONFIG.fiveUnitPercent,
+      tenUnitPercent: DEFAULT_BUNDLE_CONFIG.tenUnitPercent,
     });
   });
 
@@ -45,6 +47,8 @@ describe("resolveBundleConfig (admin whole-number percents -> rates)", () => {
     expect(resolveBundleConfig({ twoUnitPercent: -3, threePlusPercent: 8 })).toEqual({
       twoUnitPercent: DEFAULT_BUNDLE_CONFIG.twoUnitPercent,
       threePlusPercent: 0.08,
+      fiveUnitPercent: DEFAULT_BUNDLE_CONFIG.fiveUnitPercent,
+      tenUnitPercent: DEFAULT_BUNDLE_CONFIG.tenUnitPercent,
     });
   });
 
@@ -52,6 +56,8 @@ describe("resolveBundleConfig (admin whole-number percents -> rates)", () => {
     expect(resolveBundleConfig({ twoUnitPercent: 999, threePlusPercent: 999 })).toEqual({
       twoUnitPercent: 0.9,
       threePlusPercent: 0.9,
+      fiveUnitPercent: DEFAULT_BUNDLE_CONFIG.fiveUnitPercent,
+      tenUnitPercent: DEFAULT_BUNDLE_CONFIG.tenUnitPercent,
     });
   });
 });

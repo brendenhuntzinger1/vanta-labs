@@ -13,17 +13,25 @@
 
 export type BundleConfig = {
   // Rates as fractions (0.05 = 5%). twoUnit applies at exactly 2 units;
-  // threePlus applies at 3 or more.
+  // threePlus at 3-4; fiveUnit at 5-9; tenUnit at 10+. The five/ten tiers are
+  // optional so existing partial configs still satisfy the type (they fall back
+  // to the defaults below).
   twoUnitPercent: number;
   threePlusPercent: number;
+  fiveUnitPercent?: number;
+  tenUnitPercent?: number;
 };
 
 export const DEFAULT_BUNDLE_CONFIG: BundleConfig = {
   twoUnitPercent: 0.05,
   threePlusPercent: 0.08,
+  fiveUnitPercent: 0.10,
+  tenUnitPercent: 0.15,
 };
 
 export function bundleDiscountRate(quantity: number, config: BundleConfig = DEFAULT_BUNDLE_CONFIG): number {
+  if (quantity >= 10) return config.tenUnitPercent ?? DEFAULT_BUNDLE_CONFIG.tenUnitPercent ?? 0.15;
+  if (quantity >= 5) return config.fiveUnitPercent ?? DEFAULT_BUNDLE_CONFIG.fiveUnitPercent ?? 0.10;
   if (quantity >= 3) return config.threePlusPercent;
   if (quantity === 2) return config.twoUnitPercent;
   return 0;
@@ -53,9 +61,11 @@ function toRate(value: unknown, fallbackRate: number): number {
 }
 
 // Build a BundleConfig from admin control values (whole-number percents).
-export function resolveBundleConfig(input: { twoUnitPercent?: unknown; threePlusPercent?: unknown }): BundleConfig {
+export function resolveBundleConfig(input: { twoUnitPercent?: unknown; threePlusPercent?: unknown; fiveUnitPercent?: unknown; tenUnitPercent?: unknown }): BundleConfig {
   return {
     twoUnitPercent: toRate(input.twoUnitPercent, DEFAULT_BUNDLE_CONFIG.twoUnitPercent),
     threePlusPercent: toRate(input.threePlusPercent, DEFAULT_BUNDLE_CONFIG.threePlusPercent),
+    fiveUnitPercent: toRate(input.fiveUnitPercent, DEFAULT_BUNDLE_CONFIG.fiveUnitPercent ?? 0.10),
+    tenUnitPercent: toRate(input.tenUnitPercent, DEFAULT_BUNDLE_CONFIG.tenUnitPercent ?? 0.15),
   };
 }

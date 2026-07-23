@@ -35,10 +35,14 @@ function formatUsd(value: number) {
 }
 
 const BUNDLE_OPTIONS = [
-  { quantity: 1, label: "1 Bottle", badge: null },
-  { quantity: 2, label: "2 Bottles", badge: "Most Popular" },
-  { quantity: 3, label: "3+ Bottles", badge: "Best Value" },
+  { quantity: 1, label: "1 Vial", badge: null },
+  { quantity: 5, label: "5-Vial Set", badge: "Most Popular" },
+  { quantity: 10, label: "10-Vial Set", badge: "Best Value" },
 ] as const;
+
+// Free shipping threshold (mirrors the storefront default). Used to show the
+// "Free Ship" badge on vial sets that cross it.
+const FREE_SHIP_THRESHOLD_USD = 250;
 
 const TRUST_ROW = [
   {
@@ -485,25 +489,29 @@ export function ProductDetailClient({
                 <p className="vl2-lab-eyebrow">Quantity</p>
                 <div className="mt-3 grid grid-cols-3 gap-2">
                   {BUNDLE_OPTIONS.map((option) => {
-                    const isSelected = option.quantity === 3 ? quantity >= 3 : quantity === option.quantity;
+                    const isSelected = option.quantity === 10 ? quantity >= 10 : quantity === option.quantity;
                     const rate = bundleDiscountRate(option.quantity, bundleConfig);
                     const lineTotal = getBundleDiscountedLineTotal(unitPrice, option.quantity, bundleConfig);
+                    const freeShip = lineTotal >= FREE_SHIP_THRESHOLD_USD;
                     return (
                       <button
                         key={option.quantity}
                         type="button"
                         onClick={() => setQuantity(option.quantity)}
-                        className={`relative border px-2 py-3 text-center transition ${isSelected ? "border-[#111] bg-zinc-50" : "border-zinc-200 hover:border-zinc-400"}`}
+                        className={`relative rounded-xl border px-2 py-3.5 text-center transition ${isSelected ? "border-emerald-600 bg-emerald-600 text-white shadow-sm" : "border-zinc-200 text-[#111] hover:border-emerald-400"}`}
                       >
                         {option.badge ? (
-                          <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap bg-[#111] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-white">
+                          <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-emerald-600 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-white shadow-sm">
                             {option.badge}
                           </span>
                         ) : null}
-                        <span className="block text-sm text-[#111]">{option.label}</span>
-                        <span className="mt-1 block text-xs text-zinc-500">{formatUsd(lineTotal)}</span>
+                        <span className="block text-sm font-medium">{option.label}</span>
+                        <span className={`mt-1 block text-xs ${isSelected ? "text-emerald-50" : "text-zinc-500"}`}>{formatUsd(lineTotal)}</span>
                         {rate > 0 ? (
-                          <span className="mt-0.5 block text-[10px] font-medium text-emerald-600">Save {Math.round(rate * 100)}%</span>
+                          <span className={`mt-0.5 block text-[10px] font-semibold ${isSelected ? "text-white" : "text-emerald-600"}`}>Save {Math.round(rate * 100)}%</span>
+                        ) : null}
+                        {freeShip ? (
+                          <span className={`mt-1 inline-flex items-center gap-1 text-[10px] font-medium ${isSelected ? "text-white" : "text-emerald-600"}`}>🚚 Free Ship</span>
                         ) : null}
                       </button>
                     );
@@ -516,7 +524,7 @@ export function ProductDetailClient({
                       onClick={() => setQuantity((q) => Math.max(1, q - 1))}
                       className="inline-flex h-11 w-11 items-center justify-center border border-zinc-200 text-lg text-zinc-600 transition hover:border-zinc-400"
                     >−</button>
-                    <span className="text-sm text-[#111]">{quantity} bottles</span>
+                    <span className="text-sm text-[#111]">{quantity} vials</span>
                     <button
                       type="button"
                       onClick={() => setQuantity((q) => Math.min(10, q + 1))}
