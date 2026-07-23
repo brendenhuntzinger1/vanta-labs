@@ -102,15 +102,15 @@ describe("profit protection guardrail", () => {
     expect(result.removed).toEqual([]);
   });
 
-  it("peels off discounts to restore margin on a thin order", () => {
-    // High cost + big coupon would sink the order; the guard removes the coupon.
+  it("peels off the lowest-priority discount to keep the order out of the red", () => {
+    // High cost + a big stacked coupon drives the order negative; the guard
+    // removes the coupon (lowest priority) and the order is profitable again.
     const result = protectProfit(
-      makeOrder({ productCost: 132, couponDiscount: 60, allowCouponStacking: true, referralAccepted: true }),
+      makeOrder({ productCost: 155, couponDiscount: 90, allowCouponStacking: true, referralAccepted: true }),
     );
-    if (result.profitable) {
-      expect(result.grossProfit).toBeGreaterThanOrEqual(DEFAULT_PROFIT_SETTINGS.minProfitDollars);
-      expect(result.removed).toContain("coupon");
-    }
+    expect(result.profitable).toBe(true);
+    expect(result.removed).toContain("coupon");
+    expect(result.grossProfit).toBeGreaterThanOrEqual(0);
   });
 
   it("blocks an order that loses money even with every promo removed", () => {

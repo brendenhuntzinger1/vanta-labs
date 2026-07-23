@@ -417,10 +417,10 @@ export function AdminControlCenterClient() {
 
           <section className="vl-panel-soft rounded-2xl p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">Profit Protection</h3>
-            <p className="mt-2 text-xs text-zinc-400">The engine never lets an order finalize below these. Leave blank for the defaults (25% margin, $10, $33 worst-case vial cost, 10% processing).</p>
+            <p className="mt-2 text-xs text-zinc-400">By default no order can ever finalize at a loss (profit stays at or above $0). Set a minimum margin or minimum profit here only if you want a buffer beyond break-even. Worst-case vial cost defaults to $33 and the processing-fee assumption to 10%.</p>
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-              <label className="text-zinc-300">Minimum margin (%)<input value={profitMinPercent} onChange={(e) => setProfitMinPercent(e.target.value)} placeholder="25" className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Minimum profit ($)<input value={profitMinDollars} onChange={(e) => setProfitMinDollars(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Minimum margin (%)<input value={profitMinPercent} onChange={(e) => setProfitMinPercent(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Minimum profit ($)<input value={profitMinDollars} onChange={(e) => setProfitMinDollars(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Worst-case unit cost ($, when a product has no cost set)<input value={profitWorstCaseCost} onChange={(e) => setProfitWorstCaseCost(e.target.value)} placeholder="33" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Processing fee assumption (%)<input value={profitProcessingFee} onChange={(e) => setProfitProcessingFee(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>

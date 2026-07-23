@@ -445,9 +445,11 @@ export interface ProfitSettingsConfig {
   processingFeePercent: number;
 }
 
+// Default: never sell at a loss (profit >= $0). Raise the minimums in the
+// Control Center to require a margin buffer beyond break-even.
 export const DEFAULT_PROFIT_CONFIG: ProfitSettingsConfig = {
-  minProfitPercent: 25,
-  minProfitDollars: 10,
+  minProfitPercent: 0,
+  minProfitDollars: 0,
   worstCaseUnitCost: 33,
   processingFeePercent: 10,
 };

@@ -39,9 +39,13 @@ export interface ProfitSettings {
   processingFeePercent: number;
 }
 
+// Default guard: the order must simply never lose money — profit >= $0 after
+// product cost, processing fee, commission, and shipping cost. Raise these in
+// the admin (Control Center → Profit Protection) if you want a margin buffer
+// beyond break-even.
 export const DEFAULT_PROFIT_SETTINGS: ProfitSettings = {
-  minProfitPercent: 25,
-  minProfitDollars: 10,
+  minProfitPercent: 0,
+  minProfitDollars: 0,
   worstCaseUnitCost: 33,
   processingFeePercent: 10,
 };
