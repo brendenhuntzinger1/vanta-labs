@@ -312,6 +312,7 @@ vi.mock("@/lib/supabase-server", () => {
 
   const mockClient = {
     from: (table: string) => makeTableClient(table),
+    rpc: async () => ({ data: null, error: null }),
     auth: {
       getUser: async () => ({ data: { user: null }, error: null }),
       admin: {

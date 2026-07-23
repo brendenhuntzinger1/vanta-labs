@@ -63,14 +63,17 @@ Reproduce anytime: `bash website/scripts/verify-db-locally.sh`
 
 ---
 
+> **Update (2026-07-23):** superseded by `FINAL_QA_REPORT.md`. Risk #1 below is
+> now **CLOSED** — the atomic inventory decrement is wired into both paid paths
+> and the refund/cancel restock, and proven against real Postgres.
+
 ## Top remaining risks to close BEFORE launch
 
-1. **Inventory decrement is not yet wired into the paid path.** The atomic
-   decrement pattern is **proven safe** (DB test [4]), but the app does not call
-   it when an order is paid — stock is only set by the 3PL sync/admin today. Fix:
-   add a `decrement_product_inventory(product_id, qty)` RPC (pattern proven) and
-   call it in `finalizeManualPayment` + the webhook paid block. **Highest
-   priority.**
+1. **~~Inventory decrement is not yet wired into the paid path.~~ ✅ CLOSED.**
+   Added `adjust_inventory_on_sale()` RPC + `src/lib/inventory-fulfillment.ts`,
+   wired into `finalizeManualPayment` + the card webhook (decrement, once per
+   order) and the webhook/admin refund paths (restock). Proven atomic +
+   symmetric under 10-way concurrency on real Postgres.
 2. **Account-verification & password-reset emails** use Supabase's built-in
    mailer, not the in-app provider. Confirm Supabase Auth SMTP is configured, or
    these can silently fail. Verify by signing up + resetting on staging.

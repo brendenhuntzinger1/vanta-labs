@@ -173,7 +173,7 @@ describe("profit protection guardrail", () => {
 // invariant: an order the engine marks `profitable` ALWAYS meets the floor, and
 // the engine never silently lets a losing order finalize.
 describe("simulation: no finalized order ever falls below the profit floor", () => {
-  const settings = DEFAULT_PROFIT_SETTINGS; // 25% / $10, worst-case $33, 10% fee
+  const settings = DEFAULT_PROFIT_SETTINGS; // break-even floor (0% / $0), worst-case $33, 10% fee
   const unitCosts = [25, 27, 29, 31, 33]; // wholesale+fulfillment range
   const retails = [55, 65, 79];
   const quantities = [1, 2, 3, 4, 6, 8];

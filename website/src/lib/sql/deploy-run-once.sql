@@ -877,3 +877,56 @@ alter table if exists public.orders
   add column if not exists gross_profit_cents integer,
   add column if not exists gross_margin_percent numeric,
   add column if not exists commission_cost_cents integer;
+
+
+-- ==================== CHUNK 6 — ATOMIC INVENTORY MOVEMENT ====================
+-- One RPC commits (on sale) or returns (on refund) stock in a single atomic
+-- statement so two orders racing for the last unit can never oversell. The app
+-- calls this from the PAID path only (finalizeManualPayment + the card webhook)
+-- and its inverse from the refund path. See src/lib/inventory-fulfillment.ts and
+-- the 100-concurrent-decrement proof in scripts/db-integrity-stress.mjs.
+--
+--   p_qty < 0  → a sale. The `inventory_quantity + p_qty >= 0` guard means an
+--                untracked item (count 0) or one without enough stock is left
+--                untouched instead of going negative — numeric tracking stays
+--                opt-in, exactly like the checkout-time oversell guard.
+--   p_qty > 0  → a refund/cancel returning the same units. The symmetric add
+--                nets tracked stock back to where it began.
+-- Returns true only when a row actually moved.
+create or replace function public.adjust_inventory_on_sale(
+  p_slug text,
+  p_variant_id text,
+  p_qty integer
+)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  moved integer;
+begin
+  if p_qty is null or p_qty = 0 then
+    return false;
+  end if;
+
+  if p_variant_id is not null and p_variant_id <> '' then
+    update public.product_doses
+       set inventory_quantity = inventory_quantity + p_qty,
+           updated_at = now()
+     where id::text = p_variant_id
+       and inventory_quantity + p_qty >= 0;
+    get diagnostics moved = row_count;
+  else
+    update public.products
+       set inventory_quantity = inventory_quantity + p_qty,
+           updated_at = now()
+     where slug = p_slug
+       and inventory_quantity + p_qty >= 0;
+    get diagnostics moved = row_count;
+  end if;
+
+  return moved > 0;
+end;
+$$;
+grant execute on function public.adjust_inventory_on_sale(text, text, integer) to service_role;

@@ -80,6 +80,40 @@ const prod = (await q(`insert into products (slug, name, category, price_cents, 
   check("stock never goes negative", rows[0].inventory_quantity === 0, `qty=${rows[0].inventory_quantity}`);
 }
 
+console.log("\n[4b] Inventory RPC — atomic decrement on sale + symmetric restock on refund");
+{
+  // Reset the stress product to a known, small stock and drive the SAME RPC the
+  // app calls from its paid/refund paths.
+  await q(`update products set inventory_quantity = 3 where id=$1`, [prod]);
+  const sell = (n) => q(`select adjust_inventory_on_sale($1, null, $2) as moved`, [ "stress-vial", -n ]).then(r => r.rows[0].moved);
+  const restock = (n) => q(`select adjust_inventory_on_sale($1, null, $2) as moved`, [ "stress-vial", n ]).then(r => r.rows[0].moved);
+
+  // 10 concurrent single-unit sales against 3 in stock → exactly 3 succeed.
+  const sold = (await Promise.all(Array.from({ length: 10 }, () => sell(1)))).filter(Boolean).length;
+  const afterSell = (await q(`select inventory_quantity from products where id=$1`, [prod])).rows[0].inventory_quantity;
+  check("only 3 of 10 concurrent unit-sales succeed (never oversell)", sold === 3, `sold=${sold}`);
+  check("stock lands at exactly 0, never negative", afterSell === 0, `qty=${afterSell}`);
+
+  // A sale that would exceed remaining stock is refused, not clamped.
+  await q(`update products set inventory_quantity = 2 where id=$1`, [prod]);
+  const oversell = await sell(5);
+  const afterOversell = (await q(`select inventory_quantity from products where id=$1`, [prod])).rows[0].inventory_quantity;
+  check("a 5-unit sale against 2 in stock is refused (no partial oversell)", oversell === false && afterOversell === 2, `moved=${oversell} qty=${afterOversell}`);
+
+  // Refund restores the exact units: sell 2, refund 2 → back to start.
+  await q(`update products set inventory_quantity = 6 where id=$1`, [prod]);
+  await sell(2);
+  await restock(2);
+  const afterRefund = (await q(`select inventory_quantity from products where id=$1`, [prod])).rows[0].inventory_quantity;
+  check("refund restocks the exact units sold (sale/refund is symmetric)", afterRefund === 6, `qty=${afterRefund}`);
+
+  // Untracked items (count 0) are never driven negative by a sale.
+  await q(`update products set inventory_quantity = 0 where id=$1`, [prod]);
+  const untrackedSale = await sell(1);
+  const afterUntracked = (await q(`select inventory_quantity from products where id=$1`, [prod])).rows[0].inventory_quantity;
+  check("a sale against an untracked (0) item is a no-op, never negative", untrackedSale === false && afterUntracked === 0, `moved=${untrackedSale} qty=${afterUntracked}`);
+}
+
 console.log("\n[5] One membership per customer (no duplicates)");
 const uid = (await q(`insert into auth.users (email) values ('dup@test.com') returning id`)).rows[0].id;
 const tier = (await q(`insert into membership_tiers (slug, name, monthly_price_cents, annual_price_cents, points_per_dollar, position) values ('elite-x','Elite',5000,50000,5,3) returning id`)).rows[0].id;
