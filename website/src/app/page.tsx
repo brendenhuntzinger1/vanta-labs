@@ -62,6 +62,25 @@ const BRAND_PILLARS = [
   },
 ];
 
+const TESTING_PROOFS = [
+  {
+    title: "Independently verified",
+    detail: "Every production lot is tested by a third-party lab — we don't grade our own work.",
+  },
+  {
+    title: "≥99% purity by HPLC",
+    detail: "High-performance liquid chromatography confirms purity on each batch before it ships.",
+  },
+  {
+    title: "Identity by mass spec",
+    detail: "Mass spectrometry verifies the exact compound and molecular weight of every lot.",
+  },
+  {
+    title: "Batch-to-COA mapping",
+    detail: "Each vial's batch number links to its Certificate of Analysis — confirm it before you buy.",
+  },
+];
+
 const FAQ = [
   {
     q: "How do you verify quality?",
@@ -204,6 +223,45 @@ export default async function HomePage() {
               Featured products will appear here once published in the live catalog.
             </div>
           )}
+        </div>
+      </section>
+
+      <section className="border-t border-white/10 bg-gradient-to-b from-emerald-500/[0.06] to-transparent py-12 sm:py-20">
+        <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
+          <div className="grid gap-10 lg:grid-cols-[1fr_1.2fr] lg:items-center">
+            <ScrollReveal>
+              <div className="max-w-lg">
+                <p className="vl2-eyebrow text-emerald-300/80">Testing &amp; Transparency</p>
+                <h2 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl lg:text-5xl">Every batch, third-party tested.</h2>
+                <p className="mt-5 text-sm leading-7 text-white/65 sm:text-base">
+                  Anyone can print a label. We publish the proof. Every lot Vanta Labs ships is
+                  independently verified for purity and identity, and every vial&apos;s batch number
+                  maps to its Certificate of Analysis — so you can confirm exactly what you&apos;re
+                  getting before you order.
+                </p>
+                <div className="mt-8 flex flex-wrap gap-3">
+                  <Link href="/coa-library" className="vl2-btn-primary vl-focus-ring px-7 py-3.5">Browse the COA Library</Link>
+                  <Link href="/products" className="vl2-btn-secondary vl-focus-ring px-7 py-3.5">Shop tested compounds</Link>
+                </div>
+              </div>
+            </ScrollReveal>
+            <div className="grid gap-3 sm:grid-cols-2">
+              {TESTING_PROOFS.map((proof, index) => (
+                <ScrollReveal key={proof.title} delayMs={index * 80}>
+                  <article className="vl2-product-card h-full p-6">
+                    <div className="mb-4 inline-flex h-9 w-9 items-center justify-center border border-emerald-400/30 bg-emerald-400/10 text-emerald-300">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                        <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
+                        <path d="m9 12 2 2 4-4" />
+                      </svg>
+                    </div>
+                    <h3 className="text-base text-white">{proof.title}</h3>
+                    <p className="mt-2 text-sm leading-6 text-white/60">{proof.detail}</p>
+                  </article>
+                </ScrollReveal>
+              ))}
+            </div>
+          </div>
         </div>
       </section>
 
