@@ -72,7 +72,13 @@ alter table if exists public.product_doses
   add column if not exists is_default boolean not null default false,
   add column if not exists is_enabled boolean not null default true,
   add column if not exists position integer not null default 0,
-  add column if not exists low_stock_threshold integer not null default 5;
+  add column if not exists low_stock_threshold integer not null default 5,
+  -- per-dose cost / margin (a 5mg and 30mg vial cost different amounts)
+  add column if not exists product_cost_cents integer,
+  add column if not exists suggested_retail_cents integer,
+  add column if not exists min_selling_price_cents integer,
+  add column if not exists min_profit_cents integer,
+  add column if not exists min_profit_percent numeric;
 
 -- Product images: the admin filters on is_enabled; make sure it exists.
 alter table if exists public.product_images
