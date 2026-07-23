@@ -867,7 +867,7 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
     supabaseAdmin.from("orders").select("amount_paid").eq("payment_status", "paid").gte("created_at", todayStart),
     supabaseAdmin.from("orders").select("amount_paid").eq("payment_status", "paid").gte("created_at", monthStart),
     supabaseAdmin.from("orders").select("customer_email").eq("payment_status", "paid"),
-    supabaseAdmin.from("inventory_items").select("quantity_on_hand, reorder_level"),
+    supabaseAdmin.from("products").select("inventory_quantity, stock_status, low_stock_threshold").eq("is_archived", false),
     supabaseAdmin.from("order_shipments").select("shipping_status").neq("shipping_status", "delivered"),
     supabaseAdmin.from("coupons").select("id").eq("active", true),
     supabaseAdmin.from("notification_queue").select("id").eq("status", "pending"),
@@ -877,26 +877,17 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
   assertNoSupabaseError("orders.select(live sales month)", monthError);
   assertNoSupabaseError("orders.select(customer analytics)", paidError);
 
-  let lowStockItems = 0;
-
-  if (!inventoryError) {
-    lowStockItems = (inventoryRows ?? []).filter((row) => Number(row.quantity_on_hand ?? 0) <= Number(row.reorder_level ?? 0)).length;
-  } else if (isMissingRelationError(inventoryError, "inventory_items")) {
-    const { data: productInventoryRows, error: productInventoryError } = await supabaseAdmin
-      .from("products")
-      .select("inventory_quantity, stock_status")
-      .eq("is_archived", false);
-
-    assertNoSupabaseError("products.select(ops summary inventory fallback)", productInventoryError);
-
-    lowStockItems = (productInventoryRows ?? []).filter((row) => {
-      const qty = Number(row.inventory_quantity ?? 0);
-      const status = String(row.stock_status ?? "").toLowerCase();
-      return qty <= 5 || status === "out of stock" || status === "limited";
-    }).length;
-  } else {
-    assertNoSupabaseError("inventory_items.select(ops summary)", inventoryError);
-  }
+  // Low stock is computed from the products table — the real source of stock
+  // (the inventory_items table exists but nothing populates it, so reading it
+  // always reported 0 low-stock items and the dashboard never flagged a
+  // stockout). Uses each product's own low_stock_threshold.
+  assertNoSupabaseError("products.select(ops summary inventory)", inventoryError);
+  const lowStockItems = (inventoryRows ?? []).filter((row) => {
+    const qty = Number(row.inventory_quantity ?? 0);
+    const threshold = Number(row.low_stock_threshold ?? 5);
+    const status = String(row.stock_status ?? "").toLowerCase();
+    return qty <= threshold || status === "out of stock" || status === "limited";
+  }).length;
 
   if (shipmentError && !isMissingRelationError(shipmentError, "order_shipments")) {
     assertNoSupabaseError("order_shipments.select(ops summary)", shipmentError);

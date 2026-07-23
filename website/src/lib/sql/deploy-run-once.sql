@@ -596,6 +596,16 @@ alter table if exists public.products
   add column if not exists reconstitution_note text,
   add column if not exists product_faq jsonb not null default '[]'::jsonb;
 
+-- Durable rate-limit store (see rate-limits.sql).
+create table if not exists public.rate_limit_hits (
+  id bigint generated always as identity primary key,
+  bucket text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists rate_limit_hits_bucket_time_idx
+  on public.rate_limit_hits (bucket, created_at desc);
+alter table if exists public.rate_limit_hits enable row level security;
+
 alter table if exists public.ambassadors
   add column if not exists commission_percent_locked boolean not null default false,
   add column if not exists updated_at timestamptz not null default now();

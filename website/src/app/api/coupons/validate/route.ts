@@ -1,9 +1,22 @@
 import { NextResponse } from "next/server";
 import { validateCoupon } from "@/lib/coupons";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { getRequestIpAddress } from "@/lib/admin-auth";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   try {
+    // Throttle coupon-code guessing: a public validate endpoint with no limit
+    // lets an attacker enumerate/brute-force discount codes. 20 attempts / IP
+    // per minute is plenty for a real shopper.
+    const ip = getRequestIpAddress(request) ?? "unknown";
+    const limit = await checkRateLimit(`coupon-validate:${ip}`, 20, 60);
+    if (!limit.allowed) {
+      const res = NextResponse.json({ success: false, error: "Too many attempts. Please wait a moment." }, { status: 429 });
+      res.headers.set("Retry-After", String(limit.retryAfterSeconds));
+      return res;
+    }
+
     const body = await request.json() as { code?: string; subtotal?: number };
     const code = String(body.code ?? "").slice(0, 40);
     const subtotal = Number(body.subtotal ?? 0);
