@@ -434,6 +434,43 @@ export async function getReferralProgramConfig(): Promise<ReferralProgramConfig>
   }
 }
 
+// Store-wide profit-protection defaults (Control Center → Profit Protection).
+// The engine (src/lib/profit-engine.ts) uses these to guarantee no order
+// finalizes below the floor. All editable live; sensible defaults keep the
+// guard active before an admin ever touches them.
+export interface ProfitSettingsConfig {
+  minProfitPercent: number;
+  minProfitDollars: number;
+  worstCaseUnitCost: number;
+  processingFeePercent: number;
+}
+
+export const DEFAULT_PROFIT_CONFIG: ProfitSettingsConfig = {
+  minProfitPercent: 25,
+  minProfitDollars: 10,
+  worstCaseUnitCost: 33,
+  processingFeePercent: 10,
+};
+
+export async function getProfitSettings(): Promise<ProfitSettingsConfig> {
+  try {
+    const snapshot = await getControlSnapshot("profit");
+    const profit = snapshot.profit ?? {};
+    const num = (value: unknown, fallback: number) => {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+    };
+    return {
+      minProfitPercent: num(profit.min_profit_percent, DEFAULT_PROFIT_CONFIG.minProfitPercent),
+      minProfitDollars: num(profit.min_profit_dollars, DEFAULT_PROFIT_CONFIG.minProfitDollars),
+      worstCaseUnitCost: num(profit.worst_case_unit_cost, DEFAULT_PROFIT_CONFIG.worstCaseUnitCost),
+      processingFeePercent: num(profit.processing_fee_percent, DEFAULT_PROFIT_CONFIG.processingFeePercent),
+    };
+  } catch {
+    return DEFAULT_PROFIT_CONFIG;
+  }
+}
+
 export interface CouponPolicyConfig {
   // Master on/off for site coupon codes.
   couponsEnabled: boolean;
