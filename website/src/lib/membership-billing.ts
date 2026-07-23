@@ -450,6 +450,40 @@ export async function cancelMembership(userId: string): Promise<MembershipCancel
   return { billingCycle, accessUntil, refundable: false };
 }
 
+// A refunded or charged-back membership ends IMMEDIATELY. Unlike a normal
+// cancellation (which keeps benefits until the already-paid period ends), a
+// refund/chargeback means the customer no longer paid — so every benefit stops
+// right now. Safe to call for any order; no-ops when the user has no membership.
+export async function revokeMembershipForRefund(userId: string): Promise<void> {
+  const { data: existing } = await supabaseAdmin
+    .from("customer_memberships")
+    .select("user_id, tier_id, status")
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!existing) {
+    return;
+  }
+
+  await supabaseAdmin
+    .from("customer_memberships")
+    .update({
+      status: "cancelled",
+      cancel_at_period_end: false,
+      cancelled_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("user_id", userId);
+
+  await recordBillingEvent({
+    userId,
+    tierId: existing.tier_id as string,
+    eventType: "cancellation",
+    amountCents: 0,
+    status: "succeeded",
+  }).catch(() => {});
+}
+
 export async function updatePaymentMethod(userId: string, paymentMethodRef: string) {
   const { error } = await supabaseAdmin
     .from("customer_memberships")

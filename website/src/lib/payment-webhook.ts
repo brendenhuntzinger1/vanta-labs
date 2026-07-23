@@ -13,7 +13,7 @@ import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
 import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
-import { activateAnnualMembership } from "@/lib/membership-billing";
+import { activateAnnualMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 
 export interface WebhookEventState {
   eventId: string;
@@ -1030,6 +1030,25 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         await refundStoreCreditForOrder(orderId);
       } catch (creditError) {
         console.error("Unable to return store credit for order", orderId, creditError);
+      }
+      // A refunded/charged-back MEMBERSHIP order ends the membership immediately
+      // so its benefits stop — otherwise a customer could buy a membership, get
+      // it refunded, and keep member pricing/free shipping/points forever.
+      try {
+        const { data: refundedOrder } = await supabaseAdmin
+          .from("orders")
+          .select("order_type, customer_user_id")
+          .eq("order_id", orderId)
+          .maybeSingle();
+        if (
+          refundedOrder
+          && String(refundedOrder.order_type ?? "product") === "membership"
+          && refundedOrder.customer_user_id
+        ) {
+          await revokeMembershipForRefund(String(refundedOrder.customer_user_id));
+        }
+      } catch (membershipError) {
+        console.error("Unable to revoke membership for refunded order", orderId, membershipError);
       }
     }
 
