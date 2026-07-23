@@ -73,6 +73,12 @@ export function AdminControlCenterClient() {
   const [couponsEnabled, setCouponsEnabled] = useState(true);
   const [couponAllowStacking, setCouponAllowStacking] = useState(false);
 
+  // Profit protection thresholds (used by the profit engine).
+  const [profitMinPercent, setProfitMinPercent] = useState("");
+  const [profitMinDollars, setProfitMinDollars] = useState("");
+  const [profitWorstCaseCost, setProfitWorstCaseCost] = useState("");
+  const [profitProcessingFee, setProfitProcessingFee] = useState("");
+
   const loadSnapshot = async () => {
     const res = await fetch("/api/admin/control", { cache: "no-store" });
     const json = await res.json() as { success: boolean; snapshot?: ControlSnapshot; error?: string };
@@ -134,6 +140,12 @@ export function AdminControlCenterClient() {
     const coupons = next.coupons ?? {};
     setCouponsEnabled(coupons.enabled !== false);
     setCouponAllowStacking(coupons.allow_stacking === true);
+
+    const profit = next.profit ?? {};
+    setProfitMinPercent(profit.min_profit_percent != null ? String(profit.min_profit_percent) : "");
+    setProfitMinDollars(profit.min_profit_dollars != null ? String(profit.min_profit_dollars) : "");
+    setProfitWorstCaseCost(profit.worst_case_unit_cost != null ? String(profit.worst_case_unit_cost) : "");
+    setProfitProcessingFee(profit.processing_fee_percent != null ? String(profit.processing_fee_percent) : "");
   };
 
   useEffect(() => {
@@ -216,6 +228,11 @@ export function AdminControlCenterClient() {
 
       { section: "coupons", key: "enabled", value: couponsEnabled },
       { section: "coupons", key: "allow_stacking", value: couponAllowStacking },
+
+      { section: "profit", key: "min_profit_percent", value: profitMinPercent },
+      { section: "profit", key: "min_profit_dollars", value: profitMinDollars },
+      { section: "profit", key: "worst_case_unit_cost", value: profitWorstCaseCost },
+      { section: "profit", key: "processing_fee_percent", value: profitProcessingFee },
     ];
 
     const res = await fetch("/api/admin/control", {
@@ -395,6 +412,17 @@ export function AdminControlCenterClient() {
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={couponsEnabled} onChange={(e) => setCouponsEnabled(e.target.checked)} /> Coupons enabled site-wide</label>
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={couponAllowStacking} onChange={(e) => setCouponAllowStacking(e.target.checked)} /> Allow coupons to stack with referral codes &amp; Buy 3 Get 1</label>
               <p className="text-xs text-zinc-500">When stacking is off (default), a coupon can&apos;t combine with an ambassador code or Buy 3 Get 1.</p>
+            </div>
+          </section>
+
+          <section className="vl-panel-soft rounded-2xl p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">Profit Protection</h3>
+            <p className="mt-2 text-xs text-zinc-400">The engine never lets an order finalize below these. Leave blank for the defaults (25% margin, $10, $33 worst-case vial cost, 10% processing).</p>
+            <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+              <label className="text-zinc-300">Minimum margin (%)<input value={profitMinPercent} onChange={(e) => setProfitMinPercent(e.target.value)} placeholder="25" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Minimum profit ($)<input value={profitMinDollars} onChange={(e) => setProfitMinDollars(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Worst-case unit cost ($, when a product has no cost set)<input value={profitWorstCaseCost} onChange={(e) => setProfitWorstCaseCost(e.target.value)} placeholder="33" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Processing fee assumption (%)<input value={profitProcessingFee} onChange={(e) => setProfitProcessingFee(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
           </section>
         </div>
