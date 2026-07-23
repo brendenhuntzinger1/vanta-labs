@@ -302,21 +302,21 @@ export function AccountAuthForm() {
 
       {mode === "signup" ? (
         <div className="mt-4 space-y-3">
-          <label className="flex items-start gap-3 rounded-xl border border-cyan-300/30 bg-cyan-400/[0.06] px-4 py-3 text-sm text-zinc-200">
+          <label className="flex items-start gap-3 rounded-xl border border-emerald-300/30 bg-emerald-400/[0.06] px-4 py-3 text-sm text-zinc-200">
             <input
               type="checkbox"
               checked={ageConfirmed}
               onChange={(event) => setAgeConfirmed(event.target.checked)}
-              className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
+              className="mt-0.5 h-5 w-5 shrink-0 accent-emerald-500"
             />
             <span>I confirm that I am at least 21 years old.</span>
           </label>
-          <label className="flex items-start gap-3 rounded-xl border border-cyan-300/30 bg-cyan-400/[0.06] px-4 py-3 text-sm text-zinc-200">
+          <label className="flex items-start gap-3 rounded-xl border border-emerald-300/30 bg-emerald-400/[0.06] px-4 py-3 text-sm text-zinc-200">
             <input
               type="checkbox"
               checked={researchUseAgreed}
               onChange={(event) => setResearchUseAgreed(event.target.checked)}
-              className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
+              className="mt-0.5 h-5 w-5 shrink-0 accent-emerald-500"
             />
             <span>I agree and understand that the products on this site are intended for research use only, as defined by FDA.</span>
           </label>
@@ -328,7 +328,7 @@ export function AccountAuthForm() {
           type="checkbox"
           checked={rememberMe}
           onChange={(event) => setRememberMe(event.target.checked)}
-          className="h-5 w-5 shrink-0 accent-cyan-400"
+          className="h-5 w-5 shrink-0 accent-emerald-500"
         />
         Keep me signed in on this device
       </label>
@@ -339,7 +339,7 @@ export function AccountAuthForm() {
       <button
         type="submit"
         disabled={loading || (mode === "signup" && (!ageConfirmed || !researchUseAgreed))}
-        className="vl-focus-ring mt-6 inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-white to-zinc-300 px-6 py-3 text-sm font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+        className="vl-focus-ring mt-6 inline-flex w-full items-center justify-center rounded-full bg-emerald-500 px-6 py-3 text-sm font-bold text-[#04120c] shadow-[0_8px_24px_-8px_rgba(16,185,129,0.6)] transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {loading ? "Please wait…" : primaryLabel}
       </button>
