@@ -537,12 +537,22 @@ export function ProductDetailClient({
                 ) : null}
               </div>
 
+              {currentBundleRate > 0 ? (
+                <div className="mt-4 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-700">{quantity}-Vial Bundle</p>
+                    <p className="text-sm text-emerald-900">You save {formatUsd(unitPrice * quantity - getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))} · {Math.round(currentBundleRate * 100)}% off</p>
+                  </div>
+                  <p className="text-xl font-bold text-emerald-700">{formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))}</p>
+                </div>
+              ) : null}
+
               <div className="mt-5 flex gap-2">
                 <button
                   onClick={(event) => handleAddToCart(event.currentTarget)}
                   type="button"
                   disabled={isOutOfStock}
-                  className="vl2-lab-btn-primary vl-focus-ring flex-1 px-5 py-3.5 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="vl-focus-ring flex-1 rounded-xl bg-emerald-600 px-5 py-3.5 text-sm font-semibold uppercase tracking-[0.08em] text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isOutOfStock ? "Currently Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
                 </button>
