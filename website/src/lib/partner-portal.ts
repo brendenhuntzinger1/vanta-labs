@@ -224,7 +224,7 @@ async function sendReferralCodeAssignedEmail(input: {
   return result.success;
 }
 
-async function autoApproveEligibleCommissions() {
+export async function autoApproveEligibleCommissions() {
   const now = new Date();
   const [ambassadorSettings, referralProgram] = await Promise.all([
     getAmbassadorProgramSettings(),
@@ -428,6 +428,13 @@ export async function createPartnerApplication(input: {
     preferred_referral_code: preferred || null,
   };
 
+  // New applicants get the admin's configured default commission rate (so the
+  // "default commission %" control in the admin is authoritative), instead of a
+  // hardcoded number. Admins can still set a per-ambassador rate on approval.
+  const defaultCommission = await getReferralProgramConfig()
+    .then((cfg) => Number(cfg.defaultCommissionPercent))
+    .catch(() => 15);
+
   const partnerInsert = await supabaseAdmin
     .from("partners")
     .insert({
@@ -436,7 +443,7 @@ export async function createPartnerApplication(input: {
       email: input.email,
       referral_code: referralCode,
       status: "pending",
-      commission_percent: 15,
+      commission_percent: defaultCommission,
       auth_user_id: input.authUserId,
       invited_at: now,
       updated_at: now,
@@ -455,7 +462,7 @@ export async function createPartnerApplication(input: {
       email: input.email,
       referral_code: referralCode,
       status: "pending",
-      commission_percent: 15,
+      commission_percent: defaultCommission,
       auth_user_id: input.authUserId,
       invited_at: now,
       updated_at: now,

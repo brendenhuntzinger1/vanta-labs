@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { grantMonthlyStoreCreditSweep, runMembershipBillingSweep } from "@/lib/membership-billing";
 import { runAbandonedCartSweep } from "@/lib/cart-recovery";
+import { autoApproveEligibleCommissions } from "@/lib/partner-portal";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -21,10 +22,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const [membershipResult, cartRecoveryResult, storeCreditResult] = await Promise.allSettled([
+  const [membershipResult, cartRecoveryResult, storeCreditResult, commissionApprovalResult] = await Promise.allSettled([
     runMembershipBillingSweep(),
     runAbandonedCartSweep(),
     grantMonthlyStoreCreditSweep(),
+    // Advance ambassador commissions past the 14-day hold automatically, instead
+    // of only when someone happens to load the partner page. Idempotent.
+    autoApproveEligibleCommissions(),
   ]);
 
   return NextResponse.json({
@@ -32,5 +36,6 @@ export async function GET(request: Request) {
     membershipBilling: membershipResult.status === "fulfilled" ? membershipResult.value : { error: String(membershipResult.reason) },
     cartRecovery: cartRecoveryResult.status === "fulfilled" ? cartRecoveryResult.value : { error: String(cartRecoveryResult.reason) },
     storeCredit: storeCreditResult.status === "fulfilled" ? storeCreditResult.value : { error: String(storeCreditResult.reason) },
+    commissionApproval: commissionApprovalResult.status === "fulfilled" ? commissionApprovalResult.value : { error: String(commissionApprovalResult.reason) },
   });
 }
