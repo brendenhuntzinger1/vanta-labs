@@ -398,8 +398,9 @@ export default function CheckoutPage() {
 
       const result = await createSecureCheckoutSession(payload);
 
-      // Manual methods (Cash App / Zelle / PayPal): stay on-page and show the
-      // premium payment instructions panel with the order number + QR.
+      // Manual (non-card) methods: stay on-page and show the payment
+      // instructions panel. None ship enabled today (card only), so this branch
+      // is dormant unless a manual method is re-enabled in config.
       if (result.isManualPayment) {
         const method = getPaymentMethodById(paymentMethods, result.paymentMethod) ?? selectedMethod;
         if (method) {

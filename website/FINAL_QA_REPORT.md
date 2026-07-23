@@ -7,6 +7,39 @@ was actually executed and observed passing in this environment.
 
 ---
 
+## Changes in this round (payment + sign-up cleanup)
+
+You asked to (1) fix the unavailable phone sign-up and (2) remove Cash App,
+Zelle, and PayPal since you won't take those, and noted your card processor
+isn't connected yet. Done:
+
+- **Removed Cash App / Zelle / PayPal / Venmo entirely.** They were disabled but
+  still present in config, copy, and assets. Now the site offers a **single
+  payment method: Debit, Credit & Apple Pay** (through your future processor).
+  Deleted the four methods from the one source of truth (`DEFAULT_PAYMENT_METHODS`),
+  the QR images, and every customer-facing mention (checkout, membership,
+  shipping policy, email labels, card-fee notice).
+- **Fixed a bug this created before it could ship:** the **annual membership**
+  purchase *required* a manual method, so removing them would have made annual
+  memberships unpayable. I unified annual into the same card-billing flow as
+  monthly (`/api/membership/subscribe`, which already handles "processor not
+  connected yet" honestly — it saves the request and charges nothing until the
+  processor is live). No more manual dependency anywhere.
+- **Removed the phone sign-up / sign-in option.** It used Supabase SMS OTP,
+  which needs an SMS provider you don't have, so it always errored — an
+  "unavailable" path shown to customers. Sign-up/sign-in is now **email +
+  password only**. (The optional *contact* phone field in account settings is
+  unrelated and still works.)
+
+All of this re-verified: **138 tests (5× consistent), 17 real-Postgres
+concurrency tests, tsc + lint clean, production build succeeds.**
+
+Note you mentioned not all products are listed yet — that's fine; the catalog is
+admin-managed and the checkout/inventory logic works for however many SKUs you
+publish. Nothing here depends on a complete catalog.
+
+---
+
 ## The one honesty caveat you need up front
 
 This build container's network policy **blocks all container-image downloads**
@@ -75,6 +108,17 @@ Reproduce the DB proof anytime: `bash website/scripts/verify-db-locally.sh`
 No other defects surfaced; the profit, discount, commission, and membership
 logic held across ~23,000 simulated scenarios.
 
+### Bugs found & fixed in the **payment/sign-up round**
+
+3. **🔴 Removing manual methods would have made annual memberships unpayable**
+   (the annual flow *required* Cash App/Zelle/PayPal). Caught before shipping —
+   annual now uses the same card-billing path as monthly, which degrades
+   gracefully until the processor is connected.
+4. **🟠 Phone sign-up was offered but always failed** (no SMS provider
+   configured). Removed the option so customers aren't shown a dead path.
+5. **🟠 Stale copy** naming Cash App/Zelle/PayPal in the shipping policy, the
+   card-fee notice, and email labels — all removed.
+
 ---
 
 ## Checklist, item by item
@@ -88,6 +132,7 @@ Legend: ✅ Proven here · 🧪 Logic proven, E2E needs staging · 🔵 Tier B (
 | Email verification | Supabase built-in mailer | 🔵 needs staging + SMTP configured |
 | Login / Logout | `admin-auth` + Supabase session; unit tests on admin session/passcode | 🧪 admin 2FA proven; customer login needs staging |
 | Password reset | Supabase recovery flow | 🔵 needs staging |
+| Sign-up method | **Email + password only** (broken phone-OTP option removed) | ✅ simplified; email path needs staging to send |
 | Session expiration | `auth-session.test.ts` (expiry logic) | ✅ logic proven |
 | Duplicate account prevention | Supabase unique email + DB unique constraints proven | 🧪 constraint proven; end-to-end needs staging |
 | **Admin 6-digit passcode (2FA)** | `admin-passcode.test.ts` (scrypt hash/verify, format) | ✅ Proven |
@@ -118,6 +163,7 @@ Legend: ✅ Proven here · 🧪 Logic proven, E2E needs staging · 🔵 Tier B (
 | Ambassador commissions | always paid on a valid code, on discounted subtotal; unit + sweep | ✅ Proven (logic) |
 | Taxes | tax on merchandise only, pass-through; sweep | ✅ Proven (logic) |
 | Shipping thresholds / free-ship cost | profit sweep accounts for store-borne shipping cost | ✅ Proven (logic) |
+| Payment method offered | **Card only** (Debit/Credit/Apple Pay); Cash App/Zelle/PayPal removed | ✅ Proven (config test) |
 | Payment processing | provider is a stub until you connect a real processor | 🔵 needs a processor |
 | Order confirmation | email template + trigger reviewed | 🔵 needs email provider |
 

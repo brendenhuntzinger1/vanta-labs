@@ -191,14 +191,6 @@ export function orderConfirmationTemplate(input: {
 
 function paymentMethodLabel(method: string) {
   switch (method) {
-    case "cashapp":
-      return "Cash App";
-    case "zelle":
-      return "Zelle";
-    case "paypal":
-      return "PayPal";
-    case "venmo":
-      return "Venmo";
     case "card":
       return "Credit / Debit Card";
     default:

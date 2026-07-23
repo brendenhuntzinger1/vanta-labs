@@ -1,11 +1,10 @@
 // -------------------------------------------------------------------------
 // Payment method configuration + shared card-processing-fee math.
 //
-// Single source of truth for every payment method the checkout offers:
-//   - the recommended, no-fee manual methods (Cash App, Zelle, PayPal, and
-//     any future ones), shown first, and
-//   - the Credit/Debit Card processor option, shown as secondary, which
-//     carries a configurable processing fee.
+// Single source of truth for every payment method the checkout offers. Vanta
+// Labs takes payment through its card processor only — Debit, Credit & Apple
+// Pay. (Peer-to-peer transfer apps such as Cash App, Zelle, PayPal and Venmo
+// are intentionally NOT offered.)
 //
 // This file has NO `server-only` import on purpose, so the SAME file (and the
 // SAME fee math) is used by both:
@@ -16,17 +15,13 @@
 // One formula, not two hand-synced copies - same reasoning as
 // bundle-pricing.ts / shipping.ts / discount-resolution.ts.
 //
-// HOW TO CONFIGURE (no code changes beyond editing the objects below):
-//   * Everything is a PLACEHOLDER. Replace handles, emails, phone numbers,
-//     QR image paths and instructions with your real details when ready.
-//   * QR images live in /public/images/payments/. Drop a real PNG/SVG in at
-//     the same path and it appears automatically.
+// HOW TO CONFIGURE:
 //   * The card processing fee is DEFAULT_CARD_PROCESSING_FEE below - change
 //     the percentage (or disable it) in one place. It can also be overridden
 //     at runtime from the admin "Payments" settings without a deploy.
-//   * To add a brand-new method (Venmo, Apple Cash, ACH, Wire, Crypto, ...)
-//     just add another object to DEFAULT_PAYMENT_METHODS with a unique `id`
-//     and `kind: "manual"`. Nothing else in checkout needs to change.
+//
+// The `kind: "manual"` scaffold below is retained so a future non-card option
+// (ACH, wire, etc.) could be added, but no manual method ships enabled.
 //
 // NOTE ON CARD SURCHARGES: charging a fee on card payments is regulated in
 // some regions (and often prohibited on debit cards). The fee is fully
@@ -122,75 +117,10 @@ export function calculateCardProcessingFee(
 
 export function cardProcessingFeeNotice(config: CardProcessingFeeConfig): string {
   if (config.noticeText.trim()) return config.noticeText.trim();
-  return `A ${config.percentage}% processing fee applies to Credit/Debit Card payments. Our recommended payment methods (Cash App, Zelle, PayPal) do not include this fee.`;
+  return `A ${config.percentage}% processing fee applies to card payments.`;
 }
 
 export const DEFAULT_PAYMENT_METHODS: PaymentMethodConfig[] = [
-  {
-    id: "cashapp",
-    label: "Cash App",
-    kind: "manual",
-    enabled: false,
-    order: 10,
-    icon: "🟢",
-    recommended: true,
-    badges: ["⭐ Recommended", "✅ No Processing Fee", "⚡ Instant"],
-    description: "Fast & secure — no processing fee",
-    tagline: "Preferred payment method",
-    handle: "$YOURCASHTAG", // PLACEHOLDER — replace with your $cashtag
-    qrImageUrl: "/images/payments/cashapp-qr.svg",
-    instructions: [
-      "Open Cash App and send the exact amount shown above to our $cashtag.",
-      "Add your Order Number to the payment note.",
-      "Enter your Cash App payment/transaction ID below and submit.",
-    ],
-    memoNote: "Please include your Order Number in the Cash App note so we can match your payment.",
-    referenceLabel: "Transaction ID",
-  },
-  {
-    id: "zelle",
-    label: "Zelle",
-    kind: "manual",
-    enabled: false,
-    order: 20,
-    icon: "🏦",
-    recommended: true,
-    badges: ["⭐ Recommended", "✅ No Processing Fee", "⚡ Fast Checkout"],
-    description: "Bank-to-bank — no processing fee",
-    tagline: "Instant payment",
-    businessName: "Your Business LLC", // PLACEHOLDER
-    email: "payments@yourbusiness.com", // PLACEHOLDER
-    phone: "(000) 000-0000", // PLACEHOLDER
-    qrImageUrl: "/images/payments/zelle-qr.svg",
-    instructions: [
-      "Open your bank's Zelle and send the exact amount shown above to our email or phone number.",
-      "Add your Order Number to the memo.",
-      "Enter your Zelle confirmation number below and submit.",
-    ],
-    memoNote: "Please include your Order Number in the Zelle memo so we can match your payment.",
-    referenceLabel: "Confirmation Number",
-  },
-  {
-    id: "paypal",
-    label: "PayPal",
-    kind: "manual",
-    enabled: false,
-    order: 30,
-    icon: "🅿️",
-    recommended: true,
-    badges: ["⭐ Recommended", "✅ No Processing Fee"],
-    description: "No processing fee",
-    tagline: "Fast & secure",
-    email: "payments@yourbusiness.com", // PLACEHOLDER
-    qrImageUrl: "/images/payments/paypal-qr.svg",
-    instructions: [
-      "Send the exact amount shown above to our PayPal email.",
-      "Add your Order Number in the notes.",
-      "Enter your PayPal transaction ID below and submit.",
-    ],
-    memoNote: "Please include your Order Number in the PayPal note so we can match your payment.",
-    referenceLabel: "Transaction ID",
-  },
   {
     id: "card",
     label: "Debit, Credit & Apple Pay",
@@ -203,30 +133,6 @@ export const DEFAULT_PAYMENT_METHODS: PaymentMethodConfig[] = [
     description: "Visa, Mastercard, Amex, Discover & Apple Pay",
     tagline: "Fast, encrypted card checkout",
     instructions: [],
-    referenceLabel: "Transaction ID",
-  },
-  // --- Future methods -----------------------------------------------------
-  // Flip `enabled: true`, drop in a QR image, and it appears automatically.
-  // No checkout code changes required. Example scaffold:
-  {
-    id: "venmo",
-    label: "Venmo",
-    kind: "manual",
-    enabled: false,
-    order: 40,
-    icon: "🔵",
-    recommended: true,
-    badges: ["⭐ Recommended", "✅ No Processing Fee"],
-    description: "No processing fee",
-    tagline: "Fast & secure",
-    handle: "@YourVenmo", // PLACEHOLDER
-    qrImageUrl: "/images/payments/venmo-qr.svg",
-    instructions: [
-      "Open Venmo and send the exact amount shown above to our handle.",
-      "Add your Order Number to the payment note.",
-      "Enter your Venmo transaction ID below and submit.",
-    ],
-    memoNote: "Please include your Order Number in the Venmo note so we can match your payment.",
     referenceLabel: "Transaction ID",
   },
 ];
