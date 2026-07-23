@@ -2,6 +2,9 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { getControlSnapshot } from "@/lib/admin-control";
 import { calculateEarnedPoints, dollarsToPoints, pointsToDollars, POINTS_PER_DOLLAR_REDEMPTION } from "@/lib/points-math";
 import { getStoreCreditBalanceCents } from "@/lib/store-credit";
+import { isMembershipActive } from "@/lib/membership-status";
+
+export { isMembershipActive } from "@/lib/membership-status";
 
 export interface MembershipBonusSettings {
   signupBonusEnabled: boolean;
@@ -178,11 +181,11 @@ export interface MembershipPerks {
 // The single source of truth for what perks a buyer's account currently
 // receives. Discount, free shipping, and store credit apply ONLY while the
 // membership is an active paying (or trialing) PAID tier — so the moment a
-// member stops paying (status leaves active/trialing) every perk switches off
-// automatically. For annual members the status stays active for the paid year.
+// member stops paying (status leaves active/trialing, or the paid period ends)
+// every perk switches off automatically.
 export async function getMembershipPerks(userId: string): Promise<MembershipPerks> {
   const membership = await getCustomerMembership(userId);
-  const active = membership.status === "active" || membership.status === "trialing";
+  const active = isMembershipActive(membership);
   const isActiveMember = active && membership.tier.slug !== "free";
 
   const [storeCreditBalanceCents, freeTier] = await Promise.all([
@@ -208,8 +211,7 @@ export async function getMembershipPerks(userId: string): Promise<MembershipPerk
 // their old paid rate.
 export async function getActivePointsPerDollar(userId: string): Promise<number> {
   const membership = await getCustomerMembership(userId);
-  const active = membership.status === "active" || membership.status === "trialing";
-  if (active) {
+  if (isMembershipActive(membership)) {
     return membership.tier.pointsPerDollar;
   }
   const free = await getFreeTier();
@@ -256,7 +258,7 @@ export async function getCustomerMembership(userId: string): Promise<CustomerMem
 // - trial members (status "trialing") don't qualify yet.
 export async function isEligibleForBulkSavings(userId: string): Promise<boolean> {
   const membership = await getCustomerMembership(userId);
-  if (membership.status !== "active" && membership.status !== "trialing") {
+  if (!isMembershipActive(membership)) {
     return false;
   }
   // Bulk savings apply to the Elite and Black tiers (the tiers whose plans
@@ -268,7 +270,7 @@ export async function isEligibleForBulkSavings(userId: string): Promise<boolean>
 // not just marketing copy, so fulfillment staff can actually filter by it.
 export async function isPriorityMember(userId: string): Promise<boolean> {
   const membership = await getCustomerMembership(userId);
-  return membership.tier.priorityShipping && (membership.status === "active" || membership.status === "trialing");
+  return membership.tier.priorityShipping && isMembershipActive(membership);
 }
 
 export async function getActivePointsMultiplier(): Promise<{ multiplier: number; eventName: string | null }> {
@@ -518,11 +520,18 @@ export async function awardReferralSignupBonus(newUserId: string, referrerUserId
     metadata: { role: "referred" },
   });
 
+  // The referrer earns their PAID tier's referral bonus only while their
+  // membership is actually active; a lapsed/expired member drops to the free
+  // tier's bonus (so they can't keep earning an elite-tier bonus after they
+  // stopped paying).
   const referrerMembership = await getCustomerMembership(referrerUserId);
-  if (referrerMembership.tier.referralBonusPoints > 0) {
+  const referrerBonusPoints = isMembershipActive(referrerMembership)
+    ? referrerMembership.tier.referralBonusPoints
+    : (await getFreeTier())?.referralBonusPoints ?? 0;
+  if (referrerBonusPoints > 0) {
     await recordPointsLedgerEntry({
       userId: referrerUserId,
-      amount: referrerMembership.tier.referralBonusPoints,
+      amount: referrerBonusPoints,
       reason: "referral_bonus",
       metadata: { role: "referrer", referredUserId: newUserId },
     });

@@ -7,6 +7,7 @@ import { orderConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/t
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { updateCommissionOnRefund } from "@/lib/payment-webhook";
 import { restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
+import { revokeMembershipForRefund } from "@/lib/membership-billing";
 import { refundStoreCreditForOrder } from "@/lib/store-credit";
 
 function roundMoney(value: number) {
@@ -292,6 +293,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
           await refundStoreCreditForOrder(orderId);
         } catch {
           // Store-credit re-credit is best-effort; never block the refund.
+        }
+        // A fully-refunded MEMBERSHIP order ends the membership immediately so
+        // its benefits stop (member pricing, free shipping, points, etc.).
+        try {
+          if (String(order.order_type ?? "product") === "membership" && order.customer_user_id) {
+            await revokeMembershipForRefund(String(order.customer_user_id));
+          }
+        } catch {
+          // Best-effort; never block the refund.
         }
       }
 
