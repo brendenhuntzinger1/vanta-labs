@@ -13,7 +13,11 @@
 // ============================================================================
 
 const M = Number(process.argv[2] || 1_000_000);
-const PROC_PCT = 0.0595, PROC_FLAT = 0.30, SHIP_COST = 9.00;
+// Processing fee is configurable: PROC_PCT / PROC_FLAT env vars (defaults to your
+// real 10% high-risk processor rate). e.g. PROC_PCT=0.10 node scripts/...
+const PROC_PCT = process.env.PROC_PCT ? Number(process.env.PROC_PCT) : 0.10;
+const PROC_FLAT = process.env.PROC_FLAT ? Number(process.env.PROC_FLAT) : 0.30;
+const SHIP_COST = 9.00;
 const HANDLING = 0.07, SHIP_FEE = 15.00, FREE_SHIP = 250, COMMISSION = 0.15;
 
 const CAT = [
