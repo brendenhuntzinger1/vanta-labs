@@ -768,7 +768,7 @@ export default function AdminProductsPage() {
 
             <div className="mt-5 space-y-3">
               <div className="flex items-center justify-between">
-                <h3 className="text-sm font-semibold text-white">Dosage variants</h3>
+                <h3 className="text-sm font-semibold text-white">Vial size variants</h3>
                 <button
                   type="button"
                   onClick={() => setWizard((prev) => ({
@@ -922,7 +922,7 @@ function ProductEditor({
 
       <div className="space-y-3">
         <div className="flex items-center justify-between">
-          <h3 className="text-sm font-semibold text-white">Dosage variants</h3>
+          <h3 className="text-sm font-semibold text-white">Vial size variants</h3>
           <button
             type="button"
             onClick={() => setDraft((prev) => ({

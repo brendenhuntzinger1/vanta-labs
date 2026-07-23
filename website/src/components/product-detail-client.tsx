@@ -399,13 +399,13 @@ export function ProductDetailClient({
                   Batch {selectedBatchNumber}
                 </span>
                 <span className="border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-700">
-                  USA&apos;s Purest Source
+                  Research Use Only
                 </span>
               </div>
 
               {product.doses && product.doses.length > 0 && (
                 <div className="mt-6">
-                  <p className="vl2-lab-eyebrow">Dosage</p>
+                  <p className="vl2-lab-eyebrow">Vial Size</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {product.doses.map((variant) => (
                       <button

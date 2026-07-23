@@ -807,3 +807,46 @@ begin
 end;
 $$;
 grant execute on function public.validate_referral_code(text) to anon, authenticated;
+
+
+-- ==================== CHUNK 4 — SECURITY HARDENING (2025 audit) ==============
+-- Added by the platform audit. Idempotent and safe to re-run.
+
+-- 4a. Admin console second factor: 6-digit passcode (scrypt salt+hash).
+--     See src/lib/admin-passcode.ts and src/lib/sql/admin-passcode-2fa.sql.
+alter table if exists public.admin_credentials
+  add column if not exists passcode_salt text,
+  add column if not exists passcode_hash text,
+  add column if not exists passcode_updated_at timestamptz;
+
+-- 4b. Deny-by-default Row Level Security on every public table. The app reads
+--     and writes through the service-role key (BYPASSRLS), so this only closes
+--     direct anon/authenticated access via the public NEXT_PUBLIC anon key.
+--     See src/lib/sql/rls-enforce-all-tables.sql for the full rationale.
+do $$
+declare
+  target text;
+  tables text[] := array[
+    'admin_credentials', 'admin_sessions', 'admin_login_attempts', 'admin_audit_logs',
+    'orders', 'order_items', 'order_shipments', 'payment_events', 'payouts',
+    'partner_payouts', 'fulfillment_payouts', 'commissions', 'commission_tier_rules',
+    'customer_addresses', 'customer_preferences', 'customer_memberships',
+    'store_credit_ledger', 'points_ledger', 'promotional_point_events',
+    'products', 'product_doses', 'product_images', 'product_subscriptions',
+    'inventory_items', 'coupons', 'membership_tiers', 'membership_billing_events',
+    'ambassadors', 'partners', 'partner_clicks', 'partner_program_stats',
+    'referrals', 'referral_orders',
+    'abandoned_carts', 'abandoned_cart_emails', 'back_in_stock_requests',
+    'wishlist_items', 'email_send_log', 'email_suppressions', 'notification_queue',
+    'fulfillment_orders', 'fulfillment_events', 'website_analytics_events'
+  ];
+begin
+  foreach target in array tables loop
+    if exists (
+      select 1 from information_schema.tables
+      where table_schema = 'public' and table_name = target
+    ) then
+      execute format('alter table public.%I enable row level security;', target);
+    end if;
+  end loop;
+end $$;

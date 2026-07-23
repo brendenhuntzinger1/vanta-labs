@@ -1237,24 +1237,48 @@ export async function markCommissionsPaid(input: {
 
   const ids = (pendingRows ?? []).map((row) => row.id);
   if (ids.length === 0) {
-    return { payoutId: null, orderCount: 0 };
+    return { payoutId: null, orderCount: 0, amount: 0 };
   }
+
+  // The payout amount is ALWAYS the sum of the commissions actually owed, never
+  // a caller-supplied number. Trusting `input.amount` let an admin under- or
+  // over-pay an ambassador (e.g. flip $500 of commissions to "paid" while
+  // recording a $50 payout). We keep the param only for the threshold display.
+  const pendingTotal = roundMoney(
+    (pendingRows ?? []).reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0),
+  );
 
   if (!input.overrideMinimumThreshold) {
     const ambassadorSettings = await getAmbassadorProgramSettings();
-    if (roundMoney(input.amount) < ambassadorSettings.minimumPayoutThreshold) {
-      throw new Error(`Payout amount is below the ${ambassadorSettings.minimumPayoutThreshold.toFixed(2)} minimum payout threshold. Wait for more commissions to accrue, or explicitly override the threshold to pay out anyway.`);
+    if (pendingTotal < ambassadorSettings.minimumPayoutThreshold) {
+      throw new Error(`Payout amount ($${pendingTotal.toFixed(2)}) is below the $${ambassadorSettings.minimumPayoutThreshold.toFixed(2)} minimum payout threshold. Wait for more commissions to accrue, or explicitly override the threshold to pay out anyway.`);
     }
   }
 
-  const { error: updateError } = await supabaseAdmin
+  // Claim the rows atomically: the `.eq("payment_status", "approved_for_payout")`
+  // guard means a concurrent second call (double-click / two admins) claims ZERO
+  // rows because they are already "paid", so it inserts no duplicate payout.
+  // `.select()` returns exactly the rows this call claimed, which is what we pay.
+  const { data: claimedRows, error: updateError } = await supabaseAdmin
     .from("referral_orders")
     .update({ payment_status: "paid", commission_paid_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .in("id", ids);
+    .in("id", ids)
+    .eq("payment_status", "approved_for_payout")
+    .select("id, commission_amount");
 
   if (updateError) {
     assertNoSupabaseError("referral_orders.update(mark paid)", updateError);
   }
+
+  const claimed = claimedRows ?? [];
+  if (claimed.length === 0) {
+    // Another concurrent payout already claimed these commissions.
+    return { payoutId: null, orderCount: 0, amount: 0 };
+  }
+
+  const payoutAmount = roundMoney(
+    claimed.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0),
+  );
 
   const { error: commissionMirrorError } = await supabaseAdmin
     .from("commissions")
@@ -1277,7 +1301,7 @@ export async function markCommissionsPaid(input: {
     .insert({
       id: payoutId,
       ambassador_id: input.partnerId,
-      amount: roundMoney(input.amount),
+      amount: payoutAmount,
       note: input.note ?? null,
       processed_by: input.actorUserId ?? null,
     });
@@ -1291,7 +1315,7 @@ export async function markCommissionsPaid(input: {
     .insert({
       id: payoutId,
       partner_id: input.partnerId,
-      amount: roundMoney(input.amount),
+      amount: payoutAmount,
       note: input.note ?? null,
       processed_by: input.actorUserId ?? null,
     });
@@ -1307,8 +1331,8 @@ export async function markCommissionsPaid(input: {
     target_id: payoutId,
     metadata: {
       partnerId: input.partnerId,
-      amount: roundMoney(input.amount),
-      orderCount: ids.length,
+      amount: payoutAmount,
+      orderCount: claimed.length,
       actorUsername: input.actorUsername ?? null,
       ipAddress: input.ipAddress ?? null,
       userAgent: input.userAgent ?? null,
@@ -1317,6 +1341,7 @@ export async function markCommissionsPaid(input: {
 
   return {
     payoutId,
-    orderCount: ids.length,
+    orderCount: claimed.length,
+    amount: payoutAmount,
   };
 }

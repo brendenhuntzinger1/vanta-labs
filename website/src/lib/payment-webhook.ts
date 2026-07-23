@@ -6,7 +6,7 @@ import { sendEmail } from "@/lib/email/send";
 import { commissionEarnedTemplate, orderConfirmationTemplate } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
 import { redeemCoupon } from "@/lib/coupons";
-import { calculateEarnedPoints, getActivePointsMultiplier, getActivePointsPerDollar, recordPointsLedgerEntry, reverseOrderPoints } from "@/lib/membership";
+import { calculateEarnedPoints, getActivePointsMultiplier, getActivePointsPerDollar, recordPointsLedgerEntry, restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
 import { redeemStoreCredit, refundStoreCreditForOrder } from "@/lib/store-credit";
 import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
@@ -827,6 +827,25 @@ export async function processPaymentWebhook(payload: string, signature: string, 
 
   try {
   const orderRecord = await getOrderByOrderId(orderId);
+
+  // Refund/cancel are terminal money states. A late or replayed
+  // `payment.succeeded` (arriving with a fresh event_id after a refund) must
+  // NOT flip the order back to "paid" and re-award commissions, points,
+  // coupons, the confirmation email, and 3PL transmission. Record the event
+  // against the existing status and stop.
+  const REFUND_TERMINAL_STATES = new Set(["refunded", "partially_refunded", "canceled"]);
+  const priorPaymentStatus = orderRecord?.payment_status ? String(orderRecord.payment_status) : null;
+  if (nextStatus === "paid" && priorPaymentStatus && REFUND_TERMINAL_STATES.has(priorPaymentStatus)) {
+    await markEventProcessed(eventId, orderId, priorPaymentStatus as OrderStatus);
+    return {
+      duplicate: false,
+      eventId,
+      orderId,
+      status: priorPaymentStatus as OrderStatus,
+      providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
+    } satisfies WebhookEventState;
+  }
+
   const subtotal = roundMoney(eventPayload.subtotal ?? 0);
   const shippingAmount = roundMoney(eventPayload.shippingAmount ?? 0);
   const discountAmount = roundMoney(eventPayload.discountAmount ?? 0);
@@ -976,6 +995,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         await reverseOrderPoints(orderId);
       } catch (pointsError) {
         console.error("Unable to reverse membership points for order", orderId, pointsError);
+      }
+      try {
+        await restoreRedeemedPoints(orderId);
+      } catch (restoreError) {
+        console.error("Unable to restore redeemed points for order", orderId, restoreError);
       }
       try {
         await refundStoreCreditForOrder(orderId);

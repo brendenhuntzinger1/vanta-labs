@@ -3,7 +3,8 @@ import "server-only";
 import { randomBytes, scryptSync, timingSafeEqual, createHash } from "crypto";
 import { cookies } from "next/headers";
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { normalizeAdminRole } from "@/lib/admin-roles";
+import { normalizeAdminRole, type AdminRole } from "@/lib/admin-roles";
+import { resolvePasscodeCheck, type PasscodeCheckResult } from "@/lib/admin-passcode";
 
 export const ADMIN_SESSION_COOKIE = "vl_admin_session";
 const ADMIN_SESSION_HOURS = 12;
@@ -174,13 +175,23 @@ export async function verifyAdminSessionFromRequest(request: Request) {
   return verifyAdminSessionToken(token);
 }
 
-export async function validateAdminCredentials(usernameRaw: string, passwordRaw: string) {
+export interface ValidatedAdminAccount {
+  username: string;
+  role: AdminRole;
+  passcodeSalt: string | null;
+  passcodeHash: string | null;
+}
+
+export async function validateAdminCredentials(
+  usernameRaw: string,
+  passwordRaw: string,
+): Promise<ValidatedAdminAccount | null> {
   const username = usernameRaw.trim().toLowerCase();
   const password = passwordRaw;
 
   const { data, error } = await supabaseAdmin
     .from("admin_credentials")
-    .select("username, password_salt, password_hash, is_active, role")
+    .select("username, password_salt, password_hash, is_active, role, passcode_salt, passcode_hash")
     .eq("username", username)
     .eq("is_active", true)
     .maybeSingle();
@@ -194,7 +205,28 @@ export async function validateAdminCredentials(usernameRaw: string, passwordRaw:
     return null;
   }
 
-  return { username: String(data.username), role: normalizeAdminRole(data.role) };
+  return {
+    username: String(data.username),
+    role: normalizeAdminRole(data.role),
+    passcodeSalt: data.passcode_salt ? String(data.passcode_salt) : null,
+    passcodeHash: data.passcode_hash ? String(data.passcode_hash) : null,
+  };
+}
+
+// Second-factor check. Verifies the 6-digit passcode against the account's
+// stored passcode, or a global ADMIN_ACCESS_CODE env fallback when no
+// per-account passcode is set. Returns "not_configured" when neither factor is
+// provisioned so a fresh deployment is never locked out of the console.
+export function verifyAdminPasscode(
+  account: Pick<ValidatedAdminAccount, "passcodeSalt" | "passcodeHash">,
+  passcodeRaw: string,
+): PasscodeCheckResult {
+  return resolvePasscodeCheck({
+    passcodeRaw,
+    accountSalt: account.passcodeSalt,
+    accountHash: account.passcodeHash,
+    envAccessCode: process.env.ADMIN_ACCESS_CODE,
+  });
 }
 
 export async function canAttemptAdminLogin(input: { username: string; ipAddress?: string | null }) {

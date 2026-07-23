@@ -6,7 +6,7 @@ import { sendEmail } from "@/lib/email/send";
 import { orderConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { updateCommissionOnRefund } from "@/lib/payment-webhook";
-import { reverseOrderPoints } from "@/lib/membership";
+import { restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
 import { refundStoreCreditForOrder } from "@/lib/store-credit";
 
 function roundMoney(value: number) {
@@ -81,6 +81,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         return NextResponse.json(
           { success: false, error: "Your role does not have permission to change payment status." },
           { status: 403 },
+        );
+      }
+
+      // Money-state transitions must go through their dedicated flows so the
+      // side-effects run: marking an order paid awards commissions/points and
+      // sends the confirmation email (payment verification action), and refunds
+      // reverse commissions, claw back points, and issue store credit (the
+      // "refund" action below). Setting these here would only change the column
+      // and silently skip all of that, so they are rejected.
+      const MONEY_STATE_STATUSES = new Set(["paid", "refunded", "partially_refunded"]);
+      if (body.paymentStatus && MONEY_STATE_STATUSES.has(String(body.paymentStatus).toLowerCase())) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "To mark an order paid or refunded, use the payment verification or refund action so commissions, points, and store credit are handled correctly.",
+          },
+          { status: 400 },
         );
       }
 
@@ -263,6 +280,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
           await reverseOrderPoints(orderId);
         } catch {
           // Points reversal must not block the refund itself from completing.
+        }
+        try {
+          // Give back the points the customer spent on this order, since the
+          // discount those points bought is being fully undone.
+          await restoreRedeemedPoints(orderId);
+        } catch {
+          // Best-effort; never block the refund.
         }
         try {
           await refundStoreCreditForOrder(orderId);

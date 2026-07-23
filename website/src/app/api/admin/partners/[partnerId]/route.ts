@@ -54,24 +54,29 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
     }
 
     if (action === "mark_paid") {
-      const amount = Number(body?.amount ?? 0);
+      // The payout amount is computed server-side from the ambassador's actual
+      // approved commissions (see markCommissionsPaid). Any client-supplied
+      // amount is ignored to prevent under/over-payment.
       const note = typeof body?.note === "string" ? body.note : undefined;
       const overrideMinimumThreshold = body?.overrideMinimumThreshold === true;
-
-      if (!Number.isFinite(amount) || amount <= 0) {
-        return NextResponse.json({ success: false, error: "Amount must be greater than 0" }, { status: 400 });
-      }
 
       const payout = await markCommissionsPaid({
         partnerId,
         actorUserId: undefined,
-        amount,
+        amount: Number(body?.amount ?? 0),
         note,
         actorUsername: session.username,
         ipAddress,
         userAgent,
         overrideMinimumThreshold,
       });
+
+      if (!payout.payoutId) {
+        return NextResponse.json(
+          { success: false, error: "No approved commissions are pending payout for this ambassador." },
+          { status: 400 },
+        );
+      }
 
       return NextResponse.json({ success: true, payout });
     }

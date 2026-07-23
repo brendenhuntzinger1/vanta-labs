@@ -7,6 +7,7 @@ export default function VaultPage() {
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [passcode, setPasscode] = useState("");
   const [status, setStatus] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -41,7 +42,7 @@ export default function VaultPage() {
       const res = await fetch("/api/admin/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ username, password, passcode }),
       });
 
       const json = (await res.json()) as { ok?: boolean; error?: string };
@@ -126,6 +127,22 @@ export default function VaultPage() {
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
                   autoComplete="off"
+                  required
+                />
+              </label>
+
+              <label className="block text-xs uppercase tracking-[0.16em] text-zinc-500">
+                6-Digit Passcode
+                <input
+                  className="vl-input mt-2 w-full px-3 py-2 tracking-[0.5em]"
+                  type="password"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  pattern="\d{6}"
+                  maxLength={6}
+                  placeholder="••••••"
+                  value={passcode}
+                  onChange={(event) => setPasscode(event.target.value.replace(/\D/g, "").slice(0, 6))}
                   required
                 />
               </label>

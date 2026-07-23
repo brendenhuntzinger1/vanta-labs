@@ -390,6 +390,45 @@ export async function reverseOrderPoints(orderId: string) {
   });
 }
 
+// Re-credits the loyalty points a customer SPENT on an order (orders.points_redeemed)
+// when that order is fully refunded. Without this, a refunded customer loses the
+// points they redeemed for a discount even though the discount is being undone.
+// Idempotent: a second refund call for the same order will not double-credit.
+export async function restoreRedeemedPoints(orderId: string) {
+  const { data: order, error } = await supabaseAdmin
+    .from("orders")
+    .select("customer_user_id, points_redeemed")
+    .eq("order_id", orderId)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  const pointsRedeemed = Number(order?.points_redeemed ?? 0);
+  if (!order?.customer_user_id || pointsRedeemed <= 0) {
+    return;
+  }
+
+  const { data: existing } = await supabaseAdmin
+    .from("points_ledger")
+    .select("id")
+    .eq("order_id", orderId)
+    .eq("reason", "order_refund_points_restore")
+    .maybeSingle();
+
+  if (existing) {
+    return;
+  }
+
+  await recordPointsLedgerEntry({
+    userId: String(order.customer_user_id),
+    amount: pointsRedeemed,
+    reason: "order_refund_points_restore",
+    orderId,
+  });
+}
+
 export async function getReferralEarnedPoints(userId: string): Promise<number> {
   const { data, error } = await supabaseAdmin
     .from("points_ledger")

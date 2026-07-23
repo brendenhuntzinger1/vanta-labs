@@ -30,6 +30,13 @@ export function canManageInventory(role: AdminRole) {
   return role === "manager" || role === "super_admin";
 }
 
+// Creating, editing, deleting, importing, reordering, or duplicating products
+// changes storefront pricing and stock for every shopper — same sensitivity as
+// the inventory gate, so it is restricted to manager and above.
+export function canManageProducts(role: AdminRole) {
+  return role === "manager" || role === "super_admin";
+}
+
 export function canViewAuditLog(role: AdminRole) {
   return role === "manager" || role === "super_admin";
 }
