@@ -587,6 +587,15 @@ alter table if exists public.products
 alter table if exists public.product_doses
   add column if not exists low_stock_threshold integer not null default 5;
 
+-- Premium product spec fields (see premium-product-fields.sql).
+alter table if exists public.products
+  add column if not exists molecular_weight text,
+  add column if not exists cas_number text,
+  add column if not exists peptide_sequence text,
+  add column if not exists storage_recommendation text,
+  add column if not exists reconstitution_note text,
+  add column if not exists product_faq jsonb not null default '[]'::jsonb;
+
 alter table if exists public.ambassadors
   add column if not exists commission_percent_locked boolean not null default false,
   add column if not exists updated_at timestamptz not null default now();

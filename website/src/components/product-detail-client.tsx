@@ -10,7 +10,8 @@ import { WishlistButton } from "@/components/wishlist-button";
 import { BackInStockForm } from "@/components/back-in-stock-form";
 import { SubscribeSave } from "@/components/subscribe-save";
 import { bundleDiscountRate, getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
-import type { Product } from "@/lib/catalog-types";
+import type { Product, ProductFaqItem } from "@/lib/catalog-types";
+import { RecentlyViewed } from "@/components/recently-viewed";
 import Image from "next/image";
 
 function parseDose(slug: string) {
@@ -83,41 +84,44 @@ const TRUST_ROW = [
   },
 ] as const;
 
-const PRODUCT_FAQ = [
+// Default FAQ used when a product has no admin-authored FAQ of its own. Kept in
+// the {question, answer} shape so per-product and default FAQs are interchangeable.
+const DEFAULT_PRODUCT_FAQ: ProductFaqItem[] = [
   {
-    q: "Is this product intended for human consumption?",
-    a: "No. All compounds sold by Vanta Labs are strictly for legitimate laboratory research purposes and are not intended for human or veterinary use.",
+    question: "Is this product intended for human consumption?",
+    answer: "No. All compounds sold by Vanta Labs are strictly for legitimate laboratory research purposes and are not intended for human or veterinary use.",
   },
   {
-    q: "How do I access the Certificate of Analysis?",
-    a: "Each product page links directly to the batch-matched COA. You can also browse all records in the COA Library.",
+    question: "How do I access the Certificate of Analysis?",
+    answer: "Each product page links directly to the batch-matched COA. You can also browse all records in the COA Library.",
   },
   {
-    q: "What is your shipping timeline?",
-    a: "Most in-stock orders are prepared within one business day. You will receive secure tracking information after dispatch.",
+    question: "What is your shipping timeline?",
+    answer: "Most in-stock orders are prepared within one business day. You will receive secure tracking information after dispatch.",
   },
   {
-    q: "Can I combine referral codes with promotions?",
-    a: "Referral discounts cannot be combined with Buy 3 Get 1 Free offers. Only one discount type applies per order.",
+    question: "Can I combine referral codes with promotions?",
+    answer: "Referral discounts cannot be combined with Buy 3 Get 1 Free offers. Only one discount type applies per order.",
   },
 ];
 
-function FaqAccordion() {
+function FaqAccordion({ items }: { items?: ProductFaqItem[] }) {
+  const faqItems = items && items.length > 0 ? items : DEFAULT_PRODUCT_FAQ;
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   return (
     <div className="mt-3 divide-y divide-zinc-200">
-      {PRODUCT_FAQ.map((item, idx) => (
+      {faqItems.map((item, idx) => (
         <div key={idx}>
           <button
             type="button"
             className="flex w-full items-center justify-between gap-4 py-4 text-left text-sm text-[#111] transition hover:text-zinc-600"
             onClick={() => setOpenIndex(openIndex === idx ? null : idx)}
           >
-            <span className="font-medium">{item.q}</span>
+            <span className="font-medium">{item.question}</span>
             <span className={`shrink-0 text-zinc-400 transition-transform duration-200 ${openIndex === idx ? "rotate-180" : ""}`}>▼</span>
           </button>
           {openIndex === idx && (
-            <p className="pb-4 text-sm leading-7 text-zinc-500">{item.a}</p>
+            <p className="pb-4 text-sm leading-7 text-zinc-500">{item.answer}</p>
           )}
         </div>
       ))}
@@ -310,21 +314,35 @@ export function ProductDetailClient({
                 {activeTab === "specs" && (
                   <div className="vl2-lab-panel p-5">
                     <dl className="space-y-3 text-sm">
-                      {[
+                      {([
                         ["Batch Number", selectedBatchNumber],
                         ["Purity Result", selectedPurity ?? "Pending"],
-                        ["Molecular Formula", product.molecularFormula ?? "See COA"],
+                        ["Molecular Formula", product.molecularFormula],
+                        ["Molecular Weight", product.molecularWeight],
+                        ["CAS Number", product.casNumber],
+                        ["Storage", product.storageRecommendation],
+                        ["Reconstitution", product.reconstitutionNote],
                         ["Testing Lab", product.labName],
                         ["Testing Date", product.testingDate],
                         ["Category", product.category],
                         ["SKU", selectedDose?.sku ?? "N/A"],
-                      ].map(([label, value]) => (
-                        <div key={label} className="flex justify-between gap-3 border-b border-zinc-100 pb-2 last:border-0">
-                          <dt className="text-zinc-400">{label}</dt>
-                          <dd className="min-w-0 break-words text-right font-medium text-[#111]">{value}</dd>
-                        </div>
-                      ))}
+                      ] as Array<[string, string | undefined]>)
+                        .filter(([, value]) => value && String(value).trim().length > 0)
+                        .map(([label, value]) => (
+                          <div key={label} className="flex justify-between gap-3 border-b border-zinc-100 pb-2 last:border-0">
+                            <dt className="text-zinc-400">{label}</dt>
+                            <dd className="min-w-0 break-words text-right font-medium text-[#111]">{value}</dd>
+                          </div>
+                        ))}
                     </dl>
+                    {product.peptideSequence && product.peptideSequence.trim().length > 0 && (
+                      <div className="mt-4 border-t border-zinc-100 pt-4">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-400">Amino Acid Sequence</p>
+                        <div className="mt-2 overflow-x-auto">
+                          <code className="block whitespace-pre-wrap break-all font-mono text-xs leading-6 text-[#111]">{product.peptideSequence}</code>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -360,7 +378,7 @@ export function ProductDetailClient({
 
             <div className="mt-8">
               <p className="vl2-lab-eyebrow">Frequently Asked Questions</p>
-              <FaqAccordion />
+              <FaqAccordion items={product.faq} />
             </div>
           </div>
 
@@ -562,6 +580,15 @@ export function ProductDetailClient({
             </section>
           </ScrollReveal>
         )}
+
+        <RecentlyViewed
+          current={{
+            slug: product.slug,
+            name: product.name,
+            price: selectedPrice,
+            image: product.coverImage ?? product.image,
+          }}
+        />
       </main>
 
       <div className="fixed inset-x-0 bottom-0 z-50 border-t border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur-xl lg:hidden">
