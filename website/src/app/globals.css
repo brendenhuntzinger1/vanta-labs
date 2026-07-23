@@ -1157,7 +1157,7 @@ textarea.vl-input { min-height: 6rem; }
 }
 
 .vl2-product-card .vl-product-card-media {
-  background: linear-gradient(180deg, #16161c, #101015);
+  background: #000000;
   border-radius: 14px 14px 0 0;
 }
 

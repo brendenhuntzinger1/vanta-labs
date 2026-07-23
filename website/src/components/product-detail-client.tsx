@@ -246,7 +246,7 @@ export function ProductDetailClient({
           {/* Block A — product image. Mobile order 1; desktop top-left. */}
           <div className="order-1 min-w-0 lg:col-start-1 lg:row-start-1">
             <div className="vl2-lab-panel overflow-hidden">
-              <div className="relative min-h-[260px] sm:min-h-[460px]">
+              <div className="relative min-h-[260px] bg-black sm:min-h-[460px]">
                 {hasRealImage ? (
                   <Image
                     src={imageToDisplay as string}
