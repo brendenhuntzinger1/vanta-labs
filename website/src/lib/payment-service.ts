@@ -233,6 +233,13 @@ export async function createCheckoutSession(
 
  const requestedSlugs = Array.from(new Set(sanitizedItems.map((item) => item.id.split("::")[0])));
  const catalogProducts = await getCatalogProductsBySlugs(requestedSlugs);
+
+ // Fetch the homepage/promotions control once, up front, because the bundle
+ // discount below is applied while building line items (before the main config
+ // Promise.all). Bundle rates are admin-editable; the client preview reads the
+ // same config from /api/catalog/promotions so the charge always matches.
+ const homepageControlConfig = await getHomepageControlConfig();
+ const bundleConfig = homepageControlConfig.bundleConfig;
  const productsById = new Map<string, ServerProduct>(
    catalogProducts.map((product) => [
      product.slug,
@@ -270,7 +277,7 @@ export async function createCheckoutSession(
  const product: ServerProduct = {
    ...baseProduct,
    id: item.id,
-   price: getBundleDiscountedUnitPrice(baseUnitPrice, item.quantity),
+   price: getBundleDiscountedUnitPrice(baseUnitPrice, item.quantity, bundleConfig),
    stockStatus: selectedDose?.stockStatus ?? baseProduct.stockStatus,
    variantId: selectedDose?.id,
    variantLabel: selectedDose?.label,
@@ -317,7 +324,7 @@ export async function createCheckoutSession(
  );
 
  const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent, shippingConfig, memberPerks, referralProgram, couponPolicy] = await Promise.all([
-   getHomepageControlConfig(),
+   Promise.resolve(homepageControlConfig),
    getBulkSavingsControlConfig(),
    payload.customerUserId ? isEligibleForBulkSavings(payload.customerUserId) : Promise.resolve(false),
    payload.customerUserId ? isPriorityMember(payload.customerUserId) : Promise.resolve(false),

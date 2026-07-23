@@ -6,7 +6,7 @@ import type { ReferralCode } from "@/lib/referral-codes";
 import { validateReferralCodeClient } from "@/lib/referral-client";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
-import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
+import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee, calculateTax, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { resolveBestDiscount } from "@/lib/discount-resolution";
@@ -106,10 +106,10 @@ const CartContext = createContext<CartContextValue | undefined>(undefined);
 const CART_STORAGE_KEY = "vanta-labs-cart";
 const REFERRAL_COOKIE_KEY = "vl_referral_code";
 
-function calculateBuy3Get1Discount(items: CartItem[]) {
+function calculateBuy3Get1Discount(items: CartItem[], bundleConfig: BundleConfig = DEFAULT_BUNDLE_CONFIG) {
   const expandedPrices: number[] = [];
   for (const item of items) {
-    const discountedUnitPrice = getBundleDiscountedUnitPrice(item.price, item.quantity);
+    const discountedUnitPrice = getBundleDiscountedUnitPrice(item.price, item.quantity, bundleConfig);
     for (let i = 0; i < item.quantity; i += 1) {
       expandedPrices.push(discountedUnitPrice);
     }
@@ -165,6 +165,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [pointsMultiplier, setPointsMultiplier] = useState(1);
   const [pointsToRedeem, setPointsToRedeemState] = useState(0);
   const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
+  const [bundleConfig, setBundleConfig] = useState<BundleConfig>(DEFAULT_BUNDLE_CONFIG);
   const [taxRatePercent, setTaxRatePercent] = useState(0);
   const [shippingConfig, setShippingConfig] = useState<ShippingConfig>(DEFAULT_SHIPPING_CONFIG);
   const [isEligibleForBulkSavings, setIsEligibleForBulkSavings] = useState(false);
@@ -218,9 +219,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; taxRatePercent?: number; shippingConfig?: ShippingConfig };
+        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; taxRatePercent?: number; shippingConfig?: ShippingConfig };
         if (result.success) {
           setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
+          if (result.bundleConfig) setBundleConfig(result.bundleConfig);
           setTaxRatePercent(Number(result.taxRatePercent ?? 0) || 0);
           if (result.shippingConfig) setShippingConfig(result.shippingConfig);
         }
@@ -443,8 +445,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const itemCount = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
 
   const subtotal = useMemo(
-    () => items.reduce((sum, item) => sum + getBundleDiscountedLineTotal(item.price, item.quantity), 0),
-    [items],
+    () => items.reduce((sum, item) => sum + getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig), 0),
+    [items, bundleConfig],
   );
 
   // Abandoned-cart-recovery tracking: fires a debounced snapshot whenever
@@ -495,8 +497,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     return remainder === 0 ? 0 : 4 - remainder;
   }, [promoBuy3Get1Enabled, totalQuantity]);
   const buy3Get1FreeDiscount = useMemo(
-    () => (promoBuy3Get1Enabled ? calculateBuy3Get1Discount(items) : 0),
-    [items, promoBuy3Get1Enabled],
+    () => (promoBuy3Get1Enabled ? calculateBuy3Get1Discount(items, bundleConfig) : 0),
+    [items, promoBuy3Get1Enabled, bundleConfig],
   );
 
   // Reaching a bulk-savings tier grants free shipping on the server

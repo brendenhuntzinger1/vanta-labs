@@ -521,6 +521,9 @@ export default function AdminProductsPage() {
           badge: nextProduct.badge,
           batchNumber: nextProduct.batchNumber,
           coaUrl: nextProduct.coaUrl,
+          purityResult: nextProduct.purityResult,
+          testingDate: nextProduct.testingDate,
+          labName: nextProduct.labName,
           molecularFormula: nextProduct.molecularFormula,
           molecularWeight: nextProduct.molecularWeight,
           casNumber: nextProduct.casNumber,
@@ -919,6 +922,27 @@ function ProductEditor({
       <label className="text-xs text-zinc-400">Long description
         <textarea value={draft.longDescription ?? draft.description ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, longDescription: e.target.value, description: e.target.value }))} className="vl-input mt-1 min-h-24 w-full px-3 py-2" />
       </label>
+
+      <div className="space-y-3 rounded-lg border border-zinc-800 p-3">
+        <h3 className="text-sm font-semibold text-white">COA &amp; testing (shown on the product page + COA library)</h3>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="text-xs text-zinc-400">Batch number
+            <input value={draft.batchNumber ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, batchNumber: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="GLP-2410B" />
+          </label>
+          <label className="text-xs text-zinc-400">Purity result
+            <input value={draft.purityResult ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, purityResult: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="99.2%" />
+          </label>
+          <label className="text-xs text-zinc-400">Testing lab
+            <input value={draft.labName ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, labName: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="Janoshik Analytical" />
+          </label>
+          <label className="text-xs text-zinc-400">Testing date
+            <input type="date" value={(draft.testingDate ?? "").slice(0, 10)} onChange={(e) => setDraft((prev) => ({ ...prev, testingDate: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" />
+          </label>
+        </div>
+        <label className="text-xs text-zinc-400">COA URL (PDF link)
+          <input value={draft.coaUrl ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, coaUrl: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="https://...pdf" />
+        </label>
+      </div>
 
       <div className="space-y-3 rounded-lg border border-zinc-800 p-3">
         <h3 className="text-sm font-semibold text-white">Research data (shown on the product page)</h3>

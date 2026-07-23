@@ -41,6 +41,11 @@ export type ProductCreateInput = {
   badge?: ProductBadge;
   batchNumber?: string;
   coaUrl?: string;
+  // COA / testing fields (drive the product page + COA library), now fully
+  // admin-editable at the product level (no SQL needed).
+  purityResult?: string;
+  testingDate?: string;
+  labName?: string;
   // Premium research-data spec fields (customer-facing).
   molecularFormula?: string;
   molecularWeight?: string;
@@ -393,6 +398,9 @@ export async function createAdminProduct(input: ProductCreateInput) {
       batch_number: input.batchNumber ?? null,
       image_url: input.imageUrl ?? null,
       coa_url: input.coaUrl ?? null,
+      purity_result: input.purityResult ?? null,
+      testing_date: input.testingDate ? input.testingDate : null,
+      lab_name: input.labName ?? null,
       molecular_formula: input.molecularFormula ?? null,
       molecular_weight: input.molecularWeight ?? null,
       cas_number: input.casNumber ?? null,
@@ -476,6 +484,9 @@ export async function updateAdminProduct(productId: string, input: ProductUpdate
   if (input.badge !== undefined) payload.badge = input.badge;
   if (input.batchNumber !== undefined) payload.batch_number = input.batchNumber;
   if (input.coaUrl !== undefined) payload.coa_url = input.coaUrl;
+  if (input.purityResult !== undefined) payload.purity_result = input.purityResult;
+  if (input.testingDate !== undefined) payload.testing_date = input.testingDate ? input.testingDate : null;
+  if (input.labName !== undefined) payload.lab_name = input.labName;
   if (input.molecularFormula !== undefined) payload.molecular_formula = input.molecularFormula;
   if (input.molecularWeight !== undefined) payload.molecular_weight = input.molecularWeight;
   if (input.casNumber !== undefined) payload.cas_number = input.casNumber;

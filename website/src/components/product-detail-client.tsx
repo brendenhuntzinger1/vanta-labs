@@ -9,7 +9,7 @@ import { ScrollReveal } from "@/components/scroll-reveal";
 import { WishlistButton } from "@/components/wishlist-button";
 import { BackInStockForm } from "@/components/back-in-stock-form";
 import { SubscribeSave } from "@/components/subscribe-save";
-import { bundleDiscountRate, getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
+import { bundleDiscountRate, getBundleDiscountedLineTotal, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
 import type { Product, ProductFaqItem } from "@/lib/catalog-types";
 import { RecentlyViewed } from "@/components/recently-viewed";
 import Image from "next/image";
@@ -135,10 +135,12 @@ export function ProductDetailClient({
   product,
   relatedProducts = [],
   promoBuy3Get1Enabled = false,
+  bundleConfig = DEFAULT_BUNDLE_CONFIG,
 }: {
   product: Product;
   relatedProducts?: Product[];
   promoBuy3Get1Enabled?: boolean;
+  bundleConfig?: BundleConfig;
 }) {
   const { addToCart } = useCart();
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
@@ -158,7 +160,7 @@ export function ProductDetailClient({
   const selectedStockStatus = selectedDose?.stockStatus ?? product.stockStatus;
   const isOutOfStock = selectedStockStatus === "Out of Stock" || selectedStockStatus === "Reserved";
   const unitPrice = toPriceNumber(selectedPrice);
-  const currentBundleRate = bundleDiscountRate(quantity);
+  const currentBundleRate = bundleDiscountRate(quantity, bundleConfig);
 
   const galleryItems = useMemo<GalleryItem[]>(() => {
     const fromGallery = (product.galleryImages ?? []).map((image) => ({
@@ -456,8 +458,8 @@ export function ProductDetailClient({
                 <div className="mt-3 grid grid-cols-3 gap-2">
                   {BUNDLE_OPTIONS.map((option) => {
                     const isSelected = option.quantity === 3 ? quantity >= 3 : quantity === option.quantity;
-                    const rate = bundleDiscountRate(option.quantity);
-                    const lineTotal = getBundleDiscountedLineTotal(unitPrice, option.quantity);
+                    const rate = bundleDiscountRate(option.quantity, bundleConfig);
+                    const lineTotal = getBundleDiscountedLineTotal(unitPrice, option.quantity, bundleConfig);
                     return (
                       <button
                         key={option.quantity}
@@ -493,7 +495,7 @@ export function ProductDetailClient({
                       className="inline-flex h-11 w-11 items-center justify-center border border-zinc-200 text-lg text-zinc-600 transition hover:border-zinc-400"
                     >+</button>
                     {currentBundleRate > 0 ? (
-                      <span className="text-xs font-medium text-emerald-600">Save {Math.round(currentBundleRate * 100)}% — {formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity))} total</span>
+                      <span className="text-xs font-medium text-emerald-600">Save {Math.round(currentBundleRate * 100)}% — {formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))} total</span>
                     ) : null}
                   </div>
                 ) : null}

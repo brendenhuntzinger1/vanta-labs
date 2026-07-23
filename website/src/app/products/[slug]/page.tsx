@@ -33,13 +33,14 @@ export default async function ProductDetailPage({
   }
 
   const relatedProducts = await getCatalogProductsByCategory(product.category, product.slug, 4).catch(() => []);
-  const { promoBuy3Get1Enabled } = await getHomepageControlConfig();
+  const { promoBuy3Get1Enabled, bundleConfig } = await getHomepageControlConfig();
 
   return (
     <ProductDetailClient
       product={product}
       relatedProducts={relatedProducts}
       promoBuy3Get1Enabled={Boolean(promoBuy3Get1Enabled)}
+      bundleConfig={bundleConfig}
     />
   );
 }

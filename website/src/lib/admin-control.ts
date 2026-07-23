@@ -3,6 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
+import { resolveBundleConfig, type BundleConfig } from "@/lib/bundle-pricing";
 import {
   DEFAULT_PAYMENT_METHODS,
   DEFAULT_CARD_PROCESSING_FEE,
@@ -32,6 +33,7 @@ export type HomepageControlConfig = {
   qualityPanelItems?: string[];
   promoBuy3Get1Enabled?: boolean;
   promoBuy2Get1HalfEnabled?: boolean;
+  bundleConfig?: BundleConfig;
 };
 
 function sanitizeSection(section: string) {
@@ -528,8 +530,8 @@ export async function getShippingConfig(): Promise<ShippingConfig> {
     return {
       domesticFee: num(shipping.flat_rate, DEFAULT_SHIPPING_CONFIG.domesticFee),
       freeShippingThreshold: num(shipping.free_shipping_threshold, DEFAULT_SHIPPING_CONFIG.freeShippingThreshold),
-      internationalFee: DEFAULT_SHIPPING_CONFIG.internationalFee,
-      internationalFreeShippingThreshold: DEFAULT_SHIPPING_CONFIG.internationalFreeShippingThreshold,
+      internationalFee: num(shipping.international_flat_rate, DEFAULT_SHIPPING_CONFIG.internationalFee),
+      internationalFreeShippingThreshold: num(shipping.international_free_shipping_threshold, DEFAULT_SHIPPING_CONFIG.internationalFreeShippingThreshold),
       handlingFeeRate: Math.max(0, serviceFeePercent) / 100,
     };
   } catch {
@@ -554,6 +556,10 @@ export async function getHomepageControlConfig(): Promise<HomepageControlConfig>
       qualityPanelItems: Array.isArray(homepage.quality_panel_items) ? homepage.quality_panel_items as string[] : undefined,
       promoBuy3Get1Enabled: Boolean(promotions.buy_3_get_1_enabled ?? false),
       promoBuy2Get1HalfEnabled: Boolean(promotions.buy_2_get_1_half_enabled ?? false),
+      bundleConfig: resolveBundleConfig({
+        twoUnitPercent: promotions.bundle_two_unit_percent,
+        threePlusPercent: promotions.bundle_three_plus_percent,
+      }),
     };
   } catch {
     return {};

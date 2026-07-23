@@ -12,6 +12,7 @@ export async function GET() {
   return NextResponse.json({
     success: true,
     promoBuy3Get1Enabled: Boolean(config.promoBuy3Get1Enabled),
+    bundleConfig: config.bundleConfig,
     taxRatePercent,
     shippingConfig,
   });
