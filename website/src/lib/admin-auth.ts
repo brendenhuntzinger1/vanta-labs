@@ -152,15 +152,25 @@ export async function verifyAdminSessionToken(token: string | null | undefined) 
       .eq("id", data.id),
     supabaseAdmin
       .from("admin_credentials")
-      .select("role")
+      .select("role, is_active")
       .eq("username", data.username)
       .maybeSingle(),
   ]);
 
+  // Re-check the account is still active AND still exists on every request. A
+  // deactivated or deleted admin must lose access immediately, not keep a valid
+  // session cookie until its 12h TTL. (Without this, offboarding a compromised
+  // or fired admin left their live session fully privileged.)
+  if (!credential || credential.is_active === false) {
+    // Proactively purge any lingering sessions for a now-invalid account.
+    await supabaseAdmin.from("admin_sessions").delete().eq("username", data.username);
+    return null;
+  }
+
   return {
     id: String(data.id),
     username: String(data.username),
-    role: normalizeAdminRole(credential?.role),
+    role: normalizeAdminRole(credential.role),
   };
 }
 
@@ -227,6 +237,23 @@ export function verifyAdminPasscode(
     accountHash: account.passcodeHash,
     envAccessCode: process.env.ADMIN_ACCESS_CODE,
   });
+}
+
+// True when a second factor is provisioned ANYWHERE in the system — a global
+// ADMIN_ACCESS_CODE, or any admin account with a per-account passcode. Used to
+// fail closed: once 2FA is in use, an account that happens to have no passcode
+// must not slip in single-factor. Only a genuinely fresh, fully-unprovisioned
+// deployment is allowed through without a second factor.
+export async function isAnyAdminSecondFactorProvisioned(): Promise<boolean> {
+  const envCode = (process.env.ADMIN_ACCESS_CODE ?? "").trim();
+  if (/^\d{6}$/.test(envCode)) {
+    return true;
+  }
+  const { count } = await supabaseAdmin
+    .from("admin_credentials")
+    .select("username", { count: "exact", head: true })
+    .not("passcode_hash", "is", null);
+  return (count ?? 0) > 0;
 }
 
 export async function canAttemptAdminLogin(input: { username: string; ipAddress?: string | null }) {

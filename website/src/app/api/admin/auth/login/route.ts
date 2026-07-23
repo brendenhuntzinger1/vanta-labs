@@ -5,6 +5,7 @@ import {
   createAdminSession,
   getRequestIpAddress,
   getRequestUserAgent,
+  isAnyAdminSecondFactorProvisioned,
   recordAdminLoginAttempt,
   validateAdminCredentials,
   verifyAdminPasscode,
@@ -55,6 +56,18 @@ export async function POST(request: Request) {
   if (passcodeStatus === "invalid") {
     await recordAdminLoginAttempt({ username, ipAddress, userAgent, success: false });
     return NextResponse.json({ error: INVALID_MESSAGE }, { status: 401 });
+  }
+
+  // Fail closed: this account has no second factor, but 2FA IS in use elsewhere
+  // (a global code or another account's passcode). Don't let it in single-factor
+  // — an owner must provision its 6-digit code first. Only a fully-unprovisioned
+  // fresh deployment is allowed through without a second factor (no lockout).
+  if (passcodeStatus === "not_configured" && (await isAnyAdminSecondFactorProvisioned())) {
+    await recordAdminLoginAttempt({ username, ipAddress, userAgent, success: false });
+    return NextResponse.json(
+      { error: "This account needs its 6-digit login code set before it can sign in. Ask an owner to set one from Admin → Team." },
+      { status: 403 },
+    );
   }
 
   await recordAdminLoginAttempt({ username, ipAddress, userAgent, success: true });

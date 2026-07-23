@@ -87,7 +87,7 @@ async function getQualifyingMonthlySalesCount(ambassadorId: string): Promise<num
 
   const { data, error } = await supabaseAdmin
     .from("referral_orders")
-    .select("created_at, payment_status")
+    .select("created_at, payment_status, ineligible_reason, commission_amount")
     .eq("ambassador_id", ambassadorId)
     .order("created_at", { ascending: false });
 
@@ -98,6 +98,14 @@ async function getQualifyingMonthlySalesCount(ambassadorId: string): Promise<num
   return (data ?? []).filter((row) => {
     const status = String(row.payment_status ?? "").toLowerCase();
     if (status === "reversed" || status === "voided" || status === "manual_review") {
+      return false;
+    }
+
+    // Only GENUINELY qualifying orders advance the performance tier. Orders that
+    // earned $0 — below the minimum qualifying subtotal, program paused, etc.
+    // (ineligible_reason set / commission_amount 0) — must not inflate the count
+    // and push the ambassador into a higher commission-percent tier.
+    if (row.ineligible_reason || Number(row.commission_amount ?? 0) <= 0) {
       return false;
     }
 

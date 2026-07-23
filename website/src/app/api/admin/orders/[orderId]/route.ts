@@ -229,6 +229,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         return NextResponse.json({ success: false, error: "Order not found." }, { status: 404 });
       }
 
+      // Idempotency with the processor webhook: a refund/chargeback that already
+      // arrived via webhook sets payment_status to "refunded" and ran the
+      // reversal side-effects (restock, points/credit clawback) WITHOUT
+      // necessarily writing refund_amount. Guard on the status too, so an admin
+      // clicking "refund" after a webhook refund can't double-restock stock and
+      // double-reverse points/credit.
+      if (String(order.payment_status) === "refunded") {
+        return NextResponse.json({ success: false, error: "This order has already been fully refunded." }, { status: 400 });
+      }
+
       const amountPaid = roundMoney(Number(order.amount_paid ?? 0));
       const alreadyRefunded = roundMoney(Number(order.refund_amount ?? 0));
       const remaining = roundMoney(Math.max(0, amountPaid - alreadyRefunded));
@@ -275,12 +285,21 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         throw error;
       }
 
-      // Reduce the ambassador commission in proportion to how much of the order
-      // value was refunded (cumulative). A full refund voids it; a partial
-      // refund keeps commission on the retained portion.
-      await updateCommissionOnRefund(orderId, {
-        refundedFraction: amountPaid > 0 ? newRefundTotal / amountPaid : 1,
-      });
+      // Reduce the ambassador commission in proportion to how much of the
+      // MERCHANDISE (commissionable) value was refunded — NOT gross amount_paid.
+      // Commission is earned only on discounted merchandise, so measuring the
+      // refund against the gross total (which includes shipping/handling/tax/
+      // card fee) under-reverses when a customer returns all their goods but not
+      // shipping. Treat a refund as merchandise-first: a full merchandise return
+      // fully voids the commission; a shipping/fee-only refund can't exceed it.
+      const commissionableBase = roundMoney(
+        Math.max(0, Number(order.subtotal ?? 0) - Number(order.discount_amount ?? 0)),
+      );
+      const merchandiseRefunded = Math.min(newRefundTotal, commissionableBase);
+      const refundedFraction = commissionableBase > 0
+        ? Math.min(1, merchandiseRefunded / commissionableBase)
+        : 1;
+      await updateCommissionOnRefund(orderId, { refundedFraction });
 
       // Only reverse membership points and re-credit spent store credit on a
       // full refund - a partial refund leaves earned points untouched rather

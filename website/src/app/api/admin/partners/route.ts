@@ -13,6 +13,12 @@ export async function GET(request: Request) {
     return unauthorizedResponse();
   }
 
+  // Ambassador PII + commission/payout figures are financial data — gate reads
+  // to the same manager+ bar as the writes and the CSV export.
+  if (!canManageRefunds(session.role)) {
+    return NextResponse.json({ success: false, error: "Your role does not have permission to view partners." }, { status: 403 });
+  }
+
   const url = new URL(request.url);
   const search = url.searchParams.get("search") ?? "";
   const status = url.searchParams.get("status") ?? "all";

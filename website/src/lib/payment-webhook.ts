@@ -1114,6 +1114,17 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     }
 
     if (nextStatus === "refunded") {
+      // Record the refund amount/time so the admin refund path (which guards on
+      // refund_amount / payment_status) sees this order as already refunded and
+      // can't double-restock or double-reverse. Best-effort: never block.
+      try {
+        await supabaseAdmin
+          .from("orders")
+          .update({ refund_amount: amountPaid, refunded_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq("order_id", orderId);
+      } catch (refundAmountError) {
+        console.error("Unable to record refund amount for order", orderId, refundAmountError);
+      }
       try {
         await reverseOrderPoints(orderId);
       } catch (pointsError) {

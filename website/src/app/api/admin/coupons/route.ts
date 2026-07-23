@@ -18,6 +18,12 @@ export async function GET(request: Request) {
     return unauthorizedResponse();
   }
 
+  // Discount codes are sensitive (a leaked list enables free-order abuse); gate
+  // reads to the same bar as coupon writes.
+  if (!canManageCoupons(session.role)) {
+    return forbiddenResponse();
+  }
+
   try {
     const coupons = await listAdminCoupons();
     return NextResponse.json({ success: true, coupons });
