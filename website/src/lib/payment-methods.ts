@@ -199,7 +199,7 @@ export const DEFAULT_PAYMENT_METHODS: PaymentMethodConfig[] = [
     order: 100,
     icon: "💳",
     recommended: true,
-    badges: ["🔒 Secure checkout", " Apple Pay"],
+    badges: ["🔒 Secure checkout", "Apple Pay"],
     description: "Visa, Mastercard, Amex, Discover & Apple Pay",
     tagline: "Fast, encrypted card checkout",
     instructions: [],

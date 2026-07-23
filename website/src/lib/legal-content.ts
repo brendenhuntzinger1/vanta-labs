@@ -100,7 +100,7 @@ ${email}`,
 Orders are prepared after payment is verified. Manual payments (Cash App, Zelle, PayPal) are verified before an order ships.
 
 ## Rates
-Domestic shipping is free over the current threshold, otherwise a flat fee applies; international shipping has its own threshold and flat fee. Exact shipping is shown at checkout before you pay.
+Domestic shipping is free over the current threshold; otherwise, a flat fee applies. International shipping has its own threshold and flat fee. Exact shipping is shown at checkout before you pay.
 
 ## Delivery
 Delivery times are estimates and are not guaranteed. Once shipped, you'll receive tracking by email.
