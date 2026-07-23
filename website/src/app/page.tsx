@@ -110,7 +110,7 @@ export default async function HomePage() {
   const categories = Array.from(new Set(catalogProducts.map((product) => product.category))).slice(0, 4);
 
   return (
-    <div className="min-h-screen bg-[#0b0b0b] text-white">
+    <div className="min-h-screen bg-[#101014] text-white">
       <SiteHeaderV2 />
 
       <section className="vl2-hero">
@@ -277,7 +277,7 @@ export default async function HomePage() {
           <div className="grid gap-px overflow-hidden border border-white/10 md:grid-cols-3">
             {BRAND_PILLARS.map((pillar, index) => (
               <ScrollReveal key={pillar.title} delayMs={index * 90}>
-                <article className="h-full bg-[#0b0b0b] p-7">
+                <article className="h-full bg-[#15151b] p-7">
                   <h3 className="vl2-serif text-xl text-white">{pillar.title}</h3>
                   <p className="mt-3 text-sm leading-7 text-white/60">{pillar.detail}</p>
                 </article>
@@ -297,7 +297,7 @@ export default async function HomePage() {
           </ScrollReveal>
           <div className="space-y-px border border-white/10">
             {FAQ.map((entry) => (
-              <details key={entry.q} className="group bg-[#0b0b0b] p-5" open={entry.q === FAQ[0].q}>
+              <details key={entry.q} className="group bg-[#15151b] p-5" open={entry.q === FAQ[0].q}>
                 <summary className="cursor-pointer list-none text-sm font-medium text-white marker:hidden">{entry.q}</summary>
                 <p className="mt-3 text-sm leading-7 text-white/60">{entry.a}</p>
               </details>
