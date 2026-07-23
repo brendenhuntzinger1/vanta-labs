@@ -9,8 +9,8 @@ import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee, calculateTax } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
-import { resolveBestDiscount } from "@/lib/discount-resolution";
-import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent, getShippingConfig } from "@/lib/admin-control";
+import { resolveBestDiscount, type DiscountCandidate } from "@/lib/discount-resolution";
+import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig } from "@/lib/admin-control";
 import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -165,11 +165,45 @@ async function validateReferralCode(
  ambassadorId: data.id,
  code: data.referral_code.toUpperCase(),
  discountPercent: 10,
- commissionPercent: Number(data.commission_percent ?? 15),
+ commissionPercent: Number(data.commission_percent ?? 10),
  ambassadorName: data.name,
  ambassadorEmail: data.email ?? null,
  ambassadorAuthUserId: data.auth_user_id ?? null,
  };
+}
+
+// True when the CUSTOMER checking out is themselves an approved ambassador —
+// used to grant the personal ambassador discount on their own purchase. Matched
+// by account first, then by email. A deactivated/removed ambassador (status not
+// "approved") returns false, so the personal discount is revoked immediately.
+async function isApprovedAmbassadorCustomer(
+ customerUserId: string | undefined,
+ email: string,
+): Promise<boolean> {
+ if (customerUserId) {
+ const { data } = await supabaseAdmin
+ .from("ambassadors")
+ .select("id")
+ .eq("auth_user_id", customerUserId)
+ .eq("status", "approved")
+ .maybeSingle();
+ if (data) {
+ return true;
+ }
+ }
+ const normalizedEmail = email.trim().toLowerCase();
+ if (normalizedEmail) {
+ const { data } = await supabaseAdmin
+ .from("ambassadors")
+ .select("id")
+ .eq("email", normalizedEmail)
+ .eq("status", "approved")
+ .maybeSingle();
+ if (data) {
+ return true;
+ }
+ }
+ return false;
 }
 
 export async function createCheckoutSession(
@@ -282,7 +316,7 @@ export async function createCheckoutSession(
  ),
  );
 
- const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent, shippingConfig, memberPerks] = await Promise.all([
+ const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent, shippingConfig, memberPerks, referralProgram, couponPolicy] = await Promise.all([
    getHomepageControlConfig(),
    getBulkSavingsControlConfig(),
    payload.customerUserId ? isEligibleForBulkSavings(payload.customerUserId) : Promise.resolve(false),
@@ -292,6 +326,8 @@ export async function createCheckoutSession(
    payload.customerUserId
      ? getMembershipPerks(payload.customerUserId)
      : Promise.resolve({ isActiveMember: false, tierSlug: "free", memberDiscountPercent: 0, freeShipping: false, pointsPerDollar: 1, storeCreditBalanceCents: 0, storeCreditMinOrderCents: 0 }),
+   getReferralProgramConfig(),
+   getCouponPolicyConfig(),
  ]);
  const handlingFee = calculateHandlingFee(subtotal, shippingConfig);
  const bulkSavingsResult = calculateBulkSavingsDiscount(subtotal, bulkSavingsEligible, bulkSavingsConfig);
@@ -304,20 +340,32 @@ export async function createCheckoutSession(
  const buy3Get1Discount = promoBuy3Get1Enabled ? calculateBuy3Get1Discount(lineItems) : 0;
  const isBuy3Get1Active = buy3Get1Discount > 0;
 
- if (isBuy3Get1Active && payload.referralCode?.trim()) {
- throw new Error("Referral codes cannot be combined with Buy 3 Get 1 Free. Remove the referral code to continue.");
+ const couponEntered = Boolean(payload.couponCode?.trim());
+ const referralCodeEntered = Boolean(payload.referralCode?.trim());
+
+ // Referral program master switch. When off, an entered code is rejected
+ // explicitly (rather than silently ignored) so the customer never sees a
+ // total that differs from the preview.
+ if (referralCodeEntered && !referralProgram.enabled) {
+ throw new Error("The referral program is currently unavailable. Remove the code to continue.");
  }
 
- if (isBuy3Get1Active && payload.couponCode?.trim()) {
+ // Validate the referral code even when Buy 3 Get 1 is active: the ambassador
+ // is still attributed and earns commission on the discounted subtotal — the
+ // free item is the only discount (no extra referral % stacks on top).
+ const referral = referralProgram.enabled
+   ? await validateReferralCode(payload.referralCode)
+   : null;
+
+ // Coupons never combine with a referral code or Buy 3 Get 1 unless the admin
+ // has explicitly enabled stacking.
+ if (!couponPolicy.allowStacking) {
+ if (referral && couponEntered) {
+ throw new Error("Coupon codes cannot be combined with a referral code. Remove one to continue.");
+ }
+ if (isBuy3Get1Active && couponEntered) {
  throw new Error("Coupon codes cannot be combined with Buy 3 Get 1 Free. Remove the coupon code to continue.");
  }
-
- const referral = isBuy3Get1Active
-   ? null
-   : await validateReferralCode(payload.referralCode);
-
- if (referral && payload.couponCode?.trim()) {
- throw new Error("Coupon codes cannot be combined with a referral code. Remove one to continue.");
  }
 
  if (referral) {
@@ -335,34 +383,49 @@ export async function createCheckoutSession(
  }
  }
 
- const coupon = isBuy3Get1Active || referral
-   ? null
-   : await validateCoupon(payload.couponCode, subtotal, payload.customer.email);
+ // Coupons master switch.
+ if (couponEntered && !couponPolicy.couponsEnabled) {
+ throw new Error("Coupons are currently disabled. Remove the coupon code to continue.");
+ }
+ const coupon = couponPolicy.couponsEnabled && couponEntered
+   ? await validateCoupon(payload.couponCode, subtotal, payload.customer.email)
+   : null;
 
- const preBulkDiscount = isBuy3Get1Active
-   ? { type: "buy3get1" as const, amount: buy3Get1Discount }
-   : referral
-     ? { type: "referral" as const, amount: calculateDiscountAmount(subtotal, referral.discountPercent) }
-     : { type: "coupon" as const, amount: coupon ? coupon.discountAmount : 0 };
+ // Personal ambassador discount: an approved ambassador gets a discount on
+ // their OWN purchase. It earns NO commission (self-referral is blocked) and,
+ // like every discount here, does not stack unless stacking is enabled.
+ const isApprovedAmbassadorSelf = await isApprovedAmbassadorCustomer(payload.customerUserId, payload.customer.email);
+ const personalDiscountAmount = isApprovedAmbassadorSelf && referralProgram.personalDiscountPercent > 0
+   ? calculateDiscountAmount(subtotal, referralProgram.personalDiscountPercent)
+   : 0;
 
- // "Cannot stack, greatest savings wins" - mirrors cart-context.tsx exactly
- // (same shared src/lib/discount-resolution.ts function) so the client
- // preview and this server total always agree on which discount applies.
  // Active-member pricing competes as one of the candidate discounts (greatest
  // savings wins, no stacking) so a member always gets at least their tier
- // discount whenever it's the best available deal. Tied to the account via
- // customerUserId -> membership.
+ // discount whenever it's the best available deal.
  const memberPricingAmount = memberPerks.memberDiscountPercent > 0
    ? calculateDiscountAmount(subtotal, memberPerks.memberDiscountPercent)
    : 0;
 
- const bestDiscount = resolveBestDiscount([
+ // "Greatest savings wins, no stacking" among the promos — mirrors the shared
+ // src/lib/discount-resolution.ts the client preview uses. Buy 3 Get 1, when
+ // active, is the promo (referral still earns commission on the discounted
+ // subtotal). When stacking is OFF a coupon competes as a candidate; when ON it
+ // is instead added on top of the best promo below.
+ const promoCandidates: DiscountCandidate[] = [
    { type: "bulk_savings", amount: bulkSavingsResult.amount },
    { type: "member_pricing", amount: memberPricingAmount },
-   preBulkDiscount,
- ]);
+   { type: "ambassador_personal", amount: personalDiscountAmount },
+   isBuy3Get1Active
+     ? { type: "buy3get1", amount: buy3Get1Discount }
+     : { type: "referral", amount: referral ? calculateDiscountAmount(subtotal, referral.discountPercent) : 0 },
+ ];
+ if (!couponPolicy.allowStacking) {
+   promoCandidates.push({ type: "coupon", amount: coupon ? coupon.discountAmount : 0 });
+ }
 
- const discountAmount = roundMoney(bestDiscount?.amount ?? 0);
+ const bestDiscount = resolveBestDiscount(promoCandidates);
+ const stackedCouponAmount = couponPolicy.allowStacking && coupon ? roundMoney(coupon.discountAmount) : 0;
+ const discountAmount = roundMoney(Math.min(subtotal, (bestDiscount?.amount ?? 0) + stackedCouponAmount));
  const bulkDiscountTier = bestDiscount?.type === "bulk_savings" ? bulkSavingsResult.tier : null;
 
  // Sales tax on the post-discount merchandise total (0 unless an admin sets a

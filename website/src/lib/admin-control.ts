@@ -361,16 +361,99 @@ export async function getWelcomeOffer(): Promise<WelcomeOffer> {
   }
 }
 
-// Flat sales-tax rate (percent) an admin sets in the Control Center. Applied
-// to the post-discount merchandise total at checkout. Defaults to 0.
+// Default sales-tax rate applied when an admin hasn't set one. Editable in the
+// Control Center → Shipping (enter 0 to collect no sales tax).
+export const DEFAULT_SALES_TAX_PERCENT = 7;
+// Default customer discount for a valid ambassador referral code.
+export const DEFAULT_REFERRAL_DISCOUNT_PERCENT = 10;
+// Default personal discount an approved ambassador gets on their OWN purchases.
+export const DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT = 10;
+// Default commission rate when an ambassador has no explicit rate set.
+export const DEFAULT_AMBASSADOR_COMMISSION_PERCENT = 10;
+
+// Flat sales-tax rate (percent) an admin sets in the Control Center. Applied to
+// the post-discount merchandise total at checkout. Unset falls back to
+// DEFAULT_SALES_TAX_PERCENT; an explicit "0" turns sales tax off.
 export async function getTaxRatePercent(): Promise<number> {
   try {
     const snapshot = await getControlSnapshot("shipping");
     const value = (snapshot.shipping ?? {}).tax_rate;
-    const rate = Number(value ?? 0);
-    return Number.isFinite(rate) && rate > 0 ? rate : 0;
+    if (value === "" || value == null) {
+      return DEFAULT_SALES_TAX_PERCENT;
+    }
+    const rate = Number(value);
+    return Number.isFinite(rate) && rate >= 0 ? rate : DEFAULT_SALES_TAX_PERCENT;
   } catch {
-    return 0;
+    return DEFAULT_SALES_TAX_PERCENT;
+  }
+}
+
+export interface ReferralProgramConfig {
+  // Master on/off for the ambassador referral program. When off, referral codes
+  // are rejected at checkout and no new commissions accrue.
+  enabled: boolean;
+  // Customer discount a valid referral code applies (percent).
+  discountPercent: number;
+  // Personal discount an approved ambassador gets on their OWN purchases.
+  personalDiscountPercent: number;
+  // Default commission rate used when an ambassador has no explicit rate.
+  defaultCommissionPercent: number;
+  // When true, referral attribution still happens but NO new commission accrues
+  // (a global pause the admin can toggle without disabling every ambassador).
+  commissionsPaused: boolean;
+}
+
+function clampPercent(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 && parsed <= 100 ? parsed : fallback;
+}
+
+// Ambassador/referral program controls (Control Center → Referral Program).
+// Defaults keep the program ON with a 10% customer discount, a 10% personal
+// ambassador discount, a 10% default commission, and commissions running.
+export async function getReferralProgramConfig(): Promise<ReferralProgramConfig> {
+  const fallback: ReferralProgramConfig = {
+    enabled: true,
+    discountPercent: DEFAULT_REFERRAL_DISCOUNT_PERCENT,
+    personalDiscountPercent: DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT,
+    defaultCommissionPercent: DEFAULT_AMBASSADOR_COMMISSION_PERCENT,
+    commissionsPaused: false,
+  };
+  try {
+    const snapshot = await getControlSnapshot("referral");
+    const referral = snapshot.referral ?? {};
+    return {
+      enabled: referral.enabled !== false,
+      discountPercent: clampPercent(referral.discount_percent, DEFAULT_REFERRAL_DISCOUNT_PERCENT),
+      personalDiscountPercent: clampPercent(referral.personal_discount_percent, DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT),
+      defaultCommissionPercent: clampPercent(referral.default_commission_percent, DEFAULT_AMBASSADOR_COMMISSION_PERCENT),
+      commissionsPaused: referral.commissions_paused === true,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+export interface CouponPolicyConfig {
+  // Master on/off for site coupon codes.
+  couponsEnabled: boolean;
+  // When true, a coupon may combine with an ambassador referral code. Default
+  // OFF: coupons and referral codes never stack (spec).
+  allowStacking: boolean;
+}
+
+// Coupon policy controls (Control Center → Coupons). Defaults keep coupons ON
+// and stacking OFF, matching prior behavior.
+export async function getCouponPolicyConfig(): Promise<CouponPolicyConfig> {
+  try {
+    const snapshot = await getControlSnapshot("coupons");
+    const coupons = snapshot.coupons ?? {};
+    return {
+      couponsEnabled: coupons.enabled !== false,
+      allowStacking: coupons.allow_stacking === true,
+    };
+  } catch {
+    return { couponsEnabled: true, allowStacking: false };
   }
 }
 

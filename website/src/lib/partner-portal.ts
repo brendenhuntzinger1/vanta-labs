@@ -10,7 +10,7 @@ import {
   referralCodeAssignedTemplate,
 } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
-import { getBusinessSettings } from "@/lib/admin-control";
+import { getBusinessSettings, getReferralProgramConfig } from "@/lib/admin-control";
 import { getAmbassadorProgramSettings, getAmbassadorMarketingResources, type AmbassadorMarketingResource } from "@/lib/ambassador-settings";
 
 function formatSupabaseError(error: unknown) {
@@ -207,12 +207,22 @@ async function sendReferralCodeAssignedEmail(input: {
 
 async function autoApproveEligibleCommissions() {
   const now = new Date();
-  const ambassadorSettings = await getAmbassadorProgramSettings();
+  const [ambassadorSettings, referralProgram] = await Promise.all([
+    getAmbassadorProgramSettings(),
+    getReferralProgramConfig(),
+  ]);
+
+  // A global pause or a disabled program stops ALL auto-approval — no accrued
+  // commission moves toward payout while either is in effect.
+  if (!referralProgram.enabled || referralProgram.commissionsPaused) {
+    return;
+  }
+
   const holdPeriodMs = Math.max(1, ambassadorSettings.commissionHoldDays) * 24 * 60 * 60 * 1000;
 
   const { data: pendingRows, error: pendingError } = await supabaseAdmin
     .from("referral_orders")
-    .select("id, order_id, created_at, payment_status, ineligible_reason, fraud_flag")
+    .select("id, order_id, ambassador_id, created_at, payment_status, ineligible_reason, fraud_flag")
     .eq("payment_status", "pending");
 
   assertNoSupabaseError("referral_orders.select(auto approve pending)", pendingError);
@@ -220,6 +230,19 @@ async function autoApproveEligibleCommissions() {
   if (!pendingRows || pendingRows.length === 0) {
     return;
   }
+
+  // Only approved ambassadors' commissions auto-approve. A deactivated/removed
+  // ambassador's already-accrued commissions never advance to payable.
+  const ambassadorIds = Array.from(
+    new Set(pendingRows.map((row) => row.ambassador_id).filter(Boolean)),
+  );
+  const { data: ambassadorRows, error: ambassadorError } = ambassadorIds.length
+    ? await supabaseAdmin.from("ambassadors").select("id, status").in("id", ambassadorIds)
+    : { data: [], error: null };
+  assertNoSupabaseError("ambassadors.select(auto approve status)", ambassadorError);
+  const approvedAmbassadorIds = new Set(
+    (ambassadorRows ?? []).filter((row) => row.status === "approved").map((row) => row.id),
+  );
 
   const orderIds = pendingRows.map((row) => row.order_id).filter(Boolean);
   if (orderIds.length === 0) {
@@ -241,6 +264,11 @@ async function autoApproveEligibleCommissions() {
       // review, never auto-approve - an admin has to clear them manually
       // from the Fraud & Review panel.
       if (row.ineligible_reason || row.fraud_flag) {
+        return false;
+      }
+
+      // Ambassador must still be approved to receive payout.
+      if (!row.ambassador_id || !approvedAmbassadorIds.has(row.ambassador_id)) {
         return false;
       }
 

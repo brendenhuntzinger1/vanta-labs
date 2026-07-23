@@ -65,6 +65,14 @@ export function AdminControlCenterClient() {
   const [backupSchedule, setBackupSchedule] = useState("daily");
   const [rolePolicy, setRolePolicy] = useState("");
 
+  // Referral / ambassador program + coupon policy controls.
+  const [referralEnabled, setReferralEnabled] = useState(true);
+  const [referralPersonalDiscount, setReferralPersonalDiscount] = useState("");
+  const [referralDefaultCommission, setReferralDefaultCommission] = useState("");
+  const [referralCommissionsPaused, setReferralCommissionsPaused] = useState(false);
+  const [couponsEnabled, setCouponsEnabled] = useState(true);
+  const [couponAllowStacking, setCouponAllowStacking] = useState(false);
+
   const loadSnapshot = async () => {
     const res = await fetch("/api/admin/control", { cache: "no-store" });
     const json = await res.json() as { success: boolean; snapshot?: ControlSnapshot; error?: string };
@@ -116,6 +124,16 @@ export function AdminControlCenterClient() {
     setSuspiciousAlertsEmail(String(security.suspicious_alerts_email ?? ""));
     setBackupSchedule(String(security.backup_schedule ?? "daily"));
     setRolePolicy(String(security.role_policy ?? ""));
+
+    const referral = next.referral ?? {};
+    setReferralEnabled(referral.enabled !== false);
+    setReferralPersonalDiscount(referral.personal_discount_percent != null ? String(referral.personal_discount_percent) : "");
+    setReferralDefaultCommission(referral.default_commission_percent != null ? String(referral.default_commission_percent) : "");
+    setReferralCommissionsPaused(referral.commissions_paused === true);
+
+    const coupons = next.coupons ?? {};
+    setCouponsEnabled(coupons.enabled !== false);
+    setCouponAllowStacking(coupons.allow_stacking === true);
   };
 
   useEffect(() => {
@@ -190,6 +208,14 @@ export function AdminControlCenterClient() {
       { section: "security", key: "suspicious_alerts_email", value: suspiciousAlertsEmail },
       { section: "security", key: "backup_schedule", value: backupSchedule },
       { section: "security", key: "role_policy", value: rolePolicy },
+
+      { section: "referral", key: "enabled", value: referralEnabled },
+      { section: "referral", key: "personal_discount_percent", value: referralPersonalDiscount },
+      { section: "referral", key: "default_commission_percent", value: referralDefaultCommission },
+      { section: "referral", key: "commissions_paused", value: referralCommissionsPaused },
+
+      { section: "coupons", key: "enabled", value: couponsEnabled },
+      { section: "coupons", key: "allow_stacking", value: couponAllowStacking },
     ];
 
     const res = await fetch("/api/admin/control", {
@@ -349,6 +375,26 @@ export function AdminControlCenterClient() {
               <label className="block text-zinc-300">Suspicious activity alerts email<input value={suspiciousAlertsEmail} onChange={(e) => setSuspiciousAlertsEmail(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="block text-zinc-300">Backup schedule<select value={backupSchedule} onChange={(e) => setBackupSchedule(e.target.value)} className="vl-input mt-1 w-full px-3 py-2"><option value="hourly">Hourly</option><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
               <label className="block text-zinc-300">Role policy<textarea value={rolePolicy} onChange={(e) => setRolePolicy(e.target.value)} className="vl-input mt-1 min-h-16 w-full px-3 py-2" /></label>
+            </div>
+          </section>
+
+          <section className="vl-panel-soft rounded-2xl p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">Referral Program</h3>
+            <p className="mt-2 text-xs text-zinc-400">The customer referral discount stays 10%. These control the ambassador side. Per-ambassador commission rates are set on the Partners page.</p>
+            <div className="mt-3 space-y-3 text-sm">
+              <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralEnabled} onChange={(e) => setReferralEnabled(e.target.checked)} /> Referral program enabled</label>
+              <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralCommissionsPaused} onChange={(e) => setReferralCommissionsPaused(e.target.checked)} /> Pause new commissions (codes still give the customer discount)</label>
+              <label className="block text-zinc-300">Ambassador personal discount (% off their own orders)<input value={referralPersonalDiscount} onChange={(e) => setReferralPersonalDiscount(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="block text-zinc-300">Default commission rate (% when an ambassador has no custom rate)<input value={referralDefaultCommission} onChange={(e) => setReferralDefaultCommission(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
+            </div>
+          </section>
+
+          <section className="vl-panel-soft rounded-2xl p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">Coupons</h3>
+            <div className="mt-3 space-y-3 text-sm">
+              <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={couponsEnabled} onChange={(e) => setCouponsEnabled(e.target.checked)} /> Coupons enabled site-wide</label>
+              <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={couponAllowStacking} onChange={(e) => setCouponAllowStacking(e.target.checked)} /> Allow coupons to stack with referral codes &amp; Buy 3 Get 1</label>
+              <p className="text-xs text-zinc-500">When stacking is off (default), a coupon can&apos;t combine with an ambassador code or Buy 3 Get 1.</p>
             </div>
           </section>
         </div>
