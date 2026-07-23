@@ -850,3 +850,30 @@ begin
     end if;
   end loop;
 end $$;
+
+
+-- ==================== CHUNK 5 — PROFIT ENGINE (cost + margin) ================
+-- Per-SKU cost/margin fields + per-order profit snapshot. Idempotent.
+-- See src/lib/sql/product-cost-profit.sql and src/lib/profit-engine.ts.
+
+alter table if exists public.products
+  add column if not exists product_cost_cents integer,
+  add column if not exists suggested_retail_cents integer,
+  add column if not exists min_selling_price_cents integer,
+  add column if not exists min_profit_cents integer,
+  add column if not exists min_profit_percent numeric;
+
+alter table if exists public.product_doses
+  add column if not exists product_cost_cents integer,
+  add column if not exists suggested_retail_cents integer,
+  add column if not exists min_selling_price_cents integer,
+  add column if not exists min_profit_cents integer,
+  add column if not exists min_profit_percent numeric;
+
+alter table if exists public.orders
+  add column if not exists product_cost_cents integer,
+  add column if not exists processing_fee_cents integer,
+  add column if not exists shipping_cost_cents integer,
+  add column if not exists gross_profit_cents integer,
+  add column if not exists gross_margin_percent numeric,
+  add column if not exists commission_cost_cents integer;
