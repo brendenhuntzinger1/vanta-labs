@@ -7,6 +7,17 @@ import { supabase } from "@/lib/supabase";
 
 type AuthMode = "login" | "signup";
 
+// Business type shown on the account-creation screen, alongside the age +
+// research-use confirmations. "Other" is the default selection.
+const BUSINESS_TYPES = [
+  "Other",
+  "Healthcare / Medical",
+  "Research / Academic",
+  "Biotechnology",
+  "Pharmaceutical",
+  "Government / Military",
+] as const;
+
 function getEmailRedirectUrl(path: string) {
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
   if (siteUrl) {
@@ -38,6 +49,9 @@ export function AccountAuthForm() {
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [businessType, setBusinessType] = useState<string>("Other");
+  const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [researchUseAgreed, setResearchUseAgreed] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [loading, setLoading] = useState(false);
   const [completingVerification, setCompletingVerification] = useState(false);
@@ -118,6 +132,15 @@ export function AccountAuthForm() {
   };
 
   const handleSignup = async () => {
+    if (!ageConfirmed) {
+      setError("Please confirm that you are at least 21 years old.");
+      return;
+    }
+    if (!researchUseAgreed) {
+      setError("Please agree that the products are intended for research use only.");
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setMessage(null);
@@ -130,6 +153,9 @@ export function AccountAuthForm() {
           data: {
             full_name: fullName.trim(),
             role: "customer",
+            business_type: businessType,
+            age_confirmed_21: true,
+            research_use_only_agreed: true,
             referred_by_code: referralCodeFromUrl || undefined,
           },
           emailRedirectTo: getEmailRedirectUrl(`/account/login?next=${encodeURIComponent(nextPath)}`),
@@ -256,7 +282,46 @@ export function AccountAuthForm() {
             required
           />
         </label>
+
+        {mode === "signup" ? (
+          <label className="block text-sm text-zinc-400">
+            <span className="mb-2 block">Business Type</span>
+            <select
+              value={businessType}
+              onChange={(event) => setBusinessType(event.target.value)}
+              className="vl-input w-full px-4 py-3"
+              required
+            >
+              {BUSINESS_TYPES.map((type) => (
+                <option key={type} value={type}>{type}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
       </div>
+
+      {mode === "signup" ? (
+        <div className="mt-4 space-y-3">
+          <label className="flex items-start gap-3 rounded-xl border border-cyan-300/30 bg-cyan-400/[0.06] px-4 py-3 text-sm text-zinc-200">
+            <input
+              type="checkbox"
+              checked={ageConfirmed}
+              onChange={(event) => setAgeConfirmed(event.target.checked)}
+              className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
+            />
+            <span>I confirm that I am at least 21 years old.</span>
+          </label>
+          <label className="flex items-start gap-3 rounded-xl border border-cyan-300/30 bg-cyan-400/[0.06] px-4 py-3 text-sm text-zinc-200">
+            <input
+              type="checkbox"
+              checked={researchUseAgreed}
+              onChange={(event) => setResearchUseAgreed(event.target.checked)}
+              className="mt-0.5 h-5 w-5 shrink-0 accent-cyan-400"
+            />
+            <span>I agree and understand that the products on this site are intended for research use only, as defined by FDA.</span>
+          </label>
+        </div>
+      ) : null}
 
       <label className="mt-4 flex min-h-[44px] cursor-pointer items-center gap-3 text-sm text-zinc-300">
         <input
@@ -273,7 +338,7 @@ export function AccountAuthForm() {
 
       <button
         type="submit"
-        disabled={loading}
+        disabled={loading || (mode === "signup" && (!ageConfirmed || !researchUseAgreed))}
         className="vl-focus-ring mt-6 inline-flex w-full items-center justify-center rounded-full bg-gradient-to-r from-white to-zinc-300 px-6 py-3 text-sm font-bold text-zinc-950 transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {loading ? "Please wait…" : primaryLabel}
