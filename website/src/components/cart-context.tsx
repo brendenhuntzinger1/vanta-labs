@@ -672,9 +672,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     });
     setReferralError(null);
     setReferralSuccess(null);
-    // Open the cart so the shopper gets immediate, unmistakable confirmation
-    // that the item was added (and a nudge toward checkout).
-    setIsCartOpen(true);
+    // Intentionally do NOT open the cart here — the fly-to-cart animation and
+    // the updated cart badge confirm the add, and the shopper keeps browsing
+    // instead of being pulled into the cart on every add.
   };
 
   const updateQuantity = (slug: string, quantity: number) => {
