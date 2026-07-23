@@ -76,6 +76,14 @@ vi.mock("@/lib/admin-control", () => ({
     handlingFeeRate: 0.05,
   }),
   getCardProcessingFeeConfig: async () => ({ enabled: true, percentage: 5, label: "Card Processing Fee", noticeText: "" }),
+  getReferralProgramConfig: async () => ({
+    enabled: true,
+    discountPercent: 10,
+    personalDiscountPercent: 10,
+    defaultCommissionPercent: 10,
+    commissionsPaused: false,
+  }),
+  getCouponPolicyConfig: async () => ({ couponsEnabled: true, allowStacking: false }),
   getPaymentMethodsConfig: async () => ([
     { id: "card", label: "Credit / Debit Card", kind: "card", enabled: true, order: 100, icon: "", recommended: false, badges: [], instructions: [] },
     { id: "cashapp", label: "Cash App", kind: "manual", enabled: true, order: 10, icon: "", recommended: true, badges: [], instructions: [] },

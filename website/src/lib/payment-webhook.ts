@@ -10,6 +10,7 @@ import { calculateEarnedPoints, getActivePointsMultiplier, getActivePointsPerDol
 import { redeemStoreCredit, refundStoreCreditForOrder } from "@/lib/store-credit";
 import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
 import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
 import { activateAnnualMembership } from "@/lib/membership-billing";
@@ -328,6 +329,11 @@ async function ensureCommissionRecord(input: {
   referralCode?: string;
   commissionPercent?: number;
   commissionableSubtotal?: number;
+  // Pre-discount merchandise subtotal — the SAME number checkout gates on. Used
+  // for the minimum-qualifying-order check so a cart that qualified at checkout
+  // always earns, even after the referral discount lowers the net (fixes the
+  // "used a code, ambassador got $0" edge). Falls back to commissionableSubtotal.
+  qualifyingSubtotal?: number;
   paymentStatus: OrderStatus;
   providerEventId?: string;
   customerEmail?: string | null;
@@ -340,9 +346,11 @@ async function ensureCommissionRecord(input: {
   }
 
   const commissionableSubtotal = roundMoney(input.commissionableSubtotal ?? 0);
+  const qualifyingSubtotal = roundMoney(input.qualifyingSubtotal ?? commissionableSubtotal);
 
-  const [ambassadorSettings, effectiveCommission, fraudSignal] = await Promise.all([
+  const [ambassadorSettings, referralProgram, effectiveCommission, fraudSignal, ambassadorRow] = await Promise.all([
     getAmbassadorProgramSettings(),
+    getReferralProgramConfig(),
     getEffectiveCommissionPercent({
       ambassadorId: input.ambassadorId,
       fallbackPercent: input.commissionPercent ?? 0,
@@ -355,16 +363,28 @@ async function ensureCommissionRecord(input: {
       city: input.city,
       postalCode: input.postalCode,
     }),
+    supabaseAdmin.from("ambassadors").select("status").eq("id", input.ambassadorId).maybeSingle(),
   ]);
 
-  // Re-checked here (not just at checkout) as defense in depth - the order
-  // shouldn't be able to earn a commission below the minimum qualifying
-  // order regardless of how it reached "paid".
-  const isIneligible = commissionableSubtotal < ambassadorSettings.minimumQualifyingOrder;
-  const ineligibleReason = isIneligible
-    ? `Order subtotal ${commissionableSubtotal.toFixed(2)} is below the ${ambassadorSettings.minimumQualifyingOrder.toFixed(2)} minimum qualifying order.`
-    : null;
+  // Eligibility is re-checked here (not just at checkout) as defense in depth,
+  // and now also enforces live ambassador state: a commission never accrues if
+  // the program is off, commissions are globally paused, or the ambassador has
+  // been deactivated/removed since the order was placed. The minimum-order check
+  // uses the pre-discount subtotal (what checkout gated on) so a qualifying cart
+  // is never silently zeroed by its own referral discount.
+  const ambassadorApproved = String(ambassadorRow.data?.status ?? "") === "approved";
+  let ineligibleReason: string | null = null;
+  if (!referralProgram.enabled) {
+    ineligibleReason = "Referral program is disabled.";
+  } else if (referralProgram.commissionsPaused) {
+    ineligibleReason = "Commissions are paused.";
+  } else if (!ambassadorApproved) {
+    ineligibleReason = "Ambassador is not active.";
+  } else if (qualifyingSubtotal < ambassadorSettings.minimumQualifyingOrder) {
+    ineligibleReason = `Order subtotal ${qualifyingSubtotal.toFixed(2)} is below the ${ambassadorSettings.minimumQualifyingOrder.toFixed(2)} minimum qualifying order.`;
+  }
 
+  const isIneligible = ineligibleReason !== null;
   const commissionPercent = isIneligible ? 0 : effectiveCommission.percent;
   const commissionAmount = isIneligible ? 0 : roundMoney(commissionableSubtotal * (commissionPercent / 100));
 
@@ -702,6 +722,7 @@ export async function finalizeManualPayment(
     ambassadorId,
     referralCode,
     commissionableSubtotal,
+    qualifyingSubtotal: subtotal,
     paymentStatus: "paid",
     customerEmail: order.customer_email ? String(order.customer_email) : null,
     shippingAddress: order.shipping_address ? String(order.shipping_address) : null,
@@ -890,6 +911,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         referralCode: eventPayload.referralCode,
         commissionPercent: eventPayload.commissionPercent,
         commissionableSubtotal,
+        qualifyingSubtotal: subtotal,
         paymentStatus: nextStatus,
         providerEventId: eventId,
         customerEmail: eventPayload.customer?.email,
