@@ -52,14 +52,11 @@ paste your current one, never share it.
 | `SUPABASE_SERVICE_ROLE_KEY` | *(your current secret key — paste it, don't commit it)* |
 | `NEXT_PUBLIC_SITE_URL` | `https://your-domain.com` (or the Vercel URL for now) |
 | `CRON_SECRET` | *(any long random string you make up)* |
-| `ADMIN_ACCESS_CODE` | *(a 6-digit number — the admin login passcode)* |
 
-**`ADMIN_ACCESS_CODE`** is the second step of admin login. After the correct
-username + password at `/vault`, the admin must also enter this 6-digit
-passcode. Set it here to turn the second factor on for every admin at once, or
-give each admin their own passcode from **Admin → Team → Set passcode** (which
-takes precedence). If both are unset, login falls back to username + password
-only, so you're never locked out — but set one to enable the second factor.
+**Admin login code (second step):** after this is deployed, set your 6-digit
+login code from **Admin → My Account → 6-digit login code**. No environment
+variable needed. Until you set one, login works with just username + password,
+so you're never locked out.
 
 **`CRON_SECRET`** protects the scheduled job at `/api/cron/sweep` (membership
 billing + abandoned-cart emails), which `vercel.json` runs every 30 minutes.
