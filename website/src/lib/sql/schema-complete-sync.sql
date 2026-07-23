@@ -254,6 +254,9 @@ alter table if exists public.admin_credentials
   add column if not exists password_salt text,
   add column if not exists password_hash text,
   add column if not exists is_active boolean not null default true,
+  add column if not exists passcode_salt text,
+  add column if not exists passcode_hash text,
+  add column if not exists passcode_updated_at timestamptz,
   add column if not exists created_at timestamptz not null default now(),
   add column if not exists updated_at timestamptz not null default now();
 

@@ -79,6 +79,42 @@ export function AdminTeamClient({ initialAccounts, currentUsername }: { initialA
     }
   };
 
+  const setPasscode = async (account: AdminAccountRow) => {
+    setError(null);
+    setMessage(null);
+    const entered = window.prompt(
+      `Set a 6-digit login passcode for "${account.username}". This is the second step required after their username and password.`,
+    );
+    if (entered === null) {
+      return;
+    }
+    const passcode = entered.replace(/\D/g, "");
+    if (passcode.length !== 6) {
+      setError("Passcode must be exactly 6 digits.");
+      return;
+    }
+
+    setBusyUsername(account.username);
+    try {
+      const response = await fetch(`/api/admin/team/${encodeURIComponent(account.username)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ passcode }),
+      });
+      const result = await response.json() as { success: boolean; error?: string };
+      if (!result.success) {
+        setError(result.error ?? "Unable to set passcode.");
+        return;
+      }
+      setMessage(`Passcode set for "${account.username}".`);
+      await refresh();
+    } catch {
+      setError("Unable to set passcode right now.");
+    } finally {
+      setBusyUsername(null);
+    }
+  };
+
   const toggleActive = async (account: AdminAccountRow) => {
     setBusyUsername(account.username);
     setError(null);
@@ -139,6 +175,7 @@ export function AdminTeamClient({ initialAccounts, currentUsername }: { initialA
                 <th className="pb-2 pr-4">Username</th>
                 <th className="pb-2 pr-4">Role</th>
                 <th className="pb-2 pr-4">Status</th>
+                <th className="pb-2 pr-4">Passcode</th>
                 <th className="pb-2 pr-4">Actions</th>
               </tr>
             </thead>
@@ -167,20 +204,35 @@ export function AdminTeamClient({ initialAccounts, currentUsername }: { initialA
                     </span>
                   </td>
                   <td className="py-3 pr-4">
-                    <button
-                      type="button"
-                      onClick={() => toggleActive(account)}
-                      disabled={busyUsername === account.username || account.username === currentUsername}
-                      className="vl-btn-secondary px-3 py-1.5 text-xs disabled:opacity-60"
-                    >
-                      {account.isActive ? "Disable" : "Enable"}
-                    </button>
+                    <span className={account.hasPasscode ? "rounded-full bg-emerald-400/15 px-2 py-1 text-xs text-emerald-300" : "rounded-full bg-amber-400/15 px-2 py-1 text-xs text-amber-300"}>
+                      {account.hasPasscode ? "Set" : "Not set"}
+                    </span>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setPasscode(account)}
+                        disabled={busyUsername === account.username}
+                        className="vl-btn-secondary px-3 py-1.5 text-xs disabled:opacity-60"
+                      >
+                        {account.hasPasscode ? "Change passcode" : "Set passcode"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => toggleActive(account)}
+                        disabled={busyUsername === account.username || account.username === currentUsername}
+                        className="vl-btn-secondary px-3 py-1.5 text-xs disabled:opacity-60"
+                      >
+                        {account.isActive ? "Disable" : "Enable"}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
               {accounts.length === 0 ? (
                 <tr>
-                  <td colSpan={4} className="py-6 text-center text-sm text-zinc-500">No admin accounts yet.</td>
+                  <td colSpan={5} className="py-6 text-center text-sm text-zinc-500">No admin accounts yet.</td>
                 </tr>
               ) : null}
             </tbody>

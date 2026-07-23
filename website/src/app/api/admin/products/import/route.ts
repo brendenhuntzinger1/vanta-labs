@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageProducts } from "@/lib/admin-roles";
 import { importProductsCsv } from "@/lib/admin-products-csv";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -9,6 +10,9 @@ export async function POST(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  }
+  if (!canManageProducts(session.role)) {
+    return NextResponse.json({ success: false, error: "Only managers and super admins can manage products." }, { status: 403 });
   }
 
   try {

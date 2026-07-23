@@ -8,7 +8,11 @@
 // encoded) and upserts the credential using the Supabase service role key.
 //
 // Usage:
-//   node scripts/create-admin-credential.mjs <username> <password> [role]
+//   node scripts/create-admin-credential.mjs <username> <password> [role] [passcode]
+//
+// passcode is an optional 6-digit second factor required at login (in addition
+// to username + password). If omitted, login falls back to the ADMIN_ACCESS_CODE
+// environment variable, or to password-only when neither is set.
 //
 // role is one of staff | manager | super_admin (see src/lib/admin-roles.ts).
 // Defaults to super_admin for a brand-new account, since this script is the
@@ -45,9 +49,9 @@ function loadEnvFile(filePath) {
 (async () => {
   loadEnvFile(".env.local");
 
-  const [username, password, roleArg] = process.argv.slice(2);
+  const [username, password, roleArg, passcodeArg] = process.argv.slice(2);
   if (!username || !password) {
-    console.error("Usage: node scripts/create-admin-credential.mjs <username> <password> [role]");
+    console.error("Usage: node scripts/create-admin-credential.mjs <username> <password> [role] [passcode]");
     process.exit(1);
   }
 
@@ -59,6 +63,11 @@ function loadEnvFile(filePath) {
   const validRoles = ["staff", "manager", "super_admin"];
   if (roleArg && !validRoles.includes(roleArg)) {
     console.error(`Invalid role "${roleArg}". Must be one of: ${validRoles.join(", ")}`);
+    process.exit(1);
+  }
+
+  if (passcodeArg !== undefined && !/^\d{6}$/.test(passcodeArg)) {
+    console.error("Passcode must be exactly 6 digits.");
     process.exit(1);
   }
 
@@ -86,24 +95,33 @@ function loadEnvFile(filePath) {
 
   const role = roleArg ?? existing?.role ?? "super_admin";
 
+  const record = {
+    username: normalizedUsername,
+    password_salt: salt,
+    password_hash: hash,
+    is_active: true,
+    role,
+    updated_at: new Date().toISOString(),
+  };
+
+  if (passcodeArg !== undefined) {
+    const passcodeSalt = randomBytes(16).toString("hex");
+    record.passcode_salt = passcodeSalt;
+    record.passcode_hash = scryptSync(passcodeArg, passcodeSalt, 64).toString("hex");
+    record.passcode_updated_at = new Date().toISOString();
+  }
+
   const { error } = await client
     .from("admin_credentials")
-    .upsert(
-      {
-        username: normalizedUsername,
-        password_salt: salt,
-        password_hash: hash,
-        is_active: true,
-        role,
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: "username" },
-    );
+    .upsert(record, { onConflict: "username" });
 
   if (error) {
     console.error("Failed to create/update admin credential:", error);
     process.exit(1);
   }
 
-  console.log(`Admin credential ready for username "${normalizedUsername}" (role: ${role}). You can now log in at /admin.`);
+  const passcodeNote = passcodeArg !== undefined
+    ? " A 6-digit login passcode was set."
+    : " No passcode set — login uses ADMIN_ACCESS_CODE (if set) or password only.";
+  console.log(`Admin credential ready for username "${normalizedUsername}" (role: ${role}).${passcodeNote} You can now log in at /vault.`);
 })();

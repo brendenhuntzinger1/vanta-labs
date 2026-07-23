@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageProducts } from "@/lib/admin-roles";
 import { reorderAdminProducts } from "@/lib/admin-products";
 
 function unauthorizedResponse() {
@@ -10,6 +11,9 @@ export async function POST(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {
     return unauthorizedResponse();
+  }
+  if (!canManageProducts(session.role)) {
+    return NextResponse.json({ success: false, error: "Only managers and super admins can manage products." }, { status: 403 });
   }
 
   try {

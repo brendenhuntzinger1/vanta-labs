@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageProducts } from "@/lib/admin-roles";
 import {
   deleteAdminProduct,
   getAdminProductById,
@@ -16,6 +17,10 @@ import {
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+}
+
+function forbiddenResponse() {
+  return NextResponse.json({ success: false, error: "Only managers and super admins can manage products." }, { status: 403 });
 }
 
 export async function GET(_: Request, context: { params: Promise<{ productId: string }> }) {
@@ -38,6 +43,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ produ
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {
     return unauthorizedResponse();
+  }
+  if (!canManageProducts(session.role)) {
+    return forbiddenResponse();
   }
 
   const { productId } = await context.params;
@@ -140,6 +148,9 @@ export async function DELETE(_: Request, context: { params: Promise<{ productId:
   const session = await verifyAdminSessionFromRequest(_);
   if (!session) {
     return unauthorizedResponse();
+  }
+  if (!canManageProducts(session.role)) {
+    return forbiddenResponse();
   }
 
   try {

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest, validateAdminCredentials, getRequestIpAddress, getRequestUserAgent } from "@/lib/admin-auth";
-import { setAdminPassword, renameAdminAccount } from "@/lib/admin-team";
+import { setAdminPassword, setAdminPasscode, renameAdminAccount } from "@/lib/admin-team";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 // Self-service admin account management: any signed-in admin can change their
@@ -18,6 +18,7 @@ export async function PATCH(request: Request) {
       currentPassword?: string;
       newPassword?: string;
       newUsername?: string;
+      newPasscode?: string;
     };
 
     // Re-authenticate with the current password before any change.
@@ -43,6 +44,16 @@ export async function PATCH(request: Request) {
       }
       await setAdminPassword(session.username, newPassword);
       await audit("admin_password_changed", {});
+      return NextResponse.json({ success: true });
+    }
+
+    if (body.action === "change_passcode") {
+      const newPasscode = String(body.newPasscode ?? "").replace(/\D/g, "");
+      if (newPasscode.length !== 6) {
+        return NextResponse.json({ success: false, error: "Your login code must be exactly 6 digits." }, { status: 400 });
+      }
+      await setAdminPasscode(session.username, newPasscode);
+      await audit("admin_passcode_set", {});
       return NextResponse.json({ success: true });
     }
 

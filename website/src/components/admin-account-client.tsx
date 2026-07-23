@@ -9,6 +9,8 @@ export function AdminAccountClient({ username }: { username: string }) {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [newUsername, setNewUsername] = useState("");
+  const [newPasscode, setNewPasscode] = useState("");
+  const [confirmPasscode, setConfirmPasscode] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<{ tone: "ok" | "err"; text: string } | null>(null);
 
@@ -44,6 +46,16 @@ export function AdminAccountClient({ username }: { username: string }) {
     }
   };
 
+  const changePasscode = async () => {
+    const code = newPasscode.replace(/\D/g, "");
+    if (code.length !== 6) return setMessage({ tone: "err", text: "Your login code must be exactly 6 digits." });
+    if (code !== confirmPasscode.replace(/\D/g, "")) return setMessage({ tone: "err", text: "The two login codes don't match." });
+    if (await call("change_passcode", { newPasscode: code })) {
+      setMessage({ tone: "ok", text: "Login code updated. Use it next time you sign in." });
+      setCurrentPassword(""); setNewPasscode(""); setConfirmPasscode("");
+    }
+  };
+
   const changeUsername = async () => {
     if (!newUsername.trim()) return setMessage({ tone: "err", text: "Enter a new username." });
     if (await call("change_username", { newUsername })) {
@@ -55,6 +67,23 @@ export function AdminAccountClient({ username }: { username: string }) {
 
   return (
     <div className="mt-6 space-y-4">
+      <div className="vl-panel rounded-2xl p-5">
+        <h2 className="text-lg font-semibold">6-digit login code</h2>
+        <p className="mt-1 text-sm text-zinc-400">This is the second step you enter after your username and password when signing in. Set or change it here anytime.</p>
+        <div className="mt-4 grid max-w-md gap-3">
+          <label className="text-xs text-zinc-400">Current password
+            <input type="password" value={currentPassword} onChange={(e) => setCurrentPassword(e.target.value)} className="vl-input mt-1 w-full px-3 py-2 text-sm" />
+          </label>
+          <label className="text-xs text-zinc-400">New 6-digit code
+            <input inputMode="numeric" maxLength={6} value={newPasscode} onChange={(e) => setNewPasscode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" className="vl-input mt-1 w-full px-3 py-2 text-sm tracking-[0.4em]" />
+          </label>
+          <label className="text-xs text-zinc-400">Confirm 6-digit code
+            <input inputMode="numeric" maxLength={6} value={confirmPasscode} onChange={(e) => setConfirmPasscode(e.target.value.replace(/\D/g, "").slice(0, 6))} placeholder="000000" className="vl-input mt-1 w-full px-3 py-2 text-sm tracking-[0.4em]" />
+          </label>
+          <button type="button" disabled={busy} onClick={changePasscode} className="vl-btn-primary mt-1 w-fit px-4 py-2 text-xs disabled:opacity-50">Update login code</button>
+        </div>
+      </div>
+
       <div className="vl-panel rounded-2xl p-5">
         <h2 className="text-lg font-semibold">Change password</h2>
         <p className="mt-1 text-sm text-zinc-400">You&apos;re signed in as <span className="text-zinc-200">{username}</span>. Enter your current password to make changes.</p>

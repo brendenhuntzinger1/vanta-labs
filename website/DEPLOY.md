@@ -16,7 +16,15 @@ That single file bundles everything the app needs (all tables, columns,
 indexes, and functions), built entirely from idempotent statements
 (`create ... if not exists`, `create or replace function`). It is safe on a
 fresh **or** an existing database, safe to re-run, and never drops or
-overwrites your data.
+overwrites your data. It now also includes **CHUNK 4 — security hardening**
+(the admin 6-digit passcode columns and deny-by-default Row Level Security on
+every table). If you deployed before this was added, just re-run the file.
+
+After running it, verify RLS is on everywhere (should return **zero rows**):
+
+```sql
+select tablename from pg_tables where schemaname = 'public' and rowsecurity = false;
+```
 
 ---
 
@@ -44,6 +52,11 @@ paste your current one, never share it.
 | `SUPABASE_SERVICE_ROLE_KEY` | *(your current secret key — paste it, don't commit it)* |
 | `NEXT_PUBLIC_SITE_URL` | `https://your-domain.com` (or the Vercel URL for now) |
 | `CRON_SECRET` | *(any long random string you make up)* |
+
+**Admin login code (second step):** after this is deployed, set your 6-digit
+login code from **Admin → My Account → 6-digit login code**. No environment
+variable needed. Until you set one, login works with just username + password,
+so you're never locked out.
 
 **`CRON_SECRET`** protects the scheduled job at `/api/cron/sweep` (membership
 billing + abandoned-cart emails), which `vercel.json` runs every 30 minutes.

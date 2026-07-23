@@ -3,12 +3,14 @@ import "server-only";
 import { randomBytes, scryptSync } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { normalizeAdminRole, type AdminRole } from "@/lib/admin-roles";
+import { generatePasscodeSalt, hashPasscode, isValidPasscodeFormat } from "@/lib/admin-passcode";
 
 export interface AdminAccountRow {
   id: string;
   username: string;
   role: AdminRole;
   isActive: boolean;
+  hasPasscode: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -16,7 +18,7 @@ export interface AdminAccountRow {
 export async function listAdminAccounts(): Promise<AdminAccountRow[]> {
   const { data, error } = await supabaseAdmin
     .from("admin_credentials")
-    .select("id, username, role, is_active, created_at, updated_at")
+    .select("id, username, role, is_active, passcode_hash, created_at, updated_at")
     .order("username", { ascending: true });
 
   if (error) {
@@ -28,9 +30,39 @@ export async function listAdminAccounts(): Promise<AdminAccountRow[]> {
     username: String(row.username),
     role: normalizeAdminRole(row.role),
     isActive: Boolean(row.is_active),
+    hasPasscode: Boolean(row.passcode_hash),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));
+}
+
+// Sets (or rotates) the 6-digit second-factor passcode for an admin account.
+// Existing sessions are left intact — rotating a passcode should not sign the
+// operator out mid-task; it only affects the next login.
+export async function setAdminPasscode(username: string, passcode: string) {
+  if (!isValidPasscodeFormat(passcode)) {
+    throw new Error("Passcode must be exactly 6 digits");
+  }
+  const normalized = username.trim().toLowerCase();
+  const salt = generatePasscodeSalt();
+  const hash = hashPasscode(passcode, salt);
+
+  const { data, error } = await supabaseAdmin
+    .from("admin_credentials")
+    .update({
+      passcode_salt: salt,
+      passcode_hash: hash,
+      passcode_updated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("username", normalized)
+    .select("id")
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) {
+    throw new Error(`No admin account found for username "${normalized}"`);
+  }
 }
 
 // Mirrors scripts/create-admin-credential.mjs's hashing scheme exactly so

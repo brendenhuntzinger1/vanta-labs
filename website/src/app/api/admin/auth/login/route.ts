@@ -7,10 +7,16 @@ import {
   getRequestUserAgent,
   recordAdminLoginAttempt,
   validateAdminCredentials,
+  verifyAdminPasscode,
 } from "@/lib/admin-auth";
 
+// A single generic message for every credential/passcode failure so an
+// attacker can't tell which of the three factors (username, password,
+// passcode) was correct.
+const INVALID_MESSAGE = "Invalid username, password, or passcode.";
+
 export async function POST(request: Request) {
-  let payload: { username?: string; password?: string };
+  let payload: { username?: string; password?: string; passcode?: string };
   try {
     payload = await request.json();
   } catch {
@@ -19,6 +25,7 @@ export async function POST(request: Request) {
 
   const username = (payload.username ?? "").trim().toLowerCase();
   const password = payload.password ?? "";
+  const passcode = payload.passcode ?? "";
   const ipAddress = getRequestIpAddress(request);
   const userAgent = getRequestUserAgent(request);
 
@@ -39,7 +46,15 @@ export async function POST(request: Request) {
   const user = await validateAdminCredentials(username, password);
   if (!user) {
     await recordAdminLoginAttempt({ username, ipAddress, userAgent, success: false });
-    return NextResponse.json({ error: "Invalid credentials" }, { status: 401 });
+    return NextResponse.json({ error: INVALID_MESSAGE }, { status: 401 });
+  }
+
+  // Second factor: 6-digit passcode (per-account, or ADMIN_ACCESS_CODE
+  // fallback). A wrong passcode counts as a failed attempt toward lockout.
+  const passcodeStatus = verifyAdminPasscode(user, passcode);
+  if (passcodeStatus === "invalid") {
+    await recordAdminLoginAttempt({ username, ipAddress, userAgent, success: false });
+    return NextResponse.json({ error: INVALID_MESSAGE }, { status: 401 });
   }
 
   await recordAdminLoginAttempt({ username, ipAddress, userAgent, success: true });
@@ -50,7 +65,7 @@ export async function POST(request: Request) {
     userAgent,
   });
 
-  const response = NextResponse.json({ ok: true });
+  const response = NextResponse.json({ ok: true, passcodeConfigured: passcodeStatus === "ok" });
   response.headers.set("Cache-Control", "no-store");
   const cookie = buildAdminSessionCookie(token);
   response.cookies.set(cookie.name, cookie.value, cookie.options);

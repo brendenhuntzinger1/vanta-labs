@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageTeam, normalizeAdminRole } from "@/lib/admin-roles";
-import { updateAdminAccount } from "@/lib/admin-team";
+import { setAdminPasscode, updateAdminAccount } from "@/lib/admin-team";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 export async function PATCH(request: Request, context: { params: Promise<{ username: string }> }) {
@@ -17,30 +17,50 @@ export async function PATCH(request: Request, context: { params: Promise<{ usern
   const { username } = await context.params;
 
   try {
-    const body = await request.json() as { role?: string; isActive?: boolean };
+    const body = await request.json() as { role?: string; isActive?: boolean; passcode?: string };
 
     if (body.isActive === false && username.trim().toLowerCase() === session.username.trim().toLowerCase()) {
       return NextResponse.json({ success: false, error: "You cannot deactivate your own account." }, { status: 400 });
     }
 
-    await updateAdminAccount(username, {
-      role: body.role !== undefined ? normalizeAdminRole(body.role) : undefined,
-      isActive: body.isActive,
-    });
+    // Setting/rotating the 6-digit second-factor passcode. The raw passcode is
+    // never logged — the audit entry only records that a passcode was set.
+    if (body.passcode !== undefined) {
+      await setAdminPasscode(username, String(body.passcode));
 
-    await supabaseAdmin.from("admin_audit_logs").insert({
-      action: "admin_account_update",
-      target_table: "admin_credentials",
-      target_id: username.toLowerCase(),
-      metadata: {
-        role: body.role ?? null,
-        isActive: body.isActive ?? null,
-        performedAt: new Date().toISOString(),
-        performedBy: session.username,
-        ipAddress: getRequestIpAddress(request),
-        userAgent: getRequestUserAgent(request),
-      },
-    });
+      await supabaseAdmin.from("admin_audit_logs").insert({
+        action: "admin_passcode_set",
+        target_table: "admin_credentials",
+        target_id: username.toLowerCase(),
+        metadata: {
+          performedAt: new Date().toISOString(),
+          performedBy: session.username,
+          ipAddress: getRequestIpAddress(request),
+          userAgent: getRequestUserAgent(request),
+        },
+      });
+    }
+
+    if (body.role !== undefined || body.isActive !== undefined) {
+      await updateAdminAccount(username, {
+        role: body.role !== undefined ? normalizeAdminRole(body.role) : undefined,
+        isActive: body.isActive,
+      });
+
+      await supabaseAdmin.from("admin_audit_logs").insert({
+        action: "admin_account_update",
+        target_table: "admin_credentials",
+        target_id: username.toLowerCase(),
+        metadata: {
+          role: body.role ?? null,
+          isActive: body.isActive ?? null,
+          performedAt: new Date().toISOString(),
+          performedBy: session.username,
+          ipAddress: getRequestIpAddress(request),
+          userAgent: getRequestUserAgent(request),
+        },
+      });
+    }
 
     return NextResponse.json({ success: true });
   } catch (error) {
