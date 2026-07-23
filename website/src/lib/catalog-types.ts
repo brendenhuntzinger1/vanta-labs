@@ -1,5 +1,10 @@
 export type ProductBadge = "new" | "best_seller" | "sale" | null;
 
+export type ProductFaqItem = {
+  question: string;
+  answer: string;
+};
+
 export type ProductImage = {
   id: string;
   imageUrl: string;
@@ -64,6 +69,13 @@ export type Product = {
   labName: string;
   coaUrl: string;
   molecularFormula?: string;
+  // Premium research-data spec fields (all optional; rendered when present).
+  molecularWeight?: string;
+  casNumber?: string;
+  peptideSequence?: string;
+  storageRecommendation?: string;
+  reconstitutionNote?: string;
+  faq?: ProductFaqItem[];
   seoTitle?: string;
   seoDescription?: string;
 };

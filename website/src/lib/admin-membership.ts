@@ -62,6 +62,101 @@ export interface MembershipTierInput {
   memberDiscountPercent: number;
 }
 
+function slugifyTier(value: string) {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60);
+}
+
+// Create a new membership tier. Only name is required; a URL-safe slug is
+// derived from it (kept unique with a numeric suffix) and every other field
+// falls back to a sensible default so a tier can be spun up with one field and
+// refined afterward.
+export async function createMembershipTier(input: { name: string } & Partial<MembershipTierInput>) {
+  const name = input.name.trim();
+  if (!name) {
+    throw new Error("Tier name is required.");
+  }
+
+  let slug = input.slug ? slugifyTier(input.slug) : slugifyTier(name);
+  if (!slug) {
+    slug = "tier";
+  }
+
+  // Ensure slug uniqueness (the column is unique) by probing and suffixing.
+  const { data: existing } = await supabaseAdmin
+    .from("membership_tiers")
+    .select("slug")
+    .like("slug", `${slug}%`);
+  const taken = new Set((existing ?? []).map((row) => String(row.slug)));
+  if (taken.has(slug)) {
+    let n = 2;
+    while (taken.has(`${slug}-${n}`)) n += 1;
+    slug = `${slug}-${n}`;
+  }
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabaseAdmin
+    .from("membership_tiers")
+    .insert({
+      slug,
+      name,
+      monthly_price_cents: Math.max(0, Math.round(input.monthlyPriceCents ?? 0)),
+      annual_price_cents: Math.max(0, Math.round(input.annualPriceCents ?? 0)),
+      points_per_dollar: Math.max(0, input.pointsPerDollar ?? 1),
+      free_shipping: input.freeShipping ?? false,
+      priority_shipping: input.priorityShipping ?? false,
+      early_access: input.earlyAccess ?? false,
+      exclusive_pricing: input.exclusivePricing ?? false,
+      referral_bonus_points: Math.max(0, Math.round(input.referralBonusPoints ?? 0)),
+      benefits: input.benefits ?? [],
+      position: input.position ?? 0,
+      is_active: input.isActive ?? true,
+      intro_price_cents: Math.max(0, Math.round(input.introPriceCents ?? 100)),
+      intro_duration_days: Math.max(1, Math.round(input.introDurationDays ?? 7)),
+      intro_offer_enabled: input.introOfferEnabled ?? true,
+      member_discount_percent: Math.max(0, Math.min(100, input.memberDiscountPercent ?? 0)),
+      created_at: now,
+      updated_at: now,
+    })
+    .select("id, slug")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return { id: String(data.id), slug: String(data.slug) };
+}
+
+// Delete a tier. Refuses when any customer is on it (deleting would orphan their
+// membership) — the admin is told to reassign or deactivate instead, so a
+// customer's benefits are never silently broken.
+export async function deleteMembershipTier(id: string) {
+  const { count, error: countError } = await supabaseAdmin
+    .from("customer_memberships")
+    .select("user_id", { count: "exact", head: true })
+    .eq("tier_id", id);
+
+  if (countError) {
+    throw countError;
+  }
+
+  if ((count ?? 0) > 0) {
+    throw new Error(
+      `This tier has ${count} member${count === 1 ? "" : "s"}. Move them to another tier or set the tier inactive instead of deleting it.`,
+    );
+  }
+
+  const { error } = await supabaseAdmin.from("membership_tiers").delete().eq("id", id);
+  if (error) {
+    throw error;
+  }
+}
+
 export async function updateMembershipTier(id: string, input: Partial<MembershipTierInput>) {
   const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (input.name !== undefined) payload.name = input.name;

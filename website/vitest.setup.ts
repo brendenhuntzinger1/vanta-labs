@@ -135,7 +135,7 @@ vi.mock("@/lib/catalog", () => ({
 
 vi.mock("@/lib/supabase-server", () => {
   const state = {
-    paymentEvents: new Set<string>(),
+    paymentEvents: new Map<string, { event_id: string; processed_at: unknown; claimed_at: unknown }>(),
     orders: new Map<string, { id: string; order_id: string; payment_status?: unknown; paid_at?: unknown }>(),
     referralOrders: new Map<string, { id: string; order_id: string; payment_status?: unknown }>(),
     ambassadors: new Map<string, { id: string; name: string; referral_code: string; commission_percent: number; status: string }>(),
@@ -168,7 +168,7 @@ vi.mock("@/lib/supabase-server", () => {
     }
 
     if (table === "payment_events" && filterCol === "event_id") {
-      return state.paymentEvents.has(String(filterValue)) ? { event_id: String(filterValue) } : null;
+      return state.paymentEvents.get(String(filterValue)) ?? null;
     }
 
     if (table === "orders" && filterCol === "order_id") {
@@ -249,7 +249,13 @@ vi.mock("@/lib/supabase-server", () => {
             }
           }
           for (const row of rows) {
-            if (row?.event_id) state.paymentEvents.add(String(row.event_id));
+            if (row?.event_id) {
+              state.paymentEvents.set(String(row.event_id), {
+                event_id: String(row.event_id),
+                processed_at: row.processed_at ?? null,
+                claimed_at: row.claimed_at ?? new Date().toISOString(),
+              });
+            }
           }
           return { data: null, error: null };
         }
@@ -276,21 +282,40 @@ vi.mock("@/lib/supabase-server", () => {
           }),
         };
       },
-      update: (payload: GenericRow) => ({
-        eq: async (col: string, value: string) => {
-          if (table === "orders" && col === "order_id") {
-            const existing = state.orders.get(String(value)) ?? { id: `order-${value}`, order_id: String(value) };
-            state.orders.set(String(value), { ...existing, ...payload });
+      update: (payload: GenericRow) => {
+        const filters: Record<string, string> = {};
+        const apply = () => {
+          if (table === "orders" && filters.order_id !== undefined) {
+            const existing = state.orders.get(filters.order_id) ?? { id: `order-${filters.order_id}`, order_id: filters.order_id };
+            state.orders.set(filters.order_id, { ...existing, ...payload });
+            return { data: [{ id: existing.id, order_id: filters.order_id }], error: null };
           }
-
-          if (table === "referral_orders" && col === "order_id") {
-            const existing = state.referralOrders.get(String(value)) ?? { id: `ref-${value}`, order_id: String(value) };
-            state.referralOrders.set(String(value), { ...existing, ...payload });
+          if (table === "referral_orders" && filters.order_id !== undefined) {
+            const existing = state.referralOrders.get(filters.order_id) ?? { id: `ref-${filters.order_id}`, order_id: filters.order_id };
+            state.referralOrders.set(filters.order_id, { ...existing, ...payload });
+            return { data: [{ id: existing.id }], error: null };
           }
-
-          return { data: null, error: null };
-        },
-      }),
+          if (table === "payment_events" && filters.event_id !== undefined) {
+            const existing = state.paymentEvents.get(filters.event_id);
+            if (existing) {
+              state.paymentEvents.set(filters.event_id, { ...existing, ...(payload as object) });
+            }
+            return { data: existing ? [{ event_id: filters.event_id }] : [], error: null };
+          }
+          return { data: [], error: null };
+        };
+        // Chainable, awaitable builder supporting eq/neq/is/lt/gt + terminal select().
+        const builder: Record<string, unknown> = {
+          eq: (col: string, value: string) => { filters[col] = String(value); return builder; },
+          neq: () => builder,
+          is: () => builder,
+          lt: () => builder,
+          gt: () => builder,
+          select: () => apply(),
+          then: (resolve: (v: unknown) => unknown) => resolve(apply()),
+        };
+        return builder;
+      },
       delete: () => ({
         eq: async () => ({ data: null, error: null }),
       }),
@@ -300,7 +325,13 @@ vi.mock("@/lib/supabase-server", () => {
         if (table === "payment_events") {
           for (const row of rows) {
             if (row?.event_id) {
-              state.paymentEvents.add(String(row.event_id));
+              const id = String(row.event_id);
+              const existing = state.paymentEvents.get(id);
+              state.paymentEvents.set(id, {
+                event_id: id,
+                processed_at: row.processed_at ?? existing?.processed_at ?? new Date().toISOString(),
+                claimed_at: existing?.claimed_at ?? new Date().toISOString(),
+              });
             }
           }
         }

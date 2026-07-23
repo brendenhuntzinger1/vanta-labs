@@ -6,6 +6,7 @@ import { validateCoupon } from "@/lib/coupons";
 import { getMembershipPerks, getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/lib/membership";
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee, calculateTax } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
@@ -233,6 +234,13 @@ export async function createCheckoutSession(
 
  const requestedSlugs = Array.from(new Set(sanitizedItems.map((item) => item.id.split("::")[0])));
  const catalogProducts = await getCatalogProductsBySlugs(requestedSlugs);
+
+ // Fetch the homepage/promotions control once, up front, because the bundle
+ // discount below is applied while building line items (before the main config
+ // Promise.all). Bundle rates are admin-editable; the client preview reads the
+ // same config from /api/catalog/promotions so the charge always matches.
+ const homepageControlConfig = await getHomepageControlConfig();
+ const bundleConfig = homepageControlConfig.bundleConfig;
  const productsById = new Map<string, ServerProduct>(
    catalogProducts.map((product) => [
      product.slug,
@@ -270,7 +278,7 @@ export async function createCheckoutSession(
  const product: ServerProduct = {
    ...baseProduct,
    id: item.id,
-   price: getBundleDiscountedUnitPrice(baseUnitPrice, item.quantity),
+   price: getBundleDiscountedUnitPrice(baseUnitPrice, item.quantity, bundleConfig),
    stockStatus: selectedDose?.stockStatus ?? baseProduct.stockStatus,
    variantId: selectedDose?.id,
    variantLabel: selectedDose?.label,
@@ -317,7 +325,7 @@ export async function createCheckoutSession(
  );
 
  const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent, shippingConfig, memberPerks, referralProgram, couponPolicy] = await Promise.all([
-   getHomepageControlConfig(),
+   Promise.resolve(homepageControlConfig),
    getBulkSavingsControlConfig(),
    payload.customerUserId ? isEligibleForBulkSavings(payload.customerUserId) : Promise.resolve(false),
    payload.customerUserId ? isPriorityMember(payload.customerUserId) : Promise.resolve(false),
@@ -453,6 +461,19 @@ export async function createCheckoutSession(
  // worst-case unit cost until real per-SKU costs are entered.
  const profitSettings = await getProfitSettings();
  const guardTotalQuantity = lineItems.reduce((sum, line) => sum + line.quantity, 0);
+ // Price the guard with the EFFECTIVE commission that will actually be recorded
+ // (an unlocked ambassador on a performance tier earns more than their stored
+ // rate). Using the stored rate here let a thin-margin order pass the guard yet
+ // finalize below true break-even once the higher tier commission was applied.
+ let guardCommissionPercent = 0;
+ if (referral) {
+   try {
+     const effective = await getEffectiveCommissionPercent({ ambassadorId: referral.ambassadorId, fallbackPercent: referral.commissionPercent });
+     guardCommissionPercent = Math.max(referral.commissionPercent, effective.percent);
+   } catch {
+     guardCommissionPercent = referral.commissionPercent;
+   }
+ }
  const guardProfit = computeProfit(
    {
      subtotal,
@@ -465,7 +486,7 @@ export async function createCheckoutSession(
      membershipPercent: 0,
      couponDiscount: 0,
      allowCouponStacking: false,
-     commissionPercent: referral ? referral.commissionPercent : 0,
+     commissionPercent: guardCommissionPercent,
      processingFeePercent: profitSettings.processingFeePercent,
      shippingCollected: shipping,
      shippingCost: 0,

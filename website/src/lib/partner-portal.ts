@@ -6,6 +6,7 @@ import {
   ambassadorApplicationReceivedTemplate,
   ambassadorApprovedTemplate,
   ambassadorDeniedTemplate,
+  ambassadorPayoutSentTemplate,
   newAmbassadorApplicationTemplate,
   referralCodeAssignedTemplate,
 } from "@/lib/email/templates";
@@ -49,7 +50,11 @@ export interface PartnerSummary {
   commissionPercent: number;
   totalEarnings: number;
   pendingCommissions: number;
+  pendingOnlyCommissions: number;
+  approvedCommissions: number;
   paidCommissions: number;
+  payoutMethod: string | null;
+  payoutHandle: string | null;
   totalOrders: number;
   averageOrderValue: number;
   returningCustomerRate: number;
@@ -175,14 +180,28 @@ async function sendPartnerStatusEmail(input: {
   name: string;
   status: "approved" | "rejected";
   referralCode?: string;
+  commissionPercent?: number;
 }) {
-  const template = input.status === "approved"
-    ? ambassadorApprovedTemplate({
-        name: input.name,
-        referralCode: input.referralCode,
-        dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
-      })
-    : ambassadorDeniedTemplate({ name: input.name });
+  let template;
+  if (input.status === "approved") {
+    // Enrich the approval email with the live program terms so the ambassador
+    // gets the full onboarding: their rates, the 14-day hold, biweekly payouts.
+    const [referralProgram, ambassadorSettings] = await Promise.all([
+      getReferralProgramConfig().catch(() => null),
+      getAmbassadorProgramSettings().catch(() => null),
+    ]);
+    template = ambassadorApprovedTemplate({
+      name: input.name,
+      referralCode: input.referralCode,
+      dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
+      commissionPercent: input.commissionPercent ?? referralProgram?.defaultCommissionPercent,
+      personalDiscountPercent: referralProgram?.personalDiscountPercent,
+      referralDiscountPercent: referralProgram?.discountPercent,
+      holdDays: ambassadorSettings?.commissionHoldDays,
+    });
+  } else {
+    template = ambassadorDeniedTemplate({ name: input.name });
+  }
 
   const result = await sendEmail({ to: input.to, ...template });
   return result.success;
@@ -205,7 +224,7 @@ async function sendReferralCodeAssignedEmail(input: {
   return result.success;
 }
 
-async function autoApproveEligibleCommissions() {
+export async function autoApproveEligibleCommissions() {
   const now = new Date();
   const [ambassadorSettings, referralProgram] = await Promise.all([
     getAmbassadorProgramSettings(),
@@ -409,6 +428,13 @@ export async function createPartnerApplication(input: {
     preferred_referral_code: preferred || null,
   };
 
+  // New applicants get the admin's configured default commission rate (so the
+  // "default commission %" control in the admin is authoritative), instead of a
+  // hardcoded number. Admins can still set a per-ambassador rate on approval.
+  const defaultCommission = await getReferralProgramConfig()
+    .then((cfg) => Number(cfg.defaultCommissionPercent))
+    .catch(() => 15);
+
   const partnerInsert = await supabaseAdmin
     .from("partners")
     .insert({
@@ -417,7 +443,7 @@ export async function createPartnerApplication(input: {
       email: input.email,
       referral_code: referralCode,
       status: "pending",
-      commission_percent: 15,
+      commission_percent: defaultCommission,
       auth_user_id: input.authUserId,
       invited_at: now,
       updated_at: now,
@@ -436,7 +462,7 @@ export async function createPartnerApplication(input: {
       email: input.email,
       referral_code: referralCode,
       status: "pending",
-      commission_percent: 15,
+      commission_percent: defaultCommission,
       auth_user_id: input.authUserId,
       invited_at: now,
       updated_at: now,
@@ -600,11 +626,145 @@ function buildLifetimeSeries(orderRows: Array<{ created_at: string; amount_paid:
   return allPoints.filter((_, index) => index % step === 0 || index === allPoints.length - 1);
 }
 
+// How the business pays an ambassador (not a customer payment method).
+export const AMBASSADOR_PAYOUT_METHODS = ["paypal", "venmo", "cashapp"] as const;
+export type AmbassadorPayoutMethod = (typeof AMBASSADOR_PAYOUT_METHODS)[number];
+
+export const AMBASSADOR_PAYOUT_METHOD_LABELS: Record<AmbassadorPayoutMethod, string> = {
+  paypal: "PayPal",
+  venmo: "Venmo",
+  cashapp: "Cash App",
+};
+
+export function isValidPayoutMethod(value: string): value is AmbassadorPayoutMethod {
+  return (AMBASSADOR_PAYOUT_METHODS as readonly string[]).includes(value);
+}
+
+// Set/update the signed-in ambassador's preferred payout destination. Validates
+// the method and handle, and mirrors to both partners + ambassadors tables.
+// Keyed by auth_user_id so a user can only ever set their OWN payout info.
+export async function updatePartnerPayoutMethod(authUserId: string, method: string, handle: string): Promise<void> {
+  const normalizedMethod = method.trim().toLowerCase();
+  if (!isValidPayoutMethod(normalizedMethod)) {
+    throw new Error("Choose a valid payout method: PayPal, Venmo, or Cash App.");
+  }
+  const normalizedHandle = handle.trim().slice(0, 200);
+  if (!normalizedHandle) {
+    throw new Error("Enter your payout username, email, or handle.");
+  }
+
+  const now = new Date().toISOString();
+  const payload = {
+    payout_method: normalizedMethod,
+    payout_handle: normalizedHandle,
+    payout_updated_at: now,
+    updated_at: now,
+  };
+
+  const { error } = await supabaseAdmin.from("partners").update(payload).eq("auth_user_id", authUserId);
+  if (error) {
+    throw error;
+  }
+  // Mirror to the ambassadors table (best-effort — never block the save).
+  await supabaseAdmin.from("ambassadors").update(payload).eq("auth_user_id", authUserId).then(() => {}, () => {});
+}
+
+export interface PayoutQueueRow {
+  partnerId: string;
+  name: string;
+  amountOwed: number;
+  approvedOrderCount: number;
+  payoutMethod: string | null;
+  payoutHandle: string | null;
+  eligibleSince: string | null; // earliest approved_for_payout_at
+  meetsMinimum: boolean;
+}
+
+export interface PayoutQueue {
+  rows: PayoutQueueRow[];
+  readyCount: number; // ambassadors whose approved balance meets the minimum payout
+  totalOwed: number;
+  minimumPayoutThreshold: number;
+}
+
+// Builds the admin payout queue: every ambassador with commissions that have
+// cleared the hold period (approved_for_payout) and are awaiting the next
+// payout, with the amount owed, order count, when they became eligible, and
+// their chosen payout method + handle. `readyCount` drives the "N ambassadors
+// ready for payout" notification badge.
+export async function getPayoutQueue(): Promise<PayoutQueue> {
+  const [{ data: rows, error }, ambassadorSettings] = await Promise.all([
+    supabaseAdmin
+      .from("referral_orders")
+      .select("ambassador_id, commission_amount, approved_for_payout_at")
+      .eq("payment_status", "approved_for_payout"),
+    getAmbassadorProgramSettings(),
+  ]);
+
+  if (error) {
+    assertNoSupabaseError("referral_orders.select(payout queue)", error);
+  }
+
+  const minimum = ambassadorSettings.minimumPayoutThreshold;
+  const byPartner = new Map<string, { amount: number; count: number; earliest: string | null }>();
+  for (const row of rows ?? []) {
+    const id = String(row.ambassador_id);
+    if (!id) continue;
+    const agg = byPartner.get(id) ?? { amount: 0, count: 0, earliest: null };
+    agg.amount += Number(row.commission_amount ?? 0);
+    agg.count += 1;
+    const at = row.approved_for_payout_at ? String(row.approved_for_payout_at) : null;
+    if (at && (!agg.earliest || at < agg.earliest)) {
+      agg.earliest = at;
+    }
+    byPartner.set(id, agg);
+  }
+
+  const partnerIds = Array.from(byPartner.keys());
+  const partnerInfo = new Map<string, { name: string; payout_method: string | null; payout_handle: string | null }>();
+  if (partnerIds.length > 0) {
+    const { data: partners } = await supabaseAdmin
+      .from("partners")
+      .select("id, name, payout_method, payout_handle")
+      .in("id", partnerIds);
+    for (const p of partners ?? []) {
+      partnerInfo.set(String(p.id), {
+        name: String(p.name ?? ""),
+        payout_method: p.payout_method ? String(p.payout_method) : null,
+        payout_handle: p.payout_handle ? String(p.payout_handle) : null,
+      });
+    }
+  }
+
+  const queueRows: PayoutQueueRow[] = partnerIds.map((id) => {
+    const agg = byPartner.get(id)!;
+    const info = partnerInfo.get(id);
+    const amountOwed = roundMoney(agg.amount);
+    return {
+      partnerId: id,
+      name: info?.name ?? "Unknown",
+      amountOwed,
+      approvedOrderCount: agg.count,
+      payoutMethod: info?.payout_method ?? null,
+      payoutHandle: info?.payout_handle ?? null,
+      eligibleSince: agg.earliest,
+      meetsMinimum: amountOwed >= minimum,
+    };
+  }).sort((a, b) => b.amountOwed - a.amountOwed);
+
+  return {
+    rows: queueRows,
+    readyCount: queueRows.filter((r) => r.meetsMinimum).length,
+    totalOwed: roundMoney(queueRows.reduce((sum, r) => sum + r.amountOwed, 0)),
+    minimumPayoutThreshold: minimum,
+  };
+}
+
 export async function getPartnerSummary(partnerId: string, siteUrl: string): Promise<PartnerSummary> {
   const [{ data: partner, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }, { data: payoutRows, error: payoutError }] = await Promise.all([
     supabaseAdmin
       .from("partners")
-      .select("id, name, referral_code, commission_percent, status")
+      .select("id, name, referral_code, commission_percent, status, payout_method, payout_handle")
       .eq("id", partnerId)
       .single(),
     supabaseAdmin
@@ -654,6 +814,14 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   const pendingCommissions = roundMoney(commissions
     .filter((row) => row.payment_status === "pending" || row.payment_status === "approved_for_payout")
     .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
+  // Pending (still in the 14-day hold) vs Approved (hold cleared, awaiting the
+  // next payout) shown as distinct buckets per the spec.
+  const pendingOnlyCommissions = roundMoney(commissions
+    .filter((row) => row.payment_status === "pending")
+    .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
+  const approvedCommissions = roundMoney(commissions
+    .filter((row) => row.payment_status === "approved_for_payout")
+    .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
   const paidCommissions = roundMoney(commissions
     .filter((row) => row.payment_status === "commission_paid" || row.payment_status === "paid")
     .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
@@ -701,7 +869,11 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     commissionPercent: Number(partner.commission_percent ?? 15),
     totalEarnings,
     pendingCommissions,
+    pendingOnlyCommissions,
+    approvedCommissions,
     paidCommissions,
+    payoutMethod: partner.payout_method ? String(partner.payout_method) : null,
+    payoutHandle: partner.payout_handle ? String(partner.payout_handle) : null,
     totalOrders,
     averageOrderValue,
     returningCustomerRate,
@@ -867,7 +1039,7 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
     supabaseAdmin.from("orders").select("amount_paid").eq("payment_status", "paid").gte("created_at", todayStart),
     supabaseAdmin.from("orders").select("amount_paid").eq("payment_status", "paid").gte("created_at", monthStart),
     supabaseAdmin.from("orders").select("customer_email").eq("payment_status", "paid"),
-    supabaseAdmin.from("inventory_items").select("quantity_on_hand, reorder_level"),
+    supabaseAdmin.from("products").select("inventory_quantity, stock_status, low_stock_threshold").eq("is_archived", false),
     supabaseAdmin.from("order_shipments").select("shipping_status").neq("shipping_status", "delivered"),
     supabaseAdmin.from("coupons").select("id").eq("active", true),
     supabaseAdmin.from("notification_queue").select("id").eq("status", "pending"),
@@ -877,26 +1049,17 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
   assertNoSupabaseError("orders.select(live sales month)", monthError);
   assertNoSupabaseError("orders.select(customer analytics)", paidError);
 
-  let lowStockItems = 0;
-
-  if (!inventoryError) {
-    lowStockItems = (inventoryRows ?? []).filter((row) => Number(row.quantity_on_hand ?? 0) <= Number(row.reorder_level ?? 0)).length;
-  } else if (isMissingRelationError(inventoryError, "inventory_items")) {
-    const { data: productInventoryRows, error: productInventoryError } = await supabaseAdmin
-      .from("products")
-      .select("inventory_quantity, stock_status")
-      .eq("is_archived", false);
-
-    assertNoSupabaseError("products.select(ops summary inventory fallback)", productInventoryError);
-
-    lowStockItems = (productInventoryRows ?? []).filter((row) => {
-      const qty = Number(row.inventory_quantity ?? 0);
-      const status = String(row.stock_status ?? "").toLowerCase();
-      return qty <= 5 || status === "out of stock" || status === "limited";
-    }).length;
-  } else {
-    assertNoSupabaseError("inventory_items.select(ops summary)", inventoryError);
-  }
+  // Low stock is computed from the products table — the real source of stock
+  // (the inventory_items table exists but nothing populates it, so reading it
+  // always reported 0 low-stock items and the dashboard never flagged a
+  // stockout). Uses each product's own low_stock_threshold.
+  assertNoSupabaseError("products.select(ops summary inventory)", inventoryError);
+  const lowStockItems = (inventoryRows ?? []).filter((row) => {
+    const qty = Number(row.inventory_quantity ?? 0);
+    const threshold = Number(row.low_stock_threshold ?? 5);
+    const status = String(row.stock_status ?? "").toLowerCase();
+    return qty <= threshold || status === "out of stock" || status === "limited";
+  }).length;
 
   if (shipmentError && !isMissingRelationError(shipmentError, "order_shipments")) {
     assertNoSupabaseError("order_shipments.select(ops summary)", shipmentError);
@@ -1035,7 +1198,7 @@ export async function updatePartnerStatus(input: {
 }) {
   const { data: existingPartner, error: partnerLookupError } = await supabaseAdmin
     .from("partners")
-    .select("id, name, email, referral_code")
+    .select("id, name, email, referral_code, commission_percent")
     .eq("id", input.partnerId)
     .maybeSingle();
 
@@ -1138,6 +1301,7 @@ export async function updatePartnerStatus(input: {
         name: existingPartner.name,
         status: input.status,
         referralCode: finalReferralCode,
+        commissionPercent: existingPartner.commission_percent != null ? Number(existingPartner.commission_percent) : undefined,
       });
 
       if (emailSent && queueRowId) {
@@ -1308,6 +1472,16 @@ export async function markCommissionsPaid(input: {
     claimed.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0),
   );
 
+  // Load the ambassador's recorded payout destination so we can stamp it on the
+  // payout record (accounting history) and confirm it in the email.
+  const { data: partner } = await supabaseAdmin
+    .from("partners")
+    .select("name, email, payout_method, payout_handle")
+    .eq("id", input.partnerId)
+    .maybeSingle();
+  const payoutMethod = partner?.payout_method ? String(partner.payout_method) : null;
+  const payoutHandle = partner?.payout_handle ? String(partner.payout_handle) : null;
+
   const { error: commissionMirrorError } = await supabaseAdmin
     .from("commissions")
     .update({ status: "paid", updated_at: new Date().toISOString() })
@@ -1332,6 +1506,8 @@ export async function markCommissionsPaid(input: {
       amount: payoutAmount,
       note: input.note ?? null,
       processed_by: input.actorUserId ?? null,
+      payout_method: payoutMethod,
+      payout_handle: payoutHandle,
     });
 
   if (payoutError) {
@@ -1346,6 +1522,8 @@ export async function markCommissionsPaid(input: {
       amount: payoutAmount,
       note: input.note ?? null,
       processed_by: input.actorUserId ?? null,
+      payout_method: payoutMethod,
+      payout_handle: payoutHandle,
     });
 
   if (payoutsMirrorError) {
@@ -1366,6 +1544,29 @@ export async function markCommissionsPaid(input: {
       userAgent: input.userAgent ?? null,
     },
   });
+
+  // Confirm the payment to the ambassador (best-effort — a failed email must
+  // never undo a completed payout).
+  if (partner?.email) {
+    try {
+      const methodLabel = payoutMethod && isValidPayoutMethod(payoutMethod)
+        ? AMBASSADOR_PAYOUT_METHOD_LABELS[payoutMethod]
+        : (payoutMethod ?? "your chosen method");
+      await sendEmail({
+        to: String(partner.email),
+        ...ambassadorPayoutSentTemplate({
+          name: String(partner.name ?? ""),
+          amount: payoutAmount,
+          method: methodLabel,
+          handle: payoutHandle,
+          orderCount: claimed.length,
+          dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
+        }),
+      });
+    } catch {
+      // Payout already recorded; email is non-critical.
+    }
+  }
 
   return {
     payoutId,

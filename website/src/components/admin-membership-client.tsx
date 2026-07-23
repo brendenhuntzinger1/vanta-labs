@@ -79,6 +79,55 @@ export function AdminMembershipClient({
     }
   };
 
+  const createTier = async () => {
+    const name = window.prompt("Name for the new membership tier?");
+    if (!name || !name.trim()) {
+      return;
+    }
+    setBusyId("new-tier");
+    setMessage(null);
+    try {
+      const response = await fetch("/api/admin/membership/tiers", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: name.trim(), isActive: false }),
+      });
+      const result = await response.json() as { success: boolean; error?: string };
+      if (!result.success) {
+        setMessage(result.error ?? "Unable to create tier.");
+        return;
+      }
+      setMessage("Tier created. Set its pricing and benefits below, then mark it Active.");
+      window.location.reload();
+    } catch {
+      setMessage("Unable to create tier right now.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const deleteTier = async (tier: MembershipTier) => {
+    if (!window.confirm(`Delete the "${tier.name}" tier? This can't be undone.`)) {
+      return;
+    }
+    setBusyId(tier.id);
+    setMessage(null);
+    try {
+      const response = await fetch(`/api/admin/membership/tiers/${tier.id}`, { method: "DELETE" });
+      const result = await response.json() as { success: boolean; error?: string };
+      if (!result.success) {
+        setMessage(result.error ?? "Unable to delete tier.");
+        return;
+      }
+      setTiers((prev) => prev.filter((t) => t.id !== tier.id));
+      setMessage("Tier deleted.");
+    } catch {
+      setMessage("Unable to delete tier right now.");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
   const createEvent = async () => {
     if (!newEventName.trim() || !newEventStart || !newEventEnd) {
       setMessage("Enter a name, start, and end date for the promotional event.");
@@ -316,16 +365,26 @@ export function AdminMembershipClient({
       </section>
 
       <section className="vl-panel rounded-2xl p-5 sm:p-6">
-        <h2 className="text-lg font-semibold text-white">Membership Tiers</h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="text-lg font-semibold text-white">Membership Tiers</h2>
+          <button type="button" onClick={createTier} disabled={busyId === "new-tier"} className="vl-btn-secondary px-3 py-1.5 text-xs disabled:opacity-60">
+            + Add tier
+          </button>
+        </div>
         <div className="mt-4 space-y-4">
           {tiers.map((tier) => (
             <div key={tier.id} className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-white">{tier.name} <span className="text-xs text-zinc-500">({tier.slug})</span></p>
-                <label className="flex items-center gap-2 text-xs text-zinc-300">
-                  <input type="checkbox" checked={tier.isActive} onChange={(e) => saveTier(tier, { isActive: e.target.checked })} disabled={busyId === tier.id} />
-                  Active
-                </label>
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 text-xs text-zinc-300">
+                    <input type="checkbox" checked={tier.isActive} onChange={(e) => saveTier(tier, { isActive: e.target.checked })} disabled={busyId === tier.id} />
+                    Active
+                  </label>
+                  <button type="button" onClick={() => deleteTier(tier)} disabled={busyId === tier.id} className="text-xs text-red-300 transition hover:text-red-200 disabled:opacity-60">
+                    Delete
+                  </button>
+                </div>
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-4">
                 <label className="text-xs text-zinc-400">

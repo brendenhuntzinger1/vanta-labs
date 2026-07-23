@@ -521,6 +521,16 @@ export default function AdminProductsPage() {
           badge: nextProduct.badge,
           batchNumber: nextProduct.batchNumber,
           coaUrl: nextProduct.coaUrl,
+          purityResult: nextProduct.purityResult,
+          testingDate: nextProduct.testingDate,
+          labName: nextProduct.labName,
+          molecularFormula: nextProduct.molecularFormula,
+          molecularWeight: nextProduct.molecularWeight,
+          casNumber: nextProduct.casNumber,
+          peptideSequence: nextProduct.peptideSequence,
+          storageRecommendation: nextProduct.storageRecommendation,
+          reconstitutionNote: nextProduct.reconstitutionNote,
+          faq: nextProduct.faq ?? [],
           imageUrl: nextProduct.coverImage,
           seoTitle: nextProduct.seoTitle,
           seoDescription: nextProduct.seoDescription,
@@ -912,6 +922,89 @@ function ProductEditor({
       <label className="text-xs text-zinc-400">Long description
         <textarea value={draft.longDescription ?? draft.description ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, longDescription: e.target.value, description: e.target.value }))} className="vl-input mt-1 min-h-24 w-full px-3 py-2" />
       </label>
+
+      <div className="space-y-3 rounded-lg border border-zinc-800 p-3">
+        <h3 className="text-sm font-semibold text-white">COA &amp; testing (shown on the product page + COA library)</h3>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="text-xs text-zinc-400">Batch number
+            <input value={draft.batchNumber ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, batchNumber: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="GLP-2410B" />
+          </label>
+          <label className="text-xs text-zinc-400">Purity result
+            <input value={draft.purityResult ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, purityResult: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="99.2%" />
+          </label>
+          <label className="text-xs text-zinc-400">Testing lab
+            <input value={draft.labName ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, labName: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="Janoshik Analytical" />
+          </label>
+          <label className="text-xs text-zinc-400">Testing date
+            <input type="date" value={(draft.testingDate ?? "").slice(0, 10)} onChange={(e) => setDraft((prev) => ({ ...prev, testingDate: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" />
+          </label>
+        </div>
+        <label className="text-xs text-zinc-400">COA URL (PDF link)
+          <input value={draft.coaUrl ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, coaUrl: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="https://...pdf" />
+        </label>
+      </div>
+
+      <div className="space-y-3 rounded-lg border border-zinc-800 p-3">
+        <h3 className="text-sm font-semibold text-white">Research data (shown on the product page)</h3>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <label className="text-xs text-zinc-400">Molecular formula
+            <input value={draft.molecularFormula ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, molecularFormula: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="C62H98N16O22" />
+          </label>
+          <label className="text-xs text-zinc-400">Molecular weight
+            <input value={draft.molecularWeight ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, molecularWeight: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="1419.5 g/mol" />
+          </label>
+          <label className="text-xs text-zinc-400">CAS number
+            <input value={draft.casNumber ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, casNumber: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="137525-51-0" />
+          </label>
+          <label className="text-xs text-zinc-400">Storage
+            <input value={draft.storageRecommendation ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, storageRecommendation: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="-20°C, protect from light" />
+          </label>
+        </div>
+        <label className="text-xs text-zinc-400">Peptide sequence
+          <input value={draft.peptideSequence ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, peptideSequence: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2 font-mono" placeholder="GEPPPGKPADDAGLV..." />
+        </label>
+        <label className="text-xs text-zinc-400">Reconstitution note
+          <input value={draft.reconstitutionNote ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, reconstitutionNote: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" placeholder="Reconstitute with bacteriostatic water." />
+        </label>
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-medium text-zinc-300">Product FAQ</span>
+            <button
+              type="button"
+              onClick={() => setDraft((prev) => ({ ...prev, faq: [...(prev.faq ?? []), { question: "", answer: "" }] }))}
+              className="vl-btn-secondary px-3 py-1 text-xs"
+            >
+              + Add question
+            </button>
+          </div>
+          {(draft.faq ?? []).map((item, index) => (
+            <div key={index} className="space-y-2 rounded-md border border-zinc-800 p-2">
+              <div className="flex items-center gap-2">
+                <input
+                  value={item.question}
+                  onChange={(e) => setDraft((prev) => ({ ...prev, faq: (prev.faq ?? []).map((f, i) => i === index ? { ...f, question: e.target.value } : f) }))}
+                  className="vl-input w-full px-3 py-2 text-sm"
+                  placeholder="Question"
+                />
+                <button
+                  type="button"
+                  onClick={() => setDraft((prev) => ({ ...prev, faq: (prev.faq ?? []).filter((_, i) => i !== index) }))}
+                  className="px-2 py-1 text-xs text-red-300 hover:text-red-200"
+                  aria-label="Remove FAQ item"
+                >
+                  Remove
+                </button>
+              </div>
+              <textarea
+                value={item.answer}
+                onChange={(e) => setDraft((prev) => ({ ...prev, faq: (prev.faq ?? []).map((f, i) => i === index ? { ...f, answer: e.target.value } : f) }))}
+                className="vl-input min-h-16 w-full px-3 py-2 text-sm"
+                placeholder="Answer (research/handling only — no medical or dosing claims)"
+              />
+            </div>
+          ))}
+        </div>
+      </div>
 
       <label className="text-xs text-zinc-400">SEO title
         <input value={draft.seoTitle ?? ""} onChange={(e) => setDraft((prev) => ({ ...prev, seoTitle: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" />

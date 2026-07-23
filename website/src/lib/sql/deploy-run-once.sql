@@ -587,6 +587,51 @@ alter table if exists public.products
 alter table if exists public.product_doses
   add column if not exists low_stock_threshold integer not null default 5;
 
+-- Premium product spec fields (see premium-product-fields.sql).
+alter table if exists public.products
+  add column if not exists molecular_weight text,
+  add column if not exists cas_number text,
+  add column if not exists peptide_sequence text,
+  add column if not exists storage_recommendation text,
+  add column if not exists reconstitution_note text,
+  add column if not exists product_faq jsonb not null default '[]'::jsonb;
+
+-- Durable rate-limit store (see rate-limits.sql).
+create table if not exists public.rate_limit_hits (
+  id bigint generated always as identity primary key,
+  bucket text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists rate_limit_hits_bucket_time_idx
+  on public.rate_limit_hits (bucket, created_at desc);
+alter table if exists public.rate_limit_hits enable row level security;
+
+-- Webhook event crash recovery (see payment-events-reclaim.sql).
+alter table if exists public.payment_events
+  add column if not exists claimed_at timestamptz not null default now();
+alter table if exists public.payment_events
+  alter column processed_at drop not null;
+
+-- Exactly-once paid side-effects gate (see order-paid-side-effects.sql).
+alter table if exists public.orders
+  add column if not exists paid_side_effects_at timestamptz;
+
+-- Ambassador payout method (see ambassador-payout-method.sql).
+alter table if exists public.partners
+  add column if not exists payout_method text,
+  add column if not exists payout_handle text,
+  add column if not exists payout_updated_at timestamptz;
+alter table if exists public.ambassadors
+  add column if not exists payout_method text,
+  add column if not exists payout_handle text,
+  add column if not exists payout_updated_at timestamptz;
+alter table if exists public.partner_payouts
+  add column if not exists payout_method text,
+  add column if not exists payout_handle text;
+alter table if exists public.payouts
+  add column if not exists payout_method text,
+  add column if not exists payout_handle text;
+
 alter table if exists public.ambassadors
   add column if not exists commission_percent_locked boolean not null default false,
   add column if not exists updated_at timestamptz not null default now();

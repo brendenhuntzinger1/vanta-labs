@@ -36,12 +36,16 @@ export function AdminControlCenterClient() {
   const [homepageFeaturedSlugs, setHomepageFeaturedSlugs] = useState("");
 
   const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
+  const [bundleTwoUnitPercent, setBundleTwoUnitPercent] = useState("");
+  const [bundleThreePlusPercent, setBundleThreePlusPercent] = useState("");
   const [promoBuy2Get1HalfEnabled, setPromoBuy2Get1HalfEnabled] = useState(false);
   const [promoFreeShippingThreshold, setPromoFreeShippingThreshold] = useState("");
   const [promoAnnouncement, setPromoAnnouncement] = useState("");
 
   const [shippingFlatRate, setShippingFlatRate] = useState("");
   const [shippingFreeThreshold, setShippingFreeThreshold] = useState("");
+  const [shippingIntlFlatRate, setShippingIntlFlatRate] = useState("");
+  const [shippingIntlFreeThreshold, setShippingIntlFreeThreshold] = useState("");
   const [shippingTaxRate, setShippingTaxRate] = useState("");
   const [shippingServiceFee, setShippingServiceFee] = useState("");
 
@@ -99,6 +103,8 @@ export function AdminControlCenterClient() {
 
     const promotions = next.promotions ?? {};
     setPromoBuy3Get1Enabled(Boolean(promotions.buy_3_get_1_enabled ?? false));
+    setBundleTwoUnitPercent(String(promotions.bundle_two_unit_percent ?? ""));
+    setBundleThreePlusPercent(String(promotions.bundle_three_plus_percent ?? ""));
     setPromoBuy2Get1HalfEnabled(Boolean(promotions.buy_2_get_1_half_enabled ?? false));
     setPromoFreeShippingThreshold(String(promotions.free_shipping_threshold ?? ""));
     setPromoAnnouncement(String(promotions.sitewide_announcement ?? ""));
@@ -106,6 +112,8 @@ export function AdminControlCenterClient() {
     const shipping = next.shipping ?? {};
     setShippingFlatRate(String(shipping.flat_rate ?? ""));
     setShippingFreeThreshold(String(shipping.free_shipping_threshold ?? ""));
+    setShippingIntlFlatRate(String(shipping.international_flat_rate ?? ""));
+    setShippingIntlFreeThreshold(String(shipping.international_free_shipping_threshold ?? ""));
     setShippingTaxRate(String(shipping.tax_rate ?? ""));
     setShippingServiceFee(String(shipping.service_fee ?? ""));
 
@@ -194,12 +202,16 @@ export function AdminControlCenterClient() {
       { section: "homepage", key: "featured_product_slugs", value: parseCsv(homepageFeaturedSlugs) },
 
       { section: "promotions", key: "buy_3_get_1_enabled", value: promoBuy3Get1Enabled },
+      { section: "promotions", key: "bundle_two_unit_percent", value: bundleTwoUnitPercent },
+      { section: "promotions", key: "bundle_three_plus_percent", value: bundleThreePlusPercent },
       { section: "promotions", key: "buy_2_get_1_half_enabled", value: promoBuy2Get1HalfEnabled },
       { section: "promotions", key: "free_shipping_threshold", value: promoFreeShippingThreshold },
       { section: "promotions", key: "sitewide_announcement", value: promoAnnouncement },
 
       { section: "shipping", key: "flat_rate", value: shippingFlatRate },
       { section: "shipping", key: "free_shipping_threshold", value: shippingFreeThreshold },
+      { section: "shipping", key: "international_flat_rate", value: shippingIntlFlatRate },
+      { section: "shipping", key: "international_free_shipping_threshold", value: shippingIntlFreeThreshold },
       { section: "shipping", key: "tax_rate", value: shippingTaxRate },
       { section: "shipping", key: "service_fee", value: shippingServiceFee },
 
@@ -343,6 +355,8 @@ export function AdminControlCenterClient() {
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
               <label className="text-zinc-300 sm:col-span-2">Sitewide announcement<input value={promoAnnouncement} onChange={(e) => setPromoAnnouncement(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="flex items-center gap-2 text-zinc-300 sm:col-span-2"><input type="checkbox" checked={promoBuy3Get1Enabled} onChange={(e) => setPromoBuy3Get1Enabled(e.target.checked)} /> Enable Buy 3 Get 1 Free</label>
+              <label className="block text-zinc-300">Bundle &amp; Save — 2 units (% off)<input value={bundleTwoUnitPercent} onChange={(e) => setBundleTwoUnitPercent(e.target.value)} placeholder="5" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="block text-zinc-300">Bundle &amp; Save — 3+ units (% off)<input value={bundleThreePlusPercent} onChange={(e) => setBundleThreePlusPercent(e.target.value)} placeholder="8" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="flex items-center gap-2 text-zinc-300 sm:col-span-2"><input type="checkbox" checked={promoBuy2Get1HalfEnabled} onChange={(e) => setPromoBuy2Get1HalfEnabled(e.target.checked)} /> Enable Buy 2 Get 1 (50% Off)</label>
               <label className="text-zinc-300">Free shipping threshold<input value={promoFreeShippingThreshold} onChange={(e) => setPromoFreeShippingThreshold(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
@@ -358,6 +372,8 @@ export function AdminControlCenterClient() {
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
               <label className="text-zinc-300">Domestic flat rate ($)<input value={shippingFlatRate} onChange={(e) => setShippingFlatRate(e.target.value)} placeholder="15" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Free shipping over ($)<input value={shippingFreeThreshold} onChange={(e) => setShippingFreeThreshold(e.target.value)} placeholder="250" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">International flat rate ($)<input value={shippingIntlFlatRate} onChange={(e) => setShippingIntlFlatRate(e.target.value)} placeholder="45" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">International free shipping over ($)<input value={shippingIntlFreeThreshold} onChange={(e) => setShippingIntlFreeThreshold(e.target.value)} placeholder="500" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Sales tax rate (%)<input value={shippingTaxRate} onChange={(e) => setShippingTaxRate(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Service fee (%)<input value={shippingServiceFee} onChange={(e) => setShippingServiceFee(e.target.value)} placeholder="5" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>

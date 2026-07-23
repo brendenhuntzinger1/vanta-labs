@@ -365,19 +365,52 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
         </div>
       </section>
 
-      <section className="mx-auto grid max-w-[1440px] gap-4 px-6 py-10 sm:grid-cols-2 lg:grid-cols-3 lg:px-12">
-        {[
-          "Lifetime recurring commissions",
-          "Real-time performance dashboard",
-          "Fast payouts and clear payout history",
-          "Premium marketing assets",
-          "Personal referral link + tracking",
-          "Mobile-first partner command center",
-        ].map((benefit) => (
-          <div key={benefit} className="border border-white/10 p-5">
-            <p className="text-sm text-white/75">{benefit}</p>
-          </div>
-        ))}
+      <section className="mx-auto grid max-w-[1440px] gap-6 px-6 py-12 lg:grid-cols-2 lg:px-12">
+        <div className="border border-white/10 p-6 sm:p-8">
+          <p className="vl2-eyebrow">What you get</p>
+          <h2 className="vl2-serif mt-2 text-2xl text-white sm:text-3xl">Benefits</h2>
+          <ul className="mt-5 space-y-3 text-sm leading-7 text-white/70">
+            {[
+              "15% discount on all of your own purchases — active the whole time you're approved.",
+              "A personal referral code that gives your audience 10% off.",
+              `A configurable commission (currently ${commissionPercent}%) on every completed order placed with your code.`,
+              "A real-time dashboard: pending, approved, and paid commissions, referral orders, and total earnings.",
+              "Payouts every two weeks.",
+              "Opportunities for performance bonuses and a higher commission rate.",
+              "Early access to new products and promotions.",
+            ].map((benefit) => (
+              <li key={benefit} className="flex gap-3">
+                <span aria-hidden className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-400" />
+                <span>{benefit}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <div className="border border-white/10 p-6 sm:p-8">
+          <p className="vl2-eyebrow">What we ask</p>
+          <h2 className="vl2-serif mt-2 text-2xl text-white sm:text-3xl">Responsibilities</h2>
+          <ul className="mt-5 space-y-3 text-sm leading-7 text-white/70">
+            {[
+              "Share Vanta Labs in at least 3 social media posts per month.",
+              "Represent Vanta Labs professionally.",
+              "Never make medical or human-use claims about research products.",
+              "Don't advertise products in prohibited ways.",
+              "Keep your referral code active through continued participation.",
+              "Follow all affiliate program rules.",
+            ].map((duty) => (
+              <li key={duty} className="flex gap-3">
+                <span aria-hidden className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-white/40" />
+                <span>{duty}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-6 text-xs leading-6 text-white/40">
+            Commissions become payable 14 days after an order completes (this protects
+            against refunds and chargebacks), and payouts are sent every two weeks via
+            PayPal, Venmo, or Cash App.
+          </p>
+        </div>
       </section>
 
     </div>

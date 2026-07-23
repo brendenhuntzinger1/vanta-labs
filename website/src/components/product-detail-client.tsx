@@ -9,8 +9,9 @@ import { ScrollReveal } from "@/components/scroll-reveal";
 import { WishlistButton } from "@/components/wishlist-button";
 import { BackInStockForm } from "@/components/back-in-stock-form";
 import { SubscribeSave } from "@/components/subscribe-save";
-import { bundleDiscountRate, getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
-import type { Product } from "@/lib/catalog-types";
+import { bundleDiscountRate, getBundleDiscountedLineTotal, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
+import type { Product, ProductFaqItem } from "@/lib/catalog-types";
+import { RecentlyViewed } from "@/components/recently-viewed";
 import Image from "next/image";
 
 function parseDose(slug: string) {
@@ -34,10 +35,14 @@ function formatUsd(value: number) {
 }
 
 const BUNDLE_OPTIONS = [
-  { quantity: 1, label: "1 Bottle", badge: null },
-  { quantity: 2, label: "2 Bottles", badge: "Most Popular" },
-  { quantity: 3, label: "3+ Bottles", badge: "Best Value" },
+  { quantity: 1, label: "1 Vial", badge: null },
+  { quantity: 5, label: "5-Vial Set", badge: "Most Popular" },
+  { quantity: 10, label: "10-Vial Set", badge: "Best Value" },
 ] as const;
+
+// Free shipping threshold (mirrors the storefront default). Used to show the
+// "Free Ship" badge on vial sets that cross it.
+const FREE_SHIP_THRESHOLD_USD = 250;
 
 const TRUST_ROW = [
   {
@@ -83,41 +88,44 @@ const TRUST_ROW = [
   },
 ] as const;
 
-const PRODUCT_FAQ = [
+// Default FAQ used when a product has no admin-authored FAQ of its own. Kept in
+// the {question, answer} shape so per-product and default FAQs are interchangeable.
+const DEFAULT_PRODUCT_FAQ: ProductFaqItem[] = [
   {
-    q: "Is this product intended for human consumption?",
-    a: "No. All compounds sold by Vanta Labs are strictly for legitimate laboratory research purposes and are not intended for human or veterinary use.",
+    question: "Is this product intended for human consumption?",
+    answer: "No. All compounds sold by Vanta Labs are strictly for legitimate laboratory research purposes and are not intended for human or veterinary use.",
   },
   {
-    q: "How do I access the Certificate of Analysis?",
-    a: "Each product page links directly to the batch-matched COA. You can also browse all records in the COA Library.",
+    question: "How do I access the Certificate of Analysis?",
+    answer: "Each product page links directly to the batch-matched COA. You can also browse all records in the COA Library.",
   },
   {
-    q: "What is your shipping timeline?",
-    a: "Most in-stock orders are prepared within one business day. You will receive secure tracking information after dispatch.",
+    question: "What is your shipping timeline?",
+    answer: "Most in-stock orders are prepared within one business day. You will receive secure tracking information after dispatch.",
   },
   {
-    q: "Can I combine referral codes with promotions?",
-    a: "Referral discounts cannot be combined with Buy 3 Get 1 Free offers. Only one discount type applies per order.",
+    question: "Can I combine referral codes with promotions?",
+    answer: "Referral discounts cannot be combined with Buy 3 Get 1 Free offers. Only one discount type applies per order.",
   },
 ];
 
-function FaqAccordion() {
+function FaqAccordion({ items }: { items?: ProductFaqItem[] }) {
+  const faqItems = items && items.length > 0 ? items : DEFAULT_PRODUCT_FAQ;
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   return (
     <div className="mt-3 divide-y divide-zinc-200">
-      {PRODUCT_FAQ.map((item, idx) => (
+      {faqItems.map((item, idx) => (
         <div key={idx}>
           <button
             type="button"
             className="flex w-full items-center justify-between gap-4 py-4 text-left text-sm text-[#111] transition hover:text-zinc-600"
             onClick={() => setOpenIndex(openIndex === idx ? null : idx)}
           >
-            <span className="font-medium">{item.q}</span>
+            <span className="font-medium">{item.question}</span>
             <span className={`shrink-0 text-zinc-400 transition-transform duration-200 ${openIndex === idx ? "rotate-180" : ""}`}>▼</span>
           </button>
           {openIndex === idx && (
-            <p className="pb-4 text-sm leading-7 text-zinc-500">{item.a}</p>
+            <p className="pb-4 text-sm leading-7 text-zinc-500">{item.answer}</p>
           )}
         </div>
       ))}
@@ -131,10 +139,12 @@ export function ProductDetailClient({
   product,
   relatedProducts = [],
   promoBuy3Get1Enabled = false,
+  bundleConfig = DEFAULT_BUNDLE_CONFIG,
 }: {
   product: Product;
   relatedProducts?: Product[];
   promoBuy3Get1Enabled?: boolean;
+  bundleConfig?: BundleConfig;
 }) {
   const { addToCart } = useCart();
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
@@ -154,7 +164,7 @@ export function ProductDetailClient({
   const selectedStockStatus = selectedDose?.stockStatus ?? product.stockStatus;
   const isOutOfStock = selectedStockStatus === "Out of Stock" || selectedStockStatus === "Reserved";
   const unitPrice = toPriceNumber(selectedPrice);
-  const currentBundleRate = bundleDiscountRate(quantity);
+  const currentBundleRate = bundleDiscountRate(quantity, bundleConfig);
 
   const galleryItems = useMemo<GalleryItem[]>(() => {
     const fromGallery = (product.galleryImages ?? []).map((image) => ({
@@ -240,7 +250,7 @@ export function ProductDetailClient({
           {/* Block A — product image. Mobile order 1; desktop top-left. */}
           <div className="order-1 min-w-0 lg:col-start-1 lg:row-start-1">
             <div className="vl2-lab-panel overflow-hidden">
-              <div className="relative min-h-[260px] sm:min-h-[460px]">
+              <div className="relative min-h-[260px] bg-black sm:min-h-[460px]">
                 {hasRealImage ? (
                   <Image
                     src={imageToDisplay as string}
@@ -310,21 +320,35 @@ export function ProductDetailClient({
                 {activeTab === "specs" && (
                   <div className="vl2-lab-panel p-5">
                     <dl className="space-y-3 text-sm">
-                      {[
+                      {([
                         ["Batch Number", selectedBatchNumber],
                         ["Purity Result", selectedPurity ?? "Pending"],
-                        ["Molecular Formula", product.molecularFormula ?? "See COA"],
+                        ["Molecular Formula", product.molecularFormula],
+                        ["Molecular Weight", product.molecularWeight],
+                        ["CAS Number", product.casNumber],
+                        ["Storage", product.storageRecommendation],
+                        ["Reconstitution", product.reconstitutionNote],
                         ["Testing Lab", product.labName],
                         ["Testing Date", product.testingDate],
                         ["Category", product.category],
                         ["SKU", selectedDose?.sku ?? "N/A"],
-                      ].map(([label, value]) => (
-                        <div key={label} className="flex justify-between gap-3 border-b border-zinc-100 pb-2 last:border-0">
-                          <dt className="text-zinc-400">{label}</dt>
-                          <dd className="min-w-0 break-words text-right font-medium text-[#111]">{value}</dd>
-                        </div>
-                      ))}
+                      ] as Array<[string, string | undefined]>)
+                        .filter(([, value]) => value && String(value).trim().length > 0)
+                        .map(([label, value]) => (
+                          <div key={label} className="flex justify-between gap-3 border-b border-zinc-100 pb-2 last:border-0">
+                            <dt className="text-zinc-400">{label}</dt>
+                            <dd className="min-w-0 break-words text-right font-medium text-[#111]">{value}</dd>
+                          </div>
+                        ))}
                     </dl>
+                    {product.peptideSequence && product.peptideSequence.trim().length > 0 && (
+                      <div className="mt-4 border-t border-zinc-100 pt-4">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-400">Amino Acid Sequence</p>
+                        <div className="mt-2 overflow-x-auto">
+                          <code className="block whitespace-pre-wrap break-all font-mono text-xs leading-6 text-[#111]">{product.peptideSequence}</code>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -360,7 +384,7 @@ export function ProductDetailClient({
 
             <div className="mt-8">
               <p className="vl2-lab-eyebrow">Frequently Asked Questions</p>
-              <FaqAccordion />
+              <FaqAccordion items={product.faq} />
             </div>
           </div>
 
@@ -391,16 +415,44 @@ export function ProductDetailClient({
 
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 {selectedPurity && (
-                  <span className="border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs font-medium text-zinc-700">
+                  <span className="border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
                     {selectedPurity} Purity Verified
                   </span>
                 )}
-                <span className="border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-500">
-                  Batch {selectedBatchNumber}
-                </span>
+                {selectedBatchNumber && (
+                  <span className="border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-500">
+                    Batch {selectedBatchNumber}
+                  </span>
+                )}
                 <span className="border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-700">
                   Research Use Only
                 </span>
+              </div>
+
+              {/* Prominent, always-visible COA callout — third-party proof right
+                  next to the buy decision, not hidden inside a tab. */}
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border border-emerald-200 bg-emerald-50/70 px-4 py-3">
+                <div className="flex items-center gap-2.5">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5 text-emerald-600">
+                    <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
+                    <path d="m9 12 2 2 4-4" />
+                  </svg>
+                  <span className="text-xs font-medium text-emerald-800">Third-party tested · COA on every batch</span>
+                </div>
+                {selectedCoaUrl ? (
+                  <a
+                    href={selectedCoaUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 whitespace-nowrap border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
+                  >
+                    Download COA <span aria-hidden="true">↓</span>
+                  </a>
+                ) : (
+                  <Link href="/coa-library" className="whitespace-nowrap text-xs font-semibold text-emerald-700 underline underline-offset-2 hover:text-emerald-900">
+                    View COA Library →
+                  </Link>
+                )}
               </div>
 
               {product.doses && product.doses.length > 0 && (
@@ -437,25 +489,29 @@ export function ProductDetailClient({
                 <p className="vl2-lab-eyebrow">Quantity</p>
                 <div className="mt-3 grid grid-cols-3 gap-2">
                   {BUNDLE_OPTIONS.map((option) => {
-                    const isSelected = option.quantity === 3 ? quantity >= 3 : quantity === option.quantity;
-                    const rate = bundleDiscountRate(option.quantity);
-                    const lineTotal = getBundleDiscountedLineTotal(unitPrice, option.quantity);
+                    const isSelected = option.quantity === 10 ? quantity >= 10 : quantity === option.quantity;
+                    const rate = bundleDiscountRate(option.quantity, bundleConfig);
+                    const lineTotal = getBundleDiscountedLineTotal(unitPrice, option.quantity, bundleConfig);
+                    const freeShip = lineTotal >= FREE_SHIP_THRESHOLD_USD;
                     return (
                       <button
                         key={option.quantity}
                         type="button"
                         onClick={() => setQuantity(option.quantity)}
-                        className={`relative border px-2 py-3 text-center transition ${isSelected ? "border-[#111] bg-zinc-50" : "border-zinc-200 hover:border-zinc-400"}`}
+                        className={`relative rounded-xl border px-2 py-3.5 text-center transition ${isSelected ? "border-emerald-600 bg-emerald-600 text-white shadow-sm" : "border-zinc-200 text-[#111] hover:border-emerald-400"}`}
                       >
                         {option.badge ? (
-                          <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap bg-[#111] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-white">
+                          <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-emerald-600 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-white shadow-sm">
                             {option.badge}
                           </span>
                         ) : null}
-                        <span className="block text-sm text-[#111]">{option.label}</span>
-                        <span className="mt-1 block text-xs text-zinc-500">{formatUsd(lineTotal)}</span>
+                        <span className="block text-sm font-medium">{option.label}</span>
+                        <span className={`mt-1 block text-xs ${isSelected ? "text-emerald-50" : "text-zinc-500"}`}>{formatUsd(lineTotal)}</span>
                         {rate > 0 ? (
-                          <span className="mt-0.5 block text-[10px] font-medium text-emerald-600">Save {Math.round(rate * 100)}%</span>
+                          <span className={`mt-0.5 block text-[10px] font-semibold ${isSelected ? "text-white" : "text-emerald-600"}`}>Save {Math.round(rate * 100)}%</span>
+                        ) : null}
+                        {freeShip ? (
+                          <span className={`mt-1 inline-flex items-center gap-1 text-[10px] font-medium ${isSelected ? "text-white" : "text-emerald-600"}`}>🚚 Free Ship</span>
                         ) : null}
                       </button>
                     );
@@ -468,25 +524,35 @@ export function ProductDetailClient({
                       onClick={() => setQuantity((q) => Math.max(1, q - 1))}
                       className="inline-flex h-11 w-11 items-center justify-center border border-zinc-200 text-lg text-zinc-600 transition hover:border-zinc-400"
                     >−</button>
-                    <span className="text-sm text-[#111]">{quantity} bottles</span>
+                    <span className="text-sm text-[#111]">{quantity} vials</span>
                     <button
                       type="button"
                       onClick={() => setQuantity((q) => Math.min(10, q + 1))}
                       className="inline-flex h-11 w-11 items-center justify-center border border-zinc-200 text-lg text-zinc-600 transition hover:border-zinc-400"
                     >+</button>
                     {currentBundleRate > 0 ? (
-                      <span className="text-xs font-medium text-emerald-600">Save {Math.round(currentBundleRate * 100)}% — {formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity))} total</span>
+                      <span className="text-xs font-medium text-emerald-600">Save {Math.round(currentBundleRate * 100)}% — {formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))} total</span>
                     ) : null}
                   </div>
                 ) : null}
               </div>
+
+              {currentBundleRate > 0 ? (
+                <div className="mt-4 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                  <div>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-700">{quantity}-Vial Bundle</p>
+                    <p className="text-sm text-emerald-900">You save {formatUsd(unitPrice * quantity - getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))} · {Math.round(currentBundleRate * 100)}% off</p>
+                  </div>
+                  <p className="text-xl font-bold text-emerald-700">{formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))}</p>
+                </div>
+              ) : null}
 
               <div className="mt-5 flex gap-2">
                 <button
                   onClick={(event) => handleAddToCart(event.currentTarget)}
                   type="button"
                   disabled={isOutOfStock}
-                  className="vl2-lab-btn-primary vl-focus-ring flex-1 px-5 py-3.5 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="vl-focus-ring flex-1 rounded-xl bg-emerald-600 px-5 py-3.5 text-sm font-semibold uppercase tracking-[0.08em] text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isOutOfStock ? "Currently Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
                 </button>
@@ -562,6 +628,15 @@ export function ProductDetailClient({
             </section>
           </ScrollReveal>
         )}
+
+        <RecentlyViewed
+          current={{
+            slug: product.slug,
+            name: product.name,
+            price: selectedPrice,
+            image: product.coverImage ?? product.image,
+          }}
+        />
       </main>
 
       <div className="fixed inset-x-0 bottom-0 z-50 border-t border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur-xl lg:hidden">

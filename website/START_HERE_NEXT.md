@@ -1,10 +1,42 @@
 # Vanta Labs — Start Here Next Session
 
-**Saved:** 2026-07-23 · **Branch:** `claude/ecommerce-platform-audit-h4oxln`
-**Latest commit:** `6e399e4`
+**Updated:** 2026-07-23 (session 2) · **Branch:** `claude/continue-previous-work-kqo7s9`
 
 Read this first, then open **`FINAL_QA_REPORT.md`** (the full report) and
 **`LAUNCH_CHECKLIST.md`** (proof detail). This file is just the fast handoff.
+
+---
+
+## NEW this session — swappable payment abstraction + sandbox gateway
+
+The card checkout and membership billing were stubs (no card order could reach
+"paid", no membership could be charged) until a live processor existed. Now both
+run behind a mock/sandbox gateway so **every flow can be tested with fake money
+today**, and connecting the real high-risk processor later is a **config change,
+not a rewrite**.
+
+**Turn the sandbox on (dev/staging only):**
+```
+PAYMENT_PROVIDER=mock      # card checkout → internal /pay/mock page
+BILLING_PROVIDER=mock      # membership recurring charges (fake)
+```
+- Card checkout redirects to `/pay/mock/<orderId>` → Approve or Decline. Approve
+  signs a webhook event and runs it through the REAL webhook handler → order
+  paid + confirmation email + inventory decrement + ambassador commission +
+  points. Refund from admin works too.
+- Membership `mock` mode simulates renewals; a decline test card exercises the
+  past-due/dunning path.
+- Test cards: `4242…` approves, `4000 0000 0000 0002` (and other `4000…`)
+  declines. Sandbox pages 404 unless `PAYMENT_PROVIDER=mock`.
+
+**When your real processor is approved:** register a provider implementation and
+set `PAYMENT_PROVIDER` (+ keys) — checkout/webhook logic is untouched. Same for
+`BILLING_PROVIDER`. That's the whole integration.
+
+Also fixed this session: "Print packing slip" now generates a real printable
+slip (was a no-op); a "delivered" status now sends the delivery-confirmation
+email. Verified: 160 unit tests, lint + tsc clean, build succeeds, 17 Postgres
+concurrency tests pass.
 
 ---
 

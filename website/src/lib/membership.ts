@@ -363,6 +363,39 @@ export async function recordPointsLedgerEntry(input: {
   }
 }
 
+// Records a points REDEMPTION debit for an order, capped to the customer's LIVE
+// balance and idempotent per order — mirroring redeemStoreCredit. This prevents
+// two concurrent pending orders that each froze the same balance from
+// over-redeeming it (which would otherwise drive the ledger negative and hand
+// out more discount than the customer had points for), and prevents a webhook
+// retry from double-debiting.
+export async function redeemPoints(userId: string, points: number, orderId: string): Promise<void> {
+  const requested = Math.floor(Number(points));
+  if (!userId || !Number.isFinite(requested) || requested <= 0) {
+    return;
+  }
+
+  // Idempotent: if this order already recorded a redemption, don't debit again.
+  const { data: existing } = await supabaseAdmin
+    .from("points_ledger")
+    .select("id")
+    .eq("order_id", orderId)
+    .eq("reason", "redeem")
+    .maybeSingle();
+
+  if (existing) {
+    return;
+  }
+
+  const liveBalance = await getPointsBalance(userId);
+  const toRedeem = Math.min(requested, Math.max(0, liveBalance));
+  if (toRedeem <= 0) {
+    return;
+  }
+
+  await recordPointsLedgerEntry({ userId, amount: -toRedeem, reason: "redeem", orderId });
+}
+
 // Claws back the points a specific order earned. This is a simple full
 // reversal (not FIFO-aware of what's since been redeemed), so a customer's
 // balance can go negative if they already redeemed those points elsewhere -
@@ -381,6 +414,21 @@ export async function reverseOrderPoints(orderId: string) {
 
   const pointsEarned = Number(order?.points_earned ?? 0);
   if (!order?.customer_user_id || pointsEarned <= 0) {
+    return;
+  }
+
+  // Idempotent: a repeated refund/chargeback event for the same order (distinct
+  // event_ids both mapping to "refunded", or a refund followed by a chargeback)
+  // must not claw back the earned points twice. Mirror restoreRedeemedPoints's
+  // existing-row guard.
+  const { data: existing } = await supabaseAdmin
+    .from("points_ledger")
+    .select("id")
+    .eq("order_id", orderId)
+    .eq("reason", "order_refund_reversal")
+    .maybeSingle();
+
+  if (existing) {
     return;
   }
 

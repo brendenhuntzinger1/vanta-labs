@@ -130,6 +130,20 @@ export async function refundStoreCreditForOrder(orderId: string): Promise<void> 
     throw error;
   }
 
+  // Idempotent: a repeated refund/chargeback event for the same order must not
+  // re-credit the customer twice. If we've already recorded a refund for this
+  // order, stop.
+  const { data: alreadyRefunded } = await supabaseAdmin
+    .from("store_credit_ledger")
+    .select("id")
+    .eq("order_id", orderId)
+    .eq("reason", "membership_redemption_refund")
+    .limit(1);
+
+  if (alreadyRefunded && alreadyRefunded.length > 0) {
+    return;
+  }
+
   const monthStart = startOfCurrentMonthIso();
   for (const row of data ?? []) {
     const returned = Math.abs(Number(row.amount_cents ?? 0));

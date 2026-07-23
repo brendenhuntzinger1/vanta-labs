@@ -12,7 +12,7 @@
 // via the BILLING_PROVIDER env var), charges start actually moving money
 // with zero other code changes required.
 
-export type BillingProviderName = "noop";
+export type BillingProviderName = "noop" | "mock";
 
 export interface ChargeCardInput {
   billingProviderCustomerId: string | null;
@@ -66,8 +66,45 @@ export class NoopBillingProvider implements BillingProvider {
   }
 }
 
+// Simulated recurring-billing processor for development and testing. It NEVER
+// moves real money; it lets the whole subscription state machine (intro charge,
+// first-month remainder, monthly renewals, dunning) be exercised with fake
+// charges before a real processor is connected. A charge succeeds unless the
+// stored payment method reference marks it as a decline test card
+// ("decline"/"4000...") — mirroring the mock order gateway's test cards — so
+// both the happy path and failed-renewal/past-due handling can be proven.
+export class MockBillingProvider implements BillingProvider {
+  async createCustomer(input: CreateBillingCustomerInput): Promise<CreateBillingCustomerResult> {
+    const seed = (input.email || "customer").toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 24) || "customer";
+    return {
+      success: true,
+      billingProviderCustomerId: `mock_cus_${seed}`,
+    };
+  }
+
+  async chargeCard(input: ChargeCardInput): Promise<ChargeCardResult> {
+    const ref = (input.paymentMethodRef ?? "").toLowerCase();
+    const isDecline = ref.includes("decline") || ref.includes("4000000000000002");
+
+    if (isDecline) {
+      return {
+        success: false,
+        error: "Card declined (sandbox test card).",
+      };
+    }
+
+    return {
+      success: true,
+      providerChargeId: `mock_ch_${input.idempotencyKey}`,
+    };
+  }
+}
+
 export function getBillingProvider(providerName = process.env.BILLING_PROVIDER ?? "noop"): BillingProvider {
-  switch (providerName) {
+  switch ((providerName ?? "").trim().toLowerCase()) {
+    case "mock":
+    case "test":
+      return new MockBillingProvider();
     case "noop":
     default:
       return new NoopBillingProvider();

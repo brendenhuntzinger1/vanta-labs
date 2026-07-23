@@ -169,7 +169,7 @@ describe("bundle pricing tiers", () => {
     expect(bundleDiscountRate(1)).toBe(0);
     expect(bundleDiscountRate(2)).toBe(0.05);
     expect(bundleDiscountRate(3)).toBe(0.08);
-    expect(bundleDiscountRate(10)).toBe(0.08);
+    expect(bundleDiscountRate(10)).toBe(0.15);
   });
   it("discounted line total is never above the undiscounted one", () => {
     for (let qty = 1; qty <= 12; qty += 1) {

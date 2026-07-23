@@ -259,7 +259,7 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
   // reconciles this month's store credit to the new tier.
   const { data: existingMembership } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status")
+    .select("user_id, tier_id, status, billing_cycle")
     .eq("user_id", input.userId)
     .maybeSingle();
 
@@ -268,9 +268,23 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
     (existingMembership.status === "active" || existingMembership.status === "trialing") &&
     existingMembership.tier_id !== tier.id
   ) {
+    // Reprice the NEXT renewal to the new tier's price. Without this the stored
+    // next_billing_amount_cents keeps the OLD tier's price, so the next renewal
+    // charges wrong — an upgrade would undercharge and, worse, a downgrade would
+    // overcharge the customer for up to a full cycle.
+    const changedCycle = (existingMembership.billing_cycle as string) ?? "monthly";
+    const nextAmountCents = changedCycle === "annual"
+      ? (tier.annual_price_cents ?? tier.monthly_price_cents)
+      : tier.monthly_price_cents;
+
     await supabaseAdmin
       .from("customer_memberships")
-      .update({ tier_id: tier.id, updated_at: now.toISOString() })
+      .update({
+        tier_id: tier.id,
+        next_billing_amount_cents: nextAmountCents,
+        renewal_reminder_sent_at: null,
+        updated_at: now.toISOString(),
+      })
       .eq("user_id", input.userId);
 
     await recordBillingEvent({ userId: input.userId, tierId: tier.id, eventType: "tier_change", amountCents: 0, status: "succeeded" });
@@ -433,11 +447,27 @@ export async function cancelMembership(userId: string): Promise<MembershipCancel
     throw new Error("This customer has no paid membership to cancel");
   }
 
+  const nowIso = new Date().toISOString();
+  // A cancel DURING the $1 trial must terminate the trial immediately and STOP
+  // the first-month remainder charge — otherwise the sweep would still bill the
+  // remainder after an explicit cancel (money taken after cancellation). Only
+  // the $1 was paid and memberships are non-refundable, so the trial simply
+  // ends. For a fully-paid (active) term we keep the original behavior: stop
+  // auto-renewal, let access run to the end of the already-paid period.
+  const isTrialing = existing.status === "trialing";
+  const cancelUpdate = isTrialing
+    ? {
+        status: "cancelled",
+        intro_status: "cancelled",
+        cancel_at_period_end: true,
+        cancelled_at: nowIso,
+        updated_at: nowIso,
+      }
+    : { cancel_at_period_end: true, updated_at: nowIso };
+
   const { error } = await supabaseAdmin
     .from("customer_memberships")
-    // Non-refundable: we stop auto-renewal and let access run to the end of
-    // the already-paid term. We never issue a refund here for either cycle.
-    .update({ cancel_at_period_end: true, updated_at: new Date().toISOString() })
+    .update(cancelUpdate)
     .eq("user_id", userId);
 
   if (error) throw error;
@@ -485,9 +515,14 @@ export async function revokeMembershipForRefund(userId: string): Promise<void> {
 }
 
 export async function updatePaymentMethod(userId: string, paymentMethodRef: string) {
+  // ONLY update the stored card reference. Do NOT force status to "active":
+  // a cancelled/refund-revoked or past_due member updating their card must not
+  // silently regain paid perks without an actual successful charge. A past_due
+  // member is recovered by the next sweep charge succeeding on the new card,
+  // not by the card update itself.
   const { error } = await supabaseAdmin
     .from("customer_memberships")
-    .update({ payment_method_ref: paymentMethodRef, status: "active", updated_at: new Date().toISOString() })
+    .update({ payment_method_ref: paymentMethodRef, updated_at: new Date().toISOString() })
     .eq("user_id", userId);
 
   if (error) throw error;
@@ -575,6 +610,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
       .select(DUE_ROW_SELECT)
       .eq("status", "trialing")
       .eq("intro_status", "active")
+      .eq("cancel_at_period_end", false)
       .is("first_month_reminder_sent_at", null)
       .lte("intro_ends_at", in3Days.toISOString())
       .gt("intro_ends_at", now.toISOString());
@@ -605,6 +641,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
       .select(DUE_ROW_SELECT)
       .eq("status", "trialing")
       .eq("intro_status", "active")
+      .eq("cancel_at_period_end", false)
       .lte("intro_ends_at", now.toISOString());
 
     if (error) throw error;

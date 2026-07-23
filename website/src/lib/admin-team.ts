@@ -154,12 +154,20 @@ export async function updateAdminAccount(username: string, input: { role?: Admin
   if (input.role !== undefined) updatePayload.role = input.role;
   if (input.isActive !== undefined) updatePayload.is_active = input.isActive;
 
+  const normalizedUsername = username.trim().toLowerCase();
   const { error } = await supabaseAdmin
     .from("admin_credentials")
     .update(updatePayload)
-    .eq("username", username.trim().toLowerCase());
+    .eq("username", normalizedUsername);
 
   if (error) {
     throw error;
+  }
+
+  // Deactivating an account must immediately revoke its live sessions, not wait
+  // for the 12h TTL. (verifyAdminSessionToken also re-checks is_active per
+  // request as defense in depth.)
+  if (input.isActive === false) {
+    await supabaseAdmin.from("admin_sessions").delete().eq("username", normalizedUsername);
   }
 }
