@@ -113,3 +113,48 @@ describe("resolvePasscodeCheck", () => {
     ).toBe("invalid");
   });
 });
+
+// SECURITY INVARIANTS — these lock in the login guarantees. If a future change
+// breaks any of them, these tests fail. Do not weaken them without intent.
+describe("security invariants (must never regress)", () => {
+  const salt = generatePasscodeSalt();
+  const correct = "222198";
+  const hash = hashPasscode(correct, salt);
+  const configured = { accountSalt: salt, accountHash: hash };
+
+  it("ONCE A CODE IS SET, the correct code always unlocks and nothing else does", () => {
+    expect(resolvePasscodeCheck({ passcodeRaw: correct, ...configured, envAccessCode: null })).toBe("ok");
+    // Every one of these is genuinely wrong (none reduce to 222198 after digit
+    // normalization): empty, blank, wrong digits, too short, too long, letters.
+    for (const wrong of ["", " ", "000000", "222199", "22219", "2221988", "abcdef", "111111"]) {
+      expect(
+        resolvePasscodeCheck({ passcodeRaw: wrong, ...configured, envAccessCode: null }),
+        `wrong input ${JSON.stringify(wrong)} must not unlock`,
+      ).not.toBe("ok");
+    }
+  });
+
+  it("ONCE A CODE IS SET, login can never fall back to password-only (never 'not_configured')", () => {
+    for (const env of [null, undefined, "", "999999", "123456"]) {
+      expect(
+        resolvePasscodeCheck({ passcodeRaw: "", ...configured, envAccessCode: env }),
+      ).not.toBe("not_configured");
+    }
+  });
+
+  it("an account code always overrides the environment code", () => {
+    // Even if the env code is 999999, only the account's own code works.
+    expect(resolvePasscodeCheck({ passcodeRaw: "999999", ...configured, envAccessCode: "999999" })).toBe("invalid");
+    expect(resolvePasscodeCheck({ passcodeRaw: correct, ...configured, envAccessCode: "999999" })).toBe("ok");
+  });
+
+  it("the same code + same salt always produces the same hash (stable, deterministic)", () => {
+    expect(hashPasscode(correct, salt)).toBe(hash);
+    expect(hashPasscode(correct, salt)).toBe(hashPasscode(correct, salt));
+  });
+
+  it("normalizes spaces/dashes so a correct code entered with formatting still works", () => {
+    expect(resolvePasscodeCheck({ passcodeRaw: "22-21-98", ...configured, envAccessCode: null })).toBe("ok");
+    expect(resolvePasscodeCheck({ passcodeRaw: " 222198 ", ...configured, envAccessCode: null })).toBe("ok");
+  });
+});

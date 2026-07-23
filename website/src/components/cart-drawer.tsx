@@ -198,7 +198,7 @@ export function CartDrawer() {
               {shippingProgress.isEligibleForFreeShipping ? (
                 <div className="text-center">
                   <p className="text-sm font-semibold text-emerald-400 flex items-center justify-center gap-2">
-                    🎉 Congratulations free shipping!
+                    🎉 Congratulations, you&apos;ve unlocked free shipping!
                   </p>
                   <div className="mt-3 w-full bg-zinc-800 rounded-full h-2 overflow-hidden">
                     <div
