@@ -606,6 +606,12 @@ create index if not exists rate_limit_hits_bucket_time_idx
   on public.rate_limit_hits (bucket, created_at desc);
 alter table if exists public.rate_limit_hits enable row level security;
 
+-- Webhook event crash recovery (see payment-events-reclaim.sql).
+alter table if exists public.payment_events
+  add column if not exists claimed_at timestamptz not null default now();
+alter table if exists public.payment_events
+  alter column processed_at drop not null;
+
 alter table if exists public.ambassadors
   add column if not exists commission_percent_locked boolean not null default false,
   add column if not exists updated_at timestamptz not null default now();

@@ -162,27 +162,81 @@ async function markEventProcessed(eventId: string, orderId: string, status: Orde
   }
 }
 
+// How long an unfinished claim may sit before it's assumed dead (a prior
+// attempt crashed after claiming but before completing) and may be retaken.
+// Webhook processing takes seconds, so 5 minutes never reclaims a live attempt.
+const STALE_CLAIM_MS = 5 * 60 * 1000;
+
 // Atomically claim a webhook event before running any side-effects. The
 // event_id is the primary key of payment_events, so a concurrent duplicate
 // delivery (processors retry and can fan out) loses the insert race with a
-// unique-violation (23505) and is treated as a duplicate — preventing double
-// loyalty points, double coupon redemption, and duplicate confirmation emails.
+// unique-violation (23505). processed_at is the COMPLETION marker: a claimed
+// row with processed_at IS NULL is in-flight. If that claim is stale (its owner
+// crashed before markEventProcessed), it is reclaimed so the processor's retry
+// can finish the order instead of being skipped forever as a "duplicate".
 async function claimEvent(eventId: string, orderId: string, status: OrderStatus): Promise<boolean> {
+  const nowIso = new Date().toISOString();
   const { error } = await supabaseAdmin.from("payment_events").insert({
     event_id: eventId,
     order_id: orderId,
     status,
-    processed_at: new Date().toISOString(),
+    claimed_at: nowIso,
+    processed_at: null,
   });
 
-  if (error) {
-    if ((error as { code?: string }).code === "23505") {
-      return false;
-    }
+  if (!error) {
+    return true;
+  }
+
+  if ((error as { code?: string }).code !== "23505") {
     throw error;
   }
 
-  return true;
+  // A row already exists. Decide: genuinely completed (skip), a live in-flight
+  // claim (skip), or a stale/stranded claim (reclaim and reprocess).
+  const { data: existing } = await supabaseAdmin
+    .from("payment_events")
+    .select("processed_at, claimed_at")
+    .eq("event_id", eventId)
+    .maybeSingle();
+
+  if (!existing) {
+    // The row was deleted (e.g. releaseEvent) between our failed insert and this
+    // read — try to claim it fresh once more.
+    const retry = await supabaseAdmin.from("payment_events").insert({
+      event_id: eventId,
+      order_id: orderId,
+      status,
+      claimed_at: nowIso,
+      processed_at: null,
+    });
+    return !retry.error;
+  }
+
+  if (existing.processed_at) {
+    return false; // genuinely already processed — a true duplicate
+  }
+
+  const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString();
+  if (String(existing.claimed_at ?? "") >= staleBefore) {
+    return false; // a recent, still-live claim is in flight — skip
+  }
+
+  // Stale unprocessed claim → retake it atomically. The guards ensure only ONE
+  // reclaimer wins even if several retries arrive together.
+  const { data: reclaimed, error: reclaimError } = await supabaseAdmin
+    .from("payment_events")
+    .update({ claimed_at: nowIso, order_id: orderId, status })
+    .eq("event_id", eventId)
+    .is("processed_at", null)
+    .lt("claimed_at", staleBefore)
+    .select("event_id");
+
+  if (reclaimError) {
+    throw reclaimError;
+  }
+
+  return Boolean(reclaimed && reclaimed.length > 0);
 }
 
 // Undo a claim when processing fails partway, so the event isn't permanently
