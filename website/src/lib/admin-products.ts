@@ -45,6 +45,14 @@ export type ProductCreateInput = {
   imageUrl?: string;
   isPublished?: boolean;
   isEnabled?: boolean;
+  // Hidden admin cost/margin fields — never shown to customers. Feed the profit
+  // engine so it can protect margin per SKU (worst-case cost is assumed when
+  // productCostCents is unset).
+  productCostCents?: number;
+  suggestedRetailCents?: number;
+  minSellingPriceCents?: number;
+  minProfitCents?: number;
+  minProfitPercent?: number;
   doses?: DoseInput[];
 };
 
@@ -138,6 +146,11 @@ function mapAdminProductRow(
     galleryImages: images,
     doses,
     defaultDoseId: defaultDose?.id ?? null,
+    productCostCents: row.product_cost_cents != null ? parseNumber(row.product_cost_cents) : undefined,
+    suggestedRetailCents: row.suggested_retail_cents != null ? parseNumber(row.suggested_retail_cents) : undefined,
+    minSellingPriceCents: row.min_selling_price_cents != null ? parseNumber(row.min_selling_price_cents) : undefined,
+    minProfitCents: row.min_profit_cents != null ? parseNumber(row.min_profit_cents) : undefined,
+    minProfitPercent: row.min_profit_percent != null ? parseNumber(row.min_profit_percent) : undefined,
     testingDate: String(row.testing_date ?? ""),
     labName: String(row.lab_name ?? ""),
     coaUrl: effectiveCoa,
@@ -233,7 +246,7 @@ export async function listAdminProducts(input: {
 }) {
   let query = supabaseAdmin
     .from("products")
-    .select("id, slug, name, category, short_description, long_description, description, price_cents, compare_at_price_cents, sale_price_cents, stock_status, inventory_quantity, is_published, is_enabled, is_archived, is_featured, badge, position, batch_number, purity_result, image_url, testing_date, lab_name, coa_url, molecular_formula, seo_title, seo_description, updated_at")
+    .select("id, slug, name, category, short_description, long_description, description, price_cents, compare_at_price_cents, sale_price_cents, stock_status, inventory_quantity, is_published, is_enabled, is_archived, is_featured, badge, position, batch_number, purity_result, image_url, testing_date, lab_name, coa_url, molecular_formula, seo_title, seo_description, product_cost_cents, suggested_retail_cents, min_selling_price_cents, min_profit_cents, min_profit_percent, updated_at")
     .order("position", { ascending: true })
     .order("updated_at", { ascending: false });
 
@@ -371,6 +384,11 @@ export async function createAdminProduct(input: ProductCreateInput) {
       is_enabled: input.isEnabled ?? true,
       is_archived: false,
       is_active: true,
+      product_cost_cents: input.productCostCents != null ? Math.max(0, Math.round(input.productCostCents)) : null,
+      suggested_retail_cents: input.suggestedRetailCents != null ? Math.max(0, Math.round(input.suggestedRetailCents)) : null,
+      min_selling_price_cents: input.minSellingPriceCents != null ? Math.max(0, Math.round(input.minSellingPriceCents)) : null,
+      min_profit_cents: input.minProfitCents != null ? Math.max(0, Math.round(input.minProfitCents)) : null,
+      min_profit_percent: input.minProfitPercent != null ? Math.max(0, input.minProfitPercent) : null,
       position,
       created_at: now,
       updated_at: now,
@@ -442,6 +460,11 @@ export async function updateAdminProduct(productId: string, input: ProductUpdate
   if (input.isPublished !== undefined) payload.is_published = input.isPublished;
   if (input.isEnabled !== undefined) payload.is_enabled = input.isEnabled;
   if (input.isArchived !== undefined) payload.is_archived = input.isArchived;
+  if (input.productCostCents !== undefined) payload.product_cost_cents = input.productCostCents === null ? null : Math.max(0, Math.round(input.productCostCents));
+  if (input.suggestedRetailCents !== undefined) payload.suggested_retail_cents = input.suggestedRetailCents === null ? null : Math.max(0, Math.round(input.suggestedRetailCents));
+  if (input.minSellingPriceCents !== undefined) payload.min_selling_price_cents = input.minSellingPriceCents === null ? null : Math.max(0, Math.round(input.minSellingPriceCents));
+  if (input.minProfitCents !== undefined) payload.min_profit_cents = input.minProfitCents === null ? null : Math.max(0, Math.round(input.minProfitCents));
+  if (input.minProfitPercent !== undefined) payload.min_profit_percent = input.minProfitPercent === null ? null : Math.max(0, input.minProfitPercent);
 
   const { error } = await supabaseAdmin.from("products").update(payload).eq("id", productId);
   if (error) {

@@ -9,8 +9,8 @@ import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateHandlingFee, calculateTax } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
-import { resolveBestDiscount, type DiscountCandidate } from "@/lib/discount-resolution";
-import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig } from "@/lib/admin-control";
+import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
+import { computeProfit, resolveCustomerDiscount } from "@/lib/profit-engine";
 import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -406,31 +406,80 @@ export async function createCheckoutSession(
    ? calculateDiscountAmount(subtotal, memberPerks.memberDiscountPercent)
    : 0;
 
- // "Greatest savings wins, no stacking" among the promos — mirrors the shared
- // src/lib/discount-resolution.ts the client preview uses. Buy 3 Get 1, when
- // active, is the promo (referral still earns commission on the discounted
- // subtotal). When stacking is OFF a coupon competes as a candidate; when ON it
- // is instead added on top of the best promo below.
- const promoCandidates: DiscountCandidate[] = [
-   { type: "bulk_savings", amount: bulkSavingsResult.amount },
-   { type: "member_pricing", amount: memberPricingAmount },
-   { type: "ambassador_personal", amount: personalDiscountAmount },
-   isBuy3Get1Active
-     ? { type: "buy3get1", amount: buy3Get1Discount }
-     : { type: "referral", amount: referral ? calculateDiscountAmount(subtotal, referral.discountPercent) : 0 },
- ];
- if (!couponPolicy.allowStacking) {
-   promoCandidates.push({ type: "coupon", amount: coupon ? coupon.discountAmount : 0 });
- }
-
- const bestDiscount = resolveBestDiscount(promoCandidates);
- const stackedCouponAmount = couponPolicy.allowStacking && coupon ? roundMoney(coupon.discountAmount) : 0;
- const discountAmount = roundMoney(Math.min(subtotal, (bestDiscount?.amount ?? 0) + stackedCouponAmount));
- const bulkDiscountTier = bestDiscount?.type === "bulk_savings" ? bulkSavingsResult.tier : null;
+ // Resolve the customer discount through the SHARED profit-engine rulebook, so
+ // checkout, the profit guard, and the client preview can never diverge:
+ //  • ONE customer discount (best value) among referral / membership / bulk /
+ //    personal / coupon.
+ //  • The one intentional stack: a BUNDLE (Buy 3 Get 1) order + a code =
+ //    bundle discount PLUS a reduced referral % (admin-set, default 5%).
+ //  • Coupons stack only when the admin enables it.
+ // Ambassador commission is handled separately below — it is NOT a customer
+ // discount and is never removed because another discount applied.
+ const customerDiscount = resolveCustomerDiscount(
+   {
+     subtotal,
+     productCost: 0,
+     bundleDiscount: buy3Get1Discount,
+     referralAccepted: Boolean(referral),
+     referralPercent: referral ? referral.discountPercent : 0,
+     bundleReferralPercent: referralProgram.bundleReferralPercent,
+     isMember: memberPricingAmount > 0,
+     membershipPercent: memberPerks.memberDiscountPercent,
+     couponDiscount: coupon ? coupon.discountAmount : 0,
+     bulkSavingsAmount: bulkSavingsResult.amount,
+     personalDiscountAmount,
+     allowCouponStacking: couponPolicy.allowStacking,
+     commissionPercent: 0,
+     processingFeePercent: 0,
+     shippingCollected: 0,
+     shippingCost: 0,
+     handlingCollected: 0,
+     taxPercent: 0,
+   },
+   new Set(["coupon", "referral", "bundle", "membership"]),
+ );
+ const discountAmount = customerDiscount.amount;
+ const bulkDiscountTier = customerDiscount.label === "Bulk savings" ? bulkSavingsResult.tier : null;
 
  // Sales tax on the post-discount merchandise total (0 unless an admin sets a
  // rate). Same shared calculateTax the client preview uses, so totals agree.
  const taxAmount = calculateTax(Math.max(0, roundMoney(subtotal - discountAmount)), taxRatePercent);
+
+ // PROFIT GUARD — never let this pricing combination complete below the store's
+ // configured floor (default: never negative). Uses the shared profit-engine
+ // math so checkout and the engine can never disagree. Ambassador commission is
+ // a real cost here, but it is NOT a customer discount — it's computed
+ // separately on the discounted subtotal. Product cost falls back to the
+ // worst-case unit cost until real per-SKU costs are entered.
+ const profitSettings = await getProfitSettings();
+ const guardTotalQuantity = lineItems.reduce((sum, line) => sum + line.quantity, 0);
+ const guardProfit = computeProfit(
+   {
+     subtotal,
+     productCost: roundMoney(profitSettings.worstCaseUnitCost * guardTotalQuantity),
+     bundleDiscount: 0,
+     referralAccepted: Boolean(referral),
+     referralPercent: 0,
+     bundleReferralPercent: 0,
+     isMember: false,
+     membershipPercent: 0,
+     couponDiscount: 0,
+     allowCouponStacking: false,
+     commissionPercent: referral ? referral.commissionPercent : 0,
+     processingFeePercent: profitSettings.processingFeePercent,
+     shippingCollected: shipping,
+     shippingCost: 0,
+     handlingCollected: handlingFee,
+     taxPercent: taxRatePercent,
+   },
+   { amount: discountAmount, components: [], label: "resolved" },
+ );
+ if (
+   guardProfit.grossProfit < profitSettings.minProfitDollars
+   || (guardProfit.discountedSubtotal > 0 && guardProfit.grossMarginPercent < profitSettings.minProfitPercent)
+ ) {
+   throw new Error("Promotion unavailable on this order.");
+ }
 
  const totalBeforePoints = roundMoney(subtotal + shipping + handlingFee + taxAmount - discountAmount);
 

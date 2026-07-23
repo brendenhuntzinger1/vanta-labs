@@ -12,6 +12,7 @@ import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/li
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
+import { decrementInventoryForOrder, restockInventoryForOrder } from "@/lib/inventory-fulfillment";
 import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
 import { activateAnnualMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 
@@ -193,7 +194,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, amount_paid, paid_at, customer_user_id, points_redeemed, store_credit_redeemed_cents")
+    .select("id, order_id, order_type, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, amount_paid, paid_at, customer_user_id, points_redeemed, store_credit_redeemed_cents")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -817,6 +818,11 @@ export async function finalizeManualPayment(
       console.error("Unable to activate membership for order", orderId, membershipError);
     }
   } else {
+    // Commit stock now that payment is verified. The atomic order claim above
+    // guarantees this runs exactly once per order, so no double-decrement.
+    await decrementInventoryForOrder(
+      (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+    );
     // Auto-transmit the paid + verified order to the 3PL (best-effort; never
     // blocks approval).
     await transmitOrderToFulfillment(orderId);
@@ -1006,6 +1012,15 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       }
     }
 
+    // Commit stock exactly once, on the first paid transition. Membership
+    // orders are digital and hold no inventory, so they are skipped.
+    const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
+    if (!wasAlreadyPaid && !isMembershipOrder) {
+      await decrementInventoryForOrder(
+        (eventPayload.items ?? []).map((item) => ({ product_id: item.productId, quantity: item.quantity })),
+      );
+    }
+
     // Auto-transmit newly-paid card orders to the 3PL (best-effort).
     if (!wasAlreadyPaid) {
       await transmitOrderToFulfillment(orderId);
@@ -1014,6 +1029,24 @@ export async function processPaymentWebhook(payload: string, signature: string, 
 
   if (nextStatus === "refunded" || nextStatus === "canceled" || nextStatus === "payment_failed") {
     await updateCommissionOnRefund(orderId);
+
+    // Return committed stock — but ONLY when this order was actually paid (so
+    // its inventory was decremented). A refund/cancel of an order that never
+    // reached "paid" (e.g. payment_failed) must not conjure phantom units, and
+    // a replayed refund event finds the status already terminal and skips.
+    const wasPaid = priorPaymentStatus === "paid";
+    if (wasPaid && (nextStatus === "refunded" || nextStatus === "canceled")) {
+      const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
+      if (!isMembershipOrder) {
+        const { data: refundItems } = await supabaseAdmin
+          .from("order_items")
+          .select("product_id, quantity")
+          .eq("order_id", orderId);
+        await restockInventoryForOrder(
+          (refundItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+        );
+      }
+    }
 
     if (nextStatus === "refunded") {
       try {

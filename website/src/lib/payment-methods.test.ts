@@ -38,28 +38,30 @@ describe("payment methods", () => {
     expect(calculateCardProcessingFee(100, fee({ percentage: 3 })).amount).toBe(3);
   });
 
-  it("builds a default notice from the configured percentage", () => {
-    expect(cardProcessingFeeNotice(fee({ percentage: 7 }))).toContain("7%");
+  it("builds a default notice from the configured percentage without naming other methods", () => {
+    const notice = cardProcessingFeeNotice(fee({ percentage: 7 }));
+    expect(notice).toContain("7%");
+    for (const removed of ["Cash App", "Zelle", "PayPal", "Venmo"]) {
+      expect(notice).not.toContain(removed);
+    }
   });
 
   it("prefers a custom notice when provided", () => {
     expect(cardProcessingFeeNotice(fee({ noticeText: "Custom copy" }))).toBe("Custom copy");
   });
 
-  it("recognises manual methods and excludes card", () => {
+  it("card is not a manual method", () => {
     const card = getPaymentMethodById(DEFAULT_PAYMENT_METHODS, "card");
-    const cashapp = getPaymentMethodById(DEFAULT_PAYMENT_METHODS, "cashapp");
     expect(isManualPaymentMethod(card)).toBe(false);
-    expect(isManualPaymentMethod(cashapp)).toBe(true);
   });
 
-  it("offers only the card method (debit/credit/Apple Pay); manual methods are off", () => {
+  it("offers ONLY the card method — Cash App / Zelle / PayPal / Venmo are gone entirely", () => {
     const enabled = getEnabledPaymentMethods(DEFAULT_PAYMENT_METHODS);
-    // Card (debit/credit/Apple Pay) is the only enabled method.
+    // Card (debit/credit/Apple Pay) is the only method the site offers.
     expect(enabled.map((m) => m.id)).toEqual(["card"]);
-    // Manual methods (Cash App / Zelle / PayPal / Venmo) are all disabled.
+    // The removed peer-to-peer methods must not exist in config at all.
     for (const id of ["cashapp", "zelle", "paypal", "venmo"]) {
-      expect(enabled.some((m) => m.id === id)).toBe(false);
+      expect(getPaymentMethodById(DEFAULT_PAYMENT_METHODS, id)).toBeUndefined();
     }
   });
 });

@@ -53,6 +53,13 @@ export type Product = {
   galleryImages?: ProductImage[];
   doses?: ProductDose[];
   defaultDoseId?: string | null;
+  // Hidden admin cost/margin fields (never rendered to customers). Cents for
+  // money, percent for the margin. Undefined when unset.
+  productCostCents?: number;
+  suggestedRetailCents?: number;
+  minSellingPriceCents?: number;
+  minProfitCents?: number;
+  minProfitPercent?: number;
   testingDate: string;
   labName: string;
   coaUrl: string;

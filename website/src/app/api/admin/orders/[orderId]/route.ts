@@ -6,6 +6,7 @@ import { sendEmail } from "@/lib/email/send";
 import { orderConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { updateCommissionOnRefund } from "@/lib/payment-webhook";
+import { restockInventoryForOrder } from "@/lib/inventory-fulfillment";
 import { restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
 import { revokeMembershipForRefund } from "@/lib/membership-billing";
 import { refundStoreCreditForOrder } from "@/lib/store-credit";
@@ -299,6 +300,17 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         try {
           if (String(order.order_type ?? "product") === "membership" && order.customer_user_id) {
             await revokeMembershipForRefund(String(order.customer_user_id));
+          }
+        } catch {
+          // Best-effort; never block the refund.
+        }
+        // Return the committed stock to the catalog on a full refund of a
+        // physical order (membership orders hold no inventory).
+        try {
+          if (String(order.order_type ?? "product") !== "membership") {
+            await restockInventoryForOrder(
+              (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+            );
           }
         } catch {
           // Best-effort; never block the refund.

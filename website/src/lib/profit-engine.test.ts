@@ -71,6 +71,47 @@ describe("discount composition rules", () => {
     expect(d.components).toEqual(["referral", "coupon"]);
     expect(d.amount).toBe(31); // 26 + 5
   });
+
+  it("membership competes for best value — it wins when largest, loses when not", () => {
+    // Membership 15% ($39) beats bundle+5% on a $20-bundle order ($33) → wins.
+    const wins = resolveCustomerDiscount(
+      makeOrder({ isMember: true, membershipPercent: 15, referralAccepted: true, bundleDiscount: 20 }),
+      ALL,
+    );
+    expect(wins.components).toEqual(["membership"]);
+    // Membership 5% ($13) loses to a $40 bundle → bundle wins (best value).
+    const loses = resolveCustomerDiscount(
+      makeOrder({ isMember: true, membershipPercent: 5, bundleDiscount: 40 }),
+      ALL,
+    );
+    expect(loses.components).toContain("bundle");
+    expect(loses.amount).toBe(40);
+  });
+
+  it("bulk savings and the personal ambassador discount compete for best value", () => {
+    const d = resolveCustomerDiscount(makeOrder({ bulkSavingsAmount: 45, referralAccepted: true }), ALL);
+    expect(d.label).toBe("Bulk savings"); // 45 beats the 26 referral
+    expect(d.amount).toBe(45);
+  });
+});
+
+describe("commission is separate from customer discounts (always paid on a valid code)", () => {
+  it("is paid on the discounted subtotal no matter which customer discount won", () => {
+    // Membership pricing wins the customer discount, but the ambassador whose
+    // code was used still earns commission on the discounted subtotal.
+    const order = makeOrder({ isMember: true, membershipPercent: 15, referralAccepted: true });
+    const d = resolveCustomerDiscount(order, ALL);
+    const p = computeProfit(order, d);
+    expect(d.components).toEqual(["membership"]);
+    expect(p.commission).toBe(Math.round(p.discountedSubtotal * (order.commissionPercent / 100) * 100) / 100);
+    expect(p.commission).toBeGreaterThan(0);
+  });
+
+  it("is never reduced or removed just because a bigger discount applied", () => {
+    const withCode = computeProfit(makeOrder({ referralAccepted: true, bulkSavingsAmount: 45 }), resolveCustomerDiscount(makeOrder({ referralAccepted: true, bulkSavingsAmount: 45 }), ALL));
+    // Bulk savings won the customer discount; commission still paid on the net.
+    expect(withCode.commission).toBeGreaterThan(0);
+  });
 });
 
 describe("ambassador commission", () => {
@@ -102,15 +143,15 @@ describe("profit protection guardrail", () => {
     expect(result.removed).toEqual([]);
   });
 
-  it("peels off discounts to restore margin on a thin order", () => {
-    // High cost + big coupon would sink the order; the guard removes the coupon.
+  it("peels off the lowest-priority discount to keep the order out of the red", () => {
+    // High cost + a big stacked coupon drives the order negative; the guard
+    // removes the coupon (lowest priority) and the order is profitable again.
     const result = protectProfit(
-      makeOrder({ productCost: 132, couponDiscount: 60, allowCouponStacking: true, referralAccepted: true }),
+      makeOrder({ productCost: 155, couponDiscount: 90, allowCouponStacking: true, referralAccepted: true }),
     );
-    if (result.profitable) {
-      expect(result.grossProfit).toBeGreaterThanOrEqual(DEFAULT_PROFIT_SETTINGS.minProfitDollars);
-      expect(result.removed).toContain("coupon");
-    }
+    expect(result.profitable).toBe(true);
+    expect(result.removed).toContain("coupon");
+    expect(result.grossProfit).toBeGreaterThanOrEqual(0);
   });
 
   it("blocks an order that loses money even with every promo removed", () => {
@@ -132,7 +173,7 @@ describe("profit protection guardrail", () => {
 // invariant: an order the engine marks `profitable` ALWAYS meets the floor, and
 // the engine never silently lets a losing order finalize.
 describe("simulation: no finalized order ever falls below the profit floor", () => {
-  const settings = DEFAULT_PROFIT_SETTINGS; // 25% / $10, worst-case $33, 10% fee
+  const settings = DEFAULT_PROFIT_SETTINGS; // break-even floor (0% / $0), worst-case $33, 10% fee
   const unitCosts = [25, 27, 29, 31, 33]; // wholesale+fulfillment range
   const retails = [55, 65, 79];
   const quantities = [1, 2, 3, 4, 6, 8];

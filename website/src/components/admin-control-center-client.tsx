@@ -68,6 +68,7 @@ export function AdminControlCenterClient() {
   // Referral / ambassador program + coupon policy controls.
   const [referralEnabled, setReferralEnabled] = useState(true);
   const [referralPersonalDiscount, setReferralPersonalDiscount] = useState("");
+  const [referralBundlePercent, setReferralBundlePercent] = useState("");
   const [referralDefaultCommission, setReferralDefaultCommission] = useState("");
   const [referralCommissionsPaused, setReferralCommissionsPaused] = useState(false);
   const [couponsEnabled, setCouponsEnabled] = useState(true);
@@ -134,6 +135,7 @@ export function AdminControlCenterClient() {
     const referral = next.referral ?? {};
     setReferralEnabled(referral.enabled !== false);
     setReferralPersonalDiscount(referral.personal_discount_percent != null ? String(referral.personal_discount_percent) : "");
+    setReferralBundlePercent(referral.bundle_referral_percent != null ? String(referral.bundle_referral_percent) : "");
     setReferralDefaultCommission(referral.default_commission_percent != null ? String(referral.default_commission_percent) : "");
     setReferralCommissionsPaused(referral.commissions_paused === true);
 
@@ -223,6 +225,7 @@ export function AdminControlCenterClient() {
 
       { section: "referral", key: "enabled", value: referralEnabled },
       { section: "referral", key: "personal_discount_percent", value: referralPersonalDiscount },
+      { section: "referral", key: "bundle_referral_percent", value: referralBundlePercent },
       { section: "referral", key: "default_commission_percent", value: referralDefaultCommission },
       { section: "referral", key: "commissions_paused", value: referralCommissionsPaused },
 
@@ -402,6 +405,7 @@ export function AdminControlCenterClient() {
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralEnabled} onChange={(e) => setReferralEnabled(e.target.checked)} /> Referral program enabled</label>
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralCommissionsPaused} onChange={(e) => setReferralCommissionsPaused(e.target.checked)} /> Pause new commissions (codes still give the customer discount)</label>
               <label className="block text-zinc-300">Ambassador personal discount (% off their own orders)<input value={referralPersonalDiscount} onChange={(e) => setReferralPersonalDiscount(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="block text-zinc-300">Bundle referral discount (% that stacks on a Buy 3 Get 1 order with a code)<input value={referralBundlePercent} onChange={(e) => setReferralBundlePercent(e.target.value)} placeholder="5" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="block text-zinc-300">Default commission rate (% when an ambassador has no custom rate)<input value={referralDefaultCommission} onChange={(e) => setReferralDefaultCommission(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
           </section>
@@ -417,10 +421,10 @@ export function AdminControlCenterClient() {
 
           <section className="vl-panel-soft rounded-2xl p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">Profit Protection</h3>
-            <p className="mt-2 text-xs text-zinc-400">The engine never lets an order finalize below these. Leave blank for the defaults (25% margin, $10, $33 worst-case vial cost, 10% processing).</p>
+            <p className="mt-2 text-xs text-zinc-400">By default no order can ever finalize at a loss (profit stays at or above $0). Set a minimum margin or minimum profit here only if you want a buffer beyond break-even. Worst-case vial cost defaults to $33 and the processing-fee assumption to 10%.</p>
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-              <label className="text-zinc-300">Minimum margin (%)<input value={profitMinPercent} onChange={(e) => setProfitMinPercent(e.target.value)} placeholder="25" className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Minimum profit ($)<input value={profitMinDollars} onChange={(e) => setProfitMinDollars(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Minimum margin (%)<input value={profitMinPercent} onChange={(e) => setProfitMinPercent(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Minimum profit ($)<input value={profitMinDollars} onChange={(e) => setProfitMinDollars(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Worst-case unit cost ($, when a product has no cost set)<input value={profitWorstCaseCost} onChange={(e) => setProfitWorstCaseCost(e.target.value)} placeholder="33" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Processing fee assumption (%)<input value={profitProcessingFee} onChange={(e) => setProfitProcessingFee(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>

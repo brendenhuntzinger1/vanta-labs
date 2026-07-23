@@ -366,6 +366,8 @@ export async function getWelcomeOffer(): Promise<WelcomeOffer> {
 export const DEFAULT_SALES_TAX_PERCENT = 7;
 // Default customer discount for a valid ambassador referral code.
 export const DEFAULT_REFERRAL_DISCOUNT_PERCENT = 10;
+// Reduced referral discount that STACKS on top of a bundle (Buy 3 Get 1) order.
+export const DEFAULT_BUNDLE_REFERRAL_DISCOUNT_PERCENT = 5;
 // Default personal discount an approved ambassador gets on their OWN purchases.
 export const DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT = 10;
 // Default commission rate when an ambassador has no explicit rate set.
@@ -394,6 +396,8 @@ export interface ReferralProgramConfig {
   enabled: boolean;
   // Customer discount a valid referral code applies (percent).
   discountPercent: number;
+  // Reduced referral discount that stacks on a bundle (Buy 3 Get 1) order.
+  bundleReferralPercent: number;
   // Personal discount an approved ambassador gets on their OWN purchases.
   personalDiscountPercent: number;
   // Default commission rate used when an ambassador has no explicit rate.
@@ -415,6 +419,7 @@ export async function getReferralProgramConfig(): Promise<ReferralProgramConfig>
   const fallback: ReferralProgramConfig = {
     enabled: true,
     discountPercent: DEFAULT_REFERRAL_DISCOUNT_PERCENT,
+    bundleReferralPercent: DEFAULT_BUNDLE_REFERRAL_DISCOUNT_PERCENT,
     personalDiscountPercent: DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT,
     defaultCommissionPercent: DEFAULT_AMBASSADOR_COMMISSION_PERCENT,
     commissionsPaused: false,
@@ -425,6 +430,7 @@ export async function getReferralProgramConfig(): Promise<ReferralProgramConfig>
     return {
       enabled: referral.enabled !== false,
       discountPercent: clampPercent(referral.discount_percent, DEFAULT_REFERRAL_DISCOUNT_PERCENT),
+      bundleReferralPercent: clampPercent(referral.bundle_referral_percent, DEFAULT_BUNDLE_REFERRAL_DISCOUNT_PERCENT),
       personalDiscountPercent: clampPercent(referral.personal_discount_percent, DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT),
       defaultCommissionPercent: clampPercent(referral.default_commission_percent, DEFAULT_AMBASSADOR_COMMISSION_PERCENT),
       commissionsPaused: referral.commissions_paused === true,
@@ -445,9 +451,11 @@ export interface ProfitSettingsConfig {
   processingFeePercent: number;
 }
 
+// Default: never sell at a loss (profit >= $0). Raise the minimums in the
+// Control Center to require a margin buffer beyond break-even.
 export const DEFAULT_PROFIT_CONFIG: ProfitSettingsConfig = {
-  minProfitPercent: 25,
-  minProfitDollars: 10,
+  minProfitPercent: 0,
+  minProfitDollars: 0,
   worstCaseUnitCost: 33,
   processingFeePercent: 10,
 };
