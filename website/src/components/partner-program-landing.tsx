@@ -189,6 +189,48 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
             <div>
               <h3 className="vl2-serif text-2xl text-white">Become an Ambassador</h3>
 
+              {/* Perks at a glance — the reasons to join, right up top. */}
+              <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+                {[
+                  {
+                    title: "Earn Commission",
+                    sub: "On every referred order",
+                    icon: (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><circle cx="12" cy="12" r="9" /><path d="M14.5 9.5a2.4 2.4 0 0 0-2.5-1.5c-1.4 0-2.5.8-2.5 2s1.1 1.8 2.5 2 2.5.8 2.5 2-1.1 2-2.5 2a2.4 2.4 0 0 1-2.5-1.5" /><path d="M12 6.5v1.5M12 16v1.5" /></svg>
+                    ),
+                  },
+                  {
+                    title: "Personal Discount",
+                    sub: "On your own orders",
+                    icon: (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0l-7.2-7.2A2 2 0 0 1 3 11.6V5a2 2 0 0 1 2-2h6.6a2 2 0 0 1 1.4.6l7.6 7.6a2 2 0 0 1 0 2.8z" /><circle cx="7.5" cy="7.5" r="1.2" /></svg>
+                    ),
+                  },
+                  {
+                    title: "Your Referral Link",
+                    sub: "A code + link to share",
+                    icon: (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7L12 5" /><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7L12 19" /></svg>
+                    ),
+                  },
+                  {
+                    title: "Live Stats & Payouts",
+                    sub: "Track earnings in real time",
+                    icon: (
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="M3 3v18h18" /><path d="M7 15l3-4 3 3 5-6" /></svg>
+                    ),
+                  },
+                ].map((perk) => (
+                  <div key={perk.title} className="rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
+                    <span className="inline-flex h-9 w-9 items-center justify-center rounded-full border border-emerald-400/30 bg-emerald-400/10 text-emerald-300">
+                      {perk.icon}
+                    </span>
+                    <p className="mt-2.5 text-sm font-medium text-white">{perk.title}</p>
+                    <p className="mt-0.5 text-xs leading-5 text-white/50">{perk.sub}</p>
+                  </div>
+                ))}
+              </div>
+
               {sessionStatus === "loading" ? (
                 <p className="mt-3 text-sm text-white/50">Checking your account…</p>
               ) : sessionStatus === "guest" ? (

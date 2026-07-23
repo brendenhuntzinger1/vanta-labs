@@ -25,13 +25,13 @@ export type BundleConfig = {
 export const DEFAULT_BUNDLE_CONFIG: BundleConfig = {
   twoUnitPercent: 0.05,
   threePlusPercent: 0.08,
-  fiveUnitPercent: 0.10,
-  tenUnitPercent: 0.15,
+  fiveUnitPercent: 0.12,
+  tenUnitPercent: 0.20,
 };
 
 export function bundleDiscountRate(quantity: number, config: BundleConfig = DEFAULT_BUNDLE_CONFIG): number {
-  if (quantity >= 10) return config.tenUnitPercent ?? DEFAULT_BUNDLE_CONFIG.tenUnitPercent ?? 0.15;
-  if (quantity >= 5) return config.fiveUnitPercent ?? DEFAULT_BUNDLE_CONFIG.fiveUnitPercent ?? 0.10;
+  if (quantity >= 10) return config.tenUnitPercent ?? DEFAULT_BUNDLE_CONFIG.tenUnitPercent ?? 0.20;
+  if (quantity >= 5) return config.fiveUnitPercent ?? DEFAULT_BUNDLE_CONFIG.fiveUnitPercent ?? 0.12;
   if (quantity >= 3) return config.threePlusPercent;
   if (quantity === 2) return config.twoUnitPercent;
   return 0;

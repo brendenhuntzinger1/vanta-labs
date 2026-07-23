@@ -36,8 +36,10 @@ function formatUsd(value: number) {
 
 const BUNDLE_OPTIONS = [
   { quantity: 1, label: "1 Vial", badge: null },
-  { quantity: 5, label: "5-Vial Set", badge: "Most Popular" },
-  { quantity: 10, label: "10-Vial Set", badge: "Best Value" },
+  { quantity: 2, label: "2 Vials", badge: null },
+  { quantity: 3, label: "3 Vials", badge: null },
+  { quantity: 5, label: "5 Vials", badge: "Most Popular" },
+  { quantity: 10, label: "10 Vials", badge: "Best Value" },
 ] as const;
 
 // Free shipping threshold (mirrors the storefront default). Used to show the
@@ -487,7 +489,7 @@ export function ProductDetailClient({
 
               <div className="mt-6">
                 <p className="vl2-lab-eyebrow">Quantity</p>
-                <div className="mt-3 grid grid-cols-3 gap-2">
+                <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">
                   {BUNDLE_OPTIONS.map((option) => {
                     const isSelected = option.quantity === 10 ? quantity >= 10 : quantity === option.quantity;
                     const rate = bundleDiscountRate(option.quantity, bundleConfig);

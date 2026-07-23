@@ -12,7 +12,7 @@ describe("bundleDiscountRate defaults (unchanged behavior)", () => {
     expect(bundleDiscountRate(1)).toBe(0);
     expect(bundleDiscountRate(2)).toBe(0.05);
     expect(bundleDiscountRate(3)).toBe(0.08);
-    expect(bundleDiscountRate(10)).toBe(0.15);
+    expect(bundleDiscountRate(10)).toBe(0.20);
   });
 });
 
