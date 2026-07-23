@@ -126,7 +126,7 @@ export function AdminOrderActions({
         <button type="button" disabled={saving} onClick={() => runAction("update_status", undefined, { carrier, estimatedDelivery: estimatedDelivery || undefined })} className="vl-btn-primary px-4 py-2 text-xs disabled:opacity-60">Save status</button>
         <button type="button" disabled={saving} onClick={() => runAction("cancel", "Cancel this order?")} className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60">Cancel</button>
         <button type="button" disabled={saving} onClick={() => runAction("resend_confirmation")} className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60">Resend confirmation</button>
-        <button type="button" disabled={saving} onClick={() => runAction("print_packing_slip")} className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60">Print packing slip</button>
+        <button type="button" onClick={() => window.open(`/api/admin/orders/${orderId}/packing-slip`, "_blank", "noopener,noreferrer")} className="vl-btn-secondary px-4 py-2 text-xs">Print packing slip</button>
       </div>
 
       {message ? <p className="mt-3 text-sm text-zinc-300">{message}</p> : null}

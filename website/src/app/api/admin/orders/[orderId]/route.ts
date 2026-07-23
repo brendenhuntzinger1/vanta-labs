@@ -3,7 +3,7 @@ import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest
 import { canManageRefunds } from "@/lib/admin-roles";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
-import { orderConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
+import { deliveryConfirmationTemplate, orderConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { updateCommissionOnRefund } from "@/lib/payment-webhook";
 import { restockInventoryForOrder } from "@/lib/inventory-fulfillment";
@@ -193,14 +193,22 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
           if (order?.customer_email) {
             const trackingNumber = newTracking || undefined;
             const carrier = body.carrier?.trim() || undefined;
-            const template = shippingUpdateTemplate({
-              customerName: String(order.customer_name ?? ""),
-              orderId,
-              status: String(updatePayload.fulfillment_status ?? order.fulfillment_status ?? "updated"),
-              carrier,
-              trackingNumber,
-              trackingUrl: buildTrackingUrl(carrier, trackingNumber),
-            });
+            // A transition to "delivered" gets the dedicated delivery
+            // confirmation; every other shipping transition (and tracking
+            // changes) uses the generic shipping-update email.
+            const template = newStatus.toLowerCase() === "delivered"
+              ? deliveryConfirmationTemplate({
+                  customerName: String(order.customer_name ?? ""),
+                  orderId,
+                })
+              : shippingUpdateTemplate({
+                  customerName: String(order.customer_name ?? ""),
+                  orderId,
+                  status: String(updatePayload.fulfillment_status ?? order.fulfillment_status ?? "updated"),
+                  carrier,
+                  trackingNumber,
+                  trackingUrl: buildTrackingUrl(carrier, trackingNumber),
+                });
             await sendEmail({ to: String(order.customer_email), ...template });
           }
         } catch {
@@ -342,7 +350,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       return NextResponse.json({ success: true, refundAmount: newRefundTotal, isFullRefund });
     }
 
-    if (action === "cancel" || action === "resend_confirmation" || action === "print_packing_slip") {
+    if (action === "cancel" || action === "resend_confirmation") {
       if (action === "cancel") {
         const { error } = await supabaseAdmin
           .from("orders")
