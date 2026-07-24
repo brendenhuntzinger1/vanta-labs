@@ -143,22 +143,22 @@ function ProductsPageContent() {
           </p>
         </div>
 
-        <section className="sticky top-[60px] z-40 mt-10 border border-white/12 bg-[#0b0b0b]/95 p-4 backdrop-blur-xl lg:top-[76px]">
-          <div className="grid gap-3 lg:grid-cols-[1fr_auto_auto]">
+        <section className="z-40 mt-10 border border-white/12 bg-[#0b0b0b]/95 p-3 backdrop-blur-xl sm:p-4 lg:sticky lg:top-[76px]">
+          <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-[1fr_auto_auto]">
             <input
               type="search"
               aria-label="Search products"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder="Search compounds, categories, or notes"
-              className="border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/35 outline-none transition focus:border-white/50"
+              className="col-span-2 border border-white/15 bg-black/40 px-4 py-2.5 text-sm text-white placeholder:text-white/35 outline-none transition focus:border-white/50 sm:py-3 lg:col-span-1"
             />
 
             <select
               value={selectedCategory}
               aria-label="Filter by category"
               onChange={(event) => setSelectedCategory(event.target.value)}
-              className="border border-white/15 bg-black/40 px-3 py-3 text-sm text-white outline-none transition focus:border-white/50 lg:w-56"
+              className="border border-white/15 bg-black/40 px-3 py-2.5 text-sm text-white outline-none transition focus:border-white/50 sm:py-3 lg:w-56"
             >
               {categories.map((category) => (
                 <option key={category} value={category}>
@@ -167,7 +167,7 @@ function ProductsPageContent() {
               ))}
             </select>
 
-            <select value={sort} aria-label="Sort products" onChange={(event) => setSort(event.target.value as SortKey)} className="border border-white/15 bg-black/40 px-3 py-3 text-sm text-white outline-none transition focus:border-white/50 lg:w-52">
+            <select value={sort} aria-label="Sort products" onChange={(event) => setSort(event.target.value as SortKey)} className="border border-white/15 bg-black/40 px-3 py-2.5 text-sm text-white outline-none transition focus:border-white/50 sm:py-3 lg:w-52">
               {SORT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
@@ -176,13 +176,16 @@ function ProductsPageContent() {
             </select>
           </div>
 
-          <div className="mt-3 flex flex-wrap items-center gap-2">
+          {/* Category quick-chips duplicate the dropdown above, so they're
+              hidden on phones to keep the filter bar short and let products
+              show sooner; they return at sm+ where there's room. */}
+          <div className="mt-2 flex flex-wrap items-center gap-2 sm:mt-3">
             {categories.slice(0, 6).map((category) => (
               <button
                 key={category}
                 onClick={() => setSelectedCategory(category)}
                 type="button"
-                className={`border px-3 py-2.5 text-xs uppercase tracking-[0.14em] transition ${
+                className={`hidden border px-3 py-2.5 text-xs uppercase tracking-[0.14em] transition sm:inline-flex ${
                   selectedCategory === category
                     ? "border-white bg-white/10 text-white"
                     : "border-white/15 text-white/55 hover:border-white/35 hover:text-white"
@@ -194,7 +197,7 @@ function ProductsPageContent() {
             <button
               type="button"
               onClick={() => setStockFilter((prev) => !prev)}
-              className={`ml-auto border px-3 py-2.5 text-xs uppercase tracking-[0.14em] transition ${
+              className={`w-full border px-3 py-2 text-xs uppercase tracking-[0.14em] transition sm:ml-auto sm:w-auto sm:py-2.5 ${
                 stockFilter
                   ? "border-emerald-300/40 text-emerald-200"
                   : "border-white/15 text-white/45 hover:text-white"
