@@ -411,7 +411,6 @@ describe("Randomized order-lifecycle simulation (2,000+ orders)", () => {
       ? round((totalProfit / netRevenue) * 100)
       : 0;
 
-    /* eslint-disable no-console */
     console.log(`
 ============================================================
   ORDER-LIFECYCLE SIMULATION — ${N} randomized orders
@@ -438,7 +437,6 @@ describe("Randomized order-lifecycle simulation (2,000+ orders)", () => {
     (C) inventory never negative ........ PASS (DB-proven in stress harness)
     (D) business never loses money ...... PASS  (min order profit $${round(worstProfit).toFixed(2)})
 ============================================================`);
-    /* eslint-enable no-console */
 
     expect(worstProfit).toBeGreaterThanOrEqual(-0.001);
     expect(rejected.length).toBeGreaterThan(0); // guard/stacking rules DID fire

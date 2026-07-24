@@ -73,6 +73,7 @@ export async function PATCH(request: Request) {
       if (typeof e.smtp_user === "string") await set("email", "smtp_user", e.smtp_user);
       await setIfPresent("email", "smtp_password", e.smtp_password);
       await setIfPresent("email", "resend_api_key", e.resend_api_key);
+      await setIfPresent("email", "sendgrid_api_key", e.sendgrid_api_key);
     }
 
     if (body.processor) {
