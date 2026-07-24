@@ -41,6 +41,7 @@ export function AdminSettingsClient({
   const [smtpUser, setSmtpUser] = useState(email.smtp.user);
   const [smtpPassword, setSmtpPassword] = useState("");
   const [resendKey, setResendKey] = useState("");
+  const [sendgridKey, setSendgridKey] = useState("");
 
   // Processor state
   const [procEnabled, setProcEnabled] = useState(processor.enabled);
@@ -161,6 +162,7 @@ export function AdminSettingsClient({
             smtp_user: smtpUser,
             smtp_password: smtpPassword,
             resend_api_key: resendKey,
+            sendgrid_api_key: sendgridKey,
           },
           processor: {
             enabled: procEnabled,
@@ -203,6 +205,7 @@ export function AdminSettingsClient({
       setMessage("Saved. Settings are live.");
       setSmtpPassword("");
       setResendKey("");
+      setSendgridKey("");
       setProcSecret("");
       setProcWebhook("");
       setFApiKey("");
@@ -286,6 +289,7 @@ export function AdminSettingsClient({
             <select value={provider} onChange={(e) => setProvider(e.target.value as EmailAdminSettings["provider"])} className="vl-input mt-1 w-full px-3 py-2 text-sm">
               <option value="smtp">SMTP (incl. AWS SES, Gmail, Mailgun)</option>
               <option value="resend">Resend</option>
+              <option value="sendgrid">SendGrid</option>
             </select>
           </Labeled>
           <Labeled label="From address" hint="e.g. Vanta Labs &lt;support@yourdomain.com&gt;">
@@ -306,10 +310,16 @@ export function AdminSettingsClient({
               Use TLS/SSL (port 465)
             </label>
           </div>
-        ) : (
+        ) : provider === "resend" ? (
           <div className="mt-3">
             <Labeled label="Resend API key" hint={email.resend.apiKeySet ? "A key is saved. Leave blank to keep it." : "Not set."}>
               <input type="password" value={resendKey} onChange={(e) => setResendKey(e.target.value)} placeholder="re_••••••••" className="vl-input mt-1 w-full px-3 py-2 text-sm" />
+            </Labeled>
+          </div>
+        ) : (
+          <div className="mt-3">
+            <Labeled label="SendGrid API key" hint={email.sendgrid.apiKeySet ? "A key is saved. Leave blank to keep it." : "Not set."}>
+              <input type="password" value={sendgridKey} onChange={(e) => setSendgridKey(e.target.value)} placeholder="SG.••••••••" className="vl-input mt-1 w-full px-3 py-2 text-sm" />
             </Labeled>
           </div>
         )}

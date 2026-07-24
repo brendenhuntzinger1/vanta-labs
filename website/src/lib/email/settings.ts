@@ -94,6 +94,7 @@ export interface EmailAdminSettings {
   from: string;
   smtp: { host: string; port: number; secure: boolean; user: string; passwordSet: boolean };
   resend: { apiKeySet: boolean };
+  sendgrid: { apiKeySet: boolean };
   /** True when the selected provider has everything it needs to send. */
   ready: boolean;
 }
@@ -122,6 +123,7 @@ export async function getEmailAdminSettings(): Promise<EmailAdminSettings> {
       passwordSet: Boolean(config.smtp.password),
     },
     resend: { apiKeySet: Boolean(config.resend.apiKey) },
+    sendgrid: { apiKeySet: Boolean(config.sendgrid.apiKey) },
     ready: isReady(config),
   };
 }

@@ -584,7 +584,7 @@ export function ProductDetailClient({
               )}
 
               {message && (
-                <p className="mt-3 text-sm text-zinc-600">{message}</p>
+                <p role="status" aria-live="polite" className="mt-3 text-sm text-zinc-600">{message}</p>
               )}
 
               <div className="mt-6 space-y-2 border-t border-zinc-200 pt-5">

@@ -15,6 +15,10 @@ function applySecurityHeaders(response: NextResponse) {
   response.headers.set("Referrer-Policy", "strict-origin-when-cross-origin");
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   response.headers.set("Cross-Origin-Resource-Policy", "same-origin");
+  // HSTS: force HTTPS for two years incl. subdomains. Safe for an HTTPS-only
+  // storefront and expected for anything handling payment/auth. (CSP is a
+  // separate, iterative hardening step — see the audit backlog.)
+  response.headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
   return response;
 }
 

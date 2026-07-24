@@ -6,7 +6,7 @@ import { POLICY_SLUGS } from "@/lib/legal-content";
 export const dynamic = "force-dynamic";
 
 function siteUrl() {
-  return process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") || "http://localhost:3000";
+  return process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") || "https://vantalabsresearch.com";
 }
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {

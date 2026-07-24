@@ -25,7 +25,7 @@ export async function getEmailProvider(): Promise<EmailProvider> {
     case "resend":
       return new ResendEmailProvider({ apiKey: config.resend.apiKey, from: config.from });
     case "sendgrid":
-      return new SendgridEmailProvider();
+      return new SendgridEmailProvider({ apiKey: config.sendgrid.apiKey, from: config.from });
     case "smtp":
     default:
       return new SmtpEmailProvider({

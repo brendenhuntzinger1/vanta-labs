@@ -1,7 +1,7 @@
 import type { MetadataRoute } from "next";
 
 function siteUrl() {
-  return (process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") || "http://localhost:3000");
+  return (process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") || "https://vantalabsresearch.com");
 }
 
 export default function robots(): MetadataRoute.Robots {
