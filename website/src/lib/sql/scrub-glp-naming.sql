@@ -9,15 +9,26 @@
 -- ============================================================================
 begin;
 
--- 1) Free the target slugs: park any archived legacy GLP shells aside (kept,
---    just renamed so they can't collide with the clean slugs below).
-update public.products set slug = slug || '-legacy', updated_at=now()
- where slug in ('glp-1','glp-2','glp-3') and is_archived = true;
+-- 1) Free the target slugs: park ANY leftover product already sitting on
+--    glp-1/2/3 out of the way (kept + archived, never deleted). Guarded so it
+--    only fires while the real product still needs that slug -> safe to re-run.
+update public.products set slug='glp-1-legacy-'||id, is_archived=true, is_published=false, is_enabled=false, updated_at=now()
+ where slug='glp-1' and exists (select 1 from public.products r where r.slug='glp-1-semaglutide');
+update public.products set slug='glp-2-legacy-'||id, is_archived=true, is_published=false, is_enabled=false, updated_at=now()
+ where slug='glp-2' and exists (select 1 from public.products r where r.slug='glp-2-tirzepatide');
+update public.products set slug='glp-3-legacy-'||id, is_archived=true, is_published=false, is_enabled=false, updated_at=now()
+ where slug='glp-3' and exists (select 1 from public.products r where r.slug='glp-3-retatrutide');
 
 -- 2) Rename the active products to clean GLP names + URL slugs.
 update public.products set slug='glp-1', name='GLP-1', updated_at=now() where slug='glp-1-semaglutide';
 update public.products set slug='glp-2', name='GLP-2', updated_at=now() where slug='glp-2-tirzepatide';
 update public.products set slug='glp-3', name='GLP-3', updated_at=now() where slug='glp-3-retatrutide';
+
+-- 2b) Belt-and-suspenders: force the clean name on whatever now holds each slug
+--     (covers a DB where the product was already at glp-1/2/3 with a trade name).
+update public.products set name='GLP-1', updated_at=now() where slug='glp-1';
+update public.products set name='GLP-2', updated_at=now() where slug='glp-2';
+update public.products set name='GLP-3', updated_at=now() where slug='glp-3';
 
 -- 3) Scrub the product descriptions (no trade names in the copy).
 update public.products set short_description='A GLP-1 receptor agonist peptide. Supplied as a lyophilized powder, third-party batch-tested to >=99% purity. For laboratory research use only.', long_description='GLP-1 is a GLP-1 receptor agonist peptide offered by Vanta Labs as a lyophilized powder for laboratory and in-vitro research. Every batch is independently third-party tested and ships with a Certificate of Analysis confirming >=99% purity, with the lot number matched to its report. For laboratory research use only. Not for human or veterinary consumption; not a drug, food, cosmetic, or dietary supplement, and not intended to diagnose, treat, cure, or prevent any condition.', description='GLP-1 is a GLP-1 receptor agonist peptide offered by Vanta Labs as a lyophilized powder for laboratory and in-vitro research. Every batch is independently third-party tested and ships with a Certificate of Analysis confirming >=99% purity, with the lot number matched to its report. For laboratory research use only. Not for human or veterinary consumption; not a drug, food, cosmetic, or dietary supplement, and not intended to diagnose, treat, cure, or prevent any condition.', updated_at=now() where slug='glp-1';
