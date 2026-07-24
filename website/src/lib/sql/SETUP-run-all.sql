@@ -86,9 +86,9 @@ insert into public.products
 select v.slug, v.name, v.category, v.price_cents, v.cost_cents, v.is_featured, v.position,
        true, true, true, false, 'In Stock', 100
 from (values
-  ('glp-1-semaglutide','GLP-1 Semaglutide','GLP Research',4999,2456,true,0),
-  ('glp-2-tirzepatide','GLP-2 Tirzepatide','GLP Research',4999,2376,true,1),
-  ('glp-3-retatrutide','GLP-3 Retatrutide','GLP Research',4999,2306,true,2),
+  ('glp-1','GLP-1','GLP Research',4999,2456,true,0),
+  ('glp-2','GLP-2','GLP Research',4999,2376,true,1),
+  ('glp-3','GLP-3','GLP Research',4999,2306,true,2),
   ('cagrilintide','Cagrilintide','GLP Research',7999,3500,false,3),
   ('klow','KLOW','Blends',10999,3500,false,4),
   ('glow','GLOW','Blends',9499,3500,false,5),
@@ -136,18 +136,18 @@ insert into public.product_doses
 select p.id, d.label, d.slug_suffix, d.price_cents, d.cost_cents,
        d.is_default, true, d.position, 'In Stock', 100
 from (values
-  ('glp-1-semaglutide','5mg','5mg',4999,2456,true,0),
-  ('glp-1-semaglutide','10mg','10mg',7499,2537,false,1),
-  ('glp-1-semaglutide','20mg','20mg',11999,2690,false,2),
-  ('glp-1-semaglutide','30mg','30mg',14999,2780,false,3),
-  ('glp-2-tirzepatide','5mg','5mg',4999,2376,true,0),
-  ('glp-2-tirzepatide','10mg','10mg',7499,2484,false,1),
-  ('glp-2-tirzepatide','20mg','20mg',11999,2646,false,2),
-  ('glp-2-tirzepatide','30mg','30mg',14999,2826,false,3),
-  ('glp-3-retatrutide','5mg','5mg',4999,2306,true,0),
-  ('glp-3-retatrutide','10mg','10mg',7499,2405,false,1),
-  ('glp-3-retatrutide','20mg','20mg',11999,2729,false,2),
-  ('glp-3-retatrutide','30mg','30mg',14999,3026,false,3),
+  ('glp-1','5mg','5mg',4999,2456,true,0),
+  ('glp-1','10mg','10mg',7499,2537,false,1),
+  ('glp-1','20mg','20mg',11999,2690,false,2),
+  ('glp-1','30mg','30mg',14999,2780,false,3),
+  ('glp-2','5mg','5mg',4999,2376,true,0),
+  ('glp-2','10mg','10mg',7499,2484,false,1),
+  ('glp-2','20mg','20mg',11999,2646,false,2),
+  ('glp-2','30mg','30mg',14999,2826,false,3),
+  ('glp-3','5mg','5mg',4999,2306,true,0),
+  ('glp-3','10mg','10mg',7499,2405,false,1),
+  ('glp-3','20mg','20mg',11999,2729,false,2),
+  ('glp-3','30mg','30mg',14999,3026,false,3),
   ('cagrilintide','10mg','10mg',7999,3500,true,0),
   ('klow','80mg','80mg',10999,3500,true,0),
   ('glow','70mg','70mg',9499,3500,true,0),
@@ -200,7 +200,6 @@ on conflict (product_id, slug_suffix) do update set
 update public.product_images pi
 set product_id = np.id
 from (values
-  ('glp-1','glp-1-semaglutide'),('glp-2','glp-2-tirzepatide'),('glp-3','glp-3-retatrutide'),
   ('mt-2','mt-2-melanotan-ii'),('nad-plus','nad'),('hgh-191aa','hgh-gh-191'),
   ('cjc-1295-ipamorelin-blend','cjc-1295-ipamorelin')
 ) as m(old_slug, new_slug)
@@ -212,7 +211,6 @@ where pi.product_id = op.id
 update public.products np
 set image_url = op.image_url, updated_at = now()
 from (values
-  ('glp-1','glp-1-semaglutide'),('glp-2','glp-2-tirzepatide'),('glp-3','glp-3-retatrutide'),
   ('mt-2','mt-2-melanotan-ii'),('nad-plus','nad'),('hgh-191aa','hgh-gh-191'),
   ('cjc-1295-ipamorelin-blend','cjc-1295-ipamorelin')
 ) as m(old_slug, new_slug)
@@ -222,7 +220,7 @@ where np.slug = m.new_slug
 
 update public.products
 set is_archived = true, is_published = false, is_enabled = false, updated_at = now()
-where slug in ('glp-1','glp-2','glp-3','mt-2','nad-plus','hgh-191aa','cjc-1295-ipamorelin-blend','ipamorelin');
+where slug in ('mt-2','nad-plus','hgh-191aa','cjc-1295-ipamorelin-blend','ipamorelin');
 
 -- ---------------------------------------------------------------------------
 -- 4) BASE PRICING — raise 21 standalone items to a ~52% margin floor
@@ -252,10 +250,10 @@ update public.product_doses d set price_cents=6899 from public.products p where 
 -- ---------------------------------------------------------------------------
 -- 5) COMPETITIVE PRICING — GLP value pricing (match Evo) + specialty trims
 -- ---------------------------------------------------------------------------
-update public.product_doses d set price_cents=4999  from public.products p where p.id=d.product_id and p.slug in ('glp-1-semaglutide','glp-2-tirzepatide','glp-3-retatrutide') and d.slug_suffix='5mg';
-update public.product_doses d set price_cents=7499  from public.products p where p.id=d.product_id and p.slug in ('glp-1-semaglutide','glp-2-tirzepatide','glp-3-retatrutide') and d.slug_suffix='10mg';
-update public.product_doses d set price_cents=11999 from public.products p where p.id=d.product_id and p.slug in ('glp-1-semaglutide','glp-2-tirzepatide','glp-3-retatrutide') and d.slug_suffix='20mg';
-update public.product_doses d set price_cents=14999 from public.products p where p.id=d.product_id and p.slug in ('glp-1-semaglutide','glp-2-tirzepatide','glp-3-retatrutide') and d.slug_suffix='30mg';
+update public.product_doses d set price_cents=4999  from public.products p where p.id=d.product_id and p.slug in ('glp-1','glp-2','glp-3') and d.slug_suffix='5mg';
+update public.product_doses d set price_cents=7499  from public.products p where p.id=d.product_id and p.slug in ('glp-1','glp-2','glp-3') and d.slug_suffix='10mg';
+update public.product_doses d set price_cents=11999 from public.products p where p.id=d.product_id and p.slug in ('glp-1','glp-2','glp-3') and d.slug_suffix='20mg';
+update public.product_doses d set price_cents=14999 from public.products p where p.id=d.product_id and p.slug in ('glp-1','glp-2','glp-3') and d.slug_suffix='30mg';
 update public.product_doses d set price_cents=9999  from public.products p where p.id=d.product_id and p.slug='igf-1-lr3' and d.slug_suffix='1mg';
 update public.product_doses d set price_cents=11499 from public.products p where p.id=d.product_id and p.slug='klow' and d.slug_suffix='80mg';
 update public.product_doses d set price_cents=9999  from public.products p where p.id=d.product_id and p.slug='5-amino-1mq' and d.slug_suffix='50mg';
@@ -282,7 +280,7 @@ from public.product_doses d where d.product_id=p.id and d.is_default=true;
 -- ---------------------------------------------------------------------------
 update public.products set is_featured = false where is_featured = true;
 update public.products set is_featured = true, updated_at = now()
-where slug in ('glp-1-semaglutide','glp-2-tirzepatide','glp-3-retatrutide',
+where slug in ('glp-1','glp-2','glp-3',
   'bpc-157','bpc-157-tb-500','cjc-1295-ipamorelin','nad','ghk-cu','klow','glow');
 
 update public.products set image_url = null, updated_at = now() where slug in ('klow','bpc-157-tb-500');

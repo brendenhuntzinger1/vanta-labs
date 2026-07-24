@@ -64,9 +64,9 @@ const round = (v: number) => Math.round(v * 100) / 100;
 // where the guard prices with worstCaseUnitCost until real per-SKU costs are
 // entered — so a real order's profit is always >= the guard's estimate.
 const CATALOG = [
-  { slug: "retatrutide", price: 149.99, cost: 24 },
-  { slug: "tirzepatide", price: 119.99, cost: 20 },
-  { slug: "semaglutide", price: 74.99, cost: 14 },
+  { slug: "glp-3", price: 149.99, cost: 24 },
+  { slug: "glp-2", price: 119.99, cost: 20 },
+  { slug: "glp-1", price: 74.99, cost: 14 },
   { slug: "bpc-157", price: 59.99, cost: 9 },
   { slug: "tb-500", price: 64.99, cost: 11 },
   { slug: "mt-2", price: 44.99, cost: 7 },

@@ -23,9 +23,9 @@ insert into public.products
 select v.slug, v.name, v.category, v.price_cents, v.cost_cents, v.is_featured, v.position,
        true, true, true, false, 'In Stock', 100
 from (values
-  ('glp-1-semaglutide',    'GLP-1 Semaglutide',      'GLP Research',    4999, 2456, true,  0),
-  ('glp-2-tirzepatide',    'GLP-2 Tirzepatide',      'GLP Research',    4999, 2376, true,  1),
-  ('glp-3-retatrutide',    'GLP-3 Retatrutide',      'GLP Research',    4999, 2306, true,  2),
+  ('glp-1',    'GLP-1',      'GLP Research',    4999, 2456, true,  0),
+  ('glp-2',    'GLP-2',      'GLP Research',    4999, 2376, true,  1),
+  ('glp-3',    'GLP-3',      'GLP Research',    4999, 2306, true,  2),
   ('cagrilintide',         'Cagrilintide',           'GLP Research',    7999, 3500, false, 3),
   ('klow',                 'KLOW',                   'Blends',         10999, 3500, false, 4),
   ('glow',                 'GLOW',                   'Blends',          9499, 3500, false, 5),
@@ -79,18 +79,18 @@ select p.id, d.label, d.slug_suffix, d.price_cents, d.cost_cents,
        d.is_default, true, d.position, 'In Stock', 100
 from (values
   -- GLP Research
-  ('glp-1-semaglutide','5mg','5mg',   4999, 2456, true,  0),
-  ('glp-1-semaglutide','10mg','10mg', 7499, 2537, false, 1),
-  ('glp-1-semaglutide','20mg','20mg',11999, 2690, false, 2),
-  ('glp-1-semaglutide','30mg','30mg',14999, 2780, false, 3),
-  ('glp-2-tirzepatide','5mg','5mg',   4999, 2376, true,  0),
-  ('glp-2-tirzepatide','10mg','10mg', 7499, 2484, false, 1),
-  ('glp-2-tirzepatide','20mg','20mg',11999, 2646, false, 2),
-  ('glp-2-tirzepatide','30mg','30mg',14999, 2826, false, 3),
-  ('glp-3-retatrutide','5mg','5mg',   4999, 2306, true,  0),
-  ('glp-3-retatrutide','10mg','10mg', 7499, 2405, false, 1),
-  ('glp-3-retatrutide','20mg','20mg',11999, 2729, false, 2),
-  ('glp-3-retatrutide','30mg','30mg',14999, 3026, false, 3),
+  ('glp-1','5mg','5mg',   4999, 2456, true,  0),
+  ('glp-1','10mg','10mg', 7499, 2537, false, 1),
+  ('glp-1','20mg','20mg',11999, 2690, false, 2),
+  ('glp-1','30mg','30mg',14999, 2780, false, 3),
+  ('glp-2','5mg','5mg',   4999, 2376, true,  0),
+  ('glp-2','10mg','10mg', 7499, 2484, false, 1),
+  ('glp-2','20mg','20mg',11999, 2646, false, 2),
+  ('glp-2','30mg','30mg',14999, 2826, false, 3),
+  ('glp-3','5mg','5mg',   4999, 2306, true,  0),
+  ('glp-3','10mg','10mg', 7499, 2405, false, 1),
+  ('glp-3','20mg','20mg',11999, 2729, false, 2),
+  ('glp-3','30mg','30mg',14999, 3026, false, 3),
   ('cagrilintide','10mg','10mg',      7999, 3500, true,  0),
   -- Blends
   ('klow','80mg','80mg',             10999, 3500, true,  0),
@@ -147,7 +147,7 @@ on conflict (product_id, slug_suffix) do update set
 -- ---------------------------------------------------------------------------
 -- 3. Verify (optional): should return 37 products and 51 doses.
 --   select count(*) from public.products where slug in
---     ('glp-1-semaglutide','glp-2-tirzepatide','glp-3-retatrutide','cagrilintide',
+--     ('glp-1','glp-2','glp-3','cagrilintide',
 --      'klow','glow','bpc-157','bpc-157-tb-500','kpv','ghk-cu','thymosin-alpha-1',
 --      'cjc-1295-ipamorelin','cjc-1295-no-dac','tesamorelin','ghrp-6','ghrp-2',
 --      'hgh-gh-191','igf-1-lr3','nad','ss-31','mots-c','epithalon','glutathione',

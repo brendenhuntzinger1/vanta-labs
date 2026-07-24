@@ -9,12 +9,12 @@
 
 // slug_suffix-level catalog: [productSlug, doseSuffix, cost, currentRetail]
 const DOSES = [
-  ["glp-1-semaglutide","5mg",24.56,42.99], ["glp-1-semaglutide","10mg",25.37,64.99],
-  ["glp-1-semaglutide","20mg",26.90,109.99], ["glp-1-semaglutide","30mg",27.80,144.99],
-  ["glp-2-tirzepatide","5mg",23.76,47.99], ["glp-2-tirzepatide","10mg",24.84,74.99],
-  ["glp-2-tirzepatide","20mg",26.46,124.99], ["glp-2-tirzepatide","30mg",28.26,164.99],
-  ["glp-3-retatrutide","5mg",23.06,54.99], ["glp-3-retatrutide","10mg",24.05,94.99],
-  ["glp-3-retatrutide","20mg",27.29,154.99], ["glp-3-retatrutide","30mg",30.26,199.99],
+  ["glp-1","5mg",24.56,42.99], ["glp-1","10mg",25.37,64.99],
+  ["glp-1","20mg",26.90,109.99], ["glp-1","30mg",27.80,144.99],
+  ["glp-2","5mg",23.76,47.99], ["glp-2","10mg",24.84,74.99],
+  ["glp-2","20mg",26.46,124.99], ["glp-2","30mg",28.26,164.99],
+  ["glp-3","5mg",23.06,54.99], ["glp-3","10mg",24.05,94.99],
+  ["glp-3","20mg",27.29,154.99], ["glp-3","30mg",30.26,199.99],
   ["cagrilintide","10mg",35.00,79.99],
   ["klow","80mg",35.00,109.99], ["glow","70mg",35.00,94.99],
   ["bpc-157","5mg",25.06,42.99], ["bpc-157","10mg",25.69,59.99],
@@ -36,7 +36,7 @@ const DOSES = [
 
 // Deliberate loss-leaders: the ENTRY dose of a multi-dose hero line. Keep cheap.
 const LOSS_LEADERS = new Set([
-  "glp-1-semaglutide|5mg","glp-2-tirzepatide|5mg","glp-3-retatrutide|5mg",
+  "glp-1|5mg","glp-2|5mg","glp-3|5mg",
   "bpc-157|5mg","ghk-cu|50mg","nad|500mg",
 ]);
 

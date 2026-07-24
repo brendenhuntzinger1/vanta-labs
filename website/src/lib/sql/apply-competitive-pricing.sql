@@ -10,10 +10,10 @@
 -- ---- GLP line — owner-set schedule: $49.99 / $74.99 / $119.99 / $149.99
 --       for 5mg / 10mg / 20mg / 30mg, applied to all three GLP compounds.
 --       (Aggressive value pricing to win the flagship category; 51-81% margin.)
-update public.product_doses d set price_cents=4999,  updated_at=now() from public.products p where p.id=d.product_id and p.slug in ('glp-1-semaglutide','glp-2-tirzepatide','glp-3-retatrutide') and d.slug_suffix='5mg';
-update public.product_doses d set price_cents=7499,  updated_at=now() from public.products p where p.id=d.product_id and p.slug in ('glp-1-semaglutide','glp-2-tirzepatide','glp-3-retatrutide') and d.slug_suffix='10mg';
-update public.product_doses d set price_cents=11999, updated_at=now() from public.products p where p.id=d.product_id and p.slug in ('glp-1-semaglutide','glp-2-tirzepatide','glp-3-retatrutide') and d.slug_suffix='20mg';
-update public.product_doses d set price_cents=14999, updated_at=now() from public.products p where p.id=d.product_id and p.slug in ('glp-1-semaglutide','glp-2-tirzepatide','glp-3-retatrutide') and d.slug_suffix='30mg';
+update public.product_doses d set price_cents=4999,  updated_at=now() from public.products p where p.id=d.product_id and p.slug in ('glp-1','glp-2','glp-3') and d.slug_suffix='5mg';
+update public.product_doses d set price_cents=7499,  updated_at=now() from public.products p where p.id=d.product_id and p.slug in ('glp-1','glp-2','glp-3') and d.slug_suffix='10mg';
+update public.product_doses d set price_cents=11999, updated_at=now() from public.products p where p.id=d.product_id and p.slug in ('glp-1','glp-2','glp-3') and d.slug_suffix='20mg';
+update public.product_doses d set price_cents=14999, updated_at=now() from public.products p where p.id=d.product_id and p.slug in ('glp-1','glp-2','glp-3') and d.slug_suffix='30mg';
 -- ---- Other raises: IGF-1 + 5-Amino + KLOW (headroom under Pro Elite) ----
 update public.product_doses d set price_cents=9999,  updated_at=now() from public.products p where p.id=d.product_id and p.slug='igf-1-lr3' and d.slug_suffix='1mg';
 update public.product_doses d set price_cents=11499, updated_at=now() from public.products p where p.id=d.product_id and p.slug='klow' and d.slug_suffix='80mg';

@@ -10,7 +10,7 @@
 update public.products set is_featured = false where is_featured = true;
 update public.products set is_featured = true, updated_at = now()
 where slug in (
-  'glp-1-semaglutide','glp-2-tirzepatide','glp-3-retatrutide',
+  'glp-1','glp-2','glp-3',
   'bpc-157','bpc-157-tb-500','cjc-1295-ipamorelin','nad','ghk-cu','klow','glow'
 );
 

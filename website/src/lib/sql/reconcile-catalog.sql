@@ -7,9 +7,6 @@
 
 with mapping(old_slug, new_slug) as (
   values
-    ('glp-1',                    'glp-1-semaglutide'),
-    ('glp-2',                    'glp-2-tirzepatide'),
-    ('glp-3',                    'glp-3-retatrutide'),
     ('mt-2',                     'mt-2-melanotan-ii'),
     ('nad-plus',                 'nad'),
     ('hgh-191aa',                'hgh-gh-191'),
@@ -28,9 +25,6 @@ where pi.product_id = op.id
 -- 2. Copy the cover photo onto the new product when it doesn't have one.
 with mapping(old_slug, new_slug) as (
   values
-    ('glp-1',                    'glp-1-semaglutide'),
-    ('glp-2',                    'glp-2-tirzepatide'),
-    ('glp-3',                    'glp-3-retatrutide'),
     ('mt-2',                     'mt-2-melanotan-ii'),
     ('nad-plus',                 'nad'),
     ('hgh-191aa',                'hgh-gh-191'),
@@ -48,7 +42,7 @@ where np.slug = m.new_slug
 update public.products
 set is_archived = true, is_published = false, is_enabled = false, updated_at = now()
 where slug in (
-  'glp-1','glp-2','glp-3','mt-2','nad-plus','hgh-191aa','cjc-1295-ipamorelin-blend'
+  'mt-2','nad-plus','hgh-191aa','cjc-1295-ipamorelin-blend'
 );
 
 -- NOTE: 'ipamorelin' (standalone) is intentionally left ACTIVE — it has no EVO

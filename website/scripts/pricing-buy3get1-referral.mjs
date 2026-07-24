@@ -132,7 +132,7 @@ function example(label, unitList) {
   console.log(`    YOUR PROFIT $${profit.toFixed(2)}  (margin ${(profit/custPays*100).toFixed(1)}%)`);
 }
 console.log("\n---- Concrete examples ----");
-example("4 × GLP-1 Semaglutide 10mg ($64.99)", [[25.37,64.99,4]]);
+example("4 × GLP-1 10mg ($64.99)", [[25.37,64.99,4]]);
 example("4 × B12 10mL ($68.99, high-cost item)", [[33.00,68.99,4]]);
 example("4 × BPC-157 5mg ($42.99, cheapest loss-leader)", [[25.06,42.99,4]]);
-example("8 × GLP-3 Retatrutide 10mg ($94.99)", [[24.05,94.99,8]]);
+example("8 × GLP-3 10mg ($94.99)", [[24.05,94.99,8]]);

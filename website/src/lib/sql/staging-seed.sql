@@ -20,7 +20,7 @@ insert into public.products
    testing_date, lab_name, coa_url, molecular_formula, product_cost_cents,
    low_stock_threshold)
 values
-  ('semaglutide-5mg', 'Semaglutide 5mg', 'GLP Research',
+  ('glp-1-5mg', 'GLP-1 5mg', 'GLP Research',
    'Research-grade GLP-1 analog, 5mg per vial.',
    'Lyophilized research peptide for laboratory use only. Not for human consumption.',
    9999, 12999, 40, 'VL-SEMA-5', true, true, true, 'In Stock',

@@ -64,8 +64,8 @@ hero-line entry doses cheap on purpose.
 | HCG 5000iu | $54.99 | **$68.99** | 52% |
 | SNAP-8 10mg | $44.99 | **$68.99** | 52% |
 
-**Keep as loss-leaders (entry dose of a high-margin line):** GLP-1 Semaglutide
-5mg ($42.99), GLP-2 Tirzepatide 5mg ($47.99), GLP-3 Retatrutide 5mg ($54.99),
+**Keep as loss-leaders (entry dose of a high-margin line):** GLP-1
+5mg ($42.99), GLP-2 5mg ($47.99), GLP-3 5mg ($54.99),
 BPC-157 5mg ($42.99), GHK-Cu 50mg ($47.99), NAD+ 500mg ($54.99).
 
 > The apply-SQL is in `src/lib/sql/apply-recommended-pricing.sql`. It updates the
@@ -148,7 +148,7 @@ EVO volume tier.
 - **Buy 3 Get 1 Free** (already built) — best on the GLP line where margin absorbs
   it easily. On a 4×GLP-10mg cart the free unit still leaves ~50%+ margin.
 - **Curated stacks** (fixed-price, margin-checked): "Recovery" (BPC-157 + TB-500),
-  "Longevity" (NAD+ + Glutathione + Epithalon), "GLP Starter" (Semaglutide 5mg +
+  "Longevity" (NAD+ + Glutathione + Epithalon), "GLP Starter" (GLP-1 5mg +
   BPC-157). Bundle price is profit-guarded like any order.
 - Bundle is the **one** discount allowed to stack with a *reduced* referral % —
   everything else is single-best.
