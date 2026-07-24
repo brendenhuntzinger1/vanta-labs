@@ -112,6 +112,7 @@ export default async function HomePage() {
   return (
     <div className="min-h-screen bg-[#101014] text-white">
       <SiteHeaderV2 />
+      <main>
 
       <section className="vl2-hero">
         <video
@@ -305,6 +306,7 @@ export default async function HomePage() {
           </div>
         </div>
       </section>
+      </main>
     </div>
   );
 }
