@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
-import { canManageRefunds } from "@/lib/admin-roles";
+import { canManageRefunds, canViewProfit } from "@/lib/admin-roles";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { AdminOrderActions } from "@/components/admin-order-actions";
 import { AdminOrderTimeline } from "@/components/admin-order-timeline";
@@ -45,7 +45,11 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
     notFound();
   }
 
-  const profit = await getOrderProfit(orderId).catch(() => null);
+  // COGS/margin is manager+ only — the lowest-privilege staff role must not see
+  // internal per-order profit. (The card below already renders only when non-null.)
+  const profit = canViewProfit(session.role)
+    ? await getOrderProfit(orderId).catch(() => null)
+    : null;
 
   return (
     <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">

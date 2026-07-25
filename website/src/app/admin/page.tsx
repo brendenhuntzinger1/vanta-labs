@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
+import { canViewProfit } from "@/lib/admin-roles";
 import { getCurrentOnlineVisitorCount, getRevenueWindowMetrics } from "@/lib/admin-analytics";
 import { getProfitWindowMetrics } from "@/lib/admin-profit";
 import { getAdminOrderRows } from "@/lib/admin-orders";
@@ -75,11 +76,13 @@ export default async function AdminHomePage() {
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Revenue</p>
             <p className="mt-2 text-2xl font-semibold text-white">{money(totalRevenue)}</p>
           </div>
+          {canViewProfit(session.role) ? (
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Net Profit · 30d</p>
             <p className={`mt-2 text-2xl font-semibold ${profitWindows.last30Days >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{money(profitWindows.last30Days)}</p>
             <p className="mt-1 text-[11px] text-zinc-500">Today {money(profitWindows.today)} · 7d {money(profitWindows.last7Days)}{profitWindows.hasEstimatedCost ? " · incl. estimates" : ""}</p>
           </div>
+          ) : null}
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Published Products</p>
             <p className="mt-2 text-2xl font-semibold text-white">{publishedProducts}</p>

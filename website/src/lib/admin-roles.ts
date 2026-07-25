@@ -41,6 +41,14 @@ export function canViewAuditLog(role: AdminRole) {
   return role === "manager" || role === "super_admin";
 }
 
+// Profit / COGS-derived metrics (net profit, margins, per-order profit,
+// estimated unit costs) expose internal cost data. Restrict to manager+ — the
+// same bar as the product-cost management that produces those numbers — so the
+// lowest-privilege staff role can't read the store's margins.
+export function canViewProfit(role: AdminRole) {
+  return role === "manager" || role === "super_admin";
+}
+
 export function canManageTeam(role: AdminRole) {
   return role === "super_admin";
 }

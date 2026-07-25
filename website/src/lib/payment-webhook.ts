@@ -1249,7 +1249,18 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   }
 
   if (nextStatus === "refunded" || nextStatus === "canceled" || nextStatus === "payment_failed") {
-    await updateCommissionOnRefund(orderId);
+    // Reverse only the PROPORTIONAL commission on a partial refund. A refund
+    // event carries the refunded amount in `amount`; when that's a positive
+    // value below the original order total, treat it as partial and pass the
+    // fraction (the admin refund path already computes this correctly). Cancels,
+    // failures, and full-amount refunds default to a full reversal.
+    const refundEventAmount = Number(eventPayload.amount ?? 0);
+    const originalAmount = Number(orderRecord?.amount_paid ?? 0);
+    const refundedFraction =
+      nextStatus === "refunded" && refundEventAmount > 0 && originalAmount > 0 && refundEventAmount < originalAmount - 0.01
+        ? refundEventAmount / originalAmount
+        : 1;
+    await updateCommissionOnRefund(orderId, { refundedFraction });
 
     // Return committed stock — but ONLY when this order was actually paid (so
     // its inventory was decremented). A refund/cancel of an order that never
