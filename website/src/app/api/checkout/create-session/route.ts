@@ -79,7 +79,12 @@ export async function POST(request: Request) {
       cardProcessingFeePercent: result.cardProcessingFeePercent,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to create checkout session";
+    const raw = error instanceof Error ? error.message : "Unable to create checkout session";
+    // Translate the internal underpayment-guard string into an actionable,
+    // non-alarming message (it can trip on a stale membership/credit preview).
+    const message = raw === "Altered total detected"
+      ? "Your order total changed since the page loaded. Please refresh and try again."
+      : raw;
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

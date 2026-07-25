@@ -4,7 +4,21 @@ import { verifyUnsubscribeToken } from "@/lib/email/unsubscribe";
 
 export const dynamic = "force-dynamic";
 
-function htmlPage(title: string, message: string) {
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function htmlPage(rawTitle: string, rawMessage: string) {
+  // Defense-in-depth: the message embeds the caller-supplied email. Reaching
+  // here already requires a valid HMAC token, but escape anyway so no reflected
+  // markup can ever render.
+  const title = escapeHtml(rawTitle);
+  const message = escapeHtml(rawMessage);
   return `<!doctype html><html><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" /><title>${title}</title></head>
   <body style="margin:0;padding:0;background:#050505;color:#f4f4f4;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;">
     <div style="max-width:480px;margin:80px auto;padding:32px;text-align:center;">

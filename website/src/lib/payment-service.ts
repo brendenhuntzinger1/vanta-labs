@@ -624,8 +624,18 @@ export async function createCheckoutSession(
 
  let orderInsertError = (await supabaseAdmin.from("orders").insert(orderRowWithContact)).error;
  if (orderInsertError) {
+   // Only retry-without-contact when the error genuinely signals a missing
+   // column — the PGRST204 schema-cache code, or a message that names the new
+   // column AND says it's unknown. The previous broad match ("state"/"phone"/
+   // "column" anywhere) could swallow an unrelated error and silently drop the
+   // customer's state/phone.
    const message = String(orderInsertError.message ?? "").toLowerCase();
-   const missingColumn = orderInsertError.code === "PGRST204" || message.includes("state") || message.includes("phone") || message.includes("column");
+   const mentionsNewColumn = message.includes("state") || message.includes("phone");
+   const looksLikeMissingColumn = message.includes("does not exist")
+     || message.includes("schema cache")
+     || message.includes("could not find")
+     || message.includes("unknown column");
+   const missingColumn = orderInsertError.code === "PGRST204" || (mentionsNewColumn && looksLikeMissingColumn);
    if (missingColumn) {
      orderInsertError = (await supabaseAdmin.from("orders").insert(baseOrderRow)).error;
    }

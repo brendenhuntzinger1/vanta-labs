@@ -7,11 +7,17 @@ export const dynamic = "force-dynamic";
 
 // Public: the product page reads the Subscribe & Save offer to display it.
 export async function GET() {
-  const config = await getSubscribeSaveConfig();
-  if (!config.enabled) {
+  try {
+    const config = await getSubscribeSaveConfig();
+    if (!config.enabled) {
+      return NextResponse.json({ success: true, config: null });
+    }
+    return NextResponse.json({ success: true, config });
+  } catch (error) {
+    // A config read must never hard-fail the product page — treat as "off".
+    console.error("Unable to load subscribe-save config", error);
     return NextResponse.json({ success: true, config: null });
   }
-  return NextResponse.json({ success: true, config });
 }
 
 // Records a subscribe-and-save opt-in as a PENDING subscription. It never

@@ -116,9 +116,9 @@ export function CartDrawer() {
                   
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1 rounded-full border border-zinc-700 text-xs text-zinc-300">
-                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="inline-flex h-10 w-10 items-center justify-center text-base" aria-label="Decrease quantity">−</button>
+                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="inline-flex h-11 w-11 items-center justify-center text-base" aria-label="Decrease quantity">−</button>
                       <span className="min-w-5 text-center tabular-nums">{item.quantity}</span>
-                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="inline-flex h-10 w-10 items-center justify-center text-base" aria-label="Increase quantity">+</button>
+                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="inline-flex h-11 w-11 items-center justify-center text-base" aria-label="Increase quantity">+</button>
                     </div>
                     <p className="text-xs font-medium text-white sm:text-sm">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity))}</p>
                   </div>
@@ -276,10 +276,12 @@ export function CartDrawer() {
               <span>Shipping</span>
               <span>{formatCartCurrency(shipping)}</span>
             </div>
-            <div className="mt-2 flex justify-between">
-              <span>Applied discount</span>
-              <span>-{formatCartCurrency(discountAmount)}</span>
-            </div>
+            {discountAmount > 0 ? (
+              <div className="mt-2 flex justify-between">
+                <span>Applied discount</span>
+                <span>-{formatCartCurrency(discountAmount)}</span>
+              </div>
+            ) : null}
             <div className="mt-3 flex justify-between border-t border-zinc-800 pt-3 text-base font-semibold text-white">
               <span>Final total</span>
               <span>{formatCartCurrency(total)}</span>

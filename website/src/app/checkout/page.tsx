@@ -823,7 +823,9 @@ export default function CheckoutPage() {
                 <span>{shipping === 0 && memberFreeShipping ? "Free (member)" : formatCartCurrency(shipping)}</span>
               </div>
               {taxAmount > 0 ? <div className="flex justify-between"><span>Sales tax</span><span>{formatCartCurrency(taxAmount)}</span></div> : null}
-              <div className="flex justify-between"><span>{ambassadorDiscountApplied ? `Ambassador ${ambassadorDiscountPercent}% off` : "Discount"}</span><span>-{formatCartCurrency(discountAmount)}</span></div>
+              {discountAmount > 0 ? (
+                <div className="flex justify-between"><span>{ambassadorDiscountApplied ? `Ambassador ${ambassadorDiscountPercent}% off` : "Discount"}</span><span>-{formatCartCurrency(discountAmount)}</span></div>
+              ) : null}
               {storeCreditApplied > 0 ? (
                 <div className="flex justify-between text-emerald-300"><span>Member store credit</span><span>-{formatCartCurrency(storeCreditApplied)}</span></div>
               ) : null}

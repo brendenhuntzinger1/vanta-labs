@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 const ALLOWED_EVENTS = new Set([
   "session_start",
@@ -78,6 +79,14 @@ export async function POST(request: Request) {
     const sessionId = normalizeText(body.sessionId, 120);
     if (!sessionId) {
       return NextResponse.json({ success: false, error: "sessionId is required" }, { status: 400 });
+    }
+
+    // This endpoint is public and writes with the service-role key, so throttle
+    // it (per session) to stop a bot flooding the analytics table — the same
+    // speed-bump used by contact/coupon-validate/back-in-stock. Fails open.
+    const rate = await checkRateLimit(`analytics:${sessionId}`, 120, 60);
+    if (!rate.allowed) {
+      return NextResponse.json({ success: false, error: "Too many requests" }, { status: 429 });
     }
 
     const { error } = await supabaseAdmin

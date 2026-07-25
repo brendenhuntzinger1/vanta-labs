@@ -9,7 +9,13 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ success: false, error: "Missing cart id" }, { status: 400 });
   }
 
-  const cart = await getAbandonedCartById(id);
+  let cart;
+  try {
+    cart = await getAbandonedCartById(id);
+  } catch (error) {
+    console.error("Unable to restore abandoned cart", error);
+    return NextResponse.json({ success: false, error: "This cart link is no longer valid" }, { status: 404 });
+  }
   if (!cart || cart.items.length === 0) {
     return NextResponse.json({ success: false, error: "This cart link is no longer valid" }, { status: 404 });
   }

@@ -12,14 +12,22 @@ export async function GET() {
 
   const fullName = typeof user.user_metadata?.full_name === "string" ? user.user_metadata.full_name : "";
 
-  const [defaultAddress, pointsBalance, membership, pointsMultiplier, isEligibleForBulk, perks] = await Promise.all([
-    getDefaultCustomerAddress(user.id),
-    getPointsBalance(user.id),
-    getCustomerMembership(user.id),
-    getActivePointsMultiplier(),
-    isEligibleForBulkSavings(user.id),
-    getMembershipPerks(user.id),
-  ]);
+  let defaultAddress, pointsBalance, membership, pointsMultiplier, isEligibleForBulk, perks;
+  try {
+    [defaultAddress, pointsBalance, membership, pointsMultiplier, isEligibleForBulk, perks] = await Promise.all([
+      getDefaultCustomerAddress(user.id),
+      getPointsBalance(user.id),
+      getCustomerMembership(user.id),
+      getActivePointsMultiplier(),
+      isEligibleForBulkSavings(user.id),
+      getMembershipPerks(user.id),
+    ]);
+  } catch (error) {
+    // The account dashboard's primary endpoint must degrade to a clean JSON
+    // error, not a raw 500 + stack, if any one read hiccups.
+    const message = error instanceof Error ? error.message : "Unable to load account";
+    return NextResponse.json({ success: false, error: message }, { status: 500 });
+  }
 
   return NextResponse.json({
     success: true,

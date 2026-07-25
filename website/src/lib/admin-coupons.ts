@@ -199,6 +199,11 @@ export async function updateAdminCoupon(id: string, input: Partial<CouponInput>)
     if (!Number.isFinite(discountValue) || discountValue <= 0) {
       throw new Error("Discount value must be a positive number");
     }
+    // Same guard as createAdminCoupon: a percent coupon edited to e.g. 500
+    // would otherwise zero out merchandise while still charging tax/shipping.
+    if (input.discountType === "percent" && discountValue > 100) {
+      throw new Error("Percent discounts cannot exceed 100");
+    }
     updatePayload.discount_value = discountValue;
   }
 
@@ -211,7 +216,15 @@ export async function updateAdminCoupon(id: string, input: Partial<CouponInput>)
   }
 
   if (input.maxRedemptions !== undefined) {
-    updatePayload.max_redemptions = input.maxRedemptions;
+    if (input.maxRedemptions !== null) {
+      const maxRedemptions = Number(input.maxRedemptions);
+      if (!Number.isFinite(maxRedemptions) || maxRedemptions < 1 || !Number.isInteger(maxRedemptions)) {
+        throw new Error("Max redemptions must be a positive whole number");
+      }
+      updatePayload.max_redemptions = maxRedemptions;
+    } else {
+      updatePayload.max_redemptions = null;
+    }
   }
 
   if (input.active !== undefined) {

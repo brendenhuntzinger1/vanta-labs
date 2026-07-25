@@ -248,7 +248,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_type, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, amount_paid, paid_at, customer_user_id, points_redeemed, store_credit_redeemed_cents")
+    .select("id, order_id, order_number, order_type, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, amount_paid, paid_at, customer_user_id, customer_email, customer_name, points_redeemed, store_credit_redeemed_cents")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -868,7 +868,10 @@ export async function finalizeManualPayment(
         discount: discountAmount,
         total: amountPaid,
       });
-      await sendEmail({ to: String(order.customer_email), ...template });
+      const emailResult = await sendEmail({ to: String(order.customer_email), ...template });
+      if (!emailResult.success) {
+        console.error("Order confirmation email not sent for order", orderId, emailResult.error);
+      }
     } catch {
       // Confirmation email is best-effort; approval already succeeded.
     }
@@ -1123,9 +1126,16 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         }
       }
 
-      if (eventPayload.customer?.email) {
+      // Resolve the buyer's email from the DB order row when the processor's
+      // callback doesn't echo it back (a real card processor often omits our
+      // custom metadata) — otherwise a paid customer keeps getting "you left
+      // items in your cart" emails and no receipt.
+      const buyerEmail = eventPayload.customer?.email
+        ?? (orderRecord?.customer_email ? String(orderRecord.customer_email) : null);
+
+      if (buyerEmail) {
         try {
-          await markAbandonedCartsRecovered(eventPayload.customer.email, orderId);
+          await markAbandonedCartsRecovered(buyerEmail, orderId);
         } catch (recoveryError) {
           console.error("Unable to mark abandoned carts recovered for order", orderId, recoveryError);
         }
@@ -1163,24 +1173,49 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         }
       }
 
-      if (eventPayload.customer?.email) {
+      if (buyerEmail) {
         try {
+          // Prefer the authoritative DB line items (persisted at checkout); a
+          // live processor's callback may omit cart items, which would render an
+          // empty receipt. Fall back to the echoed payload only when the DB has
+          // none (webhook-before-order).
+          let emailItems = (eventPayload.items ?? []).map((item) => ({
+            name: item.productName ?? item.productId ?? "Item",
+            quantity: item.quantity ?? 0,
+            lineTotal: roundMoney(item.lineTotal ?? 0),
+          }));
+          try {
+            const { data: dbItems } = await supabaseAdmin
+              .from("order_items")
+              .select("product_name, product_id, quantity, line_total")
+              .eq("order_id", orderId);
+            if (dbItems && dbItems.length > 0) {
+              emailItems = dbItems.map((item) => ({
+                name: (item.product_name as string | null) ?? (item.product_id as string | null) ?? "Item",
+                quantity: Number(item.quantity ?? 0),
+                lineTotal: roundMoney(Number(item.line_total ?? 0)),
+              }));
+            }
+          } catch {
+            // Fall back to the payload items already assigned above.
+          }
           const template = orderConfirmationTemplate({
-            customerName: eventPayload.customer.fullName ?? "",
-            orderId,
-            items: (eventPayload.items ?? []).map((item) => ({
-              name: item.productName ?? item.productId ?? "Item",
-              quantity: item.quantity ?? 0,
-              lineTotal: roundMoney(item.lineTotal ?? 0),
-            })),
+            customerName: eventPayload.customer?.fullName ?? String(orderRecord?.customer_name ?? ""),
+            // Show the friendly VL-XXXX order number, not the internal UUID.
+            orderId: orderRecord?.order_number ? String(orderRecord.order_number) : orderId,
+            items: emailItems,
             subtotal,
             shipping: shippingAmount,
             discount: discountAmount,
             total: amountPaid,
           });
-          await sendEmail({ to: eventPayload.customer.email, ...template });
-        } catch {
-          // Order processing must not fail because a confirmation email couldn't be sent.
+          const emailResult = await sendEmail({ to: buyerEmail, ...template });
+          if (!emailResult.success) {
+            // Never throw (order is already paid), but make a silent miss visible.
+            console.error("Order confirmation email not sent for order", orderId, emailResult.error);
+          }
+        } catch (emailError) {
+          console.error("Unable to send order confirmation email for order", orderId, emailError);
         }
       }
 
@@ -1220,7 +1255,9 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // its inventory was decremented). A refund/cancel of an order that never
     // reached "paid" (e.g. payment_failed) must not conjure phantom units, and
     // a replayed refund event finds the status already terminal and skips.
-    const wasPaid = priorPaymentStatus === "paid";
+    // "partially_refunded" is a paid-derived state (a partial refund was already
+    // issued on a paid order), so a later full refund/cancel must still restock.
+    const wasPaid = priorPaymentStatus === "paid" || priorPaymentStatus === "partially_refunded";
     if (wasPaid && (nextStatus === "refunded" || nextStatus === "canceled")) {
       const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
       // Atomic exactly-once claim: only the FIRST refund/cancel event for this

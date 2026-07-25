@@ -315,8 +315,9 @@ export function shippingUpdateTemplate(input: {
   trackingUrl?: string;
 }): EmailTemplate {
   const name = escapeHtml(input.customerName || "there");
+  const carrierLine = input.carrier ? `Carrier: ${escapeHtml(input.carrier)}<br/>` : "";
   const trackingLine = input.trackingNumber
-    ? `<p>Carrier: ${escapeHtml(input.carrier ?? "")}<br/>Tracking number: ${escapeHtml(input.trackingNumber)}</p>`
+    ? `<p>${carrierLine}Tracking number: ${escapeHtml(input.trackingNumber)}</p>`
     : "";
 
   return {

@@ -121,6 +121,7 @@ function FaqAccordion({ items }: { items?: ProductFaqItem[] }) {
         <div key={idx}>
           <button
             type="button"
+            aria-expanded={openIndex === idx}
             className="flex w-full items-center justify-between gap-4 py-4 text-left text-sm text-[#111] transition hover:text-zinc-600"
             onClick={() => setOpenIndex(openIndex === idx ? null : idx)}
           >

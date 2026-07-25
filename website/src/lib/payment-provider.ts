@@ -88,12 +88,19 @@ export function verifyWebhookSignatureImpl(payload: string, signature: string, s
 
 export class LivePaymentProvider implements PaymentProvider {
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResult> {
-    const siteUrl = getSiteUrl();
-
-    return {
-      paymentId: input.orderId,
-      hostedCheckoutUrl: `${siteUrl}/checkout?order=${input.orderId}`,
-    };
+    // No real card processor is integrated yet. The previous stub returned a
+    // hosted-checkout URL that pointed back at /checkout, which bounced the
+    // shopper in a loop and never captured payment. Fail loudly with a clear,
+    // friendly message instead of shipping a broken card flow.
+    //
+    // TO GO LIVE WITH CARDS: replace the body of this method with a call to your
+    // processor (Stripe/Square/etc.) that creates a hosted-checkout session and
+    // returns its real { paymentId, hostedCheckoutUrl }. The webhook handler
+    // (processPaymentWebhook) is already wired to settle the order on callback.
+    void input;
+    throw new Error(
+      "Card payments are being set up and aren't available yet. Please choose another payment method or check back soon.",
+    );
   }
 
   verifyWebhookSignature(payload: string, signature: string, secret: string): boolean {
