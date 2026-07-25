@@ -7,7 +7,7 @@ import { validateReferralCodeClient } from "@/lib/referral-client";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
-import { calculateShipping, calculateHandlingFee, calculateTax, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
+import { calculateShipping, calculateTax, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { resolveBestDiscount } from "@/lib/discount-resolution";
 
@@ -53,7 +53,6 @@ type CartContextValue = {
   itemCount: number;
   subtotal: number;
   shipping: number;
-  serviceFee: number;
   taxAmount: number;
   taxRatePercent: number;
   shippingConfig: ShippingConfig;
@@ -518,8 +517,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // recomputed value (not this one) is what's sent to the server.
   const shipping = (bulkSavingsTierReached || memberFreeShipping) ? 0 : calculateShipping(subtotal, undefined, shippingConfig);
 
-  const serviceFee = calculateHandlingFee(subtotal, shippingConfig);
-
   const couponDiscountAmount = useMemo(
     () => (buy3Get1FreeDiscount > 0 || referralDetails ? 0 : calculateCouponDiscountAmount(subtotal, couponDetails)),
     [buy3Get1FreeDiscount, referralDetails, couponDetails, subtotal],
@@ -576,7 +573,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // (payment-service.ts) using the same shared calculateTax.
   const taxAmount = calculateTax(Math.max(0, subtotal - discountAmount), taxRatePercent);
 
-  const totalBeforePoints = Math.max(0, subtotal + shipping + serviceFee + taxAmount - discountAmount);
+  const totalBeforePoints = Math.max(0, subtotal + shipping + taxAmount - discountAmount);
 
   // Membership store credit auto-applies when the merchandise subtotal meets
   // the tier's redemption minimum. Mirrors payment-service.ts exactly.
@@ -933,7 +930,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     itemCount,
     subtotal,
     shipping,
-    serviceFee,
     taxAmount,
     taxRatePercent,
     shippingConfig,

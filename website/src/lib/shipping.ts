@@ -1,31 +1,29 @@
-// Shared shipping + handling fee math, imported identically by the client
-// cart preview (cart-context.tsx, checkout/page.tsx) and the server
-// checkout total (payment-service.ts) - same reasoning as bundle-pricing.ts:
-// one formula, not two hand-synced copies, so client/server totals can never
-// drift apart and trip the "Altered total detected" check.
+// Shared shipping math, imported identically by the client cart preview
+// (cart-context.tsx, checkout/page.tsx) and the server checkout total
+// (payment-service.ts) - same reasoning as bundle-pricing.ts: one formula,
+// not two hand-synced copies, so client/server totals can never drift apart
+// and trip the "Altered total detected" check.
+//
+// There is intentionally NO service/handling fee: the only charges added to
+// merchandise are shipping (when under the free-shipping threshold) and sales
+// tax. Do not reintroduce a handling/service fee here.
 
 export const FREE_SHIPPING_THRESHOLD = 250;
 export const DOMESTIC_SHIPPING_FEE = 15;
 export const INTERNATIONAL_FREE_SHIPPING_THRESHOLD = 600;
 export const INTERNATIONAL_SHIPPING_FEE = 60;
-// Customers pay no service/handling fee — the only add-on to merchandise is
-// sales tax (and shipping when under the free-shipping threshold). Set to a
-// fraction (e.g. 0.05 for 5%) only if a service fee is ever reinstated.
-export const HANDLING_FEE_RATE = 0;
 
-// Admin-editable shipping + service-fee settings. An admin sets these in
-// Admin → Control Center → Shipping (stored in the "shipping" control
-// section); the coded constants above are the defaults when a field is left
-// blank. Passed identically into calculateShipping/calculateHandlingFee on
-// both the client preview and the authoritative server total, so the two can
-// never drift apart and trip the "Altered total detected" guard.
+// Admin-editable shipping settings. An admin sets these in Admin → Control
+// Center → Shipping (stored in the "shipping" control section); the coded
+// constants above are the defaults when a field is left blank. Passed
+// identically into calculateShipping on both the client preview and the
+// authoritative server total, so the two can never drift apart and trip the
+// "Altered total detected" guard.
 export interface ShippingConfig {
   domesticFee: number;
   freeShippingThreshold: number;
   internationalFee: number;
   internationalFreeShippingThreshold: number;
-  // Service/handling fee as a fraction of subtotal (0.05 = 5%). 0 disables it.
-  handlingFeeRate: number;
 }
 
 export const DEFAULT_SHIPPING_CONFIG: ShippingConfig = {
@@ -33,7 +31,6 @@ export const DEFAULT_SHIPPING_CONFIG: ShippingConfig = {
   freeShippingThreshold: FREE_SHIPPING_THRESHOLD,
   internationalFee: INTERNATIONAL_SHIPPING_FEE,
   internationalFreeShippingThreshold: INTERNATIONAL_FREE_SHIPPING_THRESHOLD,
-  handlingFeeRate: HANDLING_FEE_RATE,
 };
 
 const DOMESTIC_COUNTRY_NAMES = new Set([
@@ -68,14 +65,6 @@ export function calculateShipping(
   }
 
   return subtotal >= config.internationalFreeShippingThreshold ? 0 : config.internationalFee;
-}
-
-export function calculateHandlingFee(
-  subtotal: number,
-  config: ShippingConfig = DEFAULT_SHIPPING_CONFIG,
-): number {
-  if (subtotal <= 0 || !config.handlingFeeRate || config.handlingFeeRate <= 0) return 0;
-  return roundMoney(subtotal * config.handlingFeeRate);
 }
 
 // Configurable sales tax, applied to the post-discount merchandise total.

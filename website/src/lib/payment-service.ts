@@ -8,7 +8,7 @@ import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
-import { calculateShipping, calculateHandlingFee, calculateTax } from "@/lib/shipping";
+import { calculateShipping, calculateTax } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
 import { computeProfit, resolveCustomerDiscount } from "@/lib/profit-engine";
@@ -357,7 +357,8 @@ export async function createCheckoutSession(
    getReferralProgramConfig(),
    getCouponPolicyConfig(),
  ]);
- const handlingFee = calculateHandlingFee(subtotal, shippingConfig);
+ // No service/handling fee is ever charged — customers pay merchandise (minus
+ // discounts) + shipping + sales tax only.
  const bulkSavingsResult = calculateBulkSavingsDiscount(subtotal, bulkSavingsEligible, bulkSavingsConfig);
  // Free shipping is a perk of reaching the bulk-savings threshold OR of an
  // active membership tier whose plan includes free shipping. Both are
@@ -521,7 +522,7 @@ export async function createCheckoutSession(
      processingFeePercent: profitSettings.processingFeePercent,
      shippingCollected: shipping,
      shippingCost: 0,
-     handlingCollected: handlingFee,
+     handlingCollected: 0,
      taxPercent: taxRatePercent,
    },
    { amount: discountAmount, components: [], label: "resolved" },
@@ -533,7 +534,7 @@ export async function createCheckoutSession(
    throw new Error("Promotion unavailable on this order.");
  }
 
- const totalBeforePoints = roundMoney(subtotal + shipping + handlingFee + taxAmount - discountAmount);
+ const totalBeforePoints = roundMoney(subtotal + shipping + taxAmount - discountAmount);
 
  // Membership store credit auto-applies when the order's merchandise subtotal
  // meets the tier's redemption minimum (the margin guardrail). It's deducted
@@ -620,7 +621,7 @@ export async function createCheckoutSession(
    currency: payload.currency ?? "USD",
    subtotal,
    shipping_amount: shipping,
-   handling_fee: handlingFee,
+   handling_fee: 0,
    tax_amount: taxAmount,
    discount_amount: discountAmount,
    bulk_discount_tier: bulkDiscountTier,

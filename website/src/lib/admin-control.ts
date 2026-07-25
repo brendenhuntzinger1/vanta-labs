@@ -504,11 +504,11 @@ export async function getCouponPolicyConfig(): Promise<CouponPolicyConfig> {
   }
 }
 
-// Admin-editable shipping + service-fee config (Control Center → Shipping).
-// A blank/invalid field falls back to the coded default in shipping.ts, so the
-// checkout math keeps working before an admin ever touches these. The domestic
-// flat rate + free-shipping threshold and the service-fee percent are exposed
-// in the Control Center; international rates keep their defaults.
+// Admin-editable shipping config (Control Center → Shipping). A blank/invalid
+// field falls back to the coded default in shipping.ts, so the checkout math
+// keeps working before an admin ever touches these. The domestic flat rate +
+// free-shipping threshold are exposed in the Control Center; international
+// rates keep their defaults. There is no service/handling fee.
 export async function getShippingConfig(): Promise<ShippingConfig> {
   try {
     const snapshot = await getControlSnapshot("shipping");
@@ -519,20 +519,11 @@ export async function getShippingConfig(): Promise<ShippingConfig> {
       return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
     };
 
-    // Service fee is entered as a percent (e.g. "5" = 5%); stored blank keeps
-    // the default 5%. Enter "0" to turn the service fee off entirely.
-    const rawServiceFee = shipping.service_fee;
-    const serviceFeePercent =
-      rawServiceFee === "" || rawServiceFee == null
-        ? DEFAULT_SHIPPING_CONFIG.handlingFeeRate * 100
-        : num(rawServiceFee, DEFAULT_SHIPPING_CONFIG.handlingFeeRate * 100);
-
     return {
       domesticFee: num(shipping.flat_rate, DEFAULT_SHIPPING_CONFIG.domesticFee),
       freeShippingThreshold: num(shipping.free_shipping_threshold, DEFAULT_SHIPPING_CONFIG.freeShippingThreshold),
       internationalFee: num(shipping.international_flat_rate, DEFAULT_SHIPPING_CONFIG.internationalFee),
       internationalFreeShippingThreshold: num(shipping.international_free_shipping_threshold, DEFAULT_SHIPPING_CONFIG.internationalFreeShippingThreshold),
-      handlingFeeRate: Math.max(0, serviceFeePercent) / 100,
     };
   } catch {
     return DEFAULT_SHIPPING_CONFIG;

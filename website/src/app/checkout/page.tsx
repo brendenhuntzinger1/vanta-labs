@@ -132,7 +132,6 @@ export default function CheckoutPage() {
   const {
     items,
     subtotal,
-    serviceFee,
     discountAmount,
     referralCode,
     referralDetails,
@@ -212,7 +211,7 @@ export default function CheckoutPage() {
     () => ((bulkSavingsTierReached || memberFreeShipping) ? 0 : calculateShipping(subtotal, form.country, shippingConfig)),
     [bulkSavingsTierReached, memberFreeShipping, subtotal, form.country, shippingConfig],
   );
-  const totalBeforeCredit = Math.max(0, subtotal + shipping + serviceFee + taxAmount - discountAmount);
+  const totalBeforeCredit = Math.max(0, subtotal + shipping + taxAmount - discountAmount);
   // Membership store credit auto-applies when the merchandise subtotal meets
   // the tier's redemption minimum (mirrors payment-service.ts).
   const storeCreditApplied = useMemo(() => {
@@ -821,8 +820,7 @@ export default function CheckoutPage() {
                 <span>Shipping</span>
                 <span>{shipping === 0 && memberFreeShipping ? "Free (member)" : formatCartCurrency(shipping)}</span>
               </div>
-              {serviceFee > 0 ? <div className="flex justify-between"><span>Service fee</span><span>{formatCartCurrency(serviceFee)}</span></div> : null}
-              {taxAmount > 0 ? <div className="flex justify-between"><span>Tax</span><span>{formatCartCurrency(taxAmount)}</span></div> : null}
+              {taxAmount > 0 ? <div className="flex justify-between"><span>Sales tax</span><span>{formatCartCurrency(taxAmount)}</span></div> : null}
               <div className="flex justify-between"><span>Discount</span><span>-{formatCartCurrency(discountAmount)}</span></div>
               {storeCreditApplied > 0 ? (
                 <div className="flex justify-between text-emerald-300"><span>Member store credit</span><span>-{formatCartCurrency(storeCreditApplied)}</span></div>

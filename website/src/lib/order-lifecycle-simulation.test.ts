@@ -32,7 +32,6 @@ import {
 } from "@/lib/profit-engine";
 import {
   calculateShipping,
-  calculateHandlingFee,
   calculateTax,
   DEFAULT_SHIPPING_CONFIG,
 } from "@/lib/shipping";
@@ -161,8 +160,9 @@ function simulateOrder(): SimResult {
   const totalUnits = pricedLines.reduce((s, l) => s + l.qty, 0);
   const trueProductCost = round(pricedLines.reduce((s, l) => s + l.cost * l.qty, 0));
 
-  // ---- shipping / handling / bulk (REAL shared formulas) ----
-  const handlingFee = calculateHandlingFee(subtotal, DEFAULT_SHIPPING_CONFIG);
+  // ---- shipping / bulk (REAL shared formulas) ----
+  // No service/handling fee is ever charged.
+  const handlingFee = 0;
   const bulkEligible = tier.slug === "elite"; // highest tier only, per production
   const bulk = calculateBulkSavingsDiscount(subtotal, bulkEligible, DEFAULT_BULK_SAVINGS_CONFIG);
   const shipping = bulk.tier || tier.freeShipping

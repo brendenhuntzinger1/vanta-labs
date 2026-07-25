@@ -17,7 +17,6 @@ export function CartPageClient() {
     removeFromCart,
     subtotal,
     shipping,
-    serviceFee,
     discountAmount,
     total,
     referralCode,
@@ -148,12 +147,6 @@ export function CartPageClient() {
                 <span>Estimated shipping</span>
                 <span>{formatCartCurrency(shipping)}</span>
               </div>
-              {serviceFee > 0 ? (
-                <div className="flex justify-between">
-                  <span>Service fee</span>
-                  <span>{formatCartCurrency(serviceFee)}</span>
-                </div>
-              ) : null}
               <div className="flex justify-between">
                 <span>Applied discount</span>
                 <span>-{formatCartCurrency(discountAmount)}</span>

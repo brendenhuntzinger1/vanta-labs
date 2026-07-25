@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 // the sweep exercises the REAL coupon math. Hoisted above imports like vi.mock.
 vi.unmock("@/lib/coupons");
 
-import { calculateShipping, calculateHandlingFee, calculateTax, DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
+import { calculateShipping, calculateTax, DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount, DEFAULT_BULK_SAVINGS_CONFIG } from "@/lib/bulk-savings";
 import { resolveBestDiscount, type DiscountCandidate } from "@/lib/discount-resolution";
 import { calculateDiscountAmount, calculateCommissionAmount } from "@/lib/referral-service";
@@ -46,7 +46,8 @@ function computeOrder(o: {
 
   const discountedSubtotal = Math.max(0, round(o.subtotal - discount));
   const tax = calculateTax(discountedSubtotal, o.taxPercent);
-  const handling = calculateHandlingFee(o.subtotal, DEFAULT_SHIPPING_CONFIG);
+  // No service/handling fee is ever charged.
+  const handling = 0;
   const freeShip = bulk.tier !== null || o.memberFreeShip;
   const shipping = freeShip ? 0 : calculateShipping(o.subtotal, o.country, DEFAULT_SHIPPING_CONFIG);
   const total = round(o.subtotal + shipping + handling + tax - discount);
@@ -114,10 +115,9 @@ describe("order-math sweep: core invariants hold across every combination", () =
 
 // ─── EDGE CASES: try to break each pure function ───────────────────────────
 describe("shipping / tax / handling edge cases", () => {
-  it("no shipping/handling/tax on a zero or negative subtotal", () => {
+  it("no shipping/tax on a zero or negative subtotal", () => {
     expect(calculateShipping(0, "United States")).toBe(0);
     expect(calculateShipping(-50, "United States")).toBe(0);
-    expect(calculateHandlingFee(0)).toBe(0);
     expect(calculateTax(0, 7)).toBe(0);
     expect(calculateTax(-100, 7)).toBe(0);
   });
