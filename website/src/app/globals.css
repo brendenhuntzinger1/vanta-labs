@@ -1008,10 +1008,12 @@ textarea.vl-input { min-height: 6rem; }
 
 .vl-product-card-media img {
   transition: transform var(--duration-slow) var(--ease-out-premium);
+  /* Zoom into the vial so it fills the frame (source photos have empty margin). */
+  transform: scale(1.4);
 }
 
 .vl-product-card:hover .vl-product-card-media img {
-  transform: scale(1.05);
+  transform: scale(1.48);
 }
 
 .vl-search-input {
