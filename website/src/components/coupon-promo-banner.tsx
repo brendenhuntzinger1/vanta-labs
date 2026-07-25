@@ -88,46 +88,42 @@ export function CouponPromoBanner() {
 
   return (
     <div
-      className={`relative mt-6 overflow-hidden rounded-2xl bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-700 px-5 py-5 shadow-[0_16px_40px_-16px_rgba(16,185,129,0.7)] transition-all duration-300 ease-out sm:px-7 sm:py-6 ${
-        entered ? "translate-y-0 scale-100 opacity-100" : "translate-y-2 scale-[0.98] opacity-0"
+      className={`relative mt-4 overflow-hidden rounded-xl bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-700 px-3.5 py-2.5 shadow-[0_10px_24px_-14px_rgba(16,185,129,0.7)] transition-all duration-300 ease-out sm:px-5 sm:py-3 ${
+        entered ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"
       }`}
       role="region"
       aria-label="Promo code"
     >
-      {/* soft glow accents */}
-      <div className="pointer-events-none absolute -right-10 -top-16 h-40 w-40 rounded-full bg-white/15 blur-2xl" aria-hidden="true" />
-      <div className="pointer-events-none absolute -bottom-16 left-10 h-40 w-40 rounded-full bg-teal-300/20 blur-2xl" aria-hidden="true" />
+      {/* one subtle glow accent — kept small so the bar stays slim */}
+      <div className="pointer-events-none absolute -right-8 -top-10 h-24 w-24 rounded-full bg-white/15 blur-2xl" aria-hidden="true" />
 
       <button
         type="button"
         onClick={dismiss}
         aria-label="Dismiss promo"
-        className="absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full text-white/70 transition hover:bg-white/15 hover:text-white"
+        className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full text-white/70 transition hover:bg-white/15 hover:text-white"
       >
         ×
       </button>
 
-      <div className="relative flex flex-col items-start gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="relative flex items-center justify-between gap-3 pr-5">
         <div className="min-w-0">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/80">Limited-time offer</p>
-          <p className="mt-1 text-2xl font-extrabold leading-tight text-white sm:text-3xl">
-            {discountHeadline(coupon)} your order
+          <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-white/80 sm:text-[10px]">Limited-time offer</p>
+          <p className="text-base font-extrabold leading-tight text-white sm:text-xl">
+            {discountHeadline(coupon)} <span className="text-xs font-semibold text-white/85 sm:text-sm">your order</span>
           </p>
-          <p className="mt-1 text-sm text-white/85">
-            Tap the code to copy, then paste it at checkout.
-            {ends ? <span className="ml-1 font-medium text-white">· {ends}</span> : null}
-          </p>
+          {ends ? <p className="text-[10px] text-white/80 sm:text-[11px]">{ends}</p> : null}
         </div>
 
         <button
           type="button"
           onClick={copy}
-          className="group relative inline-flex shrink-0 items-center gap-3 rounded-xl border-2 border-dashed border-white/60 bg-white/10 px-4 py-3 backdrop-blur-sm transition hover:border-white hover:bg-white/20"
+          className="group relative inline-flex shrink-0 items-center gap-2 rounded-lg border border-dashed border-white/60 bg-white/10 px-2.5 py-1.5 backdrop-blur-sm transition hover:border-white hover:bg-white/20 sm:px-3 sm:py-2"
           aria-label={`Copy promo code ${coupon.code}`}
         >
-          <span className="font-mono text-xl font-bold tracking-[0.18em] text-white sm:text-2xl">{coupon.code}</span>
-          <span className="rounded-md bg-white px-2.5 py-1 text-xs font-bold uppercase tracking-wide text-emerald-700 transition group-hover:bg-emerald-50">
-            {copied ? "Copied!" : "Copy"}
+          <span className="font-mono text-sm font-bold tracking-[0.12em] text-white sm:text-lg">{coupon.code}</span>
+          <span className="rounded bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700 transition group-hover:bg-emerald-50 sm:text-xs">
+            {copied ? "✓" : "Copy"}
           </span>
         </button>
       </div>

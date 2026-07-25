@@ -93,10 +93,14 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
     }
   }
 
+  // Case-insensitive lookup: the code is matched regardless of how it was
+  // stored (a code seeded or created lower/mixed case would otherwise fail
+  // here even though it shows on the storefront). normalizeCouponCode strips
+  // everything except [A-Z0-9-], so there are no ILIKE wildcards to escape.
   const { data, error } = await supabaseAdmin
     .from("coupons")
     .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email")
-    .eq("code", normalizedCode)
+    .ilike("code", normalizedCode)
     .maybeSingle();
 
   if (error) {
@@ -166,7 +170,7 @@ export async function redeemCoupon(code: string) {
   const { data, error: loadError } = await supabaseAdmin
     .from("coupons")
     .select("id, redemptions_count")
-    .eq("code", normalizedCode)
+    .ilike("code", normalizedCode)
     .maybeSingle();
 
   if (loadError) {
