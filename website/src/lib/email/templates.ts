@@ -36,7 +36,7 @@ function renderLayout(input: { preheader: string; title: string; bodyHtml: strin
         </td></tr>
         ${cta}
         <tr><td style="padding:28px 32px 24px;border-top:1px solid rgba(255,255,255,0.1);margin-top:24px;">
-          <p style="margin:20px 0 0;font-size:12px;color:#71717a;">Vanta Labs · Research Use Only<br/>Questions? <a href="mailto:brendenhuntzinger1@vantalabsresearch.com" style="color:#a1a1aa;">brendenhuntzinger1@vantalabsresearch.com</a></p>
+          <p style="margin:20px 0 0;font-size:12px;color:#71717a;">Vanta Labs · Research Use Only<br/>Questions? <a href="mailto:support@vantalabsresearch.com" style="color:#a1a1aa;">support@vantalabsresearch.com</a></p>
         </td></tr>
       </table>
     </td></tr>

@@ -279,7 +279,7 @@ export interface BusinessSettings {
 }
 
 export const DEFAULT_BUSINESS_SETTINGS: BusinessSettings = {
-  supportEmail: "brendenhuntzinger1@vantalabsresearch.com",
+  supportEmail: "support@vantalabsresearch.com",
   businessName: "Vanta Labs",
 };
 
