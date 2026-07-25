@@ -160,6 +160,16 @@ export class MockPaymentProvider implements PaymentProvider {
 export function resolvePaymentProviderName(providerName = process.env.PAYMENT_PROVIDER): PaymentProviderName {
   const normalized = (providerName ?? "").trim().toLowerCase();
   if (normalized === "mock" || normalized === "test") {
+    // HARD STOP: the simulated gateway must never run in production. If it does,
+    // any unauthenticated caller can mark orders paid via /api/checkout/mock-pay.
+    // Fail loudly at the first payment operation rather than silently accepting
+    // fake payments. The only escape hatch is an explicit non-prod opt-in.
+    if (process.env.NODE_ENV === "production" && process.env.ALLOW_MOCK_PAYMENTS !== "true") {
+      throw new Error(
+        "PAYMENT_PROVIDER=mock/test is forbidden in production. Set PAYMENT_PROVIDER=live. " +
+        "(ALLOW_MOCK_PAYMENTS=true may be set ONLY in a non-production environment.)",
+      );
+    }
     return "mock";
   }
   return "live";

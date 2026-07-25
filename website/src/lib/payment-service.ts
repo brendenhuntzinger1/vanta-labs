@@ -236,6 +236,25 @@ export async function createCheckoutSession(
  const requestedSlugs = Array.from(new Set(sanitizedItems.map((item) => item.id.split("::")[0])));
  const catalogProducts = await getCatalogProductsBySlugs(requestedSlugs);
 
+ // Real per-SKU cost (COGS) for the profit floor. The catalog select omits cost,
+ // so fetch it directly here — the profit guard must price against the ACTUAL
+ // product/dose cost, not a single flat worst-case assumption (which let a
+ // deeply-discounted order on a high-cost SKU finalize below true break-even).
+ const { data: costRows } = await supabaseAdmin
+   .from("products")
+   .select("slug, product_cost_cents, product_doses(id, product_cost_cents)")
+   .in("slug", requestedSlugs);
+ const unitCostBySlug = new Map<string, number>();
+ const unitCostByDoseId = new Map<string, number>();
+ for (const row of (costRows ?? []) as Array<{ slug: string; product_cost_cents: number | null; product_doses: Array<{ id: string; product_cost_cents: number | null }> | null }>) {
+   const productCostCents = Number(row.product_cost_cents ?? 0);
+   if (productCostCents > 0) unitCostBySlug.set(String(row.slug), productCostCents / 100);
+   for (const dose of row.product_doses ?? []) {
+     const doseCostCents = Number(dose.product_cost_cents ?? 0);
+     if (doseCostCents > 0) unitCostByDoseId.set(String(dose.id), doseCostCents / 100);
+   }
+ }
+
  // Fetch the homepage/promotions control once, up front, because the bundle
  // discount below is applied while building line items (before the main config
  // Promise.all). Bundle rates are admin-editable; the client preview reads the
@@ -461,7 +480,6 @@ export async function createCheckoutSession(
  // separately on the discounted subtotal. Product cost falls back to the
  // worst-case unit cost until real per-SKU costs are entered.
  const profitSettings = await getProfitSettings();
- const guardTotalQuantity = lineItems.reduce((sum, line) => sum + line.quantity, 0);
  // Price the guard with the EFFECTIVE commission that will actually be recorded
  // (an unlocked ambassador on a performance tier earns more than their stored
  // rate). Using the stored rate here let a thin-margin order pass the guard yet
@@ -475,10 +493,22 @@ export async function createCheckoutSession(
      guardCommissionPercent = referral.commissionPercent;
    }
  }
+ // Price the floor against REAL per-line cost: the chosen dose's cost if known,
+ // else the product's cost, else the conservative worst-case fallback. This can
+ // only tighten the floor for high-cost SKUs; a missing cost never sells below
+ // the old worst-case assumption.
+ const guardProductCost = roundMoney(lineItems.reduce((sum, line) => {
+   const slug = String(line.product.id).split("::")[0];
+   const doseCost = line.product.variantId ? unitCostByDoseId.get(line.product.variantId) : undefined;
+   const unitCost = (doseCost && doseCost > 0)
+     ? doseCost
+     : (unitCostBySlug.get(slug) ?? profitSettings.worstCaseUnitCost);
+   return sum + unitCost * line.quantity;
+ }, 0));
  const guardProfit = computeProfit(
    {
      subtotal,
-     productCost: roundMoney(profitSettings.worstCaseUnitCost * guardTotalQuantity),
+     productCost: guardProductCost,
      bundleDiscount: 0,
      referralAccepted: Boolean(referral),
      referralPercent: 0,
