@@ -21,6 +21,9 @@ export type ProductDose = {
   price: string;
   compareAtPrice?: string;
   salePrice?: string;
+  /** Internal cost (COGS) in cents — admin-only, populated only in admin
+   *  contexts; never selected for or shown to customers. */
+  productCostCents?: number;
   inventoryQuantity: number;
   stockStatus?: "In Stock" | "Limited" | "Reserved" | "Out of Stock";
   batchNumber?: string;

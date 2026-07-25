@@ -27,6 +27,7 @@ type WizardState = {
     slugSuffix: string;
     sku: string;
     price: string;
+    productCost: string;
     compareAtPrice: string;
     salePrice: string;
     inventoryQuantity: string;
@@ -86,6 +87,7 @@ function toDoseInput(dose: ProductDose, index: number) {
     priceCents: parseMoneyToCents(dose.price),
     compareAtPriceCents: parseMoneyToCents(dose.compareAtPrice ?? ""),
     salePriceCents: parseMoneyToCents(dose.salePrice ?? ""),
+    productCostCents: dose.productCostCents ?? null,
     inventoryQuantity: Number(dose.inventoryQuantity ?? 0),
     stockStatus: dose.stockStatus,
     batchNumber: dose.batchNumber ?? "",
@@ -139,6 +141,9 @@ function VariantEditor({
         <label className="text-xs text-zinc-400">Price
           <input value={variant.price} onChange={(e) => onChange({ ...variant, price: e.target.value })} className="vl-input mt-1 w-full px-3 py-2" placeholder="89.00" />
         </label>
+        <label className="text-xs text-cyan-300/90">Product Cost (Internal)
+          <input value={variant.productCost} onChange={(e) => onChange({ ...variant, productCost: e.target.value })} className="vl-input mt-1 w-full px-3 py-2" placeholder="26.14" inputMode="decimal" />
+        </label>
         <label className="text-xs text-zinc-400">Compare-at price
           <input value={variant.compareAtPrice} onChange={(e) => onChange({ ...variant, compareAtPrice: e.target.value })} className="vl-input mt-1 w-full px-3 py-2" placeholder="109.00" />
         </label>
@@ -191,6 +196,7 @@ export default function AdminProductsPage() {
         slugSuffix: "10mg",
         sku: "",
         price: "",
+        productCost: "",
         compareAtPrice: "",
         salePrice: "",
         inventoryQuantity: "0",
@@ -436,6 +442,7 @@ export default function AdminProductsPage() {
             slugSuffix: variant.slugSuffix,
             sku: variant.sku,
             priceCents: parseMoneyToCents(variant.price),
+            productCostCents: variant.productCost.trim() === "" ? null : parseMoneyToCents(variant.productCost),
             compareAtPriceCents: parseMoneyToCents(variant.compareAtPrice),
             salePriceCents: parseMoneyToCents(variant.salePrice),
             inventoryQuantity: Number(variant.inventoryQuantity || 0),
@@ -472,6 +479,7 @@ export default function AdminProductsPage() {
             slugSuffix: "10mg",
             sku: "",
             price: "",
+            productCost: "",
             compareAtPrice: "",
             salePrice: "",
             inventoryQuantity: "0",
@@ -797,6 +805,7 @@ export default function AdminProductsPage() {
                         slugSuffix: "",
                         sku: "",
                         price: "",
+                        productCost: "",
                         compareAtPrice: "",
                         salePrice: "",
                         inventoryQuantity: "0",
@@ -1062,6 +1071,18 @@ function ProductEditor({
               <label className="text-xs text-zinc-400">Price
                 <input value={dose.price} onChange={(e) => setDose(dose.id, (prev) => ({ ...prev, price: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" />
               </label>
+              <label className="text-xs text-cyan-300/90">Product Cost (Internal)
+                <input
+                  value={dose.productCostCents != null ? (dose.productCostCents / 100).toFixed(2) : ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setDose(dose.id, (prev) => ({ ...prev, productCostCents: v.trim() === "" ? undefined : parseMoneyToCents(v) }));
+                  }}
+                  placeholder="26.14"
+                  inputMode="decimal"
+                  className="vl-input mt-1 w-full px-3 py-2"
+                />
+              </label>
               <label className="text-xs text-zinc-400">Inventory
                 <input value={String(dose.inventoryQuantity ?? 0)} onChange={(e) => setDose(dose.id, (prev) => ({ ...prev, inventoryQuantity: Number(e.target.value || 0) }))} className="vl-input mt-1 w-full px-3 py-2" />
               </label>
@@ -1078,6 +1099,23 @@ function ProductEditor({
                 <input value={dose.purityResult ?? ""} onChange={(e) => setDose(dose.id, (prev) => ({ ...prev, purityResult: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" />
               </label>
             </div>
+
+            {(() => {
+              const priceCents = parseMoneyToCents(dose.price);
+              const costCents = dose.productCostCents ?? null;
+              if (priceCents <= 0 || costCents == null) {
+                return <p className="text-[11px] text-zinc-500">Enter a Product Cost to preview profit for this dose. Internal only — never shown to customers, and it doesn&apos;t change the price.</p>;
+              }
+              const profit = (priceCents - costCents) / 100;
+              const margin = ((priceCents - costCents) / priceCents) * 100;
+              const good = profit >= 0;
+              return (
+                <p className={`text-[11px] ${good ? "text-emerald-300" : "text-rose-300"}`}>
+                  Selling ${(priceCents / 100).toFixed(2)} &nbsp;·&nbsp; Cost ${(costCents / 100).toFixed(2)} &nbsp;·&nbsp;
+                  <span className="font-semibold"> Profit ${profit.toFixed(2)}</span> &nbsp;·&nbsp; Margin {margin.toFixed(1)}%
+                </p>
+              );
+            })()}
 
             <div className="flex flex-wrap items-center gap-2">
               <label className="flex items-center gap-2 rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-300">

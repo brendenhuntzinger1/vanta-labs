@@ -15,6 +15,9 @@ export type DoseInput = {
   priceCents: number;
   compareAtPriceCents?: number;
   salePriceCents?: number;
+  /** Internal cost (COGS) for this dose, in cents. Admin-only; never shown to
+   *  customers. Feeds profit calculations only. */
+  productCostCents?: number | null;
   inventoryQuantity: number;
   stockStatus?: Product["stockStatus"];
   batchNumber?: string;
@@ -197,7 +200,7 @@ async function fetchProductRelations(productIds: string[]) {
       .order("position", { ascending: true }),
     supabaseAdmin
       .from("product_doses")
-      .select("id, product_id, label, slug_suffix, sku, price_cents, compare_at_price_cents, sale_price_cents, inventory_quantity, stock_status, batch_number, coa_url, image_url, purity_result, is_default, is_enabled, position")
+      .select("id, product_id, label, slug_suffix, sku, price_cents, compare_at_price_cents, sale_price_cents, product_cost_cents, inventory_quantity, stock_status, batch_number, coa_url, image_url, purity_result, is_default, is_enabled, position")
       .in("product_id", productIds)
       .order("position", { ascending: true }),
   ]);
@@ -243,6 +246,7 @@ async function fetchProductRelations(productIds: string[]) {
       price: toCurrencyString(priceCents),
       compareAtPrice: compareAtPriceCents > 0 ? toCurrencyString(compareAtPriceCents) : undefined,
       salePrice: salePriceCents > 0 ? toCurrencyString(salePriceCents) : undefined,
+      productCostCents: row.product_cost_cents != null ? parseNumber(row.product_cost_cents) : undefined,
       inventoryQuantity: parseNumber(row.inventory_quantity, 0),
       stockStatus: String(row.stock_status ?? "In Stock") as ProductDose["stockStatus"],
       batchNumber: row.batch_number ? String(row.batch_number) : undefined,
@@ -346,6 +350,7 @@ async function createDoseRows(productId: string, doses: DoseInput[]) {
     price_cents: Math.max(0, Math.round(dose.priceCents)),
     compare_at_price_cents: Math.max(0, Math.round(dose.compareAtPriceCents ?? 0)),
     sale_price_cents: Math.max(0, Math.round(dose.salePriceCents ?? 0)),
+    product_cost_cents: dose.productCostCents == null ? null : Math.max(0, Math.round(dose.productCostCents)),
     inventory_quantity: Math.max(0, Math.round(dose.inventoryQuantity)),
     stock_status: normalizeStockStatus(dose.stockStatus, dose.inventoryQuantity),
     batch_number: dose.batchNumber ?? null,
@@ -458,8 +463,24 @@ export async function getAdminProductById(productId: string) {
   );
 }
 
-export async function updateAdminProduct(productId: string, input: ProductUpdateInput) {
+export async function updateAdminProduct(productId: string, input: ProductUpdateInput, changedBy?: string) {
   const nextInventory = input.inventoryQuantity !== undefined ? Math.max(0, Math.round(input.inventoryQuantity)) : undefined;
+
+  // Snapshot current costs BEFORE mutating so we can log what actually changed.
+  const { data: beforeProduct } = await supabaseAdmin
+    .from("products")
+    .select("name, product_cost_cents")
+    .eq("id", productId)
+    .maybeSingle();
+  const { data: beforeDoseRows } = await supabaseAdmin
+    .from("product_doses")
+    .select("id, label, product_cost_cents")
+    .eq("product_id", productId);
+  const beforeDoseCostById = new Map<string, { label: string; cost: number | null }>();
+  for (const row of (beforeDoseRows ?? []) as Array<{ id: string; label: string | null; product_cost_cents: number | null }>) {
+    beforeDoseCostById.set(String(row.id), { label: String(row.label ?? ""), cost: row.product_cost_cents == null ? null : Number(row.product_cost_cents) });
+  }
+  const productName = beforeProduct?.name ? String(beforeProduct.name) : "";
 
   const payload: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
@@ -513,6 +534,38 @@ export async function updateAdminProduct(productId: string, input: ProductUpdate
 
   if (input.doses) {
     await replaceProductDoses(productId, input.doses);
+  }
+
+  // Record cost changes to the history table (best-effort — never block a save
+  // if the history table isn't migrated yet).
+  try {
+    const changeRows: Array<Record<string, unknown>> = [];
+    const norm = (cents: number | null | undefined): number | null =>
+      cents == null ? null : Math.max(0, Math.round(cents));
+
+    if (input.productCostCents !== undefined) {
+      const oldCost = beforeProduct?.product_cost_cents == null ? null : Number(beforeProduct.product_cost_cents);
+      const newCost = norm(input.productCostCents);
+      if (oldCost !== newCost) {
+        changeRows.push({ product_id: productId, dose_id: null, product_name: productName, dose_label: null, old_cost_cents: oldCost, new_cost_cents: newCost, changed_by: changedBy ?? null });
+      }
+    }
+
+    for (const dose of input.doses ?? []) {
+      if (dose.productCostCents === undefined || !dose.id) continue;
+      const before = beforeDoseCostById.get(dose.id);
+      const oldCost = before?.cost ?? null;
+      const newCost = norm(dose.productCostCents);
+      if (oldCost !== newCost) {
+        changeRows.push({ product_id: productId, dose_id: dose.id, product_name: productName, dose_label: dose.label ?? before?.label ?? null, old_cost_cents: oldCost, new_cost_cents: newCost, changed_by: changedBy ?? null });
+      }
+    }
+
+    if (changeRows.length > 0) {
+      await supabaseAdmin.from("product_cost_changes").insert(changeRows);
+    }
+  } catch (logError) {
+    console.error("Unable to record product cost change history:", logError);
   }
 
   return getAdminProductById(productId);

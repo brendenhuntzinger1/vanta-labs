@@ -85,7 +85,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ produ
     const action = String(body.action ?? "update");
 
     if (action === "update") {
-      const product = await updateAdminProduct(productId, body.payload ?? {});
+      const product = await updateAdminProduct(productId, body.payload ?? {}, session.username);
       return NextResponse.json({ success: true, product });
     }
 

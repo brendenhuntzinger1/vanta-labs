@@ -636,6 +636,19 @@ export async function createCheckoutSession(
    throw new Error("Unable to create order record");
  }
 
+ // Snapshot the CURRENT internal cost (COGS) onto each line so profit for this
+ // order is always computed with the cost that applied today — a later cost
+ // change never rewrites this order's profit. Same per-line lookup the profit
+ // guard uses: the dose's cost if known, else the product's, else worst-case.
+ const unitCostCentsForLine = (line: (typeof lineItems)[number]): number => {
+   const slug = String(line.product.id).split("::")[0];
+   const doseCost = line.product.variantId ? unitCostByDoseId.get(line.product.variantId) : undefined;
+   const unitCost = (doseCost && doseCost > 0)
+     ? doseCost
+     : (unitCostBySlug.get(slug) ?? profitSettings.worstCaseUnitCost);
+   return Math.max(0, Math.round(unitCost * 100));
+ };
+
  const orderItemsPayload = lineItems.map((line) => ({
    order_id: orderId,
    product_id: line.product.id,
@@ -643,9 +656,24 @@ export async function createCheckoutSession(
    unit_price: line.product.price,
    quantity: line.quantity,
    line_total: roundMoney(line.product.price * line.quantity),
+   unit_cost_cents: unitCostCentsForLine(line),
  }));
 
- const { error: itemInsertError } = await supabaseAdmin.from("order_items").insert(orderItemsPayload);
+ let { error: itemInsertError } = await supabaseAdmin.from("order_items").insert(orderItemsPayload);
+ // Backwards-compatible: if the cost-snapshot migration hasn't been run yet the
+ // unit_cost_cents column won't exist. Never let that break checkout — retry
+ // the insert without the snapshot column.
+ if (itemInsertError && (itemInsertError.code === "PGRST204" || /unit_cost_cents/i.test(itemInsertError.message ?? ""))) {
+   const legacyPayload = orderItemsPayload.map((item) => ({
+     order_id: item.order_id,
+     product_id: item.product_id,
+     product_name: item.product_name,
+     unit_price: item.unit_price,
+     quantity: item.quantity,
+     line_total: item.line_total,
+   }));
+   ({ error: itemInsertError } = await supabaseAdmin.from("order_items").insert(legacyPayload));
+ }
  if (itemInsertError) {
    console.error("Unable to create order items", itemInsertError);
    throw new Error("Unable to create order items");
