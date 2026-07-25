@@ -1101,7 +1101,11 @@ function ProductEditor({
             </div>
 
             {(() => {
-              const priceCents = parseMoneyToCents(dose.price);
+              // Use the price the customer actually pays — the sale price when
+              // one is set, otherwise the regular price — so profit isn't
+              // overstated on a discounted dose.
+              const saleCents = parseMoneyToCents(dose.salePrice ?? "");
+              const priceCents = saleCents > 0 ? saleCents : parseMoneyToCents(dose.price);
               const costCents = dose.productCostCents ?? null;
               if (priceCents <= 0 || costCents == null) {
                 return <p className="text-[11px] text-zinc-500">Enter a Product Cost to preview profit for this dose. Internal only — never shown to customers, and it doesn&apos;t change the price.</p>;

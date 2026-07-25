@@ -638,15 +638,17 @@ export async function createCheckoutSession(
 
  // Snapshot the CURRENT internal cost (COGS) onto each line so profit for this
  // order is always computed with the cost that applied today — a later cost
- // change never rewrites this order's profit. Same per-line lookup the profit
- // guard uses: the dose's cost if known, else the product's, else worst-case.
- const unitCostCentsForLine = (line: (typeof lineItems)[number]): number => {
+ // change never rewrites this order's profit. Prefer the dose's cost, else the
+ // product's. If NEITHER is set we snapshot null (unknown) rather than the
+ // guard's worst-case assumption, so profit reports show real cost when known
+ // and flag an estimate when not — never presenting an assumption as fact.
+ const unitCostCentsForLine = (line: (typeof lineItems)[number]): number | null => {
    const slug = String(line.product.id).split("::")[0];
    const doseCost = line.product.variantId ? unitCostByDoseId.get(line.product.variantId) : undefined;
-   const unitCost = (doseCost && doseCost > 0)
-     ? doseCost
-     : (unitCostBySlug.get(slug) ?? profitSettings.worstCaseUnitCost);
-   return Math.max(0, Math.round(unitCost * 100));
+   if (doseCost && doseCost > 0) return Math.round(doseCost * 100);
+   const slugCost = unitCostBySlug.get(slug);
+   if (slugCost && slugCost > 0) return Math.round(slugCost * 100);
+   return null;
  };
 
  const orderItemsPayload = lineItems.map((line) => ({
