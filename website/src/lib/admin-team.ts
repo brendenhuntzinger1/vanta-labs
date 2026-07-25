@@ -150,11 +150,35 @@ export async function renameAdminAccount(oldUsername: string, newUsername: strin
 }
 
 export async function updateAdminAccount(username: string, input: { role?: AdminRole; isActive?: boolean }) {
+  const normalizedUsername = username.trim().toLowerCase();
+
+  // Never demote or deactivate the LAST active super_admin. Team/role
+  // management is super_admin-only, so reaching zero super_admins locks out all
+  // team administration and is only recoverable via a direct DB write.
+  const demotingSuperAdmin = input.role !== undefined && input.role !== "super_admin";
+  const deactivating = input.isActive === false;
+  if (demotingSuperAdmin || deactivating) {
+    const { data: target } = await supabaseAdmin
+      .from("admin_credentials")
+      .select("role")
+      .eq("username", normalizedUsername)
+      .maybeSingle();
+    if (target?.role === "super_admin") {
+      const { count } = await supabaseAdmin
+        .from("admin_credentials")
+        .select("username", { count: "exact", head: true })
+        .eq("role", "super_admin")
+        .eq("is_active", true);
+      if ((count ?? 0) <= 1) {
+        throw new Error("You can't remove or demote the last active super admin.");
+      }
+    }
+  }
+
   const updatePayload: Record<string, unknown> = { updated_at: new Date().toISOString() };
   if (input.role !== undefined) updatePayload.role = input.role;
   if (input.isActive !== undefined) updatePayload.is_active = input.isActive;
 
-  const normalizedUsername = username.trim().toLowerCase();
   const { error } = await supabaseAdmin
     .from("admin_credentials")
     .update(updatePayload)

@@ -125,8 +125,25 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
     throw new Error("This coupon has expired");
   }
 
-  if (typeof data.max_redemptions === "number" && data.redemptions_count >= data.max_redemptions) {
-    throw new Error("This coupon has reached its redemption limit");
+  if (typeof data.max_redemptions === "number") {
+    // Enforce the limit against ORDERS that already hold this code — not just the
+    // paid-time redemptions_count, which lags because it only increments after an
+    // order settles. Counting in-flight (pending/awaiting) + paid orders stops a
+    // limited or one-time code from being applied to many simultaneous unpaid
+    // orders before any of them pays (the classic "open N tabs" abuse, and worse
+    // for manual methods where orders stay unpaid for days). Mirrors the
+    // welcome-offer in-flight guard above. Terminal orders (canceled/failed/
+    // refunded — both cancel spellings) don't consume a slot. Degrades to the
+    // counter check if the count query fails (count → null → 0).
+    const { count: liveUses } = await supabaseAdmin
+      .from("orders")
+      .select("id", { count: "exact", head: true })
+      .ilike("coupon_code", normalizedCode)
+      .not("payment_status", "in", "(canceled,cancelled,payment_failed,refunded)");
+    const used = Math.max(Number(data.redemptions_count ?? 0), Number(liveUses ?? 0));
+    if (used >= data.max_redemptions) {
+      throw new Error("This coupon has reached its redemption limit");
+    }
   }
 
   const discountType = data.discount_type === "fixed" ? "fixed" : "percent";

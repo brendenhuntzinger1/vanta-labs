@@ -1,11 +1,16 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { canManageProducts } from "@/lib/admin-roles";
 import { exportProductsCsv } from "@/lib/admin-products-csv";
 
 export async function GET(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
   if (!session) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
+  }
+  // Consistency with every other product route (import/update are manager+).
+  if (!canManageProducts(session.role)) {
+    return NextResponse.json({ success: false, error: "Forbidden" }, { status: 403 });
   }
 
   try {

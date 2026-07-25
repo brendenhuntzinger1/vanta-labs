@@ -351,12 +351,20 @@ export async function createCheckoutSession(
  throw new Error("The referral program is currently unavailable. Remove the code to continue.");
  }
 
- // Validate the referral code even when Buy 3 Get 1 is active: the ambassador
- // is still attributed and earns commission on the discounted subtotal — the
- // free item is the only discount (no extra referral % stacks on top).
- const referral = referralProgram.enabled
-   ? await validateReferralCode(payload.referralCode, referralProgram.discountPercent)
-   : null;
+ // A referral only counts when the customer has visibly applied it (create-
+ // session no longer reads the cookie). If a code that was valid when applied
+ // has since gone stale — the ambassador was removed, or the code was changed —
+ // DROP it to null rather than throwing: a stale referral must never hard-block
+ // a legitimate sale. Commission is only attributed for a currently-approved
+ // code (validateReferralCode rejects any status != approved).
+ let referral: ValidatedReferral | null = null;
+ if (referralProgram.enabled) {
+   try {
+     referral = await validateReferralCode(payload.referralCode, referralProgram.discountPercent);
+   } catch {
+     referral = null;
+   }
+ }
 
  // Coupons never combine with a referral code or Buy 3 Get 1 unless the admin
  // has explicitly enabled stacking.

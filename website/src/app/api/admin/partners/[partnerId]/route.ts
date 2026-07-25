@@ -38,6 +38,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
         return NextResponse.json({ success: false, error: "Invalid status" }, { status: 400 });
       }
 
+      // Guardrail: a commission percent must be sane. Without this, a fat-finger
+      // (500) or a negative would flow straight into commission math.
+      if (commissionPercent !== undefined && (!Number.isFinite(commissionPercent) || commissionPercent < 0 || commissionPercent > 100)) {
+        return NextResponse.json({ success: false, error: "Commission percent must be between 0 and 100." }, { status: 400 });
+      }
+
       await updatePartnerStatus({
         partnerId,
         status,

@@ -46,7 +46,12 @@ describe("payment service", () => {
     ).rejects.toThrow("Invalid product id");
   });
 
-  it("rejects expired promotions", async () => {
+  it("drops an invalid/stale referral instead of hard-blocking checkout", async () => {
+    // A referral that has gone stale (unknown code, or an ambassador removed
+    // AFTER the customer applied it) must never fail the sale. It is dropped
+    // (no discount, no commission) and checkout proceeds — here it advances PAST
+    // referral validation to the card-provider step (no real processor wired
+    // yet), proving the invalid code did not throw "Invalid referral code".
     await expect(
       createCheckoutSession({
         items: [{ id: "bpc-157-10mg", quantity: 1 }],
@@ -60,7 +65,7 @@ describe("payment service", () => {
         },
         referralCode: "EXPIRED10",
       }),
-    ).rejects.toThrow("Invalid referral code");
+    ).rejects.toThrow("Card payments are being set up");
   });
 
   it("does not create duplicate orders from duplicate webhooks", async () => {
