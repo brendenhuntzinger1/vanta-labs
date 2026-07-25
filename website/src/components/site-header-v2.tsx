@@ -118,7 +118,7 @@ export function SiteHeaderV2() {
                 placeholder="Search"
                 tabIndex={searchOpen ? 0 : -1}
                 aria-hidden={!searchOpen}
-                className="w-full border-b border-white/25 bg-transparent px-1 py-1.5 text-sm text-white placeholder:text-white/40 focus:outline-none"
+                className="w-full border-b border-white/25 bg-transparent px-1 py-1.5 text-sm text-white placeholder:text-white/70 focus:outline-none"
               />
             </div>
             <button
@@ -176,7 +176,7 @@ export function SiteHeaderV2() {
               value={searchValue}
               onChange={(event) => setSearchValue(event.target.value)}
               placeholder="Search products"
-              className="vl-input min-w-0 flex-1 px-3 py-3 text-white placeholder:text-white/40"
+              className="vl-input min-w-0 flex-1 px-3 py-3 text-white placeholder:text-white/70"
             />
             <button type="submit" aria-label="Search" className="vl2-btn-secondary vl-focus-ring inline-flex h-11 w-11 shrink-0 items-center justify-center">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px]">

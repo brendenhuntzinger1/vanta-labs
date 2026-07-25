@@ -59,7 +59,7 @@ export function ProductCard({
             />
           ) : (
             <div className="flex h-full items-center justify-center">
-              <div className="border border-white/12 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-white/40">
+              <div className="border border-white/12 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-white/70">
                 Image pending
               </div>
             </div>
@@ -76,7 +76,7 @@ export function ProductCard({
           <div className="mt-3 flex items-baseline gap-x-2">
             <p className="text-lg text-white sm:text-xl">{product.salePrice ?? product.price}</p>
             {product.salePrice && product.compareAtPrice ? (
-              <p className="text-xs text-white/40 line-through sm:text-sm">{product.compareAtPrice}</p>
+              <p className="text-xs text-white/70 line-through sm:text-sm">{product.compareAtPrice}</p>
             ) : null}
           </div>
           {/* Trust badges — data-driven, so they only appear when the real
@@ -97,7 +97,7 @@ export function ProductCard({
                 Batch {product.batchNumber}
               </span>
             ) : null}
-            <span className="text-white/40">{dosePreview?.label ?? "Verified lot"}</span>
+            <span className="text-white/70">{dosePreview?.label ?? "Verified lot"}</span>
           </div>
         </div>
       </Link>

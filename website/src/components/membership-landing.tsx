@@ -50,7 +50,7 @@ function FaqAccordion() {
               aria-expanded={isOpen}
             >
               <span className="text-sm text-white">{item.q}</span>
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 flex-shrink-0 text-white/40 transition-transform ${isOpen ? "rotate-180" : ""}`}>
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`h-4 w-4 flex-shrink-0 text-white/70 transition-transform ${isOpen ? "rotate-180" : ""}`}>
                 <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </button>
@@ -108,11 +108,11 @@ function RewardsCalculator({ tiers }: { tiers: MembershipTier[] }) {
 
       <div className="mt-6 grid grid-cols-2 gap-4 border-t border-white/10 pt-6">
         <div>
-          <p className="text-[11px] uppercase tracking-[0.18em] text-white/40">Points / month</p>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-white/70">Points / month</p>
           <p className="mt-1 text-2xl text-white">{monthlyPoints.toLocaleString()}</p>
         </div>
         <div>
-          <p className="text-[11px] uppercase tracking-[0.18em] text-white/40">Value / year</p>
+          <p className="text-[11px] uppercase tracking-[0.18em] text-white/70">Value / year</p>
           <p className="mt-1 text-2xl text-emerald-300">${yearlyValue}</p>
         </div>
       </div>
@@ -221,7 +221,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                       <span className="text-base font-normal text-white/35 line-through">{money(tier.compareMonthlyPriceCents)}</span>
                     ) : null}
                     <span>{money(price)}</span>
-                    {price > 0 ? <span className="text-sm font-normal text-white/40">/{billingCycle === "monthly" ? "mo" : "yr"}</span> : null}
+                    {price > 0 ? <span className="text-sm font-normal text-white/70">/{billingCycle === "monthly" ? "mo" : "yr"}</span> : null}
                   </p>
                   {showAnnualSavings ? (
                     <p className="mt-1 text-xs font-semibold text-emerald-300">Save {money(annualSavingsCents)} vs monthly</p>
@@ -268,7 +268,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                       >
                         Join {tier.name}
                       </Link>
-                      <p className="mt-2 text-center text-[11px] text-white/40">$1 today, {tier.introDurationDays}-day intro, then {money(tier.monthlyPriceCents)}/month.</p>
+                      <p className="mt-2 text-center text-[11px] text-white/70">$1 today, {tier.introDurationDays}-day intro, then {money(tier.monthlyPriceCents)}/month.</p>
                     </div>
                   )}
                 </div>
@@ -276,7 +276,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
             );
           })}
         </div>
-        <p className="mt-3 text-center text-[11px] uppercase tracking-[0.24em] text-white/40 sm:hidden">← Swipe to compare plans →</p>
+        <p className="mt-3 text-center text-[11px] uppercase tracking-[0.24em] text-white/70 sm:hidden">← Swipe to compare plans →</p>
 
         <ScrollReveal delayMs={80}>
           <div className="mt-14 border-t border-white/10 pt-10 text-center">

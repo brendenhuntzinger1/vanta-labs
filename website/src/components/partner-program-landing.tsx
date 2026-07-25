@@ -274,7 +274,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
                       <input type="tel" value={applicantPhone} onChange={(event) => setApplicantPhone(event.target.value)} autoComplete="tel" placeholder="(555) 123-4567" className="vl-input w-full px-4 py-3" required />
                     </label>
                     <label className="block text-sm text-white/50 sm:col-span-2">
-                      <span className="mb-2 block">Instagram / TikTok / social <span className="text-white/30">(optional)</span></span>
+                      <span className="mb-2 block">Instagram / TikTok / social <span className="text-white/60">(optional)</span></span>
                       <input value={social} onChange={(event) => setSocial(event.target.value)} placeholder="@yourhandle or profile link" className="vl-input w-full px-4 py-3" />
                     </label>
                     <label className="block text-sm text-white/50">
@@ -282,7 +282,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
                       <input value={preferredCode} onChange={(event) => setPreferredCode(event.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))} placeholder="e.g. JORDAN10" maxLength={20} className="vl-input w-full px-4 py-3" />
                     </label>
                     <label className="block text-sm text-white/50">
-                      <span className="mb-2 block">Follower count <span className="text-white/30">(optional)</span></span>
+                      <span className="mb-2 block">Follower count <span className="text-white/60">(optional)</span></span>
                       <input type="text" inputMode="numeric" value={followerCount} onChange={(event) => setFollowerCount(event.target.value.replace(/[^\d,]/g, ""))} placeholder="e.g. 12,500" className="vl-input w-full px-4 py-3" />
                     </label>
                   </div>
@@ -309,7 +309,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
                 <li>3. Admin reviews fit and audience quality.</li>
                 <li>4. On approval, your Ambassador Stats tab unlocks in your account.</li>
               </ol>
-              <p className="mt-4 text-white/40">Average approval time: {stats.averageApprovalTimeHours.toFixed(1)} hours.</p>
+              <p className="mt-4 text-white/70">Average approval time: {stats.averageApprovalTimeHours.toFixed(1)} hours.</p>
             </div>
           </div>
         </div>
@@ -447,7 +447,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
               </li>
             ))}
           </ul>
-          <p className="mt-6 text-xs leading-6 text-white/40">
+          <p className="mt-6 text-xs leading-6 text-white/70">
             Commissions become payable 14 days after an order completes (this protects
             against refunds and chargebacks), and payouts are sent every two weeks via
             PayPal, Venmo, or Cash App.

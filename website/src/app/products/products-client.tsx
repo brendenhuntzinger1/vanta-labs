@@ -273,7 +273,7 @@ function ProductsPageContent() {
               <button
                 type="button"
                 onClick={() => { setSelectedCategory("All"); setSearchQuery(""); setStockFilter(false); setBestSellersOnly(false); }}
-                className="text-[10px] uppercase tracking-[0.18em] text-white/40 transition hover:text-white"
+                className="text-[10px] uppercase tracking-[0.18em] text-white/70 transition hover:text-white"
               >
                 Clear all
               </button>

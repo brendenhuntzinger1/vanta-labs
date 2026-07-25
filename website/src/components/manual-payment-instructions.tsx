@@ -169,7 +169,7 @@ export function ManualPaymentInstructions({
             value={transactionId}
             onChange={(e) => setTransactionId(e.target.value)}
             placeholder={`Enter your ${referenceLabel}`}
-            className="w-full rounded-lg border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
+            className="w-full rounded-lg border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
           />
         </label>
 

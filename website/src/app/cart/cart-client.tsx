@@ -66,7 +66,7 @@ export function CartPageClient() {
                         {hasRealImage ? (
                           <Image src={item.image} alt={item.name} fill sizes="80px" className="object-contain p-2" />
                         ) : (
-                          <div className="flex h-full w-full items-center justify-center text-[9px] uppercase tracking-[0.14em] text-white/30">No image</div>
+                          <div className="flex h-full w-full items-center justify-center text-[9px] uppercase tracking-[0.14em] text-white/60">No image</div>
                         )}
                       </div>
                       <div className="flex flex-1 items-start justify-between gap-4">
@@ -170,7 +170,7 @@ export function CartPageClient() {
                     value={effectiveReferralInput}
                     onChange={(event) => setReferralInput(event.target.value)}
                     placeholder="VANTA10"
-                    className="w-full border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
+                    className="w-full border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
                   />
                 </label>
                 <div className="mt-4 flex flex-col gap-3 sm:flex-row">
@@ -210,7 +210,7 @@ export function CartPageClient() {
               Continue to checkout
             </button>
 
-            <div className="mt-5 flex items-center justify-center gap-6 text-[10px] uppercase tracking-[0.14em] text-white/40">
+            <div className="mt-5 flex items-center justify-center gap-6 text-[10px] uppercase tracking-[0.14em] text-white/70">
               <span>Encrypted Checkout</span>
               <span>Fast Dispatch</span>
             </div>

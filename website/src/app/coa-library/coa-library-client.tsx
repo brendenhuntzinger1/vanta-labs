@@ -63,7 +63,7 @@ export function CoaLibraryPageClient() {
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Aurelium or AR-2407A"
-                className="w-full border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
+                className="w-full border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
               />
             </label>
             <label className="text-sm text-white/50">
@@ -119,15 +119,15 @@ export function CoaLibraryPageClient() {
                 </div>
                 <div className="grid gap-3 text-sm text-white/70 sm:grid-cols-2 lg:w-[420px] lg:min-w-0">
                   <div>
-                    <p className="text-white/40">Purity result</p>
+                    <p className="text-white/70">Purity result</p>
                     <p className="mt-1 text-white">{record.purityResult}</p>
                   </div>
                   <div>
-                    <p className="text-white/40">Testing date</p>
+                    <p className="text-white/70">Testing date</p>
                     <p className="mt-1 text-white">{record.testingDate}</p>
                   </div>
                   <div>
-                    <p className="text-white/40">Laboratory</p>
+                    <p className="text-white/70">Laboratory</p>
                     <p className="mt-1 text-white">{record.labName}</p>
                   </div>
                   <div>
@@ -141,7 +141,7 @@ export function CoaLibraryPageClient() {
                         Open / Download COA
                       </a>
                     ) : (
-                      <span className="inline-flex px-4 py-2 text-sm text-white/40">COA coming soon</span>
+                      <span className="inline-flex px-4 py-2 text-sm text-white/70">COA coming soon</span>
                     )}
                   </div>
                 </div>

@@ -70,7 +70,7 @@ export default async function AccountLoginPage({
               ))}
             </ul>
           </div>
-          <p className="relative text-[11px] uppercase tracking-[0.18em] text-white/30">For laboratory research use only</p>
+          <p className="relative text-[11px] uppercase tracking-[0.18em] text-white/60">For laboratory research use only</p>
         </div>
 
         {/* Form panel */}

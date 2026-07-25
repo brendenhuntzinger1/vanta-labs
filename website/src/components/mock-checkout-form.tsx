@@ -46,7 +46,7 @@ export function MockCheckoutForm({ orderId, orderNumber }: { orderId: string; or
 
   return (
     <div>
-      <label className="block text-xs uppercase tracking-wide text-white/40">Card number</label>
+      <label className="block text-xs uppercase tracking-wide text-white/70">Card number</label>
       <input
         type="text"
         inputMode="numeric"
@@ -55,7 +55,7 @@ export function MockCheckoutForm({ orderId, orderNumber }: { orderId: string; or
         aria-label="Test card number"
         className="mt-2 w-full border border-white/15 bg-white/5 px-3 py-2 text-sm text-white/80"
       />
-      <p className="mt-1 text-xs text-white/40">Sandbox test card — no real card is accepted here.</p>
+      <p className="mt-1 text-xs text-white/70">Sandbox test card — no real card is accepted here.</p>
 
       <div className="mt-6 flex flex-col gap-3 sm:flex-row">
         <button
@@ -80,7 +80,7 @@ export function MockCheckoutForm({ orderId, orderNumber }: { orderId: string; or
         <p className={`mt-4 text-sm ${state === "declined" ? "text-amber-300" : "text-red-300"}`}>{message}</p>
       ) : null}
 
-      <p className="mt-6 text-xs text-white/30">Order reference: {orderNumber}</p>
+      <p className="mt-6 text-xs text-white/60">Order reference: {orderNumber}</p>
     </div>
   );
 }

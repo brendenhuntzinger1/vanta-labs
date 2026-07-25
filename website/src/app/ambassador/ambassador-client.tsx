@@ -43,7 +43,7 @@ export function AmbassadorPageClient() {
               <a href="#apply" className="vl2-btn-primary vl-focus-ring px-6 py-3 text-sm">Apply as Ambassador</a>
               <Link href="/partner" className="vl2-btn-secondary vl-focus-ring px-6 py-3 text-sm">Partner Dashboard</Link>
             </div>
-            <div className="mt-6 flex flex-wrap gap-6 text-[10px] uppercase tracking-[0.14em] text-white/40">
+            <div className="mt-6 flex flex-wrap gap-6 text-[10px] uppercase tracking-[0.14em] text-white/70">
               <span>Fast Approval</span>
               <span>Reliable Payouts</span>
             </div>
@@ -81,7 +81,7 @@ export function AmbassadorPageClient() {
               </div>
             ))}
           </div>
-          <p className="mt-5 text-xs leading-6 text-white/40">
+          <p className="mt-5 text-xs leading-6 text-white/70">
             Commission is calculated on the order subtotal after the customer&apos;s 10% discount (excluding shipping and
             fees). Exact rate and thresholds may vary by tier and are shown in your dashboard.
           </p>
@@ -169,7 +169,7 @@ export function AmbassadorPageClient() {
                   value={applicantName}
                   onChange={(event) => setApplicantName(event.target.value)}
                   autoComplete="name"
-                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
+                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
                   placeholder="Your name"
                 />
               </label>
@@ -180,7 +180,7 @@ export function AmbassadorPageClient() {
                   value={applicantEmail}
                   onChange={(event) => setApplicantEmail(event.target.value)}
                   autoComplete="email"
-                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
+                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
                   placeholder="you@domain.com"
                 />
               </label>

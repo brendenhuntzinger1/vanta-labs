@@ -933,55 +933,79 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
     }
   }
 
-  const [{ data: partners, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }] = await Promise.all([
+  const [{ data: partners, error: partnerError }, rollup] = await Promise.all([
     query,
-    supabaseAdmin.from("referral_orders").select("ambassador_id, commission_amount, payment_status"),
-    supabaseAdmin.from("orders").select("ambassador_id, amount_paid, payment_status"),
-    supabaseAdmin.from("partner_clicks").select("ambassador_id"),
+    // Aggregate the three growth tables in Postgres (one grouped pass each)
+    // instead of scanning every row into the app. Falls back below if the RPC
+    // isn't migrated yet — see src/lib/sql/admin-partner-rollups.sql.
+    supabaseAdmin.rpc("admin_partner_rollups"),
   ]);
-
   assertNoSupabaseError("partners.select(admin partner rows)", partnerError);
-  assertNoSupabaseError("referral_orders.select(admin commission rows)", commissionError);
-  assertNoSupabaseError("orders.select(admin order rows)", orderError);
-  assertNoSupabaseError("partner_clicks.select(admin click rows)", clickError);
 
   const commissionByPartner = new Map<string, { total: number; pending: number; approvedForPayout: number; paid: number; reversed: number }>();
-  for (const row of commissionRows ?? []) {
-    const partnerId = row.ambassador_id;
-    if (!partnerId) continue;
-    const current = commissionByPartner.get(partnerId) ?? { total: 0, pending: 0, approvedForPayout: 0, paid: 0, reversed: 0 };
-    const amount = Number(row.commission_amount ?? 0);
-    // "total" is EARNED commission — exclude reversed/voided/manual_review so it
-    // matches the ambassador's own lifetime-earnings figure. The status
-    // breakdown below still tracks each bucket separately.
-    if (isEarnedCommission(row.payment_status)) current.total += amount;
-    if (row.payment_status === "commission_paid" || row.payment_status === "paid") {
-      current.paid += amount;
-    } else if (row.payment_status === "approved_for_payout") {
-      current.approvedForPayout += amount;
-    } else if (row.payment_status === "reversed" || row.payment_status === "voided") {
-      current.reversed += amount;
-    } else if (row.payment_status !== "reversed" && row.payment_status !== "voided") {
-      current.pending += amount;
-    }
-    commissionByPartner.set(partnerId, current);
-  }
-
   const ordersByPartner = new Map<string, { totalRevenue: number; totalOrders: number }>();
-  for (const row of orderRows ?? []) {
-    const partnerId = row.ambassador_id;
-    if (!partnerId || row.payment_status !== "paid") continue;
-    const current = ordersByPartner.get(partnerId) ?? { totalRevenue: 0, totalOrders: 0 };
-    current.totalRevenue += Number(row.amount_paid ?? 0);
-    current.totalOrders += 1;
-    ordersByPartner.set(partnerId, current);
-  }
-
   const clickCounts = new Map<string, number>();
-  for (const row of clickRows ?? []) {
-    const partnerId = row.ambassador_id;
-    if (!partnerId) continue;
-    clickCounts.set(partnerId, (clickCounts.get(partnerId) ?? 0) + 1);
+
+  if (!rollup.error && Array.isArray(rollup.data)) {
+    for (const row of rollup.data as Array<Record<string, unknown>>) {
+      const partnerId = row.ambassador_id ? String(row.ambassador_id) : "";
+      if (!partnerId) continue;
+      commissionByPartner.set(partnerId, {
+        total: Number(row.commission_total ?? 0),
+        pending: Number(row.commission_pending ?? 0),
+        approvedForPayout: Number(row.commission_approved ?? 0),
+        paid: Number(row.commission_paid ?? 0),
+        reversed: Number(row.commission_reversed ?? 0),
+      });
+      ordersByPartner.set(partnerId, {
+        totalRevenue: Number(row.order_revenue ?? 0),
+        totalOrders: Number(row.order_count ?? 0),
+      });
+      clickCounts.set(partnerId, Number(row.click_count ?? 0));
+    }
+  } else {
+    // Fallback: the rollup RPC isn't present — legacy full-table scan + JS
+    // aggregation (identical bucket logic). Slower, but keeps the page working
+    // before the migration is applied.
+    const [{ data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }] = await Promise.all([
+      supabaseAdmin.from("referral_orders").select("ambassador_id, commission_amount, payment_status"),
+      supabaseAdmin.from("orders").select("ambassador_id, amount_paid, payment_status"),
+      supabaseAdmin.from("partner_clicks").select("ambassador_id"),
+    ]);
+    assertNoSupabaseError("referral_orders.select(admin commission rows)", commissionError);
+    assertNoSupabaseError("orders.select(admin order rows)", orderError);
+    assertNoSupabaseError("partner_clicks.select(admin click rows)", clickError);
+
+    for (const row of commissionRows ?? []) {
+      const partnerId = row.ambassador_id;
+      if (!partnerId) continue;
+      const current = commissionByPartner.get(partnerId) ?? { total: 0, pending: 0, approvedForPayout: 0, paid: 0, reversed: 0 };
+      const amount = Number(row.commission_amount ?? 0);
+      if (isEarnedCommission(row.payment_status)) current.total += amount;
+      if (row.payment_status === "commission_paid" || row.payment_status === "paid") {
+        current.paid += amount;
+      } else if (row.payment_status === "approved_for_payout") {
+        current.approvedForPayout += amount;
+      } else if (row.payment_status === "reversed" || row.payment_status === "voided") {
+        current.reversed += amount;
+      } else if (row.payment_status !== "reversed" && row.payment_status !== "voided") {
+        current.pending += amount;
+      }
+      commissionByPartner.set(partnerId, current);
+    }
+    for (const row of orderRows ?? []) {
+      const partnerId = row.ambassador_id;
+      if (!partnerId || row.payment_status !== "paid") continue;
+      const current = ordersByPartner.get(partnerId) ?? { totalRevenue: 0, totalOrders: 0 };
+      current.totalRevenue += Number(row.amount_paid ?? 0);
+      current.totalOrders += 1;
+      ordersByPartner.set(partnerId, current);
+    }
+    for (const row of clickRows ?? []) {
+      const partnerId = row.ambassador_id;
+      if (!partnerId) continue;
+      clickCounts.set(partnerId, (clickCounts.get(partnerId) ?? 0) + 1);
+    }
   }
 
   const mappedRows = (partners ?? []).map((partner) => {

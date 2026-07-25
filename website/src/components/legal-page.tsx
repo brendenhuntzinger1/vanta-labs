@@ -37,7 +37,7 @@ export function LegalPage({
       <main className="mx-auto max-w-3xl px-6 pb-24 pt-32 lg:px-12">
         <p className="vl2-eyebrow">Legal</p>
         <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">{title}</h1>
-        <p className="mt-2 text-xs text-white/40">Last updated: {updated}</p>
+        <p className="mt-2 text-xs text-white/70">Last updated: {updated}</p>
         <div className="mt-8 space-y-4">{renderBody(body)}</div>
       </main>
     </div>

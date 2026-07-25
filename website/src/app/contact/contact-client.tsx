@@ -157,7 +157,7 @@ export function ContactPageClient() {
                   type="text"
                   value={firstName}
                   onChange={(event) => setFirstName(event.target.value)}
-                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
+                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
                   autoComplete="given-name"
                   required
                 />
@@ -169,7 +169,7 @@ export function ContactPageClient() {
                   type="text"
                   value={lastName}
                   onChange={(event) => setLastName(event.target.value)}
-                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
+                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
                   autoComplete="family-name"
                   required
                 />
@@ -183,7 +183,7 @@ export function ContactPageClient() {
                   type="email"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
-                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
+                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
                   autoComplete="email"
                   required
                 />
@@ -195,7 +195,7 @@ export function ContactPageClient() {
                   type="text"
                   value={orderNumber}
                   onChange={(event) => setOrderNumber(event.target.value)}
-                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
+                  className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
                   placeholder="Optional"
                   autoComplete="off"
                 />
@@ -208,7 +208,7 @@ export function ContactPageClient() {
                 type="text"
                 value={subject}
                 onChange={(event) => setSubject(event.target.value)}
-                className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
+                className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
                 required
               />
             </label>
@@ -218,7 +218,7 @@ export function ContactPageClient() {
               <textarea
                 value={message}
                 onChange={(event) => setMessage(event.target.value)}
-                className="min-h-40 w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/30 outline-none transition focus:border-white/50"
+                className="min-h-40 w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50"
                 required
               />
             </label>

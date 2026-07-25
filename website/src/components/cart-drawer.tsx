@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -41,6 +41,48 @@ export function CartDrawer() {
   } = useCart();
 
   const shippingProgress = getShippingProgress(subtotal);
+  const panelRef = useRef<HTMLDivElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  // Accessible modal behavior: move focus into the drawer on open, trap Tab
+  // within it, close on Escape, lock body scroll, and restore focus on close.
+  useEffect(() => {
+    if (!isCartOpen) return;
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    closeButtonRef.current?.focus();
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeCart();
+        return;
+      }
+      if (event.key === "Tab" && panelRef.current) {
+        const focusables = panelRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+      previouslyFocused?.focus?.();
+    };
+  }, [isCartOpen, closeCart]);
 
   const effectiveReferralInput = referralInput || referralCode || "";
   const effectiveCouponInput = couponInput || couponCode || "";
@@ -58,18 +100,25 @@ export function CartDrawer() {
     <div className="fixed inset-0 z-[60] flex justify-end px-0 py-0 sm:px-4 sm:py-4">
       <button
         type="button"
+        tabIndex={-1}
         className="absolute inset-0 bg-black/70 backdrop-blur-[2px] animate-[vl-fade-backdrop_0.28s_ease-out]"
         aria-label="Close cart drawer"
         onClick={closeCart}
       />
 
-      <div className="vl-panel relative z-10 flex h-full w-full max-w-xl flex-col rounded-none p-4 shadow-2xl animate-[vl-drawer-in-mobile_0.32s_cubic-bezier(0.2,0.8,0.2,1)] sm:rounded-[2rem] sm:p-6 sm:animate-[vl-drawer-in-desktop_0.32s_cubic-bezier(0.2,0.8,0.2,1)]">
+      <div
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="cart-drawer-title"
+        className="vl-panel relative z-10 flex h-full w-full max-w-xl flex-col rounded-none p-4 shadow-2xl animate-[vl-drawer-in-mobile_0.32s_cubic-bezier(0.2,0.8,0.2,1)] sm:rounded-[2rem] sm:p-6 sm:animate-[vl-drawer-in-desktop_0.32s_cubic-bezier(0.2,0.8,0.2,1)]"
+      >
         <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
           <div>
             <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Cart</p>
-            <h2 className="mt-2 text-2xl font-semibold text-white">Your order</h2>
+            <h2 id="cart-drawer-title" className="mt-2 text-2xl font-semibold text-white">Your order</h2>
           </div>
-          <button type="button" onClick={closeCart} aria-label="Close cart" className="-mr-2 inline-flex h-11 w-11 items-center justify-center text-sm text-zinc-400 transition hover:text-white">
+          <button ref={closeButtonRef} type="button" onClick={closeCart} aria-label="Close cart" className="-mr-2 inline-flex h-11 w-11 items-center justify-center text-sm text-zinc-400 transition hover:text-white">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" className="h-5 w-5"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
