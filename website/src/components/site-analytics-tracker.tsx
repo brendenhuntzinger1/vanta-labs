@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 
 const SESSION_KEY = "vl_analytics_session_id";
@@ -43,6 +43,13 @@ function sendTrackEvent(payload: Record<string, unknown>) {
 export function SiteAnalyticsTracker() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [consentRevision, setConsentRevision] = useState(0);
+
+  useEffect(() => {
+    const handleConsentChange = () => setConsentRevision((revision) => revision + 1);
+    window.addEventListener("vanta:cookie-consent", handleConsentChange);
+    return () => window.removeEventListener("vanta:cookie-consent", handleConsentChange);
+  }, []);
 
   const currentUrl = useMemo(() => {
     const query = searchParams?.toString();
@@ -59,14 +66,14 @@ export function SiteAnalyticsTracker() {
       return;
     }
 
-    // Honor the cookie-consent choice: if the visitor declined, don't track.
-    // (Matches the STORAGE_KEY used by cookie-consent.tsx.)
+    // Analytics is opt-in. Do not create analytics storage or send events until
+    // the visitor explicitly accepts; this makes Decline a real no-track path.
     try {
-      if (window.localStorage.getItem("vl_cookie_consent") === "declined") {
+      if (window.localStorage.getItem("vl_cookie_consent") !== "accepted") {
         return;
       }
     } catch {
-      // If storage is unreadable, fall through (no consent stored = default on).
+      return;
     }
 
     const sessionId = getOrCreateStorageValue(SESSION_KEY);
@@ -95,7 +102,7 @@ export function SiteAnalyticsTracker() {
     }
 
     sendTrackEvent({ ...basePayload, eventType: "page_view" });
-  }, [currentUrl, pathname]);
+  }, [consentRevision, currentUrl, pathname]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -107,14 +114,14 @@ export function SiteAnalyticsTracker() {
       return;
     }
 
-    // Honor the cookie-consent choice: if the visitor declined, don't track.
-    // (Matches the STORAGE_KEY used by cookie-consent.tsx.)
+    // Analytics is opt-in. Do not create analytics storage or send events until
+    // the visitor explicitly accepts; this makes Decline a real no-track path.
     try {
-      if (window.localStorage.getItem("vl_cookie_consent") === "declined") {
+      if (window.localStorage.getItem("vl_cookie_consent") !== "accepted") {
         return;
       }
     } catch {
-      // If storage is unreadable, fall through (no consent stored = default on).
+      return;
     }
 
     const handler = (event: Event) => {
@@ -139,7 +146,7 @@ export function SiteAnalyticsTracker() {
     return () => {
       window.removeEventListener("vanta:analytics", handler as EventListener);
     };
-  }, [pathname]);
+  }, [consentRevision, pathname]);
 
   return null;
 }
