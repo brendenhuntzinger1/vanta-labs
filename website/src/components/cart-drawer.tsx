@@ -10,6 +10,7 @@ import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 export function CartDrawer() {
   const router = useRouter();
   const [referralInput, setReferralInput] = useState("");
+  const [couponInput, setCouponInput] = useState("");
   const {
     items,
     isCartOpen,
@@ -26,6 +27,12 @@ export function CartDrawer() {
     referralSuccess,
     applyReferralCode,
     clearReferralCode,
+    couponCode,
+    couponDetails,
+    couponError,
+    couponSuccess,
+    applyCouponCode,
+    clearCouponCode,
     isBuy3Get1FreeEligible,
     buy3Get1UntilNextFree,
     bulkSavingsApplied,
@@ -36,6 +43,7 @@ export function CartDrawer() {
   const shippingProgress = getShippingProgress(subtotal);
 
   const effectiveReferralInput = referralInput || referralCode || "";
+  const effectiveCouponInput = couponInput || couponCode || "";
 
   const handleContinueToCheckout = () => {
     closeCart();
@@ -188,8 +196,43 @@ export function CartDrawer() {
           {referralSuccess ? <p className="text-sm text-emerald-400">{referralSuccess}</p> : null}
           {referralError ? <p className="text-sm text-rose-400">{referralError}</p> : null}
           {referralDetails ? (
-            <p className="text-sm text-zinc-300">
-              Ambassador {referralDetails.ambassadorName} • {referralDetails.customerDiscountPercent}% off
+            <p className="flex items-center justify-between text-sm text-zinc-300">
+              <span>Ambassador {referralDetails.ambassadorName} • {referralDetails.customerDiscountPercent}% off</span>
+              <button type="button" onClick={clearReferralCode} className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
+            </p>
+          ) : null}
+
+          {/* Coupon Code — a separate field from the referral code. Also hidden
+              while Buy 3 Get 1 is active (codes can't combine with it). */}
+          {!isBuy3Get1FreeEligible && (
+            <label className="block text-sm text-zinc-400">
+              <span className="mb-2 block uppercase tracking-[0.3em]">Coupon code</span>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={effectiveCouponInput}
+                  onChange={(event) => setCouponInput(event.target.value)}
+                  placeholder="LAUNCH"
+                  className="vl-input flex-1 rounded-full px-4 py-3 text-sm"
+                />
+                <button
+                  type="button"
+                  onClick={() => applyCouponCode(effectiveCouponInput)}
+                  className="vl-btn-secondary vl-focus-ring rounded-full px-4 py-3 text-sm"
+                >
+                  Apply
+                </button>
+              </div>
+            </label>
+          )}
+          {couponSuccess ? <p className="text-sm text-emerald-400">{couponSuccess}</p> : null}
+          {couponError ? <p className="text-sm text-rose-400">{couponError}</p> : null}
+          {couponDetails ? (
+            <p className="flex items-center justify-between text-sm text-zinc-300">
+              <span>
+                Coupon {couponDetails.code} • {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off
+              </span>
+              <button type="button" onClick={clearCouponCode} className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
             </p>
           ) : null}
           {subtotal > 0 && (
