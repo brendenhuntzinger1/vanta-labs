@@ -5,9 +5,8 @@ import { useEffect, useState } from "react";
 
 const STORAGE_KEY = "vl_cookie_consent";
 
-// Lightweight cookie-consent banner. We only use essential cookies plus
-// privacy-friendly analytics, so this is an acknowledgement/notice with a link
-// to the Cookie Policy — no third-party tracking is loaded either way.
+// Analytics remains disabled until the visitor explicitly accepts. Essential
+// store/session cookies continue to work regardless of this preference.
 export function CookieConsent() {
   const [visible, setVisible] = useState(false);
 
@@ -28,6 +27,7 @@ export function CookieConsent() {
     } catch {
       /* no-op */
     }
+    window.dispatchEvent(new Event("vanta:cookie-consent"));
     setVisible(false);
   };
 
