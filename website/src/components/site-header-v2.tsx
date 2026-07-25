@@ -74,7 +74,10 @@ export function SiteHeaderV2() {
     setMobileNavOpen(false);
   };
 
-  const isActive = (href: string) => pathname === href;
+  // Match the exact page and any sub-page (e.g. /products/bpc-157 highlights
+  // Products). None of the nav hrefs are the home route, so prefix matching
+  // never over-highlights.
+  const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
   return (
     <header className="vl2-nav" data-scrolled={scrolled}>
@@ -83,13 +86,17 @@ export function SiteHeaderV2() {
           VANTA LABS
         </Link>
 
-        <nav className="hidden items-center gap-8 lg:flex">
+        <nav className="hidden items-center gap-1 lg:flex">
           {NAV_LINKS.map((link) => (
             <Link
               key={link.href}
               href={link.href}
               aria-current={isActive(link.href) ? "page" : undefined}
-              className="vl-focus-ring text-[0.72rem] font-medium uppercase tracking-[0.16em] text-white/75 transition hover:text-white"
+              className={`vl-focus-ring rounded-full px-3.5 py-2 text-[0.72rem] font-medium uppercase tracking-[0.16em] transition ${
+                isActive(link.href)
+                  ? "bg-emerald-400/12 text-emerald-300 ring-1 ring-inset ring-emerald-400/35"
+                  : "text-white/75 hover:text-white"
+              }`}
             >
               {link.label}
             </Link>
@@ -184,7 +191,12 @@ export function SiteHeaderV2() {
                 key={link.href}
                 href={link.href}
                 onClick={() => setMobileNavOpen(false)}
-                className="vl-focus-ring flex min-h-[44px] items-center rounded-lg px-3 py-3 text-sm uppercase tracking-[0.12em] text-white/85 transition hover:bg-white/5 hover:text-white"
+                aria-current={isActive(link.href) ? "page" : undefined}
+                className={`vl-focus-ring flex min-h-[44px] items-center rounded-lg px-3 py-3 text-sm uppercase tracking-[0.12em] transition ${
+                  isActive(link.href)
+                    ? "bg-emerald-400/12 text-emerald-300 ring-1 ring-inset ring-emerald-400/35"
+                    : "text-white/85 hover:bg-white/5 hover:text-white"
+                }`}
               >
                 {link.label}
               </Link>
