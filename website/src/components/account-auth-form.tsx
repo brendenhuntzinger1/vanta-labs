@@ -16,6 +16,11 @@ const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() ||
 // paid SMS in a rapid loop.
 const OTP_RESEND_COOLDOWN_SECONDS = 45;
 
+// Phone/SMS sign-in stays hidden until the Twilio Trust Hub compliance profile
+// is approved — otherwise the "Text me a code" button returns a Twilio error to
+// real shoppers. Flip to true once Twilio approves the account, then redeploy.
+const PHONE_LOGIN_ENABLED = false;
+
 type AuthMode = "login" | "signup";
 
 // Business type shown on the account-creation screen, alongside the age +
@@ -374,7 +379,7 @@ export function AccountAuthForm() {
           </label>
         ) : null}
 
-        {mode === "login" ? (
+        {PHONE_LOGIN_ENABLED && mode === "login" ? (
           <div className="grid grid-cols-2 gap-1 rounded-full border border-white/10 bg-black/40 p-1">
             <button
               type="button"
