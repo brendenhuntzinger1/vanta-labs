@@ -4,6 +4,17 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { TurnstileWidget } from "@/components/turnstile-widget";
+
+// When a Turnstile site key is configured, every auth call carries a CAPTCHA
+// token that Supabase verifies — blocking bots from draining email + SMS spend.
+// Absent the key, the whole layer is a graceful no-op.
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() || "";
+
+// Seconds a shopper must wait between "Text me a code" requests. A cheap client
+// speed-bump on top of Supabase/Twilio limits so a single visitor can't fire off
+// paid SMS in a rapid loop.
+const OTP_RESEND_COOLDOWN_SECONDS = 45;
 
 type AuthMode = "login" | "signup";
 
@@ -62,6 +73,10 @@ export function AccountAuthForm() {
   const [phone, setPhone] = useState("");
   const [otpCode, setOtpCode] = useState("");
   const [otpSent, setOtpSent] = useState(false);
+  const [otpCooldown, setOtpCooldown] = useState(0);
+  // Single-use Turnstile token + a bump counter to reset the widget after each try.
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
 
   // A shopper who clicked the confirmation link in Supabase's built-in
   // verification email lands back here with a session already established
@@ -120,6 +135,23 @@ export function AccountAuthForm() {
     };
   }, [router, nextPath]);
 
+  // Tick down the "Text me a code" cooldown once per second.
+  useEffect(() => {
+    if (otpCooldown <= 0) return;
+    const timer = setInterval(() => {
+      setOtpCooldown((seconds) => (seconds <= 1 ? 0 : seconds - 1));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [otpCooldown]);
+
+  // A CAPTCHA token is single-use — after each auth attempt, force the widget to
+  // mint a fresh one so the next attempt isn't rejected for a spent token.
+  const resetCaptcha = () => {
+    if (!TURNSTILE_SITE_KEY) return;
+    setCaptchaToken(null);
+    setCaptchaResetKey((key) => key + 1);
+  };
+
   const establishSessionAndGo = async (accessToken: string) => {
     const sessionResponse = await fetch("/api/auth/session", {
       method: "POST",
@@ -164,6 +196,7 @@ export function AccountAuthForm() {
             referred_by_code: referralCodeFromUrl || undefined,
           },
           emailRedirectTo: getEmailRedirectUrl(`/account/login?next=${encodeURIComponent(nextPath)}`),
+          captchaToken: captchaToken ?? undefined,
         },
       });
 
@@ -191,6 +224,7 @@ export function AccountAuthForm() {
       setError(submitError instanceof Error ? submitError.message : "Unable to create account");
     } finally {
       setLoading(false);
+      resetCaptcha();
     }
   };
 
@@ -203,6 +237,7 @@ export function AccountAuthForm() {
       const { data, error: signInError } = await supabase.auth.signInWithPassword({
         email: email.trim(),
         password,
+        options: { captchaToken: captchaToken ?? undefined },
       });
 
       if (signInError || !data.session?.access_token) {
@@ -214,6 +249,7 @@ export function AccountAuthForm() {
       setError(submitError instanceof Error ? submitError.message : "Unable to sign in");
     } finally {
       setLoading(false);
+      resetCaptcha();
     }
   };
 
@@ -221,6 +257,10 @@ export function AccountAuthForm() {
   const normalizePhone = (raw: string) => `+${raw.replace(/[^\d]/g, "")}`;
 
   const handleSendOtp = async () => {
+    if (otpCooldown > 0) {
+      setError(`Please wait ${otpCooldown}s before requesting another code.`);
+      return;
+    }
     const normalized = normalizePhone(phone);
     if (normalized.length < 9) {
       setError("Enter your phone in full international format, e.g. +1 813 555 0000.");
@@ -230,14 +270,19 @@ export function AccountAuthForm() {
     setError(null);
     setMessage(null);
     try {
-      const { error: otpError } = await supabase.auth.signInWithOtp({ phone: normalized });
+      const { error: otpError } = await supabase.auth.signInWithOtp({
+        phone: normalized,
+        options: { captchaToken: captchaToken ?? undefined },
+      });
       if (otpError) throw new Error(otpError.message);
       setOtpSent(true);
+      setOtpCooldown(OTP_RESEND_COOLDOWN_SECONDS);
       setMessage("We texted you a 6-digit code. Enter it below to sign in.");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Couldn't send the code. Try again.");
     } finally {
       setLoading(false);
+      resetCaptcha();
     }
   };
 
@@ -291,10 +336,17 @@ export function AccountAuthForm() {
     );
   }
 
+  const isSendCodeAction = mode === "login" && loginMethod === "phone" && !otpSent;
+  const sendBlockedByCooldown = isSendCodeAction && otpCooldown > 0;
+
   const primaryLabel = mode === "signup"
     ? "Create Account"
     : loginMethod === "phone"
-      ? (otpSent ? "Verify & Sign In" : "Text me a code")
+      ? otpSent
+        ? "Verify & Sign In"
+        : sendBlockedByCooldown
+          ? `Resend in ${otpCooldown}s`
+          : "Text me a code"
       : "Sign In";
 
   return (
@@ -454,12 +506,20 @@ export function AccountAuthForm() {
         Keep me signed in on this device
       </label>
 
+      {TURNSTILE_SITE_KEY ? (
+        <TurnstileWidget
+          siteKey={TURNSTILE_SITE_KEY}
+          onToken={setCaptchaToken}
+          resetKey={captchaResetKey}
+        />
+      ) : null}
+
       {message ? <p className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{message}</p> : null}
       {error ? <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p> : null}
 
       <button
         type="submit"
-        disabled={loading || (mode === "signup" && (!ageConfirmed || !researchUseAgreed))}
+        disabled={loading || sendBlockedByCooldown || (mode === "signup" && (!ageConfirmed || !researchUseAgreed))}
         className="vl-focus-ring mt-6 inline-flex w-full items-center justify-center rounded-full bg-emerald-500 px-6 py-3 text-sm font-bold text-[#04120c] shadow-[0_8px_24px_-8px_rgba(16,185,129,0.6)] transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
       >
         {loading ? "Please wait…" : primaryLabel}
