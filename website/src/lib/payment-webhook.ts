@@ -13,6 +13,7 @@ import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
 import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
+import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
 import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
 import { activateAnnualMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 
@@ -887,11 +888,17 @@ export async function finalizeManualPayment(
       console.error("Unable to activate membership for order", orderId, membershipError);
     }
   } else {
-    // Commit stock now that payment is verified. The atomic order claim above
+    // Commit stock now that payment is verified. Finalize the reservation held
+    // at checkout (permanent deduct); if no active hold exists (untracked item,
+    // expired hold, or pre-migration order) fall back to the legacy atomic
+    // decrement so tracked stock still moves. The atomic order claim above
     // guarantees this runs exactly once per order, so no double-decrement.
-    await decrementInventoryForOrder(
-      (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
-    );
+    const fin = await finalizeInventoryForOrder(orderId);
+    if (fin.degraded || fin.finalized === 0) {
+      await decrementInventoryForOrder(
+        (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+      );
+    }
     // Auto-transmit the paid + verified order to the 3PL (best-effort; never
     // blocks approval).
     await transmitOrderToFulfillment(orderId);
@@ -1227,13 +1234,19 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
       if (!isMembershipOrder) {
         try {
-          const { data: soldItems } = await supabaseAdmin
-            .from("order_items")
-            .select("product_id, quantity")
-            .eq("order_id", orderId);
-          await decrementInventoryForOrder(
-            (soldItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
-          );
+          // Finalize the checkout reservation (permanent deduct). Fall back to
+          // the legacy atomic decrement only when there's no active hold to
+          // finalize (untracked item, expired hold, or pre-migration order).
+          const fin = await finalizeInventoryForOrder(orderId);
+          if (fin.degraded || fin.finalized === 0) {
+            const { data: soldItems } = await supabaseAdmin
+              .from("order_items")
+              .select("product_id, quantity")
+              .eq("order_id", orderId);
+            await decrementInventoryForOrder(
+              (soldItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+            );
+          }
         } catch (inventoryError) {
           console.error("Unable to decrement inventory for order", orderId, inventoryError);
         }
@@ -1261,6 +1274,12 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         ? refundEventAmount / originalAmount
         : 1;
     await updateCommissionOnRefund(orderId, { refundedFraction });
+
+    // Release any still-active inventory hold. For a never-paid order (failed /
+    // canceled) this returns the reserved units immediately; for a paid order
+    // the hold was already finalized, so this no-ops and the restock below does
+    // the work. Idempotent and best-effort.
+    await releaseInventoryForOrder(orderId);
 
     // Return committed stock — but ONLY when this order was actually paid (so
     // its inventory was decremented). A refund/cancel of an order that never

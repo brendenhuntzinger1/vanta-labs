@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
+import { reserveInventoryForOrder, DEFAULT_RESERVATION_MINUTES, MANUAL_RESERVATION_MINUTES } from "@/lib/inventory-reservation";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { calculateDiscountAmount } from "@/lib/referral-service";
 import { validateCoupon } from "@/lib/coupons";
@@ -697,6 +698,30 @@ export async function createCheckoutSession(
  if (itemInsertError) {
    console.error("Unable to create order items", itemInsertError);
    throw new Error("Unable to create order items");
+ }
+
+ // Reserve stock ATOMICALLY now that the order + items exist (checkout has
+ // begun — never at add-to-cart). Card/instant orders hold for 15 minutes;
+ // manual (off-platform) orders hold longer since an admin verifies them later.
+ // If any tracked line is short, cancel this order and stop — the customer is
+ // never charged for stock we can't fulfil. The hold is finalized (permanently
+ // deducted) only on a verified paid webhook, released on failure/cancel, and
+ // auto-expired by the sweep. Fails open (never blocks) if the layer is down.
+ const reservation = await reserveInventoryForOrder(
+   orderId,
+   orderItemsPayload.map((i) => ({ productId: i.product_id, quantity: i.quantity })),
+   { expiresInMinutes: isManual ? MANUAL_RESERVATION_MINUTES : DEFAULT_RESERVATION_MINUTES },
+ );
+ if (!reservation.ok) {
+   await supabaseAdmin
+     .from("orders")
+     .update({ payment_status: "canceled", updated_at: new Date().toISOString() })
+     .eq("order_id", orderId);
+   throw new Error(
+     reservation.unavailable.length === 1
+       ? "Sorry — an item in your cart just sold out. Please adjust your cart and try again."
+       : "Sorry — some items in your cart just sold out. Please adjust your cart and try again.",
+   );
  }
 
  // Manual methods (Cash App / Zelle / PayPal) are settled off-platform: the
