@@ -275,7 +275,15 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     }
 
     if (config.t24hEnabled && elapsedMs >= 24 * HOUR_MS) {
-      const coupon = await mintCartRecoveryCoupon(row.email, config.discountPercent, config.couponExpirationHours);
+      // Mint a coupon only if this cart hasn't already had its t24h email — the
+      // sweep runs repeatedly, so minting before the send-dedup check (as this
+      // did) re-created a fresh SAVE-… code on every pass for any cart that
+      // stayed abandoned. Guarding the mint (matching the t72h stage below)
+      // means each forgotten cart gets exactly one recovery code.
+      const alreadySent = await hasSentStage(row.id, "t24h");
+      const coupon = alreadySent
+        ? null
+        : await mintCartRecoveryCoupon(row.email, config.discountPercent, config.couponExpirationHours);
       if (coupon) {
         const sent = await reserveAndSendStage({
           cartId: row.id,
