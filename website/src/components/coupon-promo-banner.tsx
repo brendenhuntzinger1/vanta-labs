@@ -9,8 +9,6 @@ type FeaturedCoupon = {
   endsAt: string | null;
 };
 
-const DISMISS_PREFIX = "vl_promo_dismissed:";
-
 function discountHeadline(coupon: FeaturedCoupon): string {
   if (coupon.discountType === "fixed") {
     // Trim a trailing .00 so "$20 OFF" reads cleaner than "$20.00 OFF".
@@ -29,28 +27,19 @@ function endsLabel(endsAt: string | null): string | null {
 
 export function CouponPromoBanner() {
   const [coupon, setCoupon] = useState<FeaturedCoupon | null>(null);
-  const [visible, setVisible] = useState(false);
   const [entered, setEntered] = useState(false);
   const [copied, setCopied] = useState(false);
 
+  // The banner is intentionally NOT dismissible: it stays up for as long as the
+  // coupon is live and disappears on its own once the coupon is no longer
+  // active (the endpoint returns nothing), so shoppers never miss the offer.
   useEffect(() => {
     let active = true;
     fetch("/api/coupons/featured", { cache: "no-store" })
       .then((res) => res.json())
       .then((json) => {
         if (!active || !json?.coupon?.code) return;
-        const next = json.coupon as FeaturedCoupon;
-        // Respect a per-code dismissal: a shopper who closed THIS code won't
-        // see it again, but a newly launched code still shows.
-        let dismissed = false;
-        try {
-          dismissed = localStorage.getItem(`${DISMISS_PREFIX}${next.code}`) === "1";
-        } catch {
-          /* storage blocked — treat as not dismissed */
-        }
-        if (dismissed) return;
-        setCoupon(next);
-        setVisible(true);
+        setCoupon(json.coupon as FeaturedCoupon);
         // Next frame -> trigger the entrance transition.
         requestAnimationFrame(() => active && setEntered(true));
       })
@@ -62,7 +51,7 @@ export function CouponPromoBanner() {
     };
   }, []);
 
-  if (!visible || !coupon) return null;
+  if (!coupon) return null;
 
   const copy = async () => {
     try {
@@ -72,16 +61,6 @@ export function CouponPromoBanner() {
     } catch {
       /* clipboard blocked — the code is still visible to type manually */
     }
-  };
-
-  const dismiss = () => {
-    try {
-      localStorage.setItem(`${DISMISS_PREFIX}${coupon.code}`, "1");
-    } catch {
-      /* ignore */
-    }
-    setEntered(false);
-    setTimeout(() => setVisible(false), 250);
   };
 
   const ends = endsLabel(coupon.endsAt);
@@ -97,16 +76,7 @@ export function CouponPromoBanner() {
       {/* one subtle glow accent — kept small so the bar stays slim */}
       <div className="pointer-events-none absolute -right-8 -top-10 h-24 w-24 rounded-full bg-white/15 blur-2xl" aria-hidden="true" />
 
-      <button
-        type="button"
-        onClick={dismiss}
-        aria-label="Dismiss promo"
-        className="absolute right-1 top-1 inline-flex h-6 w-6 items-center justify-center rounded-full text-white/70 transition hover:bg-white/15 hover:text-white"
-      >
-        ×
-      </button>
-
-      <div className="relative flex items-center justify-between gap-3 pr-5">
+      <div className="relative flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-white/80 sm:text-[10px]">Limited-time offer</p>
           <p className="text-base font-extrabold leading-tight text-white sm:text-xl">
