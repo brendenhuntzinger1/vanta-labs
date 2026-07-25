@@ -3,6 +3,7 @@ import { getPaymentProvider } from "@/lib/payment-provider";
 import type { OrderStatus } from "@/lib/payment-types";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
+import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { commissionEarnedTemplate, orderConfirmationTemplate } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
 import { redeemCoupon } from "@/lib/coupons";
@@ -874,6 +875,7 @@ export async function finalizeManualPayment(
       const emailResult = await sendEmail({ to: String(order.customer_email), ...template });
       if (!emailResult.success) {
         console.error("Order confirmation email not sent for order", orderId, emailResult.error);
+        await enqueueFailedEmail({ to: String(order.customer_email), subject: template.subject, html: template.html, text: template.text }, emailResult.error);
       }
     } catch {
       // Confirmation email is best-effort; approval already succeeded.
@@ -1222,8 +1224,10 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           });
           const emailResult = await sendEmail({ to: buyerEmail, ...template });
           if (!emailResult.success) {
-            // Never throw (order is already paid), but make a silent miss visible.
+            // Never throw (order is already paid), but make a silent miss visible
+            // and queue it for durable retry by the sweep.
             console.error("Order confirmation email not sent for order", orderId, emailResult.error);
+            await enqueueFailedEmail({ to: buyerEmail, subject: template.subject, html: template.html, text: template.text }, emailResult.error);
           }
         } catch (emailError) {
           console.error("Unable to send order confirmation email for order", orderId, emailError);

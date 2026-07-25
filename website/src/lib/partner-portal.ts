@@ -1540,6 +1540,14 @@ export async function markCommissionsPaid(input: {
 
   const payoutId = randomUUID();
 
+  // Link the just-paid commissions to this payout so it can be reversed later
+  // (best-effort — pre-migration the payout_id column doesn't exist and this
+  // update simply no-ops without affecting the payout).
+  await supabaseAdmin
+    .from("referral_orders")
+    .update({ payout_id: payoutId })
+    .in("id", claimed.map((row) => String(row.id)));
+
   const { error: payoutError } = await supabaseAdmin
     .from("partner_payouts")
     .insert({
@@ -1615,4 +1623,68 @@ export async function markCommissionsPaid(input: {
     orderCount: claimed.length,
     amount: payoutAmount,
   };
+}
+
+// Reverse a mistaken ambassador payout. The payout row is KEPT as an immutable
+// record and stamped reversed (who/when/why); the commissions it paid are reset
+// to "approved_for_payout" so they re-enter the next payout run. Records an
+// audit row. Requires the payout-reversal.sql migration (payout_id link +
+// reversal columns); pre-migration a payout has no linked commissions to reset.
+export async function reversePayout(input: {
+  payoutId: string;
+  actorUserId?: string | null;
+  actorUsername?: string | null;
+  reason?: string | null;
+}): Promise<{ reversedCommissions: number; amount: number }> {
+  const nowIso = new Date().toISOString();
+
+  const { data: payout, error: loadError } = await supabaseAdmin
+    .from("partner_payouts")
+    .select("id, ambassador_id, amount, reversed_at")
+    .eq("id", input.payoutId)
+    .maybeSingle();
+  if (loadError) assertNoSupabaseError("partner_payouts.select(reverse)", loadError);
+  if (!payout) throw new Error("Payout not found.");
+  if (payout.reversed_at) throw new Error("This payout has already been reversed.");
+
+  // Reset the commissions this payout paid. The atomic guard on
+  // payment_status='paid' means a concurrent reversal claims zero rows.
+  const { data: reset } = await supabaseAdmin
+    .from("referral_orders")
+    .update({ payment_status: "approved_for_payout", commission_paid_at: null, payout_id: null, updated_at: nowIso })
+    .eq("payout_id", input.payoutId)
+    .eq("payment_status", "paid")
+    .select("id, order_id");
+  const reversedCommissions = (reset ?? []).length;
+
+  // Mirror ONLY the reversed commissions back on the commissions ledger.
+  const resetOrderIds = (reset ?? []).map((row) => row.order_id).filter(Boolean) as string[];
+  if (resetOrderIds.length > 0) {
+    await supabaseAdmin
+      .from("commissions")
+      .update({ status: "approved_for_payout", updated_at: nowIso })
+      .in("order_id", resetOrderIds)
+      .eq("status", "paid");
+  }
+
+  // Stamp both payout tables reversed (records retained, never deleted).
+  const reversalPatch = { reversed_at: nowIso, reversed_by: input.actorUsername ?? null, reversal_reason: input.reason ?? null };
+  await supabaseAdmin.from("partner_payouts").update(reversalPatch).eq("id", input.payoutId);
+  await supabaseAdmin.from("payouts").update(reversalPatch).eq("id", input.payoutId);
+
+  await supabaseAdmin.from("admin_audit_logs").insert({
+    actor_user_id: input.actorUserId ?? null,
+    action: "partner_payout_reversed",
+    target_table: "partner_payouts",
+    target_id: input.payoutId,
+    metadata: {
+      ambassadorId: payout.ambassador_id,
+      amount: Number(payout.amount ?? 0),
+      reversedCommissions,
+      reason: input.reason ?? null,
+      actorUsername: input.actorUsername ?? null,
+    },
+  });
+
+  return { reversedCommissions, amount: Number(payout.amount ?? 0) };
 }

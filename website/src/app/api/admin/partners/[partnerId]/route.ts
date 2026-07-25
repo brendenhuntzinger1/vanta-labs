@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds } from "@/lib/admin-roles";
-import { deleteAmbassador, markCommissionsPaid, updatePartnerStatus } from "@/lib/partner-portal";
+import { deleteAmbassador, markCommissionsPaid, reversePayout, updatePartnerStatus } from "@/lib/partner-portal";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -85,6 +85,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
       }
 
       return NextResponse.json({ success: true, payout });
+    }
+
+    if (action === "reverse_payout") {
+      const payoutId = typeof body?.payoutId === "string" ? body.payoutId : "";
+      if (!payoutId) {
+        return NextResponse.json({ success: false, error: "A payout id is required to reverse." }, { status: 400 });
+      }
+      const reason = typeof body?.reason === "string" ? body.reason.slice(0, 500) : null;
+      const result = await reversePayout({ payoutId, actorUsername: session.username, reason });
+      return NextResponse.json({ success: true, ...result });
     }
 
     return NextResponse.json({ success: false, error: "Unknown action" }, { status: 400 });

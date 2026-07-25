@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
+import { recordSystemAlert } from "@/lib/monitoring";
 import { deliveryConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { getFulfillmentRuntimeConfig, type FulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
 import { getFulfillmentProvider, type NormalizedFulfillmentOrder } from "@/lib/fulfillment/provider";
@@ -205,8 +206,25 @@ export async function transmitOrderToFulfillment(orderId: string): Promise<void>
       message: result.message,
       payload: result.raw,
     });
+
+    // A paid order that fails to reach the 3PL is a critical incident — the
+    // customer is charged but nothing ships. Surface it (durable alert + email).
+    if (!result.ok) {
+      await recordSystemAlert({
+        type: "fulfillment_failed",
+        severity: "critical",
+        message: `Order ${order.order_id} failed to transmit to the 3PL — customer is paid but the order did not reach fulfillment.`,
+        context: { orderId: order.order_id, provider: provider.name, error: result.message ?? null, statusCode: result.statusCode ?? null },
+      });
+    }
   } catch (error) {
     await logEvent({ orderId, direction: "outbound", eventType: "error", ok: false, message: error instanceof Error ? error.message : "transmit failed" });
+    await recordSystemAlert({
+      type: "fulfillment_failed",
+      severity: "critical",
+      message: `Order ${orderId} threw while transmitting to the 3PL.`,
+      context: { orderId, error: error instanceof Error ? error.message : String(error) },
+    });
   }
 }
 

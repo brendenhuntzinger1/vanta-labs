@@ -3,6 +3,7 @@ import { grantMonthlyStoreCreditSweep, runMembershipBillingSweep } from "@/lib/m
 import { runAbandonedCartSweep } from "@/lib/cart-recovery";
 import { autoApproveEligibleCommissions } from "@/lib/partner-portal";
 import { expireStaleReservations } from "@/lib/inventory-reservation";
+import { retryPendingEmails } from "@/lib/email/retry-queue";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -23,7 +24,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const [membershipResult, cartRecoveryResult, storeCreditResult, commissionApprovalResult, reservationExpiryResult] = await Promise.allSettled([
+  const [membershipResult, cartRecoveryResult, storeCreditResult, commissionApprovalResult, reservationExpiryResult, emailRetryResult] = await Promise.allSettled([
     runMembershipBillingSweep(),
     runAbandonedCartSweep(),
     grantMonthlyStoreCreditSweep(),
@@ -32,6 +33,8 @@ export async function GET(request: Request) {
     autoApproveEligibleCommissions(),
     // Reclaim inventory held by abandoned checkouts past their expiry window.
     expireStaleReservations(),
+    // Retry transactional emails (receipts/shipping) that failed to send.
+    retryPendingEmails(),
   ]);
 
   return NextResponse.json({
@@ -41,5 +44,6 @@ export async function GET(request: Request) {
     storeCredit: storeCreditResult.status === "fulfilled" ? storeCreditResult.value : { error: String(storeCreditResult.reason) },
     commissionApproval: commissionApprovalResult.status === "fulfilled" ? commissionApprovalResult.value : { error: String(commissionApprovalResult.reason) },
     reservationsExpired: reservationExpiryResult.status === "fulfilled" ? reservationExpiryResult.value : { error: String(reservationExpiryResult.reason) },
+    emailRetry: emailRetryResult.status === "fulfilled" ? emailRetryResult.value : { error: String(emailRetryResult.reason) },
   });
 }
