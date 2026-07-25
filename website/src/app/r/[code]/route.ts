@@ -1,75 +1,63 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getRequestIpAddress } from "@/lib/admin-auth";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { resolveReferralCode } from "@/lib/referral-code-service";
 
 const REFERRAL_COOKIE_NAME = "vl_referral_code";
 const REFERRAL_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
 
-function normalizeReferralCode(code: string) {
-  return code.trim().toUpperCase().replace(/[^A-Z0-9-]/g, "");
-}
-
 export async function GET(request: Request, context: { params: Promise<{ code: string }> }) {
   const { code } = await context.params;
-  const referralCode = normalizeReferralCode(code);
   const url = new URL(request.url);
   const redirectTarget = url.searchParams.get("next") || "/products";
   const destination = new URL(redirectTarget, url.origin);
-
   const response = NextResponse.redirect(destination);
 
-  if (!referralCode) {
+  // Resolve to the ambassador: a live code, OR an aliased OLD code that redirects
+  // to their CURRENT code (per the admin redirect policy). Unknown/expired/
+  // disabled codes just fall through to the destination with no attribution.
+  const resolved = await resolveReferralCode(code);
+  if (!resolved) {
     return response;
   }
 
-  const { data: partnerFromPartners, error: partnerError } = await supabaseAdmin
-    .from("partners")
-    .select("id, referral_code, status")
-    .eq("referral_code", referralCode)
-    .maybeSingle();
+  const ipAddress = getRequestIpAddress(request);
 
-  const { data: partnerFromAmbassadors, error: ambassadorError } = await supabaseAdmin
-    .from("ambassadors")
-    .select("id, referral_code, status")
-    .eq("referral_code", referralCode)
-    .maybeSingle();
-
-  const partner = partnerFromPartners ?? partnerFromAmbassadors;
-  const error = partnerError ?? ambassadorError;
-
-  if (error || !partner || partner.status !== "approved") {
-    return response;
+  // Throttle click writes per IP so a known code can't be looped to inflate an
+  // ambassador's click/conversion stats or hammer the DB. Over the limit we
+  // still redirect + set the cookie, we just skip recording the click.
+  const clickLimit = await checkRateLimit(`referral-click:${ipAddress ?? "unknown"}`, 60, 60);
+  if (clickLimit.allowed) {
+    await Promise.all([
+      supabaseAdmin.from("partner_clicks").insert({
+        ambassador_id: resolved.ambassadorId,
+        referral_code: resolved.currentCode,
+        landing_path: destination.pathname,
+        utm_source: url.searchParams.get("utm_source"),
+        utm_medium: url.searchParams.get("utm_medium"),
+        utm_campaign: url.searchParams.get("utm_campaign"),
+        referrer: request.headers.get("referer"),
+        user_agent: request.headers.get("user-agent"),
+        ip_address: ipAddress,
+      }),
+      supabaseAdmin.from("referrals").insert({
+        partner_id: resolved.ambassadorId,
+        referral_code: resolved.currentCode,
+        event_type: "click",
+        landing_path: destination.pathname,
+        utm_source: url.searchParams.get("utm_source"),
+        utm_medium: url.searchParams.get("utm_medium"),
+        utm_campaign: url.searchParams.get("utm_campaign"),
+        referrer: request.headers.get("referer"),
+        user_agent: request.headers.get("user-agent"),
+        ip_address: ipAddress,
+      }),
+    ]);
   }
 
-  const forwardedFor = request.headers.get("x-forwarded-for") ?? "";
-  const ipAddress = forwardedFor.split(",")[0]?.trim() || null;
-
-  await Promise.all([
-    supabaseAdmin.from("partner_clicks").insert({
-      ambassador_id: partner.id,
-      referral_code: partner.referral_code,
-      landing_path: destination.pathname,
-      utm_source: url.searchParams.get("utm_source"),
-      utm_medium: url.searchParams.get("utm_medium"),
-      utm_campaign: url.searchParams.get("utm_campaign"),
-      referrer: request.headers.get("referer"),
-      user_agent: request.headers.get("user-agent"),
-      ip_address: ipAddress,
-    }),
-    supabaseAdmin.from("referrals").insert({
-      partner_id: partner.id,
-      referral_code: partner.referral_code,
-      event_type: "click",
-      landing_path: destination.pathname,
-      utm_source: url.searchParams.get("utm_source"),
-      utm_medium: url.searchParams.get("utm_medium"),
-      utm_campaign: url.searchParams.get("utm_campaign"),
-      referrer: request.headers.get("referer"),
-      user_agent: request.headers.get("user-agent"),
-      ip_address: ipAddress,
-    }),
-  ]);
-
-  response.cookies.set(REFERRAL_COOKIE_NAME, partner.referral_code, {
+  // Attribute to the CURRENT code so an old link credits the live code.
+  response.cookies.set(REFERRAL_COOKIE_NAME, resolved.currentCode, {
     path: "/",
     maxAge: REFERRAL_COOKIE_MAX_AGE,
     sameSite: "lax",

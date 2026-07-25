@@ -2,14 +2,11 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { RevenueBars } from "@/components/revenue-bars";
+import { ReferralCodeManager } from "@/components/referral-code-manager";
 import type { PartnerSummary } from "@/lib/partner-portal";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
-}
-
-async function copyText(value: string) {
-  await navigator.clipboard.writeText(value);
 }
 
 const PAYOUT_METHOD_OPTIONS: Array<{ value: string; label: string; hint: string }> = [
@@ -94,7 +91,6 @@ function PayoutMethodEditor({ initialMethod, initialHandle }: { initialMethod: s
 
 export function PartnerDashboardClient({ summary }: { summary: PartnerSummary }) {
   const [liveSummary, setLiveSummary] = useState(summary);
-  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -144,25 +140,15 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
         <h1 className="mt-2 text-3xl font-semibold text-white sm:text-4xl">Welcome back, {liveSummary.partnerName}</h1>
         <p className="mt-3 max-w-3xl text-sm text-zinc-400 sm:text-base">Performance updates are connected to your live referral orders and payment events in Supabase.</p>
 
-        <div className="mt-5 rounded-2xl border border-white/20 bg-zinc-950/60 p-4">
-          <p className="text-[11px] uppercase tracking-[0.25em] text-zinc-500">Your Referral Link</p>
-          <div className="mt-2 flex flex-col gap-3 sm:flex-row sm:items-center">
-            <p className="min-w-0 flex-1 truncate text-sm text-zinc-200">{liveSummary.referralLink}</p>
-            <button
-              type="button"
-              onClick={async () => {
-                await copyText(liveSummary.referralLink);
-                setCopied(true);
-                window.setTimeout(() => setCopied(false), 1500);
-              }}
-              className="vl-focus-ring rounded-full border border-white/30 bg-white/10 px-4 py-2 text-xs font-semibold text-zinc-100 transition hover:bg-white/20"
-            >
-              {copied ? "Copied" : "Copy Link"}
-            </button>
-          </div>
-          <p className="mt-2 text-xs text-zinc-500">Referral code: {liveSummary.referralCode} • Commission: {liveSummary.commissionPercent}%</p>
-          <p className="mt-1 text-xs text-zinc-500">Coupon code (share for customers to use at checkout): <span className="font-semibold text-zinc-300">{liveSummary.referralCode}</span></p>
-          <p className="mt-2 text-xs text-emerald-300/90">Your personal perk: you automatically get <span className="font-semibold">15% off your own purchases</span> while approved — just sign in and check out, no code needed.</p>
+        <div className="mt-5">
+          <ReferralCodeManager
+            initialCode={liveSummary.referralCode}
+            referralLink={liveSummary.referralLink}
+          />
+          <p className="mt-3 text-xs text-zinc-500">
+            Commission: <span className="text-zinc-300">{liveSummary.commissionPercent}%</span> • Customers enter this same code at checkout for their discount.
+          </p>
+          <p className="mt-1 text-xs text-emerald-300/90">Your personal perk: you automatically get <span className="font-semibold">15% off your own purchases</span> while approved — just sign in and check out, no code needed.</p>
         </div>
 
         <PayoutMethodEditor
