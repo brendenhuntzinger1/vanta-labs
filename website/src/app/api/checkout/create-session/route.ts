@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-service";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import type { CustomerInput } from "@/lib/payment-types";
-
-const REFERRAL_COOKIE_NAME = "vl_referral_code";
 
 function hasRequiredAcknowledgements(value: unknown) {
   if (!value || typeof value !== "object") {
@@ -49,9 +46,13 @@ export async function POST(request: Request) {
     if (authenticatedUser.email) {
       customer.email = authenticatedUser.email.trim().toLowerCase();
     }
-    const cookieStore = await cookies();
-    const referralFromCookie = cookieStore.get(REFERRAL_COOKIE_NAME)?.value;
-    const referralCode = body.referralCode || referralFromCookie;
+    // Ambassador attribution is driven ONLY by the code the customer has
+    // visibly applied at checkout (body.referralCode). We deliberately do NOT
+    // fall back to the vl_referral_code cookie here: a cookie the shopper can't
+    // see must never silently generate an ambassador commission. A referral
+    // link still pre-fills the visible field client-side, so legitimate,
+    // customer-confirmed attribution is unaffected.
+    const referralCode = body.referralCode;
 
     const result = await createCheckoutSession({
       items: body.items,

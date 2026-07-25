@@ -32,6 +32,43 @@ function makeOrder(overrides: Partial<OrderInputs> = {}): OrderInputs {
 
 const ALL = new Set(["coupon", "referral", "bundle", "membership"] as const);
 
+// Deterministic PRNG so this fuzz is reproducible across CI runs.
+function seededRand(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (Math.imul(a, 1103515245) + 12345) & 0x7fffffff;
+    return a / 0x7fffffff;
+  };
+}
+
+describe("INVARIANT — discounts never stack (bundle + referral policy)", () => {
+  it("a bundle order with a referral code never applies both, and never exceeds subtotal", () => {
+    const rnd = seededRand(0xBADC0DE);
+    for (let i = 0; i < 20_000; i++) {
+      const subtotal = Math.round(rnd() * 100_000) / 100; // $0–$1000
+      const order = makeOrder({
+        subtotal,
+        bundleDiscount: Math.round(rnd() * subtotal * 100) / 100,
+        referralAccepted: rnd() > 0.25,
+        referralPercent: Math.round(rnd() * 30),
+        bundleReferralPercent: Math.round(rnd() * 10),
+        couponDiscount: Math.round(rnd() * subtotal * 0.3 * 100) / 100,
+        isMember: rnd() > 0.7,
+        membershipPercent: Math.round(rnd() * 20),
+        bulkSavingsAmount: Math.round(rnd() * subtotal * 0.15 * 100) / 100,
+        personalDiscountAmount: Math.round(rnd() * subtotal * 0.1 * 100) / 100,
+        allowCouponStacking: false,
+      });
+      const d = resolveCustomerDiscount(order, ALL);
+      // The bundle (Buy-3-Get-1) and a referral % must NEVER both be applied.
+      expect(d.components.includes("bundle") && d.components.includes("referral")).toBe(false);
+      // A discount can never push merchandise below $0.
+      expect(d.amount).toBeGreaterThanOrEqual(0);
+      expect(d.amount).toBeLessThanOrEqual(subtotal + 1e-9);
+    }
+  });
+});
+
 describe("discount composition rules", () => {
   it("normal order + code → 10% referral to the customer", () => {
     const d = resolveCustomerDiscount(makeOrder({ referralAccepted: true }), ALL);
