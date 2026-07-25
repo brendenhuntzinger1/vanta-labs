@@ -9,7 +9,7 @@ import type { Product } from "@/lib/catalog-types";
 type SortKey = "default" | "price-asc" | "price-desc" | "name-asc" | "purity";
 
 const SORT_OPTIONS: Array<{ value: SortKey; label: string }> = [
-  { value: "default", label: "Featured" },
+  { value: "default", label: "Best Sellers First" },
   { value: "price-asc", label: "Price: Low to High" },
   { value: "price-desc", label: "Price: High to Low" },
   { value: "name-asc", label: "Name: A to Z" },
@@ -33,6 +33,7 @@ function ProductsPageContent() {
   const [imageOverrides, setImageOverrides] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [stockFilter, setStockFilter] = useState(false);
+  const [bestSellersOnly, setBestSellersOnly] = useState(false);
   const { addToCart } = useCart();
 
   // Re-sync filters from the URL when it changes (header search, a homepage
@@ -79,11 +80,22 @@ function ProductsPageContent() {
     return ["All", ...productCategories];
   }, [products]);
 
+  // Only surface the Best Sellers tab when at least one product is actually
+  // tagged as a best seller in the admin — no empty tab otherwise.
+  const hasBestSellers = useMemo(
+    () => products.some((product) => product.badge === "best_seller"),
+    [products],
+  );
+
   const visibleProducts = useMemo(() => {
     let result = [...products];
 
     if (selectedCategory !== "All") {
       result = result.filter((product) => product.category === selectedCategory);
+    }
+
+    if (bestSellersOnly) {
+      result = result.filter((product) => product.badge === "best_seller");
     }
 
     if (stockFilter) {
@@ -124,11 +136,18 @@ function ProductsPageContent() {
         break;
       case "default":
       default:
+        // Best sellers rise to the top; everything else keeps its catalog
+        // order (the sort is stable, so ties stay in position order).
+        result.sort((a, b) => {
+          const aRank = a.badge === "best_seller" ? 0 : 1;
+          const bRank = b.badge === "best_seller" ? 0 : 1;
+          return aRank - bRank;
+        });
         break;
     }
 
     return result;
-  }, [products, searchQuery, selectedCategory, stockFilter, sort]);
+  }, [products, searchQuery, selectedCategory, stockFilter, bestSellersOnly, sort]);
 
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
@@ -194,6 +213,19 @@ function ProductsPageContent() {
                 {category}
               </button>
             ))}
+            {hasBestSellers ? (
+              <button
+                type="button"
+                onClick={() => setBestSellersOnly((prev) => !prev)}
+                className={`w-full border px-3 py-2 text-xs uppercase tracking-[0.14em] transition sm:w-auto sm:py-2.5 ${
+                  bestSellersOnly
+                    ? "border-amber-300/50 text-amber-200"
+                    : "border-white/15 text-white/45 hover:text-white"
+                }`}
+              >
+                {bestSellersOnly ? "★ Best Sellers" : "☆ Best Sellers"}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => setStockFilter((prev) => !prev)}
@@ -207,9 +239,15 @@ function ProductsPageContent() {
             </button>
           </div>
 
-          {(selectedCategory !== "All" || searchQuery.trim() || stockFilter) && (
+          {(selectedCategory !== "All" || searchQuery.trim() || stockFilter || bestSellersOnly) && (
             <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/10 pt-3">
               <span className="text-[10px] uppercase tracking-[0.18em] text-white/35">Active:</span>
+              {bestSellersOnly && (
+                <span className="flex items-center gap-1.5 border border-amber-300/30 px-2.5 py-1 text-xs text-amber-200">
+                  Best Sellers
+                  <button type="button" aria-label="Clear best sellers filter" onClick={() => setBestSellersOnly(false)} className="-mr-1 inline-flex h-6 w-6 items-center justify-center text-amber-300/70 hover:text-amber-100">×</button>
+                </span>
+              )}
               {selectedCategory !== "All" && (
                 <span className="flex items-center gap-1.5 border border-white/15 px-2.5 py-1 text-xs text-white/75">
                   {selectedCategory}
@@ -230,7 +268,7 @@ function ProductsPageContent() {
               )}
               <button
                 type="button"
-                onClick={() => { setSelectedCategory("All"); setSearchQuery(""); setStockFilter(false); }}
+                onClick={() => { setSelectedCategory("All"); setSearchQuery(""); setStockFilter(false); setBestSellersOnly(false); }}
                 className="text-[10px] uppercase tracking-[0.18em] text-white/40 transition hover:text-white"
               >
                 Clear all
@@ -244,13 +282,14 @@ function ProductsPageContent() {
             <p className="text-sm text-white/45">
               {isLoading ? "Loading catalog…" : `${visibleProducts.length} product${visibleProducts.length === 1 ? "" : "s"}`}
             </p>
-            {(selectedCategory !== "All" || searchQuery || stockFilter) && (
+            {(selectedCategory !== "All" || searchQuery || stockFilter || bestSellersOnly) && (
               <button
                 type="button"
                 onClick={() => {
                   setSelectedCategory("All");
                   setSearchQuery("");
                   setStockFilter(false);
+                  setBestSellersOnly(false);
                 }}
                 className="text-xs uppercase tracking-[0.18em] text-white/55 transition hover:text-white"
               >
@@ -285,6 +324,7 @@ function ProductsPageContent() {
                   setSelectedCategory("All");
                   setSearchQuery("");
                   setStockFilter(false);
+                  setBestSellersOnly(false);
                 }}
                 className="vl2-btn-secondary vl-focus-ring mt-6 px-5 py-2.5 text-sm"
               >
