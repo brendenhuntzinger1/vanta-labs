@@ -57,6 +57,11 @@ export function AccountAuthForm() {
   const [completingVerification, setCompletingVerification] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Phone (SMS one-time-code) sign-in — an alternative to email + password.
+  const [loginMethod, setLoginMethod] = useState<"email" | "phone">("email");
+  const [phone, setPhone] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
 
   // A shopper who clicked the confirmation link in Supabase's built-in
   // verification email lands back here with a session already established
@@ -212,10 +217,70 @@ export function AccountAuthForm() {
     }
   };
 
+  // Keep only digits and a single leading "+" (Supabase expects E.164).
+  const normalizePhone = (raw: string) => {
+    const digits = raw.replace(/[^\d]/g, "");
+    return raw.trim().startsWith("+") ? `+${digits}` : `+${digits}`;
+  };
+
+  const handleSendOtp = async () => {
+    const normalized = normalizePhone(phone);
+    if (normalized.length < 9) {
+      setError("Enter your phone in international format, e.g. +15551234567.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const { error: otpError } = await supabase.auth.signInWithOtp({ phone: normalized });
+      if (otpError) {
+        throw new Error(otpError.message);
+      }
+      setOtpSent(true);
+      setMessage("We texted you a 6-digit code. Enter it below to sign in.");
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Couldn't send the code. Try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    const normalized = normalizePhone(phone);
+    const token = otpCode.trim();
+    if (token.length < 4) {
+      setError("Enter the code we texted you.");
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const { data, error: verifyError } = await supabase.auth.verifyOtp({ phone: normalized, token, type: "sms" });
+      if (verifyError || !data.session?.access_token) {
+        throw new Error(verifyError?.message ?? "That code didn't work. Request a new one.");
+      }
+      await establishSessionAndGo(data.session.access_token);
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Couldn't verify the code.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = (event: React.FormEvent) => {
     event.preventDefault();
     if (loading) return;
-    void (mode === "signup" ? handleSignup() : handleLogin());
+    if (mode === "signup") {
+      void handleSignup();
+      return;
+    }
+    if (loginMethod === "phone") {
+      void (otpSent ? handleVerifyOtp() : handleSendOtp());
+      return;
+    }
+    void handleLogin();
   };
 
   const resetTransientState = () => {
@@ -231,7 +296,11 @@ export function AccountAuthForm() {
     );
   }
 
-  const primaryLabel = mode === "signup" ? "Create Account" : "Sign In";
+  const primaryLabel = mode === "signup"
+    ? "Create Account"
+    : loginMethod === "phone"
+      ? (otpSent ? "Verify & Sign In" : "Send Code")
+      : "Sign In";
 
   return (
     <form onSubmit={handleSubmit} className="vl-panel mx-auto w-full max-w-md rounded-[1.75rem] p-6 sm:p-8">
@@ -258,30 +327,85 @@ export function AccountAuthForm() {
           </label>
         ) : null}
 
-        <label className="block text-sm text-zinc-400">
-          <span className="mb-2 block">Email</span>
-          <input
-            type="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            className="vl-input w-full px-4 py-3"
-            autoComplete="email"
-            required
-          />
-        </label>
+        {mode === "login" ? (
+          <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/10 bg-black/30 p-1">
+            <button
+              type="button"
+              onClick={() => { setLoginMethod("email"); setOtpSent(false); resetTransientState(); }}
+              className={`rounded-lg px-3 py-2 text-sm transition ${loginMethod === "email" ? "bg-white/15 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
+            >
+              Email + password
+            </button>
+            <button
+              type="button"
+              onClick={() => { setLoginMethod("phone"); resetTransientState(); }}
+              className={`rounded-lg px-3 py-2 text-sm transition ${loginMethod === "phone" ? "bg-white/15 text-white" : "text-zinc-400 hover:text-zinc-200"}`}
+            >
+              Phone (SMS code)
+            </button>
+          </div>
+        ) : null}
 
-        <label className="block text-sm text-zinc-400">
-          <span className="mb-2 block">Password</span>
-          <input
-            type="password"
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            className="vl-input w-full px-4 py-3"
-            autoComplete={mode === "signup" ? "new-password" : "current-password"}
-            minLength={8}
-            required
-          />
-        </label>
+        {(mode === "signup" || loginMethod === "email") ? (
+          <>
+            <label className="block text-sm text-zinc-400">
+              <span className="mb-2 block">Email</span>
+              <input
+                type="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                className="vl-input w-full px-4 py-3"
+                autoComplete="email"
+                required
+              />
+            </label>
+
+            <label className="block text-sm text-zinc-400">
+              <span className="mb-2 block">Password</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className="vl-input w-full px-4 py-3"
+                autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                minLength={8}
+                required
+              />
+            </label>
+          </>
+        ) : null}
+
+        {mode === "login" && loginMethod === "phone" ? (
+          <>
+            <label className="block text-sm text-zinc-400">
+              <span className="mb-2 block">Phone number</span>
+              <input
+                type="tel"
+                value={phone}
+                onChange={(event) => { setPhone(event.target.value); setOtpSent(false); }}
+                placeholder="+1 555 123 4567"
+                className="vl-input w-full px-4 py-3"
+                autoComplete="tel"
+                required
+              />
+            </label>
+            {otpSent ? (
+              <label className="block text-sm text-zinc-400">
+                <span className="mb-2 block">Text-message code</span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={otpCode}
+                  onChange={(event) => setOtpCode(event.target.value)}
+                  placeholder="6-digit code"
+                  className="vl-input w-full px-4 py-3 tracking-[0.4em]"
+                  autoComplete="one-time-code"
+                  required
+                />
+              </label>
+            ) : null}
+          </>
+        ) : null}
 
         {mode === "signup" ? (
           <label className="block text-sm text-zinc-400">
