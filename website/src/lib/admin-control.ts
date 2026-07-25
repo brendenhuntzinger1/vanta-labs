@@ -451,6 +451,8 @@ export interface ProfitSettingsConfig {
   minProfitDollars: number;
   worstCaseUnitCost: number;
   processingFeePercent: number;
+  /** What the store pays to ship one order (used in profit reports). */
+  shippingCostPerOrder: number;
 }
 
 // Default: never sell at a loss (profit >= $0). Raise the minimums in the
@@ -460,6 +462,7 @@ export const DEFAULT_PROFIT_CONFIG: ProfitSettingsConfig = {
   minProfitDollars: 0,
   worstCaseUnitCost: 33,
   processingFeePercent: 10,
+  shippingCostPerOrder: 10,
 };
 
 export async function getProfitSettings(): Promise<ProfitSettingsConfig> {
@@ -475,6 +478,7 @@ export async function getProfitSettings(): Promise<ProfitSettingsConfig> {
       minProfitDollars: num(profit.min_profit_dollars, DEFAULT_PROFIT_CONFIG.minProfitDollars),
       worstCaseUnitCost: num(profit.worst_case_unit_cost, DEFAULT_PROFIT_CONFIG.worstCaseUnitCost),
       processingFeePercent: num(profit.processing_fee_percent, DEFAULT_PROFIT_CONFIG.processingFeePercent),
+      shippingCostPerOrder: num(profit.shipping_cost_per_order, DEFAULT_PROFIT_CONFIG.shippingCostPerOrder),
     };
   } catch {
     return DEFAULT_PROFIT_CONFIG;

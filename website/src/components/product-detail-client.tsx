@@ -464,21 +464,31 @@ export function ProductDetailClient({
                 <div className="mt-6">
                   <p className="vl2-lab-eyebrow">Vial Size</p>
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {product.doses.map((variant) => (
-                      <button
-                        key={variant.id}
-                        type="button"
-                        onClick={() => setSelectedDoseId(variant.id)}
-                        className={`border px-4 py-2 text-sm transition ${
-                          selectedDose?.id === variant.id
-                            ? "border-[#111] bg-[#111] text-white"
-                            : "border-zinc-200 text-zinc-600 hover:border-zinc-400 hover:text-[#111]"
-                        } ${variant.stockStatus === "Out of Stock" ? "opacity-40" : ""}`}
-                      >
-                        {variant.label}
-                        {variant.stockStatus === "Out of Stock" && <span className="ml-1 text-[9px]">sold out</span>}
-                      </button>
-                    ))}
+                    {product.doses.map((variant) => {
+                      const isGlp = product.slug.toLowerCase().startsWith("glp-");
+                      const normalizedSize = (variant.slugSuffix || variant.label || "").toLowerCase().replace(/\s+/g, "");
+                      const isMostPopular = isGlp && normalizedSize === "10mg";
+                      return (
+                        <button
+                          key={variant.id}
+                          type="button"
+                          onClick={() => setSelectedDoseId(variant.id)}
+                          className={`relative border px-4 py-2 text-sm transition ${
+                            selectedDose?.id === variant.id
+                              ? "border-[#111] bg-[#111] text-white"
+                              : "border-zinc-200 text-zinc-600 hover:border-zinc-400 hover:text-[#111]"
+                          } ${variant.stockStatus === "Out of Stock" ? "opacity-40" : ""}`}
+                        >
+                          {variant.label}
+                          {isMostPopular && (
+                            <span className="ml-1.5 inline-flex items-center gap-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-500">
+                              <span aria-hidden="true">★</span> Most Popular
+                            </span>
+                          )}
+                          {variant.stockStatus === "Out of Stock" && <span className="ml-1 text-[9px]">sold out</span>}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}

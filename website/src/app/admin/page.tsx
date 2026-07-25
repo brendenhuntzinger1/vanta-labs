@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getCurrentOnlineVisitorCount, getRevenueWindowMetrics } from "@/lib/admin-analytics";
+import { getProfitWindowMetrics } from "@/lib/admin-profit";
 import { getAdminOrderRows } from "@/lib/admin-orders";
 import { listAdminProducts } from "@/lib/admin-products";
 import { getLowStockCount } from "@/lib/admin-inventory";
@@ -27,7 +28,7 @@ export default async function AdminHomePage() {
     redirect("/vault");
   }
 
-  const [orderList, products, partners, onlineVisitors, revenueWindows, lowStockCount, reconciliationFlagCount] = await Promise.all([
+  const [orderList, products, partners, onlineVisitors, revenueWindows, lowStockCount, reconciliationFlagCount, profitWindows] = await Promise.all([
     getAdminOrderRows({ pageSize: 1000 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 1000, pageCount: 1 })),
     listAdminProducts({ search: "", category: "all", status: "all" }).catch(() => []),
     getAdminPartnerRows({ status: "all" }).catch(() => []),
@@ -35,6 +36,7 @@ export default async function AdminHomePage() {
     getRevenueWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0 })),
     getLowStockCount().catch(() => 0),
     getReconciliationFlagCount().catch(() => 0),
+    getProfitWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, ordersLast30Days: 0, hasEstimatedCost: false })),
   ]);
 
   const orders = orderList.rows;
@@ -72,6 +74,11 @@ export default async function AdminHomePage() {
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Revenue</p>
             <p className="mt-2 text-2xl font-semibold text-white">{money(totalRevenue)}</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Net Profit · 30d</p>
+            <p className={`mt-2 text-2xl font-semibold ${profitWindows.last30Days >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{money(profitWindows.last30Days)}</p>
+            <p className="mt-1 text-[11px] text-zinc-500">Today {money(profitWindows.today)} · 7d {money(profitWindows.last7Days)}{profitWindows.hasEstimatedCost ? " · incl. estimates" : ""}</p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Published Products</p>

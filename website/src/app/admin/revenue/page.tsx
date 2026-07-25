@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getRevenueMetrics } from "@/lib/admin-revenue";
+import { getProfitWindowMetrics } from "@/lib/admin-profit";
 
 export const dynamic = "force-dynamic";
 
@@ -38,6 +39,7 @@ export default async function AdminRevenuePage() {
     shipped: 0,
     byMethod: [],
   }));
+  const profit = await getProfitWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, ordersLast30Days: 0, hasEstimatedCost: false }));
   const maxMethodRevenue = Math.max(1, ...metrics.byMethod.map((m) => m.revenue));
 
   return (
@@ -59,6 +61,13 @@ export default async function AdminRevenuePage() {
           <StatCard label="Total Paid Revenue" value={money(metrics.totalPaidRevenue)} sub={`${metrics.totalPaidOrders} paid orders`} />
           <StatCard label="Average Order Value" value={money(metrics.averageOrderValue)} />
           <StatCard label="Processing Fees Collected" value={money(metrics.processingFeesCollected)} sub="Card fees added at checkout" />
+        </div>
+
+        <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Net Profit · Today" value={money(profit.today)} sub="After cost, commission, fees, shipping" accent />
+          <StatCard label="Net Profit · 7 days" value={money(profit.last7Days)} />
+          <StatCard label="Net Profit · 30 days" value={money(profit.last30Days)} sub={`${profit.ordersLast30Days} paid order${profit.ordersLast30Days === 1 ? "" : "s"}${profit.hasEstimatedCost ? " · incl. estimates" : ""}`} />
+          <StatCard label="Avg Profit / Order · 30d" value={money(profit.ordersLast30Days > 0 ? profit.last30Days / profit.ordersLast30Days : 0)} />
         </div>
 
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
