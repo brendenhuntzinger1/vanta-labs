@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createPartnerApplication } from "@/lib/partner-portal";
 import { createServerClient } from "@/lib/supabase-server";
+import { checkRateLimit } from "@/lib/rate-limit";
 
 export async function POST(request: Request) {
   try {
@@ -31,6 +32,14 @@ export async function POST(request: Request) {
     const { data, error } = await supabaseAuthClient.auth.getUser(accessToken);
     if (error || !data.user || !data.user.email) {
       return NextResponse.json({ success: false, error: "Invalid auth session" }, { status: 401 });
+    }
+
+    const rateLimit = await checkRateLimit(`partner-application:${data.user.id}`, 3, 60 * 60);
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { success: false, error: "Please wait before submitting another application." },
+        { status: 429, headers: { "Retry-After": String(rateLimit.retryAfterSeconds) } },
+      );
     }
 
     const result = await createPartnerApplication({
