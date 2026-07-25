@@ -88,10 +88,12 @@ function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-// Change the percentage here (or set enabled:false) to update the card fee
-// everywhere. Manual methods never carry a fee.
+// The card processing fee is NOT passed on to customers — the merchant absorbs
+// it. Disabled by default so checkout never surcharges the shopper. Flip
+// `enabled: true` (and set the percentage) only if a card surcharge is ever
+// reinstated. Manual methods never carry a fee.
 export const DEFAULT_CARD_PROCESSING_FEE: CardProcessingFeeConfig = {
-  enabled: true,
+  enabled: false,
   percentage: 5,
   label: "Card Processing Fee",
   noticeText: "",

@@ -368,14 +368,14 @@ export function AdminControlCenterClient() {
 
           <section className="vl-panel-soft rounded-2xl p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">{SECTION_LABELS.shipping}</h3>
-            <p className="mt-2 text-xs text-zinc-400">These apply live at checkout. Leave a field blank to keep the default (domestic flat rate $15, free over $250, 5% service fee, 0% tax).</p>
+            <p className="mt-2 text-xs text-zinc-400">These apply live at checkout. Leave a field blank to keep the default (domestic flat rate $15, free over $250, no service fee, 0% tax).</p>
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
               <label className="text-zinc-300">Domestic flat rate ($)<input value={shippingFlatRate} onChange={(e) => setShippingFlatRate(e.target.value)} placeholder="15" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Free shipping over ($)<input value={shippingFreeThreshold} onChange={(e) => setShippingFreeThreshold(e.target.value)} placeholder="250" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">International flat rate ($)<input value={shippingIntlFlatRate} onChange={(e) => setShippingIntlFlatRate(e.target.value)} placeholder="45" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">International free shipping over ($)<input value={shippingIntlFreeThreshold} onChange={(e) => setShippingIntlFreeThreshold(e.target.value)} placeholder="500" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Sales tax rate (%)<input value={shippingTaxRate} onChange={(e) => setShippingTaxRate(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Service fee (%)<input value={shippingServiceFee} onChange={(e) => setShippingServiceFee(e.target.value)} placeholder="5" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Service fee (%)<input value={shippingServiceFee} onChange={(e) => setShippingServiceFee(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
           </section>
 

@@ -92,14 +92,20 @@ export function PaymentMethodPicker({
   const others = methods.filter((m) => !m.recommended);
   const feeConfig = cardFeeConfig;
   const cardFee = feeConfig ? calculateCardProcessingFee(baseTotal, feeConfig) : { amount: 0, percentage: 0 };
+  // Only frame methods around "no processing fee / save on fees" when a card
+  // surcharge is actually configured somewhere. With no surcharge in play,
+  // that contrast is meaningless (and confusing), so use a neutral header.
+  const surchargeActive = Boolean(feeConfig?.enabled && feeConfig.percentage > 0);
 
   return (
     <div role="radiogroup" aria-label="Payment method">
       {recommended.length > 0 ? (
         <>
           <div className="flex items-center justify-between">
-            <p className="vl2-eyebrow">Recommended — No Processing Fee</p>
-            <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[color:var(--accent-gold)]">Save on fees</span>
+            <p className="vl2-eyebrow">{surchargeActive ? "Recommended — No Processing Fee" : "Payment Method"}</p>
+            {surchargeActive ? (
+              <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-[color:var(--accent-gold)]">Save on fees</span>
+            ) : null}
           </div>
           <div className="mt-3 grid gap-3">
             {recommended.map((method) => (
@@ -109,9 +115,11 @@ export function PaymentMethodPicker({
                 selected={selectedMethodId === method.id}
                 onSelect={() => onSelect(method.id)}
                 trailing={
-                  <span className="mt-1 block text-xs font-medium text-emerald-300">
-                    ✅ No processing fee · You pay {formatCartCurrency(baseTotal)}
-                  </span>
+                  surchargeActive ? (
+                    <span className="mt-1 block text-xs font-medium text-emerald-300">
+                      ✅ No processing fee · You pay {formatCartCurrency(baseTotal)}
+                    </span>
+                  ) : undefined
                 }
               />
             ))}

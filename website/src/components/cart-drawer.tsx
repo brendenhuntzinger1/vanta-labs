@@ -234,10 +234,12 @@ export function CartDrawer() {
               <span>Shipping</span>
               <span>{formatCartCurrency(shipping)}</span>
             </div>
-            <div className="mt-2 flex justify-between">
-              <span>Service fee</span>
-              <span>{formatCartCurrency(serviceFee)}</span>
-            </div>
+            {serviceFee > 0 ? (
+              <div className="mt-2 flex justify-between">
+                <span>Service fee</span>
+                <span>{formatCartCurrency(serviceFee)}</span>
+              </div>
+            ) : null}
             <div className="mt-2 flex justify-between">
               <span>Applied discount</span>
               <span>-{formatCartCurrency(discountAmount)}</span>

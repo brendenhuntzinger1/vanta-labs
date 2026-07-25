@@ -8,7 +8,10 @@ export const FREE_SHIPPING_THRESHOLD = 250;
 export const DOMESTIC_SHIPPING_FEE = 15;
 export const INTERNATIONAL_FREE_SHIPPING_THRESHOLD = 600;
 export const INTERNATIONAL_SHIPPING_FEE = 60;
-export const HANDLING_FEE_RATE = 0.05;
+// Customers pay no service/handling fee — the only add-on to merchandise is
+// sales tax (and shipping when under the free-shipping threshold). Set to a
+// fraction (e.g. 0.05 for 5%) only if a service fee is ever reinstated.
+export const HANDLING_FEE_RATE = 0;
 
 // Admin-editable shipping + service-fee settings. An admin sets these in
 // Admin → Control Center → Shipping (stored in the "shipping" control
