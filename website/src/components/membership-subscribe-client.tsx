@@ -9,8 +9,6 @@ function money(cents: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
 }
 
-const CARD_FEE_RATE = 0.05;
-
 export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
   const router = useRouter();
   const [billingCycle, setBillingCycle] = useState<"monthly" | "annual">("annual");
@@ -20,7 +18,10 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
   const [status, setStatus] = useState<"idle" | "success">("idle");
 
   const usesIntroOffer = billingCycle === "monthly" && tier.introOfferEnabled;
-  const monthlyWithFee = Math.round(tier.monthlyPriceCents * (1 + CARD_FEE_RATE));
+  // Show the ACTUAL charged monthly price. Membership charges are billed at the
+  // base price (no card fee is added — see membership-billing.ts), so the old
+  // "+5% card fee" display over-stated the price and contradicted the receipt.
+  const monthlyPrice = tier.monthlyPriceCents;
 
   // Both cycles are billed to a card through the payment processor. Annual is a
   // single charge for the year (no auto-renew); monthly recurs until canceled.
@@ -104,13 +105,11 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
         ) : usesIntroOffer ? (
           <ul className="mt-4 space-y-3 text-sm leading-6 text-white/80">
             <li><strong className="text-white">{money(tier.introPriceCents)} today</strong> for your {tier.introDurationDays}-day intro period.</li>
-            <li>Then the remaining first-month balance, then <strong className="text-white">{money(monthlyWithFee)}/month</strong> until canceled.</li>
-            <li className="text-amber-200/90">Monthly plans are billed to a card and include a 5% card processing fee.</li>
+            <li>Then the remaining first-month balance, then <strong className="text-white">{money(monthlyPrice)}/month</strong> until canceled.</li>
           </ul>
         ) : (
           <p className="mt-4 text-sm leading-6 text-white/80">
-            <strong className="text-white">{money(monthlyWithFee)}/month</strong> (includes 5% card processing fee),
-            billed to your card automatically until you cancel.
+            <strong className="text-white">{money(monthlyPrice)}/month</strong>, billed to your card automatically until you cancel.
           </p>
         )}
       </div>

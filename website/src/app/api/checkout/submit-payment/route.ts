@@ -7,6 +7,9 @@ import { getBusinessSettings } from "@/lib/admin-control";
 import { getSiteUrl } from "@/lib/env";
 
 export const dynamic = "force-dynamic";
+// This route uploads a proof screenshot and sends two emails; give it headroom
+// so a slow storage/SMTP call can't time out AFTER the customer has paid.
+export const maxDuration = 30;
 
 // Customer-facing: submit proof of a manual payment (Cash App / Zelle /
 // PayPal). Identified by the unguessable order UUID (the same bearer-token

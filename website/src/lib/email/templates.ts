@@ -146,15 +146,30 @@ export function orderConfirmationTemplate(input: {
   subtotal: number;
   shipping: number;
   discount: number;
+  tax?: number;
+  cardProcessingFee?: number;
   total: number;
 }): EmailTemplate {
   const name = escapeHtml(input.customerName || "there");
+  const tax = input.tax ?? 0;
+  const cardFee = input.cardProcessingFee ?? 0;
+  // Collapse ALL reductions (promo discount + points + store credit) into one
+  // line derived from the actual charged Total, so the receipt always
+  // reconciles: subtotal + shipping + tax + fee − savings = total. This avoids
+  // an unexplained gap (tax/fee were previously missing) or an over-stated
+  // discount line when points/credit were used.
+  const savings = Math.max(0, Math.round((input.subtotal + input.shipping + tax + cardFee - input.total) * 100) / 100);
   const rows = input.items
     .map(
       (item) =>
         `<tr><td style="padding:6px 0;color:#e4e4e7;">${escapeHtml(item.name)} × ${item.quantity}</td><td style="padding:6px 0;text-align:right;color:#e4e4e7;">${money(item.lineTotal)}</td></tr>`,
     )
     .join("");
+  const summaryRow = (label: string, value: string, opts?: { border?: boolean; bold?: boolean }) => {
+    const base = opts?.border ? "padding:10px 0 2px;border-top:1px solid rgba(255,255,255,0.1);" : "padding:2px 0;";
+    const color = opts?.bold ? "color:#ffffff;font-weight:700;" : "color:#a1a1aa;";
+    return `<tr><td style="${base}${color}">${label}</td><td style="${base}text-align:right;${color}">${value}</td></tr>`;
+  };
 
   return {
     subject: `Order Confirmed - ${input.orderId}`,
@@ -165,10 +180,12 @@ export function orderConfirmationTemplate(input: {
         <p>Order <strong>${escapeHtml(input.orderId)}</strong> has been received and is being prepared.</p>
         <table role="presentation" width="100%" style="margin-top:12px;font-size:14px;">
           ${rows}
-          <tr><td style="padding:10px 0 2px;border-top:1px solid rgba(255,255,255,0.1);color:#a1a1aa;">Subtotal</td><td style="padding:10px 0 2px;border-top:1px solid rgba(255,255,255,0.1);text-align:right;color:#a1a1aa;">${money(input.subtotal)}</td></tr>
-          <tr><td style="padding:2px 0;color:#a1a1aa;">Shipping</td><td style="padding:2px 0;text-align:right;color:#a1a1aa;">${money(input.shipping)}</td></tr>
-          ${input.discount > 0 ? `<tr><td style="padding:2px 0;color:#a1a1aa;">Discount</td><td style="padding:2px 0;text-align:right;color:#a1a1aa;">-${money(input.discount)}</td></tr>` : ""}
-          <tr><td style="padding:8px 0 0;font-weight:700;color:#ffffff;">Total</td><td style="padding:8px 0 0;text-align:right;font-weight:700;color:#ffffff;">${money(input.total)}</td></tr>
+          ${summaryRow("Subtotal", money(input.subtotal), { border: true })}
+          ${summaryRow("Shipping", money(input.shipping))}
+          ${savings > 0 ? summaryRow("Discounts &amp; credits", `-${money(savings)}`) : ""}
+          ${tax > 0 ? summaryRow("Sales tax", money(tax)) : ""}
+          ${cardFee > 0 ? summaryRow("Card processing fee", money(cardFee)) : ""}
+          ${summaryRow("Total", money(input.total), { bold: true })}
         </table>
       `,
     }),
@@ -181,7 +198,9 @@ export function orderConfirmationTemplate(input: {
       "",
       `Subtotal: ${money(input.subtotal)}`,
       `Shipping: ${money(input.shipping)}`,
-      input.discount > 0 ? `Discount: -${money(input.discount)}` : null,
+      savings > 0 ? `Discounts & credits: -${money(savings)}` : null,
+      tax > 0 ? `Sales tax: ${money(tax)}` : null,
+      cardFee > 0 ? `Card processing fee: ${money(cardFee)}` : null,
       `Total: ${money(input.total)}`,
       "",
       "- Vanta Labs",

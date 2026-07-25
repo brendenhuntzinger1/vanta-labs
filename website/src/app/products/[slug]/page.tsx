@@ -71,10 +71,15 @@ export default async function ProductDetailPage({
           "@type": "Offer",
           priceCurrency: "USD",
           price: priceNumber,
+          // Only assert InStock for an explicit In Stock status — map anything
+          // else (Out of Stock, Backorder, Low, unknown) to a non-InStock value
+          // so JSON-LD never over-claims availability to search engines.
           availability:
-            product.stockStatus === "Out of Stock"
-              ? "https://schema.org/OutOfStock"
-              : "https://schema.org/InStock",
+            product.stockStatus === "In Stock"
+              ? "https://schema.org/InStock"
+              : product.stockStatus === "Out of Stock"
+                ? "https://schema.org/OutOfStock"
+                : "https://schema.org/LimitedAvailability",
           url: `${SITE_URL}/products/${product.slug}`,
         }
       : undefined,

@@ -5,6 +5,11 @@ function siteUrl() {
 }
 
 export default function robots(): MetadataRoute.Robots {
+  // Non-production deployments (Vercel preview/staging, local dev) disallow the
+  // entire site so a preview URL is never crawled or indexed.
+  if (process.env.VERCEL_ENV !== "production") {
+    return { rules: [{ userAgent: "*", disallow: "/" }] };
+  }
   return {
     rules: [
       {

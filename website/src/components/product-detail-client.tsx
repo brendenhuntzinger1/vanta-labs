@@ -165,6 +165,10 @@ export function ProductDetailClient({
   const selectedBatchNumber = selectedDose?.batchNumber ?? product.batchNumber;
   const selectedPurity = selectedDose?.purityResult ?? product.purityResult;
   const selectedCoaUrl = selectedDose?.coaUrl ?? product.coaUrl;
+  // Only assert testing/purity when there is a real purity value AND a COA on
+  // file for this batch — never claim "third-party tested / ≥99%" for a product
+  // whose data is absent or "Pending". Keeps on-page claims substantiated.
+  const hasVerifiedTesting = Boolean(selectedCoaUrl) && Boolean(selectedPurity) && selectedPurity !== "Pending";
   const selectedStockStatus = selectedDose?.stockStatus ?? product.stockStatus;
   const isOutOfStock = selectedStockStatus === "Out of Stock" || selectedStockStatus === "Reserved";
   const unitPrice = toPriceNumber(selectedPrice);
@@ -420,7 +424,7 @@ export function ProductDetailClient({
               ) : null}
 
               <div className="mt-4 flex flex-wrap items-center gap-2">
-                {selectedPurity && (
+                {hasVerifiedTesting && (
                   <span className="border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
                     {selectedPurity} Purity Verified
                   </span>
@@ -444,8 +448,8 @@ export function ProductDetailClient({
                     <path d="m9 12 2 2 4-4" />
                   </svg>
                   <div>
-                    <p className="text-xs font-bold text-emerald-800">{selectedPurity ? `${selectedPurity} purity` : "≥99% purity"}</p>
-                    <p className="text-[11px] leading-4 text-emerald-700">Third-party batch tested</p>
+                    <p className="text-xs font-bold text-emerald-800">{hasVerifiedTesting ? `${selectedPurity} purity` : "COA pending"}</p>
+                    <p className="text-[11px] leading-4 text-emerald-700">{hasVerifiedTesting ? "Third-party batch tested" : "Published for this batch when available"}</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-2.5 rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3">

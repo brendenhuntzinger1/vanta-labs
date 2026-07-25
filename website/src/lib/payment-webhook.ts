@@ -249,7 +249,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_number, order_type, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, amount_paid, paid_at, customer_user_id, customer_email, customer_name, points_redeemed, store_credit_redeemed_cents")
+    .select("id, order_id, order_number, order_type, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, paid_at, customer_user_id, customer_email, customer_name, points_redeemed, store_credit_redeemed_cents")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -867,6 +867,8 @@ export async function finalizeManualPayment(
         subtotal,
         shipping: roundMoney(Number(order.shipping_amount ?? 0)),
         discount: discountAmount,
+        tax: Number(order.tax_amount ?? 0),
+        cardProcessingFee: Number(order.card_processing_fee ?? 0),
         total: amountPaid,
       });
       const emailResult = await sendEmail({ to: String(order.customer_email), ...template });
@@ -1214,6 +1216,8 @@ export async function processPaymentWebhook(payload: string, signature: string, 
             subtotal,
             shipping: shippingAmount,
             discount: discountAmount,
+            tax: Number(orderRecord?.tax_amount ?? 0),
+            cardProcessingFee: Number(orderRecord?.card_processing_fee ?? 0),
             total: amountPaid,
           });
           const emailResult = await sendEmail({ to: buyerEmail, ...template });
@@ -1262,16 +1266,17 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   }
 
   if (nextStatus === "refunded" || nextStatus === "canceled" || nextStatus === "payment_failed") {
-    // Reverse only the PROPORTIONAL commission on a partial refund. A refund
-    // event carries the refunded amount in `amount`; when that's a positive
-    // value below the original order total, treat it as partial and pass the
-    // fraction (the admin refund path already computes this correctly). Cancels,
-    // failures, and full-amount refunds default to a full reversal.
+    // Reverse only the PROPORTIONAL commission on a partial refund, prorated
+    // against the MERCHANDISE base the commission is computed on (subtotal −
+    // discount) — NOT the gross total. Prorating on gross (amount_paid, which
+    // includes tax/shipping/card fee) wrongly claws back commission when a
+    // shipping/tax-only amount is refunded. A refund at/above the merchandise
+    // base is a full reversal. Cancels/failures also fully reverse.
     const refundEventAmount = Number(eventPayload.amount ?? 0);
-    const originalAmount = Number(orderRecord?.amount_paid ?? 0);
+    const merchandiseBase = commissionableSubtotal;
     const refundedFraction =
-      nextStatus === "refunded" && refundEventAmount > 0 && originalAmount > 0 && refundEventAmount < originalAmount - 0.01
-        ? refundEventAmount / originalAmount
+      nextStatus === "refunded" && refundEventAmount > 0 && merchandiseBase > 0 && refundEventAmount < merchandiseBase
+        ? refundEventAmount / merchandiseBase
         : 1;
     await updateCommissionOnRefund(orderId, { refundedFraction });
 

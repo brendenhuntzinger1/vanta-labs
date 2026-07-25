@@ -133,6 +133,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
               subtotal: roundMoney(Number(order.subtotal ?? 0)),
               shipping: roundMoney(Number(order.shipping_amount ?? 0)),
               discount: roundMoney(Number(order.discount_amount ?? 0)),
+              tax: roundMoney(Number(order.tax_amount ?? 0)),
+              cardProcessingFee: roundMoney(Number(order.card_processing_fee ?? 0)),
               total: roundMoney(Number(order.amount_paid ?? 0)),
             })
           : manualPaymentReceivedTemplate({

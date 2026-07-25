@@ -64,7 +64,13 @@ export const metadata: Metadata = {
     description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
     images: ["/images/vantalabs.png"],
   },
-  robots: { index: true, follow: true },
+  // Only the real production deployment is indexable. Vercel preview/staging
+  // deployments (VERCEL_ENV = "preview") and local dev must never be crawled —
+  // otherwise a *.vercel.app URL competes with production and leaks pre-release
+  // content into search.
+  robots: process.env.VERCEL_ENV === "production"
+    ? { index: true, follow: true }
+    : { index: false, follow: false },
 };
 
 export default function RootLayout({

@@ -107,11 +107,29 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       // an actual transition, not on every save of the admin form.
       const { data: priorOrder } = await supabaseAdmin
         .from("orders")
-        .select("fulfillment_status, tracking_number")
+        .select("fulfillment_status, tracking_number, payment_status")
         .eq("order_id", orderId)
         .maybeSingle();
       const priorStatus = String(priorOrder?.fulfillment_status ?? "");
       const priorTracking = priorOrder?.tracking_number ? String(priorOrder.tracking_number) : "";
+
+      // Never advance fulfillment (ship/deliver/etc.) on an order that hasn't
+      // been paid — otherwise a pending or canceled order would send the
+      // customer a shipping email + tracking and goods would leave for an order
+      // with no captured payment. Only paid / partially_refunded orders ship.
+      const FULFILLMENT_ADVANCE_STATES = new Set(["processing", "shipped", "delivered", "fulfilled", "partially_fulfilled"]);
+      const orderPaymentStatus = String(priorOrder?.payment_status ?? "").toLowerCase();
+      if (
+        body.fulfillmentStatus
+        && FULFILLMENT_ADVANCE_STATES.has(String(body.fulfillmentStatus).toLowerCase())
+        && orderPaymentStatus !== "paid"
+        && orderPaymentStatus !== "partially_refunded"
+      ) {
+        return NextResponse.json(
+          { success: false, error: "This order can't be marked for fulfillment until its payment is verified." },
+          { status: 400 },
+        );
+      }
 
       const updatePayload: Record<string, unknown> = { updated_at: now };
       if (body.paymentStatus) {
@@ -392,7 +410,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         const orderItems = (order.order_items ?? []) as Array<{ product_name?: string; product_id?: string; quantity?: number; line_total?: number }>;
         const template = orderConfirmationTemplate({
           customerName: String(order.customer_name ?? ""),
-          orderId,
+          orderId: order.order_number ? String(order.order_number) : orderId,
           items: orderItems.map((item) => ({
             name: item.product_name ?? item.product_id ?? "Item",
             quantity: Number(item.quantity ?? 0),
@@ -401,6 +419,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
           subtotal: roundMoney(Number(order.subtotal ?? 0)),
           shipping: roundMoney(Number(order.shipping_amount ?? 0)),
           discount: roundMoney(Number(order.discount_amount ?? 0)),
+          tax: roundMoney(Number(order.tax_amount ?? 0)),
+          cardProcessingFee: roundMoney(Number(order.card_processing_fee ?? 0)),
           total: roundMoney(Number(order.amount_paid ?? 0)),
         });
 
