@@ -557,7 +557,7 @@ export default function AdminProductsPage() {
     const formData = new FormData();
     formData.append("file", file);
     formData.append("productId", productId);
-    formData.append("makePrimary", "false");
+    formData.append("makePrimary", "true");
 
     const res = await fetch("/api/admin/upload-image", {
       method: "POST",
@@ -572,10 +572,16 @@ export default function AdminProductsPage() {
     }
 
     const product = json.product;
+    const nextImage = json.imageUrl;
+    // One upload sets the whole product's photo: the clicked dose, the default
+    // dose (what the storefront shows as the cover), and the product cover — so
+    // the new photo always appears, no matter which dose you clicked from.
     const updatedDoses = (product.doses ?? []).map((dose) => (
-      dose.id === variantId ? { ...dose, imageUrl: json.imageUrl } : dose
+      dose.id === variantId || dose.isDefault ? { ...dose, imageUrl: nextImage } : dose
     ));
-    await saveProduct({ ...product, doses: updatedDoses });
+    await saveProduct({ ...product, coverImage: nextImage, doses: updatedDoses });
+    setMessage("Photo updated.");
+    clearMessageSoon();
   };
 
   const deleteProduct = async (productId: string) => {
