@@ -195,6 +195,46 @@ export interface ActiveCouponSummary {
   endsAt: string | null;
 }
 
+// The single headline coupon to advertise on the public storefront (the big
+// product-page banner). Shows automatically whenever an admin has an active,
+// in-window, store-wide coupon — no separate "publish" toggle. Personal codes
+// (assigned_email, e.g. cart-recovery) and exhausted/limit-reached codes are
+// never advertised. Returns the most recently created qualifying coupon so the
+// last code the owner turned on is the one shoppers see.
+export async function getStorefrontCoupon(): Promise<ActiveCouponSummary | null> {
+  const nowIso = new Date().toISOString();
+
+  const { data, error } = await supabaseAdmin
+    .from("coupons")
+    .select("code, discount_type, discount_value, ends_at, active, assigned_email, max_redemptions, redemptions_count")
+    .eq("active", true)
+    .is("assigned_email", null)
+    .or(`starts_at.is.null,starts_at.lte.${nowIso}`)
+    .or(`ends_at.is.null,ends_at.gte.${nowIso}`)
+    .order("created_at", { ascending: false })
+    .limit(10);
+
+  if (error) {
+    throw error;
+  }
+
+  // Skip any code that has already hit its redemption cap.
+  const usable = (data ?? []).find(
+    (row) => !(typeof row.max_redemptions === "number" && Number(row.redemptions_count ?? 0) >= row.max_redemptions),
+  );
+
+  if (!usable) {
+    return null;
+  }
+
+  return {
+    code: String(usable.code).toUpperCase(),
+    discountType: usable.discount_type === "fixed" ? "fixed" : "percent",
+    discountValue: Number(usable.discount_value ?? 0),
+    endsAt: usable.ends_at ? String(usable.ends_at) : null,
+  };
+}
+
 // Customer-facing listing (account dashboard, checkout hints) - only the
 // fields a shopper needs to decide whether to use a code, not redemption
 // counts or internal limits.

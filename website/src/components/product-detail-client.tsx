@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useCart } from "@/components/cart-context";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
+import { CouponPromoBanner } from "@/components/coupon-promo-banner";
 import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { WishlistButton } from "@/components/wishlist-button";
@@ -239,6 +240,8 @@ export function ProductDetailClient({
           <span>/</span>
           <span className="text-zinc-700">{product.name}</span>
         </nav>
+
+        <CouponPromoBanner />
 
         {promoBuy3Get1Enabled ? (
           <div className="vl2-lab-panel mt-6 flex flex-wrap items-center gap-2 border-emerald-200 bg-emerald-50 px-5 py-3 text-sm text-emerald-900">

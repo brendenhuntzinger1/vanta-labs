@@ -3,6 +3,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ProductCard } from "@/components/product-card";
+import { CouponPromoBanner } from "@/components/coupon-promo-banner";
 import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
 
@@ -161,6 +162,8 @@ function ProductsPageContent() {
             Documented compounds with transparent purity records, mapped lot metadata, and streamlined fulfillment.
           </p>
         </div>
+
+        <CouponPromoBanner />
 
         <section className="z-40 mt-10 border border-white/12 bg-[#0b0b0b]/95 p-3 backdrop-blur-xl sm:p-4 lg:sticky lg:top-[76px]">
           <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-[1fr_auto_auto]">
