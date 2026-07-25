@@ -255,14 +255,14 @@ export function ProductDetailClient({
           {/* Block A — product image. Mobile order 1; desktop top-left. */}
           <div className="order-1 min-w-0 lg:col-start-1 lg:row-start-1">
             <div className="vl2-lab-panel overflow-hidden">
-              <div className="relative min-h-[260px] bg-black sm:min-h-[460px]">
+              <div className="relative min-h-[260px] bg-white sm:min-h-[460px]">
                 {hasRealImage ? (
                   <Image
                     src={imageToDisplay as string}
                     alt={product.name}
                     fill
                     sizes="(max-width: 1024px) 100vw, 55vw"
-                    className="object-cover"
+                    className="object-contain"
                     priority
                   />
                 ) : (
@@ -436,28 +436,14 @@ export function ProductDetailClient({
 
               {/* Prominent, always-visible COA callout — third-party proof right
                   next to the buy decision, not hidden inside a tab. */}
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border border-emerald-200 bg-emerald-50/70 px-4 py-3">
-                <div className="flex items-center gap-2.5">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5 text-emerald-600">
-                    <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
-                    <path d="m9 12 2 2 4-4" />
-                  </svg>
-                  <span className="text-xs font-medium text-emerald-800">Third-party tested · COA on every batch</span>
-                </div>
-                {selectedCoaUrl ? (
-                  <a
-                    href={selectedCoaUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1.5 whitespace-nowrap border border-emerald-600 bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-700"
-                  >
-                    Download COA <span aria-hidden="true">↓</span>
-                  </a>
-                ) : (
-                  <Link href="/coa-library" className="whitespace-nowrap text-xs font-semibold text-emerald-700 underline underline-offset-2 hover:text-emerald-900">
-                    View COA Library →
-                  </Link>
-                )}
+              <div className="mt-4 flex items-center gap-2.5 border border-emerald-200 bg-emerald-50/70 px-4 py-3">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5 flex-shrink-0 text-emerald-600">
+                  <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
+                  <path d="m9 12 2 2 4-4" />
+                </svg>
+                <span className="text-xs font-semibold text-emerald-800">
+                  {selectedPurity ? `${selectedPurity} purity` : "≥99% purity"} · third-party batch tested
+                </span>
               </div>
 
               {product.doses && product.doses.length > 0 && (
