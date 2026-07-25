@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { generateReferralCode } from "@/lib/referral-code-utils";
+import { isEarnedCommission } from "@/lib/ledger";
 import { sendEmail } from "@/lib/email/send";
 import {
   ambassadorApplicationReceivedTemplate,
@@ -483,7 +484,7 @@ export async function createPartnerApplication(input: {
   // Notify the admin: queue a dashboard notification AND email the owner so a
   // new application is never missed. Best-effort — never blocks the application.
   try {
-    await enqueueNotification("partner_application_received", input.email, {
+    const applicationQueueRowId = await enqueueNotification("partner_application_received", input.email, {
       partnerId,
       name: input.name,
       email: input.email,
@@ -497,6 +498,19 @@ export async function createPartnerApplication(input: {
         adminUrl: `${getSiteUrl().replace(/\/$/, "")}/admin/partners`,
       });
       await sendEmail({ to: supportEmail, ...ownerAlert });
+    }
+
+    // Mark the queued notification handled once the owner alert has been sent,
+    // so the admin "pending notifications" count reflects real unsent work
+    // instead of growing forever — this kind previously had no consumer.
+    if (applicationQueueRowId) {
+      const { error: markSentError } = await supabaseAdmin
+        .from("notification_queue")
+        .update({ status: "sent", sent_at: new Date().toISOString() })
+        .eq("id", applicationQueueRowId);
+      if (markSentError && !isMissingRelationError(markSentError, "notification_queue")) {
+        assertNoSupabaseError("notification_queue.update(application received sent)", markSentError);
+      }
     }
   } catch {
     // Admin alert is best-effort; the application itself already succeeded.
@@ -533,13 +547,15 @@ export async function getPartnerProgramStats(): Promise<PartnerProgramStats> {
   const commissionByPartner = new Map<string, number>();
   const { data: partnerCommissionRows, error: partnerCommissionError } = await supabaseAdmin
     .from("referral_orders")
-    .select("ambassador_id, commission_amount");
+    .select("ambassador_id, commission_amount, payment_status");
 
   assertNoSupabaseError("referral_orders.select(program partner commission totals)", partnerCommissionError);
 
   for (const row of partnerCommissionRows ?? []) {
     const partnerId = row.ambassador_id;
-    if (!partnerId) continue;
+    // Canonical earned-commission rule (excludes reversed/voided/manual_review)
+    // so program stats reconcile exactly with the ambassador + admin surfaces.
+    if (!partnerId || !isEarnedCommission(row.payment_status)) continue;
     commissionByPartner.set(partnerId, (commissionByPartner.get(partnerId) ?? 0) + Number(row.commission_amount ?? 0));
   }
 
@@ -805,8 +821,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   // Reversed/refunded (and under-review) commissions must NOT inflate the
   // ambassador's displayed lifetime earnings — only genuinely earned
   // commissions count.
-  const REVERSED_COMMISSION_STATUSES = new Set(["reversed", "voided", "manual_review"]);
-  const earnedCommissions = commissions.filter((row) => !REVERSED_COMMISSION_STATUSES.has(String(row.payment_status)));
+  const earnedCommissions = commissions.filter((row) => isEarnedCommission(row.payment_status));
   const totalEarnings = roundMoney(earnedCommissions.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
   // Unpaid balance = commissions still owed to the partner. This must exclude
   // already-paid commissions (previously "paid" was wrongly counted here, so
@@ -936,7 +951,10 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
     if (!partnerId) continue;
     const current = commissionByPartner.get(partnerId) ?? { total: 0, pending: 0, approvedForPayout: 0, paid: 0, reversed: 0 };
     const amount = Number(row.commission_amount ?? 0);
-    current.total += amount;
+    // "total" is EARNED commission — exclude reversed/voided/manual_review so it
+    // matches the ambassador's own lifetime-earnings figure. The status
+    // breakdown below still tracks each bucket separately.
+    if (isEarnedCommission(row.payment_status)) current.total += amount;
     if (row.payment_status === "commission_paid" || row.payment_status === "paid") {
       current.paid += amount;
     } else if (row.payment_status === "approved_for_payout") {

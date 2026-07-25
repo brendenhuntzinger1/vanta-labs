@@ -1,34 +1,33 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { resolvePaymentProviderName } from "@/lib/payment-provider";
 import { computeProfit } from "@/lib/profit-engine";
 
 // ── P2-5: mock payment gateway must be impossible in production ──────────────
 describe("P2-5 mock-in-production guard", () => {
-  const original = { ...process.env };
   afterEach(() => {
-    process.env = { ...original };
+    vi.unstubAllEnvs();
   });
 
   it("THROWS when PAYMENT_PROVIDER=mock resolves in production", () => {
-    process.env.NODE_ENV = "production";
-    delete process.env.ALLOW_MOCK_PAYMENTS;
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("ALLOW_MOCK_PAYMENTS", "");
     expect(() => resolvePaymentProviderName("mock")).toThrow(/forbidden in production/i);
     expect(() => resolvePaymentProviderName("test")).toThrow(/forbidden in production/i);
   });
 
   it("allows mock in a non-production environment", () => {
-    process.env.NODE_ENV = "test";
+    vi.stubEnv("NODE_ENV", "test");
     expect(resolvePaymentProviderName("mock")).toBe("mock");
   });
 
   it("allows mock in production ONLY with the explicit opt-in", () => {
-    process.env.NODE_ENV = "production";
-    process.env.ALLOW_MOCK_PAYMENTS = "true";
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("ALLOW_MOCK_PAYMENTS", "true");
     expect(resolvePaymentProviderName("mock")).toBe("mock");
   });
 
   it("defaults to live when unset (a missing config never runs mock)", () => {
-    delete process.env.PAYMENT_PROVIDER;
+    vi.stubEnv("PAYMENT_PROVIDER", "");
     expect(resolvePaymentProviderName(undefined)).toBe("live");
   });
 });

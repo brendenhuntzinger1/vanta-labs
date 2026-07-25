@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { PAID_ORDER_STATUSES, netOrderRevenue } from "@/lib/ledger";
 
 export interface RevenueByMethod {
   method: string;
@@ -53,8 +54,8 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
     supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).eq("fulfillment_status", "shipped"),
     supabaseAdmin
       .from("orders")
-      .select("amount_paid, payment_method, card_processing_fee, paid_at")
-      .eq("payment_status", "paid")
+      .select("amount_paid, refund_amount, payment_method, card_processing_fee, paid_at")
+      .in("payment_status", Array.from(PAID_ORDER_STATUSES))
       .limit(10000),
   ]);
 
@@ -75,7 +76,9 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
   const methodMap = new Map<string, { revenue: number; orders: number }>();
 
   for (const order of paidOrders) {
-    const amount = Number(order.amount_paid ?? 0);
+    // NET of partial refunds — gross amount_paid overstates revenue when a
+    // partial refund left the order in a paid state.
+    const amount = netOrderRevenue(order);
     const fee = Number(order.card_processing_fee ?? 0);
     const method = String(order.payment_method ?? "");
 

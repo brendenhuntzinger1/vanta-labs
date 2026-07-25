@@ -618,6 +618,16 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     if (error) throw error;
 
     for (const row of (data ?? []) as unknown as DueMembershipRow[]) {
+      // Atomically CLAIM before sending: flip first_month_reminder_sent_at
+      // NULL -> now and proceed only if THIS sweep won the flip. Two overlapping
+      // sweeps can no longer both email the same member.
+      const { data: claimedRemainder } = await supabaseAdmin
+        .from("customer_memberships")
+        .update({ first_month_reminder_sent_at: now.toISOString() })
+        .eq("user_id", row.user_id)
+        .is("first_month_reminder_sent_at", null)
+        .select("user_id");
+      if (!claimedRemainder || claimedRemainder.length === 0) continue;
       const contact = await getAuthUserContact(row.user_id);
       if (contact && row.first_month_remainder_cents !== null && row.intro_ends_at) {
         await sendEmail({
@@ -629,7 +639,6 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
           }),
         });
       }
-      await supabaseAdmin.from("customer_memberships").update({ first_month_reminder_sent_at: now.toISOString() }).eq("user_id", row.user_id);
       result.remainderRemindersSent += 1;
     }
   }
@@ -749,6 +758,15 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     if (error) throw error;
 
     for (const row of (data ?? []) as unknown as DueMembershipRow[]) {
+      // Atomically CLAIM before sending (same exactly-once pattern as the
+      // remainder reminder) so overlapping sweeps can't both send it.
+      const { data: claimedRenewal } = await supabaseAdmin
+        .from("customer_memberships")
+        .update({ renewal_reminder_sent_at: now.toISOString() })
+        .eq("user_id", row.user_id)
+        .is("renewal_reminder_sent_at", null)
+        .select("user_id");
+      if (!claimedRenewal || claimedRenewal.length === 0) continue;
       const tier = row.membership_tiers;
       const contact = await getAuthUserContact(row.user_id);
       if (contact && tier && row.next_billing_at) {
@@ -761,7 +779,6 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
           }),
         });
       }
-      await supabaseAdmin.from("customer_memberships").update({ renewal_reminder_sent_at: now.toISOString() }).eq("user_id", row.user_id);
       result.renewalRemindersSent += 1;
     }
   }

@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { isPaidOrderStatus, netOrderRevenue } from "@/lib/ledger";
 
 const ONLINE_WINDOW_MINUTES = 5;
 
@@ -43,13 +44,14 @@ function daysAgoIso(days: number) {
   return date.toISOString();
 }
 
+// Delegate to the canonical predicate so every dashboard shares one definition.
 function isPaidStatus(value: unknown) {
-  const status = String(value ?? "").toLowerCase();
-  return status === "paid" || status === "completed" || status === "succeeded";
+  return isPaidOrderStatus(value as string | null | undefined);
 }
 
 type RevenueRow = {
   amount_paid: number | null;
+  refund_amount: number | null;
   payment_status: string | null;
   paid_at: string | null;
   created_at: string | null;
@@ -81,7 +83,7 @@ function revenueFromRows(rows: RevenueRow[]) {
       continue;
     }
 
-    const amount = Number(row.amount_paid ?? 0);
+    const amount = netOrderRevenue(row);
     if (!Number.isFinite(amount) || amount <= 0) {
       continue;
     }
@@ -115,11 +117,11 @@ export async function getRevenueWindowMetrics() {
   const [{ data: paidRows, error: paidError }, { data: fallbackRows, error: fallbackError }] = await Promise.all([
     supabaseAdmin
       .from("orders")
-      .select("amount_paid, payment_status, paid_at, created_at")
+      .select("amount_paid, refund_amount, payment_status, paid_at, created_at")
       .gte("paid_at", monthStartIso),
     supabaseAdmin
       .from("orders")
-      .select("amount_paid, payment_status, paid_at, created_at")
+      .select("amount_paid, refund_amount, payment_status, paid_at, created_at")
       .is("paid_at", null)
       .gte("created_at", monthStartIso),
   ]);
@@ -140,12 +142,12 @@ async function getRevenueRowsInRange(input: RevenueRangeInput) {
   const [{ data: paidRows, error: paidError }, { data: fallbackRows, error: fallbackError }] = await Promise.all([
     supabaseAdmin
       .from("orders")
-      .select("amount_paid, payment_status, paid_at, created_at")
+      .select("amount_paid, refund_amount, payment_status, paid_at, created_at")
       .gte("paid_at", input.fromIso)
       .lte("paid_at", input.toIso),
     supabaseAdmin
       .from("orders")
-      .select("amount_paid, payment_status, paid_at, created_at")
+      .select("amount_paid, refund_amount, payment_status, paid_at, created_at")
       .is("paid_at", null)
       .gte("created_at", input.fromIso)
       .lte("created_at", input.toIso),
@@ -194,7 +196,7 @@ export async function getRevenueTrend(input: RevenueRangeInput) {
       continue;
     }
 
-    const amount = Number(row.amount_paid ?? 0);
+    const amount = netOrderRevenue(row);
     if (!Number.isFinite(amount) || amount <= 0) {
       continue;
     }
@@ -216,7 +218,7 @@ export async function getRevenueTrend(input: RevenueRangeInput) {
 export async function getDailyProfitEstimate() {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("amount_paid, payment_status, paid_at, created_at")
+    .select("amount_paid, refund_amount, payment_status, paid_at, created_at")
     .gte("created_at", dayStartIso());
 
   if (error) {
