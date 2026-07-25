@@ -51,7 +51,7 @@ export function ProductCard({
               priority={priority}
               loading={priority ? undefined : "lazy"}
               sizes="(max-width: 640px) 50vw, (max-width: 1280px) 50vw, 25vw"
-              className="object-contain p-4 sm:p-7"
+              className="object-cover"
             />
           ) : (
             <div className="flex h-full items-center justify-center">
