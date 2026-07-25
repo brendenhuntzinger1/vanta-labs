@@ -82,6 +82,8 @@ export interface OrderInputs {
   bulkSavingsAmount?: number;
   /** Personal ambassador discount dollars (competes for best value). */
   personalDiscountAmount?: number;
+  /** The personal ambassador discount percent, for labeling only. */
+  personalDiscountPercent?: number;
   /** Admin: may a coupon combine with a referral/bundle? */
   allowCouponStacking: boolean;
   /** Ambassador commission percent (admin-set). */
@@ -160,7 +162,7 @@ export function resolveCustomerDiscount(
   if (referralBucket > 0) candidates.push({ amount: referralBucket, components: ["referral"], label: `${inputs.referralPercent}% referral` });
   if (membershipAmount > 0) candidates.push({ amount: membershipAmount, components: ["membership"], label: "Membership pricing" });
   if (bulkAmount > 0) candidates.push({ amount: bulkAmount, components: [], label: "Bulk savings" });
-  if (personalAmount > 0) candidates.push({ amount: personalAmount, components: [], label: "Ambassador personal" });
+  if (personalAmount > 0) candidates.push({ amount: personalAmount, components: [], label: inputs.personalDiscountPercent ? `Ambassador ${inputs.personalDiscountPercent}% off` : "Ambassador discount" });
   if (couponEnabled && !inputs.allowCouponStacking) candidates.push({ amount: inputs.couponDiscount, components: ["coupon"], label: "Coupon" });
 
   let best: DiscountBreakdown = { amount: 0, components: [], label: "None" };

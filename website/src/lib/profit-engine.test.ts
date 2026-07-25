@@ -72,6 +72,34 @@ describe("discount composition rules", () => {
     expect(d.amount).toBe(31); // 26 + 5
   });
 
+  it("ambassador self-purchase → 15% personal discount, labeled, no commission cost", () => {
+    const d = resolveCustomerDiscount(
+      makeOrder({ personalDiscountAmount: 39, personalDiscountPercent: 15 }),
+      ALL,
+    );
+    expect(d.amount).toBe(39); // 15% of 260
+    expect(d.label).toBe("Ambassador 15% off");
+    expect(d.components).toEqual([]); // a perk — never peeled off by the profit guard
+  });
+
+  it("ambassador discount does NOT stack with a coupon — the bigger one wins", () => {
+    // Bigger coupon beats the 15% personal discount.
+    const bigger = resolveCustomerDiscount(
+      makeOrder({ personalDiscountAmount: 39, personalDiscountPercent: 15, couponDiscount: 50 }),
+      ALL,
+    );
+    expect(bigger.amount).toBe(50);
+    expect(bigger.components).toEqual(["coupon"]);
+
+    // Smaller coupon loses to the 15% personal discount.
+    const smaller = resolveCustomerDiscount(
+      makeOrder({ personalDiscountAmount: 39, personalDiscountPercent: 15, couponDiscount: 10 }),
+      ALL,
+    );
+    expect(smaller.amount).toBe(39);
+    expect(smaller.label).toBe("Ambassador 15% off");
+  });
+
   it("membership competes for best value — it wins when largest, loses when not", () => {
     // Membership 15% ($39) beats bundle+5% on a $20-bundle order ($33) → wins.
     const wins = resolveCustomerDiscount(

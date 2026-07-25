@@ -9,6 +9,7 @@ import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateTax } from "@/lib/shipping";
+import { isApprovedAmbassadorCustomer } from "@/lib/ambassador-status";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
 import { computeProfit, resolveCustomerDiscount } from "@/lib/profit-engine";
@@ -175,38 +176,9 @@ async function validateReferralCode(
 }
 
 // True when the CUSTOMER checking out is themselves an approved ambassador —
-// used to grant the personal ambassador discount on their own purchase. Matched
-// by account first, then by email. A deactivated/removed ambassador (status not
-// "approved") returns false, so the personal discount is revoked immediately.
-async function isApprovedAmbassadorCustomer(
- customerUserId: string | undefined,
- email: string,
-): Promise<boolean> {
- if (customerUserId) {
- const { data } = await supabaseAdmin
- .from("ambassadors")
- .select("id")
- .eq("auth_user_id", customerUserId)
- .eq("status", "approved")
- .maybeSingle();
- if (data) {
- return true;
- }
- }
- const normalizedEmail = email.trim().toLowerCase();
- if (normalizedEmail) {
- const { data } = await supabaseAdmin
- .from("ambassadors")
- .select("id")
- .eq("email", normalizedEmail)
- .eq("status", "approved")
- .maybeSingle();
- if (data) {
- return true;
- }
- }
- return false;
-}
+// used to grant the personal ambassador discount on their own purchase. See
+// isApprovedAmbassadorCustomer in src/lib/ambassador-status.ts (shared with the
+// account endpoint that drives the checkout preview).
 
 export async function createCheckoutSession(
  payload: CreateCheckoutPayload,
@@ -457,6 +429,7 @@ export async function createCheckoutSession(
      couponDiscount: coupon ? coupon.discountAmount : 0,
      bulkSavingsAmount: bulkSavingsResult.amount,
      personalDiscountAmount,
+     personalDiscountPercent: referralProgram.personalDiscountPercent,
      allowCouponStacking: couponPolicy.allowStacking,
      commissionPercent: 0,
      processingFeePercent: 0,

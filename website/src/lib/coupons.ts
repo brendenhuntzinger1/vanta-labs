@@ -243,8 +243,12 @@ export async function getActiveCouponsForDisplay(): Promise<ActiveCouponSummary[
 
   const { data, error } = await supabaseAdmin
     .from("coupons")
-    .select("code, discount_type, discount_value, starts_at, ends_at, active")
+    .select("code, discount_type, discount_value, starts_at, ends_at, active, assigned_email")
+    // Only store-wide coupons belong in a customer-facing list. Personal codes
+    // (assigned_email — e.g. auto-minted SAVE-… cart-recovery codes) are tied to
+    // one shopper and must never be advertised here.
     .eq("active", true)
+    .is("assigned_email", null)
     .or(`starts_at.is.null,starts_at.lte.${nowIso}`)
     .or(`ends_at.is.null,ends_at.gte.${nowIso}`)
     .order("created_at", { ascending: false })

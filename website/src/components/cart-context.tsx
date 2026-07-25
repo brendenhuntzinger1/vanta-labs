@@ -63,6 +63,8 @@ type CartContextValue = {
   buy3Get1UntilNextFree: number;
   bulkSavingsApplied: boolean;
   bulkSavingsTierReached: boolean;
+  ambassadorDiscountApplied: boolean;
+  ambassadorDiscountPercent: number;
   memberFreeShipping: boolean;
   storeCreditApplied: number;
   storeCreditBalanceCents: number;
@@ -174,6 +176,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [cartSessionId, setCartSessionId] = useState<string | null>(null);
   const [memberDiscountPercent, setMemberDiscountPercent] = useState(0);
   const [memberFreeShipping, setMemberFreeShipping] = useState(false);
+  // Personal discount an approved ambassador gets on their own order (0 for
+  // everyone else). Fetched from /api/account/ambassador-discount, which uses
+  // the same check as the server so the preview matches the real charge.
+  const [ambassadorDiscountPercent, setAmbassadorDiscountPercent] = useState(0);
   const [storeCreditBalanceCents, setStoreCreditBalanceCents] = useState(0);
   const [storeCreditMinOrderCents, setStoreCreditMinOrderCents] = useState(0);
 
@@ -209,6 +215,21 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         if (result.fullName) setCustomerName(result.fullName);
       } catch {
         // Guest shoppers simply see no points UI.
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const response = await fetch("/api/account/ambassador-discount", { cache: "no-store" });
+        if (!response.ok) return;
+        const result = await response.json() as { success?: boolean; percent?: number };
+        if (result.success) {
+          setAmbassadorDiscountPercent(Number(result.percent ?? 0) || 0);
+        }
+      } catch {
+        // Not an ambassador / signed out — no personal discount shown.
       }
     })();
   }, []);
@@ -548,17 +569,27 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [memberDiscountPercent, subtotal],
   );
 
+  // Ambassadors get a personal discount on their own order (no commission). It
+  // competes for best value with everything else — a bigger coupon wins, and it
+  // never stacks. Mirrors payment-service.ts.
+  const ambassadorPersonalAmount = useMemo(
+    () => (ambassadorDiscountPercent > 0 ? subtotal * (ambassadorDiscountPercent / 100) : 0),
+    [ambassadorDiscountPercent, subtotal],
+  );
+
   const bestDiscount = useMemo(
     () => resolveBestDiscount([
       { type: "bulk_savings", amount: bulkSavingsResult.amount },
       { type: "member_pricing", amount: memberPricingAmount },
+      { type: "ambassador_personal", amount: ambassadorPersonalAmount },
       preBulkDiscount,
     ]),
-    [bulkSavingsResult.amount, memberPricingAmount, preBulkDiscount],
+    [bulkSavingsResult.amount, memberPricingAmount, ambassadorPersonalAmount, preBulkDiscount],
   );
 
   const discountAmount = bestDiscount?.amount ?? 0;
   const bulkSavingsApplied = bestDiscount?.type === "bulk_savings";
+  const ambassadorDiscountApplied = bestDiscount?.type === "ambassador_personal";
   const bulkSavingsProgress = useMemo(
     () => getBulkSavingsProgress(subtotal, isEligibleForBulkSavings, bulkSavingsConfig),
     [subtotal, isEligibleForBulkSavings, bulkSavingsConfig],
@@ -940,6 +971,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     buy3Get1UntilNextFree,
     bulkSavingsApplied,
     bulkSavingsTierReached,
+    ambassadorDiscountApplied,
+    ambassadorDiscountPercent,
     memberFreeShipping,
     storeCreditApplied,
     storeCreditBalanceCents,
