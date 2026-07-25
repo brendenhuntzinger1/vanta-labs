@@ -58,7 +58,7 @@ export default async function AccountLoginPage({
                 "Third-party tested — COA on every batch",
                 "≥99% purity, verified by HPLC",
                 "Discreet, tracked U.S. shipping",
-                "30-day money-back guarantee",
+                "Damaged or incorrect orders made right",
                 "Sign in with email or a texted code",
               ].map((point) => (
                 <li key={point} className="flex items-center gap-3 text-sm text-white/75">

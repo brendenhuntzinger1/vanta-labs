@@ -53,10 +53,10 @@ describe("INVARIANT 1 — customers never receive more discount than intended", 
     expect(d.amount).toBeLessThanOrEqual(30);
   });
 
-  it("the ONLY intentional stack (bundle + reduced referral %) is bounded and labeled", () => {
+  it("discounts never stack: a bundle order with a referral code gets the free item only", () => {
     const d = resolveCustomerDiscount({ ...BASE, subtotal: 100, bundleDiscount: 20, referralAccepted: true, bundleReferralPercent: 5 }, ALL);
-    expect(d.amount).toBe(25); // $20 bundle + 5% of $100
-    expect(d.components.sort()).toEqual(["bundle", "referral"]);
+    expect(d.amount).toBe(20); // $20 bundle only; the referral % does not stack on a bundle
+    expect(d.components).toEqual(["bundle"]);
   });
 });
 

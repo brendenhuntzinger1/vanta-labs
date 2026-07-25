@@ -39,10 +39,10 @@ describe("discount composition rules", () => {
     expect(d.components).toEqual(["referral"]);
   });
 
-  it("bundle order + code → bundle discount PLUS an extra 5% referral (stacked)", () => {
+  it("bundle order + code → bundle discount only (referral % does NOT stack)", () => {
     const d = resolveCustomerDiscount(makeOrder({ bundleDiscount: 20, referralAccepted: true }), ALL);
-    expect(d.amount).toBe(33); // 20 bundle + 5% of 260 (13)
-    expect(d.components).toEqual(["bundle", "referral"]);
+    expect(d.amount).toBe(20); // Buy-3-Get-1 free item only; no referral % added on top
+    expect(d.components).toEqual(["bundle"]);
   });
 
   it("bundle order, no code → bundle discount only", () => {

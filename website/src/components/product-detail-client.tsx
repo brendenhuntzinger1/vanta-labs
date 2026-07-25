@@ -455,8 +455,8 @@ export function ProductDetailClient({
                     <path d="M12 16h.01" />
                   </svg>
                   <div>
-                    <p className="text-xs font-bold text-emerald-800">30-day money-back guarantee</p>
-                    <p className="text-[11px] leading-4 text-emerald-700">Every order shipment-protected</p>
+                    <p className="text-xs font-bold text-emerald-800">Damaged or incorrect? Made right.</p>
+                    <p className="text-[11px] leading-4 text-emerald-700">Discreet, tracked U.S. shipping</p>
                   </div>
                 </div>
               </div>

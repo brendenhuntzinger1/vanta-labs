@@ -68,12 +68,13 @@ describe("each single lever, in isolation, never finalizes below break-even", ()
     expect(r.grossProfit).toBeGreaterThanOrEqual(0);
   });
 
-  it("bundle + referral (the one intentional stack)", () => {
+  it("bundle + referral: free item only (no stack), commission still paid", () => {
     const r = protectProfit(order({ bundleDiscount: 30, referralAccepted: true }));
     expect(r.profitable).toBe(true);
     expect(r.grossProfit).toBeGreaterThanOrEqual(0);
-    // Bundle discount + reduced 5% referral stacked, and commission still paid.
-    expect(r.discount.components).toContain("bundle");
+    // The bundle is the whole discount — the referral % does NOT stack — but the
+    // ambassador is still attributed and paid commission.
+    expect(r.discount.components).toEqual(["bundle"]);
     expect(r.commission).toBeGreaterThan(0);
   });
 });

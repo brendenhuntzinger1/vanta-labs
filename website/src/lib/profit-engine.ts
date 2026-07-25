@@ -112,8 +112,9 @@ export interface DiscountBreakdown {
 //   • ONE customer discount applies, whichever gives the best value, among:
 //     the referral discount, membership pricing, bulk savings, the personal
 //     ambassador discount, and (when it doesn't stack) a coupon.
-//   • The ONE intentional stack: a BUNDLE (Buy 3 Get 1) order with a code gets
-//     the bundle discount PLUS a reduced referral % (default 5%).
+//   • Discounts NEVER stack: a Buy-3-Get-1 (bundle) order gives the free item
+//     only — a referral code on top adds NO extra %. The ambassador is still
+//     attributed and paid commission; the customer just doesn't double-dip.
 //   • A coupon competes as a candidate when stacking is off; when the admin
 //     enables stacking it adds on top of the best promo.
 // Ambassador commission is NOT a customer discount — it is computed separately
@@ -128,8 +129,8 @@ export function resolveCustomerDiscount(
   const isBundle = enabled.has("bundle") && inputs.bundleDiscount > 0;
   const hasReferral = enabled.has("referral") && inputs.referralAccepted;
 
-  // The bundle "bucket": bundle discount, plus a reduced referral % when a code
-  // is also on the order (the one intentional stack).
+  // The bundle "bucket": the Buy-3-Get-1 free item only. A referral code does
+  // NOT stack an extra % on top of a bundle — the bundle is the whole discount.
   let bundleBucket = 0;
   const bundleComponents: DiscountComponent[] = [];
   let bundleLabel = "";
@@ -137,11 +138,6 @@ export function resolveCustomerDiscount(
     bundleBucket += inputs.bundleDiscount;
     bundleComponents.push("bundle");
     bundleLabel = "Bundle";
-    if (hasReferral) {
-      bundleBucket += pct(subtotal, inputs.bundleReferralPercent);
-      bundleComponents.push("referral");
-      bundleLabel = `Bundle + ${inputs.bundleReferralPercent}% referral`;
-    }
   }
 
   // The plain referral bucket (non-bundle order with a code).
