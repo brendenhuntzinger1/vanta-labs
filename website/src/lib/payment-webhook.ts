@@ -1079,10 +1079,16 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // Ambassador commission — MUST be gated (an ungated replay reset a paid
       // commission back to pending and paid the ambassador twice).
       try {
+        // Attribution is read from the AUTHORITATIVE order row (persisted at
+        // checkout), not the provider's echoed webhook payload. A live card
+        // processor may not echo our custom metadata back at the top level, and
+        // relying on it silently dropped the ambassador's commission even though
+        // orders.ambassador_id was correctly set. Fall back to the payload only
+        // when the order row hasn't materialised yet (webhook-before-order).
         await ensureCommissionRecord({
           orderId,
-          ambassadorId: eventPayload.ambassadorId,
-          referralCode: eventPayload.referralCode,
+          ambassadorId: orderRecord?.ambassador_id ?? eventPayload.ambassadorId,
+          referralCode: orderRecord?.referral_code ?? eventPayload.referralCode,
           commissionPercent: eventPayload.commissionPercent,
           commissionableSubtotal,
           qualifyingSubtotal: subtotal,

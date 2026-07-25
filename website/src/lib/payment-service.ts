@@ -135,7 +135,8 @@ function calculateBuy3Get1Discount(lineItems: Array<{ product: ServerProduct; qu
 }
 
 async function validateReferralCode(
- code?: string,
+ code: string | undefined,
+ discountPercent: number,
 ): Promise<ValidatedReferral | null> {
  const normalizedCode = code?.trim().toUpperCase();
 
@@ -165,7 +166,7 @@ async function validateReferralCode(
  return {
  ambassadorId: data.id,
  code: data.referral_code.toUpperCase(),
- discountPercent: 10,
+ discountPercent,
  commissionPercent: Number(data.commission_percent ?? 10),
  ambassadorName: data.name,
  ambassadorEmail: data.email ?? null,
@@ -362,7 +363,7 @@ export async function createCheckoutSession(
  // is still attributed and earns commission on the discounted subtotal — the
  // free item is the only discount (no extra referral % stacks on top).
  const referral = referralProgram.enabled
-   ? await validateReferralCode(payload.referralCode)
+   ? await validateReferralCode(payload.referralCode, referralProgram.discountPercent)
    : null;
 
  // Coupons never combine with a referral code or Buy 3 Get 1 unless the admin
