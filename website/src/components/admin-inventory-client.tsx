@@ -122,7 +122,7 @@ export function AdminInventoryClient({
               <th className="pb-2 pr-4">Quantity</th>
               <th className="pb-2 pr-4">Low-stock threshold</th>
               <th className="pb-2 pr-4">Status</th>
-              {canManage ? <th className="pb-2 pr-4">Actions</th> : null}
+              {canManage && inventoryTrackingActive ? <th className="pb-2 pr-4">Actions</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -136,7 +136,9 @@ export function AdminInventoryClient({
                   </td>
                   <td className="py-3 pr-4 text-zinc-400">{row.sku ?? "—"}</td>
                   <td className="py-3 pr-4">
-                    {canManage ? (
+                    {!inventoryTrackingActive ? (
+                      <span className="text-zinc-600">—</span>
+                    ) : canManage ? (
                       <input
                         value={draft.quantity}
                         onChange={(e) => setDraft(row.key, "quantity", e.target.value)}
@@ -145,7 +147,9 @@ export function AdminInventoryClient({
                     ) : row.inventoryQuantity}
                   </td>
                   <td className="py-3 pr-4">
-                    {canManage ? (
+                    {!inventoryTrackingActive ? (
+                      <span className="text-zinc-600">—</span>
+                    ) : canManage ? (
                       <input
                         value={draft.threshold}
                         onChange={(e) => setDraft(row.key, "threshold", e.target.value)}
@@ -164,7 +168,7 @@ export function AdminInventoryClient({
                       <span className="rounded-full bg-emerald-400/15 px-2 py-1 text-xs text-emerald-300">In stock</span>
                     )}
                   </td>
-                  {canManage ? (
+                  {canManage && inventoryTrackingActive ? (
                     <td className="py-3 pr-4">
                       <button
                         type="button"
@@ -181,7 +185,7 @@ export function AdminInventoryClient({
             })}
             {filteredRows.length === 0 ? (
               <tr>
-                <td colSpan={canManage ? 6 : 5} className="py-6 text-center text-sm text-zinc-500">No inventory lines match.</td>
+                <td colSpan={canManage && inventoryTrackingActive ? 6 : 5} className="py-6 text-center text-sm text-zinc-500">No inventory lines match.</td>
               </tr>
             ) : null}
           </tbody>
