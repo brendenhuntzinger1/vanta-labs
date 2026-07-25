@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { AdminCouponsClient } from "@/components/admin-coupons-client";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canManageCoupons } from "@/lib/admin-roles";
-import { listAdminCoupons } from "@/lib/admin-coupons";
+import { listAdminCoupons, listCartRecoveryCoupons } from "@/lib/admin-coupons";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +14,9 @@ export default async function AdminCouponsPage() {
 
   const canManage = canManageCoupons(session.role);
   const coupons = canManage ? await listAdminCoupons().catch(() => []) : [];
+  const recovery = canManage
+    ? await listCartRecoveryCoupons().catch(() => ({ items: [], total: 0 }))
+    : { items: [], total: 0 };
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -28,7 +31,7 @@ export default async function AdminCouponsPage() {
         </section>
 
         {canManage ? (
-          <AdminCouponsClient initialCoupons={coupons} />
+          <AdminCouponsClient initialCoupons={coupons} recoveryCoupons={recovery.items} recoveryTotal={recovery.total} />
         ) : (
           <section className="vl-panel rounded-2xl p-6 text-sm text-zinc-300">
             Your role ({session.role.replace("_", " ")}) does not have permission to manage coupons. Ask a manager or

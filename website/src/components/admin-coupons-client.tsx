@@ -56,13 +56,22 @@ function fromDatetimeLocal(value: string) {
   return new Date(value).toISOString();
 }
 
-export function AdminCouponsClient({ initialCoupons }: { initialCoupons: AdminCoupon[] }) {
+export function AdminCouponsClient({
+  initialCoupons,
+  recoveryCoupons = [],
+  recoveryTotal = 0,
+}: {
+  initialCoupons: AdminCoupon[];
+  recoveryCoupons?: AdminCoupon[];
+  recoveryTotal?: number;
+}) {
   const [coupons, setCoupons] = useState<AdminCoupon[]>(initialCoupons);
   const [form, setForm] = useState<CouponFormState>(EMPTY_FORM);
   const [creating, setCreating] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [showRecovery, setShowRecovery] = useState(false);
 
   const refresh = async () => {
     const response = await fetch("/api/admin/coupons");
@@ -346,6 +355,60 @@ export function AdminCouponsClient({ initialCoupons }: { initialCoupons: AdminCo
           );
         })
       )}
+
+      {recoveryTotal > 0 ? (
+        <section className="vl-panel rounded-2xl p-5 sm:p-6">
+          <button
+            type="button"
+            onClick={() => setShowRecovery((v) => !v)}
+            className="flex w-full flex-wrap items-baseline justify-between gap-x-3 text-left"
+            aria-expanded={showRecovery}
+          >
+            <h2 className="text-lg font-semibold text-white">
+              <span className="mr-2 text-zinc-500">{showRecovery ? "▾" : "▸"}</span>
+              Cart-recovery codes ({recoveryTotal})
+            </h2>
+            <span className="text-xs text-zinc-500">Auto-generated for abandoned carts — managed for you</span>
+          </button>
+
+          {showRecovery ? (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[640px] text-left text-sm">
+                <thead className="text-xs uppercase tracking-wide text-zinc-500">
+                  <tr>
+                    <th className="pb-2 pr-4">Code</th>
+                    <th className="pb-2 pr-4">Discount</th>
+                    <th className="pb-2 pr-4">Sent to</th>
+                    <th className="pb-2 pr-4">Created</th>
+                    <th className="pb-2 pr-4">Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {recoveryCoupons.map((coupon) => {
+                    const status = STATUS_META[effectiveStatus(coupon)];
+                    return (
+                      <tr key={coupon.id} className="border-t border-white/10">
+                        <td className="py-3 pr-4 font-mono text-zinc-100">{coupon.code}</td>
+                        <td className="py-3 pr-4 text-zinc-300">{formatDiscount(coupon)}</td>
+                        <td className="py-3 pr-4 text-xs text-zinc-400">{coupon.assignedEmail ?? "—"}</td>
+                        <td className="py-3 pr-4 text-xs text-zinc-400">{new Date(coupon.createdAt).toLocaleDateString()}</td>
+                        <td className="py-3 pr-4">
+                          <span className={`rounded-full px-2 py-1 text-xs ${status.className}`}>{status.label}</span>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {recoveryTotal > recoveryCoupons.length ? (
+                <p className="mt-3 text-xs text-zinc-500">Showing the most recent {recoveryCoupons.length} of {recoveryTotal}. These are created automatically when a shopper abandons a cart — you don&apos;t need to manage them.</p>
+              ) : (
+                <p className="mt-3 text-xs text-zinc-500">These are created automatically when a shopper abandons a cart — you don&apos;t need to manage them.</p>
+              )}
+            </div>
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }
