@@ -5,7 +5,15 @@ import type { InventoryLine } from "@/lib/admin-inventory";
 
 type StatusFilter = "all" | "low" | "out";
 
-export function AdminInventoryClient({ initialRows, canManage }: { initialRows: InventoryLine[]; canManage: boolean }) {
+export function AdminInventoryClient({
+  initialRows,
+  canManage,
+  inventoryTrackingActive = true,
+}: {
+  initialRows: InventoryLine[];
+  canManage: boolean;
+  inventoryTrackingActive?: boolean;
+}) {
   const [rows, setRows] = useState<InventoryLine[]>(initialRows);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -78,6 +86,14 @@ export function AdminInventoryClient({ initialRows, canManage }: { initialRows: 
 
   return (
     <section className="vl-panel rounded-2xl p-5 sm:p-6">
+      {!inventoryTrackingActive ? (
+        <div className="mb-4 rounded-xl border border-cyan-400/25 bg-cyan-400/[0.06] px-4 py-3 text-sm text-cyan-100">
+          <p className="font-semibold">Inventory is managed by your 3PL</p>
+          <p className="mt-1 text-cyan-100/80">
+            These counts don&apos;t control the storefront — every product stays purchasable and your fulfillment provider owns the real stock. The numbers below are a reference only, until your 3PL feed is connected.
+          </p>
+        </div>
+      ) : null}
       <div className="flex flex-wrap items-center gap-3">
         <input
           type="text"
@@ -86,11 +102,13 @@ export function AdminInventoryClient({ initialRows, canManage }: { initialRows: 
           placeholder="Search product, variant, or SKU"
           className="vl-input flex-1 px-3 py-2 text-sm"
         />
-        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)} className="vl-input px-3 py-2 text-sm">
-          <option value="all">All lines</option>
-          <option value="low">Low stock</option>
-          <option value="out">Out of stock</option>
-        </select>
+        {inventoryTrackingActive ? (
+          <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)} className="vl-input px-3 py-2 text-sm">
+            <option value="all">All lines</option>
+            <option value="low">Low stock</option>
+            <option value="out">Out of stock</option>
+          </select>
+        ) : null}
       </div>
 
       {message ? <p className="mt-3 text-sm text-zinc-300">{message}</p> : null}
@@ -136,7 +154,9 @@ export function AdminInventoryClient({ initialRows, canManage }: { initialRows: 
                     ) : row.lowStockThreshold}
                   </td>
                   <td className="py-3 pr-4">
-                    {row.isOutOfStock ? (
+                    {!inventoryTrackingActive ? (
+                      <span className="rounded-full bg-cyan-400/15 px-2 py-1 text-xs text-cyan-200">Managed by 3PL</span>
+                    ) : row.isOutOfStock ? (
                       <span className="rounded-full bg-rose-500/15 px-2 py-1 text-xs text-rose-300">Out of stock</span>
                     ) : row.isLowStock ? (
                       <span className="rounded-full bg-amber-400/15 px-2 py-1 text-xs text-amber-300">Low stock</span>
