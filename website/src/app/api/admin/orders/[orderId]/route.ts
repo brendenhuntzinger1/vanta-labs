@@ -6,7 +6,7 @@ import { sendEmail } from "@/lib/email/send";
 import { deliveryConfirmationTemplate, orderConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { updateCommissionOnRefund } from "@/lib/payment-webhook";
-import { restockInventoryForOrder } from "@/lib/inventory-fulfillment";
+import { restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
 import { restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
 import { revokeMembershipForRefund } from "@/lib/membership-billing";
 import { refundStoreCreditForOrder } from "@/lib/store-credit";
@@ -334,7 +334,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         // Return the committed stock to the catalog on a full refund of a
         // physical order (membership orders hold no inventory).
         try {
-          if (String(order.order_type ?? "product") !== "membership") {
+          // Share the SAME atomic restock claim as the webhook path so an admin
+          // refund racing the processor's refund webhook (or a double-click)
+          // restocks exactly once — never twice.
+          if (String(order.order_type ?? "product") !== "membership" && await claimInventoryRestock(orderId)) {
             await restockInventoryForOrder(
               (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
             );

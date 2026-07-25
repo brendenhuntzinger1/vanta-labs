@@ -80,8 +80,35 @@ export async function decrementInventoryForOrder(items: OrderItemRef[]): Promise
   }
 }
 
+// Atomic exactly-once claim for an order's restock. Flips inventory_restocked_at
+// NULL -> now and returns true ONLY for the caller that won the flip. Every
+// concurrent or duplicate refund event, chargeback, and admin double-click loses
+// the claim and must skip restocking — so inventory can never be returned twice
+// (which would create phantom stock and feed overselling). Mirrors the
+// paid_side_effects_at exactly-once pattern used for the paid side-effects.
+//
+// Fail-safe: if the claim errors (e.g. the column isn't migrated yet), it
+// returns false so the caller does NOT restock. Under-restock (stock stays low)
+// is a recoverable inconvenience; double-restock is a money-losing oversell, so
+// the safe failure direction is "don't restock". Run the
+// add-inventory-restock-claim.sql migration BEFORE deploying this code.
+export async function claimInventoryRestock(orderId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .update({ inventory_restocked_at: new Date().toISOString() })
+    .eq("order_id", orderId)
+    .is("inventory_restocked_at", null)
+    .select("id");
+  if (error) {
+    console.error("Inventory restock claim failed (skipping restock) for order", orderId, error);
+    return false;
+  }
+  return Boolean(data && data.length > 0);
+}
+
 // Return stock when a paid order is fully refunded or canceled — the exact
 // inverse of the decrement above, so tracked stock nets back to where it began.
+// Gate every call with claimInventoryRestock(orderId) so it runs at most once.
 export async function restockInventoryForOrder(items: OrderItemRef[]): Promise<void> {
   for (const adjustment of planInventoryAdjustments(items)) {
     try {

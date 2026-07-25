@@ -12,7 +12,7 @@ import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/li
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
-import { decrementInventoryForOrder, restockInventoryForOrder } from "@/lib/inventory-fulfillment";
+import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
 import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
 import { activateAnnualMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 
@@ -1223,7 +1223,10 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     const wasPaid = priorPaymentStatus === "paid";
     if (wasPaid && (nextStatus === "refunded" || nextStatus === "canceled")) {
       const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
-      if (!isMembershipOrder) {
+      // Atomic exactly-once claim: only the FIRST refund/cancel event for this
+      // order restocks; a concurrent chargeback or replayed event loses the
+      // claim and skips, so stock is never returned twice.
+      if (!isMembershipOrder && await claimInventoryRestock(orderId)) {
         const { data: refundItems } = await supabaseAdmin
           .from("order_items")
           .select("product_id, quantity")
