@@ -372,8 +372,10 @@ export const DEFAULT_REFERRAL_DISCOUNT_PERCENT = 10;
 export const DEFAULT_BUNDLE_REFERRAL_DISCOUNT_PERCENT = 5;
 // Default personal discount an approved ambassador gets on their OWN purchases.
 export const DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT = 15;
-// Default commission rate when an ambassador has no explicit rate set.
-export const DEFAULT_AMBASSADOR_COMMISSION_PERCENT = 15;
+// Starting commission rate for a new ambassador when no explicit per-ambassador
+// rate is set. Admins can raise (or lock) any individual ambassador's rate in
+// Admin → Partners.
+export const DEFAULT_AMBASSADOR_COMMISSION_PERCENT = 10;
 
 // Flat sales-tax rate (percent) an admin sets in the Control Center. Applied to
 // the post-discount merchandise total at checkout. Unset falls back to

@@ -395,7 +395,7 @@ export function ambassadorApprovedTemplate(input: {
 }): EmailTemplate {
   const name = escapeHtml(input.name);
   const code = input.referralCode ? escapeHtml(input.referralCode) : null;
-  const commissionPct = Number.isFinite(input.commissionPercent) ? Number(input.commissionPercent) : 15;
+  const commissionPct = Number.isFinite(input.commissionPercent) ? Number(input.commissionPercent) : 10;
   const personalPct = Number.isFinite(input.personalDiscountPercent) ? Number(input.personalDiscountPercent) : 15;
   const referralPct = Number.isFinite(input.referralDiscountPercent) ? Number(input.referralDiscountPercent) : 10;
   const holdDays = Number.isFinite(input.holdDays) ? Number(input.holdDays) : 14;
@@ -403,28 +403,30 @@ export function ambassadorApprovedTemplate(input: {
   const bodyHtml = `
     <p>Congratulations, ${name} — your application to the Vanta Labs Ambassador Program has been <strong>approved</strong>. Welcome aboard.</p>
     ${code ? `<p><strong>Your referral code:</strong> ${code} — customers who use it get <strong>${referralPct}% off</strong>.</p>` : ""}
-    <p><strong>Your personal discount:</strong> while you're an approved ambassador you automatically get <strong>${personalPct}% off your own purchases</strong> — just sign in and check out; it applies at the cart, no code needed.</p>
+    <p><strong>Your personal discount:</strong> as an approved ambassador you automatically get <strong>${personalPct}% off your own purchases</strong> — just sign in and check out; it applies at the cart, no code needed.</p>
 
-    <p style="margin-top:20px"><strong>Your benefits</strong></p>
+    <p style="margin-top:20px"><strong>Starting Benefits</strong></p>
     <ul>
-      <li>${personalPct}% off all of your own purchases (active while approved).</li>
-      <li>A personal referral code that gives your audience ${referralPct}% off.</li>
-      <li>${commissionPct}% commission on every completed order placed with your code.</li>
-      <li>A real-time dashboard: pending, approved, and paid commissions, referral orders, and total earnings.</li>
-      <li>Payouts every two weeks.</li>
-      <li>Opportunities for performance bonuses and a higher commission rate.</li>
-      <li>Early access to new products and promotions.</li>
+      <li><strong>${commissionPct}% commission</strong> on every completed referral.</li>
+      <li><strong>${personalPct}% personal discount</strong> on all Vanta Labs products.</li>
+      <li>Access to exclusive promotions, giveaways, and future ambassador perks.</li>
     </ul>
 
-    <p style="margin-top:16px"><strong>Your responsibilities</strong></p>
+    <p style="margin-top:16px"><strong>Growth Opportunities</strong></p>
+    <p>As your referrals begin to grow and you consistently bring in completed orders, we'll review your performance and negotiate a higher commission rate. We want to reward ambassadors who genuinely help grow Vanta Labs, so there is no fixed ceiling on what top performers can earn.</p>
+    <p>High-performing ambassadors may receive:</p>
     <ul>
-      <li>Share Vanta Labs in at least 3 social posts per month.</li>
-      <li>Represent Vanta Labs professionally.</li>
-      <li>Never make medical or human-use claims about research products.</li>
-      <li>Don't advertise in prohibited ways.</li>
-      <li>Keep your referral code active through continued participation.</li>
-      <li>Follow all affiliate program rules.</li>
+      <li>Increased commission percentages</li>
+      <li>Cash bonuses</li>
+      <li>Free products</li>
+      <li>Early access to new releases</li>
+      <li>Exclusive promotions</li>
+      <li>Long-term partnership opportunities</li>
     </ul>
+
+    <p style="margin-top:16px"><strong>Monthly Performance</strong></p>
+    <p>Referral performance is reviewed each month based on completed, paid orders. Refunded, canceled, fraudulent, or chargeback orders do not count toward referral totals.</p>
+    <p>Our goal is simple: the more value you bring to Vanta Labs, the more we'll invest back into you.</p>
 
     <p style="margin-top:16px"><strong>How commissions work</strong></p>
     <p>You earn ${commissionPct}% on the merchandise total of each completed order placed with your code. A commission is <em>pending</em> for ${holdDays} days after the order completes (this protects against refunds and chargebacks), then becomes <em>approved</em> and is included in the next payout. Payouts run every two weeks. You'll never be paid on a refunded or cancelled order.</p>
