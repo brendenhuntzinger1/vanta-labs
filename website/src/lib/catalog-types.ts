@@ -52,6 +52,8 @@ export type Product = {
   isArchived?: boolean;
   isFeatured?: boolean;
   badge?: ProductBadge;
+  /** Auto-computed from real sales (units sold) — a current best seller. */
+  isBestSeller?: boolean;
   position?: number;
   batchNumber: string;
   purityResult?: string;

@@ -38,7 +38,11 @@ export function ProductCard({
       />
       <Link href={`/products/${product.slug}`} className="vl-focus-ring flex flex-1 flex-col">
         <div className="vl-product-card-media border-b border-white/10">
-          {product.badge ? (
+          {product.isBestSeller ? (
+            <span className="vl2-eyebrow absolute left-3 top-3 z-10 border border-amber-300/40 bg-black/70 px-2.5 py-1 text-[10px] text-amber-300 backdrop-blur">
+              ★ Best Seller
+            </span>
+          ) : product.badge ? (
             <span className="vl2-eyebrow absolute left-3 top-3 z-10 border border-white/20 bg-black/70 px-2.5 py-1 text-[10px] backdrop-blur">
               {BADGE_LABELS[product.badge]}
             </span>

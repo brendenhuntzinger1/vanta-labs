@@ -81,10 +81,11 @@ function ProductsPageContent() {
     return ["All", ...productCategories];
   }, [products]);
 
-  // Only surface the Best Sellers tab when at least one product is actually
-  // tagged as a best seller in the admin — no empty tab otherwise.
+  // Only surface the Best Sellers tab when there actually are best sellers.
+  // isBestSeller is computed from real sales (units sold), so this stays current
+  // automatically as buying patterns change.
   const hasBestSellers = useMemo(
-    () => products.some((product) => product.badge === "best_seller"),
+    () => products.some((product) => product.isBestSeller),
     [products],
   );
 
@@ -96,7 +97,7 @@ function ProductsPageContent() {
     }
 
     if (bestSellersOnly) {
-      result = result.filter((product) => product.badge === "best_seller");
+      result = result.filter((product) => product.isBestSeller);
     }
 
     if (stockFilter) {
@@ -140,8 +141,8 @@ function ProductsPageContent() {
         // Best sellers rise to the top; everything else keeps its catalog
         // order (the sort is stable, so ties stay in position order).
         result.sort((a, b) => {
-          const aRank = a.badge === "best_seller" ? 0 : 1;
-          const bRank = b.badge === "best_seller" ? 0 : 1;
+          const aRank = a.isBestSeller ? 0 : 1;
+          const bRank = b.isBestSeller ? 0 : 1;
           return aRank - bRank;
         });
         break;
