@@ -16,6 +16,11 @@ export async function GET(request: Request) {
   if (!session) {
     return unauthorizedResponse();
   }
+  // The fraud review list contains customer emails/addresses — gate it to the
+  // same manager+ role that can act on it (parity with PATCH below).
+  if (!canManageRefunds(session.role)) {
+    return forbiddenResponse();
+  }
 
   const rows = await getFraudReviewRows();
   return NextResponse.json({ success: true, rows });

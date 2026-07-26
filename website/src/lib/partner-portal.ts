@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { generateReferralCode } from "@/lib/referral-code-utils";
+import { validateReferralCodeFormat } from "@/lib/referral-code-validation";
 import { isEarnedCommission } from "@/lib/ledger";
 import { sendEmail } from "@/lib/email/send";
 import {
@@ -409,7 +410,11 @@ export async function createPartnerApplication(input: {
   // still override it at approval.
   const preferred = (input.preferredReferralCode ?? "").trim().toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
   let referralCode = generateReferralCode(input.name);
-  if (preferred) {
+  // A7: validate the applicant's preferred code the same way self-service code
+  // changes are (reserved words like ADMIN/PAYOUT, profanity, length). An
+  // invalid preferred code silently falls back to the auto-generated one rather
+  // than letting an applicant claim a reserved word or slur as their code.
+  if (preferred && validateReferralCodeFormat(preferred).ok) {
     const { data: codeTaken } = await supabaseAdmin
       .from("partners")
       .select("id")
@@ -669,6 +674,13 @@ export async function updatePartnerPayoutMethod(authUserId: string, method: stri
     throw new Error("Enter your payout username, email, or handle.");
   }
 
+  // Capture the prior destination for the audit trail before overwriting it.
+  const { data: prior } = await supabaseAdmin
+    .from("partners")
+    .select("id, payout_method, payout_handle")
+    .eq("auth_user_id", authUserId)
+    .maybeSingle();
+
   const now = new Date().toISOString();
   const payload = {
     payout_method: normalizedMethod,
@@ -683,6 +695,21 @@ export async function updatePartnerPayoutMethod(authUserId: string, method: stri
   }
   // Mirror to the ambassadors table (best-effort — never block the save).
   await supabaseAdmin.from("ambassadors").update(payload).eq("auth_user_id", authUserId).then(() => {}, () => {});
+
+  // A11: audit the change. A payout handle changed right before a payout is a
+  // classic fraud signal, so the prior + new destination must be traceable.
+  // Best-effort — never block the ambassador's save on the audit write.
+  await supabaseAdmin.from("admin_audit_logs").insert({
+    actor_user_id: authUserId,
+    action: "partner_payout_method_changed",
+    target_table: "partners",
+    target_id: prior?.id ? String(prior.id) : null,
+    metadata: {
+      self_service: true,
+      previous: { method: prior?.payout_method ?? null, handle: prior?.payout_handle ?? null },
+      next: { method: normalizedMethod, handle: normalizedHandle },
+    },
+  }).then(() => {}, () => {});
 }
 
 export interface PayoutQueueRow {
@@ -694,6 +721,7 @@ export interface PayoutQueueRow {
   payoutHandle: string | null;
   eligibleSince: string | null; // earliest approved_for_payout_at
   meetsMinimum: boolean;
+  onHold: boolean; // ambassador not currently approved — balance is held, not payable
 }
 
 export interface PayoutQueue {
@@ -737,17 +765,18 @@ export async function getPayoutQueue(): Promise<PayoutQueue> {
   }
 
   const partnerIds = Array.from(byPartner.keys());
-  const partnerInfo = new Map<string, { name: string; payout_method: string | null; payout_handle: string | null }>();
+  const partnerInfo = new Map<string, { name: string; payout_method: string | null; payout_handle: string | null; status: string }>();
   if (partnerIds.length > 0) {
     const { data: partners } = await supabaseAdmin
       .from("partners")
-      .select("id, name, payout_method, payout_handle")
+      .select("id, name, payout_method, payout_handle, status")
       .in("id", partnerIds);
     for (const p of partners ?? []) {
       partnerInfo.set(String(p.id), {
         name: String(p.name ?? ""),
         payout_method: p.payout_method ? String(p.payout_method) : null,
         payout_handle: p.payout_handle ? String(p.payout_handle) : null,
+        status: String(p.status ?? "").toLowerCase(),
       });
     }
   }
@@ -756,6 +785,7 @@ export async function getPayoutQueue(): Promise<PayoutQueue> {
     const agg = byPartner.get(id)!;
     const info = partnerInfo.get(id);
     const amountOwed = roundMoney(agg.amount);
+    const onHold = (info?.status ?? "") !== "approved";
     return {
       partnerId: id,
       name: info?.name ?? "Unknown",
@@ -765,12 +795,15 @@ export async function getPayoutQueue(): Promise<PayoutQueue> {
       payoutHandle: info?.payout_handle ?? null,
       eligibleSince: agg.earliest,
       meetsMinimum: amountOwed >= minimum,
+      onHold,
     };
   }).sort((a, b) => b.amountOwed - a.amountOwed);
 
   return {
     rows: queueRows,
-    readyCount: queueRows.filter((r) => r.meetsMinimum).length,
+    // A disabled ambassador's balance is held (markCommissionsPaid refuses it),
+    // so it must not inflate the "ready for payout" badge.
+    readyCount: queueRows.filter((r) => r.meetsMinimum && !r.onHold).length,
     totalOwed: roundMoney(queueRows.reduce((sum, r) => sum + r.amountOwed, 0)),
     minimumPayoutThreshold: minimum,
   };
@@ -868,7 +901,10 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
       createdAt: commission.created_at,
       customerEmail: order?.customer_email ?? null,
       amountPaid: roundMoney(Number(order?.amount_paid ?? 0)),
-      paymentStatus: order?.payment_status ?? "pending_payment",
+      // A commission row only exists for a PAID order, so an order we can't
+      // re-load (rare) is "paid", not "pending_payment" — the old default
+      // mislabeled real paid orders as pending on the ambassador dashboard.
+      paymentStatus: order?.payment_status ?? "paid",
       commissionAmount: roundMoney(Number(commission.commission_amount ?? 0)),
       commissionStatus: commission.payment_status,
     };
@@ -1459,6 +1495,20 @@ export async function markCommissionsPaid(input: {
   userAgent?: string | null;
   overrideMinimumThreshold?: boolean;
 }) {
+  // A1: never release a payout for an ambassador who isn't CURRENTLY approved.
+  // Commissions that reached approved_for_payout before the ambassador was
+  // disabled (e.g. for fraud) must be held until an admin re-approves them —
+  // otherwise a disabled ambassador keeps getting paid off their old balance.
+  const { data: partnerStatusRow } = await supabaseAdmin
+    .from("partners")
+    .select("status")
+    .eq("id", input.partnerId)
+    .maybeSingle();
+  const partnerStatus = String(partnerStatusRow?.status ?? "").toLowerCase();
+  if (partnerStatus !== "approved") {
+    throw new Error(`This ambassador is not currently approved (status: ${partnerStatus || "unknown"}). Re-approve them before releasing a payout, or handle the held balance manually.`);
+  }
+
   const { data: pendingRows, error: pendingError } = await supabaseAdmin
     .from("referral_orders")
     .select("id, commission_amount")
@@ -1498,7 +1548,7 @@ export async function markCommissionsPaid(input: {
     .update({ payment_status: "paid", commission_paid_at: new Date().toISOString(), updated_at: new Date().toISOString() })
     .in("id", ids)
     .eq("payment_status", "approved_for_payout")
-    .select("id, commission_amount");
+    .select("id, commission_amount, order_id");
 
   if (updateError) {
     assertNoSupabaseError("referral_orders.update(mark paid)", updateError);
@@ -1524,18 +1574,22 @@ export async function markCommissionsPaid(input: {
   const payoutMethod = partner?.payout_method ? String(partner.payout_method) : null;
   const payoutHandle = partner?.payout_handle ? String(partner.payout_handle) : null;
 
-  const { error: commissionMirrorError } = await supabaseAdmin
-    .from("commissions")
-    .update({ status: "paid", updated_at: new Date().toISOString() })
-    .eq("partner_id", input.partnerId)
-    // Mirror only what the authoritative referral_orders update above actually
-    // pays (approved_for_payout). Previously this also flipped "pending" rows,
-    // so the two ledgers drifted - pending commissions that were never paid out
-    // showed as paid in the mirror.
-    .in("status", ["approved_for_payout"]);
+  // A8: flip the mirror by the EXACT order_ids the authoritative update just
+  // claimed — not by partner_id+status. A concurrent payout or a partial claim
+  // could leave other approved_for_payout rows for this partner that were NOT
+  // paid in THIS run; the old partner_id+status filter would flip those too and
+  // drift the two ledgers. Keying on the claimed order_ids keeps them exact.
+  const claimedOrderIds = claimed.map((row) => row.order_id).filter(Boolean);
+  if (claimedOrderIds.length > 0) {
+    const { error: commissionMirrorError } = await supabaseAdmin
+      .from("commissions")
+      .update({ status: "paid", updated_at: new Date().toISOString() })
+      .eq("partner_id", input.partnerId)
+      .in("order_id", claimedOrderIds);
 
-  if (commissionMirrorError) {
-    assertNoSupabaseError("commissions.update(mark paid mirror)", commissionMirrorError);
+    if (commissionMirrorError) {
+      assertNoSupabaseError("commissions.update(mark paid mirror)", commissionMirrorError);
+    }
   }
 
   const payoutId = randomUUID();

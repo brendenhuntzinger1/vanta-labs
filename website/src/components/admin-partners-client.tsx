@@ -555,7 +555,7 @@ export function AdminPartnersClient({
             <thead>
               <tr className="text-left text-zinc-500">
                 <th className="px-2 py-2">Name</th>
-                <th className="px-2 py-2">Min monthly sales</th>
+                <th className="px-2 py-2">Min monthly orders</th>
                 <th className="px-2 py-2">Commission %</th>
                 <th className="px-2 py-2">Active</th>
                 <th className="px-2 py-2">Actions</th>
@@ -615,7 +615,7 @@ export function AdminPartnersClient({
 
         <form className="mt-4 grid gap-3 sm:grid-cols-4" onSubmit={handleCreateTier}>
           <input value={newTierName} onChange={(event) => setNewTierName(event.target.value)} placeholder="Tier name" className="vl-input px-3 py-2 text-sm" required />
-          <input type="number" min={0} value={newTierMinSales} onChange={(event) => setNewTierMinSales(event.target.value)} placeholder="Min monthly sales" className="vl-input px-3 py-2 text-sm" />
+          <input type="number" min={0} value={newTierMinSales} onChange={(event) => setNewTierMinSales(event.target.value)} placeholder="Min monthly orders" className="vl-input px-3 py-2 text-sm" />
           <input type="number" min={0} max={100} step={0.5} value={newTierPercent} onChange={(event) => setNewTierPercent(event.target.value)} placeholder="Commission %" className="vl-input px-3 py-2 text-sm" />
           <button type="submit" disabled={loading} className="vl-focus-ring rounded-lg bg-gradient-to-r from-cyan-300 via-blue-200 to-indigo-200 px-4 py-2 text-sm font-semibold text-zinc-950">
             Add Tier
