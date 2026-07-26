@@ -851,6 +851,9 @@ export default function CheckoutPage() {
                 </div>
               ) : null}
               <div className="mt-3 flex justify-between border-t border-white/10 pt-3 text-base text-white"><span>Total</span><span>{formatCartCurrency(finalTotal)}</span></div>
+              {(discountAmount + storeCreditApplied + pointsRedeemedDiscount) > 0 ? (
+                <div className="flex justify-between rounded-lg bg-emerald-400/10 px-3 py-2 text-sm font-semibold text-emerald-300"><span>You saved</span><span>{formatCartCurrency(discountAmount + storeCreditApplied + pointsRedeemedDiscount)}</span></div>
+              ) : null}
               {selectedMethod && selectedMethod.kind === "manual" ? (
                 <p className="flex items-center justify-center gap-1.5 rounded-lg border border-emerald-400/25 bg-emerald-400/5 py-2 text-xs font-medium text-emerald-300">
                   ✅ No processing fee with {selectedMethod.label}
@@ -858,9 +861,12 @@ export default function CheckoutPage() {
               ) : null}
             </div>
 
-            <div className="mt-5 flex items-center justify-center gap-6 text-[10px] uppercase tracking-[0.14em] text-white/70">
-              <span>TLS Encrypted</span>
-              <span>Fraud Screened</span>
+            <div className="mt-5 grid grid-cols-1 gap-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 text-xs text-white/70">
+              <span className="flex items-center gap-2"><span aria-hidden>🔒</span><span>SSL-encrypted secure checkout</span></span>
+              <span className="flex items-center gap-2"><span aria-hidden>🧪</span><span>Third-party lab tested — COAs published</span></span>
+              <span className="flex items-center gap-2"><span aria-hidden>🇺🇸</span><span>Ships from the USA</span></span>
+              <span className="flex items-center gap-2"><span aria-hidden>📦</span><span>Same-day dispatch before daily cutoff</span></span>
+              <span className="flex items-center gap-2"><span aria-hidden>⭐</span><span>Premium customer support</span></span>
             </div>
 
             <button
@@ -877,6 +883,12 @@ export default function CheckoutPage() {
             </button>
 
             {checkoutMessage ? <p className="mt-3 text-sm text-white/65">{checkoutMessage}</p> : null}
+
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              {["Visa", "Mastercard", "Amex", "Discover", "Apple Pay"].map((brand) => (
+                <span key={brand} className="rounded-md border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/60">{brand}</span>
+              ))}
+            </div>
 
             <Link href="/cart" className="mt-4 inline-flex text-sm text-white/45 transition hover:text-white">
               Back to cart
