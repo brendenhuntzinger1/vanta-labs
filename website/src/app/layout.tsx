@@ -84,6 +84,29 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} ${manrope.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        {/* Site-wide Organization + WebSite structured data for brand/knowledge
+            panel eligibility. Rendered server-side so crawlers always see it. */}
+        <script
+          type="application/ld+json"
+          dangerouslySetInnerHTML={{
+            __html: JSON.stringify([
+              {
+                "@context": "https://schema.org",
+                "@type": "Organization",
+                name: "Vanta Labs",
+                url: siteUrl,
+                logo: `${siteUrl}/images/vantalabs.png`,
+                description: "Premium research peptides — third-party tested, made in the USA.",
+              },
+              {
+                "@context": "https://schema.org",
+                "@type": "WebSite",
+                name: "Vanta Labs",
+                url: siteUrl,
+              },
+            ]),
+          }}
+        />
         <CartProvider>
           <Suspense fallback={null}>
             <SiteAnalyticsTracker />

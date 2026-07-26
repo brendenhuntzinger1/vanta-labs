@@ -1,4 +1,5 @@
 import Link from "next/link";
+import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getPaymentMethodsConfig } from "@/lib/admin-control";
@@ -7,6 +8,11 @@ import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ManualPaymentInstructions } from "@/components/manual-payment-instructions";
 
 export const dynamic = "force-dynamic";
+
+// Private, order-scoped payment page — never index it.
+export const metadata: Metadata = {
+  robots: { index: false, follow: false },
+};
 
 // Customer-facing resubmission page. The order UUID acts as an unguessable
 // bearer token (same pattern as the hosted-checkout return URL). Linked from

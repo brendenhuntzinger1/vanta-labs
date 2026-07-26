@@ -68,4 +68,9 @@ as $$
   left join k on k.ambassador_id = ids.ambassador_id;
 $$;
 
+-- Lock down the SECURITY DEFINER function: Postgres grants EXECUTE to PUBLIC by
+-- default on create, which (via Supabase's anon/authenticated roles + PostgREST
+-- RPC exposure) would let an anonymous caller read ambassador commission/revenue
+-- financials while bypassing RLS. Revoke the default; grant only to service_role.
+revoke all on function public.admin_partner_rollups() from public;
 grant execute on function public.admin_partner_rollups() to service_role;

@@ -529,8 +529,10 @@ export async function createPartnerApplication(input: {
 }
 
 export async function getPartnerProgramStats(): Promise<PartnerProgramStats> {
-  await autoApproveEligibleCommissions();
-
+  // NOTE: the commission auto-approval sweep is intentionally NOT run here.
+  // This stats read is served by the UNAUTHENTICATED /api/partner/program-stats
+  // endpoint, and money-state transitions must not be drivable (or DoS-able) by
+  // anonymous traffic. The scheduled cron (/api/cron/sweep) owns the sweep.
   const [
     { data: payoutRows, error: payoutError },
     { data: partnerRows, error: partnerError },

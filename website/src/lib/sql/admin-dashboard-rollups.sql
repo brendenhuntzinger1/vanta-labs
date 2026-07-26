@@ -70,6 +70,12 @@ as $$
   order by revenue desc;
 $$;
 
+-- SECURITY DEFINER functions are granted EXECUTE to PUBLIC by default on
+-- create, which would let anon/authenticated callers invoke them via PostgREST
+-- and read revenue/PII while bypassing RLS. Revoke that default and grant only
+-- to service_role (the key the app uses).
+revoke all on function public.admin_revenue_summary(timestamptz) from public;
+revoke all on function public.admin_revenue_by_method() from public;
 grant execute on function public.admin_revenue_summary(timestamptz) to service_role;
 grant execute on function public.admin_revenue_by_method() to service_role;
 
@@ -137,6 +143,7 @@ as $$
   offset coalesce(p_offset, 0);
 $$;
 
+revoke all on function public.admin_customer_rollup(text, int, int) from public;
 grant execute on function public.admin_customer_rollup(text, int, int) to service_role;
 
 -- ---------------------------------------------------------------------------
@@ -164,7 +171,7 @@ as $$
   with per_customer as (
     select customer_email, count(*) as cnt
     from public.orders
-    where payment_status = 'paid' and customer_email is not null
+    where payment_status = 'paid' and customer_email is not null and customer_email <> ''
     group by customer_email
   )
   select
@@ -175,6 +182,7 @@ as $$
     coalesce((select count(*) from per_customer), 0) as total_customers;
 $$;
 
+revoke all on function public.admin_ops_summary(timestamptz, timestamptz) from public;
 grant execute on function public.admin_ops_summary(timestamptz, timestamptz) to service_role;
 
 -- ---------------------------------------------------------------------------
@@ -191,6 +199,7 @@ as $$
   select coalesce(sum(amount), 0) from public.points_ledger;
 $$;
 
+revoke all on function public.admin_points_outstanding() from public;
 grant execute on function public.admin_points_outstanding() to service_role;
 
 -- ---------------------------------------------------------------------------
@@ -217,6 +226,7 @@ as $$
   group by bulk_discount_tier;
 $$;
 
+revoke all on function public.admin_bulk_savings_stats() from public;
 grant execute on function public.admin_bulk_savings_stats() to service_role;
 
 -- ---------------------------------------------------------------------------
