@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
 function getAgeVerifiedSnapshot() {
   if (typeof window === "undefined") {
@@ -94,16 +94,32 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
     window.location.assign("https://www.google.com");
   };
 
+  // Move focus into the blocking gate when it appears so keyboard/screen-reader
+  // users land on it instead of the (inert) page behind it.
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!isVerified) {
+      dialogRef.current?.focus();
+    }
+  }, [isVerified]);
+
   if (!isVerified) {
     return (
       <div className="flex min-h-screen items-start justify-center overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.16),_transparent_55%),linear-gradient(135deg,_#020202_0%,_#111111_50%,_#050505_100%)] px-4 py-8 text-zinc-100 sm:items-center sm:px-6 sm:py-10">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_30%_20%,_rgba(242,201,76,0.10),_transparent_55%),radial-gradient(ellipse_at_80%_80%,_rgba(140,180,255,0.08),_transparent_50%)] opacity-70" />
-        <div className="vl-panel relative w-full max-w-2xl rounded-[1.75rem] p-5 text-center sm:rounded-[2rem] sm:p-8 xl:p-10">
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="age-gate-title"
+          tabIndex={-1}
+          className="vl-panel vl-focus-ring relative w-full max-w-2xl rounded-[1.75rem] p-5 text-center sm:rounded-[2rem] sm:p-8 xl:p-10"
+        >
           <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-full border border-white/20 bg-white/10 text-2xl font-semibold tracking-[0.3em] text-white">
             VL
           </div>
           <p className="mb-4 text-[11px] uppercase tracking-[0.35em] text-zinc-400 sm:text-xs sm:tracking-[0.45em]">Restricted Access</p>
-          <h1 className="text-3xl font-semibold tracking-[0.2em] text-white sm:text-5xl sm:tracking-[0.3em]">Vanta Labs</h1>
+          <h1 id="age-gate-title" className="text-3xl font-semibold tracking-[0.2em] text-white sm:text-5xl sm:tracking-[0.3em]">Vanta Labs</h1>
           <p className="mt-4 text-base text-zinc-300 sm:text-lg">Research Integrity. Verified Quality.</p>
           <p className="mt-7 text-lg font-medium text-white sm:mt-8 sm:text-xl">Are you 21 years of age or older?</p>
           <label className="vl-panel-soft mt-6 flex items-start justify-center gap-3 rounded-[1.25rem] p-4 text-left text-sm text-zinc-300">
@@ -120,7 +136,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
             />
             <span>I confirm that I am at least 21 years of age and understand that Vanta Labs products are intended only for lawful laboratory research purposes.</span>
           </label>
-          {showPrompt ? <p className="mt-4 text-sm text-zinc-300">Please confirm your age before continuing.</p> : null}
+          {showPrompt ? <p role="alert" className="mt-4 text-sm text-zinc-300">Please confirm your age before continuing.</p> : null}
           <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
             <button
               type="button"

@@ -29,12 +29,14 @@ export function CartDrawer() {
     referralSuccess,
     applyReferralCode,
     clearReferralCode,
+    isApplyingReferral,
     couponCode,
     couponDetails,
     couponError,
     couponSuccess,
     applyCouponCode,
     clearCouponCode,
+    isApplyingCoupon,
     isBuy3Get1FreeEligible,
     buy3Get1UntilNextFree,
     bulkSavingsApplied,
@@ -237,9 +239,10 @@ export function CartDrawer() {
                 <button
                   type="button"
                   onClick={() => applyReferralCode(effectiveReferralInput)}
-                  className="vl-btn-secondary vl-focus-ring rounded-full px-4 py-3 text-sm"
+                  disabled={isApplyingReferral}
+                  className="vl-btn-secondary vl-focus-ring rounded-full px-4 py-3 text-sm disabled:opacity-60"
                 >
-                  Apply
+                  {isApplyingReferral ? "Applying…" : "Apply"}
                 </button>
               </div>
             </label>
@@ -269,9 +272,10 @@ export function CartDrawer() {
                 <button
                   type="button"
                   onClick={() => applyCouponCode(effectiveCouponInput)}
-                  className="vl-btn-secondary vl-focus-ring rounded-full px-4 py-3 text-sm"
+                  disabled={isApplyingCoupon}
+                  className="vl-btn-secondary vl-focus-ring rounded-full px-4 py-3 text-sm disabled:opacity-60"
                 >
-                  Apply
+                  {isApplyingCoupon ? "Applying…" : "Apply"}
                 </button>
               </div>
             </label>

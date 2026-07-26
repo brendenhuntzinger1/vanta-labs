@@ -44,6 +44,8 @@ type CartContextValue = {
   couponDiscountAmount: number;
   couponError: string | null;
   couponSuccess: string | null;
+  isApplyingReferral: boolean;
+  isApplyingCoupon: boolean;
   isSignedIn: boolean;
   pointsBalance: number;
   pointsToEarn: number;
@@ -785,7 +787,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const closeCart = () => setIsCartOpen(false);
   const toggleCart = () => setIsCartOpen((current) => !current);
 
+  const [isApplyingReferral, setIsApplyingReferral] = useState(false);
+  const [isApplyingCoupon, setIsApplyingCoupon] = useState(false);
+
   const applyReferralCode = async (code: string) => {
+    if (isApplyingReferral) return; // ignore rapid re-clicks while validating
     const normalized = code.trim().toUpperCase();
 
     if (buy3Get1FreeDiscount > 0) {
@@ -812,6 +818,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    setIsApplyingReferral(true);
     try {
       const validatedReferral = await validateReferralCodeClient(normalized);
 
@@ -849,6 +856,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       setReferralCode(null);
       setReferralError("Unable to check the referral code right now.");
       setReferralSuccess(null);
+    } finally {
+      setIsApplyingReferral(false);
     }
   };
 
@@ -868,6 +877,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   };
 
   const applyCouponCode = async (code: string) => {
+    if (isApplyingCoupon) return; // ignore rapid re-clicks while validating
     const normalized = code.trim().toUpperCase();
 
     if (buy3Get1FreeDiscount > 0) {
@@ -886,6 +896,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    setIsApplyingCoupon(true);
     try {
       const response = await fetch("/api/coupons/validate", {
         method: "POST",
@@ -929,6 +940,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       setCouponCode(null);
       setCouponError("Unable to check the coupon code right now.");
       setCouponSuccess(null);
+    } finally {
+      setIsApplyingCoupon(false);
     }
   };
 
@@ -957,6 +970,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     couponDiscountAmount,
     couponError,
     couponSuccess,
+    isApplyingReferral,
+    isApplyingCoupon,
     isSignedIn,
     pointsBalance,
     pointsToEarn,
