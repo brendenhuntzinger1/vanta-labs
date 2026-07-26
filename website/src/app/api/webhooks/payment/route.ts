@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequiredEnv } from "@/lib/env";
 import { processPaymentWebhook } from "@/lib/payment-webhook";
+import { recordSystemAlert } from "@/lib/monitoring";
 
 export async function POST(request: Request) {
   try {
@@ -29,6 +30,15 @@ export async function POST(request: Request) {
         { status: 500 },
       );
     }
+
+    // Record a durable, dashboard-visible alert. Warning (not critical) so
+    // routine bad-signature probes from the internet don't email the operator,
+    // but a genuine settlement failure is still surfaced for review.
+    await recordSystemAlert({
+      type: "payment_webhook_error",
+      severity: "warning",
+      message: `A payment webhook failed to process: ${error instanceof Error ? error.message : "unknown error"}. If this coincides with a real order, that order may not have settled.`,
+    });
 
     return NextResponse.json({ success: false, error: "Webhook processing failed" }, { status: 400 });
   }

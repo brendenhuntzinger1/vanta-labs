@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getSystemStatus, type StatusLevel } from "@/lib/system-status";
+import { getRecentSystemAlerts } from "@/lib/monitoring";
 
 export const dynamic = "force-dynamic";
 
@@ -17,9 +18,13 @@ export default async function AdminStatusPage() {
     redirect("/vault");
   }
 
-  const statuses = await getSystemStatus();
+  const [statuses, recentAlerts] = await Promise.all([
+    getSystemStatus(),
+    getRecentSystemAlerts(10).catch(() => []),
+  ]);
   const blockers = statuses.filter((s) => s.blocksLaunch && (s.level === "not_configured" || s.level === "error"));
   const readyForOrders = blockers.length === 0;
+  const unresolvedAlerts = recentAlerts.filter((a) => !a.resolved_at);
 
   return (
     <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -59,6 +64,28 @@ export default async function AdminStatusPage() {
               </div>
             );
           })}
+        </div>
+
+        <div className="mt-8">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Recent alerts</h2>
+          {unresolvedAlerts.length === 0 ? (
+            <p className="mt-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm text-zinc-400">
+              No unresolved system alerts. 🎉 Failures (payment, email, cron, fulfillment) will appear here.
+            </p>
+          ) : (
+            <div className="mt-2 divide-y divide-white/5 overflow-hidden rounded-xl border border-white/10">
+              {unresolvedAlerts.map((a) => (
+                <div key={a.id} className="bg-white/[0.02] p-4">
+                  <div className="flex items-center gap-2">
+                    <span className={`inline-block h-2 w-2 rounded-full ${a.severity === "critical" ? "bg-rose-500" : a.severity === "warning" ? "bg-amber-400" : "bg-sky-400"}`} aria-hidden />
+                    <span className="text-sm font-medium text-white">{a.type}</span>
+                    <span className="text-xs text-zinc-500">{new Date(a.created_at).toLocaleString()}</span>
+                  </div>
+                  <p className="mt-1 pl-4 text-xs text-zinc-400">{a.message}</p>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         <p className="mt-4 text-xs text-zinc-500">

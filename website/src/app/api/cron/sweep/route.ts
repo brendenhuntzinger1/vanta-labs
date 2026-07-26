@@ -5,6 +5,7 @@ import { runAbandonedCartSweep } from "@/lib/cart-recovery";
 import { autoApproveEligibleCommissions } from "@/lib/partner-portal";
 import { expireStaleReservations } from "@/lib/inventory-reservation";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
+import { recordSystemAlert } from "@/lib/monitoring";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -42,6 +43,28 @@ export async function GET(request: Request) {
     // Retry transactional emails (receipts/shipping) that failed to send.
     retryPendingEmails(),
   ]);
+
+  // Surface any failed job as a durable, operator-visible alert (critical =
+  // emails the operator). Without this a rejected sweep only appeared in the
+  // HTTP response body that nobody reads, so renewals/recovery could silently
+  // stall. Best-effort and never throws.
+  const jobs: Array<[string, PromiseSettledResult<unknown>]> = [
+    ["membership_billing", membershipResult],
+    ["cart_recovery", cartRecoveryResult],
+    ["store_credit", storeCreditResult],
+    ["commission_approval", commissionApprovalResult],
+    ["reservation_expiry", reservationExpiryResult],
+    ["email_retry", emailRetryResult],
+  ];
+  const failed = jobs.filter(([, r]) => r.status === "rejected");
+  if (failed.length > 0) {
+    await recordSystemAlert({
+      type: "cron_sweep_failed",
+      severity: "critical",
+      message: `Scheduled sweep had ${failed.length} failing job(s): ${failed.map(([name]) => name).join(", ")}. Renewals, cart recovery, reservation expiry, or email retries may be stalled.`,
+      context: Object.fromEntries(failed.map(([name, r]) => [name, String((r as PromiseRejectedResult).reason)])),
+    });
+  }
 
   return NextResponse.json({
     success: true,
