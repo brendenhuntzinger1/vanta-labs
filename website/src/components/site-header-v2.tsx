@@ -93,8 +93,8 @@ export function SiteHeaderV2() {
               href={link.href}
               aria-current={isActive(link.href) ? "page" : undefined}
               className={`vl-focus-ring rounded-full px-3.5 py-2 text-[0.72rem] font-medium uppercase tracking-[0.16em] transition ${
-                isActive(link.href)
-                  ? "bg-emerald-400/12 text-emerald-300 ring-1 ring-inset ring-emerald-400/35"
+                link.href === "/membership"
+                  ? "bg-white text-black shadow-sm ring-1 ring-inset ring-white/70 hover:bg-white/90"
                   : "text-white/75 hover:text-white"
               }`}
             >
@@ -193,8 +193,8 @@ export function SiteHeaderV2() {
                 onClick={() => setMobileNavOpen(false)}
                 aria-current={isActive(link.href) ? "page" : undefined}
                 className={`vl-focus-ring flex min-h-[44px] items-center rounded-lg px-3 py-3 text-sm uppercase tracking-[0.12em] transition ${
-                  isActive(link.href)
-                    ? "bg-emerald-400/12 text-emerald-300 ring-1 ring-inset ring-emerald-400/35"
+                  link.href === "/membership"
+                    ? "bg-white text-black ring-1 ring-inset ring-white/70 hover:bg-white/90"
                     : "text-white/85 hover:bg-white/5 hover:text-white"
                 }`}
               >
