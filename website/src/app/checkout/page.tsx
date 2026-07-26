@@ -9,7 +9,6 @@ import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
-import { PaymentMethodPicker } from "@/components/payment-method-picker";
 import { ManualPaymentInstructions } from "@/components/manual-payment-instructions";
 import {
   calculateCardProcessingFee,
@@ -616,21 +615,6 @@ export default function CheckoutPage() {
                 </div>
               ) : null}
             </div>
-
-            {paymentMethods.length > 0 ? (
-              <div className="mt-8">
-                <p className="vl2-eyebrow">Payment Method</p>
-                <div className="mt-4">
-                  <PaymentMethodPicker
-                    methods={paymentMethods}
-                    cardFeeConfig={cardFeeConfig}
-                    baseTotal={total}
-                    selectedMethodId={selectedMethodId}
-                    onSelect={setSelectedMethodId}
-                  />
-                </div>
-              </div>
-            ) : null}
 
             <div className="mt-8 grid gap-4 sm:grid-cols-2">
               <div className="border border-white/10 p-4">
