@@ -59,6 +59,20 @@ describe("resolveRefundOutcome (F2/A5 — partial refunds & chargebacks)", () =>
     expect(o.paymentStatus).toBe("partially_refunded");
   });
 
+  it("prorates commission on the CUMULATIVE refunded amount across multiple partials", () => {
+    // Two partials on the same order: 30% of merchandise, then another 40%.
+    // Cumulative = 70% refunded, so the ambassador must retain 30% of commission.
+    const first = resolveRefundOutcome({ eventType: "refund.completed", nextStatus: "refunded", refundEventAmount: 30, ...base, existingRefundAmount: 0 });
+    expect(first.refundedFraction).toBeCloseTo(0.3);
+
+    const second = resolveRefundOutcome({ eventType: "refund.completed", nextStatus: "refunded", refundEventAmount: 40, ...base, existingRefundAmount: 30 });
+    // Was 0.4 (this-event-only) before the fix; must be 0.7 cumulative.
+    expect(second.refundedFraction).toBeCloseTo(0.7);
+
+    // Commission on $100 merch @ 10% = $10 original; after 70% refunded → $3 retained.
+    expect(computeRetainedCommission({ base: 100, percent: 10, refundedFraction: second.refundedFraction })).toBeCloseTo(3);
+  });
+
   it("always treats a chargeback as a FULL reversal even with a partial amount (A5)", () => {
     const o = resolveRefundOutcome({ eventType: "chargeback.created", nextStatus: "refunded", refundEventAmount: 30, ...base });
     expect(o.isChargeback).toBe(true);

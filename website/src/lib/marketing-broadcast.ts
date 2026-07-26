@@ -20,19 +20,34 @@ export async function getMarketingRecipientEmails(): Promise<string[]> {
     throw error;
   }
 
-  const userIds = Array.from(new Set((data ?? []).map((row) => row.user_id).filter(Boolean)));
+  const userIds = new Set((data ?? []).map((row) => row.user_id).filter(Boolean));
 
   const emails = new Set<string>();
-  for (const userId of userIds) {
+  // Resolve opted-in user_ids → emails by PAGING the auth admin list once
+  // (ceil(N/1000) calls) instead of one getUserById per opted-in customer,
+  // which was O(N) serial round-trips to the rate-limited auth admin API and
+  // would time out at thousands of subscribers.
+  const PER_PAGE = 1000;
+  const MAX_PAGES = 100; // safety backstop (100k users); logged if exceeded.
+  let page = 1;
+  for (; page <= MAX_PAGES; page++) {
     try {
-      const { data: userData } = await supabaseAdmin.auth.admin.getUserById(userId);
-      const email = userData?.user?.email?.trim().toLowerCase();
-      if (email) {
-        emails.add(email);
+      const { data: pageData, error: pageError } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: PER_PAGE });
+      if (pageError) break;
+      const users = pageData?.users ?? [];
+      for (const user of users) {
+        if (userIds.has(user.id)) {
+          const email = user.email?.trim().toLowerCase();
+          if (email) emails.add(email);
+        }
       }
+      if (users.length < PER_PAGE) break; // last page
     } catch {
-      // Skip a user we can't resolve; the rest of the list still sends.
+      break; // partial list still sends; union below adds email-keyed opt-ins.
     }
+  }
+  if (page > MAX_PAGES) {
+    console.warn(`getMarketingRecipientEmails: stopped paging auth users at ${MAX_PAGES} pages; some account opt-ins may be omitted.`);
   }
 
   // Union the email-keyed opt-in list (guests + at-checkout opt-ins). Best-
@@ -103,11 +118,18 @@ export async function broadcastCouponAnnouncement(input: {
 
   // Load everyone who already received THIS coupon announcement in ONE query,
   // instead of a per-recipient lookup inside the loop (was O(N) round-trips).
-  const { data: sentRows } = await supabaseAdmin
+  const { data: sentRows, error: sentError } = await supabaseAdmin
     .from("email_send_log")
     .select("recipient_email")
     .eq("campaign_type", "coupon_announcement")
     .eq("reference_id", input.coupon.id);
+  // If the dedup lookup fails we must NOT proceed with an empty "already sent"
+  // set — that would re-blast the entire list on the next click. Fail the run
+  // so the admin can retry rather than double-send. (sendMarketingEmail also
+  // suppresses per-recipient, but we don't rely on that as the only guard.)
+  if (sentError) {
+    throw sentError;
+  }
   const alreadySent = new Set(
     (sentRows ?? []).map((row) => String(row.recipient_email ?? "").trim().toLowerCase()),
   );

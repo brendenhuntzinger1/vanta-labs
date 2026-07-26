@@ -149,18 +149,20 @@ async function isValidAdminSessionToken(token: string) {
 
   const tokenHash = await sha256Hex(token);
   const query = new URLSearchParams({
-    select: "id",
+    select: "id,username",
     token_hash: `eq.${tokenHash}`,
     expires_at: `gt.${new Date().toISOString()}`,
     limit: "1",
   });
 
+  const authHeaders = {
+    apikey: config.serviceRole,
+    Authorization: `Bearer ${config.serviceRole}`,
+  };
+
   try {
     const response = await fetch(`${config.url}/rest/v1/admin_sessions?${query.toString()}`, {
-      headers: {
-        apikey: config.serviceRole,
-        Authorization: `Bearer ${config.serviceRole}`,
-      },
+      headers: authHeaders,
       cache: "no-store",
     });
 
@@ -169,8 +171,30 @@ async function isValidAdminSessionToken(token: string) {
       return false;
     }
 
-    const rows = (await response.json()) as Array<{ id: string }>;
-    const valid = rows.length > 0;
+    const rows = (await response.json()) as Array<{ id: string; username?: string }>;
+    const username = rows[0]?.username;
+    let valid = rows.length > 0 && Boolean(username);
+
+    // Mirror verifyAdminSessionToken: a deactivated admin must not keep the
+    // maintenance-page bypass just because their session cookie is unexpired.
+    if (valid && username) {
+      const credQuery = new URLSearchParams({
+        select: "is_active",
+        username: `eq.${username}`,
+        limit: "1",
+      });
+      const credResponse = await fetch(`${config.url}/rest/v1/admin_credentials?${credQuery.toString()}`, {
+        headers: authHeaders,
+        cache: "no-store",
+      });
+      if (!credResponse.ok) {
+        valid = false;
+      } else {
+        const credRows = (await credResponse.json()) as Array<{ is_active?: boolean }>;
+        valid = credRows.length > 0 && credRows[0]?.is_active !== false;
+      }
+    }
+
     sessionCache.set(token, { value: valid, expiresAt: now + SESSION_CACHE_TTL_MS });
     return valid;
   } catch {

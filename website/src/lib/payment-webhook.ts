@@ -94,7 +94,14 @@ export function resolveRefundOutcome(input: {
   const isPartial = nextStatus === "refunded" && !isChargeback && refundEventAmount > 0 && refundEventAmount < amountPaid;
   const isFullRefund = !isPartial;
   const paymentStatus: OrderStatus = isPartial ? "partially_refunded" : nextStatus;
-  const refundedFraction = isFullRefund ? 1 : merchandiseBase > 0 ? Math.min(1, refundEventAmount / merchandiseBase) : 1;
+  // Prorate on the CUMULATIVE amount refunded (prior partials + this event), not
+  // just this event — otherwise a second partial refund overwrites the first and
+  // the ambassador keeps commission on merchandise that was already refunded.
+  // computeRetainedCommission recomputes retained = original * (1 - fraction)
+  // from the original base each time, so this fraction must be cumulative.
+  // Single partials are unchanged (existingRefundAmount is 0).
+  const cumulativeRefundAmount = existingRefundAmount + refundEventAmount;
+  const refundedFraction = isFullRefund ? 1 : merchandiseBase > 0 ? Math.min(1, cumulativeRefundAmount / merchandiseBase) : 1;
   // refund_amount is only meaningful for money returned (refunded / partial). A
   // cancel/failure of a paid order records no refund dollars.
   const recordedRefundAmount = nextStatus === "refunded"

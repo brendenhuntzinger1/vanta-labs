@@ -153,12 +153,15 @@ export function orderConfirmationTemplate(input: {
   const name = escapeHtml(input.customerName || "there");
   const tax = input.tax ?? 0;
   const cardFee = input.cardProcessingFee ?? 0;
-  // Collapse ALL reductions (promo discount + points + store credit) into one
-  // line derived from the actual charged Total, so the receipt always
-  // reconciles: subtotal + shipping + tax + fee − savings = total. This avoids
-  // an unexplained gap (tax/fee were previously missing) or an over-stated
-  // discount line when points/credit were used.
-  const savings = Math.max(0, Math.round((input.subtotal + input.shipping + tax + cardFee - input.total) * 100) / 100);
+  // Reconcile the receipt against the ACTUAL charged Total. The residual of
+  // (subtotal + shipping + tax + fee − total) is either net reductions (promo
+  // discount + points + store credit) when positive, or a net add-on (e.g. the
+  // shipping-protection fee, which is folded into the total and not stored as a
+  // separate column) when negative. Splitting it this way means the line items
+  // ALWAYS sum to Total, whether the order had discounts, an add-on, or both.
+  const residual = Math.round((input.subtotal + input.shipping + tax + cardFee - input.total) * 100) / 100;
+  const savings = Math.max(0, residual);
+  const addOn = Math.max(0, -residual);
   const rows = input.items
     .map(
       (item) =>
@@ -185,6 +188,7 @@ export function orderConfirmationTemplate(input: {
           ${savings > 0 ? summaryRow("Discounts &amp; credits", `-${money(savings)}`) : ""}
           ${tax > 0 ? summaryRow("Sales tax", money(tax)) : ""}
           ${cardFee > 0 ? summaryRow("Card processing fee", money(cardFee)) : ""}
+          ${addOn > 0 ? summaryRow("Shipping protection", money(addOn)) : ""}
           ${summaryRow("Total", money(input.total), { bold: true })}
         </table>
       `,
@@ -201,6 +205,7 @@ export function orderConfirmationTemplate(input: {
       savings > 0 ? `Discounts & credits: -${money(savings)}` : null,
       tax > 0 ? `Sales tax: ${money(tax)}` : null,
       cardFee > 0 ? `Card processing fee: ${money(cardFee)}` : null,
+      addOn > 0 ? `Shipping protection: ${money(addOn)}` : null,
       `Total: ${money(input.total)}`,
       "",
       "- Vanta Labs",

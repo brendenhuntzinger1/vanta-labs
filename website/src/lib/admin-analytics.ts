@@ -214,16 +214,3 @@ export async function getRevenueTrend(input: RevenueRangeInput) {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([date, amount]) => ({ date, amount }));
 }
-
-export async function getDailyProfitEstimate() {
-  const { data, error } = await supabaseAdmin
-    .from("orders")
-    .select("amount_paid, refund_amount, payment_status, paid_at, created_at")
-    .gte("created_at", dayStartIso());
-
-  if (error) {
-    throw error;
-  }
-
-  return revenueFromRows((data ?? []) as RevenueRow[]).today;
-}

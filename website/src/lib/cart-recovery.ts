@@ -236,10 +236,19 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   const now = Date.now();
   const result: AbandonedCartSweepResult = { t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0 };
 
+  // Only sweep carts new enough to still have a pending stage. The last stage
+  // fires at 72h; past ~96h every stage has been sent (or is past its value), so
+  // a still-"active" cart older than that would just be re-scanned every tick
+  // forever. Bounding by first_seen_at keeps per-tick work flat as active carts
+  // accumulate. (If the sweep is down >96h, those carts are past recovery value
+  // anyway.)
+  const RECOVERY_MAX_AGE_MS = 96 * HOUR_MS;
+  const oldestFirstSeenIso = new Date(now - RECOVERY_MAX_AGE_MS).toISOString();
   const { data, error } = await supabaseAdmin
     .from("abandoned_carts")
     .select("id, email, customer_name, items, cart_value_cents, first_seen_at")
-    .eq("status", "active");
+    .eq("status", "active")
+    .gte("first_seen_at", oldestFirstSeenIso);
 
   if (error) throw error;
 
