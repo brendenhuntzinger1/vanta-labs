@@ -105,6 +105,17 @@ Domestic shipping is free over the current threshold; otherwise, a flat fee appl
 ## Delivery
 Delivery times are estimates and are not guaranteed. Once shipped, you'll receive tracking by email.
 
+## Shipping Protection (optional)
+Shipping Protection is an optional, store-backed service — not third-party insurance — that you may add at checkout for a small fee based on your order total. It is off by default and never pre-selected.
+
+**What it covers:** with protection added, if your order is lost in transit, stolen after delivery, or arrives damaged, we will replace the affected items or refund them, at our discretion.
+
+**What it does not cover:** orders shipped to an incorrect or incomplete address you provided; packages marked delivered by the carrier and not reported within the claim window; items damaged by misuse after delivery; and delays alone (a late but delivered package is not a covered loss).
+
+**How to file a claim:** contact ${email} with your order number within 14 days of the delivery date (or expected delivery date for a lost package). Include photos for damage claims. We may ask you to complete a short carrier claim statement.
+
+**Refund behavior:** an approved claim is resolved by replacement or refund of the affected items. The protection fee itself is non-refundable once an order has shipped. If you did not add protection, lost/stolen/damaged shipments are handled case-by-case at our discretion and are not guaranteed.
+
 ## Issues
 For lost, delayed, or damaged shipments, contact ${email} with your order number.`,
   },

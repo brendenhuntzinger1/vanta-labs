@@ -872,8 +872,8 @@ export default function CheckoutPage() {
                     aria-label="Add shipping protection"
                   />
                   <span>
-                    <span className="block font-medium text-white">Shipping Protection</span>
-                    <span className="block text-xs text-white/45">Covers loss, theft, or damage in transit.</span>
+                    <span className="block font-medium text-white">Shipping Protection <span className="font-normal text-white/45">(optional)</span></span>
+                    <span className="block text-xs text-white/45">Store-backed: we&apos;ll replace or refund items lost, stolen, or damaged in transit. <a href="/legal/shipping" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white/70">See terms</a></span>
                   </span>
                 </span>
                 <span className="whitespace-nowrap text-white/80">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>

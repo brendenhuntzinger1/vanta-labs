@@ -339,8 +339,8 @@ export function CartDrawer() {
                   aria-label="Add shipping protection"
                 />
                 <span className="text-sm">
-                  <span className="block font-medium text-white">Shipping Protection</span>
-                  <span className="block text-xs text-zinc-500">Covers loss, theft, or damage in transit.</span>
+                  <span className="block font-medium text-white">Shipping Protection <span className="font-normal text-zinc-500">(optional)</span></span>
+                  <span className="block text-xs text-zinc-500">Store-backed: we&apos;ll replace or refund items lost, stolen, or damaged in transit. <a href="/legal/shipping" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-zinc-300">See terms</a></span>
                 </span>
               </span>
               <span className="whitespace-nowrap text-sm text-zinc-300">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>
