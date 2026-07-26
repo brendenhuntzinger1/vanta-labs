@@ -1519,7 +1519,27 @@ export async function markCommissionsPaid(input: {
   ipAddress?: string | null;
   userAgent?: string | null;
   overrideMinimumThreshold?: boolean;
+  // The admin must affirm the money has ACTUALLY been transferred before this
+  // flips commissions to paid and emails the ambassador "we sent $X". Marking
+  // paid is a record of a real transfer, not the transfer itself.
+  confirmedTransferred?: boolean;
+  // Optional external transfer/transaction reference (e.g. PayPal txn id),
+  // recorded on the immutable payout row + audit log.
+  transactionReference?: string | null;
 }) {
+  // Require explicit confirmation that funds were sent — never mark paid (or
+  // email the ambassador) off a click alone.
+  if (input.confirmedTransferred !== true) {
+    throw new Error("Before marking this payout paid, send the funds to the ambassador, then confirm the transfer. This step only RECORDS a payment you've already made.");
+  }
+  const transactionReference = typeof input.transactionReference === "string"
+    ? input.transactionReference.trim().slice(0, 200) || null
+    : null;
+  // Fold the transfer reference into the payout note so it lives on the
+  // immutable payout record without a schema change.
+  const payoutNote = [input.note, transactionReference ? `Transfer ref: ${transactionReference}` : null]
+    .filter(Boolean)
+    .join(" — ") || null;
   // A1: never release a payout for an ambassador who isn't CURRENTLY approved.
   // Commissions that reached approved_for_payout before the ambassador was
   // disabled (e.g. for fraud) must be held until an admin re-approves them —
@@ -1633,7 +1653,7 @@ export async function markCommissionsPaid(input: {
       id: payoutId,
       ambassador_id: input.partnerId,
       amount: payoutAmount,
-      note: input.note ?? null,
+      note: payoutNote,
       processed_by: input.actorUserId ?? null,
       payout_method: payoutMethod,
       payout_handle: payoutHandle,
@@ -1649,7 +1669,7 @@ export async function markCommissionsPaid(input: {
       id: payoutId,
       partner_id: input.partnerId,
       amount: payoutAmount,
-      note: input.note ?? null,
+      note: payoutNote,
       processed_by: input.actorUserId ?? null,
       payout_method: payoutMethod,
       payout_handle: payoutHandle,
@@ -1668,6 +1688,8 @@ export async function markCommissionsPaid(input: {
       partnerId: input.partnerId,
       amount: payoutAmount,
       orderCount: claimed.length,
+      transactionReference,
+      confirmedTransferred: true,
       actorUsername: input.actorUsername ?? null,
       ipAddress: input.ipAddress ?? null,
       userAgent: input.userAgent ?? null,

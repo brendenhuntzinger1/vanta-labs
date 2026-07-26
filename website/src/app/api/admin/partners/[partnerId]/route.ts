@@ -65,6 +65,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
       // amount is ignored to prevent under/over-payment.
       const note = typeof body?.note === "string" ? body.note : undefined;
       const overrideMinimumThreshold = body?.overrideMinimumThreshold === true;
+      const transactionReference = typeof body?.transactionReference === "string" ? body.transactionReference : null;
 
       const payout = await markCommissionsPaid({
         partnerId,
@@ -75,6 +76,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
         ipAddress,
         userAgent,
         overrideMinimumThreshold,
+        // The admin UI requires an explicit "I've sent the funds" confirmation;
+        // the server enforces it too (markCommissionsPaid throws without it).
+        confirmedTransferred: body?.confirmedTransferred === true,
+        transactionReference,
       });
 
       if (!payout.payoutId) {

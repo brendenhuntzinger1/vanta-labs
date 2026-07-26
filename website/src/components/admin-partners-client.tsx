@@ -215,11 +215,30 @@ export function AdminPartnersClient({
       overrideMinimumThreshold = true;
     }
 
+    // Marking paid RECORDS a transfer you've already made — it does not send
+    // money. Require the admin to affirm the funds were actually sent (the
+    // server enforces this too) before we flip commissions to paid and email
+    // the ambassador "we sent you $X".
+    const affirmed = window.confirm(
+      `Have you ALREADY sent ${currency(row.approvedForPayoutCommissions)} to ${row.name} (${row.referralCode})?\n\n` +
+      `Click OK ONLY if the money has actually been transferred. This records the payment and notifies the ambassador — it does not move any funds.`,
+    );
+    if (!affirmed) return;
+
+    const transactionReference = window.prompt(
+      "Optional: transfer/transaction reference (e.g. PayPal transaction ID). Leave blank to skip.",
+      "",
+    );
+    // Cancel on the reference prompt aborts the whole action (safer default).
+    if (transactionReference === null) return;
+
     await applyPartnerAction(row.id, {
       action: "mark_paid",
       amount: row.approvedForPayoutCommissions,
       note: "Bulk payout",
       overrideMinimumThreshold,
+      confirmedTransferred: true,
+      transactionReference: transactionReference.trim() || null,
     });
   };
 
