@@ -158,7 +158,13 @@ export async function getAdminCustomers(filters: AdminCustomerFilters = {}): Pro
 }
 
 function csvEscape(value: unknown) {
-  const text = String(value ?? "");
+  let text = String(value ?? "");
+  // Neutralize spreadsheet formula injection from attacker-controlled cells
+  // (customer name/email) — a leading = + - @ / tab / CR would run as a formula
+  // in Excel/Sheets. Prefix a single quote.
+  if (/^[=+\-@\t\r]/.test(text)) {
+    text = `'${text}`;
+  }
   if (/[",\n]/.test(text)) {
     return `"${text.replaceAll("\"", "\"\"")}"`;
   }

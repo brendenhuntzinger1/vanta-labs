@@ -39,7 +39,7 @@ function roundMoney(value: number) {
 export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("order_id, customer_email, subtotal, shipping_amount, discount_amount, amount_paid, refund_amount, payment_status, paid_at, created_at")
+    .select("order_id, customer_email, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, refund_amount, payment_status, paid_at, created_at")
     .order("created_at", { ascending: false })
     .limit(2000);
 
@@ -56,18 +56,29 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
     const subtotal = roundMoney(Number(order.subtotal ?? 0));
     const shipping = roundMoney(Number(order.shipping_amount ?? 0));
     const discount = roundMoney(Number(order.discount_amount ?? 0));
+    const tax = roundMoney(Number(order.tax_amount ?? 0));
+    const cardFee = roundMoney(Number(order.card_processing_fee ?? 0));
+    const storeCredit = roundMoney(Number(order.store_credit_redeemed_cents ?? 0) / 100);
+    const pointsDollars = roundMoney(Number(order.points_redeemed ?? 0) / 100);
     const amountPaid = roundMoney(Number(order.amount_paid ?? 0));
     const refundAmount = roundMoney(Number(order.refund_amount ?? 0));
-    const expectedTotal = roundMoney(subtotal + shipping - discount);
+    // Mirror payment-service's amount_paid formula: merchandise − discount + tax
+    // + card fee, less store credit and points redeemed. The optional
+    // shipping-protection fee ($2.49–$4.99) is folded into amount_paid but not
+    // stored as its own column, so a fully-reconciled order lands between
+    // expectedTotal and expectedTotal + the max protection fee. We only flag a
+    // TRUE mismatch: underpayment, or an overage beyond the max protection fee.
+    const expectedTotal = roundMoney(subtotal + tax + cardFee + shipping - discount - storeCredit - pointsDollars);
+    const MAX_PROTECTION_FEE = 4.99;
     const paymentStatus = String(order.payment_status ?? "");
     const createdAt = String(order.created_at);
 
-    if (Math.abs(amountPaid - expectedTotal) > 0.01) {
+    if (amountPaid < expectedTotal - 0.01 || amountPaid > expectedTotal + MAX_PROTECTION_FEE + 0.01) {
       flags.push({
         orderId,
         customerEmail,
         type: "total_mismatch",
-        detail: `Expected $${expectedTotal.toFixed(2)}, recorded $${amountPaid.toFixed(2)}`,
+        detail: `Expected $${expectedTotal.toFixed(2)}${amountPaid > expectedTotal ? ` (+ up to $${MAX_PROTECTION_FEE.toFixed(2)} protection)` : ""}, recorded $${amountPaid.toFixed(2)}`,
         createdAt,
       });
     }

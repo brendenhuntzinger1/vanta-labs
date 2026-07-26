@@ -48,16 +48,27 @@ export function AdminOrderActions({
     setSaving(true);
     setMessage(null);
 
+    // Only send paymentStatus when the admin actually CHANGED it. Sending the
+    // unchanged current status (e.g. "paid") makes the server reject a plain
+    // fulfillment/tracking save (money-state statuses must go through the
+    // verification/refund flows) and 403s staff who can't manage payments — so
+    // shipping an order and emailing tracking became impossible. Omitting the
+    // unchanged value lets fulfillment saves through while the guard still
+    // catches a genuine attempt to flip payment status here.
+    const payload: Record<string, unknown> = {
+      action,
+      fulfillmentStatus,
+      trackingNumber,
+      ...extra,
+    };
+    if (paymentStatus !== (initialPaymentStatus || "pending_payment")) {
+      payload.paymentStatus = paymentStatus;
+    }
+
     const res = await fetch(`/api/admin/orders/${orderId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action,
-        paymentStatus,
-        fulfillmentStatus,
-        trackingNumber,
-        ...extra,
-      }),
+      body: JSON.stringify(payload),
     });
 
     const json = await res.json() as { success: boolean; error?: string };

@@ -4,7 +4,13 @@ import { canManageSettings } from "@/lib/admin-roles";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 function csvEscape(value: unknown) {
-  const text = String(value ?? "");
+  let text = String(value ?? "");
+  // Neutralize spreadsheet formula injection: a leading = + - @ (or tab/CR) in
+  // an attacker-controlled cell (customer name/email) would execute as a formula
+  // when the owner opens the export in Excel/Sheets. Prefix a single quote.
+  if (/^[=+\-@\t\r]/.test(text)) {
+    text = `'${text}`;
+  }
   if (/[",\n]/.test(text)) {
     return `"${text.replaceAll("\"", "\"\"")}"`;
   }
