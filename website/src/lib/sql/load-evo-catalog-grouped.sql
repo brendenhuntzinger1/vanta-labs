@@ -29,11 +29,11 @@ from (values
   ('cagrilintide',         'Cagrilintide',           'GLP Research',    7999, 3500, false, 3),
   ('klow',                 'KLOW',                   'Blends',         10999, 3500, false, 4),
   ('glow',                 'GLOW',                   'Blends',          9499, 3500, false, 5),
-  ('bpc-157',              'BPC-157',                'Healing',         4299, 2506, true,  6),
-  ('bpc-157-tb-500',       'BPC-157 + TB-500',       'Healing',         7499, 3398, false, 7),
-  ('kpv',                  'KPV',                    'Healing',         4999, 3147, false, 8),
-  ('ghk-cu',               'GHK-Cu',                 'Healing',         4799, 2288, false, 9),
-  ('thymosin-alpha-1',     'Thymosin Alpha-1',       'Healing',         5999, 3350, false, 10),
+  ('bpc-157',              'BPC-157',                'Tissue Research',         4299, 2506, true,  6),
+  ('bpc-157-tb-500',       'BPC-157 + TB-500',       'Tissue Research',         7499, 3398, false, 7),
+  ('kpv',                  'KPV',                    'Tissue Research',         4999, 3147, false, 8),
+  ('ghk-cu',               'GHK-Cu',                 'Tissue Research',         4799, 2288, false, 9),
+  ('thymosin-alpha-1',     'Thymosin Alpha-1',       'Tissue Research',         5999, 3350, false, 10),
   ('cjc-1295-ipamorelin',  'CJC-1295 + Ipamorelin',  'Growth Hormone',  6499, 2914, true,  11),
   ('cjc-1295-no-dac',      'CJC-1295 no DAC',        'Growth Hormone',  5999, 3500, false, 12),
   ('tesamorelin',          'Tesamorelin',            'Growth Hormone',  7499, 3414, false, 13),
@@ -95,7 +95,7 @@ from (values
   -- Blends
   ('klow','80mg','80mg',             10999, 3500, true,  0),
   ('glow','70mg','70mg',              9499, 3500, true,  0),
-  -- Healing
+  -- Tissue Research
   ('bpc-157','5mg','5mg',             4299, 2506, true,  0),
   ('bpc-157','10mg','10mg',           5999, 2569, false, 1),
   ('bpc-157-tb-500','20mg','20mg',    7499, 3398, true,  0),

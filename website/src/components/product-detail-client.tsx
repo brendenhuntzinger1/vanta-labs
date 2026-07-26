@@ -86,8 +86,8 @@ const TRUST_ROW = [
         <path d="M9 2h6M10 2v6.2a2 2 0 0 1-.34 1.12L4.9 17.2A2.4 2.4 0 0 0 6.9 21h10.2a2.4 2.4 0 0 0 2-3.8l-4.76-7.88A2 2 0 0 1 14 8.2V2" />
       </svg>
     ),
-    label: "USA Sourced",
-    detail: "Among the purest sources available",
+    label: "Based in the USA",
+    detail: "U.S.-based fulfillment & support",
   },
 ] as const;
 

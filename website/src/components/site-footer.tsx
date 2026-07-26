@@ -22,7 +22,7 @@ const FOOTER_COLUMNS = {
   ],
 };
 
-const TRUST_POINTS = ["Lab-Verified", "COA Documented", "Encrypted Checkout", "Fast Dispatch"];
+const TRUST_POINTS = ["Batch Tested", "COA Documented", "Encrypted Checkout", "Fast Dispatch"];
 
 function FooterColumn({
   title,
