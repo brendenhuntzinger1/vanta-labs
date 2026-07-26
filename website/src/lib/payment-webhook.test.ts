@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeRetainedCommission, getCommissionStateForRefund, getOrderStatusForEventType } from "@/lib/payment-webhook";
+import { computeRetainedCommission, getCommissionStateForRefund, getOrderStatusForEventType, resolveRefundOutcome } from "@/lib/payment-webhook";
 
 describe("computeRetainedCommission (partial-refund proportional commission)", () => {
   // Ambassador earns 15% of a $90 discounted subtotal = $13.50.
@@ -23,6 +23,64 @@ describe("computeRetainedCommission (partial-refund proportional commission)", (
   it("clamps out-of-range fractions", () => {
     expect(computeRetainedCommission({ base: 100, percent: 10, refundedFraction: 1.5 })).toBe(0);
     expect(computeRetainedCommission({ base: 100, percent: 10, refundedFraction: -0.2 })).toBe(10);
+  });
+});
+
+describe("resolveRefundOutcome (F2/A5 — partial refunds & chargebacks)", () => {
+  // Order: merchandise $100, +$10 ship +$8 tax → charged $118.
+  const base = { amountPaid: 118, merchandiseBase: 100, existingRefundAmount: 0 };
+
+  it("records a FULL refund as refunded with the full amount and full reversal", () => {
+    const o = resolveRefundOutcome({ eventType: "refund.completed", nextStatus: "refunded", refundEventAmount: 118, ...base });
+    expect(o.paymentStatus).toBe("refunded");
+    expect(o.recordedRefundAmount).toBe(118);
+    expect(o.refundedFraction).toBe(1);
+    expect(o.shouldRestock).toBe(true);
+  });
+
+  it("treats a refund event with no amount as a full refund (processor omitted it)", () => {
+    const o = resolveRefundOutcome({ eventType: "refund.completed", nextStatus: "refunded", refundEventAmount: 0, ...base });
+    expect(o.paymentStatus).toBe("refunded");
+    expect(o.recordedRefundAmount).toBe(118);
+    expect(o.isFullRefund).toBe(true);
+  });
+
+  it("records a PARTIAL refund as partially_refunded with only the returned amount", () => {
+    const o = resolveRefundOutcome({ eventType: "refund.completed", nextStatus: "refunded", refundEventAmount: 30, ...base });
+    expect(o.paymentStatus).toBe("partially_refunded");
+    expect(o.recordedRefundAmount).toBe(30); // NOT the full 118
+    expect(o.refundedFraction).toBeCloseTo(0.3); // 30 / 100 merchandise base
+    expect(o.shouldRestock).toBe(false); // never over-restock on partial
+  });
+
+  it("accumulates repeated partial refunds and never exceeds the amount paid", () => {
+    const o = resolveRefundOutcome({ eventType: "refund.completed", nextStatus: "refunded", refundEventAmount: 30, ...base, existingRefundAmount: 100 });
+    expect(o.recordedRefundAmount).toBe(118); // min(118, 100 + 30)
+    expect(o.paymentStatus).toBe("partially_refunded");
+  });
+
+  it("always treats a chargeback as a FULL reversal even with a partial amount (A5)", () => {
+    const o = resolveRefundOutcome({ eventType: "chargeback.created", nextStatus: "refunded", refundEventAmount: 30, ...base });
+    expect(o.isChargeback).toBe(true);
+    expect(o.paymentStatus).toBe("refunded");
+    expect(o.refundedFraction).toBe(1);
+    expect(o.recordedRefundAmount).toBe(118);
+    expect(o.shouldRestock).toBe(true);
+  });
+
+  it("treats a cancel as a full reversal that records no refund dollars", () => {
+    const o = resolveRefundOutcome({ eventType: "payment.canceled", nextStatus: "canceled", refundEventAmount: 0, ...base });
+    expect(o.paymentStatus).toBe("canceled");
+    expect(o.recordedRefundAmount).toBe(0);
+    expect(o.refundedFraction).toBe(1);
+    expect(o.shouldRestock).toBe(true);
+  });
+
+  it("is a no-op for a non-refund (paid) event", () => {
+    const o = resolveRefundOutcome({ eventType: "payment.succeeded", nextStatus: "paid", refundEventAmount: 0, ...base });
+    expect(o.isRefundEvent).toBe(false);
+    expect(o.paymentStatus).toBe("paid");
+    expect(o.shouldRestock).toBe(false);
   });
 });
 

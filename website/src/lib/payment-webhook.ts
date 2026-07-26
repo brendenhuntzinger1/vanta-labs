@@ -50,6 +50,60 @@ export function getOrderStatusForEventType(eventType: string): OrderStatus {
   }
 }
 
+export interface RefundOutcome {
+  isRefundEvent: boolean;
+  isChargeback: boolean;
+  isFullRefund: boolean;
+  /** The payment_status to persist (partially_refunded vs refunded vs passthrough). */
+  paymentStatus: OrderStatus;
+  /** Cumulative refund_amount to record (actual money returned, not gross). */
+  recordedRefundAmount: number;
+  /** Fraction of commission to reverse (1 = full). */
+  refundedFraction: number;
+  /** Restock the order's inventory only on a FULL reversal. */
+  shouldRestock: boolean;
+}
+
+// Pure resolver for how a refund / chargeback / cancel event is recorded.
+// Centralizes partial-vs-full detection so the webhook records the SAME way the
+// admin refund path does: a partial refund keeps `partially_refunded` status and
+// records only the amount actually returned (accumulated), not the full charge.
+// Chargebacks are ALWAYS a full reversal — a partial `amount` on a chargeback
+// must never leave residual commission or a `partially_refunded` status.
+export function resolveRefundOutcome(input: {
+  eventType: string;
+  nextStatus: OrderStatus;
+  refundEventAmount: number;
+  amountPaid: number;
+  merchandiseBase: number;
+  existingRefundAmount: number;
+}): RefundOutcome {
+  const { eventType, nextStatus, amountPaid } = input;
+  const merchandiseBase = Math.max(0, Number(input.merchandiseBase) || 0);
+  const refundEventAmount = Number.isFinite(input.refundEventAmount) ? Math.max(0, input.refundEventAmount) : 0;
+  const existingRefundAmount = Number.isFinite(input.existingRefundAmount) ? Math.max(0, input.existingRefundAmount) : 0;
+  const isChargeback = eventType.startsWith("chargeback");
+  const isRefundEvent = nextStatus === "refunded" || nextStatus === "canceled" || nextStatus === "payment_failed";
+
+  if (!isRefundEvent) {
+    return { isRefundEvent: false, isChargeback, isFullRefund: false, paymentStatus: nextStatus, recordedRefundAmount: existingRefundAmount, refundedFraction: 0, shouldRestock: false };
+  }
+
+  // Partial applies ONLY to a genuine refund.completed carrying a positive
+  // amount below what was charged. Chargebacks / cancels / failures are full.
+  const isPartial = nextStatus === "refunded" && !isChargeback && refundEventAmount > 0 && refundEventAmount < amountPaid;
+  const isFullRefund = !isPartial;
+  const paymentStatus: OrderStatus = isPartial ? "partially_refunded" : nextStatus;
+  const refundedFraction = isFullRefund ? 1 : merchandiseBase > 0 ? Math.min(1, refundEventAmount / merchandiseBase) : 1;
+  // refund_amount is only meaningful for money returned (refunded / partial). A
+  // cancel/failure of a paid order records no refund dollars.
+  const recordedRefundAmount = nextStatus === "refunded"
+    ? isFullRefund ? roundMoney(amountPaid) : roundMoney(Math.min(amountPaid, existingRefundAmount + refundEventAmount))
+    : existingRefundAmount;
+
+  return { isRefundEvent: true, isChargeback, isFullRefund, paymentStatus, recordedRefundAmount, refundedFraction, shouldRestock: isFullRefund };
+}
+
 export function getCommissionStateForRefund(currentStatus: string | null | undefined): CommissionState {
   const normalizedStatus = (currentStatus ?? "pending").toLowerCase();
 
@@ -250,7 +304,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_number, order_type, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, paid_at, customer_user_id, customer_email, customer_name, points_redeemed, store_credit_redeemed_cents")
+    .select("id, order_id, order_number, order_type, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, points_redeemed, store_credit_redeemed_cents")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -1005,6 +1059,18 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   const commissionableSubtotal = roundMoney(Math.max(0, subtotal - discountAmount));
   const effectiveCouponCode = orderRecord?.coupon_code ? String(orderRecord.coupon_code) : eventPayload.couponCode;
 
+  // Resolve how this refund/chargeback/cancel is recorded (partial vs full,
+  // status to persist, cumulative refund amount, commission fraction, restock).
+  // No-op for non-refund events. Mirrors the admin refund path's correctness.
+  const refundOutcome = resolveRefundOutcome({
+    eventType: eventPayload.type ?? "",
+    nextStatus,
+    refundEventAmount: Number(eventPayload.amount ?? 0),
+    amountPaid,
+    merchandiseBase: commissionableSubtotal,
+    existingRefundAmount: roundMoney(Number(orderRecord?.refund_amount ?? 0)),
+  });
+
   // Atomic paid-claim (H1): exactly one webhook event may flip a not-yet-paid
   // order to "paid" and therefore run the paid side-effects below. A concurrent
   // SECOND distinct success event (different event_id, so not caught by the
@@ -1059,7 +1125,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       couponCode: eventPayload.couponCode,
       customerUserId: eventPayload.customerUserId ?? orderRecord?.customer_user_id ?? undefined,
       pointsRedeemed: eventPayload.pointsRedeemed ?? orderRecord?.points_redeemed ?? 0,
-      paymentStatus: nextStatus,
+      paymentStatus: refundOutcome.paymentStatus,
       fulfillmentStatus: nextStatus === "paid" ? "awaiting_fulfillment" : orderRecord?.fulfillment_status ?? "pending",
       paidAt: nextStatus === "paid" ? new Date().toISOString() : orderRecord?.paid_at ?? null,
       providerEventId: eventId,
@@ -1276,13 +1342,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // includes tax/shipping/card fee) wrongly claws back commission when a
     // shipping/tax-only amount is refunded. A refund at/above the merchandise
     // base is a full reversal. Cancels/failures also fully reverse.
-    const refundEventAmount = Number(eventPayload.amount ?? 0);
-    const merchandiseBase = commissionableSubtotal;
-    const refundedFraction =
-      nextStatus === "refunded" && refundEventAmount > 0 && merchandiseBase > 0 && refundEventAmount < merchandiseBase
-        ? refundEventAmount / merchandiseBase
-        : 1;
-    await updateCommissionOnRefund(orderId, { refundedFraction });
+    await updateCommissionOnRefund(orderId, { refundedFraction: refundOutcome.refundedFraction });
 
     // Release any still-active inventory hold. For a never-paid order (failed /
     // canceled) this returns the reserved units immediately; for a paid order
@@ -1297,7 +1357,10 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // "partially_refunded" is a paid-derived state (a partial refund was already
     // issued on a paid order), so a later full refund/cancel must still restock.
     const wasPaid = priorPaymentStatus === "paid" || priorPaymentStatus === "partially_refunded";
-    if (wasPaid && (nextStatus === "refunded" || nextStatus === "canceled")) {
+    // Restock ONLY on a full reversal — a partial refund must not return the
+    // whole order's stock. A later full refund/cancel still restocks (its own
+    // atomic claim), because a partial leaves status "partially_refunded".
+    if (wasPaid && refundOutcome.shouldRestock && (nextStatus === "refunded" || nextStatus === "canceled")) {
       const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
       // Atomic exactly-once claim: only the FIRST refund/cancel event for this
       // order restocks; a concurrent chargeback or replayed event loses the
@@ -1320,7 +1383,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       try {
         await supabaseAdmin
           .from("orders")
-          .update({ refund_amount: amountPaid, refunded_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .update({ refund_amount: refundOutcome.recordedRefundAmount, refunded_at: new Date().toISOString(), updated_at: new Date().toISOString() })
           .eq("order_id", orderId);
       } catch (refundAmountError) {
         console.error("Unable to record refund amount for order", orderId, refundAmountError);

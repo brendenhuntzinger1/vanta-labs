@@ -134,7 +134,11 @@ function formatCurrency(value: number) {
 }
 
 function isReferralValid(code: ReferralCode) {
-  return code.customerDiscountPercent === 10 && Boolean(code.ambassadorId);
+  // Honor whatever customer-discount percent the admin has configured (the
+  // amount at the call site already uses this value). Hard-coding === 10 made
+  // the cart preview silently drop the referral discount — and trip the
+  // checkout "total changed" guard — whenever the admin set any other percent.
+  return code.customerDiscountPercent > 0 && Boolean(code.ambassadorId);
 }
 
 function calculateCouponDiscountAmount(subtotal: number, coupon: CouponDetails | null) {

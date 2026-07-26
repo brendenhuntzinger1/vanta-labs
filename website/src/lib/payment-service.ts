@@ -503,7 +503,11 @@ export async function createCheckoutSession(
      commissionPercent: guardCommissionPercent,
      processingFeePercent: profitSettings.processingFeePercent,
      shippingCollected: shipping,
-     shippingCost: 0,
+     // Charge the guard for what the store actually pays to ship this order
+     // (admin-configurable, same figure used in profit reports). Previously 0,
+     // which let a free-shipping / thin-margin order pass the break-even floor
+     // yet finalize at a real cash loss equal to the shipping cost.
+     shippingCost: profitSettings.shippingCostPerOrder,
      handlingCollected: 0,
      taxPercent: taxRatePercent,
    },
