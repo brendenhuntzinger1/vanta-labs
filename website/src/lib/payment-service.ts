@@ -9,7 +9,7 @@ import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
-import { calculateShipping, calculateTax } from "@/lib/shipping";
+import { calculateShipping, calculateTax, isShippableCountry } from "@/lib/shipping";
 import { isApprovedAmbassadorCustomer } from "@/lib/ambassador-status";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
@@ -110,6 +110,12 @@ function validateCustomer(customer: CustomerInput) {
  !customer.country
  ) {
  throw new Error("Incomplete customer details");
+ }
+
+ // The store ships only to the US and Canada — reject anything else server-side
+ // so it can't be bypassed even if the client country selector is tampered with.
+ if (!isShippableCountry(customer.country)) {
+ throw new Error("We currently ship only to the United States and Canada.");
  }
 }
 

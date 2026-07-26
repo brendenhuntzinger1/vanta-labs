@@ -58,18 +58,25 @@ export function isDomesticCountry(country?: string | null): boolean {
 
 const NORTH_AMERICA_COUNTRY_NAMES = new Set([
   "canada", "ca", "can",
-  "mexico", "méxico", "mx", "mex",
 ]);
 
 export type ShippingZone = "domestic" | "north_america" | "international";
 
-// Three-zone model: US (domestic), Canada/Mexico (north_america), everywhere
-// else (international). Unknown/empty country defaults to domestic so the cart
-// preview (before a shipping address is entered) matches prior behavior.
+// Zones: US (domestic) and Canada (north_america) are the only shippable
+// destinations; everything else is "international" and is NOT offered (blocked
+// at checkout). Unknown/empty country defaults to domestic so the cart preview
+// (before a shipping address is entered) matches prior behavior.
 export function resolveShippingZone(country?: string | null): ShippingZone {
   if (isDomesticCountry(country)) return "domestic";
   if (NORTH_AMERICA_COUNTRY_NAMES.has((country ?? "").trim().toLowerCase())) return "north_america";
   return "international";
+}
+
+// The store ships ONLY to the United States and Canada. Used to gate the
+// checkout country selector (UX) and to reject an out-of-area order on the
+// server (authoritative).
+export function isShippableCountry(country?: string | null): boolean {
+  return resolveShippingZone(country) !== "international";
 }
 
 export function roundMoney(value: number): number {

@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 // the sweep exercises the REAL coupon math. Hoisted above imports like vi.mock.
 vi.unmock("@/lib/coupons");
 
-import { calculateShipping, calculateTax, DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
+import { calculateShipping, calculateTax, isShippableCountry, DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount, DEFAULT_BULK_SAVINGS_CONFIG } from "@/lib/bulk-savings";
 import { resolveBestDiscount, type DiscountCandidate } from "@/lib/discount-resolution";
 import { calculateDiscountAmount, calculateCommissionAmount } from "@/lib/referral-service";
@@ -125,14 +125,16 @@ describe("shipping / tax / handling edge cases", () => {
     expect(calculateShipping(250, "United States")).toBe(0);
     expect(calculateShipping(249.99, "United States")).toBe(DEFAULT_SHIPPING_CONFIG.domesticFee);
   });
-  it("north-america rates apply for Canada/Mexico", () => {
+  it("Canada gets its own shipping zone", () => {
     expect(calculateShipping(100, "Canada")).toBe(DEFAULT_SHIPPING_CONFIG.northAmericaFee);
-    expect(calculateShipping(100, "Mexico")).toBe(DEFAULT_SHIPPING_CONFIG.northAmericaFee);
     expect(calculateShipping(DEFAULT_SHIPPING_CONFIG.northAmericaFreeShippingThreshold, "Canada")).toBe(0);
   });
-  it("international rates apply for overseas countries", () => {
-    expect(calculateShipping(100, "Germany")).toBe(DEFAULT_SHIPPING_CONFIG.internationalFee);
-    expect(calculateShipping(600, "Germany")).toBe(0);
+  it("ships ONLY to the US and Canada", () => {
+    expect(isShippableCountry("United States")).toBe(true);
+    expect(isShippableCountry("Canada")).toBe(true);
+    expect(isShippableCountry("Mexico")).toBe(false);
+    expect(isShippableCountry("Germany")).toBe(false);
+    expect(isShippableCountry("")).toBe(true); // empty defaults to domestic (cart preview)
   });
   it("tax ignores a zero/negative rate", () => {
     expect(calculateTax(100, 0)).toBe(0);

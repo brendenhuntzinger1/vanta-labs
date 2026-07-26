@@ -47,22 +47,12 @@ type CheckoutForm = {
   billingCountry: string;
 };
 
-// A curated country list. "United States" matches isDomesticCountry() so it
-// gets the domestic shipping tier; everything else is international.
+// The store ships ONLY to the United States and Canada, so those are the only
+// selectable destinations. This is enforced again server-side (validateCustomer
+// -> isShippableCountry) so a tampered client can't check out elsewhere.
 const COUNTRY_OPTIONS = [
   "United States",
   "Canada",
-  "United Kingdom",
-  "Australia",
-  "Germany",
-  "France",
-  "Netherlands",
-  "Spain",
-  "Italy",
-  "Ireland",
-  "New Zealand",
-  "Mexico",
-  "Other",
 ];
 
 const US_STATE_OPTIONS = [
