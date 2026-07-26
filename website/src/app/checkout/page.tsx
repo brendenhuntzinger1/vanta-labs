@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
+import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
@@ -150,12 +151,14 @@ export default function CheckoutPage() {
     referralSuccess,
     applyReferralCode,
     clearReferralCode,
+    isApplyingReferral,
     couponCode,
     couponDetails,
     couponError,
     couponSuccess,
     applyCouponCode,
     clearCouponCode,
+    isApplyingCoupon,
     isBuy3Get1FreeActive,
     isSignedIn,
     pointsBalance,
@@ -288,6 +291,14 @@ export default function CheckoutPage() {
   // on `total`/`subtotal` would re-dispatch every time the shopper edits points,
   // country, or shipping, inflating the funnel.
   const beganCheckoutRef = useRef(false);
+  // Synchronous double-submit latch. `isSubmitting` is React state and only
+  // flips true on the next render, so two clicks in the same tick could both
+  // pass the state check and create two orders (each taking an inventory hold).
+  // This ref updates immediately, closing that window.
+  const submitLatchRef = useRef(false);
+  // Lets a failed validation scroll the shopper back up to the form fields
+  // (with their inline errors) instead of leaving them at the submit button.
+  const shippingSectionRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (typeof window === "undefined" || beganCheckoutRef.current || items.length === 0) {
       return;
@@ -365,6 +376,9 @@ export default function CheckoutPage() {
     if (Object.keys(errors).length > 0) {
       setFormErrors(errors);
       setCheckoutMessage("Please complete all required fields before placing your order.");
+      // Bring the shopper back to the fields (and their inline errors); on a
+      // long mobile form the generic message sits below the fold otherwise.
+      shippingSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
       return;
     }
 
@@ -373,7 +387,8 @@ export default function CheckoutPage() {
       return;
     }
 
-    if (isSubmitting) return;
+    if (isSubmitting || submitLatchRef.current) return;
+    submitLatchRef.current = true;
 
     setCheckoutState("loading");
     setCheckoutMessage(null);
@@ -449,6 +464,7 @@ export default function CheckoutPage() {
       setCheckoutMessage(error instanceof Error ? error.message : "Checkout could not be created.");
     } finally {
       setIsSubmitting(false);
+      submitLatchRef.current = false;
     }
   };
 
@@ -511,7 +527,7 @@ export default function CheckoutPage() {
         </section>
 
         <div className="mt-7 grid gap-7 lg:grid-cols-[1.05fr_0.95fr]">
-          <section className="border border-white/10 p-5 sm:p-7">
+          <section ref={shippingSectionRef} className="border border-white/10 p-5 sm:p-7">
             <div>
               <p className="vl2-eyebrow">Shipping Information</p>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
@@ -644,7 +660,7 @@ export default function CheckoutPage() {
               ) : (
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                   <input type="text" value={effectiveReferralInput} onChange={(event) => setReferralInput(event.target.value)} aria-label="Referral code" placeholder="VANTA10" className="w-full flex-1 border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/60 outline-none transition focus:border-white/50" />
-                  <button type="button" onClick={() => applyReferralCode(effectiveReferralInput)} className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm">Apply</button>
+                  <button type="button" onClick={() => applyReferralCode(effectiveReferralInput)} disabled={isApplyingReferral} className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm disabled:opacity-60">{isApplyingReferral ? "Applying…" : "Apply"}</button>
                 </div>
               )}
 
@@ -678,7 +694,7 @@ export default function CheckoutPage() {
               ) : (
                 <div className="mt-3 flex flex-col gap-2 sm:flex-row">
                   <input type="text" value={effectiveCouponInput} onChange={(event) => setCouponInput(event.target.value)} aria-label="Coupon code" placeholder="SAVE10" className="w-full flex-1 border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/60 outline-none transition focus:border-white/50" />
-                  <button type="button" onClick={() => applyCouponCode(effectiveCouponInput)} className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm">Apply</button>
+                  <button type="button" onClick={() => applyCouponCode(effectiveCouponInput)} disabled={isApplyingCoupon} className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm disabled:opacity-60">{isApplyingCoupon ? "Applying…" : "Apply"}</button>
                 </div>
               )}
 
@@ -911,7 +927,7 @@ export default function CheckoutPage() {
             {checkoutMessage ? <p className="mt-3 text-sm text-white/65">{checkoutMessage}</p> : null}
 
             <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-              {["Visa", "Mastercard", "Amex", "Discover", "Apple Pay"].map((brand) => (
+              {["Visa", "Mastercard", "Amex", "Discover", ...(EXPRESS_CHECKOUT_ENABLED ? ["Apple Pay"] : [])].map((brand) => (
                 <span key={brand} className="rounded-md border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/60">{brand}</span>
               ))}
             </div>

@@ -7,6 +7,7 @@ import Image from "next/image";
 import { formatCartCurrency, useCart, getShippingProgress } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
+import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 
 export function CartDrawer() {
   const router = useRouter();
@@ -372,21 +373,26 @@ export function CartDrawer() {
             </div>
           </div>
           <div className="space-y-3">
-            <p className="text-center text-[10px] uppercase tracking-[0.22em] text-zinc-500">Express checkout</p>
             {/* Apple Pay express slot. Modular: a payment processor's Apple Pay
-                handler plugs in here later; until one is connected it routes to
-                the full checkout so the flow always works. */}
-            <button
-              type="button"
-              onClick={handleContinueToCheckout}
-              aria-label="Apple Pay express checkout"
-              className="vl-focus-ring w-full rounded-full bg-white px-4 py-3 text-center text-sm font-semibold text-black transition hover:bg-white/90"
-            >
-              Apple Pay
-            </button>
-            <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.22em] text-zinc-600">
-              <span className="h-px flex-1 bg-zinc-800" />or<span className="h-px flex-1 bg-zinc-800" />
-            </div>
+                handler plugs in here later. Hidden until EXPRESS_CHECKOUT_ENABLED
+                so we never show a button that looks like one-tap Apple Pay but
+                actually just opens the normal checkout form. */}
+            {EXPRESS_CHECKOUT_ENABLED ? (
+              <>
+                <p className="text-center text-[10px] uppercase tracking-[0.22em] text-zinc-500">Express checkout</p>
+                <button
+                  type="button"
+                  onClick={handleContinueToCheckout}
+                  aria-label="Apple Pay express checkout"
+                  className="vl-focus-ring w-full rounded-full bg-white px-4 py-3 text-center text-sm font-semibold text-black transition hover:bg-white/90"
+                >
+                  Apple Pay
+                </button>
+                <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.22em] text-zinc-600">
+                  <span className="h-px flex-1 bg-zinc-800" />or<span className="h-px flex-1 bg-zinc-800" />
+                </div>
+              </>
+            ) : null}
             <button
               type="button"
               onClick={handleContinueToCheckout}
@@ -407,7 +413,7 @@ export function CartDrawer() {
               </button>
             ) : null}
             <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
-              {["Visa", "Mastercard", "Amex", "Discover", "Apple Pay"].map((brand) => (
+              {["Visa", "Mastercard", "Amex", "Discover", ...(EXPRESS_CHECKOUT_ENABLED ? ["Apple Pay"] : [])].map((brand) => (
                 <span key={brand} className="rounded border border-zinc-700 bg-zinc-900/60 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-500">{brand}</span>
               ))}
             </div>
