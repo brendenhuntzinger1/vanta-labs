@@ -33,6 +33,7 @@ function ProductsPageContent() {
   const [selectedCategory, setSelectedCategory] = useState(() => searchParams.get("category") ?? "All");
   const [imageOverrides, setImageOverrides] = useState<Record<string, string>>({});
   const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [stockFilter, setStockFilter] = useState(false);
   const [bestSellersOnly, setBestSellersOnly] = useState(false);
   const { addToCart } = useCart();
@@ -68,11 +69,18 @@ function ProductsPageContent() {
       .then((json) => {
         if (json?.success && Array.isArray(json.products)) {
           setProducts(json.products as Product[]);
+          setLoadError(false);
         } else {
           setProducts([]);
+          setLoadError(true);
         }
       })
-      .catch(() => setProducts([]))
+      .catch(() => {
+        // Distinguish a real load failure from an empty catalog so the page can
+        // show a retry instead of a misleading "no products" state.
+        setProducts([]);
+        setLoadError(true);
+      })
       .finally(() => setIsLoading(false));
   }, []);
 
@@ -315,6 +323,20 @@ function ProductsPageContent() {
                   </div>
                 </div>
               ))}
+            </div>
+          ) : loadError ? (
+            <div className="border border-white/10 p-10 text-center">
+              <h2 className="vl2-serif text-xl text-white">We couldn&apos;t load the catalog</h2>
+              <p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-white/55">
+                Something went wrong reaching our servers. This is usually temporary — please try again.
+              </p>
+              <button
+                type="button"
+                onClick={() => window.location.reload()}
+                className="vl2-btn-primary vl-focus-ring mt-6 px-5 py-2.5 text-sm"
+              >
+                Try again
+              </button>
             </div>
           ) : visibleProducts.length === 0 ? (
             <div className="border border-white/10 p-10 text-center">

@@ -93,7 +93,7 @@ export function ReorderButton({ orderId }: { orderId: string }) {
         type="button"
         onClick={handleReorder}
         disabled={loading}
-        className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60"
+        className="vl-btn-secondary vl-focus-ring px-4 py-2 text-xs disabled:opacity-60"
       >
         {loading ? "Adding…" : "Reorder"}
       </button>
