@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
 import { grantMonthlyStoreCreditSweep, runMembershipBillingSweep } from "@/lib/membership-billing";
 import { runAbandonedCartSweep } from "@/lib/cart-recovery";
@@ -18,9 +19,14 @@ export const maxDuration = 60;
 // incorrect behavior.
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
-  const authHeader = request.headers.get("authorization");
-
-  if (!secret || authHeader !== `Bearer ${secret}`) {
+  const authHeader = request.headers.get("authorization") ?? "";
+  const expected = `Bearer ${secret ?? ""}`;
+  // Constant-time compare (consistent with admin-auth) so the secret can't be
+  // recovered by response-timing analysis.
+  const authorized = Boolean(secret)
+    && authHeader.length === expected.length
+    && timingSafeEqual(Buffer.from(authHeader), Buffer.from(expected));
+  if (!authorized) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
 

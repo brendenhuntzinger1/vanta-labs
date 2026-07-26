@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getRequestIpAddress } from "@/lib/admin-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 
 const ALLOWED_EVENTS = new Set([
@@ -86,6 +87,14 @@ export async function POST(request: Request) {
     // speed-bump used by contact/coupon-validate/back-in-stock. Fails open.
     const rate = await checkRateLimit(`analytics:${sessionId}`, 120, 60);
     if (!rate.allowed) {
+      return NextResponse.json({ success: false, error: "Too many requests" }, { status: 429 });
+    }
+    // S5: a per-session limit alone is bypassable by rotating the client-supplied
+    // sessionId, so also cap per IP. Generous ceiling so shared IPs (offices,
+    // carrier NAT) with many real visitors aren't blocked.
+    const ip = getRequestIpAddress(request) ?? "unknown";
+    const ipRate = await checkRateLimit(`analytics-ip:${ip}`, 600, 60);
+    if (!ipRate.allowed) {
       return NextResponse.json({ success: false, error: "Too many requests" }, { status: 429 });
     }
 

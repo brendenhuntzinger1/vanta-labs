@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getRequestIpAddress } from "@/lib/admin-auth";
+import { checkRateLimit } from "@/lib/rate-limit";
 import { uploadPaymentProof } from "@/lib/payment-proof-storage";
 import { sendEmail } from "@/lib/email/send";
 import { manualPaymentReceivedTemplate, newPaymentToVerifyTemplate } from "@/lib/email/templates";
@@ -20,6 +22,17 @@ export const maxDuration = 30;
 // the same request.
 export async function POST(request: Request) {
   try {
+    // S3: this endpoint is unauthenticated (order-UUID capability URL), uploads
+    // a file, and sends two emails. Throttle per IP before parsing the upload so
+    // it can't be used to spam proof submissions / emails or burn storage.
+    const ip = getRequestIpAddress(request) ?? "unknown";
+    const limit = await checkRateLimit(`submit-payment:${ip}`, 10, 60);
+    if (!limit.allowed) {
+      const res = NextResponse.json({ success: false, error: "Too many attempts. Please wait a moment and try again." }, { status: 429 });
+      res.headers.set("Retry-After", String(limit.retryAfterSeconds));
+      return res;
+    }
+
     const formData = await request.formData();
     const orderId = String(formData.get("orderId") ?? "").trim();
     const transactionId = String(formData.get("transactionId") ?? "").trim();
