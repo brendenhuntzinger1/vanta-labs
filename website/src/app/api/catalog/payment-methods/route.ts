@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getPaymentMethodsConfig, getCardProcessingFeeConfig } from "@/lib/admin-control";
 import { getEnabledPaymentMethods } from "@/lib/payment-methods";
+import { isCheckoutOpen } from "@/lib/payment-provider";
 
 export const dynamic = "force-dynamic";
 
@@ -18,8 +19,9 @@ export async function GET() {
       success: true,
       methods: getEnabledPaymentMethods(methods),
       cardProcessingFee,
+      checkoutOpen: isCheckoutOpen(),
     });
   } catch {
-    return NextResponse.json({ success: true, methods: [], cardProcessingFee: null });
+    return NextResponse.json({ success: true, methods: [], cardProcessingFee: null, checkoutOpen: isCheckoutOpen() });
   }
 }

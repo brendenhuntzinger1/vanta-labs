@@ -3,6 +3,7 @@ import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-serv
 import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { isCheckoutOpen } from "@/lib/payment-provider";
 import type { CustomerInput } from "@/lib/payment-types";
 
 function hasRequiredAcknowledgements(value: unknown) {
@@ -21,6 +22,22 @@ function hasRequiredAcknowledgements(value: unknown) {
 
 export async function POST(request: Request) {
   try {
+    // HARD SAFETY GATE: never create an order the store can't actually charge.
+    // Until a real payment path is live (CHECKOUT_ENABLED=true, or the mock
+    // gateway in dev), refuse checkout BEFORE any order row is written — no
+    // orphan orders, no false "confirmed" state. Browsing/cart/accounts are
+    // unaffected; only order creation is gated.
+    if (!isCheckoutOpen()) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Checkout is opening soon — we're finalizing secure payment setup. No charge was made and no order was placed. Please check back shortly.",
+          checkoutClosed: true,
+        },
+        { status: 503 },
+      );
+    }
+
     const body = await request.json();
 
     if (!hasRequiredAcknowledgements(body.complianceAcknowledgements)) {

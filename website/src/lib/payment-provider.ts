@@ -188,6 +188,19 @@ export function isMockPaymentMode(providerName?: string): boolean {
   return resolvePaymentProviderName(providerName) === "mock";
 }
 
+// Checkout is "open" only when the store can actually capture money: the mock
+// gateway (dev/test) OR an explicit CHECKOUT_ENABLED=true flag the owner sets
+// once a real payment path is live (a card processor wired into
+// LivePaymentProvider, or manual payment methods enabled). Default CLOSED so a
+// production store with no processor can NEVER accept an order it can't charge —
+// checkout refuses up front instead of creating an orphan, uncharged order.
+export function isCheckoutOpen(): boolean {
+  if (isMockPaymentMode()) {
+    return true;
+  }
+  return process.env.CHECKOUT_ENABLED === "true";
+}
+
 export function getPaymentProvider(providerName = process.env.PAYMENT_PROVIDER): PaymentProvider {
   if (resolvePaymentProviderName(providerName) === "mock") {
     return new MockPaymentProvider();

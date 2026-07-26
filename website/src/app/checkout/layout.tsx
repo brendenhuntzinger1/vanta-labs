@@ -1,8 +1,5 @@
 import { ReactNode } from "react";
 import type { Metadata } from "next";
-import { redirect } from "next/navigation";
-import { detectRoleFromUser } from "@/lib/auth-role";
-import { getAuthenticatedUser } from "@/lib/auth-session";
 
 export const dynamic = "force-dynamic";
 
@@ -13,16 +10,12 @@ export const metadata: Metadata = {
   robots: { index: false, follow: false },
 };
 
-// Checkout requires a signed-in customer account (guest checkout is off).
-// Browsing the store stays open to everyone; only the checkout is gated, so
-// SEO and product discovery are unaffected. Unauthenticated shoppers are sent
-// to sign in and returned to checkout afterward.
-export default async function CheckoutLayout({ children }: { children: ReactNode }) {
-  const user = await getAuthenticatedUser();
-
-  if (!user || detectRoleFromUser(user) !== "customer") {
-    redirect("/account/login?next=/checkout");
-  }
-
+// GUEST CHECKOUT is enabled: checkout is open to everyone. A signed-in customer
+// gets their order tied to their account (and locked to their account email);
+// a guest checks out with just the email they enter. Account-only perks (points,
+// store credit) are gated server-side on the authenticated customer id, so
+// guests simply can't use them — see /api/checkout/create-session. This layout
+// intentionally does NOT force a login (that previously blocked guest checkout).
+export default function CheckoutLayout({ children }: { children: ReactNode }) {
   return <>{children}</>;
 }

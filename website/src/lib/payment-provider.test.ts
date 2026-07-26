@@ -1,13 +1,41 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   LivePaymentProvider,
   MockPaymentProvider,
   getPaymentProvider,
+  isCheckoutOpen,
   isMockPaymentMode,
   resolvePaymentProviderName,
   signWebhookPayload,
   verifyWebhookSignatureImpl,
 } from "@/lib/payment-provider";
+
+describe("isCheckoutOpen (never accept an order the store can't charge)", () => {
+  const originalProvider = process.env.PAYMENT_PROVIDER;
+  const originalFlag = process.env.CHECKOUT_ENABLED;
+  afterEach(() => {
+    process.env.PAYMENT_PROVIDER = originalProvider;
+    process.env.CHECKOUT_ENABLED = originalFlag;
+  });
+
+  it("is CLOSED by default in live mode with no explicit flag", () => {
+    process.env.PAYMENT_PROVIDER = "live";
+    delete process.env.CHECKOUT_ENABLED;
+    expect(isCheckoutOpen()).toBe(false);
+  });
+
+  it("is OPEN in live mode only when CHECKOUT_ENABLED=true", () => {
+    process.env.PAYMENT_PROVIDER = "live";
+    process.env.CHECKOUT_ENABLED = "true";
+    expect(isCheckoutOpen()).toBe(true);
+  });
+
+  it("is OPEN in mock mode (dev/test gateway) regardless of the flag", () => {
+    process.env.PAYMENT_PROVIDER = "mock";
+    delete process.env.CHECKOUT_ENABLED;
+    expect(isCheckoutOpen()).toBe(true);
+  });
+});
 
 describe("payment provider selection (swap-by-config)", () => {
   it("returns the mock gateway for mock/test names", () => {

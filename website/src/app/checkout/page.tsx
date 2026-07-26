@@ -192,6 +192,10 @@ export default function CheckoutPage() {
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethodConfig[]>([]);
   const [cardFeeConfig, setCardFeeConfig] = useState<CardProcessingFeeConfig | null>(null);
   const [selectedMethodId, setSelectedMethodId] = useState<string>("");
+  // Whether the store can currently capture payment (server-authoritative; the
+  // API also hard-blocks order creation when closed). Assume open until the
+  // config loads so we never flash a false "closed" state.
+  const [checkoutOpen, setCheckoutOpen] = useState(true);
   const [createdOrder, setCreatedOrder] = useState<CreatedManualOrder | null>(null);
   const [referralInput, setReferralInput] = useState("");
   const [couponInput, setCouponInput] = useState("");
@@ -275,7 +279,9 @@ export default function CheckoutPage() {
           success: boolean;
           methods?: PaymentMethodConfig[];
           cardProcessingFee?: CardProcessingFeeConfig | null;
+          checkoutOpen?: boolean;
         };
+        setCheckoutOpen(result.checkoutOpen !== false);
         if (!result.success || !Array.isArray(result.methods)) return;
         const enabled = getEnabledPaymentMethods(result.methods);
         setPaymentMethods(enabled);
@@ -911,17 +917,29 @@ export default function CheckoutPage() {
               <span className="flex items-center gap-2"><span aria-hidden>⭐</span><span>Premium customer support</span></span>
             </div>
 
+            {!checkoutOpen ? (
+              <div className="mt-6 rounded-xl border border-amber-300/30 bg-amber-300/[0.06] p-4 text-sm text-amber-100/90" role="status">
+                <p className="font-semibold text-amber-100">Checkout is opening soon</p>
+                <p className="mt-1 text-amber-100/70">
+                  We&apos;re finalizing secure payment setup. You can browse and build your cart now —
+                  it&apos;ll be saved — and complete your order as soon as checkout opens. No charge is made until then.
+                </p>
+              </div>
+            ) : null}
+
             <button
               type="button"
               onClick={handleCheckout}
-              disabled={isSubmitting || items.length === 0}
+              disabled={isSubmitting || items.length === 0 || !checkoutOpen}
               className="vl2-btn-primary vl-focus-ring mt-6 w-full px-5 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {checkoutState === "loading"
-                ? "Creating secure checkout..."
-                : selectedMethod && selectedMethod.kind === "manual"
-                  ? `Continue to ${selectedMethod.label}`
-                  : "Continue to Secure Payment"}
+              {!checkoutOpen
+                ? "Checkout opening soon"
+                : checkoutState === "loading"
+                  ? "Creating secure checkout..."
+                  : selectedMethod && selectedMethod.kind === "manual"
+                    ? `Continue to ${selectedMethod.label}`
+                    : "Continue to Secure Payment"}
             </button>
 
             {checkoutMessage ? <p className="mt-3 text-sm text-white/65">{checkoutMessage}</p> : null}
