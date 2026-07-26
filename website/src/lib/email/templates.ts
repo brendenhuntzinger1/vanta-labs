@@ -213,6 +213,46 @@ export function orderConfirmationTemplate(input: {
   };
 }
 
+export function refundConfirmationTemplate(input: {
+  customerName: string;
+  orderId: string;
+  refundAmount: number;
+  isFullRefund: boolean;
+  supportEmail?: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.customerName || "there");
+  const kind = input.isFullRefund ? "full refund" : "partial refund";
+  const support = input.supportEmail ? escapeHtml(input.supportEmail) : null;
+  return {
+    subject: `Refund processed - ${input.orderId}`,
+    html: renderLayout({
+      preheader: `A ${kind} of ${money(input.refundAmount)} has been issued for order ${input.orderId}.`,
+      title: `Your refund has been processed`,
+      bodyHtml: `
+        <p>Hi ${name},</p>
+        <p>We've issued a <strong>${kind}</strong> for order <strong>${escapeHtml(input.orderId)}</strong>.</p>
+        <table role="presentation" width="100%" style="margin-top:12px;font-size:14px;">
+          <tr><td style="padding:10px 0 2px;border-top:1px solid rgba(255,255,255,0.1);color:#ffffff;font-weight:700;">Refund amount</td><td style="padding:10px 0 2px;border-top:1px solid rgba(255,255,255,0.1);text-align:right;color:#ffffff;font-weight:700;">${money(input.refundAmount)}</td></tr>
+        </table>
+        <p style="margin-top:16px;color:#a1a1aa;">Refunds are returned to your original payment method. Depending on your bank or card issuer, it can take 5–10 business days to appear on your statement.</p>
+        ${support ? `<p style="color:#a1a1aa;">Questions about this refund? Contact us at ${support}.</p>` : ""}
+      `,
+    }),
+    text: toText([
+      `Hi ${input.customerName || "there"},`,
+      "",
+      `We've issued a ${kind} for order ${input.orderId}.`,
+      "",
+      `Refund amount: ${money(input.refundAmount)}`,
+      "",
+      "Refunds are returned to your original payment method and can take 5-10 business days to appear.",
+      support ? `Questions? Contact ${input.supportEmail}.` : null,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 function paymentMethodLabel(method: string) {
   switch (method) {
     case "card":

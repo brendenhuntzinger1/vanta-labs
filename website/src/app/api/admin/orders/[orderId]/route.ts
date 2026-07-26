@@ -3,7 +3,7 @@ import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest
 import { canManageRefunds } from "@/lib/admin-roles";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
-import { deliveryConfirmationTemplate, orderConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
+import { deliveryConfirmationTemplate, orderConfirmationTemplate, refundConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { updateCommissionOnRefund } from "@/lib/payment-webhook";
 import { restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
@@ -363,6 +363,19 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         } catch {
           // Best-effort; never block the refund.
         }
+      }
+
+      // Tell the customer their refund was processed. Best-effort — a mail
+      // failure must never roll back a completed refund (it's queued/retried by
+      // the email layer). Reports THIS event's amount and full/partial nature.
+      if (order.customer_email) {
+        const refundEmail = refundConfirmationTemplate({
+          customerName: String(order.customer_name ?? ""),
+          orderId: String(order.order_number ?? orderId),
+          refundAmount: requestedAmount,
+          isFullRefund,
+        });
+        void sendEmail({ to: String(order.customer_email), ...refundEmail });
       }
 
       const { error: auditError } = await supabaseAdmin

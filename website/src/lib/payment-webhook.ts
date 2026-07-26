@@ -4,7 +4,7 @@ import type { OrderStatus } from "@/lib/payment-types";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
 import { enqueueFailedEmail } from "@/lib/email/retry-queue";
-import { commissionEarnedTemplate, orderConfirmationTemplate } from "@/lib/email/templates";
+import { commissionEarnedTemplate, orderConfirmationTemplate, refundConfirmationTemplate } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
 import { redeemCoupon } from "@/lib/coupons";
 import { calculateEarnedPoints, getActivePointsMultiplier, getActivePointsPerDollar, recordPointsLedgerEntry, redeemPoints, restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
@@ -1394,6 +1394,22 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           .eq("order_id", orderId);
       } catch (refundAmountError) {
         console.error("Unable to record refund amount for order", orderId, refundAmountError);
+      }
+      // Notify the customer their refund was processed (processor-initiated
+      // refunds previously sent nothing). Best-effort — never block webhook
+      // processing; sendEmail queues/retries on failure.
+      if (orderRecord?.customer_email) {
+        try {
+          const refundEmail = refundConfirmationTemplate({
+            customerName: String(orderRecord.customer_name ?? ""),
+            orderId: String(orderRecord.order_number ?? orderId),
+            refundAmount: refundOutcome.recordedRefundAmount,
+            isFullRefund: refundOutcome.isFullRefund,
+          });
+          await sendEmail({ to: String(orderRecord.customer_email), ...refundEmail });
+        } catch (refundEmailError) {
+          console.error("Unable to send refund confirmation email for order", orderId, refundEmailError);
+        }
       }
       try {
         await reverseOrderPoints(orderId);

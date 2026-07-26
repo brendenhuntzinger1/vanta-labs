@@ -98,14 +98,27 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
   // users land on it instead of the (inert) page behind it.
   const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!isVerified) {
-      dialogRef.current?.focus();
-    }
+    if (isVerified) return;
+    dialogRef.current?.focus();
+    // Lock body scroll so the (now server-rendered) content behind the overlay
+    // can't be scrolled or interacted with until the visitor confirms.
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
   }, [isVerified]);
 
-  if (!isVerified) {
-    return (
-      <div className="flex min-h-screen items-start justify-center overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.16),_transparent_55%),linear-gradient(135deg,_#020202_0%,_#111111_50%,_#050505_100%)] px-4 py-8 text-zinc-100 sm:items-center sm:px-6 sm:py-10">
+  // Always render the store content so search engines receive the real
+  // server-side HTML (the gate previously REPLACED all content, making every
+  // page look like the same "Are you 21?" panel to crawlers). For human
+  // visitors the gate is a fixed full-screen overlay on top of that content
+  // until they confirm; body scroll is locked so they can't interact behind it.
+  return (
+    <>
+      {children}
+      {!isVerified ? (
+      <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.16),_transparent_55%),linear-gradient(135deg,_#020202_0%,_#111111_50%,_#050505_100%)] px-4 py-8 text-zinc-100 sm:items-center sm:px-6 sm:py-10">
         <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_30%_20%,_rgba(242,201,76,0.10),_transparent_55%),radial-gradient(ellipse_at_80%_80%,_rgba(140,180,255,0.08),_transparent_50%)] opacity-70" />
         <div
           ref={dialogRef}
@@ -168,8 +181,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
           </button>
         </div>
       </div>
-    );
-  }
-
-  return <>{children}</>;
+      ) : null}
+    </>
+  );
 }
