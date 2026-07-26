@@ -541,12 +541,14 @@ export function ProductDetailClient({
                   <div className="mt-2 flex items-center gap-3">
                     <button
                       type="button"
+                      aria-label="Decrease quantity"
                       onClick={() => setQuantity((q) => Math.max(1, q - 1))}
                       className="inline-flex h-11 w-11 items-center justify-center border border-zinc-200 text-lg text-zinc-600 transition hover:border-zinc-400"
                     >−</button>
-                    <span className="text-sm text-[#111]">{quantity} vials</span>
+                    <span className="text-sm text-[#111]" aria-live="polite">{quantity} vials</span>
                     <button
                       type="button"
+                      aria-label="Increase quantity"
                       onClick={() => setQuantity((q) => Math.min(10, q + 1))}
                       className="inline-flex h-11 w-11 items-center justify-center border border-zinc-200 text-lg text-zinc-600 transition hover:border-zinc-400"
                     >+</button>

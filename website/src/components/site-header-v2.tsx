@@ -56,13 +56,20 @@ export function SiteHeaderV2() {
     }
   }, [searchOpen]);
 
-  // Lock the page behind the open mobile menu so the body doesn't scroll under it.
+  // Lock the page behind the open mobile menu so the body doesn't scroll under
+  // it, and let Escape close it (keyboard users can dismiss without tabbing to
+  // the toggle).
   useEffect(() => {
     if (!mobileNavOpen) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setMobileNavOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
     return () => {
       document.body.style.overflow = previous;
+      document.removeEventListener("keydown", onKeyDown);
     };
   }, [mobileNavOpen]);
 
