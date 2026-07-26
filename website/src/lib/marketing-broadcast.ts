@@ -68,18 +68,20 @@ export async function broadcastCouponAnnouncement(input: {
   let skipped = 0;
   let failed = 0;
 
+  // Load everyone who already received THIS coupon announcement in ONE query,
+  // instead of a per-recipient lookup inside the loop (was O(N) round-trips).
+  const { data: sentRows } = await supabaseAdmin
+    .from("email_send_log")
+    .select("recipient_email")
+    .eq("campaign_type", "coupon_announcement")
+    .eq("reference_id", input.coupon.id);
+  const alreadySent = new Set(
+    (sentRows ?? []).map((row) => String(row.recipient_email ?? "").trim().toLowerCase()),
+  );
+
   for (const email of emails) {
     // Don't re-announce the same coupon to someone who already got it.
-    const { data: already } = await supabaseAdmin
-      .from("email_send_log")
-      .select("id")
-      .eq("campaign_type", "coupon_announcement")
-      .eq("reference_id", input.coupon.id)
-      .eq("recipient_email", email)
-      .limit(1)
-      .maybeSingle();
-
-    if (already) {
+    if (alreadySent.has(email.trim().toLowerCase())) {
       skipped++;
       continue;
     }

@@ -26,10 +26,32 @@ export async function PATCH(request: Request, context: { params: Promise<{ tierI
     const body = await request.json();
     const update: Parameters<typeof updateCommissionTierRule>[1] = {};
 
+    // Validate numeric fields (finite + in range) BEFORE they reach payout
+    // math — mirrors the POST create-tier and per-partner endpoints, which both
+    // reject non-finite/out-of-range. Without this a manager could PATCH a tier
+    // to a 99% (or NaN) commission that flows straight into commission payouts.
     if (body?.name !== undefined) update.name = String(body.name);
-    if (body?.minMonthlySales !== undefined) update.minMonthlySales = Number(body.minMonthlySales);
-    if (body?.commissionPercent !== undefined) update.commissionPercent = Number(body.commissionPercent);
-    if (body?.position !== undefined) update.position = Number(body.position);
+    if (body?.minMonthlySales !== undefined) {
+      const v = Number(body.minMonthlySales);
+      if (!Number.isFinite(v) || v < 0) {
+        return NextResponse.json({ success: false, error: "Minimum monthly orders must be a non-negative number." }, { status: 400 });
+      }
+      update.minMonthlySales = v;
+    }
+    if (body?.commissionPercent !== undefined) {
+      const v = Number(body.commissionPercent);
+      if (!Number.isFinite(v) || v < 0 || v > 100) {
+        return NextResponse.json({ success: false, error: "Commission percent must be a number between 0 and 100." }, { status: 400 });
+      }
+      update.commissionPercent = v;
+    }
+    if (body?.position !== undefined) {
+      const v = Number(body.position);
+      if (!Number.isFinite(v) || v < 0) {
+        return NextResponse.json({ success: false, error: "Position must be a non-negative number." }, { status: 400 });
+      }
+      update.position = v;
+    }
     if (body?.isActive !== undefined) update.isActive = Boolean(body.isActive);
 
     await updateCommissionTierRule(tierId, update);

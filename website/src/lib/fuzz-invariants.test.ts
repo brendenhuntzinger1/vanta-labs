@@ -287,7 +287,6 @@ describe("fuzz: coverage summary", () => {
   it("reports the total number of randomized cases exercised", () => {
     // 10 properties × ITER, run above. Confirms the fuzzer actually ran.
     expect(CASES).toBeGreaterThanOrEqual(ITER * 9);
-    // eslint-disable-next-line no-console
     console.log(`\n  ✓ fuzz-invariants exercised ${CASES.toLocaleString()} randomized cases (seeded, reproducible)\n`);
   });
 });

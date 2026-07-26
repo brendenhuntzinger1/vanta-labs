@@ -43,8 +43,21 @@ export async function PATCH(request: Request) {
       ["birthday_bonus_points", body.birthdayBonusPoints],
     ];
 
-    for (const [key, value] of entries) {
-      if (value === undefined) continue;
+    // Points fields are written straight into the points_ledger for every new
+    // customer, so a NaN or absurd value would corrupt balances. Validate them
+    // (finite, 0..1,000,000) before storing — matches the ambassadors/settings
+    // pattern. The *_enabled fields are booleans and pass through.
+    const NUMERIC_KEYS = new Set(["signup_bonus_points", "referral_bonus_points", "birthday_bonus_points"]);
+    for (const [key, rawValue] of entries) {
+      if (rawValue === undefined) continue;
+      let value = rawValue;
+      if (NUMERIC_KEYS.has(key)) {
+        const n = Number(rawValue);
+        if (!Number.isFinite(n) || n < 0 || n > 1_000_000) {
+          return NextResponse.json({ success: false, error: `${key.replace(/_/g, " ")} must be a number between 0 and 1,000,000.` }, { status: 400 });
+        }
+        value = n;
+      }
       await upsertControlValue({
         section: "membership",
         key,

@@ -131,7 +131,12 @@ export async function adjustInventoryLine(input: { productId: string; doseId?: s
   let wasOutOfStock = false;
 
   if (input.quantity !== undefined) {
-    const quantity = Math.max(0, Math.round(input.quantity));
+    const q = Number(input.quantity);
+    if (!Number.isFinite(q)) {
+      // Reject non-numeric input rather than writing NaN into inventory_quantity.
+      throw new Error("Inventory quantity must be a valid number.");
+    }
+    const quantity = Math.max(0, Math.round(q));
     updatePayload.inventory_quantity = quantity;
     restockedTo = quantity;
 

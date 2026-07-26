@@ -199,9 +199,21 @@ export async function updateAdminCoupon(id: string, input: Partial<CouponInput>)
     if (!Number.isFinite(discountValue) || discountValue <= 0) {
       throw new Error("Discount value must be a positive number");
     }
-    // Same guard as createAdminCoupon: a percent coupon edited to e.g. 500
-    // would otherwise zero out merchandise while still charging tax/shipping.
-    if (input.discountType === "percent" && discountValue > 100) {
+    // Resolve the EFFECTIVE discount type — from this request if present, else
+    // the coupon's stored type — so editing ONLY the value can't slip a percent
+    // coupon past the >100 ceiling. (A percent coupon at 500 would zero out
+    // merchandise while still charging tax/shipping.) Previously the guard only
+    // ran when discountType was included in the same PATCH body.
+    let effectiveType = input.discountType;
+    if (!effectiveType) {
+      const { data: existing } = await supabaseAdmin
+        .from("coupons")
+        .select("discount_type")
+        .eq("id", id)
+        .maybeSingle();
+      effectiveType = existing?.discount_type === "percent" ? "percent" : "fixed";
+    }
+    if (effectiveType === "percent" && discountValue > 100) {
       throw new Error("Percent discounts cannot exceed 100");
     }
     updatePayload.discount_value = discountValue;

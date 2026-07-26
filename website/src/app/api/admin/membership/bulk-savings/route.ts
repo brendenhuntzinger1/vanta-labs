@@ -42,8 +42,22 @@ export async function PATCH(request: Request) {
       ["tier2_percent", body.tier2Percent],
     ];
 
-    for (const [key, value] of entries) {
-      if (value === undefined) continue;
+    // Validate numeric fields before they reach the discount math: thresholds
+    // must be finite & >= 0, percents finite & 0..100. Prevents a NaN/absurd
+    // value corrupting bulk-savings pricing.
+    const THRESHOLD_KEYS = new Set(["tier1_threshold", "tier2_threshold"]);
+    const PERCENT_KEYS = new Set(["tier1_percent", "tier2_percent"]);
+    for (const [key, rawValue] of entries) {
+      if (rawValue === undefined) continue;
+      let value = rawValue;
+      if (THRESHOLD_KEYS.has(key) || PERCENT_KEYS.has(key)) {
+        const n = Number(rawValue);
+        const max = PERCENT_KEYS.has(key) ? 100 : 10_000_000;
+        if (!Number.isFinite(n) || n < 0 || n > max) {
+          return NextResponse.json({ success: false, error: `${key.replace(/_/g, " ")} must be a number between 0 and ${max}.` }, { status: 400 });
+        }
+        value = n;
+      }
       await upsertControlValue({
         section: "bulk_savings",
         key,

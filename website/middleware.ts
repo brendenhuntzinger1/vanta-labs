@@ -98,21 +98,29 @@ async function fetchMaintenanceMode() {
     limit: "1",
   });
 
-  const response = await fetch(`${config.url}/rest/v1/admin_audit_logs?${query.toString()}`, {
-    headers: {
-      apikey: config.serviceRole,
-      Authorization: `Bearer ${config.serviceRole}`,
-    },
-    cache: "no-store",
-  });
+  try {
+    const response = await fetch(`${config.url}/rest/v1/admin_audit_logs?${query.toString()}`, {
+      headers: {
+        apikey: config.serviceRole,
+        Authorization: `Bearer ${config.serviceRole}`,
+      },
+      cache: "no-store",
+    });
 
-  if (!response.ok) {
+    if (!response.ok) {
+      return false;
+    }
+
+    const rows = (await response.json()) as Array<{ metadata?: { value?: unknown } }>;
+    const row = rows[0];
+    return row?.metadata?.value === true;
+  } catch {
+    // FAIL OPEN. This runs in middleware on EVERY request; an unhandled throw
+    // here (Supabase network blip, DNS, timeout) would 500 the entire site —
+    // every page and API route. Maintenance mode is the exceptional state, so
+    // default to "not in maintenance" (site stays up) when the check fails.
     return false;
   }
-
-  const rows = (await response.json()) as Array<{ metadata?: { value?: unknown } }>;
-  const row = rows[0];
-  return row?.metadata?.value === true;
 }
 
 async function isMaintenanceEnabled() {
@@ -147,23 +155,31 @@ async function isValidAdminSessionToken(token: string) {
     limit: "1",
   });
 
-  const response = await fetch(`${config.url}/rest/v1/admin_sessions?${query.toString()}`, {
-    headers: {
-      apikey: config.serviceRole,
-      Authorization: `Bearer ${config.serviceRole}`,
-    },
-    cache: "no-store",
-  });
+  try {
+    const response = await fetch(`${config.url}/rest/v1/admin_sessions?${query.toString()}`, {
+      headers: {
+        apikey: config.serviceRole,
+        Authorization: `Bearer ${config.serviceRole}`,
+      },
+      cache: "no-store",
+    });
 
-  if (!response.ok) {
+    if (!response.ok) {
+      sessionCache.set(token, { value: false, expiresAt: now + SESSION_CACHE_TTL_MS });
+      return false;
+    }
+
+    const rows = (await response.json()) as Array<{ id: string }>;
+    const valid = rows.length > 0;
+    sessionCache.set(token, { value: valid, expiresAt: now + SESSION_CACHE_TTL_MS });
+    return valid;
+  } catch {
+    // Fail closed for admin-session validation (deny), but never throw — a
+    // thrown fetch in middleware 500s the whole request. Cache the negative
+    // briefly so a Supabase blip doesn't hammer it on every request.
     sessionCache.set(token, { value: false, expiresAt: now + SESSION_CACHE_TTL_MS });
     return false;
   }
-
-  const rows = (await response.json()) as Array<{ id: string }>;
-  const valid = rows.length > 0;
-  sessionCache.set(token, { value: valid, expiresAt: now + SESSION_CACHE_TTL_MS });
-  return valid;
 }
 
 async function hasValidAdminSession(request: NextRequest) {
