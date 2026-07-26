@@ -12,7 +12,9 @@ export const FREE_SHIPPING_THRESHOLD = 250;
 export const DOMESTIC_SHIPPING_FEE = 15;
 export const INTERNATIONAL_FREE_SHIPPING_THRESHOLD = 600;
 export const INTERNATIONAL_SHIPPING_FEE = 60;
-// North America (Canada & Mexico) — a middle zone between US and overseas.
+// North America (Canada) — a middle zone between the US and overseas. Only the
+// US and Canada are shippable today; the international constants above are kept
+// for the zone model but every non-US/Canada country is rejected at checkout.
 export const NORTH_AMERICA_SHIPPING_FEE = 25;
 export const NORTH_AMERICA_FREE_SHIPPING_THRESHOLD = 400;
 

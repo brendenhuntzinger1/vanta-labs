@@ -179,6 +179,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
   const [bundleConfig, setBundleConfig] = useState<BundleConfig>(DEFAULT_BUNDLE_CONFIG);
   const [taxRatePercent, setTaxRatePercent] = useState(0);
+  // Admin-configurable referral customer-discount percent, loaded from the same
+  // /api/catalog/promotions config the server uses. Defaults to 10 (matches the
+  // server default) until config loads, so the client preview always mirrors the
+  // authoritative server discount — a hardcoded value here would trip the
+  // anti-tamper "Altered total" guard the moment an admin changed the percent.
+  const [referralDiscountPercent, setReferralDiscountPercent] = useState(10);
   const [shippingConfig, setShippingConfig] = useState<ShippingConfig>(DEFAULT_SHIPPING_CONFIG);
   const [isEligibleForBulkSavings, setIsEligibleForBulkSavings] = useState(false);
   const [bulkSavingsConfig, setBulkSavingsConfig] = useState<BulkSavingsConfig>(DEFAULT_BULK_SAVINGS_CONFIG);
@@ -250,12 +256,15 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; taxRatePercent?: number; shippingConfig?: ShippingConfig };
+        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; taxRatePercent?: number; shippingConfig?: ShippingConfig; referralDiscountPercent?: number };
         if (result.success) {
           setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
           if (result.bundleConfig) setBundleConfig(result.bundleConfig);
           setTaxRatePercent(Number(result.taxRatePercent ?? 0) || 0);
           if (result.shippingConfig) setShippingConfig(result.shippingConfig);
+          if (Number.isFinite(result.referralDiscountPercent)) {
+            setReferralDiscountPercent(Number(result.referralDiscountPercent));
+          }
         }
       } catch {
         // Defaults to disabled (matches the server's default) if this fails.
@@ -456,7 +465,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
         setReferralDetails({
           code: validatedReferral.referralCode,
-          customerDiscountPercent: validatedReferral.discountPercent,
+          customerDiscountPercent: referralDiscountPercent,
           ambassadorName: validatedReferral.ambassadorName,
           ambassadorId: validatedReferral.ambassadorId,
           commissionPercent: validatedReferral.commissionPercent,
@@ -562,10 +571,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       return { type: "buy3get1" as const, amount: buy3Get1FreeDiscount };
     }
     if (referralDetails && isReferralValid(referralDetails)) {
-      return { type: "referral" as const, amount: subtotal * (referralDetails.customerDiscountPercent / 100) };
+      // Use the LIVE admin-configured percent (not a value snapshotted into
+      // referralDetails at apply-time) so the preview can never drift from the
+      // server's charge even if config finished loading after the code was set.
+      return { type: "referral" as const, amount: subtotal * (referralDiscountPercent / 100) };
     }
     return { type: "coupon" as const, amount: couponDiscountAmount };
-  }, [buy3Get1FreeDiscount, referralDetails, subtotal, couponDiscountAmount]);
+  }, [buy3Get1FreeDiscount, referralDetails, subtotal, couponDiscountAmount, referralDiscountPercent]);
 
   // The elite "Exclusive Buy In Bulk Savings" benefit cannot stack with
   // anything else - it competes with whatever the customer would otherwise
@@ -842,7 +854,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
       const details: ReferralCode = {
         code: validatedReferral.referralCode,
-        customerDiscountPercent: validatedReferral.discountPercent,
+        customerDiscountPercent: referralDiscountPercent,
         ambassadorName: validatedReferral.ambassadorName,
         ambassadorId: validatedReferral.ambassadorId,
         commissionPercent: validatedReferral.commissionPercent,
@@ -851,7 +863,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       setReferralDetails(details);
       setReferralCode(validatedReferral.referralCode);
       setReferralError(null);
-      setReferralSuccess("Referral code applied — 10% off.");
+      setReferralSuccess(`Referral code applied — ${referralDiscountPercent}% off.`);
       setCouponCode(null);
       setCouponDetails(null);
       setCouponError(null);
