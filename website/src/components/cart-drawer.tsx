@@ -6,6 +6,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { formatCartCurrency, useCart, getShippingProgress } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
+import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 
 export function CartDrawer() {
   const router = useRouter();
@@ -16,6 +17,9 @@ export function CartDrawer() {
     isCartOpen,
     isHydrated,
     bundleConfig,
+    shippingProtectionEnabled,
+    setShippingProtectionEnabled,
+    shippingProtectionFee,
     closeCart,
     updateQuantity,
     removeFromCart,
@@ -322,6 +326,25 @@ export function CartDrawer() {
             </div>
           )}
 
+          {subtotal > 0 ? (
+            <label className="vl-panel-soft flex cursor-pointer items-start justify-between gap-3 rounded-[1.25rem] p-4">
+              <span className="flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  checked={shippingProtectionEnabled}
+                  onChange={(e) => setShippingProtectionEnabled(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 accent-emerald-500"
+                  aria-label="Add shipping protection"
+                />
+                <span className="text-sm">
+                  <span className="block font-medium text-white">Shipping Protection</span>
+                  <span className="block text-xs text-zinc-500">Covers loss, theft, or damage in transit.</span>
+                </span>
+              </span>
+              <span className="whitespace-nowrap text-sm text-zinc-300">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>
+            </label>
+          ) : null}
+
           <div className="vl-panel-soft rounded-[1.25rem] p-4 text-sm text-zinc-300">
             <div className="flex justify-between">
               <span>Subtotal</span>
@@ -332,9 +355,15 @@ export function CartDrawer() {
               <span>{formatCartCurrency(shipping)}</span>
             </div>
             {discountAmount > 0 ? (
-              <div className="mt-2 flex justify-between">
-                <span>Applied discount</span>
+              <div className="mt-2 flex justify-between text-emerald-400">
+                <span>You saved</span>
                 <span>-{formatCartCurrency(discountAmount)}</span>
+              </div>
+            ) : null}
+            {shippingProtectionFee > 0 ? (
+              <div className="mt-2 flex justify-between">
+                <span>Shipping protection</span>
+                <span>+{formatCartCurrency(shippingProtectionFee)}</span>
               </div>
             ) : null}
             <div className="mt-3 flex justify-between border-t border-zinc-800 pt-3 text-base font-semibold text-white">
@@ -342,13 +371,28 @@ export function CartDrawer() {
               <span>{formatCartCurrency(total)}</span>
             </div>
           </div>
-          <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="space-y-3">
+            <p className="text-center text-[10px] uppercase tracking-[0.22em] text-zinc-500">Express checkout</p>
+            {/* Apple Pay express slot. Modular: a payment processor's Apple Pay
+                handler plugs in here later; until one is connected it routes to
+                the full checkout so the flow always works. */}
             <button
               type="button"
               onClick={handleContinueToCheckout}
-              className="vl-btn-primary vl-focus-ring flex-1 px-4 py-3 text-center text-sm"
+              aria-label="Apple Pay express checkout"
+              className="vl-focus-ring w-full rounded-full bg-white px-4 py-3 text-center text-sm font-semibold text-black transition hover:bg-white/90"
             >
-              Continue to checkout
+              Apple Pay
+            </button>
+            <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.22em] text-zinc-600">
+              <span className="h-px flex-1 bg-zinc-800" />or<span className="h-px flex-1 bg-zinc-800" />
+            </div>
+            <button
+              type="button"
+              onClick={handleContinueToCheckout}
+              className="vl-btn-primary vl-focus-ring w-full px-4 py-3 text-center text-sm"
+            >
+              Proceed to checkout
             </button>
             {referralCode ? (
               <button
@@ -357,11 +401,16 @@ export function CartDrawer() {
                   clearReferralCode();
                   setReferralInput("");
                 }}
-                className="vl-btn-secondary vl-focus-ring rounded-full px-4 py-3 text-sm"
+                className="vl-btn-secondary vl-focus-ring w-full rounded-full px-4 py-2.5 text-sm"
               >
                 Remove code
               </button>
             ) : null}
+            <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
+              {["Visa", "Mastercard", "Amex", "Discover", "Apple Pay"].map((brand) => (
+                <span key={brand} className="rounded border border-zinc-700 bg-zinc-900/60 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-500">{brand}</span>
+              ))}
+            </div>
           </div>
         </div>
       </div>
