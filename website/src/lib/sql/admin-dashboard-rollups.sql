@@ -138,3 +138,102 @@ as $$
 $$;
 
 grant execute on function public.admin_customer_rollup(text, int, int) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Operations summary customer counts + live sales (mirrors partner-portal.ts
+-- getAdminOperationsSummary). new/returning are computed by grouping PAID orders
+-- on the RAW customer_email (matches the JS map key — no lower/trim). Live sales
+-- sum GROSS amount_paid (not net of refund), matching the JS reduce.
+-- ---------------------------------------------------------------------------
+create or replace function public.admin_ops_summary(
+  p_today_start timestamptz,
+  p_month_start timestamptz
+)
+returns table (
+  live_sales_today numeric,
+  live_sales_month numeric,
+  new_customers bigint,
+  returning_customers bigint,
+  total_customers bigint
+)
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  with per_customer as (
+    select customer_email, count(*) as cnt
+    from public.orders
+    where payment_status = 'paid' and customer_email is not null
+    group by customer_email
+  )
+  select
+    coalesce((select sum(coalesce(amount_paid, 0)) from public.orders where payment_status = 'paid' and created_at >= p_today_start), 0) as live_sales_today,
+    coalesce((select sum(coalesce(amount_paid, 0)) from public.orders where payment_status = 'paid' and created_at >= p_month_start), 0) as live_sales_month,
+    coalesce((select count(*) from per_customer where cnt = 1), 0) as new_customers,
+    coalesce((select count(*) from per_customer where cnt > 1), 0) as returning_customers,
+    coalesce((select count(*) from per_customer), 0) as total_customers;
+$$;
+
+grant execute on function public.admin_ops_summary(timestamptz, timestamptz) to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Total outstanding points (mirrors admin-membership.ts getMembershipAnalytics
+-- totalPointsOutstanding = sum of every points_ledger.amount).
+-- ---------------------------------------------------------------------------
+create or replace function public.admin_points_outstanding()
+returns numeric
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select coalesce(sum(amount), 0) from public.points_ledger;
+$$;
+
+grant execute on function public.admin_points_outstanding() to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Bulk-savings tier stats (mirrors admin-membership.ts getBulkSavingsStats).
+-- Revenue in cents = sum(round(amount_paid * 100)) per tier, matching the JS.
+-- ---------------------------------------------------------------------------
+create or replace function public.admin_bulk_savings_stats()
+returns table (
+  tier text,
+  orders bigint,
+  revenue_cents numeric
+)
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select
+    bulk_discount_tier as tier,
+    count(*) as orders,
+    coalesce(sum(round(coalesce(amount_paid, 0) * 100)), 0) as revenue_cents
+  from public.orders
+  where bulk_discount_tier is not null
+  group by bulk_discount_tier;
+$$;
+
+grant execute on function public.admin_bulk_savings_stats() to service_role;
+
+-- ---------------------------------------------------------------------------
+-- Supporting indexes for the aggregations above. IF NOT EXISTS = safe re-run.
+-- ---------------------------------------------------------------------------
+-- Speeds the customer-rollup "latest order per email" DISTINCT ON and the
+-- per-email grouping (functional index matches lower(trim(customer_email))).
+create index if not exists idx_orders_email_lower_created
+  on public.orders (lower(trim(customer_email)), created_at desc)
+  where customer_email is not null;
+
+-- Bulk-savings stats only touch the small subset of orders that carry a tier.
+create index if not exists idx_orders_bulk_tier
+  on public.orders (bulk_discount_tier)
+  where bulk_discount_tier is not null;
+
+-- Ops-summary live-sales windows filter paid orders by created_at.
+create index if not exists idx_orders_paid_created
+  on public.orders (created_at)
+  where payment_status = 'paid';

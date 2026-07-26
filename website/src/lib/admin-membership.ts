@@ -241,13 +241,34 @@ export interface CustomerBalanceRow {
   pointsBalance: number;
 }
 
-// Uses the Supabase auth admin API to resolve emails since points_ledger /
-// customer_memberships only store user_id. listUsers() is paginated (up to
-// 1000/page here) - fine for an early-stage store, but this will need a
-// proper email index if the customer base grows well beyond that.
+// Pages through the Supabase auth admin API to collect ALL users (not just the
+// first 1000). Bounded by a page cap so a runaway can't loop forever; logs if
+// it hits the cap so the omission is visible rather than silent.
+type AuthUser = Awaited<ReturnType<typeof supabaseAdmin.auth.admin.listUsers>>["data"]["users"][number];
+async function listAllAuthUsers(): Promise<AuthUser[]> {
+  const PER_PAGE = 1000;
+  const MAX_PAGES = 100; // 100k users backstop
+  const all: AuthUser[] = [];
+  let page = 1;
+  for (; page <= MAX_PAGES; page++) {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: PER_PAGE });
+    if (error) break;
+    const users = data?.users ?? [];
+    all.push(...users);
+    if (users.length < PER_PAGE) break;
+  }
+  if (page > MAX_PAGES) {
+    console.warn(`listAllAuthUsers: stopped paging at ${MAX_PAGES} pages; some users may be omitted.`);
+  }
+  return all;
+}
+
+// Resolves emails via the auth admin API since points_ledger /
+// customer_memberships only store user_id. Pages through ALL users so balances
+// aren't silently capped at the first 1000 as the customer base grows.
 export async function listCustomerBalances(search?: string): Promise<CustomerBalanceRow[]> {
-  const [{ data: authUsers }, { data: ledgerRows, error: ledgerError }, { data: memberships, error: membershipError }] = await Promise.all([
-    supabaseAdmin.auth.admin.listUsers({ perPage: 1000 }),
+  const [authUsersAll, { data: ledgerRows, error: ledgerError }, { data: memberships, error: membershipError }] = await Promise.all([
+    listAllAuthUsers(),
     supabaseAdmin.from("points_ledger").select("user_id, amount"),
     supabaseAdmin.from("customer_memberships").select("user_id, status, membership_tiers(name)"),
   ]);
@@ -270,7 +291,7 @@ export async function listCustomerBalances(search?: string): Promise<CustomerBal
     });
   }
 
-  const customerUsers = (authUsers?.users ?? []).filter((user) => {
+  const customerUsers = authUsersAll.filter((user) => {
     const role = String(user.app_metadata?.role ?? user.user_metadata?.role ?? "").toLowerCase();
     return role === "customer";
   });
@@ -378,7 +399,7 @@ export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
 
   const [
     { data: memberships, error: membershipError },
-    { data: ledgerRows, error: ledgerError },
+    pointsRpc,
     { data: events, error: eventsError },
     { data: introMembers, error: introError },
     { data: billingEvents30d, error: billingEventsError },
@@ -387,7 +408,9 @@ export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
       .from("customer_memberships")
       .select("status, billing_cycle, membership_tiers(name, monthly_price_cents, annual_price_cents)")
       .eq("status", "active"),
-    supabaseAdmin.from("points_ledger").select("amount"),
+    // Sum outstanding points in Postgres instead of scanning the whole ledger
+    // (the fastest-growing table). Falls back to the scan if the RPC is absent.
+    supabaseAdmin.rpc("admin_points_outstanding"),
     supabaseAdmin
       .from("promotional_point_events")
       .select("id")
@@ -401,7 +424,6 @@ export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
   ]);
 
   if (membershipError) throw membershipError;
-  if (ledgerError) throw ledgerError;
   if (eventsError) throw eventsError;
   if (introError) throw introError;
   if (billingEventsError) throw billingEventsError;
@@ -421,7 +443,15 @@ export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
     }
   }
 
-  const totalPointsOutstanding = (ledgerRows ?? []).reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+  let totalPointsOutstanding: number;
+  if (!pointsRpc.error && pointsRpc.data != null) {
+    totalPointsOutstanding = Number(pointsRpc.data);
+  } else {
+    // Fallback: RPC absent — scan the ledger and sum in JS (identical result).
+    const { data: ledgerRows, error: ledgerError } = await supabaseAdmin.from("points_ledger").select("amount");
+    if (ledgerError) throw ledgerError;
+    totalPointsOutstanding = (ledgerRows ?? []).reduce((sum, row) => sum + Number(row.amount ?? 0), 0);
+  }
 
   const events30d = billingEvents30d ?? [];
   const introAttempts = events30d.filter((row) => row.event_type === "intro_charge" || row.event_type === "first_month_remainder");
@@ -453,19 +483,38 @@ export interface BulkSavingsStats {
 }
 
 export async function getBulkSavingsStats(): Promise<BulkSavingsStats> {
-  const { data, error } = await supabaseAdmin
-    .from("orders")
-    .select("bulk_discount_tier, amount_paid")
-    .not("bulk_discount_tier", "is", null);
-
-  if (error) throw error;
-
   const stats: BulkSavingsStats = {
     tier5PercentOrders: 0,
     tier5PercentRevenueCents: 0,
     tier12PercentOrders: 0,
     tier12PercentRevenueCents: 0,
   };
+
+  // Aggregate per tier in Postgres. Falls back to the full-table JS scan if the
+  // RPC isn't migrated yet — see src/lib/sql/admin-dashboard-rollups.sql.
+  const rpc = await supabaseAdmin.rpc("admin_bulk_savings_stats");
+  if (!rpc.error && Array.isArray(rpc.data)) {
+    for (const row of rpc.data as Array<Record<string, unknown>>) {
+      const tier = String(row.tier ?? "");
+      const orders = Number(row.orders ?? 0);
+      const revenueCents = Number(row.revenue_cents ?? 0);
+      if (tier === "5_percent") {
+        stats.tier5PercentOrders = orders;
+        stats.tier5PercentRevenueCents = revenueCents;
+      } else if (tier === "12_percent") {
+        stats.tier12PercentOrders = orders;
+        stats.tier12PercentRevenueCents = revenueCents;
+      }
+    }
+    return stats;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .select("bulk_discount_tier, amount_paid")
+    .not("bulk_discount_tier", "is", null);
+
+  if (error) throw error;
 
   for (const row of data ?? []) {
     const amountCents = Math.round(Number(row.amount_paid ?? 0) * 100);

@@ -1106,26 +1106,63 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
   const monthStart = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)).toISOString();
 
   const [
-    { data: todayOrders, error: todayError },
-    { data: monthOrders, error: monthError },
-    { data: allPaidOrders, error: paidError },
+    opsRpc,
     { data: inventoryRows, error: inventoryError },
     { data: shipmentRows, error: shipmentError },
     { data: couponRows, error: couponError },
     { data: notificationRows, error: notificationError },
   ] = await Promise.all([
-    supabaseAdmin.from("orders").select("amount_paid").eq("payment_status", "paid").gte("created_at", todayStart),
-    supabaseAdmin.from("orders").select("amount_paid").eq("payment_status", "paid").gte("created_at", monthStart),
-    supabaseAdmin.from("orders").select("customer_email").eq("payment_status", "paid"),
+    // Live sales + new/returning customer counts aggregated in Postgres (no
+    // unbounded scan of every paid order into the app). Falls back below if the
+    // RPC isn't migrated yet — see src/lib/sql/admin-dashboard-rollups.sql.
+    supabaseAdmin.rpc("admin_ops_summary", { p_today_start: todayStart, p_month_start: monthStart }),
     supabaseAdmin.from("products").select("inventory_quantity, stock_status, low_stock_threshold").eq("is_archived", false),
     supabaseAdmin.from("order_shipments").select("shipping_status").neq("shipping_status", "delivered"),
     supabaseAdmin.from("coupons").select("id").eq("active", true),
     supabaseAdmin.from("notification_queue").select("id").eq("status", "pending"),
   ]);
 
-  assertNoSupabaseError("orders.select(live sales today)", todayError);
-  assertNoSupabaseError("orders.select(live sales month)", monthError);
-  assertNoSupabaseError("orders.select(customer analytics)", paidError);
+  let liveSalesToday: number;
+  let liveSalesMonth: number;
+  let newCustomers: number;
+  let returningCustomers: number;
+  let totalCustomers: number;
+
+  const opsRow = Array.isArray(opsRpc.data) ? (opsRpc.data[0] as Record<string, unknown> | undefined) : undefined;
+  if (!opsRpc.error && opsRow) {
+    liveSalesToday = roundMoney(Number(opsRow.live_sales_today ?? 0));
+    liveSalesMonth = roundMoney(Number(opsRow.live_sales_month ?? 0));
+    newCustomers = Number(opsRow.new_customers ?? 0);
+    returningCustomers = Number(opsRow.returning_customers ?? 0);
+    totalCustomers = Number(opsRow.total_customers ?? 0);
+  } else {
+    // Fallback: RPC not present — legacy scans + JS aggregation (identical math).
+    const [
+      { data: todayOrders, error: todayError },
+      { data: monthOrders, error: monthError },
+      { data: allPaidOrders, error: paidError },
+    ] = await Promise.all([
+      supabaseAdmin.from("orders").select("amount_paid").eq("payment_status", "paid").gte("created_at", todayStart),
+      supabaseAdmin.from("orders").select("amount_paid").eq("payment_status", "paid").gte("created_at", monthStart),
+      supabaseAdmin.from("orders").select("customer_email").eq("payment_status", "paid"),
+    ]);
+    assertNoSupabaseError("orders.select(live sales today)", todayError);
+    assertNoSupabaseError("orders.select(live sales month)", monthError);
+    assertNoSupabaseError("orders.select(customer analytics)", paidError);
+
+    liveSalesToday = roundMoney((todayOrders ?? []).reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0));
+    liveSalesMonth = roundMoney((monthOrders ?? []).reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0));
+
+    const customerOrderCount = new Map<string, number>();
+    for (const row of allPaidOrders ?? []) {
+      const email = row.customer_email;
+      if (!email) continue;
+      customerOrderCount.set(email, (customerOrderCount.get(email) ?? 0) + 1);
+    }
+    newCustomers = Array.from(customerOrderCount.values()).filter((count) => count === 1).length;
+    returningCustomers = Array.from(customerOrderCount.values()).filter((count) => count > 1).length;
+    totalCustomers = customerOrderCount.size;
+  }
 
   // Low stock is computed from the products table — the real source of stock
   // (the inventory_items table exists but nothing populates it, so reading it
@@ -1150,20 +1187,6 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
   if (notificationError && !isMissingRelationError(notificationError, "notification_queue")) {
     assertNoSupabaseError("notification_queue.select(ops summary)", notificationError);
   }
-
-  const liveSalesToday = roundMoney((todayOrders ?? []).reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0));
-  const liveSalesMonth = roundMoney((monthOrders ?? []).reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0));
-
-  const customerOrderCount = new Map<string, number>();
-  for (const row of allPaidOrders ?? []) {
-    const email = row.customer_email;
-    if (!email) continue;
-    customerOrderCount.set(email, (customerOrderCount.get(email) ?? 0) + 1);
-  }
-
-  const newCustomers = Array.from(customerOrderCount.values()).filter((count) => count === 1).length;
-  const returningCustomers = Array.from(customerOrderCount.values()).filter((count) => count > 1).length;
-  const totalCustomers = customerOrderCount.size;
 
   const pendingShipments = shipmentError ? 0 : (shipmentRows ?? []).length;
   const activeCoupons = couponError ? 0 : (couponRows ?? []).length;

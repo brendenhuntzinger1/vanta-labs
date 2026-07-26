@@ -20,17 +20,27 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: false, error: "Your role cannot export order data." }, { status: 403 });
   }
 
-  const { data, error } = await supabaseAdmin
-    .from("orders")
-    .select("order_id, customer_email, customer_name, amount_paid, payment_status, fulfillment_status, tracking_number, referral_code, coupon_code, refund_amount, created_at")
-    .order("created_at", { ascending: false })
-    .limit(5000);
+  // Page through ALL orders in chunks instead of a single 5000-row cap, so the
+  // export is complete at 100k+ orders. Bounded by a hard page cap as a
+  // runaway backstop.
+  const CHUNK = 1000;
+  const MAX_CHUNKS = 500; // 500k-order backstop
+  const rows: Array<Record<string, unknown>> = [];
+  for (let chunk = 0; chunk < MAX_CHUNKS; chunk++) {
+    const from = chunk * CHUNK;
+    const { data, error } = await supabaseAdmin
+      .from("orders")
+      .select("order_id, customer_email, customer_name, amount_paid, payment_status, fulfillment_status, tracking_number, referral_code, coupon_code, refund_amount, created_at")
+      .order("created_at", { ascending: false })
+      .range(from, from + CHUNK - 1);
 
-  if (error) {
-    return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+    if (error) {
+      return NextResponse.json({ success: false, error: error.message }, { status: 400 });
+    }
+    const batch = data ?? [];
+    rows.push(...batch);
+    if (batch.length < CHUNK) break;
   }
-
-  const rows = data ?? [];
   const header = [
     "order_id",
     "customer_email",
