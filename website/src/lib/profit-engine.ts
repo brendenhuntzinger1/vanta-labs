@@ -70,8 +70,14 @@ export interface OrderInputs {
   referralAccepted: boolean;
   /** Customer referral discount percent on a NON-bundle order (e.g. 10). */
   referralPercent: number;
-  /** Reduced referral discount percent on a BUNDLE order (e.g. 5). */
-  bundleReferralPercent: number;
+  /**
+   * @deprecated Inert and NOT read by resolveCustomerDiscount. The "bundle +
+   * reduced referral" stack was never implemented; on a bundle order the
+   * referral contributes $0. Kept optional only so existing tests that pass a
+   * value still compile — it has no effect on any calculation. Removed from
+   * admin config and the Control Center UI so it can't be set in production.
+   */
+  bundleReferralPercent?: number;
   /** The customer holds an active membership discount. */
   isMember: boolean;
   /** Membership discount percent (0 when not a member). */
