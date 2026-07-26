@@ -3,6 +3,7 @@ import "server-only";
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getBillingProvider } from "@/lib/billing-provider";
+import { computeTierChangeBilling } from "@/lib/membership-billing-math";
 import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
 import { sendMarketingEmail } from "@/lib/email/marketing";
@@ -268,30 +269,28 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
     (existingMembership.status === "active" || existingMembership.status === "trialing") &&
     existingMembership.tier_id !== tier.id
   ) {
-    // Reprice the NEXT charge to the new tier. Without this the stored amounts
-    // keep the OLD tier's price, so the next charge is wrong — an upgrade would
-    // undercharge and a downgrade would overcharge.
-    //
-    // A TRIALING member's next charge is the first-month REMAINDER (monthly −
-    // intro), billed by sweep Step 2, so we must reprice BOTH
-    // first_month_remainder_cents and next_billing_amount_cents to the new
-    // tier's remainder. An ACTIVE member's next charge is a full renewal, so it
-    // reprices to the new tier's full monthly/annual price.
+    // Reprice the NEXT charge to the new tier (pure logic in
+    // computeTierChangeBilling, unit-tested in membership-billing-math.test.ts).
+    // Without this the stored amounts keep the OLD tier's price, so the next
+    // charge is wrong — an upgrade would undercharge and a downgrade overcharge.
     const isTrialing = existingMembership.status === "trialing";
     const changedCycle = (existingMembership.billing_cycle as string) ?? "monthly";
-    const newRemainderCents = Math.max(0, tier.monthly_price_cents - tier.intro_price_cents);
-    const nextAmountCents = isTrialing
-      ? newRemainderCents
-      : changedCycle === "annual"
-        ? (tier.annual_price_cents ?? tier.monthly_price_cents)
-        : tier.monthly_price_cents;
+    const repriced = computeTierChangeBilling({
+      isTrialing,
+      billingCycle: changedCycle,
+      monthlyPriceCents: tier.monthly_price_cents,
+      annualPriceCents: tier.annual_price_cents ?? null,
+      introPriceCents: tier.intro_price_cents,
+    });
 
     await supabaseAdmin
       .from("customer_memberships")
       .update({
         tier_id: tier.id,
-        next_billing_amount_cents: nextAmountCents,
-        ...(isTrialing ? { first_month_remainder_cents: newRemainderCents } : {}),
+        next_billing_amount_cents: repriced.nextBillingAmountCents,
+        ...(repriced.firstMonthRemainderCents !== null
+          ? { first_month_remainder_cents: repriced.firstMonthRemainderCents }
+          : {}),
         renewal_reminder_sent_at: null,
         updated_at: now.toISOString(),
       })
