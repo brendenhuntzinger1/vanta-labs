@@ -335,14 +335,56 @@ export async function adminAdjustPoints(input: { userId: string; amount: number;
 // Manually activates a paid tier for a customer, since there's no billing
 // integration to do it automatically yet. Upserts rather than requiring an
 // existing row, unlike setMembershipStatus below.
-export async function assignMembershipTier(userId: string, tierId: string, billingCycle: "monthly" | "annual") {
+export interface AssignMembershipOptions {
+  // ISO date the comp membership expires. REQUIRED unless `permanent` is true.
+  expiresAt?: string | null;
+  // A deliberate, permanent complimentary membership (no expiry). Must be set
+  // explicitly — a comp never becomes permanent by omission.
+  permanent?: boolean;
+}
+
+// Admin-assigned (complimentary) membership. Two deliberate shapes:
+//   • Time-limited: requires an expiration date. Stored in renews_at, which
+//     isMembershipActive honors as the period end, so the comp auto-expires.
+//   • Permanent: `permanent: true`, no expiry — active until manually revoked.
+//
+// A comp NEVER auto-charges (next_billing_at stays null, so the renewal-charge
+// sweep skips it) and NEVER auto-grants recurring monthly store credit — the
+// credit sweep now requires next_billing_at, which only real paying members
+// have. This closes the "perpetual free membership + monthly credit forever"
+// liability: a comp is a benefits grant, not a silent recurring giveaway.
+export async function assignMembershipTier(
+  userId: string,
+  tierId: string,
+  billingCycle: "monthly" | "annual",
+  options: AssignMembershipOptions = {},
+) {
+  const nowIso = new Date().toISOString();
+  const permanent = options.permanent === true;
+
+  let expiresAtIso: string | null = null;
+  if (!permanent) {
+    if (!options.expiresAt) {
+      throw new Error("An expiration date is required for a complimentary membership. To grant one with no end date, mark it a permanent complimentary membership.");
+    }
+    const ts = new Date(options.expiresAt);
+    if (Number.isNaN(ts.getTime()) || ts.getTime() <= Date.now()) {
+      throw new Error("The membership expiration date must be a valid date in the future.");
+    }
+    expiresAtIso = ts.toISOString();
+  }
+
   const { error } = await supabaseAdmin.from("customer_memberships").upsert({
     user_id: userId,
     tier_id: tierId,
     billing_cycle: billingCycle,
     status: "active",
-    started_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    started_at: nowIso,
+    next_billing_at: null, // never auto-charge; also excludes from credit sweep
+    next_billing_amount_cents: 0,
+    renews_at: expiresAtIso, // null = permanent; a date = auto-expiry
+    cancel_at_period_end: false,
+    updated_at: nowIso,
   }, { onConflict: "user_id" });
 
   if (error) {

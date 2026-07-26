@@ -24,6 +24,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ userI
       status?: "active" | "paused" | "cancelled";
       tierId?: string;
       billingCycle?: "monthly" | "annual";
+      expiresAt?: string | null;
+      permanent?: boolean;
     };
 
     if (body.action === "set_tier") {
@@ -31,7 +33,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ userI
         return NextResponse.json({ success: false, error: "tierId is required" }, { status: 400 });
       }
 
-      await assignMembershipTier(userId, body.tierId, body.billingCycle ?? "monthly");
+      await assignMembershipTier(userId, body.tierId, body.billingCycle ?? "monthly", {
+        expiresAt: body.expiresAt ?? null,
+        permanent: body.permanent === true,
+      });
 
       await supabaseAdmin.from("admin_audit_logs").insert({
         action: "membership_tier_assign",
@@ -40,6 +45,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ userI
         metadata: {
           tierId: body.tierId,
           billingCycle: body.billingCycle ?? "monthly",
+          expiresAt: body.expiresAt ?? null,
+          permanent: body.permanent === true,
           performedAt: new Date().toISOString(),
           performedBy: session.username,
           ipAddress: getRequestIpAddress(request),

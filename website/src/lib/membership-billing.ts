@@ -576,7 +576,11 @@ export async function grantMonthlyStoreCreditSweep(): Promise<{ granted: number 
   const { data, error } = await supabaseAdmin
     .from("customer_memberships")
     .select("user_id, status, membership_tiers(slug, monthly_store_credit_cents)")
-    .eq("status", "active");
+    .eq("status", "active")
+    // Only members on a real recurring billing cycle earn monthly store credit.
+    // Admin-assigned complimentary memberships have next_billing_at = null, so
+    // they are excluded — a comp must NOT silently hand out credit every month.
+    .not("next_billing_at", "is", null);
 
   if (error) {
     if (String(error.code) === "42P01") return { granted: 0 };
