@@ -90,14 +90,64 @@ async function aggregateCustomers(search?: string): Promise<AdminCustomerRow[]> 
   return customers;
 }
 
-export async function getAdminCustomers(filters: AdminCustomerFilters = {}): Promise<AdminCustomerListResult> {
-  const customers = await aggregateCustomers(filters.search);
+// Sanitize admin search input before it reaches the RPC's LIKE pattern — strip
+// LIKE metacharacters so a stray % or _ can't turn into an unintended wildcard.
+function sanitizeSearch(search?: string): string | null {
+  const normalized = (search ?? "").trim().replace(/[%_\\]/g, "").slice(0, 100);
+  return normalized || null;
+}
 
-  const total = customers.length;
+function mapRpcRow(row: Record<string, unknown>): AdminCustomerRow {
+  return {
+    email: String(row.email ?? ""),
+    name: row.name ? String(row.name) : null,
+    orderCount: Number(row.order_count ?? 0),
+    totalSpent: Number(row.total_spent ?? 0),
+    firstOrderAt: String(row.first_order_at ?? ""),
+    lastOrderAt: String(row.last_order_at ?? ""),
+  };
+}
+
+// Aggregate + filter + paginate entirely in Postgres (no row transfer, no cap).
+// Returns null when the RPC isn't migrated yet so callers can fall back to the
+// legacy JS aggregation. p_limit null = all rows (export).
+async function rpcCustomerRows(
+  search: string | null,
+  limit: number | null,
+  offset: number,
+): Promise<{ rows: AdminCustomerRow[]; total: number } | null> {
+  const { data, error } = await supabaseAdmin.rpc("admin_customer_rollup", {
+    p_search: search,
+    p_limit: limit,
+    p_offset: offset,
+  });
+  if (error || !Array.isArray(data)) {
+    return null;
+  }
+  const rows = (data as Array<Record<string, unknown>>).map(mapRpcRow);
+  const total = data.length > 0 ? Number((data[0] as Record<string, unknown>).total_count ?? rows.length) : 0;
+  return { rows, total };
+}
+
+export async function getAdminCustomers(filters: AdminCustomerFilters = {}): Promise<AdminCustomerListResult> {
   const page = Math.max(1, Math.trunc(filters.page ?? 1));
   const pageSize = Math.min(100, Math.max(1, Math.trunc(filters.pageSize ?? 25)));
   const from = (page - 1) * pageSize;
 
+  const rpc = await rpcCustomerRows(sanitizeSearch(filters.search), pageSize, from);
+  if (rpc) {
+    return {
+      rows: rpc.rows,
+      total: rpc.total,
+      page,
+      pageSize,
+      pageCount: Math.max(1, Math.ceil(rpc.total / pageSize)),
+    };
+  }
+
+  // Fallback: RPC not present — legacy 5k-capped JS aggregation + slice.
+  const customers = await aggregateCustomers(filters.search);
+  const total = customers.length;
   return {
     rows: customers.slice(from, from + pageSize),
     total,
@@ -116,7 +166,9 @@ function csvEscape(value: unknown) {
 }
 
 export async function exportCustomersCsv(): Promise<string> {
-  const customers = await aggregateCustomers();
+  // Prefer the RPC (all rows, no cap); fall back to the legacy 5k JS path.
+  const rpc = await rpcCustomerRows(null, null, 0);
+  const customers = rpc ? rpc.rows : await aggregateCustomers();
   const header = ["email", "name", "orderCount", "totalSpent", "firstOrderAt", "lastOrderAt"];
 
   return [

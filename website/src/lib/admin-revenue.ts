@@ -47,65 +47,88 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
   const now = new Date();
   const startOfToday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())).toISOString();
 
-  const [pending, approved, awaiting, shippedResult, paidResult] = await Promise.all([
+  const [pending, approved, awaiting, shippedResult, summaryRpc, byMethodRpc] = await Promise.all([
     supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).in("payment_status", ["pending_payment", "awaiting_verification"]),
     supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).eq("payment_status", "paid"),
     supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).eq("payment_status", "paid").eq("fulfillment_status", "awaiting_fulfillment"),
     supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).eq("fulfillment_status", "shipped"),
-    supabaseAdmin
-      .from("orders")
-      .select("amount_paid, refund_amount, payment_method, card_processing_fee, paid_at")
-      .in("payment_status", Array.from(PAID_ORDER_STATUSES))
-      .limit(10000),
+    // Aggregate revenue in Postgres (one grouped pass, no row transfer, no cap).
+    // Falls back to the legacy 10k-capped JS scan if the RPC isn't migrated yet
+    // — see src/lib/sql/admin-dashboard-rollups.sql.
+    supabaseAdmin.rpc("admin_revenue_summary", { p_start_of_today: startOfToday }),
+    supabaseAdmin.rpc("admin_revenue_by_method"),
   ]);
-
-  if (paidResult.error) {
-    throw paidResult.error;
-  }
 
   const pendingPayments = pending.count ?? 0;
   const approvedPayments = approved.count ?? 0;
   const awaitingFulfillment = awaiting.count ?? 0;
   const shipped = shippedResult.count ?? 0;
-  const paidOrders = paidResult.data ?? [];
 
   let totalPaidRevenue = 0;
   let processingFeesCollected = 0;
   let todayRevenue = 0;
   let todayOrders = 0;
-  const methodMap = new Map<string, { revenue: number; orders: number }>();
+  let totalPaidOrders = 0;
+  let byMethod: RevenueByMethod[];
 
-  for (const order of paidOrders) {
-    // NET of partial refunds — gross amount_paid overstates revenue when a
-    // partial refund left the order in a paid state.
-    const amount = netOrderRevenue(order);
-    const fee = Number(order.card_processing_fee ?? 0);
-    const method = String(order.payment_method ?? "");
-
-    totalPaidRevenue += amount;
-    processingFeesCollected += fee;
-
-    const entry = methodMap.get(method) ?? { revenue: 0, orders: 0 };
-    entry.revenue += amount;
-    entry.orders += 1;
-    methodMap.set(method, entry);
-
-    if (order.paid_at && String(order.paid_at) >= startOfToday) {
-      todayRevenue += amount;
-      todayOrders += 1;
+  const summaryRow = Array.isArray(summaryRpc.data) ? summaryRpc.data[0] : undefined;
+  if (!summaryRpc.error && summaryRow && !byMethodRpc.error && Array.isArray(byMethodRpc.data)) {
+    totalPaidRevenue = Number((summaryRow as Record<string, unknown>).total_paid_revenue ?? 0);
+    totalPaidOrders = Number((summaryRow as Record<string, unknown>).total_paid_orders ?? 0);
+    processingFeesCollected = Number((summaryRow as Record<string, unknown>).processing_fees ?? 0);
+    todayRevenue = Number((summaryRow as Record<string, unknown>).today_revenue ?? 0);
+    todayOrders = Number((summaryRow as Record<string, unknown>).today_orders ?? 0);
+    byMethod = (byMethodRpc.data as Array<Record<string, unknown>>)
+      .map((row) => ({
+        method: String(row.method ?? ""),
+        label: methodLabel(String(row.method ?? "")),
+        revenue: roundMoney(Number(row.revenue ?? 0)),
+        orders: Number(row.orders ?? 0),
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
+  } else {
+    // Fallback: RPC not present — legacy 10k-capped scan + JS aggregation
+    // (identical math). Run the migration to remove the cap at scale.
+    const paidResult = await supabaseAdmin
+      .from("orders")
+      .select("amount_paid, refund_amount, payment_method, card_processing_fee, paid_at")
+      .in("payment_status", Array.from(PAID_ORDER_STATUSES))
+      .limit(10000);
+    if (paidResult.error) {
+      throw paidResult.error;
     }
+    const paidOrders = paidResult.data ?? [];
+    const methodMap = new Map<string, { revenue: number; orders: number }>();
+
+    for (const order of paidOrders) {
+      const amount = netOrderRevenue(order);
+      const fee = Number(order.card_processing_fee ?? 0);
+      const method = String(order.payment_method ?? "");
+
+      totalPaidRevenue += amount;
+      processingFeesCollected += fee;
+
+      const entry = methodMap.get(method) ?? { revenue: 0, orders: 0 };
+      entry.revenue += amount;
+      entry.orders += 1;
+      methodMap.set(method, entry);
+
+      if (order.paid_at && String(order.paid_at) >= startOfToday) {
+        todayRevenue += amount;
+        todayOrders += 1;
+      }
+    }
+
+    totalPaidOrders = paidOrders.length;
+    byMethod = Array.from(methodMap.entries())
+      .map(([method, value]) => ({
+        method,
+        label: methodLabel(method),
+        revenue: roundMoney(value.revenue),
+        orders: value.orders,
+      }))
+      .sort((a, b) => b.revenue - a.revenue);
   }
-
-  const totalPaidOrders = paidOrders.length;
-
-  const byMethod: RevenueByMethod[] = Array.from(methodMap.entries())
-    .map(([method, value]) => ({
-      method,
-      label: methodLabel(method),
-      revenue: roundMoney(value.revenue),
-      orders: value.orders,
-    }))
-    .sort((a, b) => b.revenue - a.revenue);
 
   return {
     todayRevenue: roundMoney(todayRevenue),
