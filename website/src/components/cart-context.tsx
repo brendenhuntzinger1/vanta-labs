@@ -7,6 +7,7 @@ import { validateReferralCodeClient } from "@/lib/referral-client";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
+import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { calculateShipping, calculateTax, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { resolveBestDiscount } from "@/lib/discount-resolution";
@@ -59,6 +60,9 @@ type CartContextValue = {
   taxRatePercent: number;
   shippingConfig: ShippingConfig;
   bundleConfig: BundleConfig;
+  shippingProtectionEnabled: boolean;
+  setShippingProtectionEnabled: (enabled: boolean) => void;
+  shippingProtectionFee: number;
   discountAmount: number;
   total: number;
   isBuy3Get1FreeActive: boolean;
@@ -632,7 +636,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [referralDetails, pointsToRedeem, totalAfterCredit],
   );
 
-  const total = Math.max(0, totalAfterCredit - pointsRedeemedDiscount);
+  // Optional shipping-protection add-on (loss/theft/damage). Default OFF; the
+  // fee is tiered on the merchandise subtotal and added on top of the total,
+  // mirrored exactly by the server (payment-service) so preview == charge.
+  const [shippingProtectionEnabled, setShippingProtectionEnabled] = useState(false);
+  const shippingProtectionFee = shippingProtectionEnabled ? calculateShippingProtectionFee(subtotal) : 0;
+
+  const total = Math.max(0, totalAfterCredit - pointsRedeemedDiscount) + shippingProtectionFee;
 
   const setPointsToRedeem = (points: number) => {
     const clamped = Math.max(0, Math.min(Math.floor(points), pointsBalance));
@@ -985,6 +995,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     taxRatePercent,
     shippingConfig,
     bundleConfig,
+    shippingProtectionEnabled,
+    setShippingProtectionEnabled,
+    shippingProtectionFee,
     discountAmount,
     total,
     isBuy3Get1FreeActive: bestDiscount?.type === "buy3get1",

@@ -365,7 +365,7 @@ export async function getWelcomeOffer(): Promise<WelcomeOffer> {
 
 // Default sales-tax rate applied when an admin hasn't set one. Editable in the
 // Control Center → Shipping (enter 0 to collect no sales tax).
-export const DEFAULT_SALES_TAX_PERCENT = 7;
+export const DEFAULT_SALES_TAX_PERCENT = 8;
 // Default customer discount for a valid ambassador referral code.
 export const DEFAULT_REFERRAL_DISCOUNT_PERCENT = 10;
 // Reduced referral discount that STACKS on top of a bundle (Buy 3 Get 1) order.

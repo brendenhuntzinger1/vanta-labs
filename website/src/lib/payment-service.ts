@@ -10,6 +10,7 @@ import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, calculateTax, isShippableCountry } from "@/lib/shipping";
+import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { isApprovedAmbassadorCustomer } from "@/lib/ambassador-status";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
@@ -69,6 +70,7 @@ export interface CreateCheckoutPayload {
  expectedTotal?: number;
  customerUserId?: string;
  pointsToRedeem?: number;
+ shippingProtection?: boolean;
  paymentMethod?: string;
 }
 
@@ -558,7 +560,11 @@ export async function createCheckoutSession(
  pointsRedeemed = dollarsToPoints(pointsDiscountAmount);
  }
 
- const expectedTotal = roundMoney(Math.max(0, totalAfterCredit - pointsDiscountAmount));
+ // Optional shipping-protection add-on: server recomputes the tiered fee from
+ // the server-side subtotal (never trusts a client amount) and adds it on top,
+ // mirroring the client preview so the totals match the anti-tamper guard.
+ const shippingProtectionFee = payload.shippingProtection ? calculateShippingProtectionFee(subtotal) : 0;
+ const expectedTotal = roundMoney(Math.max(0, totalAfterCredit - pointsDiscountAmount) + shippingProtectionFee);
 
  // The guard only blocks UNDERpayment (a client trying to pay less than the
  // real total). Membership perks are applied authoritatively on the server

@@ -63,6 +63,7 @@ export async function POST(request: Request) {
       expectedTotal: body.expectedTotal,
       customerUserId,
       pointsToRedeem: customerUserId ? Number(body.pointsToRedeem ?? 0) : 0,
+      shippingProtection: Boolean(body.shippingProtection),
       paymentMethod: body.paymentMethod,
     });
 

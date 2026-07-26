@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
+import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { PaymentMethodPicker } from "@/components/payment-method-picker";
@@ -152,6 +153,9 @@ export default function CheckoutPage() {
     taxAmount,
     shippingConfig,
     bundleConfig,
+    shippingProtectionEnabled,
+    setShippingProtectionEnabled,
+    shippingProtectionFee,
   } = useCart();
 
   const [acknowledgements, setAcknowledgements] = useState<ComplianceAcknowledgements>({
@@ -222,7 +226,7 @@ export default function CheckoutPage() {
   // expectedTotal (matches the server's own recompute exactly). The card
   // processing fee is then added ON TOP for the card method only; manual
   // methods pay `total`.
-  const total = Math.max(0, totalBeforePoints - pointsRedeemedDiscount);
+  const total = Math.max(0, totalBeforePoints - pointsRedeemedDiscount) + shippingProtectionFee;
 
   const selectedMethod = useMemo(
     () => getPaymentMethodById(paymentMethods, selectedMethodId),
@@ -383,6 +387,7 @@ export default function CheckoutPage() {
         referralCode: referralCode ?? undefined,
         couponCode: couponCode ?? undefined,
         pointsToRedeem: pointsToRedeem > 0 ? pointsToRedeem : undefined,
+        shippingProtection: shippingProtectionEnabled,
         expectedTotal: total,
         paymentMethod: selectedMethodId || undefined,
         complianceAcknowledgements: acknowledgements,
@@ -814,6 +819,22 @@ export default function CheckoutPage() {
                 <span>{shipping === 0 && memberFreeShipping ? "Free (member)" : formatCartCurrency(shipping)}</span>
               </div>
               {taxAmount > 0 ? <div className="flex justify-between"><span>Sales tax</span><span>{formatCartCurrency(taxAmount)}</span></div> : null}
+              <label className="flex cursor-pointer items-start justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
+                <span className="flex items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={shippingProtectionEnabled}
+                    onChange={(e) => setShippingProtectionEnabled(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-emerald-500"
+                    aria-label="Add shipping protection"
+                  />
+                  <span>
+                    <span className="block font-medium text-white">Shipping Protection</span>
+                    <span className="block text-xs text-white/45">Covers loss, theft, or damage in transit.</span>
+                  </span>
+                </span>
+                <span className="whitespace-nowrap text-white/80">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>
+              </label>
               {discountAmount > 0 ? (
                 <div className="flex justify-between"><span>{ambassadorDiscountApplied ? `Ambassador ${ambassadorDiscountPercent}% off` : "Discount"}</span><span>-{formatCartCurrency(discountAmount)}</span></div>
               ) : null}
