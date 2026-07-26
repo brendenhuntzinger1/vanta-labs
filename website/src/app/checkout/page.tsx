@@ -67,6 +67,25 @@ function isUnitedStates(country: string) {
   return ["united states", "usa", "us", "u.s.", "u.s.a."].includes(country.trim().toLowerCase());
 }
 
+function isCanada(country: string) {
+  return ["canada", "ca", "can"].includes(country.trim().toLowerCase());
+}
+
+// Country-aware postal-code check. US = 5 digits or ZIP+4; Canada = A1A 1A1
+// (space optional). For anything else we only require non-empty. Returns an
+// error string, or null when the value is acceptable for the country.
+function postalCodeError(value: string, country: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return "Postal code is required.";
+  if (isUnitedStates(country) && !/^\d{5}(-\d{4})?$/.test(trimmed)) {
+    return "Enter a valid ZIP code (e.g. 78701).";
+  }
+  if (isCanada(country) && !/^[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d$/.test(trimmed)) {
+    return "Enter a valid postal code (e.g. K1A 0B1).";
+  }
+  return null;
+}
+
 type ComplianceAcknowledgements = {
   researchResponsibility: boolean;
   researchCompliance: boolean;
@@ -89,14 +108,16 @@ function validateCheckoutForm(form: CheckoutForm, sameAsShipping: boolean) {
   if (!form.address.trim()) errors.address = "Shipping address is required.";
   if (!form.city.trim()) errors.city = "City is required.";
   if (isUnitedStates(form.country) && !form.state.trim()) errors.state = "State is required.";
-  if (!form.postalCode.trim()) errors.postalCode = "Postal code is required.";
+  const postalErr = postalCodeError(form.postalCode, form.country);
+  if (postalErr) errors.postalCode = postalErr;
   if (!form.country.trim()) errors.country = "Country is required.";
 
   if (!sameAsShipping) {
     if (!form.billingFullName.trim()) errors.billingFullName = "Billing name is required.";
     if (!form.billingAddress.trim()) errors.billingAddress = "Billing address is required.";
     if (!form.billingCity.trim()) errors.billingCity = "Billing city is required.";
-    if (!form.billingPostalCode.trim()) errors.billingPostalCode = "Billing postal code is required.";
+    const billingPostalErr = postalCodeError(form.billingPostalCode, form.billingCountry);
+    if (billingPostalErr) errors.billingPostalCode = billingPostalErr;
     if (!form.billingCountry.trim()) errors.billingCountry = "Billing country is required.";
   }
 
