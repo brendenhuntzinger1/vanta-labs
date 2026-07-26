@@ -56,6 +56,7 @@ type CartContextValue = {
   taxAmount: number;
   taxRatePercent: number;
   shippingConfig: ShippingConfig;
+  bundleConfig: BundleConfig;
   discountAmount: number;
   total: number;
   isBuy3Get1FreeActive: boolean;
@@ -964,6 +965,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     taxAmount,
     taxRatePercent,
     shippingConfig,
+    bundleConfig,
     discountAmount,
     total,
     isBuy3Get1FreeActive: bestDiscount?.type === "buy3get1",

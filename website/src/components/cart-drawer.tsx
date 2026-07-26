@@ -14,6 +14,8 @@ export function CartDrawer() {
   const {
     items,
     isCartOpen,
+    isHydrated,
+    bundleConfig,
     closeCart,
     updateQuantity,
     removeFromCart,
@@ -124,7 +126,7 @@ export function CartDrawer() {
         </div>
 
         <div className="mt-5 flex-1 overflow-y-auto pr-1 sm:pr-2">
-          {items.length === 0 ? (
+          {isHydrated && items.length === 0 ? (
             <div className="rounded-[1.5rem] border border-dashed border-zinc-700 bg-zinc-900/70 p-8 text-center text-zinc-400">
               <p className="text-lg text-white">Your cart is currently empty.</p>
               <p className="mt-3">Add products to begin building an order.</p>
@@ -169,7 +171,7 @@ export function CartDrawer() {
                       <span className="min-w-5 text-center tabular-nums">{item.quantity}</span>
                       <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="inline-flex h-11 w-11 items-center justify-center text-base" aria-label="Increase quantity">+</button>
                     </div>
-                    <p className="text-xs font-medium text-white sm:text-sm">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity))}</p>
+                    <p className="text-xs font-medium text-white sm:text-sm">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
                   </div>
                 </div>
               ))}

@@ -161,6 +161,7 @@ export default function CheckoutPage() {
     storeCreditMinOrderCents,
     taxAmount,
     shippingConfig,
+    bundleConfig,
   } = useCart();
 
   const [acknowledgements, setAcknowledgements] = useState<ComplianceAcknowledgements>({
@@ -809,7 +810,7 @@ export default function CheckoutPage() {
                       <p className="truncate text-sm text-white">{item.name}</p>
                       <p className="mt-1 text-xs text-white/70">Qty {item.quantity}{item.doseLabel ? ` • ${item.doseLabel}` : ""}</p>
                     </div>
-                    <p className="text-sm text-white/75">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity))}</p>
+                    <p className="text-sm text-white/75">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
                   </div>
                 ))}
               </div>

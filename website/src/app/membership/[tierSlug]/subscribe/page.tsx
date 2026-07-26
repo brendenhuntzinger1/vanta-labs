@@ -20,7 +20,7 @@ export default async function MembershipSubscribePage({
 
   const user = await getAuthenticatedUser();
   if (!user || detectRoleFromUser(user) !== "customer") {
-    redirect(`/account/login?redirect=${encodeURIComponent(`/membership/${tierSlug}/subscribe`)}`);
+    redirect(`/account/login?next=${encodeURIComponent(`/membership/${tierSlug}/subscribe`)}`);
   }
 
   return <MembershipSubscribeClient tier={tier} />;

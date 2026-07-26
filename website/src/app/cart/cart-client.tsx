@@ -13,6 +13,8 @@ export function CartPageClient() {
   const [referralInput, setReferralInput] = useState("");
   const {
     items,
+    isHydrated,
+    bundleConfig,
     updateQuantity,
     removeFromCart,
     subtotal,
@@ -48,7 +50,7 @@ export function CartPageClient() {
 
         <div className="mt-10 grid gap-6 lg:grid-cols-[1.2fr_0.8fr] lg:gap-10">
           <div className="space-y-3">
-            {items.length === 0 ? (
+            {isHydrated && items.length === 0 ? (
               <div className="border border-dashed border-white/15 p-10 text-center text-white/55">
                 <p className="text-lg text-white">No items yet.</p>
                 <p className="mt-3">Visit the catalog to add products.</p>
@@ -87,7 +89,7 @@ export function CartPageClient() {
                         <span className="min-w-6 text-center tabular-nums">{item.quantity}</span>
                         <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="inline-flex h-11 w-11 items-center justify-center text-base" aria-label="Increase quantity">+</button>
                       </div>
-                      <p className="text-base text-white sm:text-lg">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity))}</p>
+                      <p className="text-base text-white sm:text-lg">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
                     </div>
                   </div>
                 );

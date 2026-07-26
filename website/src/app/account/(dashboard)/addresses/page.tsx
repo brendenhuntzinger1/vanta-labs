@@ -10,7 +10,8 @@ export default async function AccountAddressesPage() {
     redirect("/account/login");
   }
 
-  const addresses = await getCustomerAddresses(user.id);
+  // Degrade gracefully on a transient DB error rather than crashing the route.
+  const addresses = await getCustomerAddresses(user.id).catch(() => []);
 
   return (
     <div className="space-y-6">

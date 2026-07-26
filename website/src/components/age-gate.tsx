@@ -141,7 +141,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
           </div>
           <p className="mt-5 text-xs leading-6 text-zinc-400">
             Create a free account to track orders and reorders, save your cart, and get member-only offers — or continue
-            as a guest and check out with just your email.
+            as a guest to browse. A free account is required to check out.
           </p>
           <button
             type="button"

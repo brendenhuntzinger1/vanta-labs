@@ -11,8 +11,10 @@ export default async function AccountWishlistPage() {
     redirect("/account/login");
   }
 
-  const slugs = await getWishlistSlugs(user.id);
-  const products = await getCatalogProductsBySlugs(slugs);
+  // Degrade gracefully on a transient DB error rather than throwing the whole
+  // account route to the error boundary — an empty wishlist is recoverable.
+  const slugs = await getWishlistSlugs(user.id).catch(() => [] as string[]);
+  const products = await getCatalogProductsBySlugs(slugs).catch(() => []);
 
   return (
     <div className="space-y-6">

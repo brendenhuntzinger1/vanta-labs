@@ -84,7 +84,7 @@ export async function POST(request: Request) {
     // Translate the internal underpayment-guard string into an actionable,
     // non-alarming message (it can trip on a stale membership/credit preview).
     const message = raw === "Altered total detected"
-      ? "Your order total changed since the page loaded. Please refresh and try again."
+      ? "A discount on your order is no longer available, so your total has been updated. Please refresh this page to see the current total, then place your order."
       : raw;
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }

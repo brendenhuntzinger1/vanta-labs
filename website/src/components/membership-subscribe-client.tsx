@@ -123,7 +123,7 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
         <span>
           {billingCycle === "annual"
             ? "I understand this is a one-time, non-refundable annual payment, and my perks activate once payment is confirmed."
-            : "I agree to recurring monthly card billing (including the 5% processing fee) until I cancel. Membership charges are non-refundable."}
+            : "I agree to recurring monthly card billing until I cancel. Membership charges are non-refundable."}
         </span>
       </label>
 
