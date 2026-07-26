@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-service";
+import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import type { CustomerInput } from "@/lib/payment-types";
@@ -29,22 +30,19 @@ export async function POST(request: Request) {
       );
     }
 
-    // Checkout requires a signed-in customer account — guest checkout is off.
-    // Enforced server-side so it can't be bypassed by calling the API directly.
+    // Guest checkout is allowed. A signed-in customer's order is tied to their
+    // account (and locked to the account email); a guest checks out with just
+    // the email they enter. Account-only perks (points, store credit) are gated
+    // on customerUserId below, so guests simply can't use them.
     const authenticatedUser = await getAuthenticatedUser();
-    if (!authenticatedUser || detectRoleFromUser(authenticatedUser) !== "customer") {
-      return NextResponse.json(
-        { success: false, error: "Please sign in to your account to complete checkout." },
-        { status: 401 },
-      );
-    }
-    const customerUserId = authenticatedUser.id;
+    const isCustomer = Boolean(authenticatedUser) && detectRoleFromUser(authenticatedUser!) === "customer";
+    const customerUserId = isCustomer ? authenticatedUser!.id : undefined;
 
     const customer = sanitizeCustomerInput(body.customer as CustomerInput);
-    // The order is always tied to the account's own email — this is the single
-    // email used for confirmations, shipping, receipts, etc.
-    if (authenticatedUser.email) {
-      customer.email = authenticatedUser.email.trim().toLowerCase();
+    // A signed-in customer's order always uses their account email (the single
+    // email for confirmations/receipts); a guest uses the email they entered.
+    if (isCustomer && authenticatedUser!.email) {
+      customer.email = authenticatedUser!.email.trim().toLowerCase();
     }
     // Ambassador attribution is driven ONLY by the code the customer has
     // visibly applied at checkout (body.referralCode). We deliberately do NOT
@@ -66,6 +64,12 @@ export async function POST(request: Request) {
       shippingProtection: Boolean(body.shippingProtection),
       paymentMethod: body.paymentMethod,
     });
+
+    // If they opted into offers/coupons at checkout, add them (guest or account)
+    // to the marketing list so promo announcements reach them. Fire-and-forget.
+    if (body.marketingOptIn && customer.email) {
+      void recordMarketingOptIn(customer.email, "checkout");
+    }
 
     return NextResponse.json({
       success: true,

@@ -178,6 +178,7 @@ export default function CheckoutPage() {
   // file. Phone-only accounts have no email, so they must enter one here to
   // receive their order confirmation / receipt.
   const [emailLockedToAccount, setEmailLockedToAccount] = useState(false);
+  const [marketingOptIn, setMarketingOptIn] = useState(false);
   const [form, setForm] = useState<CheckoutForm>({
     fullName: "",
     email: "",
@@ -388,6 +389,7 @@ export default function CheckoutPage() {
         couponCode: couponCode ?? undefined,
         pointsToRedeem: pointsToRedeem > 0 ? pointsToRedeem : undefined,
         shippingProtection: shippingProtectionEnabled,
+        marketingOptIn,
         expectedTotal: total,
         paymentMethod: selectedMethodId || undefined,
         complianceAcknowledgements: acknowledgements,
@@ -860,6 +862,11 @@ export default function CheckoutPage() {
                 </p>
               ) : null}
             </div>
+
+            <label className="mt-5 flex cursor-pointer items-start gap-2.5 text-sm text-white/70">
+              <input type="checkbox" checked={marketingOptIn} onChange={(e) => setMarketingOptIn(e.target.checked)} className="mt-0.5 h-4 w-4 accent-emerald-500" />
+              <span>Email me exclusive offers, coupons &amp; restock alerts. <span className="text-white/45">Optional — unsubscribe anytime.</span></span>
+            </label>
 
             <div className="mt-5 grid grid-cols-1 gap-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 text-xs text-white/70">
               <span className="flex items-center gap-2"><span aria-hidden>🔒</span><span>SSL-encrypted secure checkout</span></span>

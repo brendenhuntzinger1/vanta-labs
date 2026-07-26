@@ -35,7 +35,40 @@ export async function getMarketingRecipientEmails(): Promise<string[]> {
     }
   }
 
+  // Union the email-keyed opt-in list (guests + at-checkout opt-ins). Best-
+  // effort: if the table isn't present yet, fall back to account opt-ins only.
+  try {
+    const { data: subs } = await supabaseAdmin
+      .from("marketing_subscribers")
+      .select("email")
+      .is("unsubscribed_at", null);
+    for (const row of subs ?? []) {
+      const email = String(row.email ?? "").trim().toLowerCase();
+      if (email) emails.add(email);
+    }
+  } catch {
+    // marketing_subscribers not created yet — ignore.
+  }
+
   return Array.from(emails);
+}
+
+// Records a marketing opt-in (guest OR account) keyed by email so the coupon
+// broadcast can reach them. Best-effort by design — a failure here (incl. the
+// table not existing yet) must NEVER block checkout.
+export async function recordMarketingOptIn(email: string, source: string): Promise<void> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized || !normalized.includes("@")) return;
+  try {
+    await supabaseAdmin
+      .from("marketing_subscribers")
+      .upsert(
+        { email: normalized, source, opted_in_at: new Date().toISOString(), unsubscribed_at: null },
+        { onConflict: "email" },
+      );
+  } catch {
+    // Table missing (migration not run) or transient error — silently skip.
+  }
 }
 
 export function couponDiscountLabel(coupon: Pick<AdminCoupon, "discountType" | "discountValue">): string {
