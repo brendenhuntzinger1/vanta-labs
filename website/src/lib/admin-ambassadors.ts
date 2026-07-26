@@ -75,10 +75,15 @@ export async function getFraudReviewRows(): Promise<FraudReviewRow[]> {
   }));
 }
 
-export async function clearFraudFlag(referralOrderId: string) {
+// "Approve Anyway": an admin releases a fraud-held commission for payout. This
+// is a money-releasing action, so it is AUDITED (who, when, which order, why).
+export async function clearFraudFlag(
+  referralOrderId: string,
+  actor?: { username?: string | null; reason?: string | null; ipAddress?: string | null; userAgent?: string | null },
+) {
   const { data: row, error: lookupError } = await supabaseAdmin
     .from("referral_orders")
-    .select("order_id")
+    .select("order_id, fraud_reason")
     .eq("id", referralOrderId)
     .maybeSingle();
 
@@ -106,6 +111,26 @@ export async function clearFraudFlag(referralOrderId: string) {
 
   if (mirrorError) {
     throw mirrorError;
+  }
+
+  // Audit the override (best-effort: never block the release on a log failure).
+  try {
+    await supabaseAdmin.from("admin_audit_logs").insert({
+      action: "ambassador_commission_approve_anyway",
+      target_table: "referral_orders",
+      target_id: referralOrderId,
+      metadata: {
+        orderId: row.order_id,
+        clearedFraudReason: row.fraud_reason ?? null,
+        reason: actor?.reason ?? null,
+        performedBy: actor?.username ?? null,
+        ipAddress: actor?.ipAddress ?? null,
+        userAgent: actor?.userAgent ?? null,
+        performedAt: new Date().toISOString(),
+      },
+    });
+  } catch (auditError) {
+    console.error("Unable to write approve-anyway audit log", referralOrderId, auditError);
   }
 }
 

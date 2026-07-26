@@ -188,12 +188,14 @@ export async function detectCommissionFraudSignal(input: {
   city?: string | null;
   postalCode?: string | null;
 }): Promise<FraudCheckResult> {
-  // Flag on the SECOND order sharing an identity under one ambassador (was 3):
-  // catches self-dealing / duplicate-account funneling earlier. A flag only
-  // HOLDS the commission for manual review (auto-approve skips fraud_flag rows,
-  // see partner-portal.ts) — it never blocks the customer's sale — so an
-  // occasional genuine repeat customer is a cheap, safe false positive.
-  const REPEAT_THRESHOLD = 2;
+  // Flag on the 4th+ order sharing one identity (email or address) under a
+  // single ambassador. A legitimate repeat/loyal customer commonly reorders 2–3
+  // times, so flagging at 2 stranded genuine commissions; 4+ from the same
+  // identity via one code is the pattern worth a human look. A flag only HOLDS
+  // the commission for review (auto-approve skips fraud_flag rows) and never
+  // blocks the customer's sale — an admin releases it via the audited
+  // "Approve Anyway" action (clearFraudFlag).
+  const REPEAT_THRESHOLD = 4;
 
   const { data, error } = await supabaseAdmin
     .from("orders")

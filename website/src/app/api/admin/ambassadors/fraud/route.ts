@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds } from "@/lib/admin-roles";
 import { clearFraudFlag, getFraudReviewRows } from "@/lib/admin-ambassadors";
 
@@ -44,7 +44,12 @@ export async function PATCH(request: Request) {
       return NextResponse.json({ success: false, error: "referralOrderId is required" }, { status: 400 });
     }
 
-    await clearFraudFlag(referralOrderId);
+    await clearFraudFlag(referralOrderId, {
+      username: session.username,
+      reason: typeof body?.reason === "string" ? body.reason.slice(0, 500) : null,
+      ipAddress: getRequestIpAddress(request),
+      userAgent: getRequestUserAgent(request),
+    });
     const rows = await getFraudReviewRows();
     return NextResponse.json({ success: true, rows });
   } catch (error) {
