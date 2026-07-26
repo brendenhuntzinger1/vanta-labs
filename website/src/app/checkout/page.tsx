@@ -439,9 +439,10 @@ export default function CheckoutPage() {
         <main className="mx-auto max-w-3xl px-6 pb-20 pt-24 sm:pt-32 lg:px-12">
           <section className="border border-white/10 p-5 sm:p-8">
             <div className="flex flex-wrap items-center gap-2">
-              <StepPill index={1} label="Details" active />
-              <StepPill index={2} label="Review" active />
+              <StepPill index={1} label="Cart" active />
+              <StepPill index={2} label="Shipping" active />
               <StepPill index={3} label="Payment" active />
+              <StepPill index={4} label="Confirmation" />
             </div>
             <p className="vl2-eyebrow mt-5">Almost there</p>
             <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Send your {createdOrder.method.label} payment</h1>
@@ -482,9 +483,10 @@ export default function CheckoutPage() {
           </p>
 
           <div className="mt-5 flex flex-wrap gap-2">
-            <StepPill index={1} label="Details" active />
-            <StepPill index={2} label="Review" active={items.length > 0} />
+            <StepPill index={1} label="Cart" active />
+            <StepPill index={2} label="Shipping" active />
             <StepPill index={3} label="Payment" active={checkoutState === "loading" || checkoutState === "success"} />
+            <StepPill index={4} label="Confirmation" active={checkoutState === "success"} />
           </div>
         </section>
 
@@ -788,6 +790,18 @@ export default function CheckoutPage() {
                   </span>
                 </span>
               </label>
+
+              <p className="text-xs leading-relaxed text-white/45">
+                By placing your order, you agree to our{" "}
+                <a href="/legal/terms" target="_blank" rel="noopener noreferrer" className="text-white/70 underline underline-offset-2 hover:text-white">
+                  Terms &amp; Conditions
+                </a>{" "}
+                and{" "}
+                <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="text-white/70 underline underline-offset-2 hover:text-white">
+                  Privacy Policy
+                </a>
+                .
+              </p>
             </div>
           </section>
 
