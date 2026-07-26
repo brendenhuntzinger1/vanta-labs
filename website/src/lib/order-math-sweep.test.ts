@@ -125,9 +125,14 @@ describe("shipping / tax / handling edge cases", () => {
     expect(calculateShipping(250, "United States")).toBe(0);
     expect(calculateShipping(249.99, "United States")).toBe(DEFAULT_SHIPPING_CONFIG.domesticFee);
   });
-  it("international rates apply for non-domestic countries", () => {
-    expect(calculateShipping(100, "Canada")).toBe(DEFAULT_SHIPPING_CONFIG.internationalFee);
-    expect(calculateShipping(600, "Canada")).toBe(0);
+  it("north-america rates apply for Canada/Mexico", () => {
+    expect(calculateShipping(100, "Canada")).toBe(DEFAULT_SHIPPING_CONFIG.northAmericaFee);
+    expect(calculateShipping(100, "Mexico")).toBe(DEFAULT_SHIPPING_CONFIG.northAmericaFee);
+    expect(calculateShipping(DEFAULT_SHIPPING_CONFIG.northAmericaFreeShippingThreshold, "Canada")).toBe(0);
+  });
+  it("international rates apply for overseas countries", () => {
+    expect(calculateShipping(100, "Germany")).toBe(DEFAULT_SHIPPING_CONFIG.internationalFee);
+    expect(calculateShipping(600, "Germany")).toBe(0);
   });
   it("tax ignores a zero/negative rate", () => {
     expect(calculateTax(100, 0)).toBe(0);

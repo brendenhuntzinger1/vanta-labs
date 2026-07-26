@@ -528,6 +528,8 @@ export async function getShippingConfig(): Promise<ShippingConfig> {
     return {
       domesticFee: num(shipping.flat_rate, DEFAULT_SHIPPING_CONFIG.domesticFee),
       freeShippingThreshold: num(shipping.free_shipping_threshold, DEFAULT_SHIPPING_CONFIG.freeShippingThreshold),
+      northAmericaFee: num(shipping.north_america_flat_rate, DEFAULT_SHIPPING_CONFIG.northAmericaFee),
+      northAmericaFreeShippingThreshold: num(shipping.north_america_free_shipping_threshold, DEFAULT_SHIPPING_CONFIG.northAmericaFreeShippingThreshold),
       internationalFee: num(shipping.international_flat_rate, DEFAULT_SHIPPING_CONFIG.internationalFee),
       internationalFreeShippingThreshold: num(shipping.international_free_shipping_threshold, DEFAULT_SHIPPING_CONFIG.internationalFreeShippingThreshold),
     };

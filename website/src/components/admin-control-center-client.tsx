@@ -46,6 +46,8 @@ export function AdminControlCenterClient() {
   const [shippingFreeThreshold, setShippingFreeThreshold] = useState("");
   const [shippingIntlFlatRate, setShippingIntlFlatRate] = useState("");
   const [shippingIntlFreeThreshold, setShippingIntlFreeThreshold] = useState("");
+  const [shippingNaFlatRate, setShippingNaFlatRate] = useState("");
+  const [shippingNaFreeThreshold, setShippingNaFreeThreshold] = useState("");
   const [shippingTaxRate, setShippingTaxRate] = useState("");
 
   const [contentFaq, setContentFaq] = useState("");
@@ -113,6 +115,8 @@ export function AdminControlCenterClient() {
     setShippingFreeThreshold(String(shipping.free_shipping_threshold ?? ""));
     setShippingIntlFlatRate(String(shipping.international_flat_rate ?? ""));
     setShippingIntlFreeThreshold(String(shipping.international_free_shipping_threshold ?? ""));
+    setShippingNaFlatRate(String(shipping.north_america_flat_rate ?? ""));
+    setShippingNaFreeThreshold(String(shipping.north_america_free_shipping_threshold ?? ""));
     setShippingTaxRate(String(shipping.tax_rate ?? ""));
 
     const content = next.content ?? {};
@@ -210,6 +214,8 @@ export function AdminControlCenterClient() {
       { section: "shipping", key: "free_shipping_threshold", value: shippingFreeThreshold },
       { section: "shipping", key: "international_flat_rate", value: shippingIntlFlatRate },
       { section: "shipping", key: "international_free_shipping_threshold", value: shippingIntlFreeThreshold },
+      { section: "shipping", key: "north_america_flat_rate", value: shippingNaFlatRate },
+      { section: "shipping", key: "north_america_free_shipping_threshold", value: shippingNaFreeThreshold },
       { section: "shipping", key: "tax_rate", value: shippingTaxRate },
 
       { section: "content", key: "faq", value: contentFaq },
@@ -369,6 +375,8 @@ export function AdminControlCenterClient() {
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
               <label className="text-zinc-300">Domestic flat rate ($)<input value={shippingFlatRate} onChange={(e) => setShippingFlatRate(e.target.value)} placeholder="15" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Free shipping over ($)<input value={shippingFreeThreshold} onChange={(e) => setShippingFreeThreshold(e.target.value)} placeholder="250" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Canada/Mexico flat rate ($)<input value={shippingNaFlatRate} onChange={(e) => setShippingNaFlatRate(e.target.value)} placeholder="25" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Canada/Mexico free shipping over ($)<input value={shippingNaFreeThreshold} onChange={(e) => setShippingNaFreeThreshold(e.target.value)} placeholder="400" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">International flat rate ($)<input value={shippingIntlFlatRate} onChange={(e) => setShippingIntlFlatRate(e.target.value)} placeholder="45" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">International free shipping over ($)<input value={shippingIntlFreeThreshold} onChange={(e) => setShippingIntlFreeThreshold(e.target.value)} placeholder="500" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Sales tax rate (%)<input value={shippingTaxRate} onChange={(e) => setShippingTaxRate(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>

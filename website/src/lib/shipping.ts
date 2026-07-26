@@ -12,6 +12,9 @@ export const FREE_SHIPPING_THRESHOLD = 250;
 export const DOMESTIC_SHIPPING_FEE = 15;
 export const INTERNATIONAL_FREE_SHIPPING_THRESHOLD = 600;
 export const INTERNATIONAL_SHIPPING_FEE = 60;
+// North America (Canada & Mexico) — a middle zone between US and overseas.
+export const NORTH_AMERICA_SHIPPING_FEE = 25;
+export const NORTH_AMERICA_FREE_SHIPPING_THRESHOLD = 400;
 
 // Admin-editable shipping settings. An admin sets these in Admin → Control
 // Center → Shipping (stored in the "shipping" control section); the coded
@@ -22,6 +25,8 @@ export const INTERNATIONAL_SHIPPING_FEE = 60;
 export interface ShippingConfig {
   domesticFee: number;
   freeShippingThreshold: number;
+  northAmericaFee: number;
+  northAmericaFreeShippingThreshold: number;
   internationalFee: number;
   internationalFreeShippingThreshold: number;
 }
@@ -29,6 +34,8 @@ export interface ShippingConfig {
 export const DEFAULT_SHIPPING_CONFIG: ShippingConfig = {
   domesticFee: DOMESTIC_SHIPPING_FEE,
   freeShippingThreshold: FREE_SHIPPING_THRESHOLD,
+  northAmericaFee: NORTH_AMERICA_SHIPPING_FEE,
+  northAmericaFreeShippingThreshold: NORTH_AMERICA_FREE_SHIPPING_THRESHOLD,
   internationalFee: INTERNATIONAL_SHIPPING_FEE,
   internationalFreeShippingThreshold: INTERNATIONAL_FREE_SHIPPING_THRESHOLD,
 };
@@ -49,6 +56,22 @@ export function isDomesticCountry(country?: string | null): boolean {
   return DOMESTIC_COUNTRY_NAMES.has(country.trim().toLowerCase());
 }
 
+const NORTH_AMERICA_COUNTRY_NAMES = new Set([
+  "canada", "ca", "can",
+  "mexico", "méxico", "mx", "mex",
+]);
+
+export type ShippingZone = "domestic" | "north_america" | "international";
+
+// Three-zone model: US (domestic), Canada/Mexico (north_america), everywhere
+// else (international). Unknown/empty country defaults to domestic so the cart
+// preview (before a shipping address is entered) matches prior behavior.
+export function resolveShippingZone(country?: string | null): ShippingZone {
+  if (isDomesticCountry(country)) return "domestic";
+  if (NORTH_AMERICA_COUNTRY_NAMES.has((country ?? "").trim().toLowerCase())) return "north_america";
+  return "international";
+}
+
 export function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -60,10 +83,17 @@ export function calculateShipping(
 ): number {
   if (subtotal <= 0) return 0;
 
-  if (isDomesticCountry(country)) {
+  const zone = resolveShippingZone(country);
+  if (zone === "domestic") {
     return subtotal >= config.freeShippingThreshold ? 0 : config.domesticFee;
   }
-
+  if (zone === "north_america") {
+    // Defensive ?? so a stale/partial config (missing the newer fields) still
+    // resolves to sane defaults instead of NaN.
+    const fee = config.northAmericaFee ?? DEFAULT_SHIPPING_CONFIG.northAmericaFee;
+    const threshold = config.northAmericaFreeShippingThreshold ?? DEFAULT_SHIPPING_CONFIG.northAmericaFreeShippingThreshold;
+    return subtotal >= threshold ? 0 : fee;
+  }
   return subtotal >= config.internationalFreeShippingThreshold ? 0 : config.internationalFee;
 }
 

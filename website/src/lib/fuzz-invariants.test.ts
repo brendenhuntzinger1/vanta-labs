@@ -214,11 +214,15 @@ describe(`fuzz: pricing / shipping / tax / ledger invariants (${ITER.toLocaleStr
     const cfg = DEFAULT_SHIPPING_CONFIG;
     for (let i = 0; i < ITER; i++) {
       const subtotal = g.money(1500);
-      const domestic = g.bool();
-      const ship = calculateShipping(subtotal, domestic ? "United States" : "Canada", cfg);
+      const zone = g.pick(["domestic", "north_america", "international"] as const);
+      const country = zone === "domestic" ? "United States" : zone === "north_america" ? "Canada" : "Germany";
+      const ship = calculateShipping(subtotal, country, cfg);
       check(ship >= 0, () => `neg ship`);
-      const expected = subtotal <= 0 ? 0 : domestic ? (subtotal >= cfg.freeShippingThreshold ? 0 : cfg.domesticFee) : (subtotal >= cfg.internationalFreeShippingThreshold ? 0 : cfg.internationalFee);
-      check(ship === expected, () => `ship ${ship} != ${expected}`);
+      const expected = subtotal <= 0 ? 0
+        : zone === "domestic" ? (subtotal >= cfg.freeShippingThreshold ? 0 : cfg.domesticFee)
+        : zone === "north_america" ? (subtotal >= cfg.northAmericaFreeShippingThreshold ? 0 : cfg.northAmericaFee)
+        : (subtotal >= cfg.internationalFreeShippingThreshold ? 0 : cfg.internationalFee);
+      check(ship === expected, () => `ship ${ship} != ${expected} (zone ${zone})`);
       CASES++;
     }
     expect(CASES).toBeGreaterThan(0);
