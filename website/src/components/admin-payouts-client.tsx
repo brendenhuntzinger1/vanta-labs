@@ -23,6 +23,11 @@ function Row({ row }: { row: PayoutRow }) {
   const [busy, setBusy] = useState(false);
 
   const setStatus = async (status: string) => {
+    // Confirm the irreversible money-record action (parity with the other
+    // dangerous admin actions). "Reset"/pending needs no confirmation.
+    if (status === "paid" && !window.confirm(`Mark the fulfillment payout for order ${row.order_number} (${money(row.threeplOwed)}) as PAID? This records that you have paid the 3PL provider.`)) {
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetch(`/api/admin/payouts/${row.order_id}`, {
