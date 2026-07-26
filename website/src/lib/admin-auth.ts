@@ -131,6 +131,7 @@ export async function verifyAdminSessionToken(token: string | null | undefined) 
     return null;
   }
 
+  try {
   const tokenHash = hashToken(token);
   const nowIso = new Date().toISOString();
 
@@ -172,6 +173,12 @@ export async function verifyAdminSessionToken(token: string | null | undefined) 
     username: String(data.username),
     role: normalizeAdminRole(credential.role),
   };
+  } catch {
+    // Fail closed but never throw: a transient Supabase error denies access
+    // (redirect to admin login) instead of crashing the admin panel and every
+    // admin API route. A genuine session recovers on the next request.
+    return null;
+  }
 }
 
 export async function verifyAdminSessionFromCookie() {

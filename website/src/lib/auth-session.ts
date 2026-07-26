@@ -18,14 +18,22 @@ export async function getAuthenticatedUser() {
     return null;
   }
 
-  const supabaseAuthClient = createServerClient();
-  const { data, error } = await supabaseAuthClient.auth.getUser(accessToken);
+  try {
+    const supabaseAuthClient = createServerClient();
+    const { data, error } = await supabaseAuthClient.auth.getUser(accessToken);
 
-  if (error || !data.user) {
+    if (error || !data.user) {
+      return null;
+    }
+
+    return data.user;
+  } catch {
+    // Never throw on a transient auth-backend failure (network/DNS/timeout).
+    // This helper gates almost every server component; callers treat null as
+    // "logged out", so a Supabase blip degrades to a signed-out view instead of
+    // crashing every authenticated page. Same resilience posture as middleware.
     return null;
   }
-
-  return data.user;
 }
 
 export function buildAuthCookieValue(accessToken: string, rememberMe = true) {

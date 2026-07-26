@@ -25,13 +25,17 @@ export async function GET() {
     database = "unreachable";
   }
 
+  // Readiness reflects the DB in the HTTP STATUS, not just the body: return 503
+  // when the database is unreachable so a status-code-only uptime monitor (the
+  // common case) actually alerts instead of seeing a false 200.
+  const healthy = database === "ok";
   return NextResponse.json(
     {
-      status: "ok",
+      status: healthy ? "ok" : "degraded",
       database,
       latencyMs: Date.now() - startedAt,
       timestamp: new Date().toISOString(),
     },
-    { status: 200, headers: { "Cache-Control": "no-store" } },
+    { status: healthy ? 200 : 503, headers: { "Cache-Control": "no-store" } },
   );
 }
