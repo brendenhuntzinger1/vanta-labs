@@ -496,7 +496,7 @@ export function AccountAuthForm() {
               onChange={(event) => setResearchUseAgreed(event.target.checked)}
               className="mt-0.5 h-5 w-5 shrink-0 accent-emerald-500"
             />
-            <span>I agree and understand that the products on this site are intended for research use only, as defined by FDA.</span>
+            <span>I agree and understand that the products on this site are intended strictly for laboratory research use only, and not for human or animal consumption.</span>
           </label>
         </div>
       ) : null}

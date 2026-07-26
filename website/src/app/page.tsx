@@ -139,7 +139,7 @@ export default async function HomePage() {
               {control.heroHeadline ?? "Precision, in every vial."}
             </h1>
             <p className="mt-6 max-w-md text-sm leading-7 text-white/70 sm:text-base">
-              {control.heroSubheadline ?? "Vanta Labs sources, verifies, and ships research compounds with the discipline of a clinical laboratory."}
+              {control.heroSubheadline ?? "Vanta Labs sources, verifies, and ships research compounds with the discipline of an analytical laboratory."}
             </p>
             <div className="mt-9 flex flex-wrap gap-3">
               <Link href="/products" className="vl2-btn-primary vl-focus-ring px-7 py-3.5">
