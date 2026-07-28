@@ -46,9 +46,16 @@ export const metadata: Metadata = {
   },
   description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
   applicationName: "Vanta Labs",
+  manifest: "/site.webmanifest",
   icons: {
-    icon: "/images/vantalabs.png",
-    apple: "/images/vantalabs.png",
+    icon: [
+      { url: "/favicon.ico", sizes: "any" },
+      { url: "/icons/icon-16.png", type: "image/png", sizes: "16x16" },
+      { url: "/icons/icon-32.png", type: "image/png", sizes: "32x32" },
+      { url: "/icons/icon-192.png", type: "image/png", sizes: "192x192" },
+      { url: "/icons/icon-512.png", type: "image/png", sizes: "512x512" },
+    ],
+    apple: [{ url: "/icons/apple-icon-180.png", sizes: "180x180", type: "image/png" }],
   },
   openGraph: {
     type: "website",
