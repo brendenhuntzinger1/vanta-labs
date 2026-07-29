@@ -660,10 +660,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [referralDetails, pointsToRedeem, totalAfterCredit],
   );
 
-  // Optional shipping-protection add-on (loss/theft/damage). Default OFF; the
-  // fee is tiered on the merchandise subtotal and added on top of the total,
-  // mirrored exactly by the server (payment-service) so preview == charge.
-  const [shippingProtectionEnabled, setShippingProtectionEnabled] = useState(false);
+  // Shipping-protection add-on (loss/theft/damage). Added by DEFAULT — the
+  // cart and checkout both show it as a visible, pre-checked line item with
+  // its fee, and one untick removes it (still strictly optional). Fee is a
+  // percentage of the merchandise subtotal (shipping-protection.ts), mirrored
+  // exactly by the server (payment-service) so preview == charge.
+  const [shippingProtectionEnabled, setShippingProtectionEnabled] = useState(true);
   const shippingProtectionFee = shippingProtectionEnabled ? calculateShippingProtectionFee(subtotal) : 0;
 
   const total = Math.max(0, totalAfterCredit - pointsRedeemedDiscount) + shippingProtectionFee;

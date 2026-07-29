@@ -6,10 +6,16 @@ function round2(v: number) {
   return Math.round(v * 100) / 100;
 }
 
-// The largest optional shipping-protection fee. Protection is folded into
-// amount_paid but not stored as its own column, so a fully-reconciled order can
-// legitimately be up to this much above the component-derived expected total.
-export const MAX_SHIPPING_PROTECTION_FEE = 4.99;
+// Protection is folded into amount_paid but not stored as its own column, so a
+// fully-reconciled order can legitimately be up to the protection fee above the
+// component-derived expected total. The fee is a percentage of the merchandise
+// subtotal (see shipping-protection.ts), so the allowance is computed per order
+// from its subtotal rather than a flat cap.
+import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
+
+export function maxShippingProtectionFee(subtotal: number): number {
+  return calculateShippingProtectionFee(subtotal);
+}
 
 export interface ExpectedTotalComponents {
   subtotal: number;
@@ -28,13 +34,14 @@ export function expectedOrderTotal(c: ExpectedTotalComponents): number {
   return round2(c.subtotal + c.tax + c.cardFee + c.shipping - c.discount - c.storeCredit - c.pointsDollars);
 }
 
-// A TRUE mismatch is either underpayment, or an overage beyond the max
+// A TRUE mismatch is either underpayment, or an overage beyond the order's max
 // protection fee. An order that paid between expectedTotal and expectedTotal +
 // maxProtectionFee is reconciled (the difference is the protection fee).
+// Callers pass maxShippingProtectionFee(order.subtotal).
 export function isTotalMismatch(
   amountPaid: number,
   expectedTotal: number,
-  maxProtectionFee: number = MAX_SHIPPING_PROTECTION_FEE,
+  maxProtectionFee: number,
 ): boolean {
   return amountPaid < expectedTotal - 0.01 || amountPaid > expectedTotal + maxProtectionFee + 0.01;
 }
