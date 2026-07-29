@@ -887,7 +887,10 @@ export default function CheckoutPage() {
                   <span>Sales tax{taxQuote.state ? ` (${taxQuote.state} · ${taxQuote.ratePercent}%)` : ""}</span>
                   <span>{formatCartCurrency(taxAmount)}</span>
                 </div>
-              ) : taxQuote.reason === "no_state" && isDomesticCountry(form.country) ? (
+              ) : taxQuote.reason === "no_state" && isDomesticCountry(form.country) && salesTaxConfig.nexusStates.length > 0 ? (
+                // Only worth prompting for the address when tax collection is
+                // actually configured — with no nexus states, no address ever
+                // produces tax, so show nothing instead of a dead hint row.
                 <div className="flex justify-between text-white/40"><span>Sales tax</span><span>Enter address</span></div>
               ) : null}
               <label className="flex cursor-pointer items-start justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
