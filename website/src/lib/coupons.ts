@@ -225,9 +225,12 @@ export interface ActiveCouponSummary {
 export async function getStorefrontCoupon(): Promise<ActiveCouponSummary | null> {
   const nowIso = new Date().toISOString();
 
-  const { data, error } = await supabaseAdmin
+  // is_private is a newer column (coupon-private-flag.sql): private codes are
+  // valid at checkout but never advertised. If the migration hasn't been
+  // applied yet, retry without the column — pre-migration behavior unchanged.
+  let { data, error } = await supabaseAdmin
     .from("coupons")
-    .select("code, discount_type, discount_value, ends_at, active, assigned_email, max_redemptions, redemptions_count")
+    .select("code, discount_type, discount_value, ends_at, active, assigned_email, max_redemptions, redemptions_count, is_private")
     .eq("active", true)
     .is("assigned_email", null)
     .or(`starts_at.is.null,starts_at.lte.${nowIso}`)
@@ -236,12 +239,29 @@ export async function getStorefrontCoupon(): Promise<ActiveCouponSummary | null>
     .limit(10);
 
   if (error) {
+    const fallback = await supabaseAdmin
+      .from("coupons")
+      .select("code, discount_type, discount_value, ends_at, active, assigned_email, max_redemptions, redemptions_count")
+      .eq("active", true)
+      .is("assigned_email", null)
+      .or(`starts_at.is.null,starts_at.lte.${nowIso}`)
+      .or(`ends_at.is.null,ends_at.gte.${nowIso}`)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    data = fallback.data as typeof data;
+    error = fallback.error;
+  }
+
+  if (error) {
     throw error;
   }
 
-  // Skip any code that has already hit its redemption cap.
+  // Skip private (unlisted) codes and any code that has already hit its
+  // redemption cap.
   const usable = (data ?? []).find(
-    (row) => !(typeof row.max_redemptions === "number" && Number(row.redemptions_count ?? 0) >= row.max_redemptions),
+    (row) =>
+      !(row as { is_private?: boolean }).is_private
+      && !(typeof row.max_redemptions === "number" && Number(row.redemptions_count ?? 0) >= row.max_redemptions),
   );
 
   if (!usable) {
@@ -262,9 +282,12 @@ export async function getStorefrontCoupon(): Promise<ActiveCouponSummary | null>
 export async function getActiveCouponsForDisplay(): Promise<ActiveCouponSummary[]> {
   const nowIso = new Date().toISOString();
 
-  const { data, error } = await supabaseAdmin
+  // Same is_private handling as getStorefrontCoupon: private codes work at
+  // checkout but never appear in customer-facing lists; fall back to the
+  // pre-migration select if the column doesn't exist yet.
+  let { data, error } = await supabaseAdmin
     .from("coupons")
-    .select("code, discount_type, discount_value, starts_at, ends_at, active, assigned_email")
+    .select("code, discount_type, discount_value, starts_at, ends_at, active, assigned_email, is_private")
     // Only store-wide coupons belong in a customer-facing list. Personal codes
     // (assigned_email — e.g. auto-minted SAVE-… cart-recovery codes) are tied to
     // one shopper and must never be advertised here.
@@ -276,10 +299,24 @@ export async function getActiveCouponsForDisplay(): Promise<ActiveCouponSummary[
     .limit(10);
 
   if (error) {
+    const fallback = await supabaseAdmin
+      .from("coupons")
+      .select("code, discount_type, discount_value, starts_at, ends_at, active, assigned_email")
+      .eq("active", true)
+      .is("assigned_email", null)
+      .or(`starts_at.is.null,starts_at.lte.${nowIso}`)
+      .or(`ends_at.is.null,ends_at.gte.${nowIso}`)
+      .order("created_at", { ascending: false })
+      .limit(10);
+    data = fallback.data as typeof data;
+    error = fallback.error;
+  }
+
+  if (error) {
     throw error;
   }
 
-  return (data ?? []).map((row) => ({
+  return (data ?? []).filter((row) => !(row as { is_private?: boolean }).is_private).map((row) => ({
     code: String(row.code),
     discountType: row.discount_type === "fixed" ? "fixed" : "percent",
     discountValue: Number(row.discount_value ?? 0),
