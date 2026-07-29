@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
+import { HeroVideo } from "@/components/hero-video";
 import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { getHomepageControlConfig } from "@/lib/admin-control";
@@ -115,16 +116,7 @@ export default async function HomePage() {
       <main>
 
       <section className="vl2-hero">
-        <video
-          className="vl2-hero-video"
-          src="/videos/vanta-labs-hero.mp4"
-          autoPlay
-          muted
-          loop
-          playsInline
-          preload="metadata"
-          aria-hidden="true"
-        />
+        <HeroVideo className="vl2-hero-video" src="/videos/vanta-labs-hero.mp4" />
         <div className="vl2-hero-scrim" aria-hidden="true" />
 
         <div className="vl2-hero-content mx-auto w-full max-w-[1440px] px-4 sm:px-6 pb-20 pt-40 lg:px-12 lg:pb-28">
@@ -144,9 +136,6 @@ export default async function HomePage() {
             <div className="mt-9 flex flex-wrap gap-3">
               <Link href="/products" className="vl2-btn-primary vl-focus-ring px-7 py-3.5">
                 Shop the catalog
-              </Link>
-              <Link href="/coa-library" className="vl2-btn-secondary vl-focus-ring px-7 py-3.5">
-                View Certificates of Analysis
               </Link>
             </div>
           </div>
