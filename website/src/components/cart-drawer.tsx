@@ -47,7 +47,6 @@ export function CartDrawer() {
     bulkSavingsApplied,
     bulkSavingsPercent,
     bulkSavingsProgress,
-    taxAmount,
   } = useCart();
 
   const shippingProgress = getShippingProgress(subtotal);
@@ -368,12 +367,10 @@ export function CartDrawer() {
                 <span>+{formatCartCurrency(shippingProtectionFee)}</span>
               </div>
             ) : null}
-            {taxAmount > 0 ? (
-              <div className="mt-2 flex justify-between">
-                <span>Sales tax</span>
-                <span>{formatCartCurrency(taxAmount)}</span>
-              </div>
-            ) : null}
+            <div className="mt-2 flex justify-between text-white/40">
+              <span>Sales tax</span>
+              <span>Calculated at checkout</span>
+            </div>
             <div className="mt-3 flex justify-between border-t border-zinc-800 pt-3 text-base font-semibold text-white">
               <span>Final total</span>
               <span>{formatCartCurrency(total)}</span>

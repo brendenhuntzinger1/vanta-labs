@@ -8,7 +8,8 @@ import {
   type DiscountComponent,
 } from "@/lib/profit-engine";
 import { resolveRefundOutcome, computeRetainedCommission } from "@/lib/payment-webhook";
-import { calculateShipping, calculateTax, DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
+import { calculateShipping, DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
+import { calculateTaxAmount as calculateTax } from "@/lib/sales-tax";
 import {
   getBundleDiscountedUnitPrice,
   getBundleDiscountedLineTotal,

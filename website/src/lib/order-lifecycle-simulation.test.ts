@@ -32,9 +32,9 @@ import {
 } from "@/lib/profit-engine";
 import {
   calculateShipping,
-  calculateTax,
   DEFAULT_SHIPPING_CONFIG,
 } from "@/lib/shipping";
+import { calculateTaxAmount as calculateTax } from "@/lib/sales-tax";
 import {
   calculateBulkSavingsDiscount,
   DEFAULT_BULK_SAVINGS_CONFIG,
@@ -219,7 +219,11 @@ function simulateOrder(): SimResult {
     new Set<DiscountComponent>(["coupon", "referral", "bundle", "membership"]),
   );
   const discountAmount = customerDiscount.amount;
-  const taxPercent = 0; // storefront default (no tax until admin sets one)
+  // Tax is address-based (sales-tax.ts): 0 models a non-nexus destination —
+  // the production default until the admin configures nexus states. Rate
+  // application itself is covered exhaustively in sales-tax.test.ts and
+  // order-math-sweep.test.ts; tax is pass-through in every money invariant.
+  const taxPercent = 0;
   const taxAmount = calculateTax(Math.max(0, round(subtotal - discountAmount)), taxPercent);
 
   // ---- PROFIT GUARD (REAL): worst-case cost, real processing % ----

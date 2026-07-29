@@ -312,3 +312,8 @@ Apply these SQL files in order (each is idempotent):
 10. **`manual-payments.sql`** (new — manual payments, order number, tax, proofs)
 11. **`fulfillment-3pl.sql`** (new — 3PL orders/events/payouts)
 12. Supabase advisor fixes (`supabase-*-advisor-*.sql`)
+13. `orders-state-phone.sql` (shipping state + phone captured at checkout)
+14. `inventory-enforce-positive-stock.sql` (reservations on any positive stock)
+15. **`dynamic-sales-tax.sql`** (new — per-order tax rate + destination state
+    for the address-based sales-tax system; tax is collected only for
+    admin-configured nexus states at destination-state rates)

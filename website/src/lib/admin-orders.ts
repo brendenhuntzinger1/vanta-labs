@@ -8,6 +8,7 @@ export interface AdminOrderRow {
   customer_email: string | null;
   customer_name: string | null;
   amount_paid: number;
+  tax_amount: number;
   referral_code: string | null;
   coupon_code: string | null;
   payment_status: string;
@@ -53,7 +54,7 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
   let query = supabaseAdmin
     .from("orders")
     .select(
-      "id, order_id, customer_email, customer_name, amount_paid, referral_code, coupon_code, payment_status, fulfillment_status, refund_amount, created_at",
+      "id, order_id, customer_email, customer_name, amount_paid, tax_amount, referral_code, coupon_code, payment_status, fulfillment_status, refund_amount, created_at",
       { count: "exact" },
     )
     .order("created_at", { ascending: false });
@@ -106,6 +107,7 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
       customer_email: order.customer_email,
       customer_name: order.customer_name,
       amount_paid: Number(order.amount_paid ?? 0),
+      tax_amount: Number(order.tax_amount ?? 0),
       referral_code: order.referral_code,
       coupon_code: order.coupon_code,
       payment_status: order.payment_status,

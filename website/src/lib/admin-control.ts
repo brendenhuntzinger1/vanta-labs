@@ -3,6 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
+import { DEFAULT_SALES_TAX_CONFIG, normalizeUsState, type SalesTaxConfig } from "@/lib/sales-tax";
 import { resolveBundleConfig, type BundleConfig } from "@/lib/bundle-pricing";
 import {
   DEFAULT_PAYMENT_METHODS,
@@ -365,7 +366,24 @@ export async function getWelcomeOffer(): Promise<WelcomeOffer> {
 
 // Default sales-tax rate applied when an admin hasn't set one. Editable in the
 // Control Center → Shipping (enter 0 to collect no sales tax).
-export const DEFAULT_SALES_TAX_PERCENT = 8;
+// ——— Sales tax (dynamic, address-based) ————————————————————————————————
+// The old storewide flat rate (shipping.tax_rate, default 8%) is GONE. Tax is
+// now resolved per order from the shipping address by src/lib/sales-tax.ts:
+// collected only for states in the admin-configured nexus list, at each
+// state's combined average rate (override-able per state below).
+
+export type SalesTaxProviderName = "builtin" | "taxjar" | "avalara";
+
+export interface SalesTaxSettings extends SalesTaxConfig {
+  // Which rate source computes quotes. "builtin" is the bundled state-level
+  // resolver; "taxjar" / "avalara" are reserved for the live-rate integration
+  // (see tax-provider.ts) and fall back to builtin until wired + configured.
+  provider: SalesTaxProviderName;
+  // Stored credentials for the future provider integration (never sent to the
+  // client; only *ApiKeySet booleans surface in the admin UI).
+  taxjarApiKey: string;
+  avalaraLicenseKey: string;
+}
 // Default customer discount for a valid ambassador referral code.
 export const DEFAULT_REFERRAL_DISCOUNT_PERCENT = 10;
 // Default personal discount an approved ambassador gets on their OWN purchases.
@@ -375,20 +393,55 @@ export const DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT = 15;
 // Admin → Partners.
 export const DEFAULT_AMBASSADOR_COMMISSION_PERCENT = 10;
 
-// Flat sales-tax rate (percent) an admin sets in the Control Center. Applied to
-// the post-discount merchandise total at checkout. Unset falls back to
-// DEFAULT_SALES_TAX_PERCENT; an explicit "0" turns sales tax off.
-export async function getTaxRatePercent(): Promise<number> {
+// Reads the "tax" control section. Defaults are deliberately conservative:
+// with no nexus states configured, NO tax is collected anywhere — a store
+// must never collect tax it isn't registered to remit. (The legacy flat
+// shipping.tax_rate value is intentionally ignored.)
+export async function getSalesTaxSettings(): Promise<SalesTaxSettings> {
+  const defaults: SalesTaxSettings = {
+    ...DEFAULT_SALES_TAX_CONFIG,
+    provider: "builtin",
+    taxjarApiKey: "",
+    avalaraLicenseKey: "",
+  };
   try {
-    const snapshot = await getControlSnapshot("shipping");
-    const value = (snapshot.shipping ?? {}).tax_rate;
-    if (value === "" || value == null) {
-      return DEFAULT_SALES_TAX_PERCENT;
+    const snapshot = await getControlSnapshot("tax");
+    const section = snapshot.tax ?? {};
+
+    const nexusStates = String(section.nexus_states ?? "")
+      .split(",")
+      .map((s) => normalizeUsState(s))
+      .filter((s): s is string => Boolean(s));
+
+    let rateOverrides: Record<string, number> = {};
+    try {
+      const parsed = JSON.parse(String(section.rate_overrides ?? "{}"));
+      if (parsed && typeof parsed === "object") {
+        for (const [state, rate] of Object.entries(parsed)) {
+          const code = normalizeUsState(state);
+          const value = Number(rate);
+          if (code && Number.isFinite(value) && value >= 0 && value <= 25) {
+            rateOverrides[code] = value;
+          }
+        }
+      }
+    } catch {
+      rateOverrides = {};
     }
-    const rate = Number(value);
-    return Number.isFinite(rate) && rate >= 0 ? rate : DEFAULT_SALES_TAX_PERCENT;
+
+    const providerRaw = String(section.provider ?? "builtin").trim().toLowerCase();
+    const provider: SalesTaxProviderName =
+      providerRaw === "taxjar" || providerRaw === "avalara" ? providerRaw : "builtin";
+
+    return {
+      nexusStates: Array.from(new Set(nexusStates)),
+      rateOverrides,
+      provider,
+      taxjarApiKey: String(section.taxjar_api_key ?? ""),
+      avalaraLicenseKey: String(section.avalara_license_key ?? ""),
+    };
   } catch {
-    return DEFAULT_SALES_TAX_PERCENT;
+    return defaults;
   }
 }
 

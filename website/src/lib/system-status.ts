@@ -4,7 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { isCheckoutOpen, isMockPaymentMode } from "@/lib/payment-provider";
 import { getEmailAdminSettings } from "@/lib/email/settings";
 import { getFulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
-import { getTaxRatePercent } from "@/lib/admin-control";
+import { getSalesTaxSettings } from "@/lib/admin-control";
 
 // Owner-facing integration health. NEVER exposes secrets — only whether each
 // integration is configured/reachable and a plain-English detail. Powers the
@@ -118,18 +118,23 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
     blocksLaunch: false,
   });
 
-  // Sales tax.
-  let taxPct = 0;
+  // Sales tax — dynamic, from the shipping address. Collected only for the
+  // admin-configured nexus states; an empty list means NO tax is collected
+  // anywhere, which is worth an amber nudge (correct for a brand-new store,
+  // but the owner should confirm their home state is registered + checked).
+  let nexusStates: string[] = [];
   try {
-    taxPct = await getTaxRatePercent();
+    nexusStates = (await getSalesTaxSettings()).nexusStates;
   } catch {
-    taxPct = 0;
+    nexusStates = [];
   }
   out.push({
     key: "tax",
     label: "Sales tax",
-    level: "ok",
-    detail: `${taxPct}% applied to the post-discount merchandise total`,
+    level: nexusStates.length > 0 ? "ok" : "warn",
+    detail: nexusStates.length > 0
+      ? `Collecting for ${nexusStates.join(", ")} at destination-state rates (address-based)`
+      : "No nexus states configured — no sales tax is being collected. Set your registered state(s) in Control Center → Sales Tax.",
     blocksLaunch: false,
   });
 

@@ -94,6 +94,24 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
           </section>
         ) : null}
 
+        <section className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-4 sm:p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-300">Charges</h2>
+          <dl className="mt-3 space-y-1.5 text-sm">
+            <div className="flex justify-between"><dt className="text-zinc-400">Subtotal</dt><dd className="text-zinc-200 tabular-nums">{money(Number(data.subtotal ?? 0))}</dd></div>
+            {Number(data.discount_amount ?? 0) > 0 ? <div className="flex justify-between"><dt className="text-zinc-400">Discount</dt><dd className="text-zinc-200 tabular-nums">−{money(Number(data.discount_amount ?? 0))}</dd></div> : null}
+            <div className="flex justify-between"><dt className="text-zinc-400">Shipping</dt><dd className="text-zinc-200 tabular-nums">{money(Number(data.shipping_amount ?? 0))}</dd></div>
+            <div className="flex justify-between">
+              <dt className="text-zinc-400">
+                Sales tax
+                {data.tax_state ? <span className="text-zinc-500"> ({String(data.tax_state)}{Number(data.tax_rate_percent ?? 0) > 0 ? ` · ${Number(data.tax_rate_percent)}%` : ""})</span> : null}
+              </dt>
+              <dd className="text-zinc-200 tabular-nums">{money(Number(data.tax_amount ?? 0))}</dd>
+            </div>
+            {Number(data.card_processing_fee ?? 0) > 0 ? <div className="flex justify-between"><dt className="text-zinc-400">Card processing fee</dt><dd className="text-zinc-200 tabular-nums">{money(Number(data.card_processing_fee ?? 0))}</dd></div> : null}
+            <div className="flex justify-between border-t border-white/10 pt-1.5 font-semibold"><dt className="text-zinc-300">Total charged</dt><dd className="tabular-nums text-white">{money(Number(data.amount_paid ?? 0))}</dd></div>
+          </dl>
+        </section>
+
         <AdminOrderTimeline entries={auditRows ?? []} />
 
         <pre className="mt-6 overflow-x-auto rounded-xl bg-zinc-950 p-3 text-xs text-zinc-300 sm:p-4 sm:text-sm">

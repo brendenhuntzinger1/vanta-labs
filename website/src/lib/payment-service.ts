@@ -9,11 +9,13 @@ import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
-import { calculateShipping, calculateTax, isShippableCountry } from "@/lib/shipping";
+import { calculateShipping, isDomesticCountry, isShippableCountry } from "@/lib/shipping";
+import { normalizeUsState } from "@/lib/sales-tax";
+import { quoteSalesTax } from "@/lib/tax-provider";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { isApprovedAmbassadorCustomer } from "@/lib/ambassador-status";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
-import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getTaxRatePercent, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
+import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
 import { computeProfit, resolveCustomerDiscount } from "@/lib/profit-engine";
 import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -118,6 +120,13 @@ function validateCustomer(customer: CustomerInput) {
  // so it can't be bypassed even if the client country selector is tampered with.
  if (!isShippableCountry(customer.country)) {
  throw new Error("We currently ship only to the United States and Canada.");
+ }
+
+ // US orders must carry a recognizable state: sales tax is resolved from it,
+ // so a crafted request without one could dodge tax in a nexus state. The
+ // checkout UI already requires this; the server is the authority.
+ if (isDomesticCountry(customer.country) && !normalizeUsState(customer.state)) {
+ throw new Error("Please select the state for your shipping address.");
  }
 }
 
@@ -325,12 +334,11 @@ export async function createCheckoutSession(
  ),
  );
 
- const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, taxRatePercent, shippingConfig, memberPerks, referralProgram, couponPolicy] = await Promise.all([
+ const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, shippingConfig, memberPerks, referralProgram, couponPolicy] = await Promise.all([
    Promise.resolve(homepageControlConfig),
    getBulkSavingsControlConfig(),
    payload.customerUserId ? isEligibleForBulkSavings(payload.customerUserId) : Promise.resolve(false),
    payload.customerUserId ? isPriorityMember(payload.customerUserId) : Promise.resolve(false),
-   getTaxRatePercent(),
    getShippingConfig(),
    payload.customerUserId
      ? getMembershipPerks(payload.customerUserId)
@@ -459,9 +467,21 @@ export async function createCheckoutSession(
  const discountAmount = customerDiscount.amount;
  const bulkDiscountTier = customerDiscount.label === "Bulk savings" ? bulkSavingsResult.tier : null;
 
- // Sales tax on the post-discount merchandise total (0 unless an admin sets a
- // rate). Same shared calculateTax the client preview uses, so totals agree.
- const taxAmount = calculateTax(Math.max(0, roundMoney(subtotal - discountAmount)), taxRatePercent);
+ // Sales tax — dynamic, from the SHIPPING ADDRESS: collected only for
+ // destinations in the admin-configured nexus states, at the destination
+ // state's rate (shipping included in the base where that state taxes it).
+ // quoteSalesTax runs the same shared resolveSalesTax the checkout preview
+ // uses, so the client and server totals agree line for line.
+ const taxQuote = await quoteSalesTax({
+   taxableAmount: Math.max(0, roundMoney(subtotal - discountAmount)),
+   shippingAmount: shipping,
+   country: payload.customer.country,
+   state: payload.customer.state,
+   city: payload.customer.city,
+   postalCode: payload.customer.postalCode,
+   street: payload.customer.address,
+ });
+ const taxAmount = taxQuote.amount;
 
  // PROFIT GUARD — never let this pricing combination complete below the store's
  // configured floor (default: never negative). Uses the shared profit-engine
@@ -515,7 +535,10 @@ export async function createCheckoutSession(
      // yet finalize at a real cash loss equal to the shipping cost.
      shippingCost: profitSettings.shippingCostPerOrder,
      handlingCollected: 0,
-     taxPercent: taxRatePercent,
+     // Effective rate actually applied to this destination (0 when the
+     // order ships to a non-nexus state). Tax stays pass-through in the
+     // engine; the rate only feeds the processing-fee-on-total model.
+     taxPercent: taxQuote.ratePercent,
    },
    { amount: discountAmount, components: [], label: "resolved" },
  );
@@ -636,13 +659,20 @@ export async function createCheckoutSession(
    updated_at: new Date().toISOString(),
  };
 
- // state/phone are new columns (see orders-state-phone.sql). Try to store them,
- // but if the migration hasn't been applied yet, fall back to inserting without
- // them so checkout NEVER breaks over a missing column.
+ // state/phone (orders-state-phone.sql) and the tax recordkeeping fields
+ // (dynamic-sales-tax.sql) are newer columns. Try to store them, but if a
+ // migration hasn't been applied yet, fall back to inserting without them so
+ // checkout NEVER breaks over a missing column. tax_amount itself is an
+ // original column and always stored (in baseOrderRow above).
  const orderRowWithContact = {
    ...baseOrderRow,
    state: payload.customer.state ?? null,
    phone: payload.customer.phone ?? null,
+   // Exact tax audit trail: the rate applied and the destination state it
+   // was applied for (null when no tax was collected), so the admin tax
+   // report can group collections by state without re-deriving rates.
+   tax_rate_percent: taxQuote.collected ? taxQuote.ratePercent : 0,
+   tax_state: taxQuote.collected ? taxQuote.state : null,
  };
 
  let orderInsertError = (await supabaseAdmin.from("orders").insert(orderRowWithContact)).error;
@@ -653,7 +683,7 @@ export async function createCheckoutSession(
    // "column" anywhere) could swallow an unrelated error and silently drop the
    // customer's state/phone.
    const message = String(orderInsertError.message ?? "").toLowerCase();
-   const mentionsNewColumn = message.includes("state") || message.includes("phone");
+   const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state");
    const looksLikeMissingColumn = message.includes("does not exist")
      || message.includes("schema cache")
      || message.includes("could not find")
