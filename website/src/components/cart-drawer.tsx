@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import { formatCartCurrency, useCart, getShippingProgress } from "@/components/cart-context";
-import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
+import { bundleDiscountRate, getBundleDiscountedLineTotal, getNextBundleTier } from "@/lib/bundle-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 
@@ -132,7 +132,7 @@ export function CartDrawer() {
           </button>
         </div>
 
-        <div className="mt-5 flex-1 overflow-y-auto pr-1 sm:pr-2">
+        <div className="mt-5 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 sm:pr-2">
           {isHydrated && items.length === 0 ? (
             <div className="rounded-[1.5rem] border border-dashed border-zinc-700 bg-zinc-900/70 p-8 text-center text-zinc-400">
               <p className="text-lg text-white">Your cart is currently empty.</p>
@@ -147,7 +147,12 @@ export function CartDrawer() {
             </div>
           ) : (
               <div className="space-y-3 sm:space-y-4">
-              {items.map((item) => (
+              {items.map((item) => {
+                const activeRate = bundleDiscountRate(item.quantity, bundleConfig);
+                const nextTier = getNextBundleTier(item.quantity, bundleConfig);
+                const lineTotal = getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig);
+                const fullTotal = item.price * item.quantity;
+                return (
                 <div key={item.key} className="vl-panel-soft rounded-[1.25rem] p-3.5 sm:p-4">
                   <div className="flex gap-3 items-start justify-between mb-3">
                     {/* Product image */}
@@ -158,35 +163,64 @@ export function CartDrawer() {
                         <div className="text-xs text-zinc-500">No image</div>
                       )}
                     </div>
-                    
+
                     <div className="flex-1">
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <h3 className="text-xs font-semibold text-white sm:text-sm">{item.name}</h3>
                           <p className="mt-1 text-xs text-zinc-400">{item.doseLabel ? `${item.doseLabel} • ` : ""}Batch {item.batchNumber}</p>
+                          {activeRate > 0 ? (
+                            <span className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+                              Bundle · {Math.round(activeRate * 100)}% off applied
+                            </span>
+                          ) : null}
                         </div>
-                        <button type="button" onClick={() => removeFromCart(item.key)} className="-my-1 flex-shrink-0 px-1 py-2 text-xs text-zinc-500 transition hover:text-white">
+                        <button type="button" onClick={() => removeFromCart(item.key)} aria-label={`Remove ${item.name} from cart`} className="-my-1 flex-shrink-0 px-1 py-2 text-xs text-zinc-500 transition hover:text-rose-300">
                           Remove
                         </button>
                       </div>
                     </div>
                   </div>
-                  
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-1 rounded-full border border-zinc-700 text-xs text-zinc-300">
-                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="inline-flex h-11 w-11 items-center justify-center text-base" aria-label="Decrease quantity">−</button>
-                      <span className="min-w-5 text-center tabular-nums">{item.quantity}</span>
-                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="inline-flex h-11 w-11 items-center justify-center text-base" aria-label="Increase quantity">+</button>
+
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center rounded-full border border-zinc-700 bg-zinc-950/40 text-sm text-zinc-200">
+                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-l-full text-base transition hover:bg-white/5 hover:text-white active:bg-white/10" aria-label={`Decrease ${item.name} quantity`}>−</button>
+                      <span className="min-w-7 text-center text-sm font-semibold tabular-nums">{item.quantity}</span>
+                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-r-full text-base transition hover:bg-white/5 hover:text-white active:bg-white/10" aria-label={`Increase ${item.name} quantity`}>+</button>
                     </div>
-                    <p className="text-xs font-medium text-white sm:text-sm">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
+                    <div className="text-right">
+                      {activeRate > 0 ? (
+                        <p className="text-[11px] text-zinc-500 line-through tabular-nums">{formatCartCurrency(fullTotal)}</p>
+                      ) : null}
+                      <p className="text-sm font-semibold text-white tabular-nums">{formatCartCurrency(lineTotal)}</p>
+                    </div>
                   </div>
+
+                  {nextTier ? (
+                    <button
+                      type="button"
+                      onClick={() => updateQuantity(item.key, item.quantity + nextTier.addMore)}
+                      className="mt-3 flex w-full items-center justify-between rounded-xl border border-emerald-400/25 bg-emerald-400/[0.07] px-3 py-2 text-left transition hover:border-emerald-400/50 hover:bg-emerald-400/[0.14]"
+                    >
+                      <span className="text-xs text-emerald-200">
+                        Buy <span className="font-semibold">{nextTier.addMore} more</span> → <span className="font-semibold">{nextTier.percent}% off</span> every unit
+                      </span>
+                      <span className="text-xs font-semibold uppercase tracking-wide text-emerald-300">Add</span>
+                    </button>
+                  ) : null}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
-        </div>
 
-        <div className="mt-4 space-y-3 border-t border-zinc-800 pt-4 sm:space-y-4">
+          {/* Everything below scrolls WITH the items — on small screens the
+              old layout pinned all of this under the list, pushing the
+              checkout button off-screen (the mobile "checkout does nothing"
+              bug: the button was unreachable). Only the compact total + CTA
+              footer stays fixed now. */}
+          {isHydrated && items.length > 0 ? (
+          <div className="mt-4 space-y-3 border-t border-zinc-800 pt-4 sm:space-y-4">
           {/* Buy 3 Get 1 Free Promotion - Show when 3+ items in cart */}
           {isBuy3Get1FreeEligible && (
             <div className="rounded-[1.25rem] border border-emerald-800 bg-emerald-950/40 p-4">
@@ -371,12 +405,20 @@ export function CartDrawer() {
               <span>Sales tax</span>
               <span>Calculated at checkout</span>
             </div>
-            <div className="mt-3 flex justify-between border-t border-zinc-800 pt-3 text-base font-semibold text-white">
-              <span>Final total</span>
-              <span>{formatCartCurrency(total)}</span>
-            </div>
           </div>
-          <div className="space-y-3">
+          </div>
+          ) : null}
+        </div>
+
+        {/* Sticky footer: always visible, safe-area padded, so the checkout
+            CTA can never scroll out of reach on a phone. */}
+        {isHydrated && items.length > 0 ? (
+        <div className="mt-3 border-t border-zinc-800 pt-3 pb-[max(env(safe-area-inset-bottom),0.25rem)]">
+          <div className="flex items-baseline justify-between pb-2.5">
+            <span className="text-xs uppercase tracking-[0.22em] text-zinc-500">Total</span>
+            <span className="text-xl font-semibold text-white tabular-nums">{formatCartCurrency(total)}</span>
+          </div>
+          <div className="space-y-2.5">
             {/* Apple Pay express slot. Modular: a payment processor's Apple Pay
                 handler plugs in here later. Hidden until EXPRESS_CHECKOUT_ENABLED
                 so we never show a button that looks like one-tap Apple Pay but
@@ -423,6 +465,7 @@ export function CartDrawer() {
             </div>
           </div>
         </div>
+        ) : null}
       </div>
     </div>
   );

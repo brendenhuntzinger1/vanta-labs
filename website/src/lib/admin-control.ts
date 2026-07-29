@@ -123,12 +123,19 @@ export async function getBulkSavingsControlConfig(): Promise<BulkSavingsConfig> 
   try {
     const snapshot = await getControlSnapshot("bulk_savings");
     const config = snapshot.bulk_savings ?? {};
+    // Blank = default (Number("") is 0 — a blank tier threshold must not
+    // unlock bulk savings at $0).
+    const num = (value: unknown, fallback: number) => {
+      if (value === "" || value == null) return fallback;
+      const parsed = Number(value);
+      return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+    };
     return {
       enabled: config.enabled !== false,
-      tier1Threshold: Number(config.tier1_threshold ?? DEFAULT_BULK_SAVINGS_CONFIG.tier1Threshold),
-      tier1Percent: Number(config.tier1_percent ?? DEFAULT_BULK_SAVINGS_CONFIG.tier1Percent),
-      tier2Threshold: Number(config.tier2_threshold ?? DEFAULT_BULK_SAVINGS_CONFIG.tier2Threshold),
-      tier2Percent: Number(config.tier2_percent ?? DEFAULT_BULK_SAVINGS_CONFIG.tier2Percent),
+      tier1Threshold: num(config.tier1_threshold, DEFAULT_BULK_SAVINGS_CONFIG.tier1Threshold),
+      tier1Percent: num(config.tier1_percent, DEFAULT_BULK_SAVINGS_CONFIG.tier1Percent),
+      tier2Threshold: num(config.tier2_threshold, DEFAULT_BULK_SAVINGS_CONFIG.tier2Threshold),
+      tier2Percent: num(config.tier2_percent, DEFAULT_BULK_SAVINGS_CONFIG.tier2Percent),
     };
   } catch {
     return DEFAULT_BULK_SAVINGS_CONFIG;
@@ -461,6 +468,9 @@ export interface ReferralProgramConfig {
 }
 
 function clampPercent(value: unknown, fallback: number): number {
+  // Blank means "keep the default" — Number("") is 0, which would silently
+  // zero out a referral/commission percent.
+  if (value === "" || value == null) return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 && parsed <= 100 ? parsed : fallback;
 }
@@ -519,6 +529,9 @@ export async function getProfitSettings(): Promise<ProfitSettingsConfig> {
     const snapshot = await getControlSnapshot("profit");
     const profit = snapshot.profit ?? {};
     const num = (value: unknown, fallback: number) => {
+      // Blank = default; a blank worst-case unit cost must never become $0
+      // (that would defang the profit guard).
+      if (value === "" || value == null) return fallback;
       const parsed = Number(value);
       return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
     };
@@ -567,7 +580,12 @@ export async function getShippingConfig(): Promise<ShippingConfig> {
     const snapshot = await getControlSnapshot("shipping");
     const shipping = snapshot.shipping ?? {};
 
+    // A BLANK field means "keep the default" (what the Control Center UI
+    // promises) — Number("") is 0, so without the explicit blank check a
+    // blank flat rate/threshold silently became $0 and made every order ship
+    // free. An explicit "0" is still honored as a real zero.
     const num = (value: unknown, fallback: number): number => {
+      if (value === "" || value == null) return fallback;
       const parsed = Number(value);
       return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
     };

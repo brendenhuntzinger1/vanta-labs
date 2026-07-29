@@ -49,6 +49,22 @@ export function getBundleDiscountedLineTotal(unitPrice: number, quantity: number
   return roundMoney(getBundleDiscountedUnitPrice(unitPrice, quantity, config) * quantity);
 }
 
+// The next quantity tier a line could reach — powers the cart's "Add 1 more,
+// save 8%" nudges. Returns null at the top tier (10+). addMore is how many
+// more units reach the tier; percent is a whole number for display (8, not
+// 0.08).
+export function getNextBundleTier(
+  quantity: number,
+  config: BundleConfig = DEFAULT_BUNDLE_CONFIG,
+): { addMore: number; percent: number } | null {
+  const pct = (rate: number) => Math.round(rate * 100);
+  if (quantity >= 10) return null;
+  if (quantity >= 5) return { addMore: 10 - quantity, percent: pct(config.tenUnitPercent ?? DEFAULT_BUNDLE_CONFIG.tenUnitPercent ?? 0.2) };
+  if (quantity >= 3) return { addMore: 5 - quantity, percent: pct(config.fiveUnitPercent ?? DEFAULT_BUNDLE_CONFIG.fiveUnitPercent ?? 0.12) };
+  if (quantity === 2) return { addMore: 1, percent: pct(config.threePlusPercent) };
+  return { addMore: 1, percent: pct(config.twoUnitPercent) };
+}
+
 // Clamp an admin-entered whole-number percent (e.g. 5 or 8) into a safe rate
 // fraction in [0, 0.9]. Blank/invalid falls back to the provided default rate.
 function toRate(value: unknown, fallbackRate: number): number {

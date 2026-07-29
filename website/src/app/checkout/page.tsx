@@ -168,6 +168,8 @@ export default function CheckoutPage() {
     setPointsToRedeem,
     setKnownEmail,
     clearCart,
+    updateQuantity,
+    removeFromCart,
     bulkSavingsTierReached,
     ambassadorDiscountApplied,
     ambassadorDiscountPercent,
@@ -867,7 +869,15 @@ export default function CheckoutPage() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm text-white">{item.name}</p>
-                      <p className="mt-1 text-xs text-white/70">Qty {item.quantity}{item.doseLabel ? ` • ${item.doseLabel}` : ""}</p>
+                      {item.doseLabel ? <p className="mt-0.5 text-xs text-white/70">{item.doseLabel}</p> : null}
+                      <div className="mt-1.5 flex items-center gap-2.5">
+                        <div className="flex items-center rounded-full border border-white/15 bg-black/40 text-xs text-white/80">
+                          <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="inline-flex h-7 w-7 items-center justify-center rounded-l-full transition hover:bg-white/10 hover:text-white" aria-label={`Decrease ${item.name} quantity`}>−</button>
+                          <span className="min-w-5 text-center font-semibold tabular-nums">{item.quantity}</span>
+                          <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="inline-flex h-7 w-7 items-center justify-center rounded-r-full transition hover:bg-white/10 hover:text-white" aria-label={`Increase ${item.name} quantity`}>+</button>
+                        </div>
+                        <button type="button" onClick={() => removeFromCart(item.key)} className="text-xs text-white/40 underline-offset-2 transition hover:text-rose-300 hover:underline" aria-label={`Remove ${item.name} from cart`}>Remove</button>
+                      </div>
                     </div>
                     <p className="text-sm text-white/75">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
                   </div>
