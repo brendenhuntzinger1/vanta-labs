@@ -170,7 +170,7 @@ export function CartDrawer() {
                           <h3 className="text-xs font-semibold text-white sm:text-sm">{item.name}</h3>
                           <p className="mt-1 text-xs text-zinc-400">{item.doseLabel ? `${item.doseLabel} • ` : ""}Batch {item.batchNumber}</p>
                           {activeRate > 0 ? (
-                            <span className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+                            <span className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-amber-200/30 bg-amber-200/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
                               Bundle · {Math.round(activeRate * 100)}% off applied
                             </span>
                           ) : null}
@@ -200,12 +200,12 @@ export function CartDrawer() {
                     <button
                       type="button"
                       onClick={() => updateQuantity(item.key, item.quantity + nextTier.addMore)}
-                      className="mt-3 flex w-full items-center justify-between rounded-xl border border-emerald-400/25 bg-emerald-400/[0.07] px-3 py-2 text-left transition hover:border-emerald-400/50 hover:bg-emerald-400/[0.14]"
+                      className="mt-3 flex w-full items-center justify-between rounded-xl border border-amber-200/25 bg-gradient-to-r from-amber-200/[0.10] via-amber-200/[0.04] to-transparent px-3 py-2 text-left transition hover:border-amber-200/50 hover:from-amber-200/[0.16]"
                     >
-                      <span className="text-xs text-emerald-200">
-                        Buy <span className="font-semibold">{nextTier.addMore} more</span> → <span className="font-semibold">{nextTier.percent}% off</span> every unit
+                      <span className="text-xs text-amber-100/90">
+                        Buy <span className="font-semibold text-amber-200">{nextTier.addMore} more</span> → <span className="font-semibold text-amber-200">{nextTier.percent}% off</span> every unit
                       </span>
-                      <span className="text-xs font-semibold uppercase tracking-wide text-emerald-300">Add</span>
+                      <span className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-200">Add</span>
                     </button>
                   ) : null}
                 </div>
@@ -223,14 +223,14 @@ export function CartDrawer() {
           <div className="mt-4 space-y-3 border-t border-zinc-800 pt-4 sm:space-y-4">
           {/* Buy 3 Get 1 Free Promotion - Show when 3+ items in cart */}
           {isBuy3Get1FreeEligible && (
-            <div className="rounded-[1.25rem] border border-emerald-800 bg-emerald-950/40 p-4">
-              <p className="text-sm font-semibold text-emerald-400 flex items-center gap-2">
+            <div className="rounded-[1.25rem] border border-amber-200/30 bg-gradient-to-r from-amber-200/[0.12] via-amber-200/[0.05] to-transparent p-4">
+              <p className="text-sm font-semibold text-amber-200 flex items-center gap-2">
                 🎁 Buy 3 Get 1 Free Active
               </p>
-              <p className="text-xs text-emerald-300 mt-2">
+              <p className="text-xs text-amber-100/80 mt-2">
                 Lowest-priced eligible item is free.
               </p>
-              <p className="text-xs text-emerald-300/70 mt-1">
+              <p className="text-xs text-amber-100/55 mt-1">
                 Referral discounts are disabled while this promotion is active.
               </p>
             </div>
@@ -240,7 +240,7 @@ export function CartDrawer() {
           {buy3Get1UntilNextFree > 0 && (
             <div className="vl-panel-soft rounded-[1.25rem] p-4">
               <p className="text-sm text-zinc-200">
-                🎁 Add <span className="font-semibold text-emerald-300">{buy3Get1UntilNextFree} more {buy3Get1UntilNextFree === 1 ? "item" : "items"}</span> to unlock a <span className="font-semibold text-emerald-300">FREE item</span>.
+                🎁 Add <span className="font-semibold text-amber-200">{buy3Get1UntilNextFree} more {buy3Get1UntilNextFree === 1 ? "item" : "items"}</span> to unlock a <span className="font-semibold text-amber-200">FREE item</span>.
               </p>
             </div>
           )}

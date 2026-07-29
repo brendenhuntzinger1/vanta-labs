@@ -71,10 +71,10 @@ export function ProductCard({
             <p className="vl2-eyebrow text-[10px] text-white/45">{product.category}</p>
           </div>
 
-          <h3 className="mt-2 line-clamp-2 text-base text-white sm:text-lg">{product.name}</h3>
+          <h3 className="mt-1.5 line-clamp-2 text-sm text-white sm:mt-2 sm:text-lg">{product.name}</h3>
 
-          <div className="mt-3 flex items-baseline gap-x-2">
-            <p className="text-lg text-white sm:text-xl">{product.salePrice ?? product.price}</p>
+          <div className="mt-2 flex items-baseline gap-x-2 sm:mt-3">
+            <p className="text-base text-white sm:text-xl">{product.salePrice ?? product.price}</p>
             {product.salePrice && product.compareAtPrice ? (
               <p className="text-xs text-white/70 line-through sm:text-sm">{product.compareAtPrice}</p>
             ) : null}
@@ -102,15 +102,17 @@ export function ProductCard({
         </div>
       </Link>
 
-      <div className="grid gap-2 p-3 pt-0 sm:grid-cols-2 sm:p-5 sm:pt-0">
+      {/* Side-by-side compact buttons on phones (stacking them doubled the
+          card height); full-size two-up from sm. */}
+      <div className="grid grid-cols-2 gap-1.5 p-3 pt-0 sm:gap-2 sm:p-5 sm:pt-0">
         {onAddToCart ? (
-          <button onClick={onAddToCart} className="vl2-btn-primary vl-focus-ring px-4 py-2.5 text-sm" type="button">
+          <button onClick={onAddToCart} className="vl2-btn-primary vl-focus-ring px-2 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm" type="button">
             Add to Cart
           </button>
         ) : null}
         <Link
           href={`/products/${product.slug}`}
-          className={`vl2-btn-secondary vl-focus-ring inline-flex items-center justify-center px-4 py-2.5 text-sm ${onAddToCart ? "" : "sm:col-span-2"}`}
+          className={`vl2-btn-secondary vl-focus-ring inline-flex items-center justify-center px-2 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm ${onAddToCart ? "" : "col-span-2"}`}
         >
           View Details
         </Link>

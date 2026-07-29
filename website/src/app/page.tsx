@@ -119,10 +119,10 @@ export default async function HomePage() {
         <HeroVideo className="vl2-hero-video" src="/videos/vanta-labs-hero.mp4" />
         <div className="vl2-hero-scrim" aria-hidden="true" />
 
-        <div className="vl2-hero-content mx-auto w-full max-w-[1440px] px-4 sm:px-6 pb-20 pt-40 lg:px-12 lg:pb-28">
+        <div className="vl2-hero-content mx-auto w-full max-w-[1440px] px-4 sm:px-6 pb-12 pt-28 sm:pb-20 sm:pt-40 lg:px-12 lg:pb-28">
           <div className="vl2-fade-in">
             {control.promoBuy3Get1Enabled ? (
-              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-300/40 bg-emerald-400/15 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-200">
+              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-amber-200/40 bg-amber-200/[0.12] px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-amber-200 backdrop-blur">
                 🎁 Buy 3 Get 1 Free — Limited Time
               </div>
             ) : null}
@@ -130,10 +130,10 @@ export default async function HomePage() {
             <h1 className="vl2-serif mt-5 max-w-2xl text-4xl leading-[1.05] text-white sm:text-5xl md:text-6xl lg:text-7xl">
               {control.heroHeadline ?? "Precision, in every vial."}
             </h1>
-            <p className="mt-6 max-w-md text-sm leading-7 text-white/70 sm:text-base">
+            <p className="mt-4 max-w-md text-sm leading-6 text-white/70 sm:mt-6 sm:text-base sm:leading-7">
               {control.heroSubheadline ?? "Vanta Labs sources, verifies, and ships research compounds with the discipline of an analytical laboratory."}
             </p>
-            <div className="mt-9 flex flex-wrap gap-3">
+            <div className="mt-6 flex flex-wrap gap-3 sm:mt-9">
               <Link href="/products" className="vl2-btn-primary vl-focus-ring px-7 py-3.5">
                 Shop the catalog
               </Link>
@@ -142,7 +142,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="border-t border-white/10 py-14">
+      <section className="border-t border-white/10 py-8 sm:py-14">
         <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
           <ScrollReveal>
             <div className="vl2-trust-row justify-center">
@@ -158,11 +158,11 @@ export default async function HomePage() {
       </section>
 
       {categories.length > 0 ? (
-        <section className="border-t border-white/10 py-12 sm:py-20">
+        <section className="border-t border-white/10 py-10 sm:py-20">
           <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
             <ScrollReveal>
               <p className="vl2-eyebrow">Catalog</p>
-              <h2 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Browse by category</h2>
+              <h2 className="vl2-serif mt-2 text-2xl text-white sm:mt-3 sm:text-4xl">Browse by category</h2>
             </ScrollReveal>
             <div className="mt-9 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               {categories.map((category, index) => (
@@ -186,13 +186,13 @@ export default async function HomePage() {
         </section>
       ) : null}
 
-      <section className="border-t border-white/10 py-12 sm:py-20">
+      <section className="border-t border-white/10 py-10 sm:py-20">
         <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
           <ScrollReveal>
             <div className="mb-10 flex items-end justify-between gap-4">
               <div>
                 <p className="vl2-eyebrow">Selection</p>
-                <h2 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Most requested compounds</h2>
+                <h2 className="vl2-serif mt-2 text-2xl text-white sm:mt-3 sm:text-4xl">Most requested compounds</h2>
               </div>
               <Link href="/products" className="text-xs uppercase tracking-[0.14em] text-white/55 transition hover:text-white">
                 Full catalog →
@@ -216,13 +216,13 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="border-t border-white/10 bg-gradient-to-b from-emerald-500/[0.06] to-transparent py-12 sm:py-20">
+      <section className="border-t border-white/10 bg-gradient-to-b from-emerald-500/[0.06] to-transparent py-10 sm:py-20">
         <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
           <div className="grid gap-10 lg:grid-cols-[1fr_1.2fr] lg:items-center">
             <ScrollReveal>
               <div className="max-w-lg">
                 <p className="vl2-eyebrow text-emerald-300/80">Testing &amp; Transparency</p>
-                <h2 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl lg:text-5xl">Every batch, third-party tested.</h2>
+                <h2 className="vl2-serif mt-2 text-2xl text-white sm:mt-3 sm:text-4xl lg:text-5xl">Every batch, third-party tested.</h2>
                 <p className="mt-5 text-sm leading-7 text-white/65 sm:text-base">
                   Anyone can print a label. We publish the proof. Every lot Vanta Labs ships is
                   independently verified for purity and identity, and every vial&apos;s batch number
@@ -255,12 +255,12 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="border-t border-white/10 py-12 sm:py-20">
+      <section className="border-t border-white/10 py-10 sm:py-20">
         <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
           <ScrollReveal>
             <div className="mb-10 max-w-2xl">
               <p className="vl2-eyebrow">Standards</p>
-              <h2 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Built around trust and performance</h2>
+              <h2 className="vl2-serif mt-2 text-2xl text-white sm:mt-3 sm:text-4xl">Built around trust and performance</h2>
             </div>
           </ScrollReveal>
 
@@ -277,12 +277,12 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="border-t border-white/10 py-12 sm:py-20">
+      <section className="border-t border-white/10 py-10 sm:py-20">
         <div className="mx-auto max-w-3xl px-6 lg:px-12">
           <ScrollReveal>
             <div className="mb-10 text-center">
               <p className="vl2-eyebrow">FAQ</p>
-              <h2 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Before you order</h2>
+              <h2 className="vl2-serif mt-2 text-2xl text-white sm:mt-3 sm:text-4xl">Before you order</h2>
             </div>
           </ScrollReveal>
           <div className="space-y-px border border-white/10">
