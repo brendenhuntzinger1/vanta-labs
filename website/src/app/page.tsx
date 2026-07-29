@@ -122,7 +122,7 @@ export default async function HomePage() {
         <div className="vl2-hero-content mx-auto w-full max-w-[1440px] px-4 sm:px-6 pb-12 pt-28 sm:pb-20 sm:pt-40 lg:px-12 lg:pb-28">
           <div className="vl2-fade-in">
             {control.promoBuy3Get1Enabled ? (
-              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-emerald-300/40 bg-emerald-400/15 px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-200">
+              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-amber-200/40 bg-amber-200/[0.12] px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-amber-200 backdrop-blur">
                 🎁 Buy 3 Get 1 Free — Limited Time
               </div>
             ) : null}
