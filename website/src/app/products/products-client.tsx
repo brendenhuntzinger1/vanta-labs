@@ -163,7 +163,7 @@ function ProductsPageContent() {
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
 
-      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-32 lg:px-12">
+      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-14 pt-24 sm:pb-20 sm:pt-32 lg:px-12">
         <div className="max-w-2xl">
           <p className="vl2-eyebrow">Vanta Labs Catalog</p>
           <h1 className="vl2-serif mt-3 text-4xl text-white sm:text-5xl">Research storefront</h1>

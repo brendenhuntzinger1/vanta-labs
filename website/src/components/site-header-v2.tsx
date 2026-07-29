@@ -88,7 +88,7 @@ export function SiteHeaderV2() {
 
   return (
     <header className="vl2-nav" data-scrolled={scrolled}>
-      <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-2 px-4 py-4 sm:gap-4 sm:px-6 sm:py-5 lg:px-12">
+      <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-2 px-4 py-3 sm:gap-4 sm:px-6 sm:py-5 lg:px-12">
         <Link href="/" className="vl-focus-ring vl2-serif text-lg tracking-[0.08em] text-white" onClick={() => setMobileNavOpen(false)}>
           VANTA LABS
         </Link>
@@ -143,7 +143,7 @@ export function SiteHeaderV2() {
             </button>
           </form>
 
-          <Link href="/account" aria-label="Your account" className="vl-focus-ring inline-flex h-11 w-11 items-center justify-center text-white/80 transition hover:text-white">
+          <Link href="/account" aria-label="Your account" className="vl-focus-ring inline-flex h-10 w-10 items-center justify-center text-white/80 transition hover:text-white">
             <AccountIcon />
           </Link>
 
@@ -152,7 +152,7 @@ export function SiteHeaderV2() {
             onClick={openCart}
             id="site-cart-trigger"
             aria-label={`Open cart with ${itemCount} items`}
-            className="vl-focus-ring relative inline-flex h-11 w-11 items-center justify-center text-white/80 transition hover:text-white"
+            className="vl-focus-ring relative inline-flex h-10 w-10 items-center justify-center text-white/80 transition hover:text-white"
           >
             <CartIcon />
             {itemCount > 0 ? (
@@ -165,7 +165,7 @@ export function SiteHeaderV2() {
           <button
             type="button"
             onClick={() => setMobileNavOpen((open) => !open)}
-            className="vl-focus-ring inline-flex h-11 w-11 items-center justify-center text-white/80 lg:hidden"
+            className="vl-focus-ring inline-flex h-10 w-10 items-center justify-center text-white/80 lg:hidden"
             aria-label="Toggle navigation"
             aria-expanded={mobileNavOpen}
           >

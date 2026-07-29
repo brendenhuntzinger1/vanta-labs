@@ -1460,6 +1460,24 @@ textarea.vl-input { min-height: 6rem; }
    Mobile refinements. Most responsiveness lives in inline Tailwind classes;
    these are cross-cutting rules that are cleaner to enforce once, globally.
    --------------------------------------------------------------------------- */
+/* Instant, clean taps everywhere: kill the grey iOS tap flash and the legacy
+   300ms double-tap-zoom delay so every button/link responds immediately. */
+a,
+button,
+label,
+input,
+select,
+textarea {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
 @media (max-width: 640px) {
   /* Any text-entry field not using .vl-input still needs a 16px floor so iOS
      Safari never zooms the viewport when it's focused. */
@@ -1472,5 +1490,13 @@ textarea.vl-input { min-height: 6rem; }
   /* Tame the trust row's big desktop gap on phones. */
   .vl2-trust-row {
     gap: 0.75rem 1.5rem;
+  }
+
+  /* Compact hero on phones: the full-viewport hero is desktop drama — on a
+     small screen it pushed all content a whole screen away. 86svh keeps the
+     impact while letting the catalog peek in sooner. */
+  .vl2-hero,
+  .vl2-hero-content {
+    min-height: 86svh;
   }
 }
