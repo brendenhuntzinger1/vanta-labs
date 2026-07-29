@@ -67,7 +67,9 @@ vi.mock("@/lib/admin-control", () => ({
     tier2Threshold: 1000,
     tier2Percent: 12,
   }),
-  getTaxRatePercent: async () => 0,
+  // Dynamic sales tax: default mock posture is NO nexus states (matches the
+  // production default — no tax collected until the admin configures states).
+  getSalesTaxSettings: async () => ({ nexusStates: [], rateOverrides: {}, provider: "builtin", taxjarApiKey: "", avalaraLicenseKey: "" }),
   getShippingConfig: async () => ({
     domesticFee: 15,
     freeShippingThreshold: 250,
@@ -91,6 +93,28 @@ vi.mock("@/lib/admin-control", () => ({
     { id: "cashapp", label: "Cash App", kind: "manual", enabled: true, order: 10, icon: "", recommended: true, badges: [], instructions: [] },
   ]),
 }));
+
+// tax-provider imports "server-only" (fails to load under vitest) — mock it
+// with the REAL shared resolver running against the mocked admin settings, so
+// payment-service tests exercise genuine tax math (no nexus → $0 by default).
+vi.mock("@/lib/tax-provider", async () => {
+  const { resolveSalesTax } = await vi.importActual<typeof import("@/lib/sales-tax")>("@/lib/sales-tax");
+  const { getSalesTaxSettings } = await import("@/lib/admin-control");
+  return {
+    quoteSalesTax: async (request: {
+      taxableAmount: number; shippingAmount: number;
+      country?: string | null; state?: string | null; city?: string | null;
+      postalCode?: string | null; street?: string | null;
+    }) => {
+      const settings = await getSalesTaxSettings();
+      const quote = resolveSalesTax({
+        ...request,
+        config: { nexusStates: settings.nexusStates, rateOverrides: settings.rateOverrides },
+      });
+      return { ...quote, settings };
+    },
+  };
+});
 
 vi.mock("@/lib/membership-billing", () => ({
   activateAnnualMembership: async () => {},

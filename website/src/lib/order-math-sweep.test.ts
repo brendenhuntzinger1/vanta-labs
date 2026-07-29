@@ -5,7 +5,8 @@ import { describe, expect, it, vi } from "vitest";
 // the sweep exercises the REAL coupon math. Hoisted above imports like vi.mock.
 vi.unmock("@/lib/coupons");
 
-import { calculateShipping, calculateTax, isShippableCountry, DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
+import { calculateShipping, isShippableCountry, DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
+import { calculateTaxAmount as calculateTax } from "@/lib/sales-tax";
 import { calculateBulkSavingsDiscount, DEFAULT_BULK_SAVINGS_CONFIG } from "@/lib/bulk-savings";
 import { resolveBestDiscount, type DiscountCandidate } from "@/lib/discount-resolution";
 import { calculateDiscountAmount, calculateCommissionAmount } from "@/lib/referral-service";

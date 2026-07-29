@@ -108,6 +108,7 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
               <p><span className="text-zinc-500">Customer:</span> {order.customer_email ?? "Unknown"}</p>
               <p><span className="text-zinc-500">Items:</span> {order.item_count}</p>
               <p><span className="text-zinc-500">Amount:</span> {money(order.amount_paid)}</p>
+              <p><span className="text-zinc-500">Sales tax:</span> {order.tax_amount > 0 ? money(order.tax_amount) : "—"}</p>
               <p><span className="text-zinc-500">Referral / Coupon:</span> {order.referral_code ?? order.coupon_code ?? "-"}</p>
               <p><span className="text-zinc-500">Payment:</span> {order.payment_status}</p>
               <p><span className="text-zinc-500">Fulfillment:</span> {order.fulfillment_status}</p>
@@ -136,6 +137,7 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
               <th className="px-4 py-3 text-left">Customer</th>
               <th className="px-4 py-3 text-left">Items</th>
               <th className="px-4 py-3 text-left">Amount</th>
+              <th className="px-4 py-3 text-left">Tax</th>
               <th className="px-4 py-3 text-left">Referral / Coupon</th>
               <th className="px-4 py-3 text-left">Payment</th>
               <th className="px-4 py-3 text-left">Fulfillment</th>
@@ -156,6 +158,7 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
                 <td className="px-4 py-3">{order.customer_email ?? "Unknown"}</td>
                 <td className="px-4 py-3">{order.item_count}</td>
                 <td className="px-4 py-3">{money(order.amount_paid)}</td>
+                <td className="px-4 py-3">{order.tax_amount > 0 ? money(order.tax_amount) : "—"}</td>
                 <td className="px-4 py-3">{order.referral_code ?? order.coupon_code ?? "—"}</td>
                 <td className="px-4 py-3">{order.payment_status}</td>
                 <td className="px-4 py-3">{order.fulfillment_status}</td>
@@ -163,7 +166,7 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
             ))}
             {orders.length === 0 ? (
               <tr>
-                <td colSpan={8} className="px-4 py-6 text-center text-sm text-zinc-500">No orders match these filters.</td>
+                <td colSpan={9} className="px-4 py-6 text-center text-sm text-zinc-500">No orders match these filters.</td>
               </tr>
             ) : null}
           </tbody>

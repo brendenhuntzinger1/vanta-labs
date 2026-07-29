@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
+import { US_STATE_TAX_TABLE } from "@/lib/sales-tax";
 
 type ControlSnapshot = Record<string, Record<string, unknown>>;
 
@@ -48,7 +49,11 @@ export function AdminControlCenterClient() {
   const [shippingIntlFreeThreshold, setShippingIntlFreeThreshold] = useState("");
   const [shippingNaFlatRate, setShippingNaFlatRate] = useState("");
   const [shippingNaFreeThreshold, setShippingNaFreeThreshold] = useState("");
-  const [shippingTaxRate, setShippingTaxRate] = useState("");
+  // Sales tax nexus: the states where the store is registered and must
+  // collect. Checkout collects tax ONLY for these destinations, at each
+  // state's built-in combined rate (override-able below).
+  const [taxNexusStates, setTaxNexusStates] = useState<string[]>([]);
+  const [taxRateOverrides, setTaxRateOverrides] = useState("");
 
   const [contentFaq, setContentFaq] = useState("");
   const [contentPolicies, setContentPolicies] = useState("");
@@ -116,7 +121,9 @@ export function AdminControlCenterClient() {
     setShippingIntlFreeThreshold(String(shipping.international_free_shipping_threshold ?? ""));
     setShippingNaFlatRate(String(shipping.north_america_flat_rate ?? ""));
     setShippingNaFreeThreshold(String(shipping.north_america_free_shipping_threshold ?? ""));
-    setShippingTaxRate(String(shipping.tax_rate ?? ""));
+    const tax = next.tax ?? {};
+    setTaxNexusStates(String(tax.nexus_states ?? "").split(",").map((s) => s.trim().toUpperCase()).filter((s) => Boolean(US_STATE_TAX_TABLE[s])));
+    setTaxRateOverrides(String(tax.rate_overrides ?? ""));
 
     const content = next.content ?? {};
     setContentFaq(String(content.faq ?? ""));
@@ -214,7 +221,8 @@ export function AdminControlCenterClient() {
       { section: "shipping", key: "international_free_shipping_threshold", value: shippingIntlFreeThreshold },
       { section: "shipping", key: "north_america_flat_rate", value: shippingNaFlatRate },
       { section: "shipping", key: "north_america_free_shipping_threshold", value: shippingNaFreeThreshold },
-      { section: "shipping", key: "tax_rate", value: shippingTaxRate },
+      { section: "tax", key: "nexus_states", value: taxNexusStates.join(",") },
+      { section: "tax", key: "rate_overrides", value: taxRateOverrides },
 
       { section: "content", key: "faq", value: contentFaq },
       { section: "content", key: "policies", value: contentPolicies },
@@ -368,7 +376,7 @@ export function AdminControlCenterClient() {
 
           <section className="vl-panel-soft rounded-2xl p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">{SECTION_LABELS.shipping}</h3>
-            <p className="mt-2 text-xs text-zinc-400">These apply live at checkout. Leave a field blank to keep the default (domestic flat rate $15, free over $250, 0% tax).</p>
+            <p className="mt-2 text-xs text-zinc-400">These apply live at checkout. Leave a field blank to keep the default (domestic flat rate $15, free over $250).</p>
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
               <label className="text-zinc-300">Domestic flat rate ($)<input value={shippingFlatRate} onChange={(e) => setShippingFlatRate(e.target.value)} placeholder="15" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Free shipping over ($)<input value={shippingFreeThreshold} onChange={(e) => setShippingFreeThreshold(e.target.value)} placeholder="250" className="vl-input mt-1 w-full px-3 py-2" /></label>
@@ -376,8 +384,40 @@ export function AdminControlCenterClient() {
               <label className="text-zinc-300">Canada free shipping over ($)<input value={shippingNaFreeThreshold} onChange={(e) => setShippingNaFreeThreshold(e.target.value)} placeholder="400" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">International flat rate ($)<input value={shippingIntlFlatRate} onChange={(e) => setShippingIntlFlatRate(e.target.value)} placeholder="45" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">International free shipping over ($)<input value={shippingIntlFreeThreshold} onChange={(e) => setShippingIntlFreeThreshold(e.target.value)} placeholder="500" className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Sales tax rate (%)<input value={shippingTaxRate} onChange={(e) => setShippingTaxRate(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
+          </section>
+
+          <section className="vl-panel-soft rounded-2xl p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">Sales Tax</h3>
+            <p className="mt-2 text-xs text-zinc-400">
+              Tax is now calculated from the customer&apos;s shipping address. Check each state where the business is
+              registered to collect sales tax (your nexus states — home state plus anywhere you&apos;ve crossed an economic
+              threshold). Orders shipping to those states are taxed at the state&apos;s combined average rate shown;
+              orders to every other state collect <span className="text-zinc-200">$0</span>. With no states checked,
+              no tax is collected anywhere.
+            </p>
+            <div className="mt-3 grid grid-cols-3 gap-1.5 text-xs sm:grid-cols-5 lg:grid-cols-7">
+              {Object.entries(US_STATE_TAX_TABLE).map(([code, rule]) => {
+                const checked = taxNexusStates.includes(code);
+                return (
+                  <label key={code} className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2 py-1.5 ${checked ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200" : "border-white/10 bg-white/[0.02] text-zinc-400"}`}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) => setTaxNexusStates((prev) => e.target.checked ? [...prev, code] : prev.filter((s) => s !== code))}
+                      className="h-3 w-3 accent-emerald-500"
+                    />
+                    <span className="font-medium">{code}</span>
+                    <span className="ml-auto tabular-nums">{rule.ratePercent}%</span>
+                  </label>
+                );
+              })}
+            </div>
+            <label className="mt-3 block text-sm text-zinc-300">
+              Rate overrides (JSON, optional)
+              <input value={taxRateOverrides} onChange={(e) => setTaxRateOverrides(e.target.value)} placeholder='{"TX": 8.25}' className="vl-input mt-1 w-full px-3 py-2 font-mono text-xs" />
+              <span className="mt-1 block text-xs text-zinc-500">Pin an exact rate for a nexus state when you know a better figure than the built-in combined average. Rates stay current automatically once a tax service (TaxJar / Avalara) is connected.</span>
+            </label>
           </section>
 
           <section className="vl-panel-soft rounded-2xl p-4">

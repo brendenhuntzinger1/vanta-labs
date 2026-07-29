@@ -106,11 +106,7 @@ export function calculateShipping(
   return subtotal >= config.internationalFreeShippingThreshold ? 0 : config.internationalFee;
 }
 
-// Configurable sales tax, applied to the post-discount merchandise total.
-// Shared client + server so the checkout preview and the authoritative server
-// total always agree (see the "Altered total detected" guard). Default rate is
-// 0 (no tax) until an admin sets one in Admin → Control Center.
-export function calculateTax(taxableBase: number, ratePercent: number): number {
-  if (taxableBase <= 0 || !ratePercent || ratePercent <= 0) return 0;
-  return roundMoney(taxableBase * (ratePercent / 100));
-}
+// NOTE: the old flat-rate calculateTax(base, ratePercent) that lived here is
+// gone. Sales tax is now dynamic — resolved from the shipping address (state
+// nexus + destination rate) by src/lib/sales-tax.ts, shared client + server
+// the same way the shipping math above is.

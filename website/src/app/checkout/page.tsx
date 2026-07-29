@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
+import { resolveSalesTax } from "@/lib/sales-tax";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
@@ -173,7 +174,7 @@ export default function CheckoutPage() {
     memberFreeShipping,
     storeCreditBalanceCents,
     storeCreditMinOrderCents,
-    taxAmount,
+    salesTaxConfig,
     shippingConfig,
     bundleConfig,
     shippingProtectionEnabled,
@@ -236,6 +237,26 @@ export default function CheckoutPage() {
     () => ((bulkSavingsTierReached || memberFreeShipping) ? 0 : calculateShipping(subtotal, form.country, shippingConfig)),
     [bulkSavingsTierReached, memberFreeShipping, subtotal, form.country, shippingConfig],
   );
+  // Live, address-based sales tax: recomputed the instant any address field
+  // changes, with the SAME shared resolveSalesTax the server runs when it
+  // builds the authoritative order total (payment-service.ts) — so the quote
+  // shown here is the quote charged. $0 until a taxable (nexus) state is
+  // entered; that's not a placeholder, it IS the correct amount for that
+  // destination.
+  const taxQuote = useMemo(
+    () => resolveSalesTax({
+      taxableAmount: Math.max(0, subtotal - discountAmount),
+      shippingAmount: shipping,
+      country: form.country,
+      state: form.state,
+      city: form.city,
+      postalCode: form.postalCode,
+      street: form.address,
+      config: salesTaxConfig,
+    }),
+    [subtotal, discountAmount, shipping, form.country, form.state, form.city, form.postalCode, form.address, salesTaxConfig],
+  );
+  const taxAmount = taxQuote.amount;
   const totalBeforeCredit = Math.max(0, subtotal + shipping + taxAmount - discountAmount);
   // Membership store credit auto-applies when the merchandise subtotal meets
   // the tier's redemption minimum (mirrors payment-service.ts).
@@ -861,7 +882,14 @@ export default function CheckoutPage() {
                 <span>Shipping</span>
                 <span>{shipping === 0 && memberFreeShipping ? "Free (member)" : formatCartCurrency(shipping)}</span>
               </div>
-              {taxAmount > 0 ? <div className="flex justify-between"><span>Sales tax</span><span>{formatCartCurrency(taxAmount)}</span></div> : null}
+              {taxAmount > 0 ? (
+                <div className="flex justify-between">
+                  <span>Sales tax{taxQuote.state ? ` (${taxQuote.state} · ${taxQuote.ratePercent}%)` : ""}</span>
+                  <span>{formatCartCurrency(taxAmount)}</span>
+                </div>
+              ) : taxQuote.reason === "no_state" && isDomesticCountry(form.country) ? (
+                <div className="flex justify-between text-white/40"><span>Sales tax</span><span>Enter address</span></div>
+              ) : null}
               <label className="flex cursor-pointer items-start justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
                 <span className="flex items-start gap-2.5">
                   <input

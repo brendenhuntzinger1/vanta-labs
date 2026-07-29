@@ -4,6 +4,7 @@ import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canViewProfit } from "@/lib/admin-roles";
 import { getRevenueMetrics } from "@/lib/admin-revenue";
 import { getProfitWindowMetrics } from "@/lib/admin-profit";
+import { getSalesTaxReport } from "@/lib/admin-tax-report";
 
 export const dynamic = "force-dynamic";
 
@@ -45,6 +46,9 @@ export default async function AdminRevenuePage() {
     ? await getProfitWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, ordersLast30Days: 0, hasEstimatedCost: false }))
     : null;
   const maxMethodRevenue = Math.max(1, ...metrics.byMethod.map((m) => m.revenue));
+  // Sales tax collected per destination state (for filing). Never blocks the
+  // dashboard if the query fails.
+  const taxReport = await getSalesTaxReport().catch(() => null);
 
   return (
     <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -103,6 +107,54 @@ export default async function AdminRevenuePage() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+
+        <div className="vl-panel mt-6 rounded-2xl p-5 sm:p-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-lg font-semibold">Sales Tax Collected by State</h2>
+              <p className="mt-1 text-xs text-zinc-500">Address-based tax recorded on each paid order — these are the figures you remit to each state.</p>
+            </div>
+            <a href="/api/admin/tax/export" className="vl-btn-secondary inline-flex px-4 py-2 text-xs" download>Export CSV</a>
+          </div>
+          {!taxReport || taxReport.byState.length === 0 ? (
+            <p className="mt-3 text-sm text-zinc-400">No sales tax collected yet. Tax is charged only on orders shipping to your configured nexus states (Control Center → Sales Tax).</p>
+          ) : (
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full min-w-[540px] text-sm">
+                <thead>
+                  <tr className="border-b border-white/10 text-left text-[11px] uppercase tracking-[0.14em] text-zinc-500">
+                    <th className="pb-2 pr-4">State</th>
+                    <th className="pb-2 pr-4">Orders</th>
+                    <th className="pb-2 pr-4">Taxable Sales</th>
+                    <th className="pb-2 pr-4">Tax Collected</th>
+                    <th className="pb-2 pr-4">Tax Refunded</th>
+                    <th className="pb-2">Net Tax Due</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {taxReport.byState.map((s) => (
+                    <tr key={s.state} className="border-b border-white/5">
+                      <td className="py-2 pr-4 font-medium text-zinc-200">{s.state}</td>
+                      <td className="py-2 pr-4 text-zinc-300 tabular-nums">{s.orders}</td>
+                      <td className="py-2 pr-4 text-zinc-300 tabular-nums">{money(s.taxableSales)}</td>
+                      <td className="py-2 pr-4 text-zinc-300 tabular-nums">{money(s.taxCollected)}</td>
+                      <td className="py-2 pr-4 text-zinc-300 tabular-nums">{s.taxRefunded > 0 ? money(s.taxRefunded) : "—"}</td>
+                      <td className="py-2 font-semibold text-white tabular-nums">{money(s.netTax)}</td>
+                    </tr>
+                  ))}
+                  <tr>
+                    <td className="pt-2 font-semibold text-zinc-200">Total</td>
+                    <td className="pt-2 text-zinc-300 tabular-nums">{taxReport.totals.orders}</td>
+                    <td className="pt-2" />
+                    <td className="pt-2 font-semibold text-white tabular-nums">{money(taxReport.totals.taxCollected)}</td>
+                    <td className="pt-2 text-zinc-300 tabular-nums">{taxReport.totals.taxRefunded > 0 ? money(taxReport.totals.taxRefunded) : "—"}</td>
+                    <td className="pt-2 font-semibold text-white tabular-nums">{money(taxReport.totals.netTax)}</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
           )}
         </div>

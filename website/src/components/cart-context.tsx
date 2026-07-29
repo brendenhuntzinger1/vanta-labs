@@ -8,7 +8,8 @@ import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
-import { calculateShipping, calculateTax, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
+import { calculateShipping, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
+import { DEFAULT_SALES_TAX_CONFIG, type SalesTaxConfig } from "@/lib/sales-tax";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { resolveBestDiscount } from "@/lib/discount-resolution";
 
@@ -57,7 +58,11 @@ type CartContextValue = {
   subtotal: number;
   shipping: number;
   taxAmount: number;
-  taxRatePercent: number;
+  // Admin tax posture (nexus states + per-state overrides) from the promotions
+  // config. The cart itself never knows the shipping address, so tax here is
+  // always 0 — the checkout page combines this config with the entered address
+  // via the shared resolveSalesTax to quote tax live (mirrors the server).
+  salesTaxConfig: SalesTaxConfig;
   shippingConfig: ShippingConfig;
   bundleConfig: BundleConfig;
   shippingProtectionEnabled: boolean;
@@ -178,7 +183,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [pointsToRedeem, setPointsToRedeemState] = useState(0);
   const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
   const [bundleConfig, setBundleConfig] = useState<BundleConfig>(DEFAULT_BUNDLE_CONFIG);
-  const [taxRatePercent, setTaxRatePercent] = useState(0);
+  const [salesTaxConfig, setSalesTaxConfig] = useState<SalesTaxConfig>(DEFAULT_SALES_TAX_CONFIG);
   // Admin-configurable referral customer-discount percent, loaded from the same
   // /api/catalog/promotions config the server uses. Defaults to 10 (matches the
   // server default) until config loads, so the client preview always mirrors the
@@ -256,11 +261,16 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; taxRatePercent?: number; shippingConfig?: ShippingConfig; referralDiscountPercent?: number };
+        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number };
         if (result.success) {
           setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
           if (result.bundleConfig) setBundleConfig(result.bundleConfig);
-          setTaxRatePercent(Number(result.taxRatePercent ?? 0) || 0);
+          if (result.salesTax) {
+            setSalesTaxConfig({
+              nexusStates: Array.isArray(result.salesTax.nexusStates) ? result.salesTax.nexusStates : [],
+              rateOverrides: result.salesTax.rateOverrides && typeof result.salesTax.rateOverrides === "object" ? result.salesTax.rateOverrides : {},
+            });
+          }
           if (result.shippingConfig) setShippingConfig(result.shippingConfig);
           if (Number.isFinite(result.referralDiscountPercent)) {
             setReferralDiscountPercent(Number(result.referralDiscountPercent));
@@ -623,9 +633,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [isSignedIn, subtotal, discountAmount, pointsPerDollar, pointsMultiplier],
   );
 
-  // Sales tax on the post-discount merchandise total — mirrors the server
-  // (payment-service.ts) using the same shared calculateTax.
-  const taxAmount = calculateTax(Math.max(0, subtotal - discountAmount), taxRatePercent);
+  // Sales tax is address-based and the cart has no address yet, so the cart
+  // preview carries $0 tax — the drawer says "calculated at checkout" and the
+  // checkout page quotes the real figure live from the entered shipping
+  // address (shared resolveSalesTax, mirroring payment-service.ts exactly).
+  const taxAmount = 0;
 
   const totalBeforePoints = Math.max(0, subtotal + shipping + taxAmount - discountAmount);
 
@@ -1004,7 +1016,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     subtotal,
     shipping,
     taxAmount,
-    taxRatePercent,
+    salesTaxConfig,
     shippingConfig,
     bundleConfig,
     shippingProtectionEnabled,
