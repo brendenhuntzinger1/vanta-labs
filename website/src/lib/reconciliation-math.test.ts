@@ -2,8 +2,8 @@ import { describe, it, expect } from "vitest";
 import { expectedOrderTotal, isTotalMismatch, maxShippingProtectionFee } from "@/lib/reconciliation-math";
 
 const base = { subtotal: 100, shipping: 15, tax: 0, cardFee: 0, discount: 0, storeCredit: 0, pointsDollars: 0 };
-// Per-order protection allowance: 3% of the merchandise subtotal.
-const protection = maxShippingProtectionFee(base.subtotal); // $3 on a $100 subtotal
+// Per-order protection allowance: the protection percent of the subtotal.
+const protection = maxShippingProtectionFee(base.subtotal); // $4 on a $100 subtotal at 4%
 
 describe("expectedOrderTotal", () => {
   it("includes tax and card fee (the pre-fix omission that false-flagged taxed orders)", () => {
@@ -16,8 +16,8 @@ describe("expectedOrderTotal", () => {
 
 describe("maxShippingProtectionFee", () => {
   it("is the percentage protection fee for the order's subtotal", () => {
-    expect(maxShippingProtectionFee(100)).toBe(3);
-    expect(maxShippingProtectionFee(500)).toBe(15);
+    expect(maxShippingProtectionFee(100)).toBe(4);
+    expect(maxShippingProtectionFee(500)).toBe(20);
     expect(maxShippingProtectionFee(0)).toBe(0);
   });
 });

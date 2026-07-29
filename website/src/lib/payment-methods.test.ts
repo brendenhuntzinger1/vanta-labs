@@ -19,17 +19,20 @@ const fee = (over: Partial<CardProcessingFeeConfig> = {}): CardProcessingFeeConf
 });
 
 describe("payment methods", () => {
-  it("charges the 5% card processing fee by default (owner-enabled, 2026-07)", () => {
-    // The surcharge is ON by default per the owner's decision; the admin
+  it("charges the 3% service fee by default (owner-set, 2026-07)", () => {
+    // The fee is ON by default per the owner's decision — 3%, labeled
+    // "Service Fee", matching the admin-saved configuration. The admin
     // Payments settings can tune or disable it without a deploy.
     expect(DEFAULT_CARD_PROCESSING_FEE.enabled).toBe(true);
-    expect(DEFAULT_CARD_PROCESSING_FEE.percentage).toBe(5);
-    expect(calculateCardProcessingFee(250, DEFAULT_CARD_PROCESSING_FEE).amount).toBe(12.5);
+    expect(DEFAULT_CARD_PROCESSING_FEE.percentage).toBe(3);
+    expect(DEFAULT_CARD_PROCESSING_FEE.label).toBe("Service Fee");
+    expect(calculateCardProcessingFee(250, DEFAULT_CARD_PROCESSING_FEE).amount).toBe(7.5);
   });
 
-  it("computes a 5% fee when the surcharge is explicitly enabled", () => {
-    // $250 subtotal → +$12.50 fee when a surcharge is turned on.
-    expect(calculateCardProcessingFee(250, fee())).toEqual({ amount: 12.5, percentage: 5 });
+  it("computes the fee from the configured percentage", () => {
+    // $250 subtotal → +$7.50 at the default 3%, +$12.50 at an explicit 5%.
+    expect(calculateCardProcessingFee(250, fee())).toEqual({ amount: 7.5, percentage: 3 });
+    expect(calculateCardProcessingFee(250, fee({ percentage: 5 }))).toEqual({ amount: 12.5, percentage: 5 });
   });
 
   it("rounds the fee to cents", () => {

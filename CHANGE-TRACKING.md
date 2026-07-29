@@ -66,6 +66,21 @@ No third-party changes recorded yet — this is the starting line.
 
 _(New entries appended here, newest first, as changes are detected.)_
 
+### 2026-07-29 — PR #17 merged to `main` (Claude, at the owner's request)
+
+**New `main` HEAD:** `9861957` (merge of PR #17). Owner-directed changes:
+1. Shipping Protection repriced to **3% of merchandise subtotal** and **added
+   by default** (visible pre-checked line, one untick removes it).
+   Reconciliation window now per-order.
+2. **5% card processing fee enabled by default** (owner accepted the
+   card-network surcharge-cap caveat; tunable in Admin → Payments → Settings).
+3. **Control Center tab** added to the admin nav (/admin#control-editor).
+
+Owner also unchecked FL in Sales Tax settings — store currently collects **no
+sales tax anywhere** (dashboard setting, not code).
+
+**Tracking baseline for third-party review now moves to `9861957`.**
+
 ### 2026-07-29 — PR #16 merged to `main` (Claude, at the owner's request)
 
 **New `main` HEAD:** `bbbb51b` (merge of PR #16). Not third-party work — these

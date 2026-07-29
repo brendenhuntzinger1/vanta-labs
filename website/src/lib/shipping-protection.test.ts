@@ -8,16 +8,16 @@ describe("calculateShippingProtectionFee (percentage add-on)", () => {
   });
 
   it("charges the configured percent of the merchandise subtotal", () => {
-    expect(SHIPPING_PROTECTION_PERCENT).toBe(3);
-    expect(calculateShippingProtectionFee(100)).toBe(3);
-    expect(calculateShippingProtectionFee(50)).toBe(1.5);
-    expect(calculateShippingProtectionFee(333.33)).toBe(10);
-    expect(calculateShippingProtectionFee(1000)).toBe(30);
+    expect(SHIPPING_PROTECTION_PERCENT).toBe(4);
+    expect(calculateShippingProtectionFee(100)).toBe(4);
+    expect(calculateShippingProtectionFee(50)).toBe(2);
+    expect(calculateShippingProtectionFee(250)).toBe(10);
+    expect(calculateShippingProtectionFee(1000)).toBe(40);
   });
 
   it("rounds to cents", () => {
-    expect(calculateShippingProtectionFee(19.99)).toBe(0.6);
-    expect(calculateShippingProtectionFee(66.66)).toBe(2);
+    expect(calculateShippingProtectionFee(19.99)).toBe(0.8);
+    expect(calculateShippingProtectionFee(66.66)).toBe(2.67);
   });
 
   it("scales with the subtotal — bigger orders pay a bigger fee", () => {

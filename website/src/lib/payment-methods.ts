@@ -89,18 +89,19 @@ function roundMoney(value: number): number {
 }
 
 // The card processing fee is NOT passed on to customers — the merchant absorbs
-// Enabled at 5% per the owner's decision (2026-07). The owner can tune or
-// disable it anytime from Admin → Payments → Settings without a deploy; a
-// stored admin override always wins over this default. Manual methods never
-// carry a fee.
+// Enabled at 3% labeled "Service Fee" per the owner's decision (2026-07),
+// matching the value they saved in Admin → Payments → Settings (the stored
+// admin override always wins over this default anyway — this just keeps the
+// fallback consistent with the store's real configuration). Manual methods
+// never carry a fee.
 //
 // NOTE: card-network rules cap surcharges (Visa/MC ~3%) and prohibit them on
-// debit cards; the owner accepted this configuration knowing that caveat —
-// see the surcharge note at the top of this file.
+// debit cards — see the surcharge note at the top of this file. 3% sits at
+// the cap.
 export const DEFAULT_CARD_PROCESSING_FEE: CardProcessingFeeConfig = {
   enabled: true,
-  percentage: 5,
-  label: "Card Processing Fee",
+  percentage: 3,
+  label: "Service Fee",
   noticeText: "",
 };
 
