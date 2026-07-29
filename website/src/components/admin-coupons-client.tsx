@@ -10,6 +10,7 @@ type CouponFormState = {
   startsAt: string;
   endsAt: string;
   maxRedemptions: string;
+  isPrivate: boolean;
 };
 
 const EMPTY_FORM: CouponFormState = {
@@ -19,6 +20,7 @@ const EMPTY_FORM: CouponFormState = {
   startsAt: "",
   endsAt: "",
   maxRedemptions: "",
+  isPrivate: false,
 };
 
 function currency(value: number) {
@@ -103,6 +105,7 @@ export function AdminCouponsClient({
           startsAt: fromDatetimeLocal(form.startsAt),
           endsAt: fromDatetimeLocal(form.endsAt),
           maxRedemptions: form.maxRedemptions.trim() ? Number(form.maxRedemptions) : null,
+          isPrivate: form.isPrivate,
         }),
       });
       const result = await response.json() as { success: boolean; error?: string };
@@ -256,6 +259,21 @@ export function AdminCouponsClient({
               className="vl-input mt-1 w-full px-3 py-2"
             />
           </label>
+          <label className="flex items-start gap-2.5 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm text-zinc-300 sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={form.isPrivate}
+              onChange={(e) => setForm((prev) => ({ ...prev, isPrivate: e.target.checked }))}
+              className="mt-0.5 h-4 w-4 accent-amber-300"
+            />
+            <span>
+              <span className="block font-medium text-white">Private code — don&apos;t advertise on the store</span>
+              <span className="mt-0.5 block text-xs text-zinc-500">
+                Works normally at checkout for anyone who has the code, but never appears on the storefront promo
+                banner or any customer-facing coupon list. For a single person, also set Max redemptions to 1.
+              </span>
+            </span>
+          </label>
         </div>
         {error ? <p className="mt-3 text-sm text-rose-300">{error}</p> : null}
         {message ? <p className="mt-3 text-sm text-emerald-300">{message}</p> : null}
@@ -302,7 +320,12 @@ export function AdminCouponsClient({
                         const status = STATUS_META[effectiveStatus(coupon)];
                         return (
                           <tr key={coupon.id} className="border-t border-white/10">
-                            <td className="py-3 pr-4 font-mono text-zinc-100">{coupon.code}</td>
+                            <td className="py-3 pr-4 font-mono text-zinc-100">
+                              {coupon.code}
+                              {coupon.isPrivate ? (
+                                <span className="ml-2 rounded-full border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 font-sans text-[10px] font-semibold uppercase tracking-wide text-amber-300">Private</span>
+                              ) : null}
+                            </td>
                             <td className="py-3 pr-4 text-zinc-300">{formatDiscount(coupon)}</td>
                             <td className="py-3 pr-4 text-xs text-zinc-400">
                               {coupon.startsAt ? new Date(coupon.startsAt).toLocaleDateString() : "—"}
