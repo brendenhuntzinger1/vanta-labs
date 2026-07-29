@@ -16,6 +16,15 @@ const tabs: AdminTab[] = [
     match: (pathname) => pathname === "/admin",
   },
   {
+    // The Control Center editor (homepage copy, promotions, shipping, sales
+    // tax, content, settings) lives at the bottom of the admin home page —
+    // give it its own tab so nobody has to know to scroll "Live Sales &
+    // Visitors" to find site configuration.
+    label: "Control Center",
+    href: "/admin#control-editor",
+    match: () => false,
+  },
+  {
     label: "System Status",
     href: "/admin/status",
     match: (pathname) => pathname.startsWith("/admin/status"),

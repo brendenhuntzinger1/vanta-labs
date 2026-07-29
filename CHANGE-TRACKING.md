@@ -65,3 +65,31 @@ No third-party changes recorded yet — this is the starting line.
 ## Change log
 
 _(New entries appended here, newest first, as changes are detected.)_
+
+### 2026-07-29 — PR #16 merged to `main` (Claude, at the owner's request)
+
+**New `main` HEAD:** `bbbb51b` (merge of PR #16). Not third-party work — these
+are the changes the owner asked Claude for in this session:
+
+1. **Dynamic address-based sales tax** (replaces the flat 8% rate):
+   - Tax resolved from the shipping address; collected only for admin-
+     configured nexus states at destination-state combined rates.
+   - New shared engine `website/src/lib/sales-tax.ts` + server seam
+     `tax-provider.ts` (TaxJar/Avalara-ready), live recalculation at checkout,
+     per-order `tax_amount`/`tax_rate_percent`/`tax_state` recordkeeping.
+   - Admin: Control Center → Sales Tax (nexus checkboxes), orders Tax column,
+     order-detail Charges card, by-state report + CSV export on the Business
+     Dashboard, System Status warning when unconfigured.
+   - Migration to run once in Supabase: `website/src/lib/sql/dynamic-sales-tax.sql`.
+2. **Homepage hero**: removed the "View Certificates of Analysis" button
+   (COA library remains in the nav); vial video hardened to autoplay/loop with
+   no play-pause affordance (iOS Low Power Mode remains an OS-level exception).
+3. `CHANGE-TRACKING.md` baseline (this file).
+
+Verified before merge: 318 tests, clean build/typecheck/lint.
+
+**Owner action still pending at time of entry:** run the Supabase migration,
+then check nexus state(s) in Control Center → Sales Tax (until then the store
+collects no tax anywhere).
+
+**Tracking baseline for third-party review now moves to `bbbb51b`.**

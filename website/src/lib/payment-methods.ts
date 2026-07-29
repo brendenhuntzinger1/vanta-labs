@@ -89,11 +89,16 @@ function roundMoney(value: number): number {
 }
 
 // The card processing fee is NOT passed on to customers — the merchant absorbs
-// it. Disabled by default so checkout never surcharges the shopper. Flip
-// `enabled: true` (and set the percentage) only if a card surcharge is ever
-// reinstated. Manual methods never carry a fee.
+// Enabled at 5% per the owner's decision (2026-07). The owner can tune or
+// disable it anytime from Admin → Payments → Settings without a deploy; a
+// stored admin override always wins over this default. Manual methods never
+// carry a fee.
+//
+// NOTE: card-network rules cap surcharges (Visa/MC ~3%) and prohibit them on
+// debit cards; the owner accepted this configuration knowing that caveat —
+// see the surcharge note at the top of this file.
 export const DEFAULT_CARD_PROCESSING_FEE: CardProcessingFeeConfig = {
-  enabled: false,
+  enabled: true,
   percentage: 5,
   label: "Card Processing Fee",
   noticeText: "",

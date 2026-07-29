@@ -19,10 +19,12 @@ const fee = (over: Partial<CardProcessingFeeConfig> = {}): CardProcessingFeeConf
 });
 
 describe("payment methods", () => {
-  it("does not charge customers a card processing fee by default", () => {
-    // The merchant absorbs card fees — shoppers are never surcharged.
-    expect(DEFAULT_CARD_PROCESSING_FEE.enabled).toBe(false);
-    expect(calculateCardProcessingFee(250, DEFAULT_CARD_PROCESSING_FEE).amount).toBe(0);
+  it("charges the 5% card processing fee by default (owner-enabled, 2026-07)", () => {
+    // The surcharge is ON by default per the owner's decision; the admin
+    // Payments settings can tune or disable it without a deploy.
+    expect(DEFAULT_CARD_PROCESSING_FEE.enabled).toBe(true);
+    expect(DEFAULT_CARD_PROCESSING_FEE.percentage).toBe(5);
+    expect(calculateCardProcessingFee(250, DEFAULT_CARD_PROCESSING_FEE).amount).toBe(12.5);
   });
 
   it("computes a 5% fee when the surcharge is explicitly enabled", () => {

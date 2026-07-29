@@ -1,36 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { calculateShippingProtectionFee, DEFAULT_SHIPPING_PROTECTION_CONFIG } from "@/lib/shipping-protection";
+import { calculateShippingProtectionFee, SHIPPING_PROTECTION_PERCENT } from "@/lib/shipping-protection";
 
-describe("calculateShippingProtectionFee (tiered add-on)", () => {
-  const { baseFee, midFee, highFee, midThreshold, highThreshold } = DEFAULT_SHIPPING_PROTECTION_CONFIG;
-
+describe("calculateShippingProtectionFee (percentage add-on)", () => {
   it("charges nothing for an empty cart", () => {
     expect(calculateShippingProtectionFee(0)).toBe(0);
     expect(calculateShippingProtectionFee(-10)).toBe(0);
   });
 
-  it("uses the base fee under the mid threshold", () => {
-    expect(calculateShippingProtectionFee(50)).toBe(baseFee);
-    expect(calculateShippingProtectionFee(midThreshold - 0.01)).toBe(baseFee);
+  it("charges the configured percent of the merchandise subtotal", () => {
+    expect(SHIPPING_PROTECTION_PERCENT).toBe(3);
+    expect(calculateShippingProtectionFee(100)).toBe(3);
+    expect(calculateShippingProtectionFee(50)).toBe(1.5);
+    expect(calculateShippingProtectionFee(333.33)).toBe(10);
+    expect(calculateShippingProtectionFee(1000)).toBe(30);
   });
 
-  it("uses the mid fee from the mid threshold up to the high threshold", () => {
-    expect(calculateShippingProtectionFee(midThreshold)).toBe(midFee);
-    expect(calculateShippingProtectionFee(300)).toBe(midFee);
-    expect(calculateShippingProtectionFee(highThreshold - 0.01)).toBe(midFee);
+  it("rounds to cents", () => {
+    expect(calculateShippingProtectionFee(19.99)).toBe(0.6);
+    expect(calculateShippingProtectionFee(66.66)).toBe(2);
   });
 
-  it("uses the high fee at/above the high threshold", () => {
-    expect(calculateShippingProtectionFee(highThreshold)).toBe(highFee);
-    expect(calculateShippingProtectionFee(1000)).toBe(highFee);
-  });
-
-  it("is monotonically non-decreasing in subtotal", () => {
+  it("scales with the subtotal — bigger orders pay a bigger fee", () => {
     let prev = 0;
     for (let s = 1; s <= 1000; s += 7) {
       const fee = calculateShippingProtectionFee(s);
       expect(fee).toBeGreaterThanOrEqual(prev - 1e-9);
       prev = fee;
     }
+    expect(calculateShippingProtectionFee(400)).toBeGreaterThan(calculateShippingProtectionFee(100));
+  });
+
+  it("a non-positive percent disables the fee", () => {
+    expect(calculateShippingProtectionFee(100, 0)).toBe(0);
+    expect(calculateShippingProtectionFee(100, -1)).toBe(0);
   });
 });

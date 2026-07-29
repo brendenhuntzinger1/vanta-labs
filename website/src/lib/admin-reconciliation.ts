@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { expectedOrderTotal, isTotalMismatch, MAX_SHIPPING_PROTECTION_FEE } from "@/lib/reconciliation-math";
+import { expectedOrderTotal, isTotalMismatch, maxShippingProtectionFee } from "@/lib/reconciliation-math";
 
 // "Reconciliation" here means internal ledger consistency - checking that
 // this store's own order/commission math holds together - not reconciling
@@ -64,19 +64,20 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
     const amountPaid = roundMoney(Number(order.amount_paid ?? 0));
     const refundAmount = roundMoney(Number(order.refund_amount ?? 0));
     // expectedOrderTotal + isTotalMismatch are pure and unit-tested in
-    // reconciliation-math.test.ts. The optional shipping-protection fee is
-    // folded into amount_paid but not stored, so an order that paid up to
-    // MAX_SHIPPING_PROTECTION_FEE above expected is still reconciled.
+    // reconciliation-math.test.ts. The shipping-protection fee is folded into
+    // amount_paid but not stored, so an order that paid up to this order's
+    // protection fee (a % of its subtotal) above expected is still reconciled.
     const expectedTotal = expectedOrderTotal({ subtotal, shipping, tax, cardFee, discount, storeCredit, pointsDollars });
+    const maxProtection = maxShippingProtectionFee(subtotal);
     const paymentStatus = String(order.payment_status ?? "");
     const createdAt = String(order.created_at);
 
-    if (isTotalMismatch(amountPaid, expectedTotal)) {
+    if (isTotalMismatch(amountPaid, expectedTotal, maxProtection)) {
       flags.push({
         orderId,
         customerEmail,
         type: "total_mismatch",
-        detail: `Expected $${expectedTotal.toFixed(2)}${amountPaid > expectedTotal ? ` (+ up to $${MAX_SHIPPING_PROTECTION_FEE.toFixed(2)} protection)` : ""}, recorded $${amountPaid.toFixed(2)}`,
+        detail: `Expected $${expectedTotal.toFixed(2)}${amountPaid > expectedTotal ? ` (+ up to $${maxProtection.toFixed(2)} protection)` : ""}, recorded $${amountPaid.toFixed(2)}`,
         createdAt,
       });
     }
