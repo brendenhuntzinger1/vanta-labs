@@ -1460,6 +1460,35 @@ textarea.vl-input { min-height: 6rem; }
    Mobile refinements. Most responsiveness lives in inline Tailwind classes;
    these are cross-cutting rules that are cleaner to enforce once, globally.
    --------------------------------------------------------------------------- */
+/* Slow gold sheen that sweeps across the promo banner — one glint every few
+   seconds, subtle enough to read as light on metal rather than a flashing ad. */
+.vl-gold-sheen {
+  background: linear-gradient(
+    105deg,
+    transparent 42%,
+    rgba(232, 213, 164, 0.16) 50%,
+    transparent 58%
+  );
+  background-size: 260% 100%;
+  animation: vl-gold-sheen 5s ease-in-out infinite;
+}
+
+@keyframes vl-gold-sheen {
+  0% {
+    background-position: 130% 0;
+  }
+  55%,
+  100% {
+    background-position: -80% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-gold-sheen {
+    animation: none;
+  }
+}
+
 /* Instant, clean taps everywhere: kill the grey iOS tap flash and the legacy
    300ms double-tap-zoom delay so every button/link responds immediately. */
 a,

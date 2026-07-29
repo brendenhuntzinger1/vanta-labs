@@ -65,34 +65,37 @@ export function CouponPromoBanner() {
 
   const ends = endsLabel(coupon.endsAt);
 
+  // Black glass panel with a fine gold border, serif gold headline, and a
+  // slow gold sheen sweeping across — matches the site's premium black/serif
+  // aesthetic while still being the one thing on the page that glints.
   return (
     <div
-      className={`relative mt-4 overflow-hidden rounded-xl bg-gradient-to-r from-emerald-500 via-emerald-600 to-teal-700 px-3.5 py-2.5 shadow-[0_10px_24px_-14px_rgba(16,185,129,0.7)] transition-all duration-300 ease-out sm:px-5 sm:py-3 ${
+      className={`relative mt-4 overflow-hidden rounded-xl border border-amber-200/40 bg-black/60 px-4 py-2.5 shadow-[0_0_34px_-12px_rgba(232,213,164,0.5)] backdrop-blur transition-all duration-300 ease-out sm:px-5 sm:py-3 ${
         entered ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"
       }`}
       role="region"
       aria-label="Promo code"
     >
-      {/* one subtle glow accent — kept small so the bar stays slim */}
-      <div className="pointer-events-none absolute -right-8 -top-10 h-24 w-24 rounded-full bg-white/15 blur-2xl" aria-hidden="true" />
+      {/* moving gold sheen (disabled by prefers-reduced-motion in globals) */}
+      <div className="vl-gold-sheen pointer-events-none absolute inset-0" aria-hidden="true" />
 
       <div className="relative flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="text-[9px] font-semibold uppercase tracking-[0.18em] text-white/80 sm:text-[10px]">Limited-time offer</p>
-          <p className="text-base font-extrabold leading-tight text-white sm:text-xl">
-            {discountHeadline(coupon)} <span className="text-xs font-semibold text-white/85 sm:text-sm">your order</span>
+          <p className="text-[9px] font-semibold uppercase tracking-[0.24em] text-amber-200/60 sm:text-[10px]">Limited-time offer</p>
+          <p className="vl2-serif text-lg leading-tight text-amber-200 sm:text-2xl">
+            {discountHeadline(coupon)} <span className="text-xs font-normal tracking-normal text-white/60 sm:text-sm">your order</span>
           </p>
-          {ends ? <p className="text-[10px] text-white/80 sm:text-[11px]">{ends}</p> : null}
+          {ends ? <p className="text-[10px] text-white/40 sm:text-[11px]">{ends}</p> : null}
         </div>
 
         <button
           type="button"
           onClick={copy}
-          className="group relative inline-flex shrink-0 items-center gap-2 rounded-lg border border-dashed border-white/60 bg-white/10 px-2.5 py-1.5 backdrop-blur-sm transition hover:border-white hover:bg-white/20 sm:px-3 sm:py-2"
+          className="group relative inline-flex shrink-0 items-center gap-2 rounded-full border border-dashed border-amber-200/50 bg-black/40 px-2.5 py-1.5 transition hover:border-amber-200 hover:bg-amber-200/10 sm:px-3.5 sm:py-2"
           aria-label={`Copy promo code ${coupon.code}`}
         >
-          <span className="font-mono text-sm font-bold tracking-[0.12em] text-white sm:text-lg">{coupon.code}</span>
-          <span className="rounded bg-white px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700 transition group-hover:bg-emerald-50 sm:text-xs">
+          <span className="font-mono text-xs font-bold tracking-[0.14em] text-amber-200 sm:text-base">{coupon.code}</span>
+          <span className="rounded-full bg-amber-200 px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-black transition group-hover:bg-amber-100 sm:text-xs">
             {copied ? "✓" : "Copy"}
           </span>
         </button>
