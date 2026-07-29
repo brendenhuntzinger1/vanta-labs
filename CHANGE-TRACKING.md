@@ -66,6 +66,23 @@ No third-party changes recorded yet — this is the starting line.
 
 _(New entries appended here, newest first, as changes are detected.)_
 
+### 2026-07-29 — PRs #18 + #19 merged to `main` (Claude, at the owner's request)
+
+**PR #18** (`01869b2`): cart overhaul — mobile checkout bug fixed (CTA was
+pushed off-screen by a non-scrolling drawer footer; now sticky + safe-area
+padded), quantity/remove controls in drawer AND checkout summary, tappable
+"Buy N more → X% off" bundle nudges, protection at 4% (percent hidden,
+"(Recommended)"), Service Fee default 3%, dead sales-tax hint row removed,
+and a real shipping bug fix: blank Control Center fields resolved to $0
+(free shipping for everyone) — blank now falls back to $15/$250 defaults;
+same blank-guard added to referral/profit/bulk-savings settings.
+
+**PR #19** (`6ad6105`): mobile compaction pass (86svh hero, tighter
+sections/cards/header, side-by-side card buttons, instant taps, smooth
+scroll) + promo banners restyled from green to champagne gold.
+
+**Tracking baseline for third-party review now moves to `6ad6105`.**
+
 ### 2026-07-29 — PR #17 merged to `main` (Claude, at the owner's request)
 
 **New `main` HEAD:** `9861957` (merge of PR #17). Owner-directed changes:
