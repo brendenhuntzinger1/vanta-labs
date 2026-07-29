@@ -9,9 +9,11 @@
 // $2.49/$3.49/$4.99 tiers), so coverage cost scales with the value being
 // protected. Protection is ADDED BY DEFAULT in the cart/checkout UI but stays
 // strictly optional — one visible, pre-announced checkbox untick removes it
-// and the fee disappears immediately.
+// and the fee disappears immediately. The UI shows the DOLLAR amount of the
+// fee (always visible next to the checkbox) but not the percentage, per the
+// owner's preference.
 
-export const SHIPPING_PROTECTION_PERCENT = 3;
+export const SHIPPING_PROTECTION_PERCENT = 4;
 
 function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
