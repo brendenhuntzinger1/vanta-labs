@@ -66,6 +66,21 @@ No third-party changes recorded yet — this is the starting line.
 
 _(New entries appended here, newest first, as changes are detected.)_
 
+### 2026-07-30 — PR #22 merged to `main` (Claude, at the owner's request)
+
+**PR #22** (`b7c4777`): membership program overhaul — dollar-based member
+pricing on every product surface (cards/PDP/cart), honest cart upsell that
+only shows when joining pays for itself, redesigned membership landing
+(club positioning, Best For personas, Most Popular/Best Value, annual
+"2 months free"), LIVE cart-connected savings calculator, dashboard
+lifetime-savings panel. $1/7-day trial messaging removed per owner
+("Join today · Cancel anytime · Benefits start immediately").
+
+**Owner admin steps pending:** untick per-tier "intro offer" in
+Admin → Membership so billing matches the no-trial messaging.
+
+**Tracking baseline for third-party review now moves to `b7c4777`.**
+
 ### 2026-07-30 — PRs #20 + #21 merged to `main` (Claude, at the owner's request)
 
 **PR #20** (`7406e98`): coupon promo banner restyled to black-glass gold with
