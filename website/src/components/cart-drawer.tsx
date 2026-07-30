@@ -9,6 +9,7 @@ import { bundleDiscountRate, getBundleDiscountedLineTotal, getNextBundleTier } f
 import { bestPaidTier, computeCartMembershipValue } from "@/lib/member-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
+import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
 
 export function CartDrawer() {
   const router = useRouter();
@@ -233,6 +234,9 @@ export function CartDrawer() {
               footer stays fixed now. */}
           {isHydrated && items.length > 0 ? (
           <div className="mt-4 space-y-3 border-t border-zinc-800 pt-4 sm:space-y-4">
+          {/* BAC Water quick-add — tick to add a size, untick to remove it */}
+          <BacWaterCartCheckboxes />
+
           {/* Buy 3 Get 1 Free Promotion - Show when 3+ items in cart */}
           {isBuy3Get1FreeEligible && (
             <div className="rounded-[1.25rem] border border-amber-200/30 bg-gradient-to-r from-amber-200/[0.12] via-amber-200/[0.05] to-transparent p-4">

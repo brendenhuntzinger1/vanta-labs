@@ -1,7 +1,7 @@
 -- ============================================================================
 -- VANTA LABS — ADD BACTERIOSTATIC WATER (0.9% Benzyl Alcohol)
--- One product, two size variants: 10mL ($15.00, cost $8.00) and
--- 30mL ($25.00, cost $14.00). Category: Solvents & Solutions.
+-- One product, two size variants: 10mL ($14.99, cost $8.00) and
+-- 30mL ($24.99, cost $14.00). Category: Solvents & Solutions.
 --
 -- Safe to re-run (upsert by slug + by dose). It PRESERVES any photo already
 -- set on the product (never overwrites image_url). It does NOT delete
@@ -17,7 +17,7 @@ insert into public.products
    is_published, is_enabled, is_active, is_archived, stock_status, inventory_quantity)
 values
   ('bacteriostatic-water', 'Bacteriostatic Water (0.9% Benzyl Alcohol)',
-   'Solvents & Solutions', 1500, 800, false, 37,
+   'Solvents & Solutions', 1499, 800, false, 37,
    true, true, true, false, 'In Stock', 100)
 on conflict (slug) do update set
   name=excluded.name, category=excluded.category, price_cents=excluded.price_cents,
@@ -36,8 +36,8 @@ insert into public.product_doses
 select p.id, d.label, d.slug_suffix, d.price_cents, d.cost_cents,
        d.is_default, true, d.position, 'In Stock', 100
 from (values
-  ('bacteriostatic-water', '10mL', '10ml', 1500,  800, true,  0),
-  ('bacteriostatic-water', '30mL', '30ml', 2500, 1400, false, 1)
+  ('bacteriostatic-water', '10mL', '10ml', 1499,  800, true,  0),
+  ('bacteriostatic-water', '30mL', '30ml', 2499, 1400, false, 1)
 ) as d(parent_slug, label, slug_suffix, price_cents, cost_cents, is_default, position)
 join public.products p on p.slug = d.parent_slug
 on conflict (product_id, slug_suffix) do update set

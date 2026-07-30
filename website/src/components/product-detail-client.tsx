@@ -14,6 +14,7 @@ import { SubscribeSave } from "@/components/subscribe-save";
 import { bundleDiscountRate, getBundleDiscountedLineTotal, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
 import type { Product, ProductFaqItem } from "@/lib/catalog-types";
 import { RecentlyViewed } from "@/components/recently-viewed";
+import { BacWaterAccessoryBlock, FrequentlyBoughtTogether } from "@/components/bac-water-upsell";
 import Image from "next/image";
 
 function parseDose(slug: string) {
@@ -145,11 +146,13 @@ export function ProductDetailClient({
   relatedProducts = [],
   promoBuy3Get1Enabled = false,
   bundleConfig = DEFAULT_BUNDLE_CONFIG,
+  bacWater = null,
 }: {
   product: Product;
   relatedProducts?: Product[];
   promoBuy3Get1Enabled?: boolean;
   bundleConfig?: BundleConfig;
+  bacWater?: Product | null;
 }) {
   const { addToCart, membershipTiers, memberDiscountPercent } = useCart();
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
@@ -621,6 +624,8 @@ export function ProductDetailClient({
                 />
               </div>
 
+              <BacWaterAccessoryBlock bacWater={bacWater} hostSlug={product.slug} />
+
               {isOutOfStock ? (
                 <div className="mt-4">
                   <BackInStockForm productSlug={product.slug} variantId={selectedDose?.id} />
@@ -657,6 +662,12 @@ export function ProductDetailClient({
             </div>
           </aside>
         </section>
+
+        <FrequentlyBoughtTogether
+          product={product}
+          selectedDoseId={selectedDose?.id ?? null}
+          bacWater={bacWater}
+        />
 
         {relatedProducts.length > 0 && (
           <ScrollReveal className="mt-16">
