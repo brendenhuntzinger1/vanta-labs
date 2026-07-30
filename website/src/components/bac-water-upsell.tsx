@@ -9,6 +9,7 @@ import {
   bacWaterAddOptions,
   getBacWaterDoseOffers,
   isBacWater,
+  isFeaturedBacWaterOffer,
   type BacWaterDoseOffer,
 } from "@/lib/bac-water";
 
@@ -93,6 +94,11 @@ export function BacWaterAccessoryBlock({ bacWater, hostSlug }: { bacWater: Produ
             <span className="text-sm text-zinc-700">
               <span className="font-medium text-[#111]">BAC Water {offer.sizeLabel}</span>
               <span className="ml-1.5 text-zinc-500">(+{offer.displayPrice})</span>
+              {isFeaturedBacWaterOffer(offer) ? (
+                <span className="ml-1.5 inline-flex items-center gap-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-500">
+                  <span aria-hidden="true">★</span> Most Popular
+                </span>
+              ) : null}
             </span>
             <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.1em] text-sky-700">
               {addedKey === offer.cartKey ? "Added ✓" : "+ Add"}
@@ -127,7 +133,9 @@ export function FrequentlyBoughtTogether({
 
   if (!bacWater || isBacWater(product.slug) || offers.length === 0) return null;
 
-  const selectedOffer = offers.find((offer) => offer.cartKey === selectedOfferKey) ?? offers[0];
+  // 30mL is the spotlighted size, so it's the pre-selected pairing.
+  const defaultOffer = offers.find(isFeaturedBacWaterOffer) ?? offers[0];
+  const selectedOffer = offers.find((offer) => offer.cartKey === selectedOfferKey) ?? defaultOffer;
   const productDose = product.doses?.find((dose) => dose.id === selectedDoseId)
     ?? product.doses?.find((dose) => dose.isDefault)
     ?? product.doses?.[0]
@@ -356,7 +364,14 @@ export function BacWaterAddedPopup() {
               onClick={() => handleAdd(offer)}
               className="vl-focus-ring flex w-full items-center justify-between gap-3 rounded-xl border border-zinc-700 bg-zinc-900/70 px-4 py-3 text-left transition hover:border-emerald-500"
             >
-              <span className="text-sm text-zinc-200">BAC Water {offer.sizeLabel}</span>
+              <span className="text-sm text-zinc-200">
+                BAC Water {offer.sizeLabel}
+                {isFeaturedBacWaterOffer(offer) ? (
+                  <span className="ml-1.5 inline-flex items-center gap-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+                    <span aria-hidden="true">★</span> Most Popular
+                  </span>
+                ) : null}
+              </span>
               <span className="text-sm font-semibold text-emerald-400">+{offer.displayPrice}</span>
             </button>
           ))}

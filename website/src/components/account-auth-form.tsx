@@ -83,11 +83,32 @@ export function AccountAuthForm() {
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
   const [captchaResetKey, setCaptchaResetKey] = useState(0);
 
+  // True only when this page load is a return from Supabase's email
+  // confirmation link: new links carry ?verified=1 (set on emailRedirectTo
+  // below); older, already-sent links are detected by the auth tokens Supabase
+  // puts in the URL fragment. Captured once at first render, before the
+  // Supabase client consumes and strips that fragment.
+  const [isVerificationReturn] = useState(() => {
+    if (typeof window === "undefined") return false;
+    if (searchParams.get("verified") === "1") return true;
+    const hash = window.location.hash;
+    return hash.includes("access_token=") || hash.includes("type=signup");
+  });
+
   // A shopper who clicked the confirmation link in Supabase's built-in
   // verification email lands back here with a session already established
   // by the Supabase client (it reads the token from the URL fragment) -
   // finish signing them in by setting our own httpOnly session cookie.
+  //
+  // Gated to verification returns ONLY. The Supabase client also keeps a
+  // long-lived copy of past sessions in localStorage, and running this on
+  // every visit made the login page silently re-establish that session and
+  // bounce straight to the home page — the shopper never saw the form.
   useEffect(() => {
+    if (!isVerificationReturn) {
+      return;
+    }
+
     let active = true;
 
     (async () => {
@@ -138,7 +159,7 @@ export function AccountAuthForm() {
     return () => {
       active = false;
     };
-  }, [router, nextPath]);
+  }, [router, nextPath, isVerificationReturn]);
 
   // Tick down the "Text me a code" cooldown once per second.
   useEffect(() => {
@@ -200,7 +221,7 @@ export function AccountAuthForm() {
             research_use_only_agreed: true,
             referred_by_code: referralCodeFromUrl || undefined,
           },
-          emailRedirectTo: getEmailRedirectUrl(`/account/login?next=${encodeURIComponent(nextPath)}`),
+          emailRedirectTo: getEmailRedirectUrl(`/account/login?verified=1&next=${encodeURIComponent(nextPath)}`),
           captchaToken: captchaToken ?? undefined,
         },
       });
