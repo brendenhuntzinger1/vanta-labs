@@ -4,8 +4,8 @@ Print-ready business card promoting the first-order welcome offer.
 
 - **Front** — V mark, VANTA LABS wordmark, "Premium Research Peptides"
 - **Back** — "Scan for 10% off your first order · sitewide", QR code to
-  [vantalabsresearch.com](https://vantalabsresearch.com), and the
-  **WELCOME10** promo code (the storefront's live welcome-offer code)
+  [vantalabsresearch.com](https://vantalabsresearch.com), and the dedicated
+  **CARD10** promo code (10% off, first order only, private — see below)
 
 ## Files
 
@@ -41,12 +41,27 @@ lamination over the QR side; matte scans more reliably under light.
   QR codes fail on many phone scanners. Don't restyle it onto the black
   background.
 
-## Tracking card performance
+## The CARD10 code — activate BEFORE ordering cards
 
-`WELCOME10` is also shown in the site's welcome banner, so it can't isolate
-card traffic. To measure the cards separately, create a dedicated code
-(e.g. `CARD10`, 10 % off, first order) in **Admin → Promotions**, update the
-code in `card.template.html`, and rebuild before ordering.
+The card prints the dedicated code **CARD10**: 10 % off, **first-order-only**
+(rejected for any email that already has a paid order, same rule as the
+welcome offer) and **private** (never advertised on the storefront). Because
+the site never shows it, every CARD10 redemption is someone who got a card —
+filter orders on `coupon_code = CARD10` to measure card ROI. (Some card
+recipients will use the public WELCOME10 banner code instead, so the CARD10
+count is a floor, not an exact total.)
+
+The code does not exist until you create it — do this before handing out
+cards, in either of two ways:
+
+1. **One paste (recommended):** run
+   `website/src/lib/sql/card10-first-order-coupon.sql` in the Supabase SQL
+   editor. It adds the `first_order_only` coupon column and creates CARD10.
+2. **Admin UI:** after deploying and running that SQL file for the column,
+   codes like this can also be created in **Admin → Coupons** — check
+   "Private code" and "First order only".
+
+Then verify: enter CARD10 at checkout on a fresh email — it should apply 10 %.
 
 ## Rebuilding
 
@@ -56,5 +71,6 @@ python3 generate.py          # optionally: --url https://vantalabsresearch.com
 node build.mjs               # needs playwright + chromium (pre-installed in CI/dev container)
 ```
 
-The welcome-offer code and percentage are editable in **Admin → Settings**;
-if you change them there, keep the card in sync.
+CARD10 is managed like any coupon in **Admin → Coupons** (disable it there to
+end the promotion). If you ever change the code or percentage, update
+`card.template.html` and rebuild so the printed cards stay in sync.

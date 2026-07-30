@@ -11,6 +11,7 @@ type CouponFormState = {
   endsAt: string;
   maxRedemptions: string;
   isPrivate: boolean;
+  firstOrderOnly: boolean;
 };
 
 const EMPTY_FORM: CouponFormState = {
@@ -21,6 +22,7 @@ const EMPTY_FORM: CouponFormState = {
   endsAt: "",
   maxRedemptions: "",
   isPrivate: false,
+  firstOrderOnly: false,
 };
 
 function currency(value: number) {
@@ -106,6 +108,7 @@ export function AdminCouponsClient({
           endsAt: fromDatetimeLocal(form.endsAt),
           maxRedemptions: form.maxRedemptions.trim() ? Number(form.maxRedemptions) : null,
           isPrivate: form.isPrivate,
+          firstOrderOnly: form.firstOrderOnly,
         }),
       });
       const result = await response.json() as { success: boolean; error?: string };
@@ -274,6 +277,21 @@ export function AdminCouponsClient({
               </span>
             </span>
           </label>
+          <label className="flex items-start gap-2.5 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm text-zinc-300 sm:col-span-2">
+            <input
+              type="checkbox"
+              checked={form.firstOrderOnly}
+              onChange={(e) => setForm((prev) => ({ ...prev, firstOrderOnly: e.target.checked }))}
+              className="mt-0.5 h-4 w-4 accent-amber-300"
+            />
+            <span>
+              <span className="block font-medium text-white">First order only</span>
+              <span className="mt-0.5 block text-xs text-zinc-500">
+                Rejected at checkout for any email that already has a paid order — the same rule as the welcome
+                offer. Use for acquisition codes like the CARD10 business-card code.
+              </span>
+            </span>
+          </label>
         </div>
         {error ? <p className="mt-3 text-sm text-rose-300">{error}</p> : null}
         {message ? <p className="mt-3 text-sm text-emerald-300">{message}</p> : null}
@@ -324,6 +342,9 @@ export function AdminCouponsClient({
                               {coupon.code}
                               {coupon.isPrivate ? (
                                 <span className="ml-2 rounded-full border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 font-sans text-[10px] font-semibold uppercase tracking-wide text-amber-300">Private</span>
+                              ) : null}
+                              {coupon.firstOrderOnly ? (
+                                <span className="ml-2 rounded-full border border-sky-300/30 bg-sky-300/10 px-2 py-0.5 font-sans text-[10px] font-semibold uppercase tracking-wide text-sky-300">First order</span>
                               ) : null}
                             </td>
                             <td className="py-3 pr-4 text-zinc-300">{formatDiscount(coupon)}</td>

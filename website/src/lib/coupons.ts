@@ -28,6 +28,42 @@ export function calculateCouponDiscount(subtotal: number, discountType: string, 
   return roundMoney(Math.min(Math.max(amount, 0), subtotal));
 }
 
+// First-order-only guard shared by the welcome offer and first_order_only
+// coupons. Blocks the email if it already has ANY paid order, OR any earlier
+// order that already used this code and isn't cancelled — the latter closes
+// the loophole of stacking the code across several simultaneous unpaid orders.
+// No-op when the email isn't known yet (cart preview); checkout re-validates
+// with the email present.
+async function assertFirstOrder(customerEmail: string | undefined, normalizedCode: string, errorMessage: string) {
+  const email = (customerEmail ?? "").trim().toLowerCase();
+  if (!email) {
+    return;
+  }
+
+  const { data: priorPaid } = await supabaseAdmin
+    .from("orders")
+    .select("id")
+    .eq("customer_email", email)
+    .eq("payment_status", "paid")
+    .limit(1)
+    .maybeSingle();
+  if (priorPaid) {
+    throw new Error(errorMessage);
+  }
+
+  const { data: priorUse } = await supabaseAdmin
+    .from("orders")
+    .select("id")
+    .eq("customer_email", email)
+    .ilike("coupon_code", normalizedCode)
+    .neq("payment_status", "cancelled")
+    .limit(1)
+    .maybeSingle();
+  if (priorUse) {
+    throw new Error(errorMessage);
+  }
+}
+
 // Mirrors validateReferralCode's contract: null for "no code supplied",
 // throws a user-facing Error for an invalid/expired/exhausted code so the
 // checkout API can surface a clear message instead of silently ignoring it.
@@ -49,35 +85,7 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
   try {
     const welcome = await getWelcomeOffer();
     if (welcome.enabled && welcome.percent > 0 && normalizeCouponCode(welcome.code) === normalizedCode) {
-      const email = (customerEmail ?? "").trim().toLowerCase();
-      if (email) {
-        // Once-per-customer: block if this email already has ANY paid order
-        // (first-order-only), OR any earlier order that already used this
-        // welcome code and isn't cancelled — this also closes the loophole of
-        // stacking the code across several simultaneous unpaid orders.
-        const { data: priorPaid } = await supabaseAdmin
-          .from("orders")
-          .select("id")
-          .eq("customer_email", email)
-          .eq("payment_status", "paid")
-          .limit(1)
-          .maybeSingle();
-        if (priorPaid) {
-          throw new Error("This welcome offer is for first orders only.");
-        }
-
-        const { data: priorWelcomeUse } = await supabaseAdmin
-          .from("orders")
-          .select("id")
-          .eq("customer_email", email)
-          .ilike("coupon_code", normalizedCode)
-          .neq("payment_status", "cancelled")
-          .limit(1)
-          .maybeSingle();
-        if (priorWelcomeUse) {
-          throw new Error("This welcome offer is for first orders only.");
-        }
-      }
+      await assertFirstOrder(customerEmail, normalizedCode, "This welcome offer is for first orders only.");
       return {
         code: normalizedCode,
         discountType: "percent",
@@ -97,11 +105,24 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
   // stored (a code seeded or created lower/mixed case would otherwise fail
   // here even though it shows on the storefront). normalizeCouponCode strips
   // everything except [A-Z0-9-], so there are no ILIKE wildcards to escape.
-  const { data, error } = await supabaseAdmin
+  // first_order_only is a newer column (card10-first-order-coupon.sql): if the
+  // migration hasn't been applied yet, retry without it — pre-migration
+  // behavior unchanged (no coupon is first-order-only).
+  let { data, error } = await supabaseAdmin
     .from("coupons")
-    .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email")
+    .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email, first_order_only")
     .ilike("code", normalizedCode)
     .maybeSingle();
+
+  if (error) {
+    const fallback = await supabaseAdmin
+      .from("coupons")
+      .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email")
+      .ilike("code", normalizedCode)
+      .maybeSingle();
+    data = fallback.data as typeof data;
+    error = fallback.error;
+  }
 
   if (error) {
     console.error("Coupon lookup failed:", error);
@@ -144,6 +165,10 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
     if (used >= data.max_redemptions) {
       throw new Error("This coupon has reached its redemption limit");
     }
+  }
+
+  if ((data as { first_order_only?: boolean }).first_order_only) {
+    await assertFirstOrder(customerEmail, normalizedCode, "This code is for first orders only.");
   }
 
   const discountType = data.discount_type === "fixed" ? "fixed" : "percent";
