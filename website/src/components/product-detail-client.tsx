@@ -525,19 +525,19 @@ export function ProductDetailClient({
               {memberQuote && memberQuote.savings > 0 ? (
                 isMember ? (
                   <div className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm">
-                    <span className="font-semibold text-amber-700">Your member price: {formatUsd(memberQuote.memberPrice)}</span>
-                    <span className="text-amber-700/70">you save {formatUsd(memberQuote.savings)} ({memberQuote.percent}%)</span>
+                    <span className="font-semibold text-emerald-700">Your member price: {formatUsd(memberQuote.memberPrice)}</span>
+                    <span className="text-emerald-700/70">you save {formatUsd(memberQuote.savings)} ({memberQuote.percent}%)</span>
                   </div>
                 ) : (
                   <Link
                     href="/membership"
-                    className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-amber-300/60 bg-gradient-to-r from-amber-50 to-white px-4 py-3 transition hover:border-amber-400"
+                    className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-emerald-300/70 bg-gradient-to-r from-emerald-50 to-white px-4 py-3 transition hover:border-emerald-500"
                   >
                     <span className="min-w-0 text-sm text-zinc-700">
                       <span className="block font-semibold text-zinc-900">Become a member — pay {formatUsd(memberQuote.memberPrice)} instead of {formatUsd(memberQuote.regularPrice)}</span>
                       <span className="mt-0.5 block text-xs text-zinc-500">Save {formatUsd(memberQuote.savings)} on this vial today, plus monthly store credit &amp; free shipping</span>
                     </span>
-                    <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.12em] text-amber-700">Join →</span>
+                    <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">Join →</span>
                   </Link>
                 )
               ) : null}
