@@ -314,6 +314,73 @@ export async function listCustomerBalances(search?: string): Promise<CustomerBal
   return rows.sort((a, b) => b.pointsBalance - a.pointsBalance);
 }
 
+export interface MembershipRosterRow {
+  userId: string;
+  name: string;
+  email: string;
+  tierName: string;
+  tierSlug: string;
+  billingCycle: string;
+  status: string;
+  joinedAt: string | null;
+  nextBillingAt: string | null;
+  nextBillingAmountCents: number;
+  cancelAtPeriodEnd: boolean;
+  storeCreditCents: number;
+}
+
+// Every member with a membership record — who they are (name + email), their
+// exact tier, billing cycle, status, join date, next billing, and store-credit
+// balance. Powers the Members section of Admin → Membership.
+export async function listMembershipRoster(): Promise<MembershipRosterRow[]> {
+  const [authUsers, { data: memberships, error }, { data: creditRows }] = await Promise.all([
+    listAllAuthUsers(),
+    supabaseAdmin
+      .from("customer_memberships")
+      .select("user_id, status, billing_cycle, started_at, next_billing_at, next_billing_amount_cents, renews_at, cancel_at_period_end, membership_tiers(name, slug)"),
+    supabaseAdmin.from("store_credit_ledger").select("user_id, amount_cents").then((r) => r, () => ({ data: null })),
+  ]);
+  if (error) throw error;
+
+  const userById = new Map(authUsers.map((user) => [user.id, user]));
+
+  const creditByUser = new Map<string, number>();
+  for (const row of (creditRows ?? []) as Array<{ user_id?: string; amount_cents?: number }>) {
+    const id = String(row.user_id ?? "");
+    creditByUser.set(id, (creditByUser.get(id) ?? 0) + Number(row.amount_cents ?? 0));
+  }
+
+  const rows: MembershipRosterRow[] = (memberships ?? []).map((row) => {
+    const user = userById.get(String(row.user_id));
+    const tier = row.membership_tiers as unknown as { name?: string; slug?: string } | null;
+    const meta = (user?.user_metadata ?? {}) as Record<string, unknown>;
+    const name = String(meta.full_name ?? meta.name ?? "").trim();
+    return {
+      userId: String(row.user_id),
+      name: name || "—",
+      email: user?.email ?? "(no email)",
+      tierName: tier?.name ? String(tier.name) : "Research Member",
+      tierSlug: tier?.slug ? String(tier.slug) : "free",
+      billingCycle: String(row.billing_cycle ?? "free"),
+      status: String(row.status ?? "active"),
+      joinedAt: row.started_at ? String(row.started_at) : null,
+      nextBillingAt: row.next_billing_at ? String(row.next_billing_at) : (row.renews_at ? String(row.renews_at) : null),
+      nextBillingAmountCents: Number(row.next_billing_amount_cents ?? 0),
+      cancelAtPeriodEnd: Boolean(row.cancel_at_period_end),
+      storeCreditCents: creditByUser.get(String(row.user_id)) ?? 0,
+    };
+  });
+
+  // Paying members first (by tier price proxy: billing cycle then name), then
+  // newest joins.
+  return rows.sort((a, b) => {
+    const aPaying = a.billingCycle !== "free" ? 1 : 0;
+    const bPaying = b.billingCycle !== "free" ? 1 : 0;
+    if (aPaying !== bPaying) return bPaying - aPaying;
+    return (b.joinedAt ?? "").localeCompare(a.joinedAt ?? "");
+  });
+}
+
 export async function adminAdjustPoints(input: { userId: string; amount: number; note: string }) {
   if (input.amount === 0) {
     throw new Error("Adjustment amount must be non-zero");

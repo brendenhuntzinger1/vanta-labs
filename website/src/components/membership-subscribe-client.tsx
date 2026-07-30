@@ -17,7 +17,10 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
   const [message, setMessage] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "success">("idle");
 
-  const usesIntroOffer = billingCycle === "monthly" && tier.introOfferEnabled;
+  // Intro/trial flow removed per the owner: every signup charges the full
+  // period immediately and benefits start the moment the charge succeeds.
+  const usesIntroOffer = false;
+  void tier.introOfferEnabled;
   // Show the ACTUAL charged monthly price. Membership charges are billed at the
   // base price (no card fee is added — see membership-billing.ts), so the old
   // "+5% card fee" display over-stated the price and contradicted the receipt.

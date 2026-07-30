@@ -11,7 +11,6 @@ import { getSiteUrl } from "@/lib/env";
 import {
   membershipWelcomeTemplate,
   membershipSignupReceiptTemplate,
-  membershipTrialConfirmationTemplate,
   membershipRemainderReminderTemplate,
   membershipRemainderReceiptTemplate,
   membershipRenewalReminderTemplate,
@@ -308,10 +307,14 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
     return { success: true, changed: false };
   }
 
-  if (input.billingCycle === "annual" || !tier.intro_offer_enabled) {
-    // No intro flow: annual signup, or a tier with the intro offer turned
-    // off - charge the full period amount immediately, same honesty rule
-    // as the monthly path (a real charge attempt, not a silent "active").
+  // No intro/trial flow — REMOVED per the owner (2026-07): every signup
+  // charges the full period amount immediately, and the membership only
+  // becomes "active" (benefits on) when that charge SUCCEEDS. A failed or
+  // impossible charge (no processor connected) records "past_due", which
+  // isMembershipActive treats as no benefits. The per-day idempotency key
+  // makes double-clicks, retries, and races provider-deduplicated — the same
+  // person can never be charged twice for the same signup.
+  {
     const amountCents = input.billingCycle === "annual" ? tier.annual_price_cents : tier.monthly_price_cents;
     const nextBillingAt = new Date(now.getTime() + (input.billingCycle === "annual" ? 365 : 30) * ONE_DAY_MS);
 
@@ -321,7 +324,9 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
       amountCents,
       currency: "usd",
       description: `${tier.name} - ${input.billingCycle} membership`,
-      idempotencyKey: `signup-${input.userId}-${tier.id}-${input.billingCycle}`,
+      // Date-scoped: dedupes any duplicate submission of THIS signup while
+      // still allowing a genuine cancel-and-rejoin on a later day.
+      idempotencyKey: `signup-${input.userId}-${tier.id}-${input.billingCycle}-${now.toISOString().slice(0, 10)}`,
     });
 
     await supabaseAdmin.from("customer_memberships").upsert({
@@ -350,7 +355,7 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
         });
 
         // Transactional receipt for the real charge (always sent). Annual is a
-        // one-year non-renewing pass; non-intro monthly auto-renews.
+        // one-year non-renewing pass; monthly auto-renews.
         await sendEmail({
           to: contact.email,
           ...membershipSignupReceiptTemplate({
@@ -369,68 +374,6 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
 
     return { success: chargeResult.success };
   }
-
-  // Monthly signup with the $1-intro-then-remainder flow.
-  const introChargeCents = tier.intro_price_cents;
-  const remainderCents = Math.max(0, tier.monthly_price_cents - introChargeCents);
-  const introEndsAt = new Date(now.getTime() + tier.intro_duration_days * ONE_DAY_MS);
-
-  const chargeResult = await billingProvider.chargeCard({
-    billingProviderCustomerId: null,
-    paymentMethodRef: null,
-    amountCents: introChargeCents,
-    currency: "usd",
-    description: `${tier.name} - ${tier.intro_duration_days}-day intro`,
-    idempotencyKey: `intro-${input.userId}-${tier.id}`,
-  });
-
-  await supabaseAdmin.from("customer_memberships").upsert({
-    user_id: input.userId,
-    tier_id: tier.id,
-    billing_cycle: "monthly",
-    status: chargeResult.success ? "trialing" : "past_due",
-    started_at: now.toISOString(),
-    intro_status: "active",
-    intro_started_at: now.toISOString(),
-    intro_ends_at: introEndsAt.toISOString(),
-    intro_charge_amount_cents: introChargeCents,
-    first_month_remainder_cents: remainderCents,
-    next_billing_at: introEndsAt.toISOString(),
-    next_billing_amount_cents: remainderCents,
-    cancel_at_period_end: false,
-    updated_at: now.toISOString(),
-  }, { onConflict: "user_id" });
-
-  if (!chargeResult.success) {
-    await handleChargeFailure({ userId: input.userId, tier, amountCents: introChargeCents, eventType: "intro_charge", error: chargeResult.error });
-    return { success: false };
-  }
-
-  await recordBillingEvent({ userId: input.userId, tierId: tier.id, eventType: "intro_charge", amountCents: introChargeCents, status: "succeeded", providerChargeId: chargeResult.providerChargeId });
-
-  if (contact) {
-    await sendMarketingEmail({
-      to: contact.email,
-      campaignType: "membership_welcome",
-      referenceId: input.userId,
-      templateKey: "membershipWelcomeTemplate",
-      ...membershipWelcomeTemplate({ name: contact.name, tierName: tier.name }),
-    });
-
-    await sendEmail({
-      to: contact.email,
-      ...membershipTrialConfirmationTemplate({
-        name: contact.name,
-        tierName: tier.name,
-        introChargeCents,
-        remainderCents,
-        remainderChargeDate: introEndsAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
-        monthlyPriceCents: tier.monthly_price_cents,
-      }),
-    });
-  }
-
-  return { success: true };
 }
 
 export interface MembershipCancellationResult {
