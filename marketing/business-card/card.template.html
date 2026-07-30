@@ -1,0 +1,304 @@
+<meta charset="utf-8">
+<title>Vanta Labs — Business Card (print master)</title>
+<style>
+  /* ============================================================
+     Vanta Labs business card — print master
+     Trim 3.5in x 2.0in · Bleed 0.125in -> page 3.75in x 2.25in
+     Safe area: keep content >= 0.25in from the page edge
+     ============================================================ */
+  @font-face {
+    font-family: "Manrope";
+    src: url(data:font/woff2;base64,__MANROPE_B64__) format("woff2");
+    font-weight: 200 800;
+    font-style: normal;
+  }
+  @page { size: 3.75in 2.25in; margin: 0; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { background: #26262e; }
+  body {
+    font-family: "Manrope", "Avenir Next", "Segoe UI", sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  .page {
+    position: relative;
+    width: 3.75in;
+    height: 2.25in;
+    overflow: hidden;
+    background: #0c0c10;
+    color: #f4f4f4;
+    page-break-after: always;
+  }
+  .page:last-child { page-break-after: auto; }
+
+  /* Layered ambient sheen — echoes the storefront background */
+  .page::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(3.4in 2.3in at 14% -10%, rgba(242, 201, 76, 0.085), transparent 62%),
+      radial-gradient(3in 2in at 102% -6%, rgba(142, 197, 255, 0.06), transparent 58%),
+      radial-gradient(4in 2.6in at 50% 118%, rgba(255, 255, 255, 0.045), transparent 60%);
+  }
+
+  /* Faint peptide-chain motif */
+  .motif {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+
+  .content {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* ---------------- FRONT ---------------- */
+  .front .stack {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  .front .vmark { width: 0.46in; height: 0.42in; margin-bottom: 0.1in; }
+  .front .wordmark {
+    font-size: 19.5pt;
+    font-weight: 500;
+    letter-spacing: 0.5em;
+    margin-right: -0.5em; /* optically recenter tracked caps */
+    color: #fafafa;
+    line-height: 1;
+  }
+  .front .sub {
+    display: flex;
+    align-items: center;
+    gap: 0.09in;
+    margin-top: 0.075in;
+  }
+  .front .sub .rule {
+    width: 0.34in;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.38);
+  }
+  .front .sub .labs {
+    font-size: 8pt;
+    font-weight: 500;
+    letter-spacing: 0.55em;
+    margin-right: -0.55em;
+    color: #e6e6e6;
+  }
+  .front .divider {
+    width: 0.5in;
+    height: 1px;
+    margin-top: 0.16in;
+    background: linear-gradient(90deg, transparent, rgba(242, 201, 76, 0.9), transparent);
+  }
+  .front .tagline {
+    margin-top: 0.115in;
+    font-size: 6.8pt;
+    font-weight: 600;
+    letter-spacing: 0.34em;
+    margin-right: -0.34em;
+    color: #f2c94c;
+  }
+  /* ---------------- BACK ---------------- */
+  .back .content {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.28in 0.32in 0.46in 0.34in;
+  }
+  .offer { display: flex; flex-direction: column; align-items: flex-start; white-space: nowrap; }
+  .offer .eyebrow {
+    font-size: 5.8pt;
+    font-weight: 700;
+    letter-spacing: 0.3em;
+    color: #f2c94c;
+  }
+  .offer .scanfor {
+    margin-top: 0.085in;
+    font-size: 7.5pt;
+    font-weight: 500;
+    letter-spacing: 0.4em;
+    color: rgba(244, 244, 244, 0.78);
+  }
+  .offer .big {
+    margin-top: 0.015in;
+    font-size: 25.5pt;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    line-height: 1.05;
+    color: #f2c94c;
+  }
+  .offer .qualifier {
+    margin-top: 0.05in;
+    font-size: 6.7pt;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    color: rgba(244, 244, 244, 0.88);
+  }
+  .offer .chip {
+    margin-top: 0.1in;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 0.07in;
+    padding: 0.045in 0.1in;
+    border: 1px solid rgba(242, 201, 76, 0.45);
+    border-radius: 999px;
+    background: rgba(242, 201, 76, 0.08);
+  }
+  .offer .chip .lbl {
+    font-size: 5.4pt;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    color: rgba(244, 244, 244, 0.66);
+  }
+  .offer .chip .code {
+    font-size: 8.2pt;
+    font-weight: 800;
+    letter-spacing: 0.12em;
+    color: #f2c94c;
+  }
+
+  .qrcol {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.055in;
+  }
+  .qrtile {
+    position: relative;
+    width: 1.06in;
+    height: 1.06in;
+    padding: 0.095in;
+    background: #ffffff;
+    border-radius: 0.09in;
+    box-shadow:
+      0 0 0 1px rgba(255, 255, 255, 0.22),
+      0 0.06in 0.18in rgba(0, 0, 0, 0.55);
+  }
+  .qrtile svg.qr { display: block; width: 100%; height: 100%; }
+  .qrtile .logo {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 0.21in;
+    height: 0.21in;
+    transform: translate(-50%, -50%);
+    background: #ffffff;
+    border-radius: 0.035in;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .qrtile .logo svg { width: 0.145in; height: 0.135in; }
+  .qrcol .caption {
+    font-size: 5.8pt;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    color: rgba(244, 244, 244, 0.7);
+  }
+
+  .fineprint {
+    position: absolute;
+    left: 0.3in;
+    right: 0.3in;
+    bottom: 0.24in;
+    text-align: center;
+    font-size: 5pt;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: rgba(244, 244, 244, 0.42);
+  }
+</style>
+
+<!-- ============================ FRONT ============================ -->
+<div class="page front">
+  <svg class="motif" viewBox="0 0 360 216" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <!-- peptide backbone chain, upper right -->
+    <g stroke="rgba(255,255,255,0.055)" stroke-width="1">
+      <path d="M258 -12 L286 6 L286 38 L314 56 L342 38 L342 6" />
+      <path d="M314 56 L314 88 L286 106 L258 88 L258 56 L286 38" />
+      <path d="M342 70 L370 88 L370 120" />
+      <path d="M314 88 L342 106 L342 138 L314 156" />
+    </g>
+    <g fill="rgba(255,255,255,0.10)">
+      <circle cx="286" cy="6" r="2.1" />
+      <circle cx="314" cy="56" r="2.1" />
+      <circle cx="258" cy="88" r="2.1" />
+      <circle cx="342" cy="106" r="2.1" />
+    </g>
+    <circle cx="286" cy="106" r="2.3" fill="rgba(242,201,76,0.30)" />
+    <!-- chain fragment, lower left -->
+    <g stroke="rgba(255,255,255,0.05)" stroke-width="1">
+      <path d="M-12 150 L16 168 L16 200 L44 218" />
+      <path d="M16 168 L44 150 L72 168 L72 200" />
+    </g>
+    <g fill="rgba(255,255,255,0.09)">
+      <circle cx="16" cy="168" r="2" />
+      <circle cx="72" cy="168" r="2" />
+    </g>
+    <circle cx="44" cy="150" r="2.2" fill="rgba(242,201,76,0.26)" />
+  </svg>
+  <div class="content">
+    <div class="stack">
+      <svg class="vmark" viewBox="0 0 46 42" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M3 3 L23 39 L43 3" stroke="#fafafa" stroke-width="4" stroke-linecap="square" stroke-linejoin="miter" />
+        <path d="M14.5 3 L23 18.4" stroke="#f2c94c" stroke-width="4" stroke-linecap="square" />
+      </svg>
+      <div class="wordmark">VANTA</div>
+      <div class="sub">
+        <span class="rule"></span>
+        <span class="labs">LABS</span>
+        <span class="rule"></span>
+      </div>
+      <div class="divider"></div>
+      <div class="tagline">PREMIUM RESEARCH PEPTIDES</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ BACK ============================ -->
+<div class="page back">
+  <svg class="motif" viewBox="0 0 360 216" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <g stroke="rgba(255,255,255,0.04)" stroke-width="1">
+      <path d="M300 -14 L328 4 L328 36 L356 54 L356 86" />
+      <path d="M328 36 L300 54 L300 86 L328 104" />
+    </g>
+    <g fill="rgba(255,255,255,0.07)">
+      <circle cx="328" cy="4" r="2" />
+      <circle cx="300" cy="54" r="2" />
+    </g>
+  </svg>
+  <div class="content">
+    <div class="offer">
+      <div class="eyebrow">FIRST-ORDER EXCLUSIVE</div>
+      <div class="scanfor">SCAN FOR</div>
+      <div class="big">10% OFF</div>
+      <div class="qualifier">YOUR FIRST ORDER &middot; SITEWIDE</div>
+      <div class="chip">
+        <span class="lbl">USE CODE</span>
+        <span class="code">WELCOME10</span>
+      </div>
+    </div>
+    <div class="qrcol">
+      <div class="qrtile">
+        __QR_SVG__
+        <div class="logo">
+          <svg viewBox="0 0 46 42" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M3 3 L23 39 L43 3" stroke="#0d0d11" stroke-width="5" stroke-linecap="square" stroke-linejoin="miter" />
+            <path d="M14.5 3 L23 18.4" stroke="#f2c94c" stroke-width="5" stroke-linecap="square" />
+          </svg>
+        </div>
+      </div>
+      <div class="caption">VANTALABSRESEARCH.COM</div>
+    </div>
+    <div class="fineprint">For laboratory research use only &middot; Not for human consumption &middot; 21+</div>
+  </div>
+</div>
