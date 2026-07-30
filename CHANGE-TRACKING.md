@@ -66,6 +66,15 @@ No third-party changes recorded yet — this is the starting line.
 
 _(New entries appended here, newest first, as changes are detected.)_
 
+### 2026-07-30 — PR #27 merged to `main` (Claude, at the owner's request)
+
+**PR #27** (`1827aac`): member-pricing accents switched from leftover gold to
+the site's single deep-emerald accent on product cards, product pages, and
+the cart upsell. Confirmed the displayed member rates already come from the
+strongest paid tier (Vanta Black, 12%) via bestPaidTier().
+
+**Tracking baseline for third-party review now moves to `1827aac`.**
+
 ### 2026-07-30 — PR #26 merged to `main` (Claude, at the owner's request)
 
 **PR #26** (`b51b2a4`): membership page fully redesigned to the site's brand
