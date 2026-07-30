@@ -66,6 +66,24 @@ No third-party changes recorded yet — this is the starting line.
 
 _(New entries appended here, newest first, as changes are detected.)_
 
+### 2026-07-30 — PRs #20 + #21 merged to `main` (Claude, at the owner's request)
+
+**PR #20** (`7406e98`): coupon promo banner restyled to black-glass gold with
+sheen; NEW private/unlisted coupons (Admin → Coupons checkbox; valid at
+checkout, never advertised; migration coupon-private-flag.sql).
+
+**PR #21** (`1ba269d`): one-click replacement shipments — Admin order page
+'Send replacement' creates a linked $0 order (reason + note, per-item
+selection), flows through the 3PL pipeline, decrements stock, audit-logs the
+claim, emails the customer (migration replacement-orders.sql). Also fixed a
+pre-existing silent no-op in the webhook's fallback inventory decrement
+(snake_case/camelCase key mismatch).
+
+**Owner Supabase steps pending at time of entry:** run
+coupon-private-flag.sql and replacement-orders.sql.
+
+**Tracking baseline for third-party review now moves to `1ba269d`.**
+
 ### 2026-07-29 — PRs #18 + #19 merged to `main` (Claude, at the owner's request)
 
 **PR #18** (`01869b2`): cart overhaul — mobile checkout bug fixed (CTA was
