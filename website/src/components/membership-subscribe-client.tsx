@@ -108,9 +108,12 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
             <li>Then the remaining first-month balance, then <strong className="text-white">{money(monthlyPrice)}/month</strong> until canceled.</li>
           </ul>
         ) : (
-          <p className="mt-4 text-sm leading-6 text-white/80">
-            <strong className="text-white">{money(monthlyPrice)}/month</strong>, billed to your card automatically until you cancel.
-          </p>
+          <>
+            <p className="mt-4 text-sm leading-6 text-white/80">
+              <strong className="text-white">{money(monthlyPrice)}/month</strong>, billed to your card automatically until you cancel.
+            </p>
+            <p className="mt-2 text-xs text-white/50">Join today · cancel anytime · benefits start immediately. No hidden fees.</p>
+          </>
         )}
       </div>
 

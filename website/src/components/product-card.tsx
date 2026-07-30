@@ -4,6 +4,8 @@ import Image from "next/image";
 import Link from "next/link";
 import type { Product } from "@/lib/catalog-types";
 import { WishlistButton } from "@/components/wishlist-button";
+import { formatCartCurrency, useCart } from "@/components/cart-context";
+import { bestPaidTier, parsePriceValue, quoteMemberPrice } from "@/lib/member-pricing";
 
 const BADGE_LABELS: Record<NonNullable<Product["badge"]>, string> = {
   new: "New",
@@ -26,6 +28,21 @@ export function ProductCard({
 }) {
   const hasRealImage = Boolean(image) && !image.includes(".svg");
   const dosePreview = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0];
+
+  // Member pricing — dollars first. Members see THEIR price; everyone else
+  // sees what the strongest paid tier would charge, with the exact savings.
+  const { membershipTiers, memberDiscountPercent } = useCart();
+  const numericPrice = parsePriceValue(product.salePrice ?? product.price);
+  const isMember = memberDiscountPercent > 0;
+  const upsellTier = isMember ? null : bestPaidTier(membershipTiers);
+  const memberQuote = numericPrice > 0
+    ? (isMember
+      ? quoteMemberPrice(numericPrice, memberDiscountPercent)
+      : upsellTier
+        ? quoteMemberPrice(numericPrice, upsellTier.discountPercent)
+        : null)
+    : null;
+  const showMemberPricing = Boolean(memberQuote && memberQuote.savings > 0);
 
   return (
     <article className="vl2-product-card group relative flex h-full flex-col">
@@ -79,6 +96,13 @@ export function ProductCard({
               <p className="text-xs text-white/70 line-through sm:text-sm">{product.compareAtPrice}</p>
             ) : null}
           </div>
+          {showMemberPricing && memberQuote ? (
+            <p className="mt-1 text-xs text-amber-200 sm:text-sm">
+              {isMember ? "Your member price " : "Member price "}
+              <span className="font-semibold">{formatCartCurrency(memberQuote.memberPrice)}</span>
+              <span className="text-amber-200/60"> · save {formatCartCurrency(memberQuote.savings)}</span>
+            </p>
+          ) : null}
           {/* Trust badges — data-driven, so they only appear when the real
               purity / COA / batch data is entered in Admin (no fabricated claims). */}
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] leading-none">
@@ -116,6 +140,14 @@ export function ProductCard({
         >
           View Details
         </Link>
+        {showMemberPricing && memberQuote && !isMember ? (
+          <Link
+            href="/membership"
+            className="vl-focus-ring col-span-2 -mb-1 inline-flex items-center justify-center gap-1 py-1 text-[11px] text-amber-200/70 transition hover:text-amber-200"
+          >
+            Become a member &amp; save {formatCartCurrency(memberQuote.savings)} today →
+          </Link>
+        ) : null}
       </div>
     </article>
   );

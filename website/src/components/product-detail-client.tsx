@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 import { useCart } from "@/components/cart-context";
+import { bestPaidTier, quoteMemberPrice } from "@/lib/member-pricing";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { CouponPromoBanner } from "@/components/coupon-promo-banner";
 import { ProductCard } from "@/components/product-card";
@@ -150,7 +151,7 @@ export function ProductDetailClient({
   promoBuy3Get1Enabled?: boolean;
   bundleConfig?: BundleConfig;
 }) {
-  const { addToCart } = useCart();
+  const { addToCart, membershipTiers, memberDiscountPercent } = useCart();
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
   const [selectedDoseId, setSelectedDoseId] = useState<string | null>(defaultDose?.id ?? null);
   const [quantity, setQuantity] = useState(1);
@@ -173,6 +174,18 @@ export function ProductDetailClient({
   const isOutOfStock = selectedStockStatus === "Out of Stock" || selectedStockStatus === "Reserved";
   const unitPrice = toPriceNumber(selectedPrice);
   const currentBundleRate = bundleDiscountRate(quantity, bundleConfig);
+
+  // Member pricing on the selected dose — members see their price; everyone
+  // else sees the strongest paid tier's price with exact dollar savings.
+  const isMember = memberDiscountPercent > 0;
+  const pdpUpsellTier = isMember ? null : bestPaidTier(membershipTiers);
+  const memberQuote = unitPrice > 0
+    ? (isMember
+      ? quoteMemberPrice(unitPrice, memberDiscountPercent)
+      : pdpUpsellTier
+        ? quoteMemberPrice(unitPrice, pdpUpsellTier.discountPercent)
+        : null)
+    : null;
 
   const galleryItems = useMemo<GalleryItem[]>(() => {
     const fromGallery = (product.galleryImages ?? []).map((image) => ({
@@ -504,6 +517,30 @@ export function ProductDetailClient({
                   <p className="mb-1 text-base text-zinc-400 line-through">{selectedCompareAtPrice}</p>
                 )}
               </div>
+
+              {/* Member pricing — dollars, not percentages. Members see their
+                  price on this exact vial; everyone else sees precisely what
+                  joining would save them today, linking to the membership
+                  page. Display only — checkout applies the real discount. */}
+              {memberQuote && memberQuote.savings > 0 ? (
+                isMember ? (
+                  <div className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm">
+                    <span className="font-semibold text-amber-700">Your member price: {formatUsd(memberQuote.memberPrice)}</span>
+                    <span className="text-amber-700/70">you save {formatUsd(memberQuote.savings)} ({memberQuote.percent}%)</span>
+                  </div>
+                ) : (
+                  <Link
+                    href="/membership"
+                    className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-amber-300/60 bg-gradient-to-r from-amber-50 to-white px-4 py-3 transition hover:border-amber-400"
+                  >
+                    <span className="min-w-0 text-sm text-zinc-700">
+                      <span className="block font-semibold text-zinc-900">Become a member — pay {formatUsd(memberQuote.memberPrice)} instead of {formatUsd(memberQuote.regularPrice)}</span>
+                      <span className="mt-0.5 block text-xs text-zinc-500">Save {formatUsd(memberQuote.savings)} on this vial today, plus monthly store credit &amp; free shipping</span>
+                    </span>
+                    <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.12em] text-amber-700">Join →</span>
+                  </Link>
+                )
+              ) : null}
 
               <div className="mt-6">
                 <p className="vl2-lab-eyebrow">Quantity</p>

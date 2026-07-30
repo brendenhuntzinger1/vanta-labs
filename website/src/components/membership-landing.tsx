@@ -1,9 +1,17 @@
 "use client";
 
+// The membership landing — designed to make joining feel like entering a
+// club, not buying a discount. Everything is expressed in DOLLARS (what you
+// pay, what you save, what today is worth), the strongest tier carries the
+// social-proof badges, and a live calculator prices membership against the
+// shopper's actual cart. No trial gimmicks: join today, cancel anytime,
+// benefits start immediately.
+
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { MembershipTier } from "@/lib/membership";
 import { ScrollReveal } from "@/components/scroll-reveal";
+import { useCart, formatCartCurrency } from "@/components/cart-context";
 
 type BillingCycle = "monthly" | "annual";
 
@@ -11,26 +19,31 @@ function money(cents: number) {
   return cents === 0 ? "$0" : `$${(cents / 100).toFixed(2)}`;
 }
 
+function moneyWhole(cents: number) {
+  const dollars = cents / 100;
+  return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
+}
+
 const FAQ_ITEMS = [
   {
-    q: "How do reward points work?",
-    a: "Every paid order earns points based on your membership tier (2x, 3x, or 5x points per $1 spent on the merchandise total). 100 points equals $1 in store credit, redeemable at checkout on any future order.",
-  },
-  {
-    q: "Do points expire?",
-    a: "No. Points stay on your account until you redeem them, and redeeming stacks with your other checkout discounts.",
-  },
-  {
-    q: "What happens if I get a refund?",
-    a: "Points earned on a fully refunded order are automatically removed from your balance. Partial refunds don't affect points already earned.",
+    q: "When do my benefits start?",
+    a: "Immediately. Member pricing, free shipping, priority processing, and your points multiplier are live from the moment you join — your very next order gets member treatment.",
   },
   {
     q: "Can I cancel or change my plan?",
-    a: "Yes, any time from your account dashboard — cancel before your next renewal date and you'll keep access through the period you already paid for.",
+    a: "Yes, any time from your account dashboard — no calls, no forms. Cancel before your next renewal date and you keep every benefit through the period you already paid for. No hidden fees, ever.",
+  },
+  {
+    q: "How does the monthly store credit work?",
+    a: "Paying tiers receive store credit every month, automatically applied at checkout once your order meets the tier's minimum. It's real money off your total, on top of your member pricing.",
+  },
+  {
+    q: "How do reward points work?",
+    a: "Every paid order earns points based on your membership tier (2x, 3x, or 5x points per $1 spent on the merchandise total). 100 points equals $1 in store credit, redeemable at checkout on any future order. Points never expire.",
   },
   {
     q: "Is billing live yet?",
-    a: "The membership signup flow, billing schedule, and dashboard are fully built and active — a payment processor isn't connected yet, so a card can't be charged until that's finished. Signing up saves your membership request, and billing begins automatically the moment a processor is connected. Free membership (Research Member) is fully active today, including points on every order.",
+    a: "The membership signup flow, billing schedule, and dashboard are fully built and active — a payment processor isn't connected yet, so a card can't be charged until that's finished. Signing up saves your membership request, and billing begins automatically the moment a processor is connected.",
   },
 ];
 
@@ -62,60 +75,107 @@ function FaqAccordion() {
   );
 }
 
-function RewardsCalculator({ tiers }: { tiers: MembershipTier[] }) {
-  const [monthlySpend, setMonthlySpend] = useState(150);
-  const [tierSlug, setTierSlug] = useState(tiers[0]?.slug ?? "free");
+// "Best for" personas by tier strength (cheapest paid tier → strongest), so
+// cards answer "which one is me?" instead of listing generic bullets.
+const BEST_FOR_BY_RANK: string[][] = [
+  ["Occasional orders", "First-time members", "1–2 products a month"],
+  ["Monthly buyers", "Researchers restocking regularly", "2–4 products a month"],
+  ["High-volume researchers", "Bulk and team orders", "Weekly ordering"],
+];
 
-  const selectedTier = tiers.find((tier) => tier.slug === tierSlug) ?? tiers[0];
-  const monthlyPoints = Math.floor(monthlySpend * (selectedTier?.pointsPerDollar ?? 2));
-  const yearlyPoints = monthlyPoints * 12;
-  const yearlyValue = (yearlyPoints / 100).toFixed(2);
+// ——— Live savings calculator ————————————————————————————————————————————
+// Prices membership against the shopper's REAL cart (live — updates as items
+// are added). With an empty cart it falls back to a spend slider so the page
+// still demonstrates value.
+function SavingsCalculator({ tiers }: { tiers: MembershipTier[] }) {
+  const { subtotal, shipping } = useCart();
+  const paidTiers = tiers.filter((tier) => tier.monthlyPriceCents > 0);
+  const [tierSlug, setTierSlug] = useState(paidTiers.find((t) => t.slug === "pro")?.slug ?? paidTiers[0]?.slug ?? "");
+  const [simulatedSpend, setSimulatedSpend] = useState(200);
+
+  const tier = paidTiers.find((t) => t.slug === tierSlug) ?? paidTiers[0];
+  if (!tier) return null;
+
+  const usingCart = subtotal > 0;
+  const basis = usingCart ? subtotal : simulatedSpend;
+  const basisShipping = usingCart ? shipping : basis >= 250 ? 0 : 15;
+
+  const discountSavings = Math.round(basis * tier.memberDiscountPercent) / 100;
+  const shippingSavings = tier.freeShipping ? basisShipping : 0;
+  const credit = Math.round(basis * 100) >= tier.storeCreditMinOrderCents ? tier.monthlyStoreCreditCents / 100 : 0;
+  const monthlyCost = tier.monthlyPriceCents / 100;
+  const totalBenefit = Math.round((discountSavings + shippingSavings + credit) * 100) / 100;
+  const todayValue = Math.round((totalBenefit - monthlyCost) * 100) / 100;
+
+  const row = (label: string, value: string, tone: "plus" | "minus" | "muted" = "muted") => (
+    <div className="flex items-center justify-between py-2.5 text-sm">
+      <span className="text-white/60">{label}</span>
+      <span className={`tabular-nums font-medium ${tone === "plus" ? "text-emerald-300" : tone === "minus" ? "text-white/80" : "text-white"}`}>{value}</span>
+    </div>
+  );
 
   return (
     <div className="vl2-glass p-6 sm:p-8">
-      <p className="vl2-eyebrow">Rewards Calculator</p>
-      <h3 className="vl2-serif mt-2 text-2xl text-white">See what you&apos;d earn</h3>
+      <p className="vl2-eyebrow">Live savings calculator</p>
+      <h3 className="vl2-serif mt-2 text-2xl text-white">What membership is worth to you — today</h3>
 
-      <div className="mt-6 space-y-5">
-        <label className="block text-sm text-white/60">
-          Monthly spend: <span className="text-white">${monthlySpend}</span>
+      {usingCart ? (
+        <p className="mt-2 text-xs text-white/45">Calculated from your current cart. Add or remove products and this updates instantly.</p>
+      ) : (
+        <label className="mt-5 block text-sm text-white/60">
+          Your typical monthly order: <span className="font-semibold text-white">${simulatedSpend}</span>
           <input
             type="range"
-            min={0}
+            min={50}
             max={1000}
             step={10}
-            value={monthlySpend}
-            onChange={(event) => setMonthlySpend(Number(event.target.value))}
-            className="mt-3 w-full accent-white"
+            value={simulatedSpend}
+            onChange={(event) => setSimulatedSpend(Number(event.target.value))}
+            className="mt-3 w-full accent-amber-200"
           />
         </label>
+      )}
 
-        <div className="flex flex-wrap gap-2">
-          {tiers.map((tier) => (
-            <button
-              key={tier.slug}
-              type="button"
-              onClick={() => setTierSlug(tier.slug)}
-              className={tier.slug === tierSlug
-                ? "border border-white bg-white/10 px-4 py-2 text-xs text-white"
-                : "border border-white/15 px-4 py-2 text-xs text-white/55 transition hover:border-white/35 hover:text-white"}
-            >
-              {tier.name}
-            </button>
-          ))}
-        </div>
+      <div className="mt-5 flex flex-wrap gap-2">
+        {paidTiers.map((paidTier) => (
+          <button
+            key={paidTier.slug}
+            type="button"
+            onClick={() => setTierSlug(paidTier.slug)}
+            className={paidTier.slug === tier.slug
+              ? "border border-amber-200/70 bg-amber-200/10 px-4 py-2 text-xs font-semibold text-amber-200"
+              : "border border-white/15 px-4 py-2 text-xs text-white/55 transition hover:border-white/35 hover:text-white"}
+          >
+            {paidTier.name}
+          </button>
+        ))}
       </div>
 
-      <div className="mt-6 grid grid-cols-2 gap-4 border-t border-white/10 pt-6">
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.18em] text-white/70">Points / month</p>
-          <p className="mt-1 text-2xl text-white">{monthlyPoints.toLocaleString()}</p>
-        </div>
-        <div>
-          <p className="text-[11px] uppercase tracking-[0.18em] text-white/70">Value / year</p>
-          <p className="mt-1 text-2xl text-emerald-300">${yearlyValue}</p>
-        </div>
+      <div className="mt-6 divide-y divide-white/5 border-t border-white/10">
+        {row(usingCart ? "Current cart" : "Monthly orders", formatCartCurrency(basis))}
+        {row(`Member pricing (${tier.memberDiscountPercent}% off)`, `−${formatCartCurrency(discountSavings)}`, "plus")}
+        {tier.freeShipping ? row("Free shipping", shippingSavings > 0 ? `−${formatCartCurrency(shippingSavings)}` : "Included", "plus") : null}
+        {tier.monthlyStoreCreditCents > 0
+          ? row(
+              "Monthly store credit",
+              credit > 0 ? `+${formatCartCurrency(credit)}` : `+${money(tier.monthlyStoreCreditCents)} on ${money(tier.storeCreditMinOrderCents)}+ orders`,
+              credit > 0 ? "plus" : "muted",
+            )
+          : null}
+        {row(`${tier.name} membership`, `−${formatCartCurrency(monthlyCost)}/mo`, "minus")}
       </div>
+
+      <div className={`mt-4 flex items-center justify-between rounded-xl border px-4 py-3.5 ${todayValue >= 0 ? "border-emerald-400/40 bg-emerald-400/10" : "border-white/10 bg-white/[0.03]"}`}>
+        <span className="text-sm font-semibold text-white">{usingCart ? "Joining today is worth" : "Each month, membership is worth"}</span>
+        <span className={`text-xl font-bold tabular-nums ${todayValue >= 0 ? "text-emerald-300" : "text-white/70"}`}>
+          {todayValue >= 0 ? "+" : "−"}{formatCartCurrency(Math.abs(todayValue))}
+        </span>
+      </div>
+      {todayValue >= 0 ? (
+        <p className="mt-2 text-xs text-white/45">The membership pays for itself on this order alone — everything after is pure savings.</p>
+      ) : (
+        <p className="mt-2 text-xs text-white/45">Add {formatCartCurrency(Math.max(0, Math.ceil(((monthlyCost - credit - shippingSavings) / Math.max(0.01, tier.memberDiscountPercent / 100) - basis) * 100) / 100))} more to your cart and membership pays for itself today.</p>
+      )}
     </div>
   );
 }
@@ -123,12 +183,22 @@ function RewardsCalculator({ tiers }: { tiers: MembershipTier[] }) {
 export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: MembershipTier[]; isSignedInCustomer: boolean }) {
   const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
 
+  const paidTiers = useMemo(
+    () => tiers.filter((tier) => tier.slug !== "free" && tier.monthlyPriceCents > 0).sort((a, b) => a.monthlyPriceCents - b.monthlyPriceCents),
+    [tiers],
+  );
+  const strongestSlug = useMemo(
+    () => (paidTiers.length ? paidTiers.reduce((best, t) => (t.memberDiscountPercent > best.memberDiscountPercent ? t : best)).slug : null),
+    [paidTiers],
+  );
+
   const comparisonRows = useMemo(() => [
+    { label: "Member pricing", getValue: (tier: MembershipTier) => (tier.memberDiscountPercent > 0 ? `${tier.memberDiscountPercent}% off everything` : "—") },
+    { label: "Monthly store credit", getValue: (tier: MembershipTier) => (tier.monthlyStoreCreditCents > 0 ? `${money(tier.monthlyStoreCreditCents)}/mo` : "—") },
     { label: "Points per $1", getValue: (tier: MembershipTier) => `${tier.pointsPerDollar}x` },
     { label: "Free shipping", getValue: (tier: MembershipTier) => (tier.freeShipping ? "✓" : "—") },
-    { label: "Priority shipping", getValue: (tier: MembershipTier) => (tier.priorityShipping ? "✓" : "—") },
+    { label: "Priority processing", getValue: (tier: MembershipTier) => (tier.priorityShipping ? "✓" : "—") },
     { label: "Early access", getValue: (tier: MembershipTier) => (tier.earlyAccess ? "✓" : "—") },
-    { label: "Exclusive pricing", getValue: (tier: MembershipTier) => (tier.exclusivePricing ? "✓" : "—") },
     { label: "Referral bonus", getValue: (tier: MembershipTier) => `${tier.referralBonusPoints} pts` },
   ], []);
 
@@ -162,14 +232,20 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
           </>
         ) : (
           <>
-        {/* Plans first: the pricing cards are the top of the page, with the
-            explainer + all supporting info moved below them. */}
+        {/* Hero: the club, not the coupon. */}
         <div className="mx-auto max-w-2xl text-center">
           <p className="vl2-eyebrow">Vanta Labs Membership</p>
-          <h1 className="vl2-serif mt-4 text-4xl text-white sm:text-5xl">Unlock Exclusive Researcher Benefits</h1>
+          <h1 className="vl2-serif mt-4 text-4xl text-white sm:text-5xl">The inner circle of research.</h1>
           <p className="mt-3 text-sm leading-7 text-white/55">
-            Save on every order, receive monthly store credit, get early access to limited releases, and enjoy premium member-only perks.
+            Member pricing on every vial, monthly store credit, free priority shipping, and first access to new
+            compounds — a membership that pays for itself on your first order.
           </p>
+          <div className="mt-5 flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-[10px] uppercase tracking-[0.18em] text-white/40">
+            <span>✓ Join today</span>
+            <span>✓ Cancel anytime</span>
+            <span>✓ Benefits start immediately</span>
+            <span>✓ No hidden fees</span>
+          </div>
         </div>
 
         <div className="mt-8 flex justify-center">
@@ -186,32 +262,36 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
               onClick={() => setBillingCycle("annual")}
               className={billingCycle === "annual" ? "inline-flex items-center justify-center bg-white/10 px-4 py-2.5 text-sm min-h-[44px] text-white sm:px-5" : "inline-flex items-center justify-center px-4 py-2.5 text-sm min-h-[44px] text-white/50 sm:px-5"}
             >
-              Annual <span className="text-emerald-300">(save ~17%)</span>
+              Annual <span className="ml-1.5 rounded-full bg-amber-200/15 px-2 py-0.5 text-[10px] font-semibold text-amber-200">2 months free</span>
             </button>
           </div>
         </div>
 
-        {/* On phones this is a snap-scrolling carousel (one plan at a time, next
-            one peeking) so every tier is easy to see and compare without an
-            endless vertical scroll; sm+ keeps the original 2-/4-up grid. The
-            tier cards intentionally skip ScrollReveal here — its viewport
-            IntersectionObserver would keep the off-screen carousel cards hidden
-            until swiped into view. */}
+        {/* Tier cards: cost, credit, real average savings, and who it's for. */}
         <div className="mt-8 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-pl-4 px-1 pb-2 pt-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:grid sm:snap-none sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pb-0 sm:pt-0 lg:grid-cols-4">
-          {tiers.filter((tier) => tier.slug !== "free").map((tier) => {
+          {paidTiers.map((tier, index) => {
             const price = billingCycle === "monthly" ? tier.monthlyPriceCents : tier.annualPriceCents;
             const isFeatured = tier.slug === "pro";
+            const isBestValue = tier.slug === strongestSlug && !isFeatured;
             const annualSavingsCents = tier.monthlyPriceCents * 12 - tier.annualPriceCents;
             const showAnnualSavings = billingCycle === "annual" && price > 0 && annualSavingsCents > 0;
             const showComparePrice = billingCycle === "monthly" && tier.compareMonthlyPriceCents > tier.monthlyPriceCents;
+            // Honest "average monthly savings" at a $200/mo order pace:
+            // member discount + store credit (labeled with its basis below).
+            const avgMonthlySavingsCents = Math.round(20000 * (tier.memberDiscountPercent / 100)) + tier.monthlyStoreCreditCents;
+            const bestFor = BEST_FOR_BY_RANK[Math.min(index, BEST_FOR_BY_RANK.length - 1)];
             return (
               <div key={tier.id} className="w-[82%] shrink-0 snap-center sm:w-auto sm:shrink">
                 <div
-                  className={`vl2-product-card group relative flex h-full flex-col p-5 ${isFeatured ? "border-white/60 ring-1 ring-white/20" : ""}`}
+                  className={`vl2-product-card group relative flex h-full flex-col p-5 ${isFeatured ? "border-white/60 ring-1 ring-white/20" : isBestValue ? "border-amber-200/50 ring-1 ring-amber-200/20" : ""}`}
                 >
                   {isFeatured ? (
                     <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-black">
                       Most Popular
+                    </span>
+                  ) : isBestValue ? (
+                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap bg-amber-200 px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-black">
+                      Best Value
                     </span>
                   ) : null}
 
@@ -224,11 +304,18 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                     {price > 0 ? <span className="text-sm font-normal text-white/70">/{billingCycle === "monthly" ? "mo" : "yr"}</span> : null}
                   </p>
                   {showAnnualSavings ? (
-                    <p className="mt-1 text-xs font-semibold text-emerald-300">Save {money(annualSavingsCents)} vs monthly</p>
+                    <p className="mt-1 text-xs font-semibold text-amber-200">Save {money(annualSavingsCents)} a year · lock in current pricing</p>
                   ) : null}
 
-                  {price > 0 && tier.monthlyStoreCreditCents > 0 ? (
-                    <div className="mt-4 rounded-lg border border-emerald-400/30 bg-emerald-400/[0.06] px-4 py-3">
+                  {tier.memberDiscountPercent > 0 ? (
+                    <div className="mt-4 rounded-lg border border-white/15 bg-white/[0.04] px-4 py-3">
+                      <p className="text-base font-bold text-white">{tier.memberDiscountPercent}% member pricing</p>
+                      <p className="text-[11px] text-white/45">pay {moneyWhole(10000 - Math.round(10000 * (tier.memberDiscountPercent / 100)))} on every $100, on everything</p>
+                    </div>
+                  ) : null}
+
+                  {tier.monthlyStoreCreditCents > 0 ? (
+                    <div className="mt-2 rounded-lg border border-emerald-400/30 bg-emerald-400/[0.06] px-4 py-3">
                       <p className="text-base font-bold text-emerald-300">{money(tier.monthlyStoreCreditCents)}/mo store credit</p>
                       <p className="text-[11px] text-white/45">
                         {tier.storeCreditMinOrderCents > 0
@@ -238,7 +325,22 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                     </div>
                   ) : null}
 
-                  <ul className="mt-6 flex-1 space-y-3 text-sm text-white/70">
+                  {avgMonthlySavingsCents > 0 ? (
+                    <p className="mt-3 text-xs text-amber-200/80">
+                      ≈ {money(avgMonthlySavingsCents)}/mo in savings <span className="text-white/35">at $200/mo in orders</span>
+                    </p>
+                  ) : null}
+
+                  <div className="mt-4">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/40">Best for</p>
+                    <ul className="mt-1.5 space-y-1 text-xs text-white/60">
+                      {bestFor.map((line) => (
+                        <li key={line}>• {line}</li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <ul className="mt-5 flex-1 space-y-2.5 border-t border-white/10 pt-4 text-sm text-white/70">
                     {tier.benefits.map((benefit) => (
                       <li key={benefit} className="flex items-start gap-2">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mt-0.5 h-4 w-4 flex-shrink-0 text-white">
@@ -249,28 +351,19 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                     ))}
                   </ul>
 
-                  {tier.slug === "free" ? (
+                  <div className="mt-6">
                     <Link
-                      href={isSignedInCustomer ? "/account" : "/account/login"}
-                      className="vl2-btn-primary vl-focus-ring mt-8 inline-flex items-center justify-center px-5 py-3 text-sm"
+                      href={
+                        isSignedInCustomer
+                          ? `/membership/${tier.slug}/subscribe`
+                          : `/account/login?redirect=${encodeURIComponent(`/membership/${tier.slug}/subscribe`)}`
+                      }
+                      className={`vl-focus-ring inline-flex w-full items-center justify-center px-5 py-3 text-sm ${isFeatured || isBestValue ? "vl2-btn-primary" : "vl2-btn-secondary"}`}
                     >
-                      {isSignedInCustomer ? "View my rewards" : "Get Started Free"}
+                      Join {tier.name}
                     </Link>
-                  ) : (
-                    <div className="mt-8">
-                      <Link
-                        href={
-                          isSignedInCustomer
-                            ? `/membership/${tier.slug}/subscribe`
-                            : `/account/login?redirect=${encodeURIComponent(`/membership/${tier.slug}/subscribe`)}`
-                        }
-                        className="vl2-btn-secondary vl-focus-ring inline-flex w-full items-center justify-center px-5 py-3 text-sm"
-                      >
-                        Join {tier.name}
-                      </Link>
-                      <p className="mt-2 text-center text-[11px] text-white/70">$1 today, {tier.introDurationDays}-day intro, then {money(tier.monthlyPriceCents)}/month.</p>
-                    </div>
-                  )}
+                    <p className="mt-2 text-center text-[11px] text-white/70">Join today · cancel anytime · benefits start immediately</p>
+                  </div>
                 </div>
               </div>
             );
@@ -278,16 +371,25 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
         </div>
         <p className="mt-3 text-center text-[11px] uppercase tracking-[0.24em] text-white/70 sm:hidden">← Swipe to compare plans →</p>
 
+        {/* Live calculator — right under the cards, priced off the real cart. */}
+        <ScrollReveal delayMs={60}>
+          <div className="mt-14">
+            <SavingsCalculator tiers={tiers} />
+          </div>
+        </ScrollReveal>
+
         <ScrollReveal delayMs={80}>
           <div className="mt-14 border-t border-white/10 pt-10 text-center">
             <p className="vl2-eyebrow">How membership works</p>
             <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/60 sm:text-base">
-              Earn points on every order, unlock free and priority shipping, and get early access to new research
-              compounds. Every registered customer starts earning automatically.
+              Join in one click and your benefits are live immediately: member pricing on every product, monthly store
+              credit, points on every order, and priority handling. Cancel anytime from your dashboard — you keep every
+              benefit through the period you&apos;ve paid for.
             </p>
-            <div className="mt-6 flex justify-center gap-8 text-[10px] uppercase tracking-[0.14em] text-white/45">
+            <div className="mt-6 flex flex-wrap justify-center gap-x-8 gap-y-2 text-[10px] uppercase tracking-[0.14em] text-white/45">
+              <span>Cancel Anytime</span>
               <span>No Hidden Fees</span>
-              <span>Automatic Tracking</span>
+              <span>Secure Checkout</span>
             </div>
           </div>
         </ScrollReveal>
@@ -345,12 +447,6 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                 </tbody>
               </table>
             </div>
-          </div>
-        </ScrollReveal>
-
-        <ScrollReveal delayMs={120}>
-          <div className="mt-16">
-            <RewardsCalculator tiers={tiers} />
           </div>
         </ScrollReveal>
           </>

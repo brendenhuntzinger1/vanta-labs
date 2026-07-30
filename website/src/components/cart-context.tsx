@@ -10,6 +10,7 @@ import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice, DEFAULT_BUN
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { calculateShipping, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from "@/lib/shipping";
 import { DEFAULT_SALES_TAX_CONFIG, type SalesTaxConfig } from "@/lib/sales-tax";
+import type { MembershipTierSummary } from "@/lib/member-pricing";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { resolveBestDiscount } from "@/lib/discount-resolution";
 
@@ -63,6 +64,10 @@ type CartContextValue = {
   // always 0 — the checkout page combines this config with the entered address
   // via the shared resolveSalesTax to quote tax live (mirrors the server).
   salesTaxConfig: SalesTaxConfig;
+  // Paid membership tiers (marketing summary) for member-pricing display and
+  // the join-and-save upsells. memberDiscountPercent > 0 means the signed-in
+  // shopper is already an active paying member.
+  membershipTiers: MembershipTierSummary[];
   shippingConfig: ShippingConfig;
   bundleConfig: BundleConfig;
   shippingProtectionEnabled: boolean;
@@ -78,6 +83,8 @@ type CartContextValue = {
   ambassadorDiscountApplied: boolean;
   ambassadorDiscountPercent: number;
   memberFreeShipping: boolean;
+  /** Active paid-member merchandise discount % (0 = not a paying member). */
+  memberDiscountPercent: number;
   storeCreditApplied: number;
   storeCreditBalanceCents: number;
   storeCreditMinOrderCents: number;
@@ -184,6 +191,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
   const [bundleConfig, setBundleConfig] = useState<BundleConfig>(DEFAULT_BUNDLE_CONFIG);
   const [salesTaxConfig, setSalesTaxConfig] = useState<SalesTaxConfig>(DEFAULT_SALES_TAX_CONFIG);
+  const [membershipTiers, setMembershipTiers] = useState<MembershipTierSummary[]>([]);
   // Admin-configurable referral customer-discount percent, loaded from the same
   // /api/catalog/promotions config the server uses. Defaults to 10 (matches the
   // server default) until config loads, so the client preview always mirrors the
@@ -261,7 +269,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number };
+        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; membershipTiers?: MembershipTierSummary[] };
         if (result.success) {
           setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
           if (result.bundleConfig) setBundleConfig(result.bundleConfig);
@@ -272,6 +280,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
             });
           }
           if (result.shippingConfig) setShippingConfig(result.shippingConfig);
+          if (Array.isArray(result.membershipTiers)) setMembershipTiers(result.membershipTiers);
           if (Number.isFinite(result.referralDiscountPercent)) {
             setReferralDiscountPercent(Number(result.referralDiscountPercent));
           }
@@ -1019,6 +1028,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     shipping,
     taxAmount,
     salesTaxConfig,
+    membershipTiers,
+    memberDiscountPercent,
     shippingConfig,
     bundleConfig,
     shippingProtectionEnabled,
