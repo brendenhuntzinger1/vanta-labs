@@ -6,6 +6,7 @@ import Link from "next/link";
 import Image from "next/image";
 import { formatCartCurrency, useCart, getShippingProgress } from "@/components/cart-context";
 import { bundleDiscountRate, getBundleDiscountedLineTotal, getNextBundleTier } from "@/lib/bundle-pricing";
+import { bestPaidTier, computeCartMembershipValue } from "@/lib/member-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 
@@ -47,9 +48,20 @@ export function CartDrawer() {
     bulkSavingsApplied,
     bulkSavingsPercent,
     bulkSavingsProgress,
+    membershipTiers,
+    memberDiscountPercent,
   } = useCart();
 
   const shippingProgress = getShippingProgress(subtotal);
+
+  // Smart membership upsell: only for non-members, and only when joining
+  // would genuinely put money in their pocket TODAY (cart savings + credit
+  // exceed the first month's cost). Dollars, computed live from this cart.
+  const upsellTier = memberDiscountPercent > 0 ? null : bestPaidTier(membershipTiers);
+  const membershipValue = upsellTier
+    ? computeCartMembershipValue({ subtotal, shipping, tier: upsellTier })
+    : null;
+  const showMembershipUpsell = Boolean(upsellTier && membershipValue && membershipValue.todayValue > 0 && subtotal > 0);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
@@ -244,6 +256,24 @@ export function CartDrawer() {
               </p>
             </div>
           )}
+
+          {showMembershipUpsell && upsellTier && membershipValue ? (
+            <Link
+              href="/membership"
+              onClick={closeCart}
+              className="block rounded-[1.25rem] border border-amber-200/30 bg-gradient-to-r from-amber-200/[0.12] via-amber-200/[0.05] to-transparent p-4 transition hover:border-amber-200/60"
+            >
+              <p className="text-sm font-semibold text-amber-200">
+                You could save {formatCartCurrency(membershipValue.totalBenefit)} today with {upsellTier.name}
+              </p>
+              <p className="mt-1 text-xs text-amber-100/70">
+                {formatCartCurrency(membershipValue.discountSavings)} off this cart
+                {membershipValue.shippingSavings > 0 ? ` + free shipping (${formatCartCurrency(membershipValue.shippingSavings)})` : ""}
+                {membershipValue.monthlyStoreCredit > 0 ? ` + ${formatCartCurrency(membershipValue.monthlyStoreCredit)} monthly credit` : ""}
+                {" "}— membership {formatCartCurrency(membershipValue.monthlyCost)}/mo. Join now →
+              </p>
+            </Link>
+          ) : null}
 
           {bulkSavingsApplied && (
             <div className="rounded-[1.25rem] border border-amber-700 bg-amber-950/40 p-4">

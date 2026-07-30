@@ -14,6 +14,7 @@ import {
   pointsToDollars,
 } from "@/lib/membership";
 import { getActiveCouponsForDisplay } from "@/lib/coupons";
+import { getLifetimeSavings } from "@/lib/member-savings";
 import { ReorderButton } from "@/components/reorder-button";
 import { ReferralLinkCopyButton } from "@/components/referral-link-copy-button";
 import { MembershipBillingPanel } from "@/components/membership-billing-panel";
@@ -48,7 +49,7 @@ export default async function AccountDashboardPage() {
   // `membership` is critical to the whole dashboard, so it stays uncaught. The
   // remaining queries degrade to safe defaults so one failing section doesn't
   // blank the entire page.
-  const [orders, membership, pointsBalance, pointsHistory, referralEarnedPoints, referralCode, activeCoupons, pointsMultiplier] = await Promise.all([
+  const [orders, membership, pointsBalance, pointsHistory, referralEarnedPoints, referralCode, activeCoupons, pointsMultiplier, lifetimeSavings] = await Promise.all([
     getCustomerOrders(user.id, user.email).catch(() => []),
     getCustomerMembership(user.id),
     getPointsBalance(user.id).catch(() => 0),
@@ -57,6 +58,7 @@ export default async function AccountDashboardPage() {
     getOrCreateReferralCode(user.id).catch(() => ""),
     getActiveCouponsForDisplay().catch(() => []),
     getActivePointsMultiplier().catch(() => ({ multiplier: 1, eventName: null })),
+    getLifetimeSavings(user.id),
   ]);
 
   const progress = getProgressToNextReward(pointsBalance);
@@ -84,6 +86,41 @@ export default async function AccountDashboardPage() {
         </div>
 
         <MembershipBillingPanel membership={membership} />
+
+        {/* Lifetime savings — real order records, not estimates. The number
+            that makes membership feel obviously worth keeping. */}
+        {lifetimeSavings.total > 0 ? (
+          <div className="mt-5 rounded-xl border border-amber-200/30 bg-gradient-to-r from-amber-200/[0.10] via-amber-200/[0.04] to-transparent p-5">
+            <p className="text-[11px] uppercase tracking-[0.2em] text-amber-200/70">Your savings with Vanta Labs</p>
+            <p className="mt-2 text-3xl font-semibold text-amber-200">{money(lifetimeSavings.total)}</p>
+            <p className="mt-1 text-xs text-zinc-400">
+              saved across {lifetimeSavings.paidOrders} paid order{lifetimeSavings.paidOrders === 1 ? "" : "s"}
+              {lifetimeSavings.discounts > 0 ? ` · ${money(lifetimeSavings.discounts)} in discounts` : ""}
+              {lifetimeSavings.storeCredit > 0 ? ` · ${money(lifetimeSavings.storeCredit)} store credit` : ""}
+              {lifetimeSavings.points > 0 ? ` · ${money(lifetimeSavings.points)} in points` : ""}
+            </p>
+          </div>
+        ) : null}
+
+        {/* Current member pricing at a glance. */}
+        {membership.tier.memberDiscountPercent > 0 || membership.tier.monthlyStoreCreditCents > 0 ? (
+          <div className="mt-5 grid gap-4 sm:grid-cols-2">
+            {membership.tier.memberDiscountPercent > 0 ? (
+              <div className="vl-panel-soft rounded-xl p-4">
+                <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Your member pricing</p>
+                <p className="mt-2 text-2xl font-semibold text-white">{membership.tier.memberDiscountPercent}% off</p>
+                <p className="mt-1 text-xs text-zinc-500">you pay ${(100 - membership.tier.memberDiscountPercent).toFixed(0)} on every $100, automatically</p>
+              </div>
+            ) : null}
+            {membership.tier.monthlyStoreCreditCents > 0 ? (
+              <div className="vl-panel-soft rounded-xl p-4">
+                <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Monthly store credit</p>
+                <p className="mt-2 text-2xl font-semibold text-emerald-300">{money(membership.tier.monthlyStoreCreditCents / 100)}/mo</p>
+                <p className="mt-1 text-xs text-zinc-500">auto-applied at checkout on qualifying orders</p>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         <div className="mt-5 grid gap-4 sm:grid-cols-3">
           <div className="vl-panel-soft rounded-xl p-4">
