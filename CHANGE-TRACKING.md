@@ -66,6 +66,18 @@ No third-party changes recorded yet — this is the starting line.
 
 _(New entries appended here, newest first, as changes are detected.)_
 
+### 2026-07-30 — PR #23 merged to `main` (Claude, at the owner's request)
+
+**PR #23** (`0acfa5e`): membership economics guardrail — permanent Monte
+Carlo test (~10k member-months/tier through the real pricing engine, owner
+economics: $31 COGS, $15 ship cost, 8% processing, zero protection revenue).
+All tiers profitable on average (Essential $175.84/mo → Black $149.68/mo);
+assertions block any future tier change that turns unprofitable. Plus luxe
+tier-card polish (serif names/pricing, gold chips/checks, emoji-stripped
+benefits).
+
+**Tracking baseline for third-party review now moves to `0acfa5e`.**
+
 ### 2026-07-30 — PR #22 merged to `main` (Claude, at the owner's request)
 
 **PR #22** (`b7c4777`): membership program overhaul — dollar-based member
