@@ -31,6 +31,13 @@ export type BacWaterDoseOffer = {
   cartKey: string;
 };
 
+/** The size to spotlight ("Most Popular") across every BAC Water surface. */
+export const BAC_WATER_FEATURED_SUFFIX = "30ml";
+
+export function isFeaturedBacWaterOffer(offer: BacWaterDoseOffer) {
+  return (offer.dose.slugSuffix || offer.dose.label || "").toLowerCase().replace(/\s+/g, "") === BAC_WATER_FEATURED_SUFFIX;
+}
+
 export function getBacWaterDoseOffers(product: Product | null | undefined): BacWaterDoseOffer[] {
   if (!product?.doses?.length) return [];
   return product.doses

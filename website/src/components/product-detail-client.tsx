@@ -12,7 +12,8 @@ import { WishlistButton } from "@/components/wishlist-button";
 import { BackInStockForm } from "@/components/back-in-stock-form";
 import { SubscribeSave } from "@/components/subscribe-save";
 import { bundleDiscountRate, getBundleDiscountedLineTotal, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
-import type { Product, ProductFaqItem } from "@/lib/catalog-types";
+import type { Product, ProductDose, ProductFaqItem } from "@/lib/catalog-types";
+import { isBacWater } from "@/lib/bac-water";
 import { RecentlyViewed } from "@/components/recently-viewed";
 import { BacWaterAccessoryBlock, FrequentlyBoughtTogether } from "@/components/bac-water-upsell";
 import Image from "next/image";
@@ -189,6 +190,26 @@ export function ProductDetailClient({
         ? quoteMemberPrice(unitPrice, pdpUpsellTier.discountPercent)
         : null)
     : null;
+
+  // Which dose gets the "★ Most Popular" badge. GLP products keep their 10mg
+  // badge; BAC Water highlights the 30mL; every other two-dose product
+  // highlights its higher-priced dose.
+  const mostPopularDoseId = useMemo(() => {
+    const doses = product.doses ?? [];
+    if (doses.length < 2) return null;
+    const normalized = (dose: ProductDose) => (dose.slugSuffix || dose.label || "").toLowerCase().replace(/\s+/g, "");
+    if (isBacWater(product.slug)) {
+      return doses.find((dose) => normalized(dose) === "30ml")?.id ?? null;
+    }
+    if (product.slug.toLowerCase().startsWith("glp-")) {
+      return doses.find((dose) => normalized(dose) === "10mg")?.id ?? null;
+    }
+    if (doses.length === 2) {
+      const price = (dose: ProductDose) => toPriceNumber(dose.salePrice ?? dose.price);
+      return [...doses].sort((a, b) => price(b) - price(a))[0]?.id ?? null;
+    }
+    return null;
+  }, [product.doses, product.slug]);
 
   const galleryItems = useMemo<GalleryItem[]>(() => {
     const fromGallery = (product.galleryImages ?? []).map((image) => ({
@@ -486,9 +507,7 @@ export function ProductDetailClient({
                   <p className="vl2-lab-eyebrow">Vial Size</p>
                   <div className="mt-3 flex flex-wrap gap-2">
                     {product.doses.map((variant) => {
-                      const isGlp = product.slug.toLowerCase().startsWith("glp-");
-                      const normalizedSize = (variant.slugSuffix || variant.label || "").toLowerCase().replace(/\s+/g, "");
-                      const isMostPopular = isGlp && normalizedSize === "10mg";
+                      const isMostPopular = variant.id === mostPopularDoseId;
                       return (
                         <button
                           key={variant.id}
