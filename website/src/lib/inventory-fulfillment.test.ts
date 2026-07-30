@@ -30,6 +30,17 @@ describe("planInventoryAdjustments", () => {
     ]);
   });
 
+  it("accepts raw snake_case order_items rows (regression: the webhook fallback passed product_id and silently no-opped)", () => {
+    const plan = planInventoryAdjustments([
+      { product_id: "bpc-157-10mg", quantity: 3 },
+      { product_id: "tb-500::dose-a", quantity: 2 },
+    ]);
+    expect(plan).toEqual([
+      { slug: "bpc-157-10mg", variantId: null, quantity: 3 },
+      { slug: "tb-500", variantId: "dose-a", quantity: 2 },
+    ]);
+  });
+
   it("sums duplicate lines for the same product/variant into one adjustment", () => {
     const plan = planInventoryAdjustments([
       { productId: "bpc-157-10mg", quantity: 2 },

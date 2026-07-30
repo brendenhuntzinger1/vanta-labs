@@ -406,6 +406,46 @@ export function shippingUpdateTemplate(input: {
   };
 }
 
+export function replacementOrderTemplate(input: {
+  customerName: string;
+  originalOrderNumber: string;
+  replacementOrderNumber: string;
+  items: Array<{ name: string; quantity: number }>;
+  supportEmail?: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.customerName || "there");
+  const itemRows = input.items
+    .map((item) => `<tr><td style="padding:6px 0;color:#d4d4d8;">${escapeHtml(item.name)}</td><td style="padding:6px 0;text-align:right;color:#d4d4d8;">× ${Math.max(1, Math.floor(item.quantity))}</td></tr>`)
+    .join("");
+  const support = input.supportEmail ? escapeHtml(input.supportEmail) : null;
+  return {
+    subject: `Your replacement is on the way — ${input.replacementOrderNumber}`,
+    html: renderLayout({
+      preheader: `We're sending a replacement for order ${input.originalOrderNumber} at no charge.`,
+      title: `Your replacement is on the way`,
+      bodyHtml: `
+        <p>Hi ${name},</p>
+        <p>We're sorry your order <strong>${escapeHtml(input.originalOrderNumber)}</strong> didn't arrive in perfect condition. A replacement is being prepared and shipped to you <strong>at no charge</strong>.</p>
+        <table role="presentation" width="100%" style="margin-top:12px;font-size:14px;">
+          <tr><td style="padding:10px 0 2px;border-top:1px solid rgba(255,255,255,0.1);color:#ffffff;font-weight:700;">Replacement order</td><td style="padding:10px 0 2px;border-top:1px solid rgba(255,255,255,0.1);text-align:right;color:#ffffff;font-weight:700;">${escapeHtml(input.replacementOrderNumber)}</td></tr>
+          ${itemRows}
+        </table>
+        <p style="margin-top:14px;">You'll receive a shipping confirmation with tracking as soon as it leaves the warehouse. Nothing is charged and nothing else is needed from you.</p>
+        ${support ? `<p style="margin-top:10px;color:#a1a1aa;">Questions? Reach us at <a href="mailto:${support}" style="color:#e8d5a4;">${support}</a>.</p>` : ""}
+      `,
+    }),
+    text: [
+      `Hi ${input.customerName || "there"},`,
+      ``,
+      `We're sorry your order ${input.originalOrderNumber} didn't arrive in perfect condition.`,
+      `A replacement (${input.replacementOrderNumber}) is being prepared and shipped at no charge:`,
+      ...input.items.map((item) => `  - ${item.name} × ${Math.max(1, Math.floor(item.quantity))}`),
+      ``,
+      `You'll receive tracking as soon as it ships. Nothing is charged.`,
+    ].join("\n"),
+  };
+}
+
 export function deliveryConfirmationTemplate(input: {
   customerName: string;
   orderId: string;
