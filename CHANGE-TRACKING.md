@@ -66,6 +66,16 @@ No third-party changes recorded yet — this is the starting line.
 
 _(New entries appended here, newest first, as changes are detected.)_
 
+### 2026-07-30 — PR #25 merged to `main` (Claude, at the owner's request)
+
+**PR #25** (`a45e65c`): membership tier cards brightened — luminous champagne
+treatment (glowing card borders/halos, gold-gradient badges + CTAs, champagne
+member-pricing chips, emerald store-credit chips, emerald checks) plus a
+"Free account included — track your savings" line under CTAs for signed-out
+visitors (account requirement already enforced by the login redirect).
+
+**Tracking baseline for third-party review now moves to `a45e65c`.**
+
 ### 2026-07-30 — PR #24 merged to `main` (Claude, at the owner's request)
 
 **PR #24** (`a753d1f`): $1/7-day trial removed from the billing signup path
