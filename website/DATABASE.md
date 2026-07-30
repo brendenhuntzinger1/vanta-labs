@@ -317,3 +317,7 @@ Apply these SQL files in order (each is idempotent):
 15. **`dynamic-sales-tax.sql`** (new — per-order tax rate + destination state
     for the address-based sales-tax system; tax is collected only for
     admin-configured nexus states at destination-state rates)
+16. **`coupon-private-flag.sql`** (new — private/unlisted coupons: valid at
+    checkout, never advertised on the storefront)
+17. **`replacement-orders.sql`** (new — links a $0 replacement shipment to the
+    original order + records the damaged/lost/stolen reason)

@@ -10,6 +10,10 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 
 export interface OrderItemRef {
   productId?: string | null;
+  /** Raw DB rows use snake_case — accepted directly so callers passing
+   *  order_items rows (payment-webhook, replacements) actually decrement
+   *  stock instead of silently no-opping on the key-name mismatch. */
+  product_id?: string | null;
   quantity?: number | null;
 }
 
@@ -38,10 +42,11 @@ export function planInventoryAdjustments(items: OrderItemRef[]): InventoryAdjust
   const byKey = new Map<string, InventoryAdjustment>();
   for (const item of items ?? []) {
     const qty = Math.trunc(Number(item?.quantity ?? 0));
-    if (!item?.productId || !Number.isFinite(qty) || qty <= 0) {
+    const productId = item?.productId ?? item?.product_id;
+    if (!productId || !Number.isFinite(qty) || qty <= 0) {
       continue;
     }
-    const { slug, variantId } = parseOrderItemRef(String(item.productId));
+    const { slug, variantId } = parseOrderItemRef(String(productId));
     if (!slug) {
       continue;
     }

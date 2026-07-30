@@ -3,7 +3,8 @@ import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest
 import { canManageRefunds } from "@/lib/admin-roles";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
-import { deliveryConfirmationTemplate, orderConfirmationTemplate, refundConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
+import { deliveryConfirmationTemplate, orderConfirmationTemplate, refundConfirmationTemplate, replacementOrderTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
+import { createReplacementOrder } from "@/lib/admin-replacements";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { updateCommissionOnRefund } from "@/lib/payment-webhook";
 import { restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
@@ -69,6 +70,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       refundAmount?: number;
       carrier?: string;
       estimatedDelivery?: string;
+      reason?: string;
+      items?: Array<{ itemId?: string | number; quantity?: number }>;
     };
 
     const action = String(body.action ?? "");
@@ -401,6 +404,76 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       }
 
       return NextResponse.json({ success: true, refundAmount: newRefundTotal, isFullRefund });
+    }
+
+    // One-click replacement shipment (damaged / lost / stolen — the Shipping
+    // Protection promise). Creates a linked $0 order, pushes it to the 3PL,
+    // audits who sent it and why, and emails the customer.
+    if (action === "send_replacement") {
+      if (!canManageRefunds(session.role)) {
+        return NextResponse.json({ success: false, error: "Your role cannot send replacements." }, { status: 403 });
+      }
+
+      const reasonRaw = String(body.reason ?? "").toLowerCase();
+      const reason = (["damaged", "lost", "stolen", "other"] as const).find((r) => r === reasonRaw);
+      if (!reason) {
+        return NextResponse.json({ success: false, error: "Pick a replacement reason." }, { status: 400 });
+      }
+
+      const replacement = await createReplacementOrder({
+        originalOrderId: orderId,
+        reason,
+        note: typeof body.note === "string" ? body.note : null,
+        selections: Array.isArray(body.items)
+          ? body.items
+              .map((item) => ({ itemId: String(item?.itemId ?? ""), quantity: Number(item?.quantity ?? 1) }))
+              .filter((item) => item.itemId)
+          : null,
+      });
+
+      const { error: auditError } = await supabaseAdmin
+        .from("admin_audit_logs")
+        .insert({
+          action: "order_replacement",
+          target_table: "orders",
+          target_id: orderId,
+          metadata: {
+            reason,
+            note: typeof body.note === "string" ? body.note.slice(0, 300) : null,
+            replacementOrderId: replacement.orderId,
+            replacementOrderNumber: replacement.orderNumber,
+            items: replacement.items,
+            performedAt: now,
+            performedBy: session.username,
+            ipAddress,
+            userAgent,
+          },
+        });
+      if (auditError) {
+        console.error("Unable to audit replacement", auditError);
+      }
+
+      // Best-effort customer email — a mail hiccup never blocks the reship.
+      if (replacement.customerEmail) {
+        try {
+          const original = await getOrderWithItems(orderId);
+          const template = replacementOrderTemplate({
+            customerName: replacement.customerName ?? "",
+            originalOrderNumber: original?.order_number ? String(original.order_number) : orderId,
+            replacementOrderNumber: replacement.orderNumber,
+            items: replacement.items,
+          });
+          await sendEmail({ to: replacement.customerEmail, ...template });
+        } catch (emailError) {
+          console.error("Unable to send replacement email", emailError);
+        }
+      }
+
+      return NextResponse.json({
+        success: true,
+        replacementOrderId: replacement.orderId,
+        replacementOrderNumber: replacement.orderNumber,
+      });
     }
 
     if (action === "cancel" || action === "resend_confirmation") {

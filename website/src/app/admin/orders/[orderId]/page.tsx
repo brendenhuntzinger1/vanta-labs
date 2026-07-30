@@ -67,6 +67,11 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
           canRefund={canManageRefunds(session.role)}
           initialCarrier={shipment?.carrier ?? null}
           initialEstimatedDelivery={shipment?.estimated_delivery ?? null}
+          orderItems={((data.order_items ?? []) as Array<{ id: string | number; product_name?: string | null; product_id?: string | null; quantity?: number | null }>).map((item) => ({
+            id: String(item.id),
+            name: String(item.product_name ?? item.product_id ?? "Item"),
+            quantity: Math.max(1, Number(item.quantity ?? 1)),
+          }))}
         />
 
         {profit ? (

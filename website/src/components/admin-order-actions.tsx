@@ -17,6 +17,7 @@ export function AdminOrderActions({
   canRefund,
   initialCarrier,
   initialEstimatedDelivery,
+  orderItems = [],
 }: {
   orderId: string;
   initialPaymentStatus: string;
@@ -27,6 +28,7 @@ export function AdminOrderActions({
   canRefund: boolean;
   initialCarrier?: string | null;
   initialEstimatedDelivery?: string | null;
+  orderItems?: Array<{ id: string; name: string; quantity: number }>;
 }) {
   const router = useRouter();
   const [paymentStatus, setPaymentStatus] = useState(initialPaymentStatus || "pending_payment");
@@ -37,6 +39,13 @@ export function AdminOrderActions({
   const [refundInput, setRefundInput] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Replacement panel state: which items (and how many of each) to reship.
+  const [replaceOpen, setReplaceOpen] = useState(false);
+  const [replaceReason, setReplaceReason] = useState("damaged");
+  const [replaceNote, setReplaceNote] = useState("");
+  const [replaceQty, setReplaceQty] = useState<Record<string, number>>(
+    () => Object.fromEntries(orderItems.map((item) => [item.id, item.quantity])),
+  );
 
   const remaining = Math.max(0, amountPaid - refundAmount);
 
@@ -71,10 +80,18 @@ export function AdminOrderActions({
       body: JSON.stringify(payload),
     });
 
-    const json = await res.json() as { success: boolean; error?: string };
+    const json = await res.json() as { success: boolean; error?: string; replacementOrderNumber?: string };
     if (!res.ok || !json.success) {
       setMessage(json.error ?? "Action failed");
       setSaving(false);
+      return;
+    }
+
+    if (action === "send_replacement") {
+      setMessage(`Replacement ${json.replacementOrderNumber ?? ""} created — it's in the fulfillment queue and the customer has been emailed.`.trim());
+      setReplaceOpen(false);
+      setSaving(false);
+      router.refresh();
       return;
     }
 
@@ -171,6 +188,91 @@ export function AdminOrderActions({
           <p className="mt-3 text-sm text-zinc-500">Your role does not have permission to issue refunds.</p>
         )}
       </div>
+
+      {/* Replacement shipment — the Shipping Protection promise. Creates a
+          linked $0 order, sends it to the 3PL, and emails the customer. */}
+      {canRefund && orderItems.length > 0 ? (
+        <div className="mt-6 border-t border-white/10 pt-4">
+          <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Replacement</p>
+          <p className="mt-2 text-sm text-zinc-300">
+            Item damaged, lost, or stolen in transit? Send a free replacement — the customer is never charged, the
+            reship goes straight to fulfillment, and the claim is logged.
+          </p>
+          {!replaceOpen ? (
+            <button type="button" onClick={() => setReplaceOpen(true)} className="vl-btn-secondary mt-3 px-4 py-2 text-xs">
+              Send replacement…
+            </button>
+          ) : (
+            <div className="mt-3 space-y-3 rounded-xl border border-white/10 bg-white/[0.02] p-4">
+              <div className="space-y-2">
+                {orderItems.map((item) => {
+                  const qty = replaceQty[item.id] ?? 0;
+                  const included = qty > 0;
+                  return (
+                    <div key={item.id} className="flex items-center justify-between gap-3 text-sm">
+                      <label className="flex min-w-0 items-center gap-2 text-zinc-200">
+                        <input
+                          type="checkbox"
+                          checked={included}
+                          onChange={(e) => setReplaceQty((prev) => ({ ...prev, [item.id]: e.target.checked ? item.quantity : 0 }))}
+                          className="h-4 w-4 accent-amber-300"
+                        />
+                        <span className="truncate">{item.name}</span>
+                      </label>
+                      {included ? (
+                        <input
+                          type="number"
+                          min={1}
+                          max={item.quantity}
+                          value={qty}
+                          onChange={(e) => setReplaceQty((prev) => ({ ...prev, [item.id]: Math.min(item.quantity, Math.max(1, Math.floor(Number(e.target.value) || 1))) }))}
+                          className="vl-input w-16 px-2 py-1 text-center text-sm"
+                          aria-label={`Replacement quantity for ${item.name}`}
+                        />
+                      ) : (
+                        <span className="text-xs text-zinc-600">excluded</span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="text-sm text-zinc-300">Reason
+                  <select value={replaceReason} onChange={(e) => setReplaceReason(e.target.value)} className="vl-input mt-1 w-full px-3 py-2">
+                    <option value="damaged">Damaged in transit</option>
+                    <option value="lost">Lost in transit</option>
+                    <option value="stolen">Stolen</option>
+                    <option value="other">Other</option>
+                  </select>
+                </label>
+                <label className="text-sm text-zinc-300">Note (optional)
+                  <input value={replaceNote} onChange={(e) => setReplaceNote(e.target.value)} placeholder="Photo received, vial cracked" className="vl-input mt-1 w-full px-3 py-2" />
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={saving || Object.values(replaceQty).every((q) => !q)}
+                  onClick={() => {
+                    const items = orderItems
+                      .filter((item) => (replaceQty[item.id] ?? 0) > 0)
+                      .map((item) => ({ itemId: item.id, quantity: replaceQty[item.id] }));
+                    void runAction(
+                      "send_replacement",
+                      "Send a free replacement shipment for the selected items? The customer will be emailed and the reship goes to fulfillment.",
+                      { reason: replaceReason, note: replaceNote.trim() || undefined, items },
+                    );
+                  }}
+                  className="vl-btn-primary px-4 py-2 text-xs disabled:opacity-60"
+                >
+                  {saving ? "Sending…" : "Send free replacement"}
+                </button>
+                <button type="button" onClick={() => setReplaceOpen(false)} className="vl-btn-secondary px-4 py-2 text-xs">Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
