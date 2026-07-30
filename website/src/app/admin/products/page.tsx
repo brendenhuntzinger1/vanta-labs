@@ -64,6 +64,44 @@ function parseMoneyToCents(value: string) {
   return Math.max(0, Math.round(parsed * 100));
 }
 
+// Vercel rejects API request bodies over ~4.5 MB before they ever reach our
+// upload route, so a big phone photo or full-res render used to fail with no
+// visible error (the platform's non-JSON error page broke the response
+// handling). Anything over this threshold is downscaled in the browser first.
+const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+const MAX_UPLOAD_EDGE_PX = 1600;
+
+async function compressImageForUpload(file: File): Promise<File> {
+  if (file.size <= MAX_UPLOAD_BYTES) {
+    return file;
+  }
+  try {
+    const bitmap = await createImageBitmap(file);
+    const scale = Math.min(1, MAX_UPLOAD_EDGE_PX / Math.max(bitmap.width, bitmap.height));
+    const width = Math.max(1, Math.round(bitmap.width * scale));
+    const height = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      return file;
+    }
+    context.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
+    if (!blob || blob.size >= file.size) {
+      return file;
+    }
+    const baseName = file.name.replace(/\.[^.]+$/, "") || "image";
+    return new File([blob], `${baseName}.jpg`, { type: "image/jpeg" });
+  } catch {
+    // Format the browser can't decode (e.g. HEIC) — send as-is and let the
+    // server report a real error instead of silently dropping the upload.
+    return file;
+  }
+}
+
 function statusLabel(product: Product) {
   if (product.isArchived) return "Archived";
   if (!product.isEnabled) return "Disabled";
@@ -562,8 +600,10 @@ export default function AdminProductsPage() {
   };
 
   const uploadVariantImage = async (productId: string, variantId: string, file: File) => {
+    setMessage("Uploading photo…");
+    const uploadFile = await compressImageForUpload(file);
     const formData = new FormData();
-    formData.append("file", file);
+    formData.append("file", uploadFile);
     formData.append("productId", productId);
     formData.append("makePrimary", "true");
 
@@ -572,9 +612,16 @@ export default function AdminProductsPage() {
       body: formData,
     });
 
-    const json = await res.json() as { success: boolean; error?: string; imageUrl?: string; product?: Product };
-    if (!res.ok || !json.success || !json.imageUrl || !json.product) {
-      setMessage(json.error ?? "Upload failed.");
+    // A platform-level rejection (e.g. body too large) returns a non-JSON
+    // error page — never let that throw and leave the UI silent.
+    const json = await res.json().catch(() => null) as { success: boolean; error?: string; imageUrl?: string; product?: Product } | null;
+    if (!res.ok || !json?.success || !json.imageUrl || !json.product) {
+      setMessage(
+        json?.error
+          ?? (res.status === 413
+            ? "Upload failed — the image is too large for the server (about 4 MB max)."
+            : `Upload failed (HTTP ${res.status}).`),
+      );
       clearMessageSoon();
       return;
     }
