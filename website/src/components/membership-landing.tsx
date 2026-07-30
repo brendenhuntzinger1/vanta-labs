@@ -283,7 +283,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
             return (
               <div key={tier.id} className="w-[82%] shrink-0 snap-center sm:w-auto sm:shrink">
                 <div
-                  className={`vl2-product-card group relative flex h-full flex-col p-5 ${isFeatured ? "border-white/60 ring-1 ring-white/20" : isBestValue ? "border-amber-200/50 ring-1 ring-amber-200/20" : ""}`}
+                  className={`vl2-product-card group relative flex h-full flex-col bg-gradient-to-b from-white/[0.05] to-transparent p-6 ${isFeatured ? "border-white/60 ring-1 ring-white/20" : isBestValue ? "border-amber-200/50 ring-1 ring-amber-200/20" : ""}`}
                 >
                   {isFeatured ? (
                     <span className="absolute -top-3 left-1/2 -translate-x-1/2 bg-white px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-black">
@@ -295,8 +295,9 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                     </span>
                   ) : null}
 
-                  <p className="vl2-eyebrow">{tier.name}</p>
-                  <p className="mt-3 flex flex-wrap items-baseline gap-x-2 text-3xl text-white">
+                  <p className="vl2-eyebrow text-amber-200/60">Membership</p>
+                  <h3 className="vl2-serif mt-1.5 text-2xl text-white">{tier.name}</h3>
+                  <p className="mt-3 flex flex-wrap items-baseline gap-x-2 text-3xl text-white vl2-serif">
                     {showComparePrice ? (
                       <span className="text-base font-normal text-white/35 line-through">{money(tier.compareMonthlyPriceCents)}</span>
                     ) : null}
@@ -308,8 +309,8 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                   ) : null}
 
                   {tier.memberDiscountPercent > 0 ? (
-                    <div className="mt-4 rounded-lg border border-white/15 bg-white/[0.04] px-4 py-3">
-                      <p className="text-base font-bold text-white">{tier.memberDiscountPercent}% member pricing</p>
+                    <div className="mt-4 rounded-lg border border-amber-200/30 bg-amber-200/[0.06] px-4 py-3">
+                      <p className="text-base font-bold text-amber-200">{tier.memberDiscountPercent}% member pricing</p>
                       <p className="text-[11px] text-white/45">pay {moneyWhole(10000 - Math.round(10000 * (tier.memberDiscountPercent / 100)))} on every $100, on everything</p>
                     </div>
                   ) : null}
@@ -342,11 +343,13 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
 
                   <ul className="mt-5 flex-1 space-y-2.5 border-t border-white/10 pt-4 text-sm text-white/70">
                     {tier.benefits.map((benefit) => (
-                      <li key={benefit} className="flex items-start gap-2">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mt-0.5 h-4 w-4 flex-shrink-0 text-white">
+                      <li key={benefit} className="flex items-start gap-2.5">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-amber-200">
                           <path d="m5 13 4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
-                        {benefit}
+                        {/* Strip any leading emoji/symbols from admin-entered benefit copy —
+                            the gold check is the icon; doubled glyphs read as clutter. */}
+                        <span>{benefit.replace(/^[^\p{L}\p{N}$]+\s*/u, "")}</span>
                       </li>
                     ))}
                   </ul>
