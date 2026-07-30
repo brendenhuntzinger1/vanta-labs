@@ -97,10 +97,10 @@ export function ProductCard({
             ) : null}
           </div>
           {showMemberPricing && memberQuote ? (
-            <p className="mt-1 text-xs text-amber-200 sm:text-sm">
+            <p className="mt-1 text-xs text-emerald-300 sm:text-sm">
               {isMember ? "Your member price " : "Member price "}
               <span className="font-semibold">{formatCartCurrency(memberQuote.memberPrice)}</span>
-              <span className="text-amber-200/60"> · save {formatCartCurrency(memberQuote.savings)}</span>
+              <span className="text-emerald-300/60"> · save {formatCartCurrency(memberQuote.savings)}</span>
             </p>
           ) : null}
           {/* Trust badges — data-driven, so they only appear when the real
@@ -143,7 +143,7 @@ export function ProductCard({
         {showMemberPricing && memberQuote && !isMember ? (
           <Link
             href="/membership"
-            className="vl-focus-ring col-span-2 -mb-1 inline-flex items-center justify-center gap-1 py-1 text-[11px] text-amber-200/70 transition hover:text-amber-200"
+            className="vl-focus-ring col-span-2 -mb-1 inline-flex items-center justify-center gap-1 py-1 text-[11px] text-emerald-300/70 transition hover:text-emerald-300"
           >
             Become a member &amp; save {formatCartCurrency(memberQuote.savings)} today →
           </Link>

@@ -66,6 +66,17 @@ No third-party changes recorded yet — this is the starting line.
 
 _(New entries appended here, newest first, as changes are detected.)_
 
+### 2026-07-30 — PR #26 merged to `main` (Claude, at the owner's request)
+
+**PR #26** (`b51b2a4`): membership page fully redesigned to the site's brand
+language — matte black + hairline borders + serif type with ONE deep muted
+emerald accent; all gold removed; watch-style hairline badges; unified glass
+chips (store credit = the only emerald tint); site-standard vl2 buttons;
+monochrome calculator with a single emerald verdict; Elite bulk panel
+de-golded to a matte lab panel. Visual only — functionality untouched.
+
+**Tracking baseline for third-party review now moves to `b51b2a4`.**
+
 ### 2026-07-30 — PR #25 merged to `main` (Claude, at the owner's request)
 
 **PR #25** (`a45e65c`): membership tier cards brightened — luminous champagne

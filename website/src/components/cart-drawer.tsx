@@ -261,12 +261,12 @@ export function CartDrawer() {
             <Link
               href="/membership"
               onClick={closeCart}
-              className="block rounded-[1.25rem] border border-amber-200/30 bg-gradient-to-r from-amber-200/[0.12] via-amber-200/[0.05] to-transparent p-4 transition hover:border-amber-200/60"
+              className="block rounded-[1.25rem] border border-emerald-400/25 bg-gradient-to-r from-emerald-400/[0.10] via-emerald-400/[0.04] to-transparent p-4 transition hover:border-emerald-400/50"
             >
-              <p className="text-sm font-semibold text-amber-200">
+              <p className="text-sm font-semibold text-emerald-300">
                 You could save {formatCartCurrency(membershipValue.totalBenefit)} today with {upsellTier.name}
               </p>
-              <p className="mt-1 text-xs text-amber-100/70">
+              <p className="mt-1 text-xs text-emerald-100/60">
                 {formatCartCurrency(membershipValue.discountSavings)} off this cart
                 {membershipValue.shippingSavings > 0 ? ` + free shipping (${formatCartCurrency(membershipValue.shippingSavings)})` : ""}
                 {membershipValue.monthlyStoreCredit > 0 ? ` + ${formatCartCurrency(membershipValue.monthlyStoreCredit)} monthly credit` : ""}
