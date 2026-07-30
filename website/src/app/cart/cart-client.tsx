@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { formatCartCurrency, getShippingProgress, useCart } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
+import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
 
 export function CartPageClient() {
   const router = useRouter();
@@ -95,6 +96,8 @@ export function CartPageClient() {
                 );
               })
             )}
+
+            {isHydrated && items.length > 0 ? <BacWaterCartCheckboxes /> : null}
           </div>
 
           <div className="vl2-glass h-fit p-5 sm:p-7">

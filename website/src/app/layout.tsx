@@ -4,6 +4,7 @@ import { Fraunces, Geist, Geist_Mono, Manrope } from "next/font/google";
 import { Suspense } from "react";
 import { AgeGate } from "@/components/age-gate";
 import { CartDrawer } from "@/components/cart-drawer";
+import { BacWaterAddedPopup } from "@/components/bac-water-upsell";
 import { CartProvider } from "@/components/cart-context";
 import { SiteAnalyticsTracker } from "@/components/site-analytics-tracker";
 import { SiteFooter } from "@/components/site-footer";
@@ -130,6 +131,7 @@ export default function RootLayout({
               vault
             </Link>
             <CartDrawer />
+            <BacWaterAddedPopup />
             <CookieConsent />
           </AgeGate>
         </CartProvider>

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ProductDetailClient } from "@/components/product-detail-client";
 import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/catalog";
 import { getHomepageControlConfig } from "@/lib/admin-control";
+import { BAC_WATER_SLUG, isBacWater } from "@/lib/bac-water";
 
 export const dynamic = "force-dynamic";
 
@@ -54,6 +55,11 @@ export default async function ProductDetailPage({
 
   const relatedProducts = await getCatalogProductsByCategory(product.category, product.slug, 4).catch(() => []);
   const { promoBuy3Get1Enabled, bundleConfig } = await getHomepageControlConfig();
+  // BAC Water cross-sell (accessory block + Frequently Bought Together).
+  // Null on the BAC Water page itself, or until the product exists in the DB.
+  const bacWater = isBacWater(product.slug)
+    ? null
+    : await getCatalogProductBySlug(BAC_WATER_SLUG).catch(() => null);
 
   // Product structured data for rich results (price / availability). Server-
   // controlled data only; escaped so it can never break out of the script tag.
@@ -96,6 +102,7 @@ export default async function ProductDetailPage({
         relatedProducts={relatedProducts}
         promoBuy3Get1Enabled={Boolean(promoBuy3Get1Enabled)}
         bundleConfig={bundleConfig}
+        bacWater={bacWater}
       />
     </>
   );
