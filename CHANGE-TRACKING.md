@@ -66,6 +66,18 @@ No third-party changes recorded yet — this is the starting line.
 
 _(New entries appended here, newest first, as changes are detected.)_
 
+### 2026-07-30 — PR #24 merged to `main` (Claude, at the owner's request)
+
+**PR #24** (`a753d1f`): $1/7-day trial removed from the billing signup path
+(full period charged immediately; activation strictly gated on a successful
+charge — failed/no-processor charges record past_due = no benefits);
+duplicate-charge protection hardened (date-scoped idempotency keys + no-op
+guard); Admin → Membership gains a Members roster (name, email, exact tier,
+billing cycle, status, join date, next billing, store credit); membership
+tier cards recolored to monochrome glass + champagne (#e8d9b5).
+
+**Tracking baseline for third-party review now moves to `a753d1f`.**
+
 ### 2026-07-30 — PR #23 merged to `main` (Claude, at the owner's request)
 
 **PR #23** (`0acfa5e`): membership economics guardrail — permanent Monte
