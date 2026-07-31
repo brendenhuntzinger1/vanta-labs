@@ -16,9 +16,29 @@ function applySecurityHeaders(response: NextResponse) {
   response.headers.set("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
   response.headers.set("Cross-Origin-Resource-Policy", "same-origin");
   // HSTS: force HTTPS for two years incl. subdomains. Safe for an HTTPS-only
-  // storefront and expected for anything handling payment/auth. (CSP is a
-  // separate, iterative hardening step — see the audit backlog.)
+  // storefront and expected for anything handling payment/auth.
   response.headers.set("Strict-Transport-Security", "max-age=63072000; includeSubDomains; preload");
+  // Content-Security-Policy — deliberately the SAFE subset that hardens the
+  // real attack surface WITHOUT a default-src/script-src/style-src allowlist.
+  // Next.js injects inline hydration scripts and styled-jsx inline styles with
+  // no nonce here, so a default-src/script-src restriction would break
+  // hydration site-wide (those need a nonce-based rollout, tracked for
+  // post-launch). We intentionally OMIT default-src so scripts/styles/images
+  // stay unrestricted, while still closing: plugin/object injection
+  // (object-src), <base>-tag hijacking (base-uri), clickjacking
+  // (frame-ancestors, duplicating X-Frame-Options), off-site form posts
+  // (form-action), and mixed content (upgrade-insecure-requests). This never
+  // breaks first-party pages.
+  response.headers.set(
+    "Content-Security-Policy",
+    [
+      "object-src 'none'",
+      "base-uri 'self'",
+      "frame-ancestors 'none'",
+      "form-action 'self'",
+      "upgrade-insecure-requests",
+    ].join("; "),
+  );
   return response;
 }
 
