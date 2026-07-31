@@ -206,7 +206,39 @@ function normalizeOrderPayload(payload: string) {
       quantity?: number;
       lineTotal?: number;
     }>;
+    /**
+     * VeyraGate's merchant envelope: `{ id, type, created_at, data: <charge> }`,
+     * where the order id rides in `data.metadata.order_id` — there is no top-level
+     * reference field. Read defensively (`data.object ?? data`) because the charge
+     * object has been seen both nested and un-nested.
+     */
+    data?: {
+      metadata?: { order_id?: string };
+      object?: { metadata?: { order_id?: string } };
+    };
   };
+}
+
+/**
+ * The order id, wherever the sender put it.
+ *
+ * The internal/mock gateway sends a flat `orderId`. VeyraGate nests it at
+ * `data.metadata.order_id` — which is exactly what LivePaymentProvider asks for
+ * when it opens the session (`metadata: { order_id: input.orderId }`). Without
+ * this, a real VeyraGate callback resolves to no order id at all, falls through
+ * to a random `order-<uuid>`, matches nothing, and the customer's card is charged
+ * while their order sits unpaid forever.
+ */
+export function resolveWebhookOrderId(eventPayload: {
+  orderId?: string;
+  data?: { metadata?: { order_id?: string }; object?: { metadata?: { order_id?: string } } };
+}): string | null {
+  return (
+    eventPayload.orderId ??
+    eventPayload.data?.metadata?.order_id ??
+    eventPayload.data?.object?.metadata?.order_id ??
+    null
+  );
 }
 
 async function markEventProcessed(eventId: string, orderId: string, status: OrderStatus) {
@@ -980,7 +1012,10 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   }
 
   const eventPayload = normalizeOrderPayload(payload);
-  const orderId = eventPayload.orderId ?? `order-${randomUUID()}`;
+  // Falls back to a synthetic id ONLY when no sender put one anywhere, so the
+  // event is still recorded rather than lost — but it will match no order, which
+  // is why resolveWebhookOrderId has to know every shape a real sender uses.
+  const orderId = resolveWebhookOrderId(eventPayload) ?? `order-${randomUUID()}`;
   const nextStatus = getOrderStatusForEventType(eventPayload.type ?? "");
 
   // Claim the event up front (atomic) so concurrent duplicate deliveries can't

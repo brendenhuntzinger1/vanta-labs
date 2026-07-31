@@ -6,8 +6,36 @@ import { recordSystemAlert } from "@/lib/monitoring";
 export async function POST(request: Request) {
   try {
     const payload = await request.text();
-    const signature = request.headers.get("x-payment-signature") ?? "";
-    const eventId = request.headers.get("x-event-id") ?? "";
+
+    // Two senders hit this route and they do not agree on headers:
+    //
+    //   • The internal/mock gateway sends `x-payment-signature` + `x-event-id`.
+    //   • VeyraGate sends `veyragate-signature` and carries the event id in the
+    //     BODY as `id` ("evt_…"); it sends no event-id header at all.
+    //
+    // Accepting both costs nothing — the signature still has to verify against the
+    // same secret either way — and without it every real VeyraGate callback is
+    // rejected at this guard before the signature is even checked, which means a
+    // card is charged and the order never settles.
+    const signature =
+      request.headers.get("veyragate-signature") ??
+      request.headers.get("x-payment-signature") ??
+      "";
+
+    // Fall back to the event id in the body when no header carries one. Parsed
+    // before verification only to READ an identifier — nothing is trusted or acted
+    // on until processPaymentWebhook verifies the signature over these exact bytes.
+    let eventId = request.headers.get("x-event-id") ?? "";
+    if (!eventId) {
+      try {
+        const parsed = JSON.parse(payload) as { id?: unknown };
+        if (typeof parsed?.id === "string") {
+          eventId = parsed.id;
+        }
+      } catch {
+        // Not JSON — fall through to the missing-headers response below.
+      }
+    }
 
     if (!signature || !eventId) {
       return NextResponse.json(
