@@ -77,6 +77,13 @@ export interface CreateCheckoutPayload {
  /** Client-generated UUID, stable across retries of the SAME checkout submit.
   *  Dedupes order creation so a lost response + user retry can't double-order. */
  idempotencyKey?: string;
+ /** Billing address (persisted for the card processor's AVS). Optional. */
+ billing?: {
+   fullName?: string;
+   address?: string;
+   city?: string;
+   postalCode?: string;
+ };
 }
 
 // Short, human-friendly order number a customer can copy into a Cash App /
@@ -743,10 +750,15 @@ export async function createCheckoutSession(
  // migration hasn't been applied yet, fall back to inserting without them so
  // checkout NEVER breaks over a missing column. tax_amount itself is an
  // original column and always stored (in baseOrderRow above).
+ const billing = payload.billing;
  const orderRowWithContact = {
    ...baseOrderRow,
    state: payload.customer.state ?? null,
    phone: payload.customer.phone ?? null,
+   billing_full_name: billing?.fullName ? sanitizeText(billing.fullName) : null,
+   billing_address: billing?.address ? sanitizeText(billing.address) : null,
+   billing_city: billing?.city ? sanitizeText(billing.city) : null,
+   billing_postal_code: billing?.postalCode ? sanitizeText(billing.postalCode) : null,
    // Exact tax audit trail: the rate applied and the destination state it
    // was applied for (null when no tax was collected), so the admin tax
    // report can group collections by state without re-deriving rates.
@@ -794,7 +806,7 @@ export async function createCheckoutSession(
  }
  if (orderInsertError) {
    const message = String(orderInsertError.message ?? "").toLowerCase();
-   const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state") || message.includes("idempotency_key");
+   const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state") || message.includes("idempotency_key") || message.includes("billing_");
    const looksLikeMissingColumn = message.includes("does not exist")
      || message.includes("schema cache")
      || message.includes("could not find")

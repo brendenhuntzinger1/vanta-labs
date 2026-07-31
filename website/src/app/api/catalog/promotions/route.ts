@@ -9,18 +9,21 @@ import {
 import { DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
 import { DEFAULT_SALES_TAX_CONFIG } from "@/lib/sales-tax";
 import { getActiveMembershipTiers } from "@/lib/membership";
+import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import type { MembershipTierSummary } from "@/lib/member-pricing";
 
 export const dynamic = "force-dynamic";
 
 export async function GET() {
   try {
-    const [config, salesTaxSettings, shippingConfig, referralProgram, membershipTiers] = await Promise.all([
+    const [config, salesTaxSettings, shippingConfig, referralProgram, membershipTiers, ambassadorSettings] = await Promise.all([
       getHomepageControlConfig(),
       getSalesTaxSettings(),
       getShippingConfig(),
       getReferralProgramConfig(),
       getActiveMembershipTiers().catch(() => []),
+      getAmbassadorProgramSettings().catch(() => ({ minimumQualifyingOrder: DEFAULT_MINIMUM_QUALIFYING_ORDER })),
     ]);
 
     // Marketing-safe tier summary for member-pricing display (product cards,
@@ -56,6 +59,7 @@ export async function GET() {
       },
       shippingConfig,
       referralDiscountPercent: referralProgram.discountPercent,
+      referralMinimumOrder: ambassadorSettings.minimumQualifyingOrder,
       membershipTiers: tierSummaries,
     });
   } catch (error) {
@@ -74,6 +78,7 @@ export async function GET() {
       salesTax: DEFAULT_SALES_TAX_CONFIG,
       shippingConfig: DEFAULT_SHIPPING_CONFIG,
       referralDiscountPercent: DEFAULT_REFERRAL_DISCOUNT_PERCENT,
+      referralMinimumOrder: DEFAULT_MINIMUM_QUALIFYING_ORDER,
       membershipTiers: [],
     });
   }

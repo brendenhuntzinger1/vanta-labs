@@ -99,6 +99,14 @@ export async function POST(request: Request) {
       shippingProtection: Boolean(body.shippingProtection),
       paymentMethod: body.paymentMethod,
       idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined,
+      billing: body.billing && typeof body.billing === "object"
+        ? {
+            fullName: String(body.billing.fullName ?? "").slice(0, 200),
+            address: String(body.billing.address ?? "").slice(0, 300),
+            city: String(body.billing.city ?? "").slice(0, 120),
+            postalCode: String(body.billing.postalCode ?? "").slice(0, 20),
+          }
+        : undefined,
     });
 
     // If they opted into offers/coupons at checkout, add them (guest or account)

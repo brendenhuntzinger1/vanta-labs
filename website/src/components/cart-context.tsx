@@ -247,6 +247,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // authoritative server discount — a hardcoded value here would trip the
   // anti-tamper "Altered total" guard the moment an admin changed the percent.
   const [referralDiscountPercent, setReferralDiscountPercent] = useState(10);
+  // Admin-configured minimum merchandise subtotal to use a referral code —
+  // loaded from the same config the server enforces so the client gate matches
+  // the real charge (a hardcoded value drifts the moment an admin changes it).
+  const [referralMinimumOrder, setReferralMinimumOrder] = useState<number>(DEFAULT_MINIMUM_QUALIFYING_ORDER);
   const [shippingConfig, setShippingConfig] = useState<ShippingConfig>(DEFAULT_SHIPPING_CONFIG);
   const [isEligibleForBulkSavings, setIsEligibleForBulkSavings] = useState(false);
   const [bulkSavingsConfig, setBulkSavingsConfig] = useState<BulkSavingsConfig>(DEFAULT_BULK_SAVINGS_CONFIG);
@@ -318,11 +322,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; membershipTiers?: MembershipTierSummary[] };
+        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; referralMinimumOrder?: number; membershipTiers?: MembershipTierSummary[] };
         if (result.success) {
           setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
           if (result.bundleConfig) setBundleConfig(result.bundleConfig);
           setBundleStacking(result.bundleStacking === true);
+          if (Number.isFinite(result.referralMinimumOrder)) {
+            setReferralMinimumOrder(Number(result.referralMinimumOrder));
+          }
           if (result.salesTax) {
             setSalesTaxConfig({
               nexusStates: Array.isArray(result.salesTax.nexusStates) ? result.salesTax.nexusStates : [],
@@ -970,10 +977,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (subtotal < DEFAULT_MINIMUM_QUALIFYING_ORDER) {
+    if (subtotal < referralMinimumOrder) {
       setReferralDetails(null);
       setReferralCode(null);
-      setReferralError(`Referral codes require a minimum order of ${formatCurrency(DEFAULT_MINIMUM_QUALIFYING_ORDER)}. Add more items to use one.`);
+      setReferralError(`Referral codes require a minimum order of ${formatCurrency(referralMinimumOrder)}. Add more items to use one.`);
       setReferralSuccess(null);
       return;
     }
