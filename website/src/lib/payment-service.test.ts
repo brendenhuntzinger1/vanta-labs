@@ -52,23 +52,30 @@ describe("payment service", () => {
     // A referral that has gone stale (unknown code, or an ambassador removed
     // AFTER the customer applied it) must never fail the sale. It is dropped
     // (no discount, no commission) and checkout proceeds — here it advances PAST
-    // referral validation to the card-provider step (no real processor wired
-    // yet), proving the invalid code did not throw "Invalid referral code".
-    await expect(
-      createCheckoutSession({
-        items: [{ id: "bpc-157-10mg", quantity: 1 }],
-        customer: {
-          email: "client@example.com",
-          fullName: "Alex Morgan",
-          address: "88 Meridian Avenue",
-          city: "Austin",
-          state: "TX",
-          postalCode: "78701",
-          country: "United States",
-        },
-        referralCode: "EXPIRED10",
-      }),
-    ).rejects.toThrow("Card payments are being set up");
+    // referral validation into the card provider, which then fails for its own
+    // reason (this test env configures no gateway credentials). What is being
+    // asserted is that the failure is NOT "Invalid referral code": the stale code
+    // was dropped rather than blocking the sale.
+    //
+    // Matched on the referral message rather than the provider's, so this stays
+    // true as the card provider evolves — it previously asserted the pre-Veyra
+    // stub's wording and broke the moment a real processor was wired in.
+    const error = await createCheckoutSession({
+      items: [{ id: "bpc-157-10mg", quantity: 1 }],
+      customer: {
+        email: "client@example.com",
+        fullName: "Alex Morgan",
+        address: "88 Meridian Avenue",
+        city: "Austin",
+        state: "TX",
+        postalCode: "78701",
+        country: "United States",
+      },
+      referralCode: "EXPIRED10",
+    }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).not.toContain("Invalid referral code");
   });
 
   it("does not create duplicate orders from duplicate webhooks", async () => {

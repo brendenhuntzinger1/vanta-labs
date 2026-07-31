@@ -1,5 +1,5 @@
 import { createHmac, timingSafeEqual } from "crypto";
-import { getSiteUrl } from "@/lib/env";
+import { getRequiredEnv, getSiteUrl } from "@/lib/env";
 
 // Order-checkout payment abstraction. Everything the store does with a card
 // order goes through the PaymentProvider interface, so swapping in a real
@@ -142,19 +142,58 @@ export function verifyTimestampedSignature(
 
 export class LivePaymentProvider implements PaymentProvider {
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResult> {
-    // No real card processor is integrated yet. The previous stub returned a
-    // hosted-checkout URL that pointed back at /checkout, which bounced the
-    // shopper in a loop and never captured payment. Fail loudly with a clear,
-    // friendly message instead of shipping a broken card flow.
-    //
-    // TO GO LIVE WITH CARDS: replace the body of this method with a call to your
-    // processor (Stripe/Square/etc.) that creates a hosted-checkout session and
-    // returns its real { paymentId, hostedCheckoutUrl }. The webhook handler
-    // (processPaymentWebhook) is already wired to settle the order on callback.
-    void input;
-    throw new Error(
-      "Card payments are being set up and aren't available yet. Please choose another payment method or check back soon.",
-    );
+    const base = getRequiredEnv("VEYRA_API_BASE").replace(/\/+$/, "");
+    const key = getRequiredEnv("VEYRA_SECRET_KEY");
+
+    // `input.amount` is ALREADY in minor units — createCheckoutSession() in
+    // payment-service.ts passes `Math.round(finalTotal * 100)`. VeyraGate's
+    // `amount_cents` is also minor units, so this is a straight pass-through.
+    // Do NOT multiply by 100 here; that would charge every customer 100×.
+    const amountCents = input.amount;
+    if (!Number.isInteger(amountCents) || amountCents <= 0) {
+      throw new Error("Invalid checkout amount.");
+    }
+
+    const siteUrl = getSiteUrl();
+
+    const response = await fetch(`${base}/api/v1/checkout_sessions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+        // Same key on a retry returns the same session instead of a second one.
+        "Idempotency-Key": input.orderId,
+      },
+      body: JSON.stringify({
+        amount_cents: amountCents,
+        currency: (input.currency || "USD").toLowerCase(),
+        customer_email: input.customerEmail,
+        description: input.metadata?.orderNumber || input.orderId,
+        return_url: `${siteUrl}/checkout/confirmation?order=${encodeURIComponent(input.orderId)}`,
+        // Real top-level origin of the page embedding the hosted checkout.
+        // Embedded Apple Pay validates against this; without it the Apple
+        // framework rejects the sheet on a cross-origin iframe mismatch.
+        allowed_origin: siteUrl,
+        // Round-trips to the webhook at data.metadata.order_id.
+        metadata: { order_id: input.orderId },
+      }),
+    });
+
+    const data: { id?: string; url?: string; embed_url?: string; error?: { message?: string } } | null =
+      await response.json().catch(() => null);
+
+    if (!response.ok || !data?.id) {
+      throw new Error(data?.error?.message || `Payment session could not be created (${response.status}).`);
+    }
+
+    // `url` is the hosted checkout page. `embed_url` is the iframe variant —
+    // this provider contract is redirect-based, so we return the hosted URL.
+    const hostedCheckoutUrl = data.url;
+    if (!hostedCheckoutUrl) {
+      throw new Error("Payment session was created without a checkout URL.");
+    }
+
+    return { paymentId: data.id, hostedCheckoutUrl };
   }
 
   // Accepts BOTH signing schemes, because two different senders hit this path:
