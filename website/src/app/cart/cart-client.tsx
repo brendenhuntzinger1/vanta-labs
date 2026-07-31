@@ -21,6 +21,8 @@ export function CartPageClient() {
     subtotal,
     shipping,
     discountAmount,
+    appliedDiscountLabel,
+    autoBestDiscountApplied,
     total,
     referralCode,
     referralDetails,
@@ -28,14 +30,20 @@ export function CartPageClient() {
     referralSuccess,
     applyReferralCode,
     clearReferralCode,
+    isApplyingReferral,
     isBuy3Get1FreeActive,
     bulkSavingsApplied,
     bulkSavingsPercent,
     bulkSavingsProgress,
+    shippingConfig,
+    shippingProtectionEnabled,
+    setShippingProtectionEnabled,
+    shippingProtectionFee,
   } = useCart();
 
   const effectiveReferralInput = referralInput || referralCode || "";
-  const shippingProgress = getShippingProgress(subtotal);
+  const freeShipThreshold = shippingConfig.freeShippingThreshold;
+  const shippingProgress = getShippingProgress(subtotal, freeShipThreshold);
 
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
@@ -76,7 +84,7 @@ export function CartPageClient() {
                         <div>
                           <h2 className="text-lg text-white sm:text-xl">{item.name}</h2>
                           <p className="mt-2 text-sm text-white/50">
-                            {item.doseLabel ? `${item.doseLabel} • ` : ""}Batch {item.batchNumber}
+                            {item.doseLabel ? `${item.doseLabel}${item.batchNumber ? " • " : ""}` : ""}{item.batchNumber ? `Batch ${item.batchNumber}` : ""}
                           </p>
                         </div>
                         <button type="button" onClick={() => removeFromCart(item.key)} className="-my-2 px-1 py-2 text-sm text-white/45 transition hover:text-white">
@@ -113,7 +121,7 @@ export function CartPageClient() {
                 ) : (
                   <div>
                     <div className="mb-2 flex items-center justify-between text-sm">
-                      <span className="text-white/50">Free shipping at $250</span>
+                      <span className="text-white/50">Free shipping at {formatCartCurrency(freeShipThreshold)}</span>
                       <span className="text-white">${shippingProgress.amountToFreeShipping.toFixed(2)} away</span>
                     </div>
                     <div className="h-[2px] w-full bg-white/10">
@@ -143,6 +151,25 @@ export function CartPageClient() {
               </div>
             ) : null}
 
+            {subtotal > 0 ? (
+              <label className="mt-6 flex cursor-pointer items-start justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm">
+                <span className="flex items-start gap-2.5">
+                  <input
+                    type="checkbox"
+                    checked={shippingProtectionEnabled}
+                    onChange={(e) => setShippingProtectionEnabled(e.target.checked)}
+                    className="mt-0.5 h-4 w-4 accent-emerald-500"
+                    aria-label="Add shipping protection"
+                  />
+                  <span>
+                    <span className="block font-medium text-white">Shipping Protection <span className="font-normal text-emerald-300">(Recommended)</span> <span className="font-normal text-white/45">· optional</span></span>
+                    <span className="block text-xs text-white/45">Replace or refund items lost, stolen, or damaged in transit.</span>
+                  </span>
+                </span>
+                <span className="whitespace-nowrap text-white/80">+{formatCartCurrency(shippingProtectionFee || 0)}</span>
+              </label>
+            ) : null}
+
             <div className="mt-6 space-y-3 text-sm text-white/70">
               <div className="flex justify-between">
                 <span>Subtotal</span>
@@ -152,14 +179,29 @@ export function CartPageClient() {
                 <span>Estimated shipping</span>
                 <span>{formatCartCurrency(shipping)}</span>
               </div>
-              <div className="flex justify-between">
-                <span>Applied discount</span>
-                <span>-{formatCartCurrency(discountAmount)}</span>
+              {discountAmount > 0 ? (
+                <div className="flex justify-between text-emerald-300">
+                  <span>{appliedDiscountLabel ?? "Discount"}</span>
+                  <span>-{formatCartCurrency(discountAmount)}</span>
+                </div>
+              ) : null}
+              {shippingProtectionFee > 0 ? (
+                <div className="flex justify-between">
+                  <span>Shipping protection</span>
+                  <span>+{formatCartCurrency(shippingProtectionFee)}</span>
+                </div>
+              ) : null}
+              <div className="flex justify-between text-white/40">
+                <span>Sales tax</span>
+                <span>Calculated at checkout</span>
               </div>
               <div className="mt-4 flex justify-between border-t border-white/10 pt-4 text-base text-white">
                 <span>Final total</span>
                 <span>{formatCartCurrency(total)}</span>
               </div>
+              {autoBestDiscountApplied ? (
+                <p className="text-xs text-emerald-300/80">✓ We&apos;ve automatically applied your best available discount.</p>
+              ) : null}
             </div>
 
             {isBuy3Get1FreeActive ? (
@@ -182,9 +224,10 @@ export function CartPageClient() {
                   <button
                     type="button"
                     onClick={() => applyReferralCode(effectiveReferralInput)}
-                    className="vl2-btn-primary vl-focus-ring px-4 py-3 text-sm"
+                    disabled={isApplyingReferral}
+                    className="vl2-btn-primary vl-focus-ring px-4 py-3 text-sm disabled:opacity-60"
                   >
-                    Apply code
+                    {isApplyingReferral ? "Applying…" : "Apply code"}
                   </button>
                   {referralCode ? (
                     <button

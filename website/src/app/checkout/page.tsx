@@ -12,6 +12,7 @@ import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ManualPaymentInstructions } from "@/components/manual-payment-instructions";
+import { PaymentMethodPicker } from "@/components/payment-method-picker";
 import {
   calculateCardProcessingFee,
   getEnabledPaymentMethods,
@@ -972,6 +973,22 @@ export default function CheckoutPage() {
                 </p>
               ) : null}
             </div>
+
+            {/* Payment method chooser — shown only when more than one method is
+                enabled (today card is the only one, so this stays hidden until a
+                manual method like Cash App / Zelle is turned on in admin). The
+                server honors the chosen method authoritatively. */}
+            {paymentMethods.length > 1 ? (
+              <div className="mt-6">
+                <PaymentMethodPicker
+                  methods={paymentMethods}
+                  cardFeeConfig={cardFeeConfig}
+                  baseTotal={total}
+                  selectedMethodId={selectedMethodId}
+                  onSelect={setSelectedMethodId}
+                />
+              </div>
+            ) : null}
 
             <label className="mt-5 flex cursor-pointer items-start gap-2.5 text-sm text-white/70">
               <input type="checkbox" checked={marketingOptIn} onChange={(e) => setMarketingOptIn(e.target.checked)} className="mt-0.5 h-4 w-4 accent-emerald-500" />
