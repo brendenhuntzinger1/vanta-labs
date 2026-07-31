@@ -35,7 +35,12 @@ export function calculateCouponDiscount(subtotal: number, discountType: string, 
 // recipient (e.g. an abandoned-cart-recovery code - see
 // mintCartRecoveryCoupon in src/lib/cart-recovery.ts); store-wide coupons
 // ignore it.
-export async function validateCoupon(code: string | undefined, subtotal: number, customerEmail?: string): Promise<CouponValidationResult | null> {
+export interface CouponValidationContext {
+  /** The shopper holds an active paid membership (server-verified). */
+  isActiveMember?: boolean;
+}
+
+export async function validateCoupon(code: string | undefined, subtotal: number, customerEmail?: string, context?: CouponValidationContext): Promise<CouponValidationResult | null> {
   const normalizedCode = normalizeCouponCode(code ?? "");
 
   if (!normalizedCode) {
@@ -97,11 +102,24 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
   // stored (a code seeded or created lower/mixed case would otherwise fail
   // here even though it shows on the storefront). normalizeCouponCode strips
   // everything except [A-Z0-9-], so there are no ILIKE wildcards to escape.
-  const { data, error } = await supabaseAdmin
+  // member_scope is a newer column (discount-rules migration): retry without
+  // it if the migration hasn't been applied yet — pre-migration behavior
+  // (every coupon open to everyone) unchanged.
+  let { data, error } = await supabaseAdmin
     .from("coupons")
-    .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email")
+    .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email, member_scope")
     .ilike("code", normalizedCode)
     .maybeSingle();
+
+  if (error) {
+    const fallback = await supabaseAdmin
+      .from("coupons")
+      .select("code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count, active, assigned_email")
+      .ilike("code", normalizedCode)
+      .maybeSingle();
+    data = fallback.data as typeof data;
+    error = fallback.error;
+  }
 
   if (error) {
     console.error("Coupon lookup failed:", error);
@@ -110,6 +128,16 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
 
   if (!data || !data.active) {
     throw new Error("Invalid coupon code");
+  }
+
+  // Audience restriction: a code can be limited to active members only, or to
+  // non-members only (e.g. an acquisition code members shouldn't consume).
+  const memberScope = String((data as { member_scope?: string }).member_scope ?? "all");
+  if (memberScope === "members" && !context?.isActiveMember) {
+    throw new Error("This coupon is exclusive to active members. Join a membership to use it.");
+  }
+  if (memberScope === "non_members" && context?.isActiveMember) {
+    throw new Error("This coupon is for non-members — your membership pricing already beats it on most orders.");
   }
 
   if (data.assigned_email && data.assigned_email.toLowerCase() !== (customerEmail ?? "").trim().toLowerCase()) {

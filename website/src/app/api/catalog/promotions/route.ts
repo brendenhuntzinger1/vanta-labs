@@ -46,6 +46,7 @@ export async function GET() {
       success: true,
       promoBuy3Get1Enabled: Boolean(config.promoBuy3Get1Enabled),
       bundleConfig: config.bundleConfig,
+      bundleStacking: config.bundleStacking === true,
       // Only the tax POSTURE travels (nexus states + any per-state overrides);
       // the rate table ships with the client bundle (sales-tax.ts) so the
       // checkout preview recomputes tax instantly as the address changes.

@@ -452,6 +452,14 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
             against refunds and chargebacks), and payouts are sent every two weeks via
             PayPal, Venmo, or Cash App.
           </p>
+          <p className="mt-3 text-xs leading-6 text-white/70">
+            How your code interacts with other discounts: exactly one discount applies per
+            order and discounts never stack. When a customer uses your code, checkout
+            automatically applies whichever single discount saves them the most — your code,
+            their membership pricing, or a promo. You still earn commission on the order
+            whenever your code is valid on it, even if a bigger discount was applied instead.
+            Commission is never earned on your own purchases.
+          </p>
         </div>
       </section>
 

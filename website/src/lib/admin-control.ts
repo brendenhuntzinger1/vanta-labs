@@ -35,6 +35,12 @@ export type HomepageControlConfig = {
   promoBuy3Get1Enabled?: boolean;
   promoBuy2Get1HalfEnabled?: boolean;
   bundleConfig?: BundleConfig;
+  /**
+   * When true, quantity "Bundle & Save" pricing stacks with the winning
+   * percentage discount (legacy behavior). Default FALSE: bundle pricing
+   * competes like every other discount — one discount per order, best wins.
+   */
+  bundleStacking?: boolean;
 };
 
 function sanitizeSection(section: string) {
@@ -620,6 +626,7 @@ export async function getHomepageControlConfig(): Promise<HomepageControlConfig>
       qualityPanelItems: Array.isArray(homepage.quality_panel_items) ? homepage.quality_panel_items as string[] : undefined,
       promoBuy3Get1Enabled: Boolean(promotions.buy_3_get_1_enabled ?? false),
       promoBuy2Get1HalfEnabled: Boolean(promotions.buy_2_get_1_half_enabled ?? false),
+      bundleStacking: promotions.bundle_stacking === true,
       bundleConfig: resolveBundleConfig({
         twoUnitPercent: promotions.bundle_two_unit_percent,
         threePlusPercent: promotions.bundle_three_plus_percent,

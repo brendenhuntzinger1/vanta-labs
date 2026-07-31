@@ -34,6 +34,10 @@ const FAQ_ITEMS = [
     a: "Yes, any time from your account dashboard — no calls, no forms. Cancel before your next renewal date and you keep every benefit through the period you already paid for. No hidden fees, ever.",
   },
   {
+    q: "Does my member discount combine with promo codes or other sales?",
+    a: "No — exactly one discount applies per order, and discounts never stack. Your member pricing is applied automatically whenever you're signed in, no code needed. If a promo or ambassador code would save you more than your member discount, checkout automatically applies that better discount instead — you always get the single best deal without doing anything.",
+  },
+  {
     q: "How does the monthly store credit work?",
     a: "Paying tiers receive store credit every month, automatically applied at checkout once your order meets the tier's minimum. It's real money off your total, on top of your member pricing.",
   },

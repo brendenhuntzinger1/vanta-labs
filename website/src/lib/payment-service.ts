@@ -324,6 +324,7 @@ export async function createCheckoutSession(
  return {
  product,
  quantity: item.quantity,
+ baseUnitPrice,
  };
  });
 
@@ -333,6 +334,19 @@ export async function createCheckoutSession(
  0,
  ),
  );
+
+ // Retail subtotal at FULL (pre-bundle) unit prices, and the dollars the
+ // quantity "Bundle & Save" tiers already granted inside `subtotal`. With
+ // bundle stacking OFF (the default), every percentage discount is computed
+ // on the full base and must BEAT the bundle savings to apply — the customer
+ // gets exactly ONE discount per order: bundle pricing or the better promo,
+ // never both. The admin can restore legacy stacking in the Control Center.
+ const fullSubtotal = roundMoney(
+ lineItems.reduce((sum, line) => sum + line.baseUnitPrice * line.quantity, 0),
+ );
+ const bundleStacking = homepageControlConfig.bundleStacking === true;
+ const quantityBundleSavings = bundleStacking ? 0 : roundMoney(Math.max(0, fullSubtotal - subtotal));
+ const discountBase = bundleStacking ? subtotal : fullSubtotal;
 
  const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, shippingConfig, memberPerks, referralProgram, couponPolicy] = await Promise.all([
    Promise.resolve(homepageControlConfig),
@@ -348,14 +362,20 @@ export async function createCheckoutSession(
  ]);
  // No service/handling fee is ever charged — customers pay merchandise (minus
  // discounts) + shipping + sales tax only.
- const bulkSavingsResult = calculateBulkSavingsDiscount(subtotal, bulkSavingsEligible, bulkSavingsConfig);
+ const bulkSavingsResult = calculateBulkSavingsDiscount(discountBase, bulkSavingsEligible, bulkSavingsConfig);
  // Free shipping is a perk of reaching the bulk-savings threshold OR of an
  // active membership tier whose plan includes free shipping. Both are
  // account-tied and evaluated server-side.
  const shipping = (bulkSavingsResult.tier || memberPerks.freeShipping)
    ? 0
    : roundMoney(calculateShipping(subtotal, payload.customer.country, shippingConfig));
- const buy3Get1Discount = promoBuy3Get1Enabled ? calculateBuy3Get1Discount(lineItems) : 0;
+ // With bundle stacking off, the Buy-3-Get-1 free item is valued at FULL
+ // price and competes with the bundle savings like every other candidate.
+ const buy3Get1Discount = promoBuy3Get1Enabled
+   ? calculateBuy3Get1Discount(bundleStacking
+     ? lineItems
+     : lineItems.map((line) => ({ product: { ...line.product, price: line.baseUnitPrice }, quantity: line.quantity })))
+   : 0;
  const isBuy3Get1Active = buy3Get1Discount > 0;
 
  const couponEntered = Boolean(payload.couponCode?.trim());
@@ -414,7 +434,7 @@ export async function createCheckoutSession(
  throw new Error("Coupons are currently disabled. Remove the coupon code to continue.");
  }
  const coupon = couponPolicy.couponsEnabled && couponEntered
-   ? await validateCoupon(payload.couponCode, subtotal, payload.customer.email)
+   ? await validateCoupon(payload.couponCode, discountBase, payload.customer.email, { isActiveMember: memberPerks.isActiveMember })
    : null;
 
  // Personal ambassador discount: an approved ambassador gets a discount on
@@ -422,14 +442,14 @@ export async function createCheckoutSession(
  // like every discount here, does not stack unless stacking is enabled.
  const isApprovedAmbassadorSelf = await isApprovedAmbassadorCustomer(payload.customerUserId, payload.customer.email);
  const personalDiscountAmount = isApprovedAmbassadorSelf && referralProgram.personalDiscountPercent > 0
-   ? calculateDiscountAmount(subtotal, referralProgram.personalDiscountPercent)
+   ? calculateDiscountAmount(discountBase, referralProgram.personalDiscountPercent)
    : 0;
 
  // Active-member pricing competes as one of the candidate discounts (greatest
  // savings wins, no stacking) so a member always gets at least their tier
  // discount whenever it's the best available deal.
  const memberPricingAmount = memberPerks.memberDiscountPercent > 0
-   ? calculateDiscountAmount(subtotal, memberPerks.memberDiscountPercent)
+   ? calculateDiscountAmount(discountBase, memberPerks.memberDiscountPercent)
    : 0;
 
  // Resolve the customer discount through the SHARED profit-engine rulebook, so
@@ -444,6 +464,8 @@ export async function createCheckoutSession(
  const customerDiscount = resolveCustomerDiscount(
    {
      subtotal,
+     fullSubtotal: discountBase,
+     quantityBundleSavings,
      productCost: 0,
      bundleDiscount: buy3Get1Discount,
      referralAccepted: Boolean(referral),

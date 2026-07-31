@@ -110,8 +110,8 @@ const DEFAULT_PRODUCT_FAQ: ProductFaqItem[] = [
     answer: "Most in-stock orders are prepared within one business day. You will receive secure tracking information after dispatch.",
   },
   {
-    question: "Can I combine referral codes with promotions?",
-    answer: "Referral discounts cannot be combined with Buy 3 Get 1 Free offers. Only one discount type applies per order.",
+    question: "Can I combine discounts, codes, or member pricing?",
+    answer: "No — exactly one discount applies per order. Membership pricing, promo codes, ambassador codes, bundle pricing, and promotions never combine. You don't have to figure out which is best: checkout automatically applies whichever single discount saves you the most.",
   },
 ];
 

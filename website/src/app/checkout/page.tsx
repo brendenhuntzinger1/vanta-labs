@@ -146,6 +146,8 @@ export default function CheckoutPage() {
     items,
     subtotal,
     discountAmount,
+    appliedDiscountLabel,
+    autoBestDiscountApplied,
     referralCode,
     referralDetails,
     referralError,
@@ -920,7 +922,12 @@ export default function CheckoutPage() {
                 <span className="whitespace-nowrap text-white/80">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>
               </label>
               {discountAmount > 0 ? (
-                <div className="flex justify-between"><span>{ambassadorDiscountApplied ? `Ambassador ${ambassadorDiscountPercent}% off` : "Discount"}</span><span>-{formatCartCurrency(discountAmount)}</span></div>
+                <div className="flex justify-between text-emerald-300"><span>{ambassadorDiscountApplied ? `Ambassador ${ambassadorDiscountPercent}% off` : (appliedDiscountLabel ?? "Discount")}</span><span>-{formatCartCurrency(discountAmount)}</span></div>
+              ) : null}
+              {autoBestDiscountApplied ? (
+                <p className="text-xs text-emerald-300/80">
+                  ✓ We&apos;ve automatically applied your best available discount. Only one discount applies per order.
+                </p>
               ) : null}
               {storeCreditApplied > 0 ? (
                 <div className="flex justify-between text-emerald-300"><span>Member store credit</span><span>-{formatCartCurrency(storeCreditApplied)}</span></div>
