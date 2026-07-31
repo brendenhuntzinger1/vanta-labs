@@ -53,9 +53,12 @@ export function CartDrawer() {
     bulkSavingsProgress,
     membershipTiers,
     memberDiscountPercent,
+    shippingConfig,
   } = useCart();
 
-  const shippingProgress = getShippingProgress(subtotal);
+  const freeShipThreshold = shippingConfig.freeShippingThreshold;
+
+  const shippingProgress = getShippingProgress(subtotal, freeShipThreshold);
 
   // Smart membership upsell: only for non-members, and only when joining
   // would genuinely put money in their pocket TODAY (cart savings + credit
@@ -183,7 +186,7 @@ export function CartDrawer() {
                       <div className="flex items-start justify-between gap-2">
                         <div>
                           <h3 className="text-xs font-semibold text-white sm:text-sm">{item.name}</h3>
-                          <p className="mt-1 text-xs text-zinc-400">{item.doseLabel ? `${item.doseLabel} • ` : ""}Batch {item.batchNumber}</p>
+                          <p className="mt-1 text-xs text-zinc-400">{item.doseLabel ? `${item.doseLabel}${item.batchNumber ? " • " : ""}` : ""}{item.batchNumber ? `Batch ${item.batchNumber}` : ""}</p>
                           {activeRate > 0 ? (
                             <span className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-amber-200/30 bg-amber-200/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
                               Bundle · {Math.round(activeRate * 100)}% off applied
@@ -382,7 +385,7 @@ export function CartDrawer() {
               ) : (
                 <div>
                   <div className="flex justify-between text-sm mb-2">
-                    <span className="text-zinc-400">Free shipping at $250</span>
+                    <span className="text-zinc-400">Free shipping at {formatCartCurrency(freeShipThreshold)}</span>
                     <span className="text-white font-semibold">${shippingProgress.amountToFreeShipping.toFixed(2)} more</span>
                   </div>
                   <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden">

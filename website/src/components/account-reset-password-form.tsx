@@ -15,14 +15,35 @@ export function AccountResetPasswordForm() {
 
   useEffect(() => {
     let active = true;
-    (async () => {
-      const { data } = await supabase.auth.getSession();
-      if (active) {
-        setHasRecoverySession(Boolean(data.session));
+
+    // SECURITY: only a genuine PASSWORD RECOVERY session may change the password
+    // here without re-entering the current one. A normally logged-in user has a
+    // live Supabase session too — accepting that would let anyone with a
+    // hijacked open session silently reset the owner's password (the settings
+    // page deliberately re-authenticates for exactly this reason). We recognize
+    // recovery via the `type=recovery` marker Supabase puts in the URL hash and
+    // the PASSWORD_RECOVERY auth event, and accept nothing else.
+    const hash = typeof window !== "undefined" ? window.location.hash : "";
+    const looksLikeRecoveryLink = hash.includes("type=recovery") || hash.includes("access_token=");
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event) => {
+      if (event === "PASSWORD_RECOVERY" && active) {
+        setHasRecoverySession(true);
       }
+    });
+
+    (async () => {
+      // Give Supabase a moment to process the recovery token in the URL, then
+      // decide. A live session that did NOT arrive via a recovery link is
+      // rejected (the user is sent to forgot-password to get a real link).
+      const { data } = await supabase.auth.getSession();
+      if (!active) return;
+      setHasRecoverySession(Boolean(data.session) && looksLikeRecoveryLink);
     })();
+
     return () => {
       active = false;
+      sub.subscription.unsubscribe();
     };
   }, []);
 

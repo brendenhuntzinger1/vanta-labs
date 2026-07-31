@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getSubscribeSaveConfig } from "@/lib/admin-control";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { getRequestIpAddress } from "@/lib/admin-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +26,16 @@ export async function GET() {
 // charges — it activates only once a recurring payment processor is connected.
 export async function POST(request: Request) {
   try {
+    // Public write with the service-role key — throttle it (mirrors the other
+    // public write endpoints) so it can't be looped to flood product_subscriptions.
+    const ip = getRequestIpAddress(request) ?? "unknown";
+    const limit = await checkRateLimit(`subscribe-save:${ip}`, 10, 3600);
+    if (!limit.allowed) {
+      const res = NextResponse.json({ success: false, error: "Too many requests. Please try again later." }, { status: 429 });
+      res.headers.set("Retry-After", String(limit.retryAfterSeconds));
+      return res;
+    }
+
     const config = await getSubscribeSaveConfig();
     if (!config.enabled) {
       return NextResponse.json({ success: false, error: "Subscriptions aren't available yet." }, { status: 400 });

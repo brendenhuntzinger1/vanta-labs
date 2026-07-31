@@ -4,6 +4,8 @@ import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { isCheckoutOpen } from "@/lib/payment-provider";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { getRequestIpAddress } from "@/lib/admin-auth";
 import type { CustomerInput } from "@/lib/payment-types";
 
 function hasRequiredAcknowledgements(value: unknown) {
@@ -36,6 +38,22 @@ export async function POST(request: Request) {
         },
         { status: 503 },
       );
+    }
+
+    // Order creation is the most expensive public write on the site — each
+    // success inserts an order + items and takes a timed inventory hold. Throttle
+    // it (a real shopper places one order) to blunt order-spam and the
+    // denial-of-inventory abuse of holding scarce stock in "reserved" via a
+    // scripted loop. Keyed on the platform-trusted client IP; fails open.
+    const ip = getRequestIpAddress(request) ?? "unknown";
+    const rateLimit = await checkRateLimit(`create-session:${ip}`, 8, 60);
+    if (!rateLimit.allowed) {
+      const res = NextResponse.json(
+        { success: false, error: "You're checking out too frequently. Please wait a moment and try again." },
+        { status: 429 },
+      );
+      res.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
+      return res;
     }
 
     const body = await request.json();
@@ -80,6 +98,15 @@ export async function POST(request: Request) {
       pointsToRedeem: customerUserId ? Number(body.pointsToRedeem ?? 0) : 0,
       shippingProtection: Boolean(body.shippingProtection),
       paymentMethod: body.paymentMethod,
+      idempotencyKey: typeof body.idempotencyKey === "string" ? body.idempotencyKey : undefined,
+      billing: body.billing && typeof body.billing === "object"
+        ? {
+            fullName: String(body.billing.fullName ?? "").slice(0, 200),
+            address: String(body.billing.address ?? "").slice(0, 300),
+            city: String(body.billing.city ?? "").slice(0, 120),
+            postalCode: String(body.billing.postalCode ?? "").slice(0, 20),
+          }
+        : undefined,
     });
 
     // If they opted into offers/coupons at checkout, add them (guest or account)

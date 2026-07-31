@@ -58,11 +58,16 @@ function normalizeIpAddress(raw: string | null | undefined) {
 }
 
 export function getRequestIpAddress(request: Request) {
-  return normalizeIpAddress(
-    request.headers.get("x-forwarded-for")
-    ?? request.headers.get("x-real-ip")
-    ?? null,
-  );
+  // Prefer headers the hosting proxy (Vercel) sets itself and that a client
+  // cannot forge: x-vercel-forwarded-for and x-real-ip are overwritten at the
+  // edge with the true client IP. x-forwarded-for is only a last resort — a
+  // client can PREPEND spoofed entries to it, so its leftmost token is
+  // attacker-controlled and must never be the primary lockout key.
+  const trusted = request.headers.get("x-vercel-forwarded-for") ?? request.headers.get("x-real-ip");
+  if (trusted && trusted.trim()) {
+    return normalizeIpAddress(trusted);
+  }
+  return normalizeIpAddress(request.headers.get("x-forwarded-for") ?? null);
 }
 
 export function getRequestUserAgent(request: Request) {

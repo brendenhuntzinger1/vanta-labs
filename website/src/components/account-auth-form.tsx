@@ -230,18 +230,16 @@ export function AccountAuthForm() {
         throw new Error(signUpError?.message ?? "Unable to create account");
       }
 
-      // Supabase's anti-enumeration behavior returns an obfuscated user with an
-      // empty identities array (and sends NO email) when the address is already
-      // registered. Detect that and point them to sign in instead of telling
-      // them to check for an email that will never arrive.
-      if (Array.isArray(data.user.identities) && data.user.identities.length === 0) {
-        setMode("login");
-        setMessage("That email is already registered. Please sign in below.");
-        return;
-      }
-
+      // SECURITY: Supabase intentionally returns an obfuscated user with an
+      // empty identities array (and sends no email) when the address already
+      // exists — precisely so signup can't be used to enumerate which emails
+      // have accounts. Branching the UI on that signal would re-expose it. We
+      // therefore show the SAME neutral outcome whether the email is new or
+      // already registered; the emailed link (confirm vs. "you already have an
+      // account, sign in") resolves the distinction privately, to the inbox
+      // owner only. A brand-new signup that returns a session still proceeds.
       if (!data.session?.access_token) {
-        setMessage("Check your email to confirm your account, then come back and sign in.");
+        setMessage("Check your email to continue — we've sent a secure link to finish setting up or accessing your account.");
         return;
       }
 

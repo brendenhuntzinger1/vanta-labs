@@ -129,6 +129,10 @@ const CartContext = createContext<CartContextValue | undefined>(undefined);
 
 const CART_STORAGE_KEY = "vanta-labs-cart";
 const REFERRAL_COOKIE_KEY = "vl_referral_code";
+// Hard per-line quantity ceiling for the cart. Prevents absurd quantities
+// (999+) that would only fail at order submit, or on untracked inventory be
+// silently accepted.
+const MAX_LINE_QUANTITY = 99;
 
 function calculateBuy3Get1Discount(items: CartItem[], bundleConfig: BundleConfig = DEFAULT_BUNDLE_CONFIG, useBundledPrices = true) {
   const expandedPrices: number[] = [];
@@ -155,6 +159,41 @@ function formatCurrency(value: number) {
     style: "currency",
     currency: "USD",
   }).format(value);
+}
+
+// Defensively validate persisted cart items. A corrupted or tampered
+// localStorage entry (price: null, quantity: "abc", missing slug) would
+// otherwise flow into every subtotal as $NaN and leave the cart unrecoverable
+// (a NaN quantity can't even be decremented to 0). Drop anything malformed and
+// coerce quantities to a sane 1..99, so the cart always renders real numbers.
+function sanitizeCartItems(raw: unknown): CartItem[] {
+  if (!Array.isArray(raw)) return [];
+  const cleaned: CartItem[] = [];
+  for (const entry of raw) {
+    if (!entry || typeof entry !== "object") continue;
+    const record = entry as Partial<CartItem>;
+    const price = Number(record.price);
+    const slug = typeof record.slug === "string" ? record.slug.trim() : "";
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    if (!Number.isFinite(price) || price < 0 || !slug || !name) continue;
+    const quantity = Math.max(1, Math.min(99, Math.floor(Number(record.quantity))));
+    if (!Number.isFinite(quantity)) continue;
+    const fallbackKey = record.variantId ? `${slug}::${record.variantId}` : slug;
+    cleaned.push({
+      key: typeof record.key === "string" && record.key ? record.key : fallbackKey,
+      variantId: record.variantId,
+      doseLabel: record.doseLabel,
+      sku: record.sku,
+      slug,
+      name,
+      price,
+      quantity,
+      batchNumber: typeof record.batchNumber === "string" ? record.batchNumber : "",
+      image: typeof record.image === "string" ? record.image : "",
+      stockStatus: typeof record.stockStatus === "string" ? record.stockStatus : "In Stock",
+    });
+  }
+  return cleaned;
 }
 
 function isReferralValid(code: ReferralCode) {
@@ -208,6 +247,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // authoritative server discount — a hardcoded value here would trip the
   // anti-tamper "Altered total" guard the moment an admin changed the percent.
   const [referralDiscountPercent, setReferralDiscountPercent] = useState(10);
+  // Admin-configured minimum merchandise subtotal to use a referral code —
+  // loaded from the same config the server enforces so the client gate matches
+  // the real charge (a hardcoded value drifts the moment an admin changes it).
+  const [referralMinimumOrder, setReferralMinimumOrder] = useState<number>(DEFAULT_MINIMUM_QUALIFYING_ORDER);
   const [shippingConfig, setShippingConfig] = useState<ShippingConfig>(DEFAULT_SHIPPING_CONFIG);
   const [isEligibleForBulkSavings, setIsEligibleForBulkSavings] = useState(false);
   const [bulkSavingsConfig, setBulkSavingsConfig] = useState<BulkSavingsConfig>(DEFAULT_BULK_SAVINGS_CONFIG);
@@ -279,11 +322,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; membershipTiers?: MembershipTierSummary[] };
+        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; referralMinimumOrder?: number; membershipTiers?: MembershipTierSummary[] };
         if (result.success) {
           setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
           if (result.bundleConfig) setBundleConfig(result.bundleConfig);
           setBundleStacking(result.bundleStacking === true);
+          if (Number.isFinite(result.referralMinimumOrder)) {
+            setReferralMinimumOrder(Number(result.referralMinimumOrder));
+          }
           if (result.salesTax) {
             setSalesTaxConfig({
               nexusStates: Array.isArray(result.salesTax.nexusStates) ? result.salesTax.nexusStates : [],
@@ -333,15 +379,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           };
 
           if (Array.isArray(parsed.items)) {
-            const normalized = parsed.items.map((item) => {
-              const record = item as CartItem;
-              const fallbackKey = record.variantId ? `${record.slug}::${record.variantId}` : record.slug;
-              return {
-                ...record,
-                key: record.key ?? fallbackKey,
-              };
-            });
-            setItems(normalized);
+            setItems(sanitizeCartItems(parsed.items));
           }
 
           if (typeof parsed.referralCode === "string") {
@@ -384,6 +422,29 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     };
 
     loadPersistedCart();
+
+    // Cross-tab sync: when another tab writes the cart (adds an item, or empties
+    // it after checkout), mirror that here. Without this, a second tab holds a
+    // stale in-memory cart and can "resurrect" a just-purchased cart or clobber
+    // the other tab's changes on its next save (last-writer-wins).
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== CART_STORAGE_KEY) return;
+      try {
+        if (!event.newValue) {
+          setItems([]);
+          return;
+        }
+        const parsed = JSON.parse(event.newValue) as { items?: unknown; referralCode?: string | null };
+        setItems(sanitizeCartItems(parsed.items));
+        if (typeof parsed.referralCode === "string" || parsed.referralCode === null) {
+          setReferralCode(parsed.referralCode ?? null);
+        }
+      } catch {
+        // Ignore a malformed cross-tab write; our own state stays intact.
+      }
+    };
+    window.addEventListener("storage", handleStorage);
+    return () => window.removeEventListener("storage", handleStorage);
   }, []);
 
   useEffect(() => {
@@ -533,12 +594,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const discountBase = bundleStacking ? subtotal : fullSubtotal;
   const competeWithBundle = (raw: number) => Math.max(0, Math.round((raw - quantityBundleSavings) * 100) / 100);
 
-  // Abandoned-cart-recovery tracking: fires a debounced snapshot whenever
-  // the cart has items and an email is known (signed-in account, or typed
-  // into the checkout email field via setKnownEmail). Fire-and-forget -
-  // failures here must never affect the shopping experience.
+  // Abandoned-cart-recovery tracking: fires a debounced snapshot only for a
+  // SIGNED-IN shopper. /api/cart/track is auth-gated and always sources the
+  // email from the session, so posting a guest's typed email did nothing but
+  // ship their PII + full cart to the server pointlessly — we no longer send
+  // the email at all, and skip the effect entirely for guests. Fire-and-forget.
   useEffect(() => {
-    if (!cartSessionId || items.length === 0 || !knownEmail.trim() || !/^\S+@\S+\.\S+$/.test(knownEmail)) {
+    if (!isSignedIn || !cartSessionId || items.length === 0) {
       return;
     }
 
@@ -548,7 +610,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: cartSessionId,
-          email: knownEmail,
           customerName: customerName || undefined,
           items: items.map((item) => ({
             slug: item.slug,
@@ -566,7 +627,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     }, 1500);
 
     return () => clearTimeout(timeout);
-  }, [cartSessionId, items, knownEmail, customerName, subtotal]);
+  }, [isSignedIn, cartSessionId, items, customerName, subtotal]);
 
   const totalQuantity = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
   const isBuy3Get1FreeEligible = useMemo(
@@ -833,7 +894,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       if (quantity <= 0) {
         return currentItems.filter((item) => item.key !== slug);
       }
-      return currentItems.map((item) => (item.key === slug ? { ...item, quantity } : item));
+      // Clamp to a sane per-line maximum so a shopper can't tap "+" up to 999
+      // and only discover the problem at order submit (the PDP already caps
+      // per-vial quantity at its bundle tiers; this is the cart-side backstop).
+      const clamped = Math.min(Math.max(1, Math.floor(quantity)), MAX_LINE_QUANTITY);
+      return currentItems.map((item) => (item.key === slug ? { ...item, quantity: clamped } : item));
     });
   };
 
@@ -912,10 +977,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (subtotal < DEFAULT_MINIMUM_QUALIFYING_ORDER) {
+    if (subtotal < referralMinimumOrder) {
       setReferralDetails(null);
       setReferralCode(null);
-      setReferralError(`Referral codes require a minimum order of ${formatCurrency(DEFAULT_MINIMUM_QUALIFYING_ORDER)}. Add more items to use one.`);
+      setReferralError(`Referral codes require a minimum order of ${formatCurrency(referralMinimumOrder)}. Add more items to use one.`);
       setReferralSuccess(null);
       return;
     }

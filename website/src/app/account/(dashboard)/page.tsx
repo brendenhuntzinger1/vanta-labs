@@ -15,6 +15,7 @@ import {
 } from "@/lib/membership";
 import { getActiveCouponsForDisplay } from "@/lib/coupons";
 import { getLifetimeSavings } from "@/lib/member-savings";
+import { getApprovedPartnerByAuthUserId } from "@/lib/partner-portal";
 import { ReorderButton } from "@/components/reorder-button";
 import { ReferralLinkCopyButton } from "@/components/referral-link-copy-button";
 import { MembershipBillingPanel } from "@/components/membership-billing-panel";
@@ -49,13 +50,20 @@ export default async function AccountDashboardPage() {
   // `membership` is critical to the whole dashboard, so it stays uncaught. The
   // remaining queries degrade to safe defaults so one failing section doesn't
   // blank the entire page.
+  // The public referral / "share to earn" program belongs to APPROVED
+  // ambassadors only — a regular account must never see a referral link or
+  // bonus-share CTA. Approved status is checked server-side (ambassadors table)
+  // so the panel can't be surfaced by a client-set flag.
+  const approvedAmbassador = await getApprovedPartnerByAuthUserId(user.id).catch(() => null);
+  const isAmbassador = Boolean(approvedAmbassador);
+
   const [orders, membership, pointsBalance, pointsHistory, referralEarnedPoints, referralCode, activeCoupons, pointsMultiplier, lifetimeSavings] = await Promise.all([
     getCustomerOrders(user.id, user.email).catch(() => []),
     getCustomerMembership(user.id),
     getPointsBalance(user.id).catch(() => 0),
     getPointsHistory(user.id, 15).catch(() => []),
-    getReferralEarnedPoints(user.id).catch(() => 0),
-    getOrCreateReferralCode(user.id).catch(() => ""),
+    isAmbassador ? getReferralEarnedPoints(user.id).catch(() => 0) : Promise.resolve(0),
+    isAmbassador ? getOrCreateReferralCode(user.id).catch(() => "") : Promise.resolve(""),
     getActiveCouponsForDisplay().catch(() => []),
     getActivePointsMultiplier().catch(() => ({ multiplier: 1, eventName: null })),
     getLifetimeSavings(user.id),
@@ -135,11 +143,19 @@ export default async function AccountDashboardPage() {
               points per $1{pointsMultiplier.multiplier > 1 ? ` · ${pointsMultiplier.eventName} (${pointsMultiplier.multiplier}x active)` : ""}
             </p>
           </div>
-          <div className="vl-panel-soft rounded-xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Referral earnings</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{referralEarnedPoints.toLocaleString()} pts</p>
-            <p className="mt-1 text-xs text-zinc-500">from referred sign-ups</p>
-          </div>
+          {isAmbassador ? (
+            <div className="vl-panel-soft rounded-xl p-4">
+              <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Referral earnings</p>
+              <p className="mt-2 text-2xl font-semibold text-white">{referralEarnedPoints.toLocaleString()} pts</p>
+              <p className="mt-1 text-xs text-zinc-500">from referred sign-ups</p>
+            </div>
+          ) : (
+            <div className="vl-panel-soft rounded-xl p-4">
+              <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Free shipping</p>
+              <p className="mt-2 text-2xl font-semibold text-white">$250+</p>
+              <p className="mt-1 text-xs text-zinc-500">on every qualifying order</p>
+            </div>
+          )}
         </div>
 
         <div className="mt-5">
@@ -152,14 +168,21 @@ export default async function AccountDashboardPage() {
           </div>
         </div>
 
-        <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.03] p-4">
-          <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Your referral link</p>
-          <div className="mt-2 flex flex-wrap items-center gap-2">
-            <code className="break-all rounded-lg bg-black/30 px-3 py-2 text-xs text-zinc-300">{referralUrl}</code>
-            {hasShareableReferralLink ? <ReferralLinkCopyButton url={referralUrl} /> : null}
+        {/* Referral / share-to-earn is an APPROVED-AMBASSADOR benefit only.
+            Regular accounts never see a referral link or bonus CTA. */}
+        {isAmbassador ? (
+          <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs uppercase tracking-[0.2em] text-zinc-500">Your referral link</p>
+              <Link href="/account/ambassador" className="text-xs text-cyan-300 underline-offset-2 hover:underline">Ambassador dashboard →</Link>
+            </div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <code className="break-all rounded-lg bg-black/30 px-3 py-2 text-xs text-zinc-300">{referralUrl}</code>
+              {hasShareableReferralLink ? <ReferralLinkCopyButton url={referralUrl} /> : null}
+            </div>
+            <p className="mt-2 text-xs text-zinc-500">Share this link — new customers who sign up get a bonus, and so do you.</p>
           </div>
-          <p className="mt-2 text-xs text-zinc-500">Share this link — new customers who sign up get a bonus, and so do you.</p>
-        </div>
+        ) : null}
       </section>
 
       {activeCoupons.length > 0 ? (

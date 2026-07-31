@@ -12,6 +12,7 @@ import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ManualPaymentInstructions } from "@/components/manual-payment-instructions";
+import { PaymentMethodPicker } from "@/components/payment-method-picker";
 import {
   calculateCardProcessingFee,
   getEnabledPaymentMethods,
@@ -327,6 +328,11 @@ export default function CheckoutPage() {
   // pass the state check and create two orders (each taking an inventory hold).
   // This ref updates immediately, closing that window.
   const submitLatchRef = useRef(false);
+  // Idempotency key for this checkout submit. Generated once, reused across
+  // retries of the SAME order attempt (so a lost response + retry can't create
+  // two orders), and cleared only after a real success so a later distinct
+  // order gets a fresh key.
+  const idempotencyKeyRef = useRef<string | null>(null);
   // Lets a failed validation scroll the shopper back up to the form fields
   // (with their inline errors) instead of leaving them at the submit button.
   const shippingSectionRef = useRef<HTMLElement | null>(null);
@@ -420,6 +426,11 @@ export default function CheckoutPage() {
 
     if (isSubmitting || submitLatchRef.current) return;
     submitLatchRef.current = true;
+    if (!idempotencyKeyRef.current) {
+      idempotencyKeyRef.current = typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `idem-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+    }
 
     setCheckoutState("loading");
     setCheckoutMessage(null);
@@ -459,6 +470,7 @@ export default function CheckoutPage() {
         expectedTotal: total,
         paymentMethod: selectedMethodId || undefined,
         complianceAcknowledgements: acknowledgements,
+        idempotencyKey: idempotencyKeyRef.current,
       };
 
       const result = await createSecureCheckoutSession(payload);
@@ -469,6 +481,9 @@ export default function CheckoutPage() {
       if (result.isManualPayment) {
         const method = getPaymentMethodById(paymentMethods, result.paymentMethod) ?? selectedMethod;
         if (method) {
+          // Order placed — this attempt is done; a later distinct order gets a
+          // fresh idempotency key.
+          idempotencyKeyRef.current = null;
           setCreatedOrder({
             orderId: result.orderId,
             orderNumber: result.orderNumber,
@@ -476,6 +491,8 @@ export default function CheckoutPage() {
             amountDue: Number(result.total ?? finalTotal),
           });
           if (typeof window !== "undefined") window.scrollTo({ top: 0, behavior: "smooth" });
+          // Intentionally do NOT reset the submit latch — the view switches to
+          // the manual-payment screen and this checkout attempt is complete.
           return;
         }
       }
@@ -484,6 +501,10 @@ export default function CheckoutPage() {
       // Otherwise (test mode / no live processor) treat the order as placed:
       // clear the cart and send the shopper to the confirmation page so they
       // always get a proper thank-you + order number instead of a dead end.
+      // The submit latch is deliberately LEFT ENGAGED on both navigation paths:
+      // the page unloads on redirect, so re-enabling the button here would only
+      // open a duplicate-order window while the redirect is still in flight.
+      idempotencyKeyRef.current = null;
       if (result.hostedCheckoutUrl) {
         window.location.assign(result.hostedCheckoutUrl);
       } else {
@@ -491,9 +512,10 @@ export default function CheckoutPage() {
         window.location.assign(`/order-confirmation/${result.orderId}`);
       }
     } catch (error) {
+      // Only an ERROR reopens the button for a retry (which reuses the same
+      // idempotency key, so a server-committed-but-lost order won't duplicate).
       setCheckoutState("idle");
       setCheckoutMessage(error instanceof Error ? error.message : "Checkout could not be created.");
-    } finally {
       setIsSubmitting(false);
       submitLatchRef.current = false;
     }
@@ -951,6 +973,22 @@ export default function CheckoutPage() {
                 </p>
               ) : null}
             </div>
+
+            {/* Payment method chooser — shown only when more than one method is
+                enabled (today card is the only one, so this stays hidden until a
+                manual method like Cash App / Zelle is turned on in admin). The
+                server honors the chosen method authoritatively. */}
+            {paymentMethods.length > 1 ? (
+              <div className="mt-6">
+                <PaymentMethodPicker
+                  methods={paymentMethods}
+                  cardFeeConfig={cardFeeConfig}
+                  baseTotal={total}
+                  selectedMethodId={selectedMethodId}
+                  onSelect={setSelectedMethodId}
+                />
+              </div>
+            ) : null}
 
             <label className="mt-5 flex cursor-pointer items-start gap-2.5 text-sm text-white/70">
               <input type="checkbox" checked={marketingOptIn} onChange={(e) => setMarketingOptIn(e.target.checked)} className="mt-0.5 h-4 w-4 accent-emerald-500" />

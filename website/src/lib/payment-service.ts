@@ -74,6 +74,16 @@ export interface CreateCheckoutPayload {
  pointsToRedeem?: number;
  shippingProtection?: boolean;
  paymentMethod?: string;
+ /** Client-generated UUID, stable across retries of the SAME checkout submit.
+  *  Dedupes order creation so a lost response + user retry can't double-order. */
+ idempotencyKey?: string;
+ /** Billing address (persisted for the card processor's AVS). Optional. */
+ billing?: {
+   fullName?: string;
+   address?: string;
+   city?: string;
+   postalCode?: string;
+ };
 }
 
 // Short, human-friendly order number a customer can copy into a Cash App /
@@ -646,9 +656,63 @@ export async function createCheckoutSession(
  const orderNumber = generateOrderNumber();
  const provider = getPaymentProvider();
 
+ // Idempotency: if this exact submit was already turned into an order (a lost
+ // response then a user/network retry re-POSTs the same key), return that
+ // existing order instead of creating a second one with its own inventory
+ // hold. Best-effort — silently skipped if the column/migration isn't present.
+ const idempotencyKey = typeof payload.idempotencyKey === "string" && payload.idempotencyKey.trim()
+   ? payload.idempotencyKey.trim().slice(0, 64)
+   : null;
+ if (idempotencyKey) {
+   try {
+     const { data: existing } = await supabaseAdmin
+       .from("orders")
+       .select("order_id, order_number, payment_id, payment_method, amount_paid, card_processing_fee, card_processing_fee_percent, payment_status")
+       .eq("idempotency_key", idempotencyKey)
+       .not("payment_status", "in", "(canceled,cancelled,payment_failed)")
+       .maybeSingle();
+     if (existing) {
+       const existingIsManual = isManualPaymentMethod(getPaymentMethodById(paymentMethods, String(existing.payment_method ?? "")));
+       let existingHostedUrl = "";
+       if (!existingIsManual) {
+         try {
+           const resumed = await provider.createCheckoutSession({
+             orderId: String(existing.order_id),
+             customerEmail: payload.customer.email,
+             amount: Math.round(Number(existing.amount_paid ?? 0) * 100),
+             currency: payload.currency ?? "USD",
+             metadata: { orderId: String(existing.order_id), orderNumber: String(existing.order_number) },
+           });
+           existingHostedUrl = resumed.hostedCheckoutUrl ?? "";
+         } catch {
+           existingHostedUrl = "";
+         }
+       }
+       return {
+         orderId: String(existing.order_id),
+         orderNumber: String(existing.order_number),
+         status: "pending_payment",
+         total: Number(existing.amount_paid ?? finalTotal),
+         subtotal,
+         shipping,
+         discountAmount,
+         paymentMethod: String(existing.payment_method ?? selectedMethod.id),
+         isManualPayment: existingIsManual,
+         cardProcessingFee: Number(existing.card_processing_fee ?? 0),
+         cardProcessingFeePercent: Number(existing.card_processing_fee_percent ?? 0),
+         paymentId: String(existing.payment_id ?? existing.order_id),
+         hostedCheckoutUrl: existingHostedUrl,
+       };
+     }
+   } catch {
+     // Column missing or lookup failed — proceed to create normally.
+   }
+ }
+
  const baseOrderRow: Record<string, unknown> = {
    order_id: orderId,
    order_number: orderNumber,
+   idempotency_key: idempotencyKey,
    payment_id: null,
    payment_method: selectedMethod.id,
    card_processing_fee: cardFee.amount,
@@ -686,10 +750,15 @@ export async function createCheckoutSession(
  // migration hasn't been applied yet, fall back to inserting without them so
  // checkout NEVER breaks over a missing column. tax_amount itself is an
  // original column and always stored (in baseOrderRow above).
+ const billing = payload.billing;
  const orderRowWithContact = {
    ...baseOrderRow,
    state: payload.customer.state ?? null,
    phone: payload.customer.phone ?? null,
+   billing_full_name: billing?.fullName ? sanitizeText(billing.fullName) : null,
+   billing_address: billing?.address ? sanitizeText(billing.address) : null,
+   billing_city: billing?.city ? sanitizeText(billing.city) : null,
+   billing_postal_code: billing?.postalCode ? sanitizeText(billing.postalCode) : null,
    // Exact tax audit trail: the rate applied and the destination state it
    // was applied for (null when no tax was collected), so the admin tax
    // report can group collections by state without re-deriving rates.
@@ -697,22 +766,58 @@ export async function createCheckoutSession(
    tax_state: taxQuote.collected ? taxQuote.state : null,
  };
 
+ // A unique-index violation on idempotency_key means a truly-simultaneous
+ // duplicate submit beat us to the insert — return that order rather than
+ // erroring, so the user's retry lands on their real (single) order.
+ const returnExistingByIdempotency = async () => {
+   if (!idempotencyKey) return null;
+   const { data: existing } = await supabaseAdmin
+     .from("orders")
+     .select("order_id, order_number, payment_id, payment_method, amount_paid, card_processing_fee, card_processing_fee_percent, payment_status")
+     .eq("idempotency_key", idempotencyKey)
+     .maybeSingle();
+   if (!existing) return null;
+   const existingIsManual = isManualPaymentMethod(getPaymentMethodById(paymentMethods, String(existing.payment_method ?? "")));
+   return {
+     orderId: String(existing.order_id),
+     orderNumber: String(existing.order_number),
+     status: "pending_payment" as const,
+     total: Number(existing.amount_paid ?? finalTotal),
+     subtotal,
+     shipping,
+     discountAmount,
+     paymentMethod: String(existing.payment_method ?? selectedMethod.id),
+     isManualPayment: existingIsManual,
+     cardProcessingFee: Number(existing.card_processing_fee ?? 0),
+     cardProcessingFeePercent: Number(existing.card_processing_fee_percent ?? 0),
+     paymentId: String(existing.payment_id ?? existing.order_id),
+     hostedCheckoutUrl: "",
+   };
+ };
+
+ // Try the full row (contact + idempotency); on a missing-column error, retry
+ // without the newer columns so checkout never breaks pre-migration.
+ const baseWithoutIdempotency = { ...baseOrderRow };
+ delete (baseWithoutIdempotency as Record<string, unknown>).idempotency_key;
  let orderInsertError = (await supabaseAdmin.from("orders").insert(orderRowWithContact)).error;
+ if (orderInsertError && orderInsertError.code === "23505") {
+   const dup = await returnExistingByIdempotency();
+   if (dup) return dup;
+ }
  if (orderInsertError) {
-   // Only retry-without-contact when the error genuinely signals a missing
-   // column — the PGRST204 schema-cache code, or a message that names the new
-   // column AND says it's unknown. The previous broad match ("state"/"phone"/
-   // "column" anywhere) could swallow an unrelated error and silently drop the
-   // customer's state/phone.
    const message = String(orderInsertError.message ?? "").toLowerCase();
-   const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state");
+   const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state") || message.includes("idempotency_key") || message.includes("billing_");
    const looksLikeMissingColumn = message.includes("does not exist")
      || message.includes("schema cache")
      || message.includes("could not find")
      || message.includes("unknown column");
    const missingColumn = orderInsertError.code === "PGRST204" || (mentionsNewColumn && looksLikeMissingColumn);
    if (missingColumn) {
-     orderInsertError = (await supabaseAdmin.from("orders").insert(baseOrderRow)).error;
+     orderInsertError = (await supabaseAdmin.from("orders").insert(baseWithoutIdempotency)).error;
+     if (orderInsertError && orderInsertError.code === "23505") {
+       const dup = await returnExistingByIdempotency();
+       if (dup) return dup;
+     }
    }
  }
 
