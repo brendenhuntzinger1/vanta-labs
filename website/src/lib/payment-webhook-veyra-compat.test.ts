@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { resolveWebhookOrderId } from "@/lib/payment-webhook";
+import {
+  resolveWebhookOrderId,
+  getOrderStatusForEventType,
+  isRecognisedMoneyEvent,
+} from "@/lib/payment-webhook";
 
 // VeyraGate and the internal/mock gateway describe the same event differently.
 // LivePaymentProvider already opens sessions with `metadata: { order_id }` — its
@@ -39,5 +43,43 @@ describe("resolveWebhookOrderId", () => {
     expect(resolveWebhookOrderId({})).toBeNull();
     expect(resolveWebhookOrderId({ data: {} })).toBeNull();
     expect(resolveWebhookOrderId({ data: { metadata: {} } })).toBeNull();
+  });
+});
+
+// The live endpoint for this store subscribes to `charge.succeeded`, `charge.failed`,
+// `charge.refunded`, `payout.paid`, `dispute.created`, `dispute.evidence_required`
+// AND '*'. VeyraGate remaps `charge.*` to `payment.*` for merchants, but a '*'
+// subscription surfaces the unmapped internal name — so both vocabularies arrive.
+describe("getOrderStatusForEventType — VeyraGate event names", () => {
+  it("marks a charge.succeeded paid, like payment.succeeded", () => {
+    expect(getOrderStatusForEventType("charge.succeeded")).toBe("paid");
+    expect(getOrderStatusForEventType("payment.succeeded")).toBe("paid");
+  });
+
+  it("maps the remaining charge.* aliases", () => {
+    expect(getOrderStatusForEventType("charge.failed")).toBe("payment_failed");
+    expect(getOrderStatusForEventType("charge.refunded")).toBe("refunded");
+  });
+
+  it("maps Veyra's dispute.* onto the internal chargeback vocabulary", () => {
+    expect(getOrderStatusForEventType("dispute.created")).toBe("refunded");
+    expect(getOrderStatusForEventType("chargeback.created")).toBe("refunded");
+  });
+});
+
+describe("isRecognisedMoneyEvent", () => {
+  it("recognises the events that genuinely move money", () => {
+    for (const t of ["charge.succeeded", "payment.succeeded", "charge.refunded", "dispute.created"]) {
+      expect(isRecognisedMoneyEvent(t)).toBe(true);
+    }
+  });
+
+  it("does not recognise notifications that say nothing about payment state", () => {
+    // These arrive because of the '*' subscription. They must never be treated as
+    // a payment state — getOrderStatusForEventType maps them to "pending_payment"
+    // via its default, which would demote a PAID order to unpaid.
+    for (const t of ["payout.paid", "dispute.evidence_required", "something.new", ""]) {
+      expect(isRecognisedMoneyEvent(t)).toBe(false);
+    }
   });
 });

@@ -34,20 +34,47 @@ export interface CommissionState {
 
 export function getOrderStatusForEventType(eventType: string): OrderStatus {
   switch (eventType) {
+    // VeyraGate remaps its internal `charge.*` to `payment.*` for merchants, but a
+    // subscription that includes '*' surfaces the UNMAPPED internal name — and the
+    // live endpoint for this store subscribes to both `charge.succeeded` and '*'.
+    // Without these aliases a real successful charge falls to the default below and
+    // the order is never marked paid.
     case "payment.succeeded":
+    case "charge.succeeded":
       return "paid";
     case "payment.failed":
+    case "charge.failed":
       return "payment_failed";
     case "payment.canceled":
+    case "charge.canceled":
       return "canceled";
     case "refund.completed":
+    case "charge.refunded":
       return "refunded";
+    // Veyra names these `dispute.*`; the internal vocabulary here is `chargeback.*`.
     case "chargeback.created":
     case "chargeback.lost":
+    case "dispute.created":
+    case "dispute.lost":
       return "refunded";
     default:
       return "pending_payment";
   }
+}
+
+/**
+ * Does this event type actually describe a money state we recognise?
+ *
+ * A '*' subscription delivers events that say nothing about an order's payment
+ * state — `payout.paid`, `dispute.evidence_required`, and anything Veyra adds
+ * later. getOrderStatusForEventType maps all of those to "pending_payment" via its
+ * default, so without this check an unrecognised event could write "pending_payment"
+ * over an order that is already PAID: the customer's money is taken and the order
+ * reads unpaid. The existing demotion guard only covers payment_failed/canceled,
+ * so it would not catch it.
+ */
+export function isRecognisedMoneyEvent(eventType: string): boolean {
+  return getOrderStatusForEventType(eventType) !== "pending_payment";
 }
 
 export interface RefundOutcome {
@@ -1056,7 +1083,15 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // order that is already PAID — that would void the ambassador's earned
   // commission and restock sold inventory. Only a genuine refund/chargeback
   // (nextStatus "refunded") may leave the paid state. Record against paid + stop.
-  if (priorPaymentStatus === "paid" && (nextStatus === "payment_failed" || nextStatus === "canceled")) {
+  // "pending_payment" is included because it is what getOrderStatusForEventType
+  // returns for ANY event it does not recognise — and a '*' subscription delivers
+  // plenty of those (payout.paid, dispute.evidence_required, anything added later).
+  // Without it, an unrelated notification demotes a paid order to unpaid: the money
+  // is taken and the order says otherwise.
+  if (
+    priorPaymentStatus === "paid" &&
+    (nextStatus === "payment_failed" || nextStatus === "canceled" || nextStatus === "pending_payment")
+  ) {
     await markEventProcessed(eventId, orderId, "paid");
     return {
       duplicate: false,
