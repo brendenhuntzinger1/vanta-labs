@@ -41,6 +41,44 @@ function seededRand(seed: number) {
   };
 }
 
+describe("quantity-bundle pricing competes with percentage discounts (no stacking)", () => {
+  // Cart: $100 at full prices, Bundle & Save already granted $10 inside the
+  // $90 subtotal. Candidates are computed on the FULL base and only apply for
+  // what they save beyond the bundle — one discount per order, best wins.
+  const bundled = { subtotal: 90, fullSubtotal: 100, quantityBundleSavings: 10 };
+
+  it("a bigger member discount replaces the bundle savings (never adds to them)", () => {
+    const d = resolveCustomerDiscount(makeOrder({ ...bundled, isMember: true, membershipPercent: 15 }), ALL);
+    // 15% of $100 = $15 raw; beyond the $10 bundle it is worth exactly $5 —
+    // final price $85 = full price with ONLY the 15% discount applied.
+    expect(d.amount).toBe(5);
+    expect(d.label).toBe("Membership pricing");
+  });
+
+  it("a smaller member discount loses to the bundle pricing entirely", () => {
+    const d = resolveCustomerDiscount(makeOrder({ ...bundled, isMember: true, membershipPercent: 8 }), ALL);
+    // 8% of $100 = $8 < $10 bundle savings already granted → nothing extra.
+    expect(d.amount).toBe(0);
+  });
+
+  it("a fixed coupon only applies for what it saves beyond the bundle", () => {
+    const d = resolveCustomerDiscount(makeOrder({ ...bundled, couponDiscount: 20 }), ALL);
+    expect(d.amount).toBe(10); // $20 coupon − $10 already granted
+    expect(d.label).toBe("Coupon");
+  });
+
+  it("a referral competes on the full base, not on top of bundle pricing", () => {
+    const d = resolveCustomerDiscount(makeOrder({ ...bundled, referralAccepted: true, referralPercent: 20 }), ALL);
+    expect(d.amount).toBe(10); // 20% of $100 = $20 − $10 bundle = $10 extra
+    expect(d.label).toBe("20% referral");
+  });
+
+  it("legacy stacking behavior is unchanged when the new fields are absent", () => {
+    const d = resolveCustomerDiscount(makeOrder({ subtotal: 90, isMember: true, membershipPercent: 15 }), ALL);
+    expect(d.amount).toBe(13.5); // 15% of the bundled $90, exactly as before
+  });
+});
+
 describe("INVARIANT — discounts never stack (bundle + referral policy)", () => {
   it("a bundle order with a referral code never applies both, and never exceeds subtotal", () => {
     const rnd = seededRand(0xBADC0DE);

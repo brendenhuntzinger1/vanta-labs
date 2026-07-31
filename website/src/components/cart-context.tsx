@@ -74,6 +74,10 @@ type CartContextValue = {
   setShippingProtectionEnabled: (enabled: boolean) => void;
   shippingProtectionFee: number;
   discountAmount: number;
+  /** Customer-facing name of the applied discount (null when none). */
+  appliedDiscountLabel: string | null;
+  /** True when the system auto-selected the best available discount. */
+  autoBestDiscountApplied: boolean;
   total: number;
   isBuy3Get1FreeActive: boolean;
   isBuy3Get1FreeEligible: boolean;
@@ -126,10 +130,12 @@ const CartContext = createContext<CartContextValue | undefined>(undefined);
 const CART_STORAGE_KEY = "vanta-labs-cart";
 const REFERRAL_COOKIE_KEY = "vl_referral_code";
 
-function calculateBuy3Get1Discount(items: CartItem[], bundleConfig: BundleConfig = DEFAULT_BUNDLE_CONFIG) {
+function calculateBuy3Get1Discount(items: CartItem[], bundleConfig: BundleConfig = DEFAULT_BUNDLE_CONFIG, useBundledPrices = true) {
   const expandedPrices: number[] = [];
   for (const item of items) {
-    const discountedUnitPrice = getBundleDiscountedUnitPrice(item.price, item.quantity, bundleConfig);
+    // With bundle stacking off, the free item is valued at FULL price and
+    // competes with the bundle savings (mirrors payment-service exactly).
+    const discountedUnitPrice = useBundledPrices ? getBundleDiscountedUnitPrice(item.price, item.quantity, bundleConfig) : item.price;
     for (let i = 0; i < item.quantity; i += 1) {
       expandedPrices.push(discountedUnitPrice);
     }
@@ -190,6 +196,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const [pointsToRedeem, setPointsToRedeemState] = useState(0);
   const [promoBuy3Get1Enabled, setPromoBuy3Get1Enabled] = useState(false);
   const [bundleConfig, setBundleConfig] = useState<BundleConfig>(DEFAULT_BUNDLE_CONFIG);
+  // Whether quantity "Bundle & Save" pricing stacks with the winning
+  // percentage discount. Default FALSE (one discount per order, best wins) —
+  // must match the server default in admin-control.ts or totals drift.
+  const [bundleStacking, setBundleStacking] = useState(false);
   const [salesTaxConfig, setSalesTaxConfig] = useState<SalesTaxConfig>(DEFAULT_SALES_TAX_CONFIG);
   const [membershipTiers, setMembershipTiers] = useState<MembershipTierSummary[]>([]);
   // Admin-configurable referral customer-discount percent, loaded from the same
@@ -269,10 +279,11 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; membershipTiers?: MembershipTierSummary[] };
+        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; membershipTiers?: MembershipTierSummary[] };
         if (result.success) {
           setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
           if (result.bundleConfig) setBundleConfig(result.bundleConfig);
+          setBundleStacking(result.bundleStacking === true);
           if (result.salesTax) {
             setSalesTaxConfig({
               nexusStates: Array.isArray(result.salesTax.nexusStates) ? result.salesTax.nexusStates : [],
@@ -508,6 +519,20 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [items, bundleConfig],
   );
 
+  // Full-price subtotal and the dollars the quantity "Bundle & Save" tiers
+  // already saved inside `subtotal`. With bundle stacking OFF (default),
+  // every percentage discount is computed on the full base and only applies
+  // for what it saves BEYOND the bundle — one discount per order, best wins.
+  // Mirrors payment-service.ts exactly (rounding included) so the preview
+  // can never fall below the server's authoritative total.
+  const fullSubtotal = useMemo(
+    () => items.reduce((sum, item) => sum + item.price * item.quantity, 0),
+    [items],
+  );
+  const quantityBundleSavings = bundleStacking ? 0 : Math.round(Math.max(0, fullSubtotal - subtotal) * 100) / 100;
+  const discountBase = bundleStacking ? subtotal : fullSubtotal;
+  const competeWithBundle = (raw: number) => Math.max(0, Math.round((raw - quantityBundleSavings) * 100) / 100);
+
   // Abandoned-cart-recovery tracking: fires a debounced snapshot whenever
   // the cart has items and an email is known (signed-in account, or typed
   // into the checkout email field via setKnownEmail). Fire-and-forget -
@@ -556,8 +581,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     return remainder === 0 ? 0 : 4 - remainder;
   }, [promoBuy3Get1Enabled, totalQuantity]);
   const buy3Get1FreeDiscount = useMemo(
-    () => (promoBuy3Get1Enabled ? calculateBuy3Get1Discount(items, bundleConfig) : 0),
-    [items, promoBuy3Get1Enabled, bundleConfig],
+    () => (promoBuy3Get1Enabled ? calculateBuy3Get1Discount(items, bundleConfig, bundleStacking) : 0),
+    [items, promoBuy3Get1Enabled, bundleConfig, bundleStacking],
   );
 
   // Reaching a bulk-savings tier grants free shipping on the server
@@ -567,8 +592,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // orders). This is a distinct check from bulkSavingsApplied below (which is
   // about which discount wins the "greatest savings" contest).
   const bulkSavingsTierReached = useMemo(
-    () => calculateBulkSavingsDiscount(subtotal, isEligibleForBulkSavings, bulkSavingsConfig).tier != null,
-    [subtotal, isEligibleForBulkSavings, bulkSavingsConfig],
+    () => calculateBulkSavingsDiscount(discountBase, isEligibleForBulkSavings, bulkSavingsConfig).tier != null,
+    [discountBase, isEligibleForBulkSavings, bulkSavingsConfig],
   );
 
   // Estimate only - no shipping address is known yet in the cart, so this
@@ -578,8 +603,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const shipping = (bulkSavingsTierReached || memberFreeShipping) ? 0 : calculateShipping(subtotal, undefined, shippingConfig);
 
   const couponDiscountAmount = useMemo(
-    () => (buy3Get1FreeDiscount > 0 || referralDetails ? 0 : calculateCouponDiscountAmount(subtotal, couponDetails)),
-    [buy3Get1FreeDiscount, referralDetails, couponDetails, subtotal],
+    () => (buy3Get1FreeDiscount > 0 || referralDetails ? 0 : calculateCouponDiscountAmount(discountBase, couponDetails)),
+    [buy3Get1FreeDiscount, referralDetails, couponDetails, discountBase],
   );
 
   // Whichever of buy3get1 / referral / coupon the customer is actually
@@ -593,43 +618,75 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       // Use the LIVE admin-configured percent (not a value snapshotted into
       // referralDetails at apply-time) so the preview can never drift from the
       // server's charge even if config finished loading after the code was set.
-      return { type: "referral" as const, amount: subtotal * (referralDiscountPercent / 100) };
+      return { type: "referral" as const, amount: discountBase * (referralDiscountPercent / 100) };
     }
     return { type: "coupon" as const, amount: couponDiscountAmount };
-  }, [buy3Get1FreeDiscount, referralDetails, subtotal, couponDiscountAmount, referralDiscountPercent]);
+  }, [buy3Get1FreeDiscount, referralDetails, discountBase, couponDiscountAmount, referralDiscountPercent]);
 
   // The elite "Exclusive Buy In Bulk Savings" benefit cannot stack with
   // anything else - it competes with whatever the customer would otherwise
   // get, and the single largest discount wins (see src/lib/discount-resolution.ts).
   const bulkSavingsResult = useMemo(
-    () => calculateBulkSavingsDiscount(subtotal, isEligibleForBulkSavings, bulkSavingsConfig),
-    [subtotal, isEligibleForBulkSavings, bulkSavingsConfig],
+    () => calculateBulkSavingsDiscount(discountBase, isEligibleForBulkSavings, bulkSavingsConfig),
+    [discountBase, isEligibleForBulkSavings, bulkSavingsConfig],
   );
 
   const memberPricingAmount = useMemo(
-    () => (memberDiscountPercent > 0 ? subtotal * (memberDiscountPercent / 100) : 0),
-    [memberDiscountPercent, subtotal],
+    () => (memberDiscountPercent > 0 ? discountBase * (memberDiscountPercent / 100) : 0),
+    [memberDiscountPercent, discountBase],
   );
 
   // Ambassadors get a personal discount on their own order (no commission). It
   // competes for best value with everything else — a bigger coupon wins, and it
   // never stacks. Mirrors payment-service.ts.
   const ambassadorPersonalAmount = useMemo(
-    () => (ambassadorDiscountPercent > 0 ? subtotal * (ambassadorDiscountPercent / 100) : 0),
-    [ambassadorDiscountPercent, subtotal],
+    () => (ambassadorDiscountPercent > 0 ? discountBase * (ambassadorDiscountPercent / 100) : 0),
+    [ambassadorDiscountPercent, discountBase],
   );
 
+  // Every candidate competes for what it saves BEYOND the bundle pricing
+  // already in the subtotal (competeWithBundle is a no-op when stacking is
+  // enabled or the cart has no bundle savings) — one discount, best wins.
   const bestDiscount = useMemo(
     () => resolveBestDiscount([
-      { type: "bulk_savings", amount: bulkSavingsResult.amount },
-      { type: "member_pricing", amount: memberPricingAmount },
-      { type: "ambassador_personal", amount: ambassadorPersonalAmount },
-      preBulkDiscount,
+      { type: "bulk_savings", amount: competeWithBundle(bulkSavingsResult.amount) },
+      { type: "member_pricing", amount: competeWithBundle(memberPricingAmount) },
+      { type: "ambassador_personal", amount: competeWithBundle(ambassadorPersonalAmount) },
+      { type: preBulkDiscount.type, amount: competeWithBundle(preBulkDiscount.amount) },
     ]),
-    [bulkSavingsResult.amount, memberPricingAmount, ambassadorPersonalAmount, preBulkDiscount],
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- competeWithBundle derives from quantityBundleSavings
+    [bulkSavingsResult.amount, memberPricingAmount, ambassadorPersonalAmount, preBulkDiscount, quantityBundleSavings],
   );
 
-  const discountAmount = bestDiscount?.amount ?? 0;
+  const discountAmount = Math.min(subtotal, bestDiscount?.amount ?? 0);
+
+  // Customer-facing name for the applied discount, and the "we picked the
+  // best one for you" note shown when an entered code lost to something
+  // bigger (or the cart's bundle pricing beat every percentage discount).
+  const appliedDiscountLabel = useMemo(() => {
+    if (discountAmount > 0 && bestDiscount) {
+      switch (bestDiscount.type) {
+        case "member_pricing": return "Membership discount";
+        case "coupon": return couponDetails ? `Promo code ${couponDetails.code}` : "Promo code";
+        case "referral": return referralDetails ? `Ambassador code ${referralDetails.code}` : "Ambassador code";
+        case "ambassador_personal": return "Ambassador discount";
+        case "bulk_savings": return "Bulk savings";
+        case "buy3get1": return "Buy 3 Get 1 Free";
+        default: return "Discount";
+      }
+    }
+    return quantityBundleSavings > 0 ? "Bundle pricing" : null;
+  }, [discountAmount, bestDiscount, couponDetails, referralDetails, quantityBundleSavings]);
+
+  const autoBestDiscountApplied = useMemo(() => {
+    const winner = discountAmount > 0 ? bestDiscount?.type : (quantityBundleSavings > 0 ? "bundle_pricing" : null);
+    if (!winner) return false;
+    if (couponDetails && winner !== "coupon") return true;
+    if (referralDetails && winner !== "referral") return true;
+    // A member whose tier discount won without entering anything also gets the
+    // reassurance line — their best discount was applied automatically.
+    return winner === "member_pricing";
+  }, [discountAmount, bestDiscount, quantityBundleSavings, couponDetails, referralDetails]);
   const bulkSavingsApplied = bestDiscount?.type === "bulk_savings";
   const ambassadorDiscountApplied = bestDiscount?.type === "ambassador_personal";
   const bulkSavingsProgress = useMemo(
@@ -1036,6 +1093,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setShippingProtectionEnabled,
     shippingProtectionFee,
     discountAmount,
+    appliedDiscountLabel,
+    autoBestDiscountApplied,
     total,
     isBuy3Get1FreeActive: bestDiscount?.type === "buy3get1",
     isBuy3Get1FreeEligible,

@@ -11,6 +11,7 @@ type CouponFormState = {
   endsAt: string;
   maxRedemptions: string;
   isPrivate: boolean;
+  memberScope: "all" | "members" | "non_members";
 };
 
 const EMPTY_FORM: CouponFormState = {
@@ -21,6 +22,7 @@ const EMPTY_FORM: CouponFormState = {
   endsAt: "",
   maxRedemptions: "",
   isPrivate: false,
+  memberScope: "all",
 };
 
 function currency(value: number) {
@@ -106,6 +108,7 @@ export function AdminCouponsClient({
           endsAt: fromDatetimeLocal(form.endsAt),
           maxRedemptions: form.maxRedemptions.trim() ? Number(form.maxRedemptions) : null,
           isPrivate: form.isPrivate,
+          memberScope: form.memberScope,
         }),
       });
       const result = await response.json() as { success: boolean; error?: string };
@@ -259,6 +262,22 @@ export function AdminCouponsClient({
               className="vl-input mt-1 w-full px-3 py-2"
             />
           </label>
+          <label className="block text-sm text-zinc-400">
+            Who can use it
+            <select
+              value={form.memberScope}
+              onChange={(e) => setForm((prev) => ({ ...prev, memberScope: e.target.value as CouponFormState["memberScope"] }))}
+              className="vl-input mt-1 w-full px-3 py-2"
+            >
+              <option value="all">Everyone</option>
+              <option value="members">Active members only</option>
+              <option value="non_members">Non-members only</option>
+            </select>
+            <span className="mt-1 block text-xs text-zinc-500">
+              Codes never stack — every customer automatically gets their single best discount, so a code only
+              applies when it beats their membership/ambassador pricing.
+            </span>
+          </label>
           <label className="flex items-start gap-2.5 rounded-xl border border-white/10 bg-white/[0.02] p-3 text-sm text-zinc-300 sm:col-span-2">
             <input
               type="checkbox"
@@ -324,6 +343,11 @@ export function AdminCouponsClient({
                               {coupon.code}
                               {coupon.isPrivate ? (
                                 <span className="ml-2 rounded-full border border-amber-300/30 bg-amber-300/10 px-2 py-0.5 font-sans text-[10px] font-semibold uppercase tracking-wide text-amber-300">Private</span>
+                              ) : null}
+                              {coupon.memberScope !== "all" ? (
+                                <span className="ml-2 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2 py-0.5 font-sans text-[10px] font-semibold uppercase tracking-wide text-cyan-300">
+                                  {coupon.memberScope === "members" ? "Members only" : "Non-members"}
+                                </span>
                               ) : null}
                             </td>
                             <td className="py-3 pr-4 text-zinc-300">{formatDiscount(coupon)}</td>

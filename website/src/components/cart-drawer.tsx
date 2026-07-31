@@ -29,6 +29,8 @@ export function CartDrawer() {
     subtotal,
     shipping,
     discountAmount,
+    appliedDiscountLabel,
+    autoBestDiscountApplied,
     total,
     referralCode,
     referralDetails,
@@ -425,9 +427,14 @@ export function CartDrawer() {
             </div>
             {discountAmount > 0 ? (
               <div className="mt-2 flex justify-between text-emerald-400">
-                <span>You saved</span>
+                <span>{appliedDiscountLabel ?? "You saved"}</span>
                 <span>-{formatCartCurrency(discountAmount)}</span>
               </div>
+            ) : null}
+            {autoBestDiscountApplied ? (
+              <p className="mt-2 text-xs text-emerald-300/80">
+                ✓ We&apos;ve automatically applied your best available discount. Only one discount applies per order.
+              </p>
             ) : null}
             {shippingProtectionFee > 0 ? (
               <div className="mt-2 flex justify-between">

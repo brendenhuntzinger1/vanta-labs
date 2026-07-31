@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { validateCoupon } from "@/lib/coupons";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { getMembershipPerks } from "@/lib/membership";
 import { getRequestIpAddress } from "@/lib/admin-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 
@@ -26,9 +27,19 @@ export async function POST(request: Request) {
     }
 
     // Pass the signed-in shopper's email so a once-per-customer welcome offer is
-    // rejected here in the cart, not just silently later at payment time.
+    // rejected here in the cart, not just silently later at payment time, and
+    // their membership status so member-only / non-member-only codes are
+    // rejected with a clear message up front (server re-checks at payment).
     const user = await getAuthenticatedUser();
-    const coupon = await validateCoupon(code, Number.isFinite(subtotal) ? subtotal : 0, user?.email ?? undefined);
+    let isActiveMember = false;
+    if (user?.id) {
+      try {
+        isActiveMember = (await getMembershipPerks(user.id)).isActiveMember;
+      } catch {
+        // Treated as non-member for the preview; payment re-checks authoritatively.
+      }
+    }
+    const coupon = await validateCoupon(code, Number.isFinite(subtotal) ? subtotal : 0, user?.email ?? undefined, { isActiveMember });
 
     if (!coupon) {
       return NextResponse.json({ success: false, error: "Enter a coupon code." }, { status: 400 });
