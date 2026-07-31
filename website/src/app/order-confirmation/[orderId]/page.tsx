@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
+import { ClearCartOnMount } from "@/components/clear-cart-on-mount";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +14,16 @@ export const metadata: Metadata = {
 
 function money(value: number) {
   return `$${Number(value ?? 0).toFixed(2)}`;
+}
+
+// The confirmation URL is an unguessable bearer token but can circulate (shared
+// devices, forwarded screenshots). Mask the email so a casual holder of the
+// link doesn't see the full address: j***@domain.com.
+function maskEmail(email: string) {
+  const [local, domain] = email.split("@");
+  if (!domain) return "***";
+  const shown = local.slice(0, 1);
+  return `${shown}${"*".repeat(Math.max(3, local.length - 1))}@${domain}`;
 }
 
 // Customer-facing thank-you page. The order UUID is an unguessable bearer token
@@ -36,6 +47,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
 
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
+      <ClearCartOnMount />
       <SiteHeaderV2 />
       <main className="mx-auto max-w-2xl px-4 pb-24 pt-28 sm:px-6 sm:pt-32 lg:px-12">
         <section className="rounded-2xl border border-white/10 bg-white/[0.02] p-6 text-center sm:p-8">
@@ -46,7 +58,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
           <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Thank you for your order</h1>
           <p className="mt-3 text-sm leading-7 text-white/60">
             Order <span className="font-semibold text-white">{orderNumber}</span>
-            {order.customer_email ? <> — a confirmation was sent to <span className="text-white/80">{String(order.customer_email)}</span>.</> : "."}
+            {order.customer_email ? <> — a confirmation was sent to <span className="text-white/80">{maskEmail(String(order.customer_email))}</span>.</> : "."}
           </p>
           <p className="mt-2 text-sm text-white/50">
             {isPaid

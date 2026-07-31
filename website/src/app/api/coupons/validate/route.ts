@@ -42,7 +42,11 @@ export async function POST(request: Request) {
     const coupon = await validateCoupon(code, Number.isFinite(subtotal) ? subtotal : 0, user?.email ?? undefined, { isActiveMember });
 
     if (!coupon) {
-      return NextResponse.json({ success: false, error: "Enter a coupon code." }, { status: 400 });
+      // validateCoupon returns null only for a normalized-empty code here (a
+      // real unknown/expired code throws with a specific message). Distinguish
+      // it from the blank-input case above so the shopper isn't told to "enter
+      // a code" when they just entered an invalid one.
+      return NextResponse.json({ success: false, error: "That coupon code is not valid." }, { status: 400 });
     }
 
     return NextResponse.json({

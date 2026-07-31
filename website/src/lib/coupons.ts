@@ -74,9 +74,13 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
         const { data: priorWelcomeUse } = await supabaseAdmin
           .from("orders")
           .select("id")
+          // Exclude BOTH cancel spellings the codebase writes ("canceled" is
+          // the one payment-service uses on reservation failure) plus failed
+          // payments — otherwise a canceled first attempt that still carries the
+          // welcome code would permanently block the customer's real first order.
+          .not("payment_status", "in", "(canceled,cancelled,payment_failed)")
           .eq("customer_email", email)
           .ilike("coupon_code", normalizedCode)
-          .neq("payment_status", "cancelled")
           .limit(1)
           .maybeSingle();
         if (priorWelcomeUse) {
