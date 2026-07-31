@@ -1,9 +1,69 @@
+import { createHmac } from "crypto";
 import { describe, it, expect } from "vitest";
 import {
   resolveWebhookOrderId,
   getOrderStatusForEventType,
   isRecognisedMoneyEvent,
 } from "@/lib/payment-webhook";
+import { verifyTimestampedSignature, LivePaymentProvider } from "@/lib/payment-provider";
+
+// VeyraGate signs `t=<unix>,v1=<hex>` over `${t}.${rawBody}` (Stripe-style,
+// replay-bounded). The pre-existing internal scheme is a bare hex HMAC over the
+// body alone. Both hit this verifier, so it has to speak both — a live delivery
+// was rejected outright until it did.
+describe("verifyTimestampedSignature (VeyraGate scheme)", () => {
+  const SECRET = "whsec_test";
+  const BODY = '{"id":"evt_1","type":"charge.succeeded"}';
+  const header = (t: number, body = BODY, secret = SECRET) =>
+    `t=${t},v1=` + createHmac("sha256", secret).update(`${t}.${body}`).digest("hex");
+
+  it("accepts a valid signature", () => {
+    expect(verifyTimestampedSignature(BODY, header(1700000000), SECRET, 1700000000)).toBe(true);
+  });
+
+  it("rejects a tampered body", () => {
+    expect(verifyTimestampedSignature('{"id":"evt_2"}', header(1700000000), SECRET, 1700000000)).toBe(false);
+  });
+
+  it("rejects the wrong secret", () => {
+    expect(verifyTimestampedSignature(BODY, header(1700000000), "other", 1700000000)).toBe(false);
+  });
+
+  it("bounds replay in both directions", () => {
+    expect(verifyTimestampedSignature(BODY, header(1700000000), SECRET, 1700000401)).toBe(false);
+    expect(verifyTimestampedSignature(BODY, header(1700000401), SECRET, 1700000000)).toBe(false);
+    expect(verifyTimestampedSignature(BODY, header(1700000000), SECRET, 1700000299)).toBe(true);
+  });
+
+  it("rejects malformed headers without throwing", () => {
+    for (const h of ["", "garbage", "t=1700000000", "v1=abc", "t=abc,v1=" + "a".repeat(64)]) {
+      expect(verifyTimestampedSignature(BODY, h, SECRET, 1700000000)).toBe(false);
+    }
+  });
+});
+
+describe("LivePaymentProvider.verifyWebhookSignature accepts both schemes", () => {
+  const SECRET = "whsec_test";
+  const BODY = '{"id":"evt_1"}';
+  const provider = new LivePaymentProvider();
+
+  it("accepts VeyraGate's timestamped signature", () => {
+    const t = Math.floor(Date.now() / 1000);
+    const sig = `t=${t},v1=` + createHmac("sha256", SECRET).update(`${t}.${BODY}`).digest("hex");
+    expect(provider.verifyWebhookSignature(BODY, sig, SECRET)).toBe(true);
+  });
+
+  it("still accepts the pre-existing bare hex signature", () => {
+    // The internal gateway and every existing caller must keep working.
+    const sig = createHmac("sha256", SECRET).update(BODY, "utf8").digest("hex");
+    expect(provider.verifyWebhookSignature(BODY, sig, SECRET)).toBe(true);
+  });
+
+  it("rejects a bad signature in either shape", () => {
+    expect(provider.verifyWebhookSignature(BODY, "a".repeat(64), SECRET)).toBe(false);
+    expect(provider.verifyWebhookSignature(BODY, `t=${Math.floor(Date.now() / 1000)},v1=${"a".repeat(64)}`, SECRET)).toBe(false);
+  });
+});
 
 // VeyraGate and the internal/mock gateway describe the same event differently.
 // LivePaymentProvider already opens sessions with `metadata: { order_id }` — its

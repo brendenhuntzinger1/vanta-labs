@@ -86,6 +86,60 @@ export function verifyWebhookSignatureImpl(payload: string, signature: string, s
   return timingSafeEqual(providedBuffer, expectedBuffer);
 }
 
+/**
+ * Verify VeyraGate's timestamped signature: `t=<unix>,v1=<hex>` over
+ * `${t}.${rawBody}`.
+ *
+ * Distinct from verifyWebhookSignatureImpl, which signs the body alone with no
+ * timestamp. The replay window is bounded in BOTH directions — a far-future
+ * timestamp is as much a replay signal as an old one — and the digest length is
+ * checked before comparison because timingSafeEqual requires equal lengths and a
+ * short digest is a cheap probe.
+ *
+ * `now` is a parameter so this is testable without freezing the clock.
+ */
+export function verifyTimestampedSignature(
+  payload: string,
+  header: string,
+  secret: string,
+  now: number,
+  toleranceSeconds = 300,
+): boolean {
+  if (!payload || !header || !secret) {
+    return false;
+  }
+
+  let t: string | null = null;
+  let v1: string | null = null;
+  for (const part of header.split(",")) {
+    const [k, v] = part.trim().split("=", 2);
+    if (k === "t") t = v ?? null;
+    else if (k === "v1") v1 = v ?? null;
+  }
+  if (!t || !v1 || !/^\d+$/.test(t)) {
+    return false;
+  }
+  if (Math.abs(now - Number(t)) > toleranceSeconds) {
+    return false;
+  }
+  if (v1.length !== 64) {
+    return false;
+  }
+
+  const expected = createHmac("sha256", secret).update(`${t}.${payload}`, "utf8").digest("hex");
+  let providedBuffer: Buffer;
+  try {
+    providedBuffer = Buffer.from(v1, "hex");
+  } catch {
+    return false;
+  }
+  const expectedBuffer = Buffer.from(expected, "hex");
+  if (providedBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+  return timingSafeEqual(providedBuffer, expectedBuffer);
+}
+
 export class LivePaymentProvider implements PaymentProvider {
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResult> {
     // No real card processor is integrated yet. The previous stub returned a
@@ -103,7 +157,22 @@ export class LivePaymentProvider implements PaymentProvider {
     );
   }
 
+  // Accepts BOTH signing schemes, because two different senders hit this path:
+  //
+  //   • VeyraGate signs `t=<unix>,v1=<hex>` over `${t}.${rawBody}` — Stripe-style,
+  //     timestamped and replay-bounded. Its portal states the header outright:
+  //     "Each delivery includes a Veyragate-Signature header."
+  //   • The pre-existing internal scheme is a bare hex HMAC over the raw body.
+  //
+  // Both require the same secret, so accepting either does not weaken the endpoint
+  // — it only stops every real VeyraGate delivery being rejected, which is what
+  // happened before: signature verification failed, the webhook 400'd, and the
+  // order behind a charged card never settled. The `t=` prefix is an unambiguous
+  // discriminator, so the existing scheme is untouched.
   verifyWebhookSignature(payload: string, signature: string, secret: string): boolean {
+    if (signature?.includes("t=") && signature.includes("v1=")) {
+      return verifyTimestampedSignature(payload, signature, secret, Math.floor(Date.now() / 1000));
+    }
     return verifyWebhookSignatureImpl(payload, signature, secret);
   }
 
