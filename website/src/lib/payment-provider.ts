@@ -143,7 +143,12 @@ export function verifyTimestampedSignature(
 export class LivePaymentProvider implements PaymentProvider {
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResult> {
     const base = getRequiredEnv("VEYRA_API_BASE").replace(/\/+$/, "");
-    const key = getRequiredEnv("VEYRA_SECRET_KEY");
+    // Accept the documented PAYMENT_SECRET_KEY as a fallback so an operator who
+    // set the documented key (rather than VEYRA_SECRET_KEY) still works.
+    const key = (process.env.VEYRA_SECRET_KEY || process.env.PAYMENT_SECRET_KEY || "").trim();
+    if (!key) {
+      throw new Error("Payment provider secret is not configured (set VEYRA_SECRET_KEY or PAYMENT_SECRET_KEY).");
+    }
 
     // `input.amount` is ALREADY in minor units — createCheckoutSession() in
     // payment-service.ts passes `Math.round(finalTotal * 100)`. VeyraGate's
