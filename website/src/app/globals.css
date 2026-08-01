@@ -1758,8 +1758,12 @@ textarea {
    because the native button ignores padding — its content is drawn by the OS,
    so there is nothing inside to pad. For the same reason no text can be placed
    inside it; in-flight states are rendered as a separate element. */
+/* NOTE: -webkit-appearance is deliberately NOT set here. Lightning CSS (Next's
+   minifier) treats it as an alias of `appearance` and drops the prefixed copy,
+   which leaves older Safari — the exact browser this button exists for — with
+   an unrecognised declaration and no button at all. It is set inline on the
+   element instead, where the minifier cannot reach it. */
 .vl-apple-pay-button {
-  -webkit-appearance: -apple-pay-button;
   appearance: -apple-pay-button;
   -apple-pay-button-type: buy;
   -apple-pay-button-style: white;

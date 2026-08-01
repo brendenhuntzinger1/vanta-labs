@@ -158,6 +158,12 @@ export interface ExpressApplePayButtonProps {
   onUnavailable?: () => void;
 }
 
+// Apple only draws its button when it sees the prefixed appearance value, and
+// the CSS minifier collapses `-webkit-appearance` into `appearance`, dropping
+// it. Setting it inline puts it beyond the minifier's reach. Typed loosely
+// because `-apple-pay-button` is not in the CSSProperties value union.
+const APPLE_PAY_APPEARANCE = { WebkitAppearance: "-apple-pay-button" } as React.CSSProperties;
+
 export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavailable }: ExpressApplePayButtonProps) {
   const router = useRouter();
   const { items, referralCode, couponCode, shippingProtectionEnabled, closeCart } = useCart();
@@ -693,6 +699,7 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
           disabled
           aria-label="Buy with Apple Pay"
           className="vl-apple-pay-button"
+          style={APPLE_PAY_APPEARANCE}
         />
         <p className="text-center text-[11px] text-zinc-500">
           Confirm the three required statements above to use Apple Pay.
@@ -738,6 +745,7 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
         onClick={startPayment}
         aria-label="Buy with Apple Pay"
         className="vl-apple-pay-button vl-focus-ring"
+        style={APPLE_PAY_APPEARANCE}
       />
       {error ? <p className="text-center text-[11px] text-rose-300">{error}</p> : null}
     </div>
