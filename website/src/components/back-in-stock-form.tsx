@@ -4,8 +4,8 @@ import { useState } from "react";
 
 // Shown on a sold-out product/variant so shoppers can be emailed when it's
 // restocked (auto-sent when inventory is replenished in admin).
-export function BackInStockForm({ productSlug, variantId }: { productSlug: string; variantId?: string }) {
-  const [email, setEmail] = useState("");
+export function BackInStockForm({ productSlug, variantId, initialEmail }: { productSlug: string; variantId?: string; initialEmail?: string }) {
+  const [email, setEmail] = useState(initialEmail ?? "");
   const [state, setState] = useState<"idle" | "sending" | "done">("idle");
   const [error, setError] = useState<string | null>(null);
 

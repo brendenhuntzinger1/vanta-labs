@@ -74,6 +74,11 @@ export async function POST(request: Request) {
         .from("products")
         .select("slug, name, inventory_quantity")
         .eq("is_enabled", true)
+        // Explicit rather than relying on archived products also happening to be
+        // disabled. They are today, but that is a data convention, not a
+        // constraint — and handing a 3PL a SKU list containing soft-deleted
+        // predecessors would have them stocking products nobody can order.
+        .eq("is_archived", false)
         .order("name", { ascending: true });
       if (error) throw error;
       const skus = (data ?? []).map((row) => ({

@@ -241,7 +241,12 @@ export interface InboundFulfillmentEvent {
   trackingUrl?: string;
   carrier?: string;
   message?: string;
-  inventory?: Array<{ sku: string; quantity: number }>;
+  /**
+   * `sku` is the product slug; `variant` is this store's product_doses.id when the
+   * 3PL is reporting a specific dose. Omitted/null means the product has no
+   * options and stock applies at product level.
+   */
+  inventory?: Array<{ sku: string; variant?: string | null; quantity: number }>;
 }
 
 async function findFulfillmentOrder(event: InboundFulfillmentEvent) {
@@ -286,24 +291,70 @@ export async function applyInboundFulfillmentEvent(event: InboundFulfillmentEven
   // positive flips it back to "In Stock". This is the ONLY thing that marks a
   // product out of stock, so no manual inventory entry is ever required.
   if (event.type === "inventory" && event.inventory?.length) {
+    // Apply PER DOSE when the 3PL names one.
+    //
+    // This previously wrote a single quantity to the product AND every one of its
+    // doses, so a product with 10mg in stock and 5mg sold out reported both as
+    // available — a customer could buy a dose the warehouse could not ship. The
+    // 3PL now sends `variant` (this store's product_doses.id) alongside `sku`, so
+    // each dose is set independently and only the product row is derived.
+    const touchedProducts = new Set<string>();
+
     for (const item of event.inventory) {
       if (!item.sku) continue;
       const stockStatus = item.quantity <= 0 ? "Out of Stock" : "In Stock";
+
       const { data: product } = await supabaseAdmin
         .from("products")
-        .update({ inventory_quantity: item.quantity, stock_status: stockStatus, updated_at: now })
-        .eq("slug", item.sku)
         .select("id")
+        .eq("slug", item.sku)
         .maybeSingle();
-      // Keep variants in sync with the product-level report so the storefront's
-      // variant-aware stock status reflects the 3PL data too.
-      if (product?.id) {
+      if (!product?.id) continue;
+      touchedProducts.add(String(product.id));
+
+      if (item.variant) {
+        // Scoped by product_id as well as id so a mismatched pair can never write
+        // stock onto some other product's dose.
+        await supabaseAdmin
+          .from("product_doses")
+          .update({ inventory_quantity: item.quantity, stock_status: stockStatus, updated_at: now })
+          .eq("id", item.variant)
+          .eq("product_id", product.id);
+      } else {
+        // No dose named: the product has no options, so product level IS the level.
+        await supabaseAdmin
+          .from("products")
+          .update({ inventory_quantity: item.quantity, stock_status: stockStatus, updated_at: now })
+          .eq("id", product.id);
         await supabaseAdmin
           .from("product_doses")
           .update({ inventory_quantity: item.quantity, stock_status: stockStatus, updated_at: now })
           .eq("product_id", product.id);
       }
     }
+
+    // Derive each touched product from its doses: a product is sellable while ANY
+    // enabled dose has stock, and its headline quantity is the total across them.
+    // Deriving rather than trusting a sent product-level number keeps the product
+    // row and its doses from ever disagreeing.
+    for (const productId of touchedProducts) {
+      const { data: doses } = await supabaseAdmin
+        .from("product_doses")
+        .select("inventory_quantity, is_enabled")
+        .eq("product_id", productId);
+      if (!doses?.length) continue;
+      const live = doses.filter((d) => d.is_enabled !== false);
+      const total = live.reduce((sum, d) => sum + Number(d.inventory_quantity ?? 0), 0);
+      await supabaseAdmin
+        .from("products")
+        .update({
+          inventory_quantity: total,
+          stock_status: total > 0 ? "In Stock" : "Out of Stock",
+          updated_at: now,
+        })
+        .eq("id", productId);
+    }
+
     await logEvent({ direction: "inbound", eventType: "inventory.sync", ok: true, payload: event as unknown as Record<string, unknown> });
     return { ok: true, message: "Inventory synced." };
   }

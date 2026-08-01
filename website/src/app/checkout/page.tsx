@@ -165,6 +165,7 @@ export default function CheckoutPage() {
     isApplyingCoupon,
     isBuy3Get1FreeActive,
     isSignedIn,
+    isHydrated,
     pointsBalance,
     pointsToEarn,
     pointsToRedeem,
@@ -211,7 +212,11 @@ export default function CheckoutPage() {
   // file. Phone-only accounts have no email, so they must enter one here to
   // receive their order confirmation / receipt.
   const [emailLockedToAccount, setEmailLockedToAccount] = useState(false);
-  const [marketingOptIn, setMarketingOptIn] = useState(false);
+  // Pre-checked by default for US shoppers (offers, coupons, restock alerts),
+  // but defaults OFF for Canada where CASL requires express opt-in. The default
+  // follows the destination country until the shopper manually toggles it.
+  const [marketingOptIn, setMarketingOptIn] = useState(true);
+  const [marketingTouched, setMarketingTouched] = useState(false);
   const [form, setForm] = useState<CheckoutForm>({
     fullName: "",
     email: "",
@@ -359,6 +364,14 @@ export default function CheckoutPage() {
       setKnownEmail(form.email);
     }
   }, [form.email, setKnownEmail]);
+
+  // CASL: default the marketing opt-in OFF for Canadian destinations, ON for the
+  // US — until the shopper manually toggles it (then respect their choice).
+  useEffect(() => {
+    if (!marketingTouched) {
+      setMarketingOptIn(!isCanada(form.country));
+    }
+  }, [form.country, marketingTouched]);
 
   useEffect(() => {
     (async () => {
@@ -882,7 +895,21 @@ export default function CheckoutPage() {
           <aside className="vl2-glass h-fit p-5 sm:p-7 lg:sticky lg:top-32">
             <p className="vl2-eyebrow">Order Summary</p>
 
-            {items.length === 0 ? (
+            {!isHydrated ? (
+              // Don't flash "No items in cart" before localStorage hydrates — a
+              // refresh mid-checkout would otherwise look like a lost cart.
+              <div className="mt-5 space-y-3">
+                {[0, 1].map((i) => (
+                  <div key={i} className="flex items-center gap-3">
+                    <div className="vl-skeleton h-16 w-16 flex-shrink-0 rounded" />
+                    <div className="flex-1 space-y-2">
+                      <div className="vl-skeleton h-3 w-2/3 rounded" />
+                      <div className="vl-skeleton h-3 w-1/3 rounded" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : items.length === 0 ? (
               <div className="mt-5 border border-dashed border-white/15 p-6 text-center text-sm text-white/45">No items in cart.</div>
             ) : (
               <div className="mt-5 space-y-4 border-b border-white/10 pb-4">
@@ -991,7 +1018,7 @@ export default function CheckoutPage() {
             ) : null}
 
             <label className="mt-5 flex cursor-pointer items-start gap-2.5 text-sm text-white/70">
-              <input type="checkbox" checked={marketingOptIn} onChange={(e) => setMarketingOptIn(e.target.checked)} className="mt-0.5 h-4 w-4 accent-emerald-500" />
+              <input type="checkbox" checked={marketingOptIn} onChange={(e) => { setMarketingTouched(true); setMarketingOptIn(e.target.checked); }} className="mt-0.5 h-4 w-4 accent-emerald-500" />
               <span>Email me exclusive offers, coupons &amp; restock alerts. <span className="text-white/45">Optional — unsubscribe anytime.</span></span>
             </label>
 

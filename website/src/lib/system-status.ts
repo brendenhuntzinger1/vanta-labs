@@ -113,9 +113,14 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
   out.push({
     key: "cron",
     label: "Scheduled jobs (renewals, cart recovery, expiry)",
-    level: cronConfigured ? "ok" : "warn",
-    detail: cronConfigured ? "CRON_SECRET set — timer armed" : "CRON_SECRET missing — scheduled jobs won't run",
-    blocksLaunch: false,
+    level: cronConfigured ? "ok" : "error",
+    detail: cronConfigured
+      ? "CRON_SECRET set — timer armed"
+      : "CRON_SECRET missing — scheduled jobs won't run. Abandoned-checkout inventory holds would never expire, permanently locking stock.",
+    // Launch-blocking: expireStaleReservations() runs only from the cron sweep.
+    // Without it, every abandoned/failed checkout's 15-min hold never releases,
+    // silently removing scarce stock from sale.
+    blocksLaunch: true,
   });
 
   // Sales tax — dynamic, from the shipping address. Collected only for the
@@ -142,9 +147,19 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
   let tracked = 0;
   let total = 0;
   try {
+    // Both sides exclude archived products. This measures oversell protection
+    // across the SELLABLE catalogue; counting soft-deleted predecessors in the
+    // denominator understates coverage against products nobody can buy.
     const [{ count: t }, { count: n }] = await Promise.all([
-      supabaseAdmin.from("products").select("id", { count: "exact", head: true }).eq("track_inventory", true),
-      supabaseAdmin.from("products").select("id", { count: "exact", head: true }),
+      supabaseAdmin
+        .from("products")
+        .select("id", { count: "exact", head: true })
+        .eq("track_inventory", true)
+        .eq("is_archived", false),
+      supabaseAdmin
+        .from("products")
+        .select("id", { count: "exact", head: true })
+        .eq("is_archived", false),
     ]);
     tracked = t ?? 0;
     total = n ?? 0;

@@ -1,0 +1,125 @@
+"use client";
+
+import { useState } from "react";
+import { useRouter } from "next/navigation";
+
+type Membership = {
+  status: string;
+  billingCycle: string;
+  cancelAtPeriodEnd: boolean;
+};
+
+type ActionKey = "pause" | "resume" | "skip";
+
+const COPY: Record<ActionKey, { endpoint: string; confirm: string; cta: string; busy: string }> = {
+  pause: {
+    endpoint: "/api/membership/pause",
+    confirm: "Pause your membership? Billing stops and your member benefits pause until you resume — you won't be charged while paused.",
+    cta: "Pause membership",
+    busy: "Pausing…",
+  },
+  resume: {
+    endpoint: "/api/membership/resume",
+    confirm: "Resume your membership? Benefits turn back on and billing restarts from a fresh cycle.",
+    cta: "Resume membership",
+    busy: "Resuming…",
+  },
+  skip: {
+    endpoint: "/api/membership/skip",
+    confirm: "Skip your next charge? Your renewal date moves forward one cycle — you keep your benefits and won't be charged next time.",
+    cta: "Skip next charge",
+    busy: "Skipping…",
+  },
+};
+
+/**
+ * Pause / skip / resume controls for a monthly membership. Annual plans are a
+ * one-time pass, so these never render for them. Each action confirms inline
+ * before firing, then refreshes the server data.
+ */
+export function SubscriptionActions({ membership }: { membership: Membership }) {
+  const router = useRouter();
+  const [confirming, setConfirming] = useState<ActionKey | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const isPaused = membership.status === "paused";
+  const canManage =
+    membership.billingCycle === "monthly" &&
+    !membership.cancelAtPeriodEnd &&
+    (membership.status === "active" || isPaused);
+
+  if (!canManage) return null;
+
+  const run = async (action: ActionKey) => {
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const response = await fetch(COPY[action].endpoint, { method: "POST" });
+      const result = (await response.json()) as { success: boolean; error?: string };
+      if (!response.ok || !result.success) {
+        setError(result.error ?? "Something went wrong. Please try again.");
+        return;
+      }
+      setConfirming(null);
+      setMessage(action === "pause" ? "Membership paused." : action === "resume" ? "Membership resumed." : "Your next charge is skipped.");
+      router.refresh();
+    } catch {
+      setError("Something went wrong. Please try again.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const actions: ActionKey[] = isPaused ? ["resume"] : ["skip", "pause"];
+
+  return (
+    <div className="mt-4 border-t border-white/10 pt-4">
+      {confirming ? (
+        <div className="rounded-xl border border-white/12 bg-white/[0.02] p-4">
+          <p className="text-sm text-zinc-300">{COPY[confirming].confirm}</p>
+          <div className="mt-3 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => run(confirming)}
+              disabled={busy}
+              className="vl2-btn-primary vl-focus-ring inline-flex px-4 py-2 text-xs disabled:opacity-60"
+            >
+              {busy ? COPY[confirming].busy : "Confirm"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setConfirming(null); setError(null); }}
+              disabled={busy}
+              className="vl-focus-ring rounded-full border border-white/15 px-4 py-2 text-xs text-zinc-300 transition hover:border-white/30 disabled:opacity-60"
+            >
+              Keep as is
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="flex flex-wrap items-center gap-2.5">
+          {actions.map((action) => (
+            <button
+              key={action}
+              type="button"
+              onClick={() => { setConfirming(action); setMessage(null); }}
+              className={`vl-focus-ring inline-flex rounded-full px-4 py-2 text-xs font-medium transition ${
+                action === "resume"
+                  ? "border border-emerald-400/40 bg-emerald-400/10 text-emerald-200 hover:bg-emerald-400/20"
+                  : "border border-white/15 bg-white/[0.03] text-zinc-200 hover:border-white/30"
+              }`}
+            >
+              {COPY[action].cta}
+            </button>
+          ))}
+        </div>
+      )}
+      {error ? <p className="mt-2 text-xs text-rose-300">{error}</p> : null}
+      {message ? <p className="mt-2 text-xs text-emerald-300">{message}</p> : null}
+      {isPaused ? <p className="mt-2 text-xs text-amber-200/80">Your membership is paused — benefits are off until you resume.</p> : null}
+    </div>
+  );
+}

@@ -64,6 +64,7 @@ export interface PartnerSummary {
   totalClicks: number;
   conversions: number;
   conversionRate: number;
+  monthlyCommissions: number;
   recentOrders: Array<{
     orderId: string;
     createdAt: string;
@@ -896,7 +897,17 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   const totalClicks = clicks.length;
   const conversionRate = totalClicks > 0 ? roundMoney((conversions / totalClicks) * 100) : 0;
 
-  const recentOrders = commissions.slice(0, 8).map((commission) => {
+  // This calendar month's earned commissions (excludes clawed-back rows).
+  const monthStart = new Date();
+  monthStart.setUTCDate(1);
+  monthStart.setUTCHours(0, 0, 0, 0);
+  const monthlyCommissions = roundMoney(
+    commissions
+      .filter((c) => new Date(c.created_at).getTime() >= monthStart.getTime() && !["reversed", "voided"].includes(String(c.payment_status)))
+      .reduce((sum, c) => sum + Number(c.commission_amount ?? 0), 0),
+  );
+
+  const recentOrders = commissions.slice(0, 50).map((commission) => {
     const order = orders.find((row) => row.order_id === commission.order_id);
     return {
       orderId: commission.order_id,
@@ -934,6 +945,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     totalClicks,
     conversions,
     conversionRate,
+    monthlyCommissions,
     recentOrders,
     monthlyRevenueSeries: buildRevenueSeriesByMonth(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) }))),
     lifetimeRevenueSeries: buildLifetimeSeries(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) }))),

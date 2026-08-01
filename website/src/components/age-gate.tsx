@@ -118,24 +118,49 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
     <>
       {children}
       {!isVerified ? (
-      <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.16),_transparent_55%),linear-gradient(135deg,_#020202_0%,_#111111_50%,_#050505_100%)] px-4 py-8 text-zinc-100 sm:items-center sm:px-6 sm:py-10">
-        <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_30%_20%,_rgba(242,201,76,0.10),_transparent_55%),radial-gradient(ellipse_at_80%_80%,_rgba(140,180,255,0.08),_transparent_50%)] opacity-70" />
+      <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-[#060606] px-4 py-8 text-zinc-100 sm:items-center sm:px-6 sm:py-10">
+        {/* Layered ambient light — warm gold + cool blue, matching the brand */}
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_28%_18%,_rgba(242,201,76,0.12),_transparent_52%),radial-gradient(ellipse_at_82%_85%,_rgba(140,180,255,0.09),_transparent_50%),linear-gradient(160deg,_#050505_0%,_#0c0c0c_48%,_#050505_100%)]" />
+        {/* Faint grid texture for depth */}
+        <div className="pointer-events-none absolute inset-0 opacity-[0.5] [background-image:linear-gradient(rgba(255,255,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:46px_46px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_72%)]" />
+
         <div
           ref={dialogRef}
           role="dialog"
           aria-modal="true"
           aria-labelledby="age-gate-title"
           tabIndex={-1}
-          className="vl-panel vl-focus-ring relative w-full max-w-2xl rounded-[1.75rem] p-5 text-center sm:rounded-[2rem] sm:p-8 xl:p-10"
+          className="vl2-fade-in vl-focus-ring relative w-full max-w-lg rounded-[1.75rem] border border-white/10 bg-[rgba(12,12,12,0.72)] p-6 text-center shadow-[0_28px_80px_rgba(0,0,0,0.6)] backdrop-blur-2xl sm:rounded-[2rem] sm:p-9"
         >
-          <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-full border border-white/20 bg-white/10 text-2xl font-semibold tracking-[0.3em] text-white">
-            VL
+          {/* Monogram */}
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-amber-200/25 bg-gradient-to-br from-amber-200/[0.12] to-white/[0.02] shadow-[0_0_28px_rgba(242,201,76,0.14)]">
+            <span className="vl2-serif text-xl tracking-[0.12em] text-white">VL</span>
           </div>
-          <p className="mb-4 text-[11px] uppercase tracking-[0.35em] text-zinc-400 sm:text-xs sm:tracking-[0.45em]">Restricted Access</p>
-          <h1 id="age-gate-title" className="text-3xl font-semibold tracking-[0.2em] text-white sm:text-5xl sm:tracking-[0.3em]">Vanta Labs</h1>
-          <p className="mt-4 text-base text-zinc-300 sm:text-lg">Research Integrity. Verified Quality.</p>
-          <p className="mt-7 text-lg font-medium text-white sm:mt-8 sm:text-xl">Are you 21 years of age or older?</p>
-          <label className="vl-panel-soft mt-6 flex items-start justify-center gap-3 rounded-[1.25rem] p-4 text-left text-sm text-zinc-300">
+
+          <p className="vl2-eyebrow mt-6 flex items-center justify-center gap-2 text-amber-200/70">
+            <span className="h-px w-6 bg-amber-200/30" />
+            Restricted Access · 21+
+            <span className="h-px w-6 bg-amber-200/30" />
+          </p>
+
+          <h1 id="age-gate-title" className="vl2-serif mt-4 text-4xl text-white sm:text-5xl">Vanta Labs</h1>
+          <p className="mt-3 text-sm text-white/55 sm:text-base">Research Integrity. Verified Quality.</p>
+
+          {/* Trust chips */}
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+            {["Batch Tested", "COA Documented", "Encrypted Checkout"].map((point) => (
+              <span key={point} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[0.62rem] font-medium uppercase tracking-[0.14em] text-white/55">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 text-emerald-300/80" aria-hidden="true"><path d="m5 12 4 4 10-10" /></svg>
+                {point}
+              </span>
+            ))}
+          </div>
+
+          <div className="my-7 h-px w-full bg-gradient-to-r from-transparent via-white/12 to-transparent" />
+
+          <p className="text-lg font-medium text-white sm:text-xl">Are you 21 years of age or older?</p>
+
+          <label className="group mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-left text-sm text-white/70 transition-colors duration-200 hover:border-white/20 has-[:checked]:border-emerald-400/30 has-[:checked]:bg-emerald-400/[0.04]">
             <input
               type="checkbox"
               checked={agreed}
@@ -145,40 +170,47 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
                   setShowPrompt(false);
                 }
               }}
-              className="mt-1 h-4 w-4 rounded border-zinc-700 bg-zinc-900"
+              className="mt-0.5 h-5 w-5 shrink-0 rounded accent-emerald-400"
             />
             <span>I confirm that I am at least 21 years of age and understand that Vanta Labs products are intended only for lawful laboratory research purposes.</span>
           </label>
-          {showPrompt ? <p role="alert" className="mt-4 text-sm text-zinc-300">Please confirm your age before continuing.</p> : null}
-          <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
+
+          {showPrompt ? <p role="alert" className="mt-3 text-sm text-amber-200">Please confirm your age before continuing.</p> : null}
+
+          <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:justify-center">
             <button
               type="button"
               onClick={handleAccount}
               disabled={!agreed}
-              className="vl-btn-primary vl-focus-ring rounded-full px-6 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+              className="vl2-btn-primary vl-focus-ring px-6 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Create Account / Sign In
+              Create account / Sign in
             </button>
             <button
               type="button"
               onClick={handleEnter}
               disabled={!agreed}
-              className="vl-btn-secondary vl-focus-ring rounded-full px-6 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-50"
+              className="vl2-btn-secondary vl-focus-ring px-6 py-3.5 text-sm disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Continue as Guest
+              Continue as guest
             </button>
           </div>
-          <p className="mt-5 text-xs leading-6 text-zinc-400">
-            Create a free account to track orders, save your cart, and earn rewards — or continue
-            as a guest and check out with just your email.
+
+          <p className="mx-auto mt-5 max-w-sm text-xs leading-6 text-white/45">
+            Create a free account to track orders, save your cart, and earn rewards — or continue as a guest and check out with just your email.
           </p>
+
           <button
             type="button"
             onClick={handleExit}
-            className="vl-focus-ring mt-4 text-xs text-zinc-500 underline-offset-4 transition hover:text-zinc-300 hover:underline"
+            className="vl-focus-ring mt-5 text-xs text-white/40 underline-offset-4 transition hover:text-white/70 hover:underline"
           >
             I am under 21 — exit
           </button>
+
+          <p className="mt-6 border-t border-white/[0.07] pt-5 text-[0.62rem] uppercase tracking-[0.2em] text-white/30">
+            Research Use Only · © Vanta Labs
+          </p>
         </div>
       </div>
       ) : null}

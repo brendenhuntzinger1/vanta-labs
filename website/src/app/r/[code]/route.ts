@@ -10,8 +10,13 @@ const REFERRAL_COOKIE_MAX_AGE = 60 * 60 * 24 * 30;
 export async function GET(request: Request, context: { params: Promise<{ code: string }> }) {
   const { code } = await context.params;
   const url = new URL(request.url);
-  const redirectTarget = url.searchParams.get("next") || "/products";
-  const destination = new URL(redirectTarget, url.origin);
+  // Only ever redirect to a same-origin, absolute internal path. An attacker
+  // could otherwise pass ?next=https://evil.example (or //evil.example) and turn
+  // this public, widely-shared referral link into an open redirect / phishing
+  // primitive on the trusted brand domain.
+  const rawNext = url.searchParams.get("next") || "/products";
+  const safeNext = rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/products";
+  const destination = new URL(safeNext, url.origin);
   const response = NextResponse.redirect(destination);
 
   // Resolve to the ambassador: a live code, OR an aliased OLD code that redirects
