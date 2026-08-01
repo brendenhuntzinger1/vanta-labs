@@ -337,14 +337,14 @@ export function ProductDetailClient({
               desktop bottom-left, under the image. */}
           <div className="order-3 min-w-0 lg:col-start-1 lg:row-start-2 lg:order-none">
             <div className="mt-2 lg:mt-0">
-              <div className="vl2-lab-panel flex gap-1 p-1">
+              <div className="vl2-lab-panel flex gap-1 rounded-full p-1">
                 {TABS.map((tab) => (
                   <button
                     key={tab.key}
                     type="button"
                     onClick={() => setActiveTab((current) => (current === tab.key ? null : tab.key))}
                     aria-expanded={activeTab === tab.key}
-                    className={`min-w-0 flex-1 px-2 py-2.5 text-[11px] font-medium uppercase tracking-normal transition sm:px-3 sm:text-xs sm:tracking-[0.16em] ${activeTab === tab.key ? "bg-[#111] text-white" : "text-zinc-500 hover:text-[#111]"}`}
+                    className={`min-w-0 flex-1 rounded-full px-2 py-2.5 text-[11px] font-medium uppercase tracking-normal transition sm:px-3 sm:text-xs sm:tracking-[0.16em] ${activeTab === tab.key ? "bg-[#111] text-white shadow-sm" : "text-zinc-500 hover:text-[#111]"}`}
                   >
                     {tab.label}
                   </button>
@@ -513,9 +513,9 @@ export function ProductDetailClient({
                           key={variant.id}
                           type="button"
                           onClick={() => setSelectedDoseId(variant.id)}
-                          className={`relative border px-4 py-2 text-sm transition ${
+                          className={`relative rounded-full border px-4 py-2 text-sm transition active:scale-95 ${
                             selectedDose?.id === variant.id
-                              ? "border-[#111] bg-[#111] text-white"
+                              ? "border-[#111] bg-[#111] text-white shadow-sm"
                               : "border-zinc-200 text-zinc-600 hover:border-zinc-400 hover:text-[#111]"
                           } ${variant.stockStatus === "Out of Stock" ? "opacity-40" : ""}`}
                         >
@@ -728,17 +728,17 @@ export function ProductDetailClient({
         />
       </main>
 
-      <div className="fixed inset-x-0 bottom-0 z-50 border-t border-zinc-200 bg-white/95 px-4 py-3 backdrop-blur-xl lg:hidden">
+      <div className="fixed inset-x-0 bottom-0 z-50 border-t border-zinc-200/80 bg-white/95 px-4 pt-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] shadow-[0_-8px_24px_-12px_rgba(0,0,0,0.25)] backdrop-blur-xl lg:hidden">
         <div className="flex items-center gap-3">
-          <div className="flex-1">
+          <div className="min-w-0 flex-1">
             <p className="truncate text-xs font-medium text-[#111]">{product.name}</p>
-            <p className="text-sm font-semibold text-zinc-600">{selectedPrice}</p>
+            <p className="text-base font-semibold text-[#111]">{selectedPrice}</p>
           </div>
           <button
             onClick={(event) => handleAddToCart(event.currentTarget)}
             type="button"
             disabled={isOutOfStock}
-            className="vl2-lab-btn-primary vl-focus-ring shrink-0 px-6 py-3.5 text-sm disabled:opacity-50"
+            className="vl2-lab-btn-primary vl-focus-ring shrink-0 rounded-full px-7 py-3.5 text-sm transition active:scale-95 disabled:opacity-50"
           >
             {isOutOfStock ? "Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
           </button>
