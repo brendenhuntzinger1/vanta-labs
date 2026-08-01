@@ -253,9 +253,10 @@ export function CartPageClient() {
             <button
               type="button"
               onClick={() => router.push("/checkout")}
-              className="vl2-btn-primary vl-focus-ring mt-8 inline-flex w-full justify-center px-5 py-3 text-center text-sm"
+              disabled={isHydrated && items.length === 0}
+              className="vl2-btn-primary vl-focus-ring mt-8 inline-flex w-full justify-center px-5 py-3 text-center text-sm disabled:cursor-not-allowed disabled:opacity-50"
             >
-              Continue to checkout
+              {isHydrated && items.length === 0 ? "Your cart is empty" : "Continue to checkout"}
             </button>
 
             <div className="mt-5 flex items-center justify-center gap-6 text-[10px] uppercase tracking-[0.14em] text-white/70">

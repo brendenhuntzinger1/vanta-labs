@@ -92,7 +92,10 @@ export async function POST(request: Request) {
       customer,
       referralCode,
       couponCode: body.couponCode,
-      currency: body.currency,
+      // Hard-pin to USD. All amounts are computed in USD; honoring a
+      // client-supplied currency code (e.g. "mxn") while sending the USD
+      // numeric amount would let a crafted request massively underpay.
+      currency: "USD",
       expectedTotal: body.expectedTotal,
       customerUserId,
       pointsToRedeem: customerUserId ? Number(body.pointsToRedeem ?? 0) : 0,

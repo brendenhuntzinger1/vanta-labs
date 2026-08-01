@@ -113,9 +113,14 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
   out.push({
     key: "cron",
     label: "Scheduled jobs (renewals, cart recovery, expiry)",
-    level: cronConfigured ? "ok" : "warn",
-    detail: cronConfigured ? "CRON_SECRET set — timer armed" : "CRON_SECRET missing — scheduled jobs won't run",
-    blocksLaunch: false,
+    level: cronConfigured ? "ok" : "error",
+    detail: cronConfigured
+      ? "CRON_SECRET set — timer armed"
+      : "CRON_SECRET missing — scheduled jobs won't run. Abandoned-checkout inventory holds would never expire, permanently locking stock.",
+    // Launch-blocking: expireStaleReservations() runs only from the cron sweep.
+    // Without it, every abandoned/failed checkout's 15-min hold never releases,
+    // silently removing scarce stock from sale.
+    blocksLaunch: true,
   });
 
   // Sales tax — dynamic, from the shipping address. Collected only for the

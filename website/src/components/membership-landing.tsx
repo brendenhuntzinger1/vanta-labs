@@ -363,7 +363,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                       href={
                         isSignedInCustomer
                           ? `/membership/${tier.slug}/subscribe`
-                          : `/account/login?redirect=${encodeURIComponent(`/membership/${tier.slug}/subscribe`)}`
+                          : `/account/login?next=${encodeURIComponent(`/membership/${tier.slug}/subscribe`)}`
                       }
                       className={`vl-focus-ring inline-flex w-full items-center justify-center px-5 py-3 text-sm ${isFeatured || isBestValue ? "vl2-btn-primary" : "vl2-btn-secondary"}`}
                     >

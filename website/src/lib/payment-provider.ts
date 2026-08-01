@@ -169,7 +169,10 @@ export class LivePaymentProvider implements PaymentProvider {
         currency: (input.currency || "USD").toLowerCase(),
         customer_email: input.customerEmail,
         description: input.metadata?.orderNumber || input.orderId,
-        return_url: `${siteUrl}/checkout/confirmation?order=${encodeURIComponent(input.orderId)}`,
+        // Must be a real route — /checkout/confirmation does not exist, so a paid
+        // customer echoed back there would hit a 404. Send them to the actual
+        // order-confirmation page keyed by order id.
+        return_url: `${siteUrl}/order-confirmation/${encodeURIComponent(input.orderId)}`,
         // Real top-level origin of the page embedding the hosted checkout.
         // Embedded Apple Pay validates against this; without it the Apple
         // framework rejects the sheet on a cross-origin iframe mismatch.
