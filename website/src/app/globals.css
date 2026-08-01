@@ -1130,6 +1130,48 @@ textarea.vl-input { min-height: 6rem; }
   justify-content: flex-end;
 }
 
+/* Quiet scroll cue at the base of the hero — a slim capsule with a dot that
+   drifts down, signaling there's more below without shouting. */
+.vl2-hero-scroll-cue {
+  position: absolute;
+  bottom: 1.25rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  width: 1.4rem;
+  height: 2.4rem;
+  padding-top: 0.45rem;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.vl2-hero-scroll-dot {
+  width: 0.28rem;
+  height: 0.28rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.85);
+  animation: vl2-hero-scroll-drift 1.8s var(--ease-in-out-premium) infinite;
+}
+
+@keyframes vl2-hero-scroll-drift {
+  0% { transform: translateY(0); opacity: 0; }
+  35% { opacity: 1; }
+  70% { transform: translateY(0.7rem); opacity: 0; }
+  100% { transform: translateY(0.7rem); opacity: 0; }
+}
+
+@media (max-width: 640px) {
+  .vl2-hero-scroll-cue { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl2-hero-scroll-dot { animation: none; opacity: 0.85; }
+}
+
 .vl2-vial-label {
   animation: vl2-vial-drift 9s var(--ease-in-out-premium) infinite;
 }
