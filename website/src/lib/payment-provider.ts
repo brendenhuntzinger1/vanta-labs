@@ -186,12 +186,24 @@ export class LivePaymentProvider implements PaymentProvider {
       throw new Error(data?.error?.message || `Payment session could not be created (${response.status}).`);
     }
 
-    // `url` is the hosted checkout page. `embed_url` is the iframe variant —
-    // this provider contract is redirect-based, so we return the hosted URL.
-    const hostedCheckoutUrl = data.url;
-    if (!hostedCheckoutUrl) {
-      throw new Error("Payment session was created without a checkout URL.");
+    // Return an ON-SITE url, not VeyraGate's hosted page.
+    //
+    // Per Veyra's own quickstart the integration is "create a session server-side
+    // and mount the iframe" — the shopper stays on this domain and the card form
+    // is an iframe served from veyragate.com. Sending them to `data.url` instead
+    // navigates away to the merchant's configured checkout host, which for this
+    // account is a mask domain that does not serve the checkout app at all (it
+    // 404s), so the shopper hit a dead end after the order row was written.
+    //
+    // Keeping the field name `hostedCheckoutUrl` means the checkout page's
+    // existing `window.location.assign(result.hostedCheckoutUrl)` needs no change
+    // — it simply navigates on-site now.
+    if (!data.id) {
+      throw new Error("Payment session was created without an id.");
     }
+    const hostedCheckoutUrl =
+      `${siteUrl}/checkout/pay/${encodeURIComponent(input.orderId)}` +
+      `?cs=${encodeURIComponent(data.id)}`;
 
     return { paymentId: data.id, hostedCheckoutUrl };
   }

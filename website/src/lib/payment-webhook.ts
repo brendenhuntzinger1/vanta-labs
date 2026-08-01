@@ -42,7 +42,12 @@ export function getOrderStatusForEventType(eventType: string): OrderStatus {
     case "payment.succeeded":
     case "charge.succeeded":
       return "paid";
+    // Veyra's quickstart lists the failure event as `payment_failed` (underscore)
+    // while its drop-in script emits `payment.failed` (dot). Accept both rather
+    // than bet on which one the webhook actually carries — guessing wrong means a
+    // failed charge is recorded as nothing at all.
     case "payment.failed":
+    case "payment_failed":
     case "charge.failed":
       return "payment_failed";
     case "payment.canceled":

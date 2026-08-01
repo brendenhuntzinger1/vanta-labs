@@ -121,6 +121,14 @@ describe("getOrderStatusForEventType — VeyraGate event names", () => {
     expect(getOrderStatusForEventType("charge.refunded")).toBe("refunded");
   });
 
+  it("accepts both spellings of the failure event", () => {
+    // The quickstart documents `payment_failed` (underscore); the drop-in script
+    // emits `payment.failed` (dot). Guessing wrong records a failed charge as
+    // nothing at all, so both are accepted.
+    expect(getOrderStatusForEventType("payment_failed")).toBe("payment_failed");
+    expect(getOrderStatusForEventType("payment.failed")).toBe("payment_failed");
+  });
+
   it("maps Veyra's dispute.* onto the internal chargeback vocabulary", () => {
     expect(getOrderStatusForEventType("dispute.created")).toBe("refunded");
     expect(getOrderStatusForEventType("chargeback.created")).toBe("refunded");
