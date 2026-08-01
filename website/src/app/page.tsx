@@ -127,18 +127,39 @@ export default async function HomePage() {
               </div>
             ) : null}
             <p className="vl2-eyebrow">Research Use Only</p>
-            <h1 className="vl2-serif mt-5 max-w-2xl text-4xl leading-[1.05] text-white sm:text-5xl md:text-6xl lg:text-7xl">
+            <h1 className="vl2-serif mt-5 max-w-2xl text-[2.6rem] leading-[1.04] tracking-[-0.01em] text-white sm:text-5xl md:text-6xl lg:text-7xl">
               {control.heroHeadline ?? "Precision, in every vial."}
             </h1>
-            <p className="mt-4 max-w-md text-sm leading-6 text-white/70 sm:mt-6 sm:text-base sm:leading-7">
+            <p className="mt-4 max-w-md text-[0.95rem] leading-7 text-white/75 sm:mt-6 sm:text-lg sm:leading-8">
               {control.heroSubheadline ?? "Vanta Labs sources, verifies, and ships research compounds with the discipline of an analytical laboratory."}
             </p>
-            <div className="mt-6 flex flex-wrap gap-3 sm:mt-9">
-              <Link href="/products" className="vl2-btn-primary vl-focus-ring px-7 py-3.5">
+            <div className="mt-7 flex flex-col gap-3 sm:mt-9 sm:flex-row sm:items-center">
+              <Link href="/products" className="vl2-btn-primary vl-focus-ring w-full px-8 py-4 text-sm sm:w-auto">
                 Shop the catalog
               </Link>
+              <Link href="/membership" className="vl2-btn-secondary vl-focus-ring w-full px-8 py-4 text-sm sm:w-auto">
+                Explore membership
+              </Link>
             </div>
+
+            {/* Inline trust strip — factual claims only, right under the CTA so
+                purchase confidence lands before the fold on mobile. */}
+            <ul className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-white/65 sm:mt-8 sm:text-[0.8rem]">
+              {["Third-party batch tested", "99%+ purity", "COA on every lot", "Ships from the USA"].map((claim) => (
+                <li key={claim} className="inline-flex items-center gap-1.5">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5 text-emerald-300">
+                    <path d="m5 12 4 4 10-10" />
+                  </svg>
+                  {claim}
+                </li>
+              ))}
+            </ul>
           </div>
+        </div>
+
+        {/* Subtle scroll cue — a quiet premium detail, hidden for reduced motion. */}
+        <div className="vl2-hero-scroll-cue" aria-hidden="true">
+          <span className="vl2-hero-scroll-dot" />
         </div>
       </section>
 
