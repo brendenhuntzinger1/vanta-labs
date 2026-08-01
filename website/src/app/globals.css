@@ -1746,3 +1746,43 @@ textarea {
   outline: 2px solid rgba(10, 10, 10, 0.78);
   outline-offset: 2px;
 }
+
+/* ── Apple Pay button ──────────────────────────────────────────────────────
+   The express-checkout button must be Apple's own, not a styled <button> with
+   the words "Apple Pay" in it. Apple draws the mark, wordmark and typography
+   itself via this appearance value; a hand-built lookalike is both visibly
+   wrong (no  glyph, wrong face) and against Apple's Human Interface
+   Guidelines, which require the supplied button for Apple Pay merchants.
+
+   `white` matches the existing dark-surface treatment. Height is set explicitly
+   because the native button ignores padding — its content is drawn by the OS,
+   so there is nothing inside to pad. For the same reason no text can be placed
+   inside it; in-flight states are rendered as a separate element. */
+.vl-apple-pay-button {
+  -webkit-appearance: -apple-pay-button;
+  appearance: -apple-pay-button;
+  -apple-pay-button-type: buy;
+  -apple-pay-button-style: white;
+  display: block;
+  width: 100%;
+  height: 46px;
+  border: 0;
+  border-radius: 9999px;
+  cursor: pointer;
+}
+
+.vl-apple-pay-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Fallback for engines that do not implement the Apple Pay appearance value.
+   The button only renders when canMakePayments() is true, so in practice this
+   is a belt-and-braces guard rather than a common path. */
+@supports not (-webkit-appearance: -apple-pay-button) {
+  .vl-apple-pay-button {
+    background: #ffffff;
+    color: #000000;
+    font-weight: 600;
+  }
+}

@@ -685,14 +685,15 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
   if (!acknowledged) {
     return (
       <div className="space-y-1.5">
+        {/* Apple's own button, dimmed. Rendering a lookalike pill with the words
+            "Apple Pay" set in the site's typeface misuses the mark; the supplied
+            button dims correctly and stays recognisably Apple's. */}
         <button
           type="button"
           disabled
-          aria-label="Apple Pay express checkout"
-          className="w-full cursor-not-allowed rounded-full bg-white/25 px-4 py-3 text-center text-sm font-semibold text-black/40"
-        >
-          Apple Pay
-        </button>
+          aria-label="Buy with Apple Pay"
+          className="vl-apple-pay-button"
+        />
         <p className="text-center text-[11px] text-zinc-500">
           Confirm the three required statements above to use Apple Pay.
         </p>
@@ -710,17 +711,34 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
     return null;
   }
 
+  // While a payment is in flight the native button is replaced rather than
+  // relabelled: Apple draws its own content, so text placed inside it is never
+  // shown and the button would appear frozen with no feedback.
+  if (paying || paid) {
+    return (
+      <div className="space-y-1.5">
+        <div
+          role="status"
+          aria-live="polite"
+          className="flex h-[46px] w-full items-center justify-center rounded-full bg-white/25 text-sm font-semibold text-black/60"
+        >
+          {paid ? "Order placed" : "Confirming…"}
+        </div>
+        {error ? <p className="text-center text-[11px] text-rose-300">{error}</p> : null}
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-1.5">
+      {/* Apple's own button — the mark, wordmark and typography are drawn by the
+          OS. It carries no children on purpose; anything inside is not rendered. */}
       <button
         type="button"
         onClick={startPayment}
-        disabled={paying || paid}
-        aria-label="Apple Pay express checkout"
-        className="vl-focus-ring w-full rounded-full bg-white px-4 py-3 text-center text-sm font-semibold text-black transition hover:bg-white/90 disabled:opacity-60"
-      >
-        {paid ? "Order placed" : paying ? "Confirming…" : "Apple Pay"}
-      </button>
+        aria-label="Buy with Apple Pay"
+        className="vl-apple-pay-button vl-focus-ring"
+      />
       {error ? <p className="text-center text-[11px] text-rose-300">{error}</p> : null}
     </div>
   );
