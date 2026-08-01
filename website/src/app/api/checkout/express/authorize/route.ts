@@ -37,12 +37,18 @@ export const maxDuration = 60;
 /** What actually happened at Veyra, which is not a yes/no question. */
 type PayOutcome =
   | "succeeded"
-  /** 409 duplicate — a charge DID succeed. Never release inventory. */
+  /** 409 duplicate — a REFUSAL, not a success. Veyra's cross-session guard
+   *  matches (merchant, email, amount) against a prior CAPTURED charge and
+   *  fires BEFORE any PaymentIntent exists, then releases its session back to
+   *  `open`. Nothing was charged for THIS order; the charge it matched belongs
+   *  to an earlier order that holds its own stock. */
   | "duplicate"
-  /** 409 session_not_available with public_status succeeded — same. */
+  /** 409 session_not_available with public_status succeeded — THIS session's
+   *  own capture. The only 409 that is genuinely a success. */
   | "already_succeeded"
-  /** 3DS pending. No webhook until the customer completes it, which an Apple
-   *  sheet has no surface for — the cron has to resolve it. */
+  /** 3DS pending. Veyra returns the hosted challenge URL with it; we hand that
+   *  to the shopper so the sheet isn't a dead end. Without one the order is
+   *  stranded and needs an operator. */
   | "requires_action"
   /** Veyra answered, and the answer was no. */
   | "answered_no"
@@ -63,6 +69,9 @@ interface AuthorizeResult {
   orderNumber?: string;
   totalCents?: number;
   message?: string;
+  /** Hosted 3DS challenge page, on `requires_action` only. Validated https
+   *  before it leaves this route — it is handed to the browser to navigate to. */
+  redirectUrl?: string;
 }
 
 function refuse(message: string, status = 200) {
@@ -308,7 +317,7 @@ export async function POST(request: Request) {
   }
 
   // ---- 5.8 Charge ---------------------------------------------------------
-  const outcome = await chargeViaVeyra({
+  const { outcome, redirectUrl } = await chargeViaVeyra({
     sessionId,
     tokenIntentId,
     orderId: claimed.order_id,
@@ -344,14 +353,52 @@ export async function POST(request: Request) {
     return NextResponse.json(result);
   }
 
+  if (outcome === "duplicate") {
+    // A REFUSAL, not a success. Veyra's duplicate guard runs before any
+    // PaymentIntent exists and releases its session back to `open`, so no
+    // money moved for this order — its own 409 body says so ("Your card has
+    // not been charged again"). The charge it matched belongs to an EARLIER
+    // order, which is holding its own reservation.
+    //
+    // So this row is a phantom: cancel it and hand the stock back, or it sits
+    // at pending_payment forever with inventory reserved against no money,
+    // being polled by a reconciliation cron that can never settle it. This is
+    // safe in a way the `never_heard_back` release would not be — there, the
+    // charge may have landed; here Veyra told us it explicitly did not.
+    await cancelOrder(claimed.order_id);
+    await releaseInventoryForOrder(claimed.order_id);
+    await recordSystemAlert({
+      type: "express_duplicate_refused",
+      severity: "warning",
+      message: `Apple Pay order ${claimed.order_number} was refused as a duplicate of a charge placed moments earlier, so it was never charged and has been canceled. Confirm the earlier order settled — a duplicate refusal usually means the shopper never saw its confirmation.`,
+      context: { order_id: claimed.order_id, session_id: sessionId, outcome },
+    });
+    const result: AuthorizeResult = {
+      ok: false,
+      outcome,
+      message:
+        "This looks like a repeat of an order you just placed, so we didn't charge you again. Check your email for that confirmation before trying again.",
+    };
+    await finish(sessionId, result, "failed");
+    return NextResponse.json(result);
+  }
+
   if (outcome === "requires_action" || outcome === "never_heard_back") {
     // Money may well have moved. Leave the order pending, keep the hold, and
     // let the webhook or the reconciliation cron settle it.
+    //
+    // `requires_action` WITH a hosted challenge URL is the one case here that
+    // has a shopper-side path: the sheet closes and we send them to Veyra's
+    // hosted 3DS page, which finishes the charge and fires the webhook. Only
+    // an action-required charge with nowhere to send them is a true dead end.
+    const stranded = outcome === "never_heard_back" || !redirectUrl;
     await recordSystemAlert({
       type: "express_charge_unresolved",
-      severity: "critical",
-      message: `An Apple Pay charge did not resolve (${outcome}). Order ${claimed.order_number} is pending and may or may not be paid — reconcile it against Veyra before refunding or re-charging.`,
-      context: { order_id: claimed.order_id, session_id: sessionId, outcome },
+      severity: stranded ? "critical" : "warning",
+      message: stranded
+        ? `An Apple Pay charge did not resolve (${outcome}). Order ${claimed.order_number} is pending and may or may not be paid — reconcile it against Veyra before refunding or re-charging.`
+        : `Apple Pay order ${claimed.order_number} needs 3DS. The shopper was sent to the hosted challenge; it settles by webhook if they complete it, and stays pending if they abandon it.`,
+      context: { order_id: claimed.order_id, session_id: sessionId, outcome, has_redirect: Boolean(redirectUrl) },
     });
     const result: AuthorizeResult = {
       ok: false,
@@ -359,7 +406,10 @@ export async function POST(request: Request) {
       orderId: claimed.order_id,
       orderNumber: claimed.order_number,
       totalCents: expectedCents,
-      message: "We're confirming your payment. Do not try again — you'll get an email once it's confirmed.",
+      ...(redirectUrl ? { redirectUrl } : {}),
+      message: redirectUrl
+        ? "Your bank needs to verify this payment. We're taking you there now."
+        : "We're confirming your payment. Do not try again — you'll get an email once it's confirmed.",
     };
     await finish(sessionId, result, "consumed");
     return NextResponse.json(result);
@@ -398,7 +448,7 @@ async function chargeViaVeyra(input: {
   lockedTaxCents: number;
   ip: string | null;
   userAgent: string | null;
-}): Promise<PayOutcome> {
+}): Promise<{ outcome: PayOutcome; redirectUrl: string | null }> {
   let response: Response;
   try {
     response = await fetch(`${veyraApiBase()}/api/checkout/${encodeURIComponent(input.sessionId)}/pay-bt`, {
@@ -448,35 +498,58 @@ async function chargeViaVeyra(input: {
     // session's processing timestamp, which changes whenever the session is
     // released back to open — so a "retry" is a genuinely new key and a second
     // charge. The cron polls the session instead.
-    return "never_heard_back";
+    return { outcome: "never_heard_back", redirectUrl: null };
   }
 
-  let payload: { public_status?: string; error?: string } | null = null;
+  let payload: { public_status?: string; error?: string; redirect_url?: unknown } | null = null;
   try {
-    payload = (await response.json()) as { public_status?: string; error?: string };
+    payload = (await response.json()) as { public_status?: string; error?: string; redirect_url?: unknown };
   } catch {
     payload = null;
   }
 
   if (!payload) {
-    return response.ok ? "never_heard_back" : "never_heard_back";
+    return { outcome: "never_heard_back", redirectUrl: null };
   }
 
   if (response.ok && payload.public_status === "succeeded") {
-    return "succeeded";
+    return { outcome: "succeeded", redirectUrl: null };
   }
   if (response.status === 409 && payload.public_status === "duplicate") {
-    return "duplicate";
+    return { outcome: "duplicate", redirectUrl: null };
   }
   if (response.status === 409 && payload.public_status === "succeeded" && payload.error === "session_not_available") {
-    return "already_succeeded";
+    return { outcome: "already_succeeded", redirectUrl: null };
   }
   if (payload.public_status === "requires_action") {
-    return "requires_action";
+    // The hosted challenge page. Validated here, not in the browser: this URL
+    // is navigated to, so a non-https value from anywhere upstream must never
+    // reach the client.
+    return { outcome: "requires_action", redirectUrl: safeHttpsUrl(payload.redirect_url) };
   }
-  if (payload.public_status === "failed" || payload.public_status === "blocked" || response.status === 409 || response.status < 500) {
-    return "answered_no";
+  if (
+    payload.public_status === "failed" ||
+    payload.public_status === "blocked" ||
+    // Genuine client errors only. `answered_no` is the ONE branch that releases
+    // inventory and tells the shopper they were declined, so nothing may land
+    // in it by default — an unenumerated public_status, or a 2xx body shape we
+    // don't recognise, must fall through to `never_heard_back` and be
+    // reconciled against the processor instead of guessed at.
+    (response.status >= 400 && response.status < 500)
+  ) {
+    return { outcome: "answered_no", redirectUrl: null };
   }
-  // A 5xx we could parse but can't interpret: treat as unresolved, not declined.
-  return "never_heard_back";
+  // Anything else — a 5xx, or a 2xx/3xx whose body we could parse but can't
+  // interpret: unresolved, not declined.
+  return { outcome: "never_heard_back", redirectUrl: null };
+}
+
+/** A URL we are willing to navigate a browser to. Anything else becomes null. */
+function safeHttpsUrl(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  try {
+    return new URL(value).protocol === "https:" ? value : null;
+  } catch {
+    return null;
+  }
 }

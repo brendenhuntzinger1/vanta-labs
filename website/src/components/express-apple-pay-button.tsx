@@ -79,6 +79,7 @@ interface ApplePaySessionLike {
 interface ApplePaySessionConstructor {
   new (version: number, request: Record<string, unknown>): ApplePaySessionLike;
   canMakePayments(): boolean;
+  supportsVersion(version: number): boolean;
   STATUS_SUCCESS: number;
   STATUS_FAILURE: number;
 }
@@ -114,6 +115,11 @@ interface RatesResponse {
   error?: string;
 }
 
+/** PassKit API version. The constructor THROWS InvalidAccessError on any device
+ *  that doesn't support it, so this is gated on supportsVersion() below rather
+ *  than assumed. */
+const APPLE_PAY_VERSION = 6;
+
 const money = (cents: number) => (cents / 100).toFixed(2);
 
 // Platform support never changes within a page load, so there is nothing to
@@ -125,6 +131,11 @@ const getPlatformSupport = () =>
   EXPRESS_CHECKOUT_ENABLED &&
   isApplePlatform(window.navigator.userAgent) &&
   typeof window.ApplePaySession !== "undefined" &&
+  // Below iOS 13.4 / macOS 10.15.4 the v6 CONSTRUCTOR throws rather than
+  // returning anything, so this has to be checked before the button renders —
+  // not caught at tap time, by which point the shopper has already committed.
+  typeof window.ApplePaySession.supportsVersion === "function" &&
+  window.ApplePaySession.supportsVersion(APPLE_PAY_VERSION) &&
   window.ApplePaySession.canMakePayments() &&
   isRegisteredApplePayHost(window.location.hostname);
 
@@ -328,7 +339,6 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
     const merchantName = config?.wallets?.merchant_name || "Secure Checkout";
     const currency = (config?.currency || "usd").toUpperCase();
 
-    setPaying(true);
     setError("");
     lockedRef.current = { methodId: null, shippingCents: 0, taxCents: 0 };
 
@@ -337,29 +347,42 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
     // with no shipping/tax rows would show the shopper a number that then
     // silently grows. They flip to 'final' only once the amount authority has
     // answered with real numbers.
-    const appleSession = new ApplePaySession(6, {
-      // Merchant country, not the shopper's destination.
-      countryCode: "US",
-      currencyCode: currency,
-      merchantCapabilities: ["supports3DS", "supportsCredit", "supportsDebit"],
-      // AMEX is excluded: on a descriptor-masked account it lands without a
-      // billing-of-record address and issuers hard-decline. AMEX-only wallet
-      // users fall through to the card form.
-      supportedNetworks: ["visa", "masterCard", "discover"],
-      requiredShippingContactFields: ["postalAddress", "name", "email", "phone"],
-      // 'email' here is mandatory: without it iOS leaves billingContact email
-      // empty, the charge reaches the processor with no cardholder identity,
-      // and issuers decline. billingContact is the authoritative identity;
-      // shippingContact is a best-effort fallback (Apple strips its email on
-      // some iOS versions).
-      requiredBillingContactFields: ["name", "email"],
-      total: { label: merchantName, type: "pending", amount: money(amountCents) },
-      lineItems: [
-        ...serverLineItems.map(toSheetLineItem),
-        { label: "Shipping", amount: "0.00", type: "pending" },
-        { label: "Sales tax", amount: "0.00", type: "pending" },
-      ],
-    });
+    //
+    // The constructor throws (InvalidAccessError on an unsupported version, and
+    // on a malformed request dictionary), so `paying` is NOT set until it has
+    // returned — setting it first left the button stuck reading "Confirming…"
+    // forever, with no error and no way back short of reopening the drawer.
+    let created: ApplePaySessionLike | null = null;
+    try {
+      created = new ApplePaySession(APPLE_PAY_VERSION, {
+        // Merchant country, not the shopper's destination.
+        countryCode: "US",
+        currencyCode: currency,
+        merchantCapabilities: ["supports3DS", "supportsCredit", "supportsDebit"],
+        // AMEX is excluded: on a descriptor-masked account it lands without a
+        // billing-of-record address and issuers hard-decline. AMEX-only wallet
+        // users fall through to the card form.
+        supportedNetworks: ["visa", "masterCard", "discover"],
+        requiredShippingContactFields: ["postalAddress", "name", "email", "phone"],
+        // 'email' here is mandatory: without it iOS leaves billingContact email
+        // empty, the charge reaches the processor with no cardholder identity,
+        // and issuers decline. billingContact is the authoritative identity;
+        // shippingContact is a best-effort fallback (Apple strips its email on
+        // some iOS versions).
+        requiredBillingContactFields: ["name", "email"],
+        total: { label: merchantName, type: "pending", amount: money(amountCents) },
+        lineItems: [
+          ...serverLineItems.map(toSheetLineItem),
+          { label: "Shipping", amount: "0.00", type: "pending" },
+          { label: "Sales tax", amount: "0.00", type: "pending" },
+        ],
+      });
+    } catch {
+      setError("Apple Pay isn't available on this device. Please use the card form.");
+      return;
+    }
+    const appleSession = created;
+    setPaying(true);
 
     const failSheet = (message: string) => {
       setError(message);
@@ -568,15 +591,45 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
           outcome?: string;
           orderId?: string;
           message?: string;
+          redirectUrl?: string;
         };
 
         if (!result.ok) {
           submittingRef.current = false;
+
+          // 3DS continuation. The sheet has no surface for a challenge, so
+          // acknowledge it as successful — that closes it cleanly instead of
+          // dropping the shopper into Apple's generic failure modal — and then
+          // hand them to the hosted challenge page, which completes the charge
+          // and fires the webhook. Nothing is paid yet, so NO paid lock is
+          // written and the session is not re-minted.
+          if (result.outcome === "requires_action" && result.redirectUrl) {
+            try {
+              appleSession.completePayment(ApplePaySession.STATUS_SUCCESS);
+            } catch {
+              // Sheet already closed.
+            }
+            setError("");
+            setPaying(false);
+            closeCart();
+            window.location.assign(result.redirectUrl);
+            return;
+          }
+
           failSheet(result.message || "That payment couldn't be completed.");
-          // A terminal, non-duplicate failure burns the session. Re-arm with a
-          // fresh one so the shopper can retry with another card. This is a
-          // shopper-initiated retry, not an automatic re-charge.
-          if (result.outcome !== "requires_action" && result.outcome !== "never_heard_back") {
+          // A terminal failure burns the session. Re-arm with a fresh one so
+          // the shopper can retry with another card. This is a shopper-initiated
+          // retry, not an automatic re-charge.
+          //
+          // Excluded: the unresolved outcomes (a re-arm invites a second charge
+          // on a payment that may have landed) and `duplicate` (the processor
+          // has already refused this cart as a repeat of an order placed moments
+          // ago, so another tap inside its window can only be refused again).
+          if (
+            result.outcome !== "requires_action" &&
+            result.outcome !== "never_heard_back" &&
+            result.outcome !== "duplicate"
+          ) {
             void mintSession();
           }
           return;
@@ -612,7 +665,14 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
       setPaying(false);
     };
 
-    appleSession.begin();
+    try {
+      appleSession.begin();
+    } catch {
+      // begin() throws on the same conditions the constructor does, plus a
+      // non-user-gesture call. Recover the button rather than stranding it.
+      setPaying(false);
+      setError("Apple Pay couldn't be started. Please try again.");
+    }
   }, [session, config, closeCart, router, mintSession]);
 
   if (!EXPRESS_CHECKOUT_ENABLED || !platformOk) {
