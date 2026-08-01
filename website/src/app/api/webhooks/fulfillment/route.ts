@@ -47,7 +47,14 @@ function normalizeInbound(body: Record<string, unknown>): InboundFulfillmentEven
     carrier: str(body.carrier) || undefined,
     message: str(body.message) || str(body.error) || undefined,
     inventory: inventoryRaw
-      .map((row) => ({ sku: str(row.sku), quantity: Number(row.quantity ?? 0) }))
+      .map((row) => ({
+        sku: str(row.sku),
+        // The dose this quantity belongs to (this store's product_doses.id).
+        // Dropping it here is what previously forced every dose of a product to
+        // share one number, so a sold-out dose still read as sellable.
+        variant: str(row.variant) || null,
+        quantity: Number(row.quantity ?? 0),
+      }))
       .filter((row) => row.sku),
   };
 }
