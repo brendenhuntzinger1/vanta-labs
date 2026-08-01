@@ -42,9 +42,16 @@ function toLine(input: {
 }
 
 export async function getInventoryRows(): Promise<InventoryLine[]> {
+  // Archived products are excluded. They are soft-deleted predecessors kept so
+  // historical orders still resolve — superseded imports whose doses are labelled
+  // with a space ("5 mg" vs "5mg"). They can never be sold and the 3PL never
+  // reports stock for them, so they sat permanently at zero and made the screen
+  // read as though live stock had failed to sync: e.g. a real "GLP-1 — 5mg = 92"
+  // next to a dead "GLP-1 — 5 mg = 0".
   const { data: products, error: productError } = await supabaseAdmin
     .from("products")
     .select("id, slug, name, category, inventory_quantity, low_stock_threshold")
+    .eq("is_archived", false)
     .order("name", { ascending: true });
 
   if (productError) {
