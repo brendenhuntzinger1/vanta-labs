@@ -10,6 +10,7 @@ import { SiteAnalyticsTracker } from "@/components/site-analytics-tracker";
 import { SiteFooter } from "@/components/site-footer";
 import { CookieConsent } from "@/components/cookie-consent";
 import { WelcomeOffer } from "@/components/welcome-offer";
+import { Analytics } from "@vercel/analytics/next";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -135,6 +136,7 @@ export default function RootLayout({
             <CookieConsent />
           </AgeGate>
         </CartProvider>
+        <Analytics />
       </body>
     </html>
   );
