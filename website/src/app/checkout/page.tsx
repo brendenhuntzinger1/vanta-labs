@@ -211,7 +211,10 @@ export default function CheckoutPage() {
   // file. Phone-only accounts have no email, so they must enter one here to
   // receive their order confirmation / receipt.
   const [emailLockedToAccount, setEmailLockedToAccount] = useState(false);
-  const [marketingOptIn, setMarketingOptIn] = useState(false);
+  // Pre-checked by default: shoppers are opted into offers, coupons, and
+  // restock alerts unless they untick it. The box stays visible with a clear
+  // "unsubscribe anytime" note so it's an easy, honest opt-out.
+  const [marketingOptIn, setMarketingOptIn] = useState(true);
   const [form, setForm] = useState<CheckoutForm>({
     fullName: "",
     email: "",
