@@ -104,6 +104,14 @@ function IconMore({ className = base }: IconProps) {
     </svg>
   );
 }
+function IconBell({ className = base }: IconProps) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M6 9a6 6 0 0 1 12 0c0 5 2 6 2 6H4s2-1 2-6" />
+      <path d="M10 20a2 2 0 0 0 4 0" />
+    </svg>
+  );
+}
 
 /* ------------------------------------------------------------------ */
 /*  Nav config                                                        */
@@ -127,6 +135,7 @@ const PRIMARY: NavItem[] = [
 ];
 
 const SECONDARY: NavItem[] = [
+  { href: "/account/notifications", label: "Notifications", icon: IconBell },
   { href: "/account/support", label: "Support", icon: IconSupport },
   { href: "/account/settings", label: "Settings", icon: IconSettings },
   { href: "/products", label: "Shop products", icon: IconProducts, external: true },

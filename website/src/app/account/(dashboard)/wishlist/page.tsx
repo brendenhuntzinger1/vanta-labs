@@ -26,7 +26,7 @@ export default async function AccountWishlistPage() {
         </p>
       </header>
 
-      <AccountWishlistClient products={products} />
+      <AccountWishlistClient products={products} email={user.email ?? undefined} />
     </div>
   );
 }
