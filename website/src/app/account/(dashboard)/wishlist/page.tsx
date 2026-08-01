@@ -17,13 +17,16 @@ export default async function AccountWishlistPage() {
   const products = await getCatalogProductsBySlugs(slugs).catch(() => []);
 
   return (
-    <div className="space-y-6">
-      <section className="vl-panel rounded-2xl p-5 sm:p-6">
-        <h1 className="text-2xl font-semibold text-white">Wishlist</h1>
-        <p className="mt-2 text-sm text-zinc-400">{products.length} saved item{products.length === 1 ? "" : "s"}.</p>
-      </section>
+    <div className="space-y-5">
+      <header className="vl-fade-up">
+        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Account</p>
+        <h1 className="vl2-serif mt-1.5 text-3xl text-white sm:text-4xl">Wishlist</h1>
+        <p className="mt-2 text-sm text-zinc-400">
+          {products.length === 0 ? "Save products to keep an eye on them." : `${products.length} saved item${products.length === 1 ? "" : "s"} · add to cart in one tap.`}
+        </p>
+      </header>
 
-      <AccountWishlistClient products={products} />
+      <AccountWishlistClient products={products} email={user.email ?? undefined} />
     </div>
   );
 }

@@ -8,10 +8,12 @@ import { useCart } from "@/components/cart-context";
 const NAV_LINKS = [
   { href: "/products", label: "Products" },
   { href: "/membership", label: "Membership" },
-  { href: "/coa-library", label: "COA Library" },
   { href: "/research", label: "Research" },
   { href: "/partner", label: "Partner Program" },
   { href: "/contact", label: "Contact us" },
+  // COA Library sits last and intentionally understated — a quiet reference
+  // link, not a primary destination.
+  { href: "/coa-library", label: "COA Library", discreet: true },
 ];
 
 function CartIcon() {
@@ -102,7 +104,9 @@ export function SiteHeaderV2() {
               className={`vl-focus-ring rounded-full px-3.5 py-2 text-[0.72rem] font-medium uppercase tracking-[0.16em] transition ${
                 link.href === "/membership"
                   ? "bg-white text-black shadow-sm ring-1 ring-inset ring-white/70 hover:bg-white/90"
-                  : "text-white/75 hover:text-white"
+                  : link.discreet
+                    ? "text-[0.66rem] font-normal tracking-[0.14em] text-white/40 hover:text-white/70"
+                    : "text-white/75 hover:text-white"
               }`}
             >
               {link.label}
@@ -202,7 +206,9 @@ export function SiteHeaderV2() {
                 className={`vl-focus-ring flex min-h-[44px] items-center rounded-lg px-3 py-3 text-sm uppercase tracking-[0.12em] transition ${
                   link.href === "/membership"
                     ? "bg-white text-black ring-1 ring-inset ring-white/70 hover:bg-white/90"
-                    : "text-white/85 hover:bg-white/5 hover:text-white"
+                    : link.discreet
+                      ? "text-xs text-white/45 hover:bg-white/5 hover:text-white/75"
+                      : "text-white/85 hover:bg-white/5 hover:text-white"
                 }`}
               >
                 {link.label}

@@ -1634,3 +1634,103 @@ textarea {
     min-height: 86svh;
   }
 }
+
+/* ------------------------------------------------------------------ */
+/*  Account dashboard motion — mobile bottom-sheet, card entrances,    */
+/*  success pop, and a premium skeleton shimmer. All 200–300ms and     */
+/*  disabled under prefers-reduced-motion.                             */
+/* ------------------------------------------------------------------ */
+
+@keyframes vl-sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+.vl-sheet-in {
+  animation: vl-sheet-up 280ms var(--ease-out-premium);
+  will-change: transform;
+}
+
+@keyframes vl-fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.vl-fade-up {
+  animation: vl-fade-up 320ms var(--ease-out-premium) both;
+}
+
+@keyframes vl-pop-in {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.08);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.vl-pop-in {
+  animation: vl-pop-in 300ms var(--ease-out-premium) both;
+}
+
+@keyframes vl-check-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+.vl-check-draw {
+  stroke-dasharray: 26;
+  stroke-dashoffset: 26;
+  animation: vl-check-draw 320ms var(--ease-out-premium) 120ms forwards;
+}
+
+@keyframes vl-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+.vl-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+}
+.vl-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.08),
+    transparent
+  );
+  animation: vl-shimmer 1.5s infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-sheet-in,
+  .vl-fade-up,
+  .vl-pop-in,
+  .vl-check-draw {
+    animation: none;
+  }
+  .vl-check-draw {
+    stroke-dashoffset: 0;
+  }
+  .vl-skeleton::after {
+    animation: none;
+  }
+}
