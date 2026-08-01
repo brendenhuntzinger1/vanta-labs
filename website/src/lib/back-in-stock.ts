@@ -31,6 +31,10 @@ export async function requestBackInStock(input: {
     .from("products")
     .select("slug")
     .eq("slug", productSlug)
+    // Archived products are never restocked, so a notification request against
+    // one could only ever come from a stale link and would sit unfulfilled
+    // forever. Reject it here rather than quietly queue a promise we cannot keep.
+    .eq("is_archived", false)
     .maybeSingle();
   if (!exists) {
     return { ok: false, error: "Unknown product." };
