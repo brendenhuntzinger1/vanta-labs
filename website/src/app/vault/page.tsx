@@ -106,6 +106,13 @@ export default function VaultPage() {
             </div>
           ) : (
             <form className="mt-6 space-y-4" onSubmit={onSubmit} autoComplete="off">
+              {/* A hidden dummy password field absorbs Chrome/Safari's
+                  "offer to save" heuristic, which ignores autoComplete="off"
+                  on a lone visible password field. Kept off-screen and
+                  non-interactive so it never affects real input. */}
+              <input type="text" name="_vl_u" autoComplete="username" tabIndex={-1} aria-hidden="true" style={{ position: "absolute", opacity: 0, height: 0, width: 0, pointerEvents: "none" }} />
+              <input type="password" name="_vl_p" autoComplete="new-password" tabIndex={-1} aria-hidden="true" style={{ position: "absolute", opacity: 0, height: 0, width: 0, pointerEvents: "none" }} />
+
               <label className="block text-xs uppercase tracking-[0.16em] text-zinc-500">
                 Username
                 <input
@@ -115,6 +122,9 @@ export default function VaultPage() {
                   autoComplete="off"
                   spellCheck={false}
                   autoCapitalize="none"
+                  data-1p-ignore="true"
+                  data-lpignore="true"
+                  data-form-type="other"
                   required
                 />
               </label>
@@ -126,7 +136,10 @@ export default function VaultPage() {
                   type="password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
-                  autoComplete="off"
+                  autoComplete="new-password"
+                  data-1p-ignore="true"
+                  data-lpignore="true"
+                  data-form-type="other"
                   required
                 />
               </label>
