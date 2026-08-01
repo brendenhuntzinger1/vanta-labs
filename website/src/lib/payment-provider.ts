@@ -143,7 +143,12 @@ export function verifyTimestampedSignature(
 export class LivePaymentProvider implements PaymentProvider {
   async createCheckoutSession(input: CreateCheckoutSessionInput): Promise<CheckoutSessionResult> {
     const base = getRequiredEnv("VEYRA_API_BASE").replace(/\/+$/, "");
-    const key = getRequiredEnv("VEYRA_SECRET_KEY");
+    // Accept the documented PAYMENT_SECRET_KEY as a fallback so an operator who
+    // set the documented key (rather than VEYRA_SECRET_KEY) still works.
+    const key = (process.env.VEYRA_SECRET_KEY || process.env.PAYMENT_SECRET_KEY || "").trim();
+    if (!key) {
+      throw new Error("Payment provider secret is not configured (set VEYRA_SECRET_KEY or PAYMENT_SECRET_KEY).");
+    }
 
     // `input.amount` is ALREADY in minor units — createCheckoutSession() in
     // payment-service.ts passes `Math.round(finalTotal * 100)`. VeyraGate's
@@ -169,7 +174,10 @@ export class LivePaymentProvider implements PaymentProvider {
         currency: (input.currency || "USD").toLowerCase(),
         customer_email: input.customerEmail,
         description: input.metadata?.orderNumber || input.orderId,
-        return_url: `${siteUrl}/checkout/confirmation?order=${encodeURIComponent(input.orderId)}`,
+        // Must be a real route — /checkout/confirmation does not exist, so a paid
+        // customer echoed back there would hit a 404. Send them to the actual
+        // order-confirmation page keyed by order id.
+        return_url: `${siteUrl}/order-confirmation/${encodeURIComponent(input.orderId)}`,
         // Real top-level origin of the page embedding the hosted checkout.
         // Embedded Apple Pay validates against this; without it the Apple
         // framework rejects the sheet on a cross-origin iframe mismatch.

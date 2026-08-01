@@ -227,10 +227,18 @@ export async function createCheckoutSession(
  (item) =>
  !item.id ||
  item.quantity < 1 ||
+ item.quantity > 99 ||
  !Number.isInteger(item.quantity),
  )
  ) {
  throw new Error("Invalid cart payload");
+ }
+
+ // Cap total units per order server-side so a crafted request can't place an
+ // absurd order (denial-of-inventory / oversized order) even for untracked SKUs.
+ const totalUnits = sanitizedItems.reduce((sum, item) => sum + item.quantity, 0);
+ if (totalUnits > 500) {
+ throw new Error("Order exceeds the maximum quantity. Please contact us for bulk orders.");
  }
 
  const requestedSlugs = Array.from(new Set(sanitizedItems.map((item) => item.id.split("::")[0])));

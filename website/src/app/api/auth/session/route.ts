@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { buildAuthCookieValue, buildExpiredAuthCookie } from "@/lib/auth-session";
+import { buildAuthCookieValue, buildExpiredAuthCookie, getSessionAccessToken } from "@/lib/auth-session";
 import { detectRoleFromUser } from "@/lib/auth-role";
-import { createServerClient } from "@/lib/supabase-server";
+import { createServerClient, supabaseAdmin } from "@/lib/supabase-server";
 import { awardReferralSignupBonus, awardSignupBonusIfNeeded } from "@/lib/membership";
 import { getUserIdByReferralCode, setReferredByCode } from "@/lib/customer-account";
 
@@ -30,7 +30,14 @@ export async function POST(request: Request) {
     // ambassador application flow or its "application received" email.
     const role = detectRoleFromUser(data.user);
 
-    if (role === "customer") {
+    // Points bonuses (signup + referral) are awarded only once the email is
+    // CONFIRMED. This stops throwaway/unverified accounts from farming signup
+    // and referral points at scale. Both awards are idempotent, so they fire on
+    // the first confirmed session and never double. If the project auto-confirms
+    // emails, email_confirmed_at is already set and this is a no-op.
+    const emailConfirmed = Boolean(data.user.email_confirmed_at);
+
+    if (role === "customer" && emailConfirmed) {
       try {
         await awardSignupBonusIfNeeded(data.user.id);
 
@@ -72,6 +79,18 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE() {
+  // Revoke the Supabase session server-side, not just clear the cookie — so a
+  // token captured before logout (shared machine, leaked log) can't keep being
+  // used until its natural expiry. Best-effort: never block logout on it.
+  try {
+    const token = await getSessionAccessToken();
+    if (token) {
+      await supabaseAdmin.auth.admin.signOut(token).catch(() => {});
+    }
+  } catch {
+    /* best-effort revocation */
+  }
+
   const response = NextResponse.json({ success: true });
   const expired = buildExpiredAuthCookie();
   response.cookies.set(expired.name, expired.value, expired.options);

@@ -238,7 +238,17 @@ async function hasValidAdminSession(request: NextRequest) {
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  if (pathname.startsWith("/api/admin") && isStateChangingMethod(request.method) && !isSameOriginRequest(request)) {
+  // CSRF defense-in-depth: reject cross-site state-changing requests to the
+  // cookie-authenticated app APIs. Webhooks (/api/webhooks, HMAC-signed) and
+  // cron (/api/cron, bearer-secret) live under other prefixes and are NOT
+  // same-origin, so they're intentionally excluded. SameSite=Lax already
+  // mitigates classic CSRF; this is a second, explicit layer.
+  const CSRF_PROTECTED_PREFIXES = ["/api/admin", "/api/account", "/api/membership", "/api/partner"];
+  if (
+    isStateChangingMethod(request.method) &&
+    CSRF_PROTECTED_PREFIXES.some((prefix) => pathname.startsWith(prefix)) &&
+    !isSameOriginRequest(request)
+  ) {
     return applySecurityHeaders(
       NextResponse.json(
         { success: false, error: "Invalid request origin" },

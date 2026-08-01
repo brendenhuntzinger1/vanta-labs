@@ -1,9 +1,17 @@
 import "server-only";
 
+import { unstable_cache } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getFulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
 import type { CoaRecord, Product, ProductDose, ProductImage } from "@/lib/catalog-types";
 import { parseProductFaq } from "@/lib/product-faq";
+
+// The catalog changes rarely but the storefront (home / PDP / list) is
+// force-dynamic and re-queried it on EVERY request — the top launch-scale risk.
+// These reads are cached with a short TTL and a shared tag; admin product
+// mutations call revalidateTag(CATALOG_CACHE_TAG) so edits show up promptly.
+export const CATALOG_CACHE_TAG = "catalog";
+const CATALOG_CACHE_TTL = 60; // seconds
 
 // Single source of truth for the product columns every public read selects, so
 // adding a field is a one-line change instead of editing four query strings.
@@ -221,23 +229,28 @@ async function fetchPublicProductRows() {
   return (data ?? []) as Array<Record<string, unknown>>;
 }
 
-export async function getCatalogProducts() {
-  const productRows = await fetchPublicProductRows();
-  const { productIds } = buildProductMaps(productRows);
-  const { imagesByProductId, dosesByProductId, inventoryActive } = await fetchProductRelations(productIds);
+export const getCatalogProducts = unstable_cache(
+  async () => {
+    const productRows = await fetchPublicProductRows();
+    const { productIds } = buildProductMaps(productRows);
+    const { imagesByProductId, dosesByProductId, inventoryActive } = await fetchProductRelations(productIds);
 
-  return productRows.map((row) => {
-    const productId = String(row.id);
-    return mapProductRow(
-      row,
-      imagesByProductId.get(productId) ?? [],
-      dosesByProductId.get(productId) ?? [],
-      inventoryActive,
-    );
-  });
-}
+    return productRows.map((row) => {
+      const productId = String(row.id);
+      return mapProductRow(
+        row,
+        imagesByProductId.get(productId) ?? [],
+        dosesByProductId.get(productId) ?? [],
+        inventoryActive,
+      );
+    });
+  },
+  ["catalog-products-all"],
+  { tags: [CATALOG_CACHE_TAG], revalidate: CATALOG_CACHE_TTL },
+);
 
-export async function getCatalogProductBySlug(slug: string) {
+export const getCatalogProductBySlug = unstable_cache(
+  async (slug: string) => {
   const { data, error } = await supabaseAdmin
     .from("products")
     .select(PRODUCT_SELECT_COLUMNS)
@@ -264,7 +277,10 @@ export async function getCatalogProductBySlug(slug: string) {
     dosesByProductId.get(productId) ?? [],
     inventoryActive,
   );
-}
+  },
+  ["catalog-product-by-slug"],
+  { tags: [CATALOG_CACHE_TAG], revalidate: CATALOG_CACHE_TTL },
+);
 
 export async function getCatalogProductsBySlugs(slugs: string[]) {
   if (slugs.length === 0) {
@@ -303,7 +319,8 @@ export async function getCatalogProductsBySlugs(slugs: string[]) {
   return slugs.map((slug) => bySlug.get(slug)).filter(Boolean) as Product[];
 }
 
-export async function getCatalogProductsByCategory(category: string, excludeSlug?: string, limit = 4) {
+export const getCatalogProductsByCategory = unstable_cache(
+  async (category: string, excludeSlug?: string, limit = 4) => {
   const query = supabaseAdmin
     .from("products")
     .select(PRODUCT_SELECT_COLUMNS)
@@ -337,7 +354,10 @@ export async function getCatalogProductsByCategory(category: string, excludeSlug
       inventoryActive,
     );
   });
-}
+  },
+  ["catalog-products-by-category"],
+  { tags: [CATALOG_CACHE_TAG], revalidate: CATALOG_CACHE_TTL },
+);
 
 export async function getCoaRecords() {
   const { data, error } = await supabaseAdmin

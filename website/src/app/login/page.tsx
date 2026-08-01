@@ -14,6 +14,9 @@ export default async function LoginPage() {
     if (role === "partner") {
       redirect("/partner/dashboard");
     }
+    // A signed-in customer landing on the partner login page is confusing —
+    // send them to their account instead of showing a partner form.
+    redirect("/account");
   }
 
   return (

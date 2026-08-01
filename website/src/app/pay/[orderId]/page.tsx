@@ -32,11 +32,7 @@ export default async function ResubmitPaymentPage({ params }: { params: Promise<
 
   const methods = await getPaymentMethodsConfig();
   const method = getPaymentMethodById(methods, order.payment_method ? String(order.payment_method) : null);
-
-  if (!method || !isManualPaymentMethod(method)) {
-    notFound();
-  }
-
+  const isManual = Boolean(method && isManualPaymentMethod(method));
   const orderNumber = String(order.order_number ?? order.order_id);
   const alreadyPaid = order.payment_status === "paid";
 
@@ -49,11 +45,19 @@ export default async function ResubmitPaymentPage({ params }: { params: Promise<
           <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Order {orderNumber}</h1>
           {alreadyPaid ? (
             <p className="mt-3 text-sm text-emerald-300">This order is already paid — no further action is needed.</p>
-          ) : (
+          ) : isManual ? (
             <p className="mt-3 text-sm leading-7 text-white/60">
               {order.rejection_reason
                 ? `We couldn't verify your previous payment: ${String(order.rejection_reason)}. Please re-send your payment and submit the details below.`
                 : "Send the exact amount, then submit your payment details below so we can verify and ship your order."}
+            </p>
+          ) : (
+            // Card order that hasn't been paid: the on-site card session is
+            // short-lived and can't be safely re-mounted from here, so guide the
+            // customer to finish securely rather than dead-ending on a 404.
+            <p className="mt-3 text-sm leading-7 text-white/60">
+              Your order is reserved and <span className="text-white/80">no charge has been made</span>. To finish paying by
+              card, return to secure checkout, or contact us and we&apos;ll send you a secure payment link.
             </p>
           )}
         </section>
@@ -62,7 +66,7 @@ export default async function ResubmitPaymentPage({ params }: { params: Promise<
           <Link href="/products" className="mt-8 inline-flex text-sm text-white/45 transition hover:text-white">
             Continue shopping
           </Link>
-        ) : (
+        ) : isManual && method ? (
           <div className="mt-7">
             <ManualPaymentInstructions
               method={method}
@@ -70,6 +74,11 @@ export default async function ResubmitPaymentPage({ params }: { params: Promise<
               orderNumber={orderNumber}
               amountDue={Number(order.amount_paid ?? 0)}
             />
+          </div>
+        ) : (
+          <div className="mt-7 flex flex-col gap-3 sm:flex-row">
+            <Link href="/checkout" className="vl2-btn-primary vl-focus-ring px-6 py-3 text-sm">Return to secure checkout</Link>
+            <Link href="/contact" className="vl2-btn-secondary vl-focus-ring px-6 py-3 text-sm">Contact support</Link>
           </div>
         )}
       </main>

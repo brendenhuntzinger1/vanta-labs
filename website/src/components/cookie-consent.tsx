@@ -33,8 +33,10 @@ export function CookieConsent() {
 
   if (!visible) return null;
 
+  // Float above the mobile sticky Add-to-Cart bar and the account bottom-nav
+  // (both fixed to bottom-0 below lg) so it never covers the primary CTA.
   return (
-    <div className="fixed inset-x-3 bottom-3 z-50 mx-auto max-w-2xl rounded-2xl border border-white/15 bg-[#111]/95 p-4 text-sm text-white/80 shadow-2xl backdrop-blur sm:flex sm:items-center sm:gap-4">
+    <div className="fixed inset-x-3 bottom-3 max-lg:bottom-24 z-[45] mx-auto max-w-2xl rounded-2xl border border-white/15 bg-[#111]/95 p-4 text-sm text-white/80 shadow-2xl backdrop-blur sm:flex sm:items-center sm:gap-4">
       <p className="flex-1 leading-6">
         We use essential cookies to run the store and privacy-friendly analytics to improve it. See our{" "}
         <Link href="/legal/cookies" className="text-white underline underline-offset-4">Cookie Policy</Link>.

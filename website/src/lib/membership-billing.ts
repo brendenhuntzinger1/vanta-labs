@@ -548,6 +548,14 @@ export async function skipNextBilling(userId: string): Promise<MembershipSchedul
   if (existing.cancel_at_period_end) throw new Error("This membership is already set to end.");
 
   const now = new Date();
+  // Cap to ONE skip per paid period. Without this a member could POST skip in a
+  // loop, pushing next_billing_at years out while staying "active" — keeping all
+  // perks and monthly store credit forever for a single charge. If the next
+  // charge is already deferred more than a cycle out, they've already skipped.
+  if (existing.next_billing_at && new Date(existing.next_billing_at as string).getTime() > now.getTime() + 33 * ONE_DAY_MS) {
+    throw new Error("You've already skipped a charge this cycle — your next billing is already deferred.");
+  }
+
   const base = existing.next_billing_at ? new Date(existing.next_billing_at as string) : now;
   const from = base.getTime() <= now.getTime() ? now : base;
   const nextBillingAt = new Date(from.getTime() + 30 * ONE_DAY_MS);

@@ -415,7 +415,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
             {[
               "15% discount on all of your own purchases — active the whole time you're approved.",
               "A personal referral code that gives your audience 10% off.",
-              "A configurable commission (starting at 10%) on every completed order placed with your code.",
+              "A 15% commission on every completed order placed with your code.",
               "A real-time dashboard: pending, approved, and paid commissions, referral orders, and total earnings.",
               "Payouts every two weeks.",
               "Opportunities for performance bonuses and a higher commission rate.",

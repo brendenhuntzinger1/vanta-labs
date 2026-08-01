@@ -18,11 +18,6 @@ function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 }
 
-function isPaidStatus(value: string | null | undefined) {
-  const status = String(value ?? "").toLowerCase();
-  return status === "paid" || status === "completed" || status === "succeeded";
-}
-
 export default async function AdminHomePage() {
   const session = await verifyAdminSessionFromCookie();
   if (!session) {
@@ -41,9 +36,6 @@ export default async function AdminHomePage() {
   ]);
 
   const orders = orderList.rows;
-  const totalRevenue = orders
-    .filter((row) => isPaidStatus(row.payment_status))
-    .reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0);
   const publishedProducts = products.filter((product) => product.isPublished && product.isEnabled && !product.isArchived).length;
   const pendingPartners = partners.filter((partner) => partner.status === "pending").length;
 
@@ -73,8 +65,9 @@ export default async function AdminHomePage() {
             <p className="mt-2 text-2xl font-semibold text-white">{orderList.total}</p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Revenue</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{money(totalRevenue)}</p>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Revenue · 30d</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{money(revenueWindows.last30Days)}</p>
+            <p className="mt-1 text-[11px] text-zinc-500">Today {money(revenueWindows.today)} · 7d {money(revenueWindows.last7Days)}</p>
           </div>
           {canViewProfit(session.role) ? (
           <div className="vl-panel rounded-2xl p-4">
