@@ -432,6 +432,38 @@ export async function cancelMembership(userId: string): Promise<MembershipCancel
   return { billingCycle, accessUntil, refundable: false };
 }
 
+export interface MembershipBillingHistoryEntry {
+  id: string;
+  eventType: string;
+  amountCents: number;
+  status: string;
+  failureReason: string | null;
+  createdAt: string;
+}
+
+// Member-facing read of the charge/cancellation ledger for the customer's own
+// subscription page. Read-only; scoped to the given user. Degrades to an empty
+// list on error so the subscription page never blanks over billing history.
+export async function getMembershipBillingHistory(userId: string, limit = 24): Promise<MembershipBillingHistoryEntry[]> {
+  const { data, error } = await supabaseAdmin
+    .from("membership_billing_events")
+    .select("id, event_type, amount_cents, status, failure_reason, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+
+  if (error) return [];
+
+  return (data ?? []).map((row) => ({
+    id: String(row.id),
+    eventType: String(row.event_type ?? ""),
+    amountCents: Number(row.amount_cents ?? 0),
+    status: String(row.status ?? ""),
+    failureReason: row.failure_reason ? String(row.failure_reason) : null,
+    createdAt: String(row.created_at),
+  }));
+}
+
 // A refunded or charged-back membership ends IMMEDIATELY. Unlike a normal
 // cancellation (which keeps benefits until the already-paid period ends), a
 // refund/chargeback means the customer no longer paid — so every benefit stops
