@@ -14,11 +14,12 @@ export default async function AccountAddressesPage() {
   const addresses = await getCustomerAddresses(user.id).catch(() => []);
 
   return (
-    <div className="space-y-6">
-      <section className="vl-panel rounded-2xl p-5 sm:p-6">
-        <h1 className="text-2xl font-semibold text-white">Saved Addresses</h1>
-        <p className="mt-2 text-sm text-zinc-400">Manage shipping addresses used to pre-fill checkout.</p>
-      </section>
+    <div className="space-y-5">
+      <header className="vl-fade-up">
+        <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Account</p>
+        <h1 className="vl2-serif mt-1.5 text-3xl text-white sm:text-4xl">Saved addresses</h1>
+        <p className="mt-2 text-sm text-zinc-400">Manage the shipping addresses used to pre-fill checkout.</p>
+      </header>
 
       <AccountAddressesClient initialAddresses={addresses} />
     </div>
