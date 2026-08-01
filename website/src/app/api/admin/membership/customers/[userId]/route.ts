@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageMembership } from "@/lib/admin-roles";
 import { adminAdjustPoints, assignMembershipTier, setMembershipStatus } from "@/lib/admin-membership";
+import { cancelMembership } from "@/lib/membership-billing";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 export async function PATCH(request: Request, context: { params: Promise<{ userId: string }> }) {
@@ -18,7 +19,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ userI
 
   try {
     const body = await request.json() as {
-      action?: "adjust_points" | "set_status" | "set_tier";
+      action?: "adjust_points" | "set_status" | "set_tier" | "remove";
       amount?: number;
       note?: string;
       status?: "active" | "paused" | "cancelled";
@@ -27,6 +28,31 @@ export async function PATCH(request: Request, context: { params: Promise<{ userI
       expiresAt?: string | null;
       permanent?: boolean;
     };
+
+    if (body.action === "remove") {
+      // Remove a member: stop all future billing but LET THEM KEEP the benefits
+      // they already paid for through the end of the current period. This sets
+      // cancel_at_period_end so no renewal charge fires; the scheduled sweep
+      // flips them to the free tier once the paid period actually ends. A member
+      // in a $1 trial is ended immediately so the remainder charge never fires.
+      const result = await cancelMembership(userId);
+
+      await supabaseAdmin.from("admin_audit_logs").insert({
+        action: "membership_remove",
+        target_table: "customer_memberships",
+        target_id: userId,
+        metadata: {
+          accessUntil: result.accessUntil ?? null,
+          billingCycle: result.billingCycle,
+          performedAt: new Date().toISOString(),
+          performedBy: session.username,
+          ipAddress: getRequestIpAddress(request),
+          userAgent: getRequestUserAgent(request),
+        },
+      });
+
+      return NextResponse.json({ success: true, accessUntil: result.accessUntil ?? null });
+    }
 
     if (body.action === "set_tier") {
       if (!body.tierId) {

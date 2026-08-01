@@ -5,6 +5,7 @@ import { getMembershipAnalytics, listMembershipTiersAdmin, listPromotionalEvents
 import { getMembershipBonusSettings } from "@/lib/membership";
 import { getBulkSavingsControlConfig } from "@/lib/admin-control";
 import { AdminMembershipClient } from "@/components/admin-membership-client";
+import { MemberRemoveButton } from "@/components/member-remove-button";
 
 export const dynamic = "force-dynamic";
 
@@ -80,7 +81,8 @@ export default async function AdminMembershipPage() {
                       <th className="pb-2 pr-4">Status</th>
                       <th className="pb-2 pr-4">Joined</th>
                       <th className="pb-2 pr-4">Next billing</th>
-                      <th className="pb-2">Store credit</th>
+                      <th className="pb-2 pr-4">Store credit</th>
+                      <th className="pb-2">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -108,8 +110,17 @@ export default async function AdminMembershipPage() {
                             ? "—"
                             : `${new Date(member.nextBillingAt).toLocaleDateString()} · $${(member.nextBillingAmountCents / 100).toFixed(2)}`}
                         </td>
-                        <td className="py-3 text-zinc-300 tabular-nums">
+                        <td className="py-3 pr-4 text-zinc-300 tabular-nums">
                           {member.storeCreditCents > 0 ? `$${(member.storeCreditCents / 100).toFixed(2)}` : "—"}
+                        </td>
+                        <td className="py-3 align-top">
+                          <MemberRemoveButton
+                            userId={member.userId}
+                            name={member.name}
+                            status={member.status}
+                            cancelAtPeriodEnd={member.cancelAtPeriodEnd}
+                            billingCycle={member.billingCycle}
+                          />
                         </td>
                       </tr>
                     ))}
