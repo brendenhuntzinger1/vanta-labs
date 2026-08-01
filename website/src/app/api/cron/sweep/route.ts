@@ -5,6 +5,7 @@ import { runAbandonedCartSweep } from "@/lib/cart-recovery";
 import { autoApproveEligibleCommissions } from "@/lib/partner-portal";
 import { expireStaleReservations } from "@/lib/inventory-reservation";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
+import { expireStaleExpressIntents, reconcileVeyraPendingPayments } from "@/lib/express-reconcile";
 import { recordSystemAlert } from "@/lib/monitoring";
 
 export const dynamic = "force-dynamic";
@@ -31,7 +32,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const [membershipResult, cartRecoveryResult, storeCreditResult, commissionApprovalResult, reservationExpiryResult, emailRetryResult] = await Promise.allSettled([
+  const [membershipResult, cartRecoveryResult, storeCreditResult, commissionApprovalResult, reservationExpiryResult, emailRetryResult, paymentReconcileResult, expressIntentResult] = await Promise.allSettled([
     runMembershipBillingSweep(),
     runAbandonedCartSweep(),
     grantMonthlyStoreCreditSweep(),
@@ -42,6 +43,12 @@ export async function GET(request: Request) {
     expireStaleReservations(),
     // Retry transactional emails (receipts/shipping) that failed to send.
     retryPendingEmails(),
+    // Settle charges whose confirmation webhook was lost. This is the only
+    // thing standing between a charged card and an order that reads unpaid
+    // forever, so a failure here is genuinely critical.
+    reconcileVeyraPendingPayments(),
+    // Hygiene: retire wallet sessions that were armed and never used.
+    expireStaleExpressIntents(),
   ]);
 
   // Surface any failed job as a durable, operator-visible alert (critical =
@@ -55,6 +62,8 @@ export async function GET(request: Request) {
     ["commission_approval", commissionApprovalResult],
     ["reservation_expiry", reservationExpiryResult],
     ["email_retry", emailRetryResult],
+    ["payment_reconcile", paymentReconcileResult],
+    ["express_intent_expiry", expressIntentResult],
   ];
   const failed = jobs.filter(([, r]) => r.status === "rejected");
   if (failed.length > 0) {
@@ -74,5 +83,7 @@ export async function GET(request: Request) {
     commissionApproval: commissionApprovalResult.status === "fulfilled" ? commissionApprovalResult.value : { error: String(commissionApprovalResult.reason) },
     reservationsExpired: reservationExpiryResult.status === "fulfilled" ? reservationExpiryResult.value : { error: String(reservationExpiryResult.reason) },
     emailRetry: emailRetryResult.status === "fulfilled" ? emailRetryResult.value : { error: String(emailRetryResult.reason) },
+    paymentReconcile: paymentReconcileResult.status === "fulfilled" ? paymentReconcileResult.value : { error: String(paymentReconcileResult.reason) },
+    expressIntentsExpired: expressIntentResult.status === "fulfilled" ? expressIntentResult.value : { error: String(expressIntentResult.reason) },
   });
 }

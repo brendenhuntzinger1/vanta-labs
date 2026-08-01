@@ -143,6 +143,28 @@ manual-payment proof (`payment_reference`, `payment_proof_url`,
 | Manual-payment **proof** | `orders.payment_reference` (transaction id) + `orders.payment_proof_url` (path into the **private** `payment-proofs` storage bucket; admins view via short-lived signed URLs). |
 | Refunds | `orders.refund_amount` / `refunded_at` + an `order_refund` row in `admin_audit_logs`. |
 | Payout records | Ambassador payouts: `payouts` / `partner_payouts`. 3PL payouts: `fulfillment_payouts` (Section 5). |
+| Express (Apple Pay) checkout | `express_checkout_intents` + `express_shipping_quotes` (`src/lib/sql/express-checkout.sql`). See below. |
+
+### Express (Apple Pay) checkout tables
+
+The mini-cart wallet lane has a problem the card lane does not: the payment
+sheet must show an amount **before** any address exists, then charge that
+amount plus shipping and tax resolved mid-sheet. These two tables are what make
+that provable rather than hopeful.
+
+| Table | Purpose |
+|---|---|
+| `express_checkout_intents` | The cart + price snapshot frozen when the sheet is armed, paired 1:1 with a processor session. `amount_cents` is the authoritative address-independent amount the sheet opens on; the charge is that plus locked shipping plus locked tax and nothing else. `consumed_at` is the atomic single-charge claim (NULL → now(), once, immediately before the charge). `compliance_ack` is the consent record for an express order — `orders` has no column for it. `outcome` is the terminal result, replayed to a duplicate authorize so a double-tap can never charge twice. |
+| `express_shipping_quotes` | Every shipping + tax quote returned to the wallet callback, keyed by a fingerprint of the address that produced it. Authorization recomputes that fingerprint from the address actually being charged and refuses any method not in the matching row — which is what stops a stale wallet cache charging one address's sales tax against another's. Append-only; it is the audit trail. |
+
+Both are service-role only (RLS on, no policies): an intent row carries the
+authoritative charge amount, so a client that could write one could choose its
+own price.
+
+`orders.checkout_channel` distinguishes the lane (`express_apple_pay`), and
+`orders.payment_id` carries the processor session id from the moment the order
+is written — that is what lets the reconciliation sweep settle a charge whose
+webhook was lost.
 
 ## Section 5 — 3PL / Fulfillment
 
@@ -321,3 +343,8 @@ Apply these SQL files in order (each is idempotent):
     checkout, never advertised on the storefront)
 17. **`replacement-orders.sql`** (new — links a $0 replacement shipment to the
     original order + records the damaged/lost/stolen reason)
+18. **`express-checkout.sql`** (new — Apple Pay express lane: intents +
+    shipping quotes, `orders.checkout_channel`, and a re-assertion of the
+    settlement backstops it depends on). Must be run **before** deploying the
+    code that reads it, and it ends with a verification query that must return
+    all `t`.

@@ -1,0 +1,1000 @@
+// No `server-only` directive here, matching payment-service.ts (this file is a
+// straight lift out of it): the unit tests import the checkout path directly,
+// and the transitive supabase-server import already makes a client import a
+// build error.
+import { getCatalogProductsBySlugs } from "@/lib/catalog";
+import { calculateDiscountAmount } from "@/lib/referral-service";
+import { validateCoupon } from "@/lib/coupons";
+import { getMembershipPerks, getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/lib/membership";
+import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
+import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
+import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
+import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
+import { calculateShipping, isDomesticCountry, isShippableCountry } from "@/lib/shipping";
+import { normalizeUsState } from "@/lib/sales-tax";
+import { quoteSalesTax, type ResolvedOrderTax } from "@/lib/tax-provider";
+import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
+import { isApprovedAmbassadorCustomer } from "@/lib/ambassador-status";
+import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
+import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
+import { computeProfit, resolveCustomerDiscount } from "@/lib/profit-engine";
+import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod, type PaymentMethodConfig } from "@/lib/payment-methods";
+import { supabaseAdmin } from "@/lib/supabase-server";
+
+import type { CartItemInput, CustomerInput } from "@/lib/payment-types";
+
+// -------------------------------------------------------------------------
+// quoteOrder — the store's ONE authoritative pricing pass.
+//
+// Lifted verbatim out of createCheckoutSession (payment-service.ts) so that a
+// second checkout lane can price an order with byte-identical math instead of
+// growing a parallel copy that silently drifts. Nothing about the numbers
+// changed in the extraction; `mode: "full"` is exactly what the card checkout
+// has always computed.
+//
+// The second caller is the Apple Pay express lane, which has a problem the card
+// lane does not: at the moment the wallet sheet is armed there is NO shipping
+// address, but Apple still needs an opening amount. `mode: "address_optional"`
+// answers that by resolving shipping and tax to 0 and reporting the
+// address-INDEPENDENT total (A). The express lane then locks shipping (S) and
+// tax (T) through the wallet's own address callback and charges A + S + T.
+// Because the profit guard runs with $0 shipping collected in that mode it is
+// strictly HARSHER than the full quote — a cart that would clear the floor once
+// real shipping is collected can be refused early. That direction is deliberate:
+// an early refusal hides the express button and the shopper still has the normal
+// checkout, whereas the reverse would let a below-floor order through.
+// -------------------------------------------------------------------------
+
+export type QuoteMode = "full" | "address_optional" | "destination_only";
+
+export interface ServerProduct {
+  id: string;
+  name: string;
+  price: number;
+  stockStatus: string;
+  variantId?: string;
+  variantLabel?: string;
+  variantSku?: string;
+}
+
+export interface QuoteOrderInput {
+  items: CartItemInput[];
+  customer: CustomerInput;
+  referralCode?: string;
+  couponCode?: string;
+  customerUserId?: string;
+  pointsToRedeem?: number;
+  shippingProtection?: boolean;
+  paymentMethod?: string;
+  /**
+   * Client-claimed total, checked against the server's own once it is known.
+   * Only UNDERpayment is rejected — see the guard below. The express lane never
+   * sends one (the wallet sheet's amount comes FROM this quote, not into it).
+   */
+  expectedTotal?: number;
+  /**
+   * "full" (card checkout / express authorize): the whole contact is known and
+   * validated, shipping + tax are priced.
+   * "address_optional" (express session create): no address yet, shipping + tax
+   * are 0 and `addressIndependentCents` carries the wallet sheet's opening
+   * amount.
+   * "destination_only" (express shipping callback): Apple redacts the street
+   * address and the cardholder name until authorization, so only the
+   * DESTINATION is validated — country/state, which is all shipping and tax
+   * actually depend on. Contact identity is validated later, at authorize,
+   * before any money moves.
+   */
+  mode: QuoteMode;
+}
+
+/** One labelled money row, in cents, for a wallet payment sheet. */
+export interface QuoteDisplayLineItem {
+  label: string;
+  amountCents: number;
+}
+
+export interface QuoteOrderLine {
+  product: ServerProduct;
+  quantity: number;
+  baseUnitPrice: number;
+}
+
+export interface ValidatedReferral {
+  ambassadorId: string;
+  code: string;
+  discountPercent: number;
+  commissionPercent: number;
+  ambassadorName: string;
+  ambassadorEmail: string | null;
+  ambassadorAuthUserId: string | null;
+}
+
+export interface QuoteResult {
+  lineItems: QuoteOrderLine[];
+  subtotal: number;
+  shipping: number;
+  discountAmount: number;
+  bulkDiscountTier: string | null;
+  isPriorityOrder: boolean;
+  taxQuote: ResolvedOrderTax;
+  taxAmount: number;
+  referral: ValidatedReferral | null;
+  couponCode: string | null;
+  isBuy3Get1Active: boolean;
+  storeCreditRedeemedCents: number;
+  pointsRedeemed: number;
+  pointsDiscountAmount: number;
+  shippingProtectionFee: number;
+  /** Total before the card processing fee. */
+  expectedTotal: number;
+  /** The configured method list this quote resolved against. */
+  paymentMethods: PaymentMethodConfig[];
+  selectedMethod: PaymentMethodConfig;
+  isManualPayment: boolean;
+  cardFee: { amount: number; percentage: number };
+  /** expectedTotal + cardFee.amount — what the card lane charges. */
+  finalTotal: number;
+  /** Per-line COGS in cents (null when no cost is on record). */
+  unitCostCentsForLine: (line: QuoteOrderLine) => number | null;
+  /**
+   * The address-independent amount in cents (merchandise − discounts − credit +
+   * protection + service fee), i.e. `A`. In "full" mode this equals
+   * round(finalTotal * 100); in "address_optional" mode shipping and tax are 0
+   * so it is the wallet sheet's opening total.
+   */
+  addressIndependentCents: number;
+  /** Server-built breakdown the wallet sheet renders verbatim. */
+  displayLineItems: QuoteDisplayLineItem[];
+}
+
+// Parse a display price string ("$44.99") to a number, rejecting malformed
+// values (e.g. multiple dots -> NaN) so a bad price can't silently produce a
+// NaN subtotal and a confusing "Altered total detected" rejection at checkout.
+function parseProductPrice(raw: string): number {
+  const value = Number(String(raw).replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error("This product has an invalid price and can't be purchased right now.");
+  }
+  return value;
+}
+
+export function sanitizeText(value: string) {
+  return value.replace(/[<>]/g, "").trim();
+}
+
+function roundMoney(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+// Destination-only checks: everything shipping and sales tax depend on, and
+// nothing else. Split out of validateCustomer so the wallet shipping callback
+// (which only ever sees a redacted country/state/city/postal contact) can run
+// exactly the same destination rules the card lane does.
+export function validateDestination(customer: Pick<CustomerInput, "country" | "state">) {
+  // The store ships only to the US and Canada — reject anything else server-side
+  // so it can't be bypassed even if the client country selector is tampered with.
+  if (!isShippableCountry(customer.country)) {
+    throw new Error("We currently ship only to the United States and Canada.");
+  }
+
+  // US orders must carry a recognizable state: sales tax is resolved from it,
+  // so a crafted request without one could dodge tax in a nexus state. The
+  // checkout UI already requires this; the server is the authority.
+  if (isDomesticCountry(customer.country) && !normalizeUsState(customer.state)) {
+    throw new Error("Please select the state for your shipping address.");
+  }
+}
+
+export function validateCustomer(customer: CustomerInput) {
+  if (!customer.email || !customer.email.includes("@")) {
+    throw new Error("Invalid email address");
+  }
+
+  if (
+    !customer.fullName ||
+    !customer.address ||
+    !customer.city ||
+    !customer.postalCode ||
+    !customer.country
+  ) {
+    throw new Error("Incomplete customer details");
+  }
+
+  validateDestination(customer);
+}
+
+// Every 4th item (cheapest-first) is free. The caller gates this behind
+// getHomepageControlConfig().promoBuy3Get1Enabled - mirrors the client-side
+// calculation in cart-context.tsx exactly (including that same gate, fetched
+// there via /api/catalog/promotions) so the server total this function feeds
+// into always matches what the cart displayed - see the "Altered total
+// detected" check in payment-service.ts.
+function calculateBuy3Get1Discount(lineItems: Array<{ product: ServerProduct; quantity: number }>) {
+  const expandedPrices: number[] = [];
+  for (const line of lineItems) {
+    for (let i = 0; i < line.quantity; i += 1) {
+      expandedPrices.push(line.product.price);
+    }
+  }
+
+  const freeItemCount = Math.floor(expandedPrices.length / 4);
+  if (freeItemCount <= 0) {
+    return 0;
+  }
+
+  expandedPrices.sort((a, b) => a - b);
+  return roundMoney(expandedPrices.slice(0, freeItemCount).reduce((sum, price) => sum + price, 0));
+}
+
+async function validateReferralCode(
+  code: string | undefined,
+  discountPercent: number,
+): Promise<ValidatedReferral | null> {
+  const normalizedCode = code?.trim().toUpperCase();
+
+  if (!normalizedCode) {
+    return null;
+  }
+
+  const { data, error } = await supabaseAdmin
+    .from("ambassadors")
+    .select("id, name, email, auth_user_id, referral_code, commission_percent, status")
+    .eq("referral_code", normalizedCode)
+    .maybeSingle();
+
+  if (error) {
+    console.error("Referral lookup failed:", error);
+    throw new Error("Unable to verify referral code");
+  }
+
+  if (!data) {
+    throw new Error("Invalid referral code");
+  }
+
+  if (data.status !== "approved") {
+    throw new Error("That referral code is not active");
+  }
+
+  return {
+    ambassadorId: data.id,
+    code: data.referral_code.toUpperCase(),
+    discountPercent,
+    commissionPercent: Number(data.commission_percent ?? 10),
+    ambassadorName: data.name,
+    ambassadorEmail: data.email ?? null,
+    ambassadorAuthUserId: data.auth_user_id ?? null,
+  };
+}
+
+export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
+  // Whether a destination is known well enough to price shipping and tax.
+  const destinationKnown = input.mode !== "address_optional";
+
+  if (input.mode === "full") {
+    validateCustomer(input.customer);
+  } else if (input.mode === "destination_only") {
+    validateDestination(input.customer);
+  }
+
+  const sanitizedItems = input.items.map((item) => ({
+    id: sanitizeText(item.id),
+    quantity: Number(item.quantity),
+  }));
+
+  if (sanitizedItems.length === 0) {
+    throw new Error("Cart is empty");
+  }
+
+  if (
+    sanitizedItems.some(
+      (item) =>
+        !item.id ||
+        item.quantity < 1 ||
+        item.quantity > 99 ||
+        !Number.isInteger(item.quantity),
+    )
+  ) {
+    throw new Error("Invalid cart payload");
+  }
+
+  // Cap total units per order server-side so a crafted request can't place an
+  // absurd order (denial-of-inventory / oversized order) even for untracked SKUs.
+  //
+  // These two caps arrived on main in the launch-audit batch, where they lived
+  // inline in createCheckoutSession. They belong HERE instead: quoteOrder is the
+  // single entry point for both the card lane and the Apple Pay express lane, and
+  // express accepts a client-supplied cart too — leaving them on the card path
+  // alone would have made express the bypass.
+  const totalUnits = sanitizedItems.reduce((sum, item) => sum + item.quantity, 0);
+  if (totalUnits > 500) {
+    throw new Error("Order exceeds the maximum quantity. Please contact us for bulk orders.");
+  }
+
+  const requestedSlugs = Array.from(new Set(sanitizedItems.map((item) => item.id.split("::")[0])));
+  const catalogProducts = await getCatalogProductsBySlugs(requestedSlugs);
+
+  // Real per-SKU cost (COGS) for the profit floor. The catalog select omits cost,
+  // so fetch it directly here — the profit guard must price against the ACTUAL
+  // product/dose cost, not a single flat worst-case assumption (which let a
+  // deeply-discounted order on a high-cost SKU finalize below true break-even).
+  const { data: costRows } = await supabaseAdmin
+    .from("products")
+    .select("slug, product_cost_cents, product_doses(id, product_cost_cents)")
+    .in("slug", requestedSlugs);
+  const unitCostBySlug = new Map<string, number>();
+  const unitCostByDoseId = new Map<string, number>();
+  for (const row of (costRows ?? []) as Array<{ slug: string; product_cost_cents: number | null; product_doses: Array<{ id: string; product_cost_cents: number | null }> | null }>) {
+    const productCostCents = Number(row.product_cost_cents ?? 0);
+    if (productCostCents > 0) unitCostBySlug.set(String(row.slug), productCostCents / 100);
+    for (const dose of row.product_doses ?? []) {
+      const doseCostCents = Number(dose.product_cost_cents ?? 0);
+      if (doseCostCents > 0) unitCostByDoseId.set(String(dose.id), doseCostCents / 100);
+    }
+  }
+
+  // Fetch the homepage/promotions control once, up front, because the bundle
+  // discount below is applied while building line items (before the main config
+  // Promise.all). Bundle rates are admin-editable; the client preview reads the
+  // same config from /api/catalog/promotions so the charge always matches.
+  const homepageControlConfig = await getHomepageControlConfig();
+  const bundleConfig = homepageControlConfig.bundleConfig;
+  const productsById = new Map<string, ServerProduct>(
+    catalogProducts.map((product) => [
+      product.slug,
+      {
+        id: product.slug,
+        name: product.name,
+        price: parseProductPrice(product.price),
+        stockStatus: product.stockStatus,
+      },
+    ]),
+  );
+
+  const lineItems: QuoteOrderLine[] = sanitizedItems.map((item) => {
+    const [slug, variantId] = item.id.split("::");
+    const baseProduct = productsById.get(slug);
+
+    if (!baseProduct) {
+      throw new Error(`Invalid product id: ${item.id}`);
+    }
+
+    const catalogProduct = catalogProducts.find((product) => product.slug === slug);
+    const selectedDose = variantId
+      ? catalogProduct?.doses?.find((dose) => dose.id === variantId)
+      : catalogProduct?.doses?.find((dose) => dose.isDefault) ?? catalogProduct?.doses?.[0];
+
+    const baseUnitPrice = selectedDose
+      ? parseProductPrice(selectedDose.salePrice ?? selectedDose.price)
+      : baseProduct.price;
+
+    // "Bundle & Save" (2 vials = 5% off, 3+ = 8% off) is applied here, at the
+    // authoritative price the server charges, so it's correct no matter what
+    // the client displayed - see getBundleDiscountedUnitPrice's callers in
+    // cart-context.tsx and product-detail-client.tsx for the matching client
+    // preview using the exact same shared formula.
+    const product: ServerProduct = {
+      ...baseProduct,
+      id: item.id,
+      price: getBundleDiscountedUnitPrice(baseUnitPrice, item.quantity, bundleConfig),
+      stockStatus: selectedDose?.stockStatus ?? baseProduct.stockStatus,
+      variantId: selectedDose?.id,
+      variantLabel: selectedDose?.label,
+      variantSku: selectedDose?.sku,
+    };
+
+    if (product.stockStatus === "Reserved") {
+      throw new Error(`Product is unavailable: ${product.name}`);
+    }
+
+    if (product.stockStatus === "Out of Stock") {
+      throw new Error(`Product is out of stock: ${product.name}`);
+    }
+
+    // Oversell guard. This ONLY fires when a real, positive stock count is on
+    // record for the item being purchased (a specific dose's count if a variant
+    // was chosen, otherwise the product-level count). When the count is 0 or
+    // absent - i.e. inventory isn't tracked numerically, or the 3PL is the
+    // source of truth - we fall back entirely to the stockStatus checks above
+    // and change nothing. That keeps an untracked catalog fully purchasable
+    // while still blocking an order for more units than actually exist.
+    const trackedInventory = selectedDose
+      ? selectedDose.inventoryQuantity
+      : catalogProduct?.inventoryQuantity;
+    if (typeof trackedInventory === "number" && Number.isFinite(trackedInventory) && trackedInventory > 0) {
+      if (item.quantity > trackedInventory) {
+        throw new Error(
+          `Only ${trackedInventory} of ${product.name} ${trackedInventory === 1 ? "is" : "are"} in stock.`,
+        );
+      }
+    }
+
+    return {
+      product,
+      quantity: item.quantity,
+      baseUnitPrice,
+    };
+  });
+
+  const subtotal = roundMoney(
+    lineItems.reduce(
+      (sum, line) => sum + line.product.price * line.quantity,
+      0,
+    ),
+  );
+
+  // Retail subtotal at FULL (pre-bundle) unit prices, and the dollars the
+  // quantity "Bundle & Save" tiers already granted inside `subtotal`. With
+  // bundle stacking OFF (the default), every percentage discount is computed
+  // on the full base and must BEAT the bundle savings to apply — the customer
+  // gets exactly ONE discount per order: bundle pricing or the better promo,
+  // never both. The admin can restore legacy stacking in the Control Center.
+  const fullSubtotal = roundMoney(
+    lineItems.reduce((sum, line) => sum + line.baseUnitPrice * line.quantity, 0),
+  );
+  const bundleStacking = homepageControlConfig.bundleStacking === true;
+  const quantityBundleSavings = bundleStacking ? 0 : roundMoney(Math.max(0, fullSubtotal - subtotal));
+  const discountBase = bundleStacking ? subtotal : fullSubtotal;
+
+  const [{ promoBuy3Get1Enabled }, bulkSavingsConfig, bulkSavingsEligible, isPriorityOrder, shippingConfig, memberPerks, referralProgram, couponPolicy] = await Promise.all([
+    Promise.resolve(homepageControlConfig),
+    getBulkSavingsControlConfig(),
+    input.customerUserId ? isEligibleForBulkSavings(input.customerUserId) : Promise.resolve(false),
+    input.customerUserId ? isPriorityMember(input.customerUserId) : Promise.resolve(false),
+    getShippingConfig(),
+    input.customerUserId
+      ? getMembershipPerks(input.customerUserId)
+      : Promise.resolve({ isActiveMember: false, tierSlug: "free", memberDiscountPercent: 0, freeShipping: false, pointsPerDollar: 1, storeCreditBalanceCents: 0, storeCreditMinOrderCents: 0 }),
+    getReferralProgramConfig(),
+    getCouponPolicyConfig(),
+  ]);
+  // No service/handling fee is ever charged — customers pay merchandise (minus
+  // discounts) + shipping + sales tax only.
+  const bulkSavingsResult = calculateBulkSavingsDiscount(discountBase, bulkSavingsEligible, bulkSavingsConfig);
+  // Free shipping is a perk of reaching the bulk-savings threshold OR of an
+  // active membership tier whose plan includes free shipping. Both are
+  // account-tied and evaluated server-side.
+  //
+  // With no address yet (express wallet), shipping is NOT knowable, so it
+  // resolves to 0 here and is locked later from the wallet's address callback.
+  const shipping = !destinationKnown
+    ? 0
+    : (bulkSavingsResult.tier || memberPerks.freeShipping)
+      ? 0
+      : roundMoney(calculateShipping(subtotal, input.customer.country, shippingConfig));
+  // With bundle stacking off, the Buy-3-Get-1 free item is valued at FULL
+  // price and competes with the bundle savings like every other candidate.
+  const buy3Get1Discount = promoBuy3Get1Enabled
+    ? calculateBuy3Get1Discount(bundleStacking
+      ? lineItems
+      : lineItems.map((line) => ({ product: { ...line.product, price: line.baseUnitPrice }, quantity: line.quantity })))
+    : 0;
+  const isBuy3Get1Active = buy3Get1Discount > 0;
+
+  const couponEntered = Boolean(input.couponCode?.trim());
+  const referralCodeEntered = Boolean(input.referralCode?.trim());
+
+  // Referral program master switch. When off, an entered code is rejected
+  // explicitly (rather than silently ignored) so the customer never sees a
+  // total that differs from the preview.
+  if (referralCodeEntered && !referralProgram.enabled) {
+    throw new Error("The referral program is currently unavailable. Remove the code to continue.");
+  }
+
+  // A referral only counts when the customer has visibly applied it (create-
+  // session no longer reads the cookie). If a code that was valid when applied
+  // has since gone stale — the ambassador was removed, or the code was changed —
+  // DROP it to null rather than throwing: a stale referral must never hard-block
+  // a legitimate sale. Commission is only attributed for a currently-approved
+  // code (validateReferralCode rejects any status != approved).
+  let referral: ValidatedReferral | null = null;
+  if (referralProgram.enabled) {
+    try {
+      referral = await validateReferralCode(input.referralCode, referralProgram.discountPercent);
+    } catch {
+      referral = null;
+    }
+  }
+
+  // Coupons never combine with a referral code or Buy 3 Get 1 unless the admin
+  // has explicitly enabled stacking.
+  if (!couponPolicy.allowStacking) {
+    if (referral && couponEntered) {
+      throw new Error("Coupon codes cannot be combined with a referral code. Remove one to continue.");
+    }
+    if (isBuy3Get1Active && couponEntered) {
+      throw new Error("Coupon codes cannot be combined with Buy 3 Get 1 Free. Remove the coupon code to continue.");
+    }
+  }
+
+  if (referral) {
+    const ambassadorSettings = await getAmbassadorProgramSettings();
+    if (subtotal < ambassadorSettings.minimumQualifyingOrder) {
+      throw new Error(`This referral code requires a minimum merchandise subtotal of $${ambassadorSettings.minimumQualifyingOrder.toFixed(2)}. Add more items or remove the referral code to continue.`);
+    }
+
+    const customerEmail = input.customer.email.trim().toLowerCase();
+    const isSelfReferralByEmail = Boolean(referral.ambassadorEmail) && referral.ambassadorEmail!.trim().toLowerCase() === customerEmail;
+    const isSelfReferralByAccount = Boolean(referral.ambassadorAuthUserId) && Boolean(input.customerUserId) && referral.ambassadorAuthUserId === input.customerUserId;
+
+    if (isSelfReferralByEmail || isSelfReferralByAccount) {
+      throw new Error("You can't use your own referral code on your own order.");
+    }
+  }
+
+  // Coupons master switch.
+  if (couponEntered && !couponPolicy.couponsEnabled) {
+    throw new Error("Coupons are currently disabled. Remove the coupon code to continue.");
+  }
+  const coupon = couponPolicy.couponsEnabled && couponEntered
+    ? await validateCoupon(input.couponCode, discountBase, input.customer.email, { isActiveMember: memberPerks.isActiveMember })
+    : null;
+
+  // Personal ambassador discount: an approved ambassador gets a discount on
+  // their OWN purchase. It earns NO commission (self-referral is blocked) and,
+  // like every discount here, does not stack unless stacking is enabled.
+  const isApprovedAmbassadorSelf = await isApprovedAmbassadorCustomer(input.customerUserId, input.customer.email);
+  const personalDiscountAmount = isApprovedAmbassadorSelf && referralProgram.personalDiscountPercent > 0
+    ? calculateDiscountAmount(discountBase, referralProgram.personalDiscountPercent)
+    : 0;
+
+  // Active-member pricing competes as one of the candidate discounts (greatest
+  // savings wins, no stacking) so a member always gets at least their tier
+  // discount whenever it's the best available deal.
+  const memberPricingAmount = memberPerks.memberDiscountPercent > 0
+    ? calculateDiscountAmount(discountBase, memberPerks.memberDiscountPercent)
+    : 0;
+
+  // Resolve the customer discount through the SHARED profit-engine rulebook, so
+  // checkout, the profit guard, and the client preview can never diverge:
+  //  • ONE customer discount (best value) among referral / membership / bulk /
+  //    personal / coupon.
+  //  • The one intentional stack: a BUNDLE (Buy 3 Get 1) order + a code =
+  //    bundle discount PLUS a reduced referral % (admin-set, default 5%).
+  //  • Coupons stack only when the admin enables it.
+  // Ambassador commission is handled separately below — it is NOT a customer
+  // discount and is never removed because another discount applied.
+  const customerDiscount = resolveCustomerDiscount(
+    {
+      subtotal,
+      fullSubtotal: discountBase,
+      quantityBundleSavings,
+      productCost: 0,
+      bundleDiscount: buy3Get1Discount,
+      referralAccepted: Boolean(referral),
+      referralPercent: referral ? referral.discountPercent : 0,
+      isMember: memberPricingAmount > 0,
+      membershipPercent: memberPerks.memberDiscountPercent,
+      couponDiscount: coupon ? coupon.discountAmount : 0,
+      bulkSavingsAmount: bulkSavingsResult.amount,
+      personalDiscountAmount,
+      personalDiscountPercent: referralProgram.personalDiscountPercent,
+      allowCouponStacking: couponPolicy.allowStacking,
+      commissionPercent: 0,
+      processingFeePercent: 0,
+      shippingCollected: 0,
+      shippingCost: 0,
+      handlingCollected: 0,
+      taxPercent: 0,
+    },
+    new Set(["coupon", "referral", "bundle", "membership"]),
+  );
+  const discountAmount = customerDiscount.amount;
+  const bulkDiscountTier = customerDiscount.label === "Bulk savings" ? bulkSavingsResult.tier : null;
+
+  // Sales tax — dynamic, from the SHIPPING ADDRESS: collected only for
+  // destinations in the admin-configured nexus states, at the destination
+  // state's rate (shipping included in the base where that state taxes it).
+  // quoteSalesTax runs the same shared resolveSalesTax the checkout preview
+  // uses, so the client and server totals agree line for line.
+  //
+  // With no address yet (express wallet) the country/state are blank, which
+  // resolves to a $0, non-collected quote — tax is locked later from the
+  // wallet's address callback.
+  const taxQuote = await quoteSalesTax({
+    taxableAmount: Math.max(0, roundMoney(subtotal - discountAmount)),
+    shippingAmount: shipping,
+    country: destinationKnown ? input.customer.country : null,
+    state: destinationKnown ? input.customer.state : null,
+    city: destinationKnown ? input.customer.city : null,
+    postalCode: destinationKnown ? input.customer.postalCode : null,
+    street: destinationKnown ? input.customer.address : null,
+  });
+  const taxAmount = taxQuote.amount;
+
+  // PROFIT GUARD — never let this pricing combination complete below the store's
+  // configured floor (default: never negative). Uses the shared profit-engine
+  // math so checkout and the engine can never disagree. Ambassador commission is
+  // a real cost here, but it is NOT a customer discount — it's computed
+  // separately on the discounted subtotal. Product cost falls back to the
+  // worst-case unit cost until real per-SKU costs are entered.
+  const profitSettings = await getProfitSettings();
+  // Price the guard with the EFFECTIVE commission that will actually be recorded
+  // (an unlocked ambassador on a performance tier earns more than their stored
+  // rate). Using the stored rate here let a thin-margin order pass the guard yet
+  // finalize below true break-even once the higher tier commission was applied.
+  let guardCommissionPercent = 0;
+  if (referral) {
+    try {
+      const effective = await getEffectiveCommissionPercent({ ambassadorId: referral.ambassadorId, fallbackPercent: referral.commissionPercent });
+      guardCommissionPercent = Math.max(referral.commissionPercent, effective.percent);
+    } catch {
+      guardCommissionPercent = referral.commissionPercent;
+    }
+  }
+  // Price the floor against REAL per-line cost: the chosen dose's cost if known,
+  // else the product's cost, else the conservative worst-case fallback. This can
+  // only tighten the floor for high-cost SKUs; a missing cost never sells below
+  // the old worst-case assumption.
+  const guardProductCost = roundMoney(lineItems.reduce((sum, line) => {
+    const slug = String(line.product.id).split("::")[0];
+    const doseCost = line.product.variantId ? unitCostByDoseId.get(line.product.variantId) : undefined;
+    const unitCost = (doseCost && doseCost > 0)
+      ? doseCost
+      : (unitCostBySlug.get(slug) ?? profitSettings.worstCaseUnitCost);
+    return sum + unitCost * line.quantity;
+  }, 0));
+  const guardProfit = computeProfit(
+    {
+      subtotal,
+      productCost: guardProductCost,
+      bundleDiscount: 0,
+      referralAccepted: Boolean(referral),
+      referralPercent: 0,
+      isMember: false,
+      membershipPercent: 0,
+      couponDiscount: 0,
+      allowCouponStacking: false,
+      commissionPercent: guardCommissionPercent,
+      processingFeePercent: profitSettings.processingFeePercent,
+      shippingCollected: shipping,
+      // Charge the guard for what the store actually pays to ship this order
+      // (admin-configurable, same figure used in profit reports). Previously 0,
+      // which let a free-shipping / thin-margin order pass the break-even floor
+      // yet finalize at a real cash loss equal to the shipping cost.
+      shippingCost: profitSettings.shippingCostPerOrder,
+      handlingCollected: 0,
+      // Effective rate actually applied to this destination (0 when the
+      // order ships to a non-nexus state). Tax stays pass-through in the
+      // engine; the rate only feeds the processing-fee-on-total model.
+      taxPercent: taxQuote.ratePercent,
+    },
+    { amount: discountAmount, components: [], label: "resolved" },
+  );
+  if (
+    guardProfit.grossProfit < profitSettings.minProfitDollars
+    || (guardProfit.discountedSubtotal > 0 && guardProfit.grossMarginPercent < profitSettings.minProfitPercent)
+  ) {
+    throw new Error("Promotion unavailable on this order.");
+  }
+
+  const totalBeforePoints = roundMoney(subtotal + shipping + taxAmount - discountAmount);
+
+  // Membership store credit auto-applies when the order's merchandise subtotal
+  // meets the tier's redemption minimum (the margin guardrail). It's deducted
+  // before points; the actual ledger deduction is recorded once the order is
+  // paid (payment-webhook), and returned if the order is later refunded.
+  let storeCreditRedeemedCents = 0;
+  // Store credit, like points, never stacks with a referral code (referral is
+  // exclusive of every other discount).
+  if (!referral && memberPerks.storeCreditBalanceCents > 0 && Math.round(subtotal * 100) >= memberPerks.storeCreditMinOrderCents) {
+    storeCreditRedeemedCents = Math.max(0, Math.min(memberPerks.storeCreditBalanceCents, Math.round(totalBeforePoints * 100)));
+  }
+  const storeCreditDiscount = roundMoney(storeCreditRedeemedCents / 100);
+  const totalAfterCredit = roundMoney(Math.max(0, totalBeforePoints - storeCreditDiscount));
+
+  // Points redemption stacks with a coupon or Buy 3 Get 1 Free (it behaves
+  // like store credit, not a promo code) but never with a referral code -
+  // referral codes are exclusive of every other discount, so redemption is
+  // silently zeroed rather than erroring (points aren't something a shopper
+  // deliberately "combines"; the balance is just sitting on their account).
+  // Also capped to the remaining balance due and the customer's actual point
+  // balance.
+  let pointsRedeemed = 0;
+  let pointsDiscountAmount = 0;
+  if (!referral && input.customerUserId && input.pointsToRedeem && input.pointsToRedeem > 0) {
+    const balance = await getPointsBalance(input.customerUserId);
+    const requestedPoints = Math.min(Math.floor(input.pointsToRedeem), balance);
+    const requestedDollars = pointsToDollars(requestedPoints);
+    pointsDiscountAmount = roundMoney(Math.min(requestedDollars, totalAfterCredit));
+    pointsRedeemed = dollarsToPoints(pointsDiscountAmount);
+  }
+
+  // Optional shipping-protection add-on: server recomputes the tiered fee from
+  // the server-side subtotal (never trusts a client amount) and adds it on top,
+  // mirroring the client preview so the totals match the anti-tamper guard.
+  const shippingProtectionFee = input.shippingProtection ? calculateShippingProtectionFee(subtotal) : 0;
+  const expectedTotal = roundMoney(Math.max(0, totalAfterCredit - pointsDiscountAmount) + shippingProtectionFee);
+
+  // The guard only blocks UNDERpayment (a client trying to pay less than the
+  // real total). Membership perks are applied authoritatively on the server
+  // and only ever LOWER the total, so a client total >= the server total is
+  // always safe and accepted (the customer is charged the correct perked total).
+  if (
+    input.expectedTotal !== undefined &&
+    Number(input.expectedTotal) < expectedTotal - 0.01
+  ) {
+    throw new Error("Altered total detected");
+  }
+
+  // Resolve the chosen payment method and, for card orders only, add the
+  // configurable card processing fee on top of expectedTotal. Manual methods
+  // carry no fee. Both the fee config and the method list come from the server
+  // so the client can never spoof a lower fee - the client only previews the
+  // same shared calculation.
+  const [paymentMethods, cardFeeConfig] = await Promise.all([
+    getPaymentMethodsConfig(),
+    getCardProcessingFeeConfig(),
+  ]);
+  const selectedMethodId = input.paymentMethod?.trim() || "card";
+  const selectedMethod = getPaymentMethodById(paymentMethods, selectedMethodId);
+
+  if (!selectedMethod || !selectedMethod.enabled) {
+    throw new Error("Unavailable payment method");
+  }
+
+  const isManual = isManualPaymentMethod(selectedMethod);
+  const cardFee = isManual
+    ? { amount: 0, percentage: 0 }
+    : calculateCardProcessingFee(expectedTotal, cardFeeConfig);
+  const finalTotal = roundMoney(expectedTotal + cardFee.amount);
+
+  // Snapshot the CURRENT internal cost (COGS) onto each line so profit for this
+  // order is always computed with the cost that applied today — a later cost
+  // change never rewrites this order's profit. Prefer the dose's cost, else the
+  // product's. If NEITHER is set we snapshot null (unknown) rather than the
+  // guard's worst-case assumption, so profit reports show real cost when known
+  // and flag an estimate when not — never presenting an assumption as fact.
+  const unitCostCentsForLine = (line: QuoteOrderLine): number | null => {
+    const slug = String(line.product.id).split("::")[0];
+    const doseCost = line.product.variantId ? unitCostByDoseId.get(line.product.variantId) : undefined;
+    if (doseCost && doseCost > 0) return Math.round(doseCost * 100);
+    const slugCost = unitCostBySlug.get(slug);
+    if (slugCost && slugCost > 0) return Math.round(slugCost * 100);
+    return null;
+  };
+
+  // The labelled breakdown a wallet sheet renders VERBATIM. Built here, on the
+  // server, from the same numbers the charge is made of — a wallet client must
+  // never derive a money row of its own. Shipping and sales tax are deliberately
+  // absent: they are appended by the wallet's address callback, from the
+  // amount authority's response, once a destination exists.
+  const displayLineItems: QuoteDisplayLineItem[] = [
+    { label: "Subtotal", amountCents: Math.round(subtotal * 100) },
+  ];
+  if (discountAmount > 0) {
+    displayLineItems.push({
+      label: customerDiscount.label || "Discount",
+      amountCents: -Math.round(discountAmount * 100),
+    });
+  }
+  if (storeCreditRedeemedCents > 0) {
+    displayLineItems.push({ label: "Store credit", amountCents: -storeCreditRedeemedCents });
+  }
+  if (pointsDiscountAmount > 0) {
+    displayLineItems.push({ label: "Rewards points", amountCents: -Math.round(pointsDiscountAmount * 100) });
+  }
+  // Shipping protection is an OPT-IN paid add-on that defaults on. It gets its
+  // own labelled row so a one-tap shopper sees what they are paying for at the
+  // moment of authorization, not only in the drawer they may have scrolled past.
+  if (shippingProtectionFee > 0) {
+    displayLineItems.push({ label: "Shipping Protection", amountCents: Math.round(shippingProtectionFee * 100) });
+  }
+  // Same reasoning for the card service fee: it is charged on this lane exactly
+  // as it is on the card form (price parity), so it must be disclosed as its own
+  // row rather than folded silently into "Subtotal".
+  if (cardFee.amount > 0) {
+    displayLineItems.push({ label: cardFeeConfig.label || "Service Fee", amountCents: Math.round(cardFee.amount * 100) });
+  }
+
+  return {
+    lineItems,
+    subtotal,
+    shipping,
+    discountAmount,
+    bulkDiscountTier,
+    isPriorityOrder,
+    taxQuote,
+    taxAmount,
+    referral,
+    couponCode: coupon?.code ?? null,
+    isBuy3Get1Active,
+    storeCreditRedeemedCents,
+    pointsRedeemed,
+    pointsDiscountAmount,
+    shippingProtectionFee,
+    expectedTotal,
+    paymentMethods,
+    selectedMethod,
+    isManualPayment: isManual,
+    cardFee,
+    finalTotal,
+    unitCostCentsForLine,
+    addressIndependentCents: Math.round(finalTotal * 100),
+    displayLineItems,
+  };
+}
+
+// -------------------------------------------------------------------------
+// Order row writing — also lifted verbatim, so the express lane writes a row
+// that is indistinguishable from a card-checkout row (same columns, same
+// pre-migration degradation retries) instead of a near-copy that drifts.
+// -------------------------------------------------------------------------
+
+export interface OrderRowInput {
+  orderId: string;
+  orderNumber: string;
+  idempotencyKey: string | null;
+  paymentId: string | null;
+  paymentMethod: string;
+  cardProcessingFee: number;
+  cardProcessingFeePercent: number;
+  customer: CustomerInput;
+  billing?: {
+    fullName?: string;
+    address?: string;
+    city?: string;
+    postalCode?: string;
+  };
+  currency: string;
+  subtotal: number;
+  shippingAmount: number;
+  taxAmount: number;
+  discountAmount: number;
+  bulkDiscountTier: string | null;
+  priority: boolean;
+  amountPaid: number;
+  referralCode: string | null;
+  ambassadorId: string | null;
+  couponCode: string | null;
+  customerUserId: string | null;
+  pointsRedeemed: number;
+  storeCreditRedeemedCents: number;
+  taxRatePercent: number;
+  taxState: string | null;
+  /** Extra columns (e.g. checkout_channel) that live on the newer-column row. */
+  extraColumns?: Record<string, unknown>;
+}
+
+export interface OrderRowDraft {
+  /** Every column, including the ones added by later migrations. */
+  full: Record<string, unknown>;
+  /** The original column set — the pre-migration fallback. */
+  base: Record<string, unknown>;
+}
+
+export function buildOrderRow(input: OrderRowInput): OrderRowDraft {
+  const baseOrderRow: Record<string, unknown> = {
+    order_id: input.orderId,
+    order_number: input.orderNumber,
+    idempotency_key: input.idempotencyKey,
+    payment_id: input.paymentId,
+    payment_method: input.paymentMethod,
+    card_processing_fee: input.cardProcessingFee,
+    card_processing_fee_percent: input.cardProcessingFee > 0 ? input.cardProcessingFeePercent : 0,
+    customer_email: input.customer.email,
+    customer_name: input.customer.fullName,
+    shipping_address: input.customer.address,
+    city: input.customer.city,
+    postal_code: input.customer.postalCode,
+    country: input.customer.country,
+    currency: input.currency,
+    subtotal: input.subtotal,
+    shipping_amount: input.shippingAmount,
+    handling_fee: 0,
+    tax_amount: input.taxAmount,
+    discount_amount: input.discountAmount,
+    bulk_discount_tier: input.bulkDiscountTier,
+    bulk_discount_amount: input.bulkDiscountTier ? input.discountAmount : 0,
+    priority: input.priority,
+    amount_paid: input.amountPaid,
+    referral_code: input.referralCode,
+    ambassador_id: input.ambassadorId,
+    coupon_code: input.couponCode,
+    customer_user_id: input.customerUserId,
+    points_redeemed: input.pointsRedeemed,
+    store_credit_redeemed_cents: input.storeCreditRedeemedCents,
+    payment_status: "pending_payment",
+    fulfillment_status: "pending",
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  };
+
+  // state/phone (orders-state-phone.sql) and the tax recordkeeping fields
+  // (dynamic-sales-tax.sql) are newer columns. Try to store them, but if a
+  // migration hasn't been applied yet, fall back to inserting without them so
+  // checkout NEVER breaks over a missing column. tax_amount itself is an
+  // original column and always stored (in baseOrderRow above).
+  const billing = input.billing;
+  const orderRowWithContact: Record<string, unknown> = {
+    ...baseOrderRow,
+    state: input.customer.state ?? null,
+    phone: input.customer.phone ?? null,
+    billing_full_name: billing?.fullName ? sanitizeText(billing.fullName) : null,
+    billing_address: billing?.address ? sanitizeText(billing.address) : null,
+    billing_city: billing?.city ? sanitizeText(billing.city) : null,
+    billing_postal_code: billing?.postalCode ? sanitizeText(billing.postalCode) : null,
+    // Exact tax audit trail: the rate applied and the destination state it
+    // was applied for (null when no tax was collected), so the admin tax
+    // report can group collections by state without re-deriving rates.
+    tax_rate_percent: input.taxRatePercent,
+    tax_state: input.taxState,
+    ...(input.extraColumns ?? {}),
+  };
+
+  const baseWithoutIdempotency = { ...baseOrderRow };
+  delete baseWithoutIdempotency.idempotency_key;
+
+  return { full: orderRowWithContact, base: baseWithoutIdempotency };
+}
+
+export type OrderInsertOutcome =
+  | { status: "inserted" }
+  /** A unique-index violation — a concurrent submit with the same key won. */
+  | { status: "duplicate" }
+  | { status: "error"; error: { code?: string; message?: string } };
+
+// Insert the row, degrading to the original column set when a later migration
+// hasn't been applied yet. Returns "duplicate" rather than resolving the winning
+// row itself, because what a caller should DO about a duplicate differs by lane.
+export async function insertOrderRow(draft: OrderRowDraft): Promise<OrderInsertOutcome> {
+  let insertError = (await supabaseAdmin.from("orders").insert(draft.full)).error;
+  if (insertError && insertError.code === "23505") {
+    return { status: "duplicate" };
+  }
+  if (insertError) {
+    const message = String(insertError.message ?? "").toLowerCase();
+    const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state") || message.includes("idempotency_key") || message.includes("billing_") || message.includes("checkout_channel");
+    const looksLikeMissingColumn = message.includes("does not exist")
+      || message.includes("schema cache")
+      || message.includes("could not find")
+      || message.includes("unknown column");
+    const missingColumn = insertError.code === "PGRST204" || (mentionsNewColumn && looksLikeMissingColumn);
+    if (missingColumn) {
+      insertError = (await supabaseAdmin.from("orders").insert(draft.base)).error;
+      if (insertError && insertError.code === "23505") {
+        return { status: "duplicate" };
+      }
+    }
+  }
+
+  if (insertError) {
+    return { status: "error", error: insertError };
+  }
+  return { status: "inserted" };
+}
+
+// The order_items rows for a quote, with the same pre-migration degradation
+// (unit_cost_cents arrived with product-cost-tracking.sql).
+export async function insertOrderItems(
+  orderId: string,
+  lineItems: QuoteOrderLine[],
+  unitCostCentsForLine: (line: QuoteOrderLine) => number | null,
+): Promise<{ payload: Array<{ product_id: string; quantity: number }>; error: unknown }> {
+  const orderItemsPayload = lineItems.map((line) => ({
+    order_id: orderId,
+    product_id: line.product.id,
+    product_name: line.product.variantLabel ? `${line.product.name} (${line.product.variantLabel})` : line.product.name,
+    unit_price: line.product.price,
+    quantity: line.quantity,
+    line_total: roundMoney(line.product.price * line.quantity),
+    unit_cost_cents: unitCostCentsForLine(line),
+  }));
+
+  let { error: itemInsertError } = await supabaseAdmin.from("order_items").insert(orderItemsPayload);
+  // Backwards-compatible: if the cost-snapshot migration hasn't been run yet the
+  // unit_cost_cents column won't exist. Never let that break checkout — retry
+  // the insert without the snapshot column.
+  if (itemInsertError && (itemInsertError.code === "PGRST204" || /unit_cost_cents/i.test(itemInsertError.message ?? ""))) {
+    const legacyPayload = orderItemsPayload.map((item) => ({
+      order_id: item.order_id,
+      product_id: item.product_id,
+      product_name: item.product_name,
+      unit_price: item.unit_price,
+      quantity: item.quantity,
+      line_total: item.line_total,
+    }));
+    ({ error: itemInsertError } = await supabaseAdmin.from("order_items").insert(legacyPayload));
+  }
+
+  return { payload: orderItemsPayload, error: itemInsertError };
+}
