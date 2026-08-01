@@ -85,6 +85,56 @@ live URL. Open it and check the homepage loads.
   Environment Variables) so emails and the sitemap use the right links, then
   redeploy.
 
+---
+
+## 6. Turning on Apple Pay express checkout (optional)
+
+The mini-cart's Apple Pay button is off by default. It is a real one-tap
+payment path, so every item below must be done **in this order** — skipping
+any one of them produces a button that opens a sheet and then fails.
+
+1. **Run the migration first.** SQL Editor → paste
+   `src/lib/sql/express-checkout.sql` → Run, then run the verification query
+   at the bottom of that file. Every column must come back `t`. Deploying the
+   code before the tables exist means the express endpoints fail while money is
+   in flight.
+2. **Register the serving host for Apple Pay** with the wallet tokenization
+   provider, and confirm
+   `https://<host>/.well-known/apple-developer-merchantid-domain-association`
+   serves **200 with no redirect**. Check the host the browser actually lands
+   on — if the apex redirects to `www`, `www` is the one that matters, and the
+   two are separate registrations.
+3. **Set the environment variables** (Vercel → Settings → Environment
+   Variables), all of them, then redeploy:
+
+   | Name | Value |
+   |------|-------|
+   | `VEYRA_API_BASE` | your processor's API base |
+   | `VEYRA_SECRET_KEY` | your processor's secret key |
+   | `PAYMENT_WEBHOOK_SECRET` | the signing secret from the processor's webhook endpoint |
+   | `CHECKOUT_ENABLED` | `true` |
+   | `NEXT_PUBLIC_SITE_URL` | the exact public origin, e.g. `https://www.your-domain.com` |
+   | `VEYRA_SHIPPING_CALLBACK_TOKEN` | any long random string you make up |
+   | `NEXT_PUBLIC_APPLE_PAY_DOMAINS` | the registered host(s), comma-separated |
+
+4. **Point a webhook** at `https://<host>/api/webhooks/payment`, subscribed to
+   the payment success / failure / refund / dispute events, and put its signing
+   secret in `PAYMENT_WEBHOOK_SECRET`. The signed webhook — not the browser —
+   is what marks an order paid. Without it, cards are charged and orders sit
+   unpaid until the reconciliation sweep catches them.
+5. **Prove the ordinary card lane end to end first**: one real order that goes
+   session → charge → webhook → `payment_status = 'paid'`. Every settlement
+   assumption on the express lane rests on that path working.
+6. Only then set `NEXT_PUBLIC_EXPRESS_CHECKOUT_ENABLED=true` and redeploy.
+7. **Test on a real iPhone.** None of this is verifiable on a desktop browser.
+   Check that the button appears only after all three confirmations are ticked,
+   that changing the address in the sheet updates **both** shipping and tax,
+   that shipping protection and the service fee each appear as their own row,
+   and that an address outside the US/Canada is refused rather than quoted $0
+   shipping.
+
+---
+
 ## Updating later
 
 Any change pushed to your production branch redeploys automatically. To change

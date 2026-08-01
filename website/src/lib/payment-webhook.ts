@@ -17,6 +17,7 @@ import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRes
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
 import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
 import { activateAnnualMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
+import { recordSystemAlert } from "@/lib/monitoring";
 
 export interface WebhookEventState {
   eventId: string;
@@ -245,8 +246,8 @@ function normalizeOrderPayload(payload: string) {
      * object has been seen both nested and un-nested.
      */
     data?: {
-      metadata?: { order_id?: string };
-      object?: { metadata?: { order_id?: string } };
+      metadata?: { order_id?: string; veyragate_session_id?: string };
+      object?: { metadata?: { order_id?: string; veyragate_session_id?: string } };
     };
   };
 }
@@ -271,6 +272,40 @@ export function resolveWebhookOrderId(eventPayload: {
     eventPayload.data?.object?.metadata?.order_id ??
     null
   );
+}
+
+/**
+ * The processor's own session id, when it sends one.
+ *
+ * Preferred over `metadata.order_id` for matching, because it is minted
+ * server-side by the processor and echoed back — nothing a client ever touched.
+ * Our own order row records it in `payment_id` at checkout, so the two can be
+ * joined. `metadata.order_id` stays as the fallback for senders that don't
+ * carry a session id (the internal/mock gateway) and for orders written before
+ * payment_id was persisted.
+ */
+export function resolveWebhookSessionId(eventPayload: {
+  data?: {
+    metadata?: { veyragate_session_id?: string };
+    object?: { metadata?: { veyragate_session_id?: string } };
+  };
+}): string | null {
+  return (
+    eventPayload.data?.metadata?.veyragate_session_id ??
+    eventPayload.data?.object?.metadata?.veyragate_session_id ??
+    null
+  );
+}
+
+/** The order carrying this processor session id, if we wrote one. */
+async function findOrderIdByPaymentId(paymentId: string): Promise<string | null> {
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .select("order_id")
+    .eq("payment_id", paymentId)
+    .maybeSingle();
+  if (error || !data) return null;
+  return String(data.order_id);
 }
 
 async function markEventProcessed(eventId: string, orderId: string, status: OrderStatus) {
@@ -1044,10 +1079,15 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   }
 
   const eventPayload = normalizeOrderPayload(payload);
-  // Falls back to a synthetic id ONLY when no sender put one anywhere, so the
-  // event is still recorded rather than lost — but it will match no order, which
-  // is why resolveWebhookOrderId has to know every shape a real sender uses.
-  const orderId = resolveWebhookOrderId(eventPayload) ?? `order-${randomUUID()}`;
+  // Match on the processor's own session id FIRST (server-minted, unspoofable,
+  // and recorded on our order as payment_id), falling back to the order id in
+  // metadata. Falls back to a synthetic id ONLY when no sender put one
+  // anywhere, so the event is still recorded rather than lost — but it will
+  // match no order, which is why these resolvers have to know every shape a
+  // real sender uses.
+  const sessionId = resolveWebhookSessionId(eventPayload);
+  const orderIdFromSession = sessionId ? await findOrderIdByPaymentId(sessionId) : null;
+  const orderId = orderIdFromSession ?? resolveWebhookOrderId(eventPayload) ?? `order-${randomUUID()}`;
   const nextStatus = getOrderStatusForEventType(eventPayload.type ?? "");
 
   // Claim the event up front (atomic) so concurrent duplicate deliveries can't
@@ -1065,6 +1105,25 @@ export async function processPaymentWebhook(payload: string, signature: string, 
 
   try {
   const orderRecord = await getOrderByOrderId(orderId);
+
+  // An event that says nothing about a money state must never write one. A '*'
+  // subscription delivers plenty of those (payout.paid,
+  // dispute.evidence_required, whatever the processor adds next), and
+  // getOrderStatusForEventType maps every one of them to "pending_payment" via
+  // its default — which the upsert below would then write over a real order.
+  // The demotion guard further down only covers payment_failed/canceled, so it
+  // does not catch this.
+  if (orderRecord && !isRecognisedMoneyEvent(eventPayload.type ?? "")) {
+    const existingStatus = (orderRecord.payment_status ?? "pending_payment") as OrderStatus;
+    await markEventProcessed(eventId, orderId, existingStatus);
+    return {
+      duplicate: false,
+      eventId,
+      orderId,
+      status: existingStatus,
+      providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
+    } satisfies WebhookEventState;
+  }
 
   // Refund/cancel are terminal money states. A late or replayed
   // `payment.succeeded` (arriving with a fresh event_id after a refund) must
@@ -1164,12 +1223,22 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // (via .neq("payment_status","paid")), so a duplicate delivery — or a later
   // "shipped" fulfillment state — is never reverted.
   if (nextStatus === "paid" && orderRecord) {
+    // Amount assertion. The money HAS moved, so we never refuse to record it —
+    // an unrecorded real charge is strictly worse than a flagged one. But an
+    // amount that disagrees with what checkout computed means something is
+    // wrong upstream, so the order is held OUT of fulfilment (fulfillment_status
+    // stays "pending" instead of advancing to "awaiting_fulfillment") and an
+    // operator is alerted rather than the parcel shipping on a bad number.
+    const eventAmount = roundMoney(Number(eventPayload.amount ?? 0));
+    const recordedAmount = roundMoney(Number(orderRecord.amount_paid ?? 0));
+    const amountDisagrees = eventAmount > 0 && recordedAmount > 0 && Math.abs(eventAmount - recordedAmount) > 0.01;
+
     const nowIso = new Date().toISOString();
     const { error: flipError } = await supabaseAdmin
       .from("orders")
       .update({
         payment_status: "paid",
-        fulfillment_status: "awaiting_fulfillment",
+        fulfillment_status: amountDisagrees ? "pending" : "awaiting_fulfillment",
         paid_at: nowIso,
         payment_id: eventPayload.paymentId ?? orderRecord.payment_id ?? null,
         provider_event_id: eventId,
@@ -1179,6 +1248,15 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       .neq("payment_status", "paid");
     if (flipError) {
       throw flipError;
+    }
+
+    if (amountDisagrees) {
+      await recordSystemAlert({
+        type: "payment_amount_mismatch",
+        severity: "critical",
+        message: `Order ${orderId} was paid for $${eventAmount.toFixed(2)} but checkout recorded $${recordedAmount.toFixed(2)}. The order is marked paid and held out of fulfilment pending review.`,
+        context: { order_id: orderId, event_amount: eventAmount, recorded_amount: recordedAmount, event_id: eventId },
+      });
     }
   }
 

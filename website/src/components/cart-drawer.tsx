@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
@@ -9,12 +9,44 @@ import { bundleDiscountRate, getBundleDiscountedLineTotal, getNextBundleTier } f
 import { bestPaidTier, computeCartMembershipValue } from "@/lib/member-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
+import { ExpressApplePayButton } from "@/components/express-apple-pay-button";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
+
+// Byte-identical to the copy on /checkout. This wording is legally
+// load-bearing: reuse it verbatim, never reword it, never merge the three into
+// one, never pre-tick a box.
+const REQUIRED_CONFIRMATIONS = [
+  {
+    key: "researchResponsibility" as const,
+    title: "Research Responsibility Statement *",
+    body: "The purchaser assumes full responsibility for the proper handling, storage, and use of these laboratory materials. The seller provides products solely as research reference materials and does not provide medical or dosing guidance.",
+  },
+  {
+    key: "researchCompliance" as const,
+    title: "Research & Compliance Agreement *",
+    body: "I acknowledge that the products sold on this website are intended strictly for laboratory research purposes. I confirm that I am purchasing these materials for legitimate research use and not for human or veterinary use. I understand these products are not drugs, dietary supplements, or medical products, and no instructions for preparation, dosage, or administration are provided by the seller.",
+  },
+  {
+    key: "ageLegalConfirmation" as const,
+    title: "Age & Legal Confirmation *",
+    body: "I confirm that I am 21 years of age or older and legally permitted to purchase laboratory research materials.",
+  },
+];
 
 export function CartDrawer() {
   const router = useRouter();
   const [referralInput, setReferralInput] = useState("");
   const [couponInput, setCouponInput] = useState("");
+  const [acknowledgements, setAcknowledgements] = useState({
+    researchResponsibility: false,
+    researchCompliance: false,
+    ageLegalConfirmation: false,
+  });
+  const [confirmationsOpen, setConfirmationsOpen] = useState(false);
+  // Set when the express lane reports it can't run here (wrong platform,
+  // unregistered host, or a cart this lane can't price). The drawer then falls
+  // back to exactly what it showed before the express slot existed.
+  const [expressUnavailable, setExpressUnavailable] = useState(false);
   const {
     items,
     isCartOpen,
@@ -118,6 +150,13 @@ export function CartDrawer() {
     closeCart();
     router.push("/checkout");
   };
+
+  const acknowledgedCount = REQUIRED_CONFIRMATIONS.filter((item) => acknowledgements[item.key]).length;
+  const allAcknowledged = acknowledgedCount === REQUIRED_CONFIRMATIONS.length;
+  // The express slot is only worth its footer real estate once the lane has
+  // proven it can actually run. onUnavailable is how it says it can't.
+  const showExpressSlot = EXPRESS_CHECKOUT_ENABLED && !expressUnavailable;
+  const onUnavailable = useCallback(() => setExpressUnavailable(true), []);
 
   if (!isCartOpen) {
     return null;
@@ -445,9 +484,18 @@ export function CartDrawer() {
                 <span>+{formatCartCurrency(shippingProtectionFee)}</span>
               </div>
             ) : null}
+            {/* On the express path shipping and tax are finalised inside the
+                Apple Pay sheet, not on a later page — "at checkout" would read
+                as "tapping Apple Pay skips tax". */}
             <div className="mt-2 flex justify-between text-white/40">
-              <span>Sales tax</span>
-              <span>Calculated at checkout</span>
+              {showExpressSlot ? (
+                <span>Shipping &amp; sales tax — calculated at payment</span>
+              ) : (
+                <>
+                  <span>Sales tax</span>
+                  <span>Calculated at checkout</span>
+                </>
+              )}
             </div>
           </div>
           </div>
@@ -462,22 +510,85 @@ export function CartDrawer() {
             <span className="text-xs uppercase tracking-[0.22em] text-zinc-500">Total</span>
             <span className="text-xl font-semibold text-white tabular-nums">{formatCartCurrency(total)}</span>
           </div>
+          {/* Shipping protection is a paid add-on that defaults ON, and its
+              toggle lives up in the SCROLLING region — on a phone the express
+              button is reachable with no scrolling and the opt-out is not. This
+              line makes the charge, and the way out of it, visible right where
+              the shopper is about to pay. It is also its own labelled row in
+              the Apple Pay sheet. */}
+          {showExpressSlot && shippingProtectionFee > 0 ? (
+            <p className="flex items-center justify-between pb-2.5 text-xs text-zinc-400">
+              <span>Shipping protection +{formatCartCurrency(shippingProtectionFee)}</span>
+              <button
+                type="button"
+                onClick={() => setShippingProtectionEnabled(false)}
+                className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline"
+              >
+                Remove
+              </button>
+            </p>
+          ) : null}
           <div className="space-y-2.5">
-            {/* Apple Pay express slot. Modular: a payment processor's Apple Pay
-                handler plugs in here later. Hidden until EXPRESS_CHECKOUT_ENABLED
-                so we never show a button that looks like one-tap Apple Pay but
-                actually just opens the normal checkout form. */}
-            {EXPRESS_CHECKOUT_ENABLED ? (
+            {/* Apple Pay express slot. Renders the real native sheet — the
+                button only appears once the platform, the registered host, the
+                required confirmations and a live server session all check out,
+                so a shopper never taps something that can't complete. */}
+            {showExpressSlot ? (
               <>
                 <p className="text-center text-[10px] uppercase tracking-[0.22em] text-zinc-500">Express checkout</p>
-                <button
-                  type="button"
-                  onClick={handleContinueToCheckout}
-                  aria-label="Apple Pay express checkout"
-                  className="vl-focus-ring w-full rounded-full bg-white px-4 py-3 text-center text-sm font-semibold text-black transition hover:bg-white/90"
-                >
-                  Apple Pay
-                </button>
+
+                {/* Required confirmations. The summary row and the pay button
+                    are BOTH always visible; the expanded copy gets its own
+                    capped scroller so it can never push the button off-screen
+                    (the mobile "checkout does nothing" failure this file
+                    already memorialises above). */}
+                <div className="rounded-[1.25rem] border border-zinc-800 bg-zinc-900/60">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmationsOpen((open) => !open)}
+                    aria-expanded={confirmationsOpen}
+                    className="flex w-full items-center justify-between gap-2 px-3.5 py-2.5 text-left"
+                  >
+                    <span className="text-xs text-zinc-300">Required confirmations</span>
+                    <span className="flex items-center gap-2">
+                      <span className={`text-xs tabular-nums ${allAcknowledged ? "text-emerald-400" : "text-zinc-500"}`}>
+                        {acknowledgedCount} of {REQUIRED_CONFIRMATIONS.length}
+                      </span>
+                      <span className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
+                        {confirmationsOpen ? "Hide" : "Review"}
+                      </span>
+                    </span>
+                  </button>
+                  {confirmationsOpen ? (
+                    <div className="max-h-[45vh] space-y-3 overflow-y-auto overscroll-contain border-t border-zinc-800 px-3.5 py-3">
+                      {REQUIRED_CONFIRMATIONS.map((item) => (
+                        <label key={item.key} className="flex items-start gap-2.5 text-xs text-zinc-400">
+                          <input
+                            type="checkbox"
+                            checked={acknowledgements[item.key]}
+                            onChange={(event) =>
+                              setAcknowledgements((current) => ({ ...current, [item.key]: event.target.checked }))
+                            }
+                            className="mt-0.5 h-4 w-4 accent-emerald-500"
+                          />
+                          <span>
+                            <span className="block text-white">{item.title}</span>
+                            <span className="mt-1 block leading-relaxed text-zinc-500">{item.body}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div onClickCapture={() => { if (!allAcknowledged) setConfirmationsOpen(true); }}>
+                  <ExpressApplePayButton
+                    acknowledged={allAcknowledged}
+                    acknowledgements={acknowledgements}
+                    onUnavailable={onUnavailable}
+                  />
+                </div>
+
                 <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.22em] text-zinc-600">
                   <span className="h-px flex-1 bg-zinc-800" />or<span className="h-px flex-1 bg-zinc-800" />
                 </div>
@@ -503,7 +614,7 @@ export function CartDrawer() {
               </button>
             ) : null}
             <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
-              {["Visa", "Mastercard", "Amex", "Discover", ...(EXPRESS_CHECKOUT_ENABLED ? ["Apple Pay"] : [])].map((brand) => (
+              {["Visa", "Mastercard", "Amex", "Discover", ...(showExpressSlot ? ["Apple Pay"] : [])].map((brand) => (
                 <span key={brand} className="rounded border border-zinc-700 bg-zinc-900/60 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-500">{brand}</span>
               ))}
             </div>

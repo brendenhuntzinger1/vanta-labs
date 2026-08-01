@@ -65,6 +65,13 @@ function isStaticAsset(pathname: string) {
 function pathBypassesMaintenance(pathname: string) {
   return (
     pathname === "/maintenance"
+    // Domain-verification files (Apple Pay's
+    // apple-developer-merchantid-domain-association, and anything else served
+    // under /.well-known). isStaticAsset() does NOT cover these: its
+    // trailing-extension test never matches a path ending in "-association", so
+    // with maintenance mode on they were rewritten to /maintenance and Apple Pay
+    // silently died sitewide the next time the domain was re-verified.
+    || pathname.startsWith("/.well-known/")
     || pathname.startsWith("/vault")
     || pathname.startsWith("/admin")
     || pathname.startsWith("/api/admin")
