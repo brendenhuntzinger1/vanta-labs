@@ -51,16 +51,16 @@ export function ProductCard({
       <WishlistButton
         slug={product.slug}
         initialInWishlist={initialInWishlist}
-        className="absolute right-2.5 top-2.5 z-20 inline-flex h-10 w-10 items-center justify-center border border-white/20 bg-black/70 text-white backdrop-blur transition hover:text-rose-300"
+        className="absolute right-2.5 top-2.5 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white shadow-sm backdrop-blur-md transition hover:scale-105 hover:text-rose-300 active:scale-95"
       />
       <Link href={`/products/${product.slug}`} className="vl-focus-ring flex flex-1 flex-col">
         <div className="vl-product-card-media border-b border-white/10">
           {product.isBestSeller ? (
-            <span className="vl2-eyebrow absolute left-3 top-3 z-10 border border-amber-300/40 bg-black/70 px-2.5 py-1 text-[10px] text-amber-300 backdrop-blur">
+            <span className="vl2-eyebrow absolute left-3 top-3 z-10 rounded-full border border-amber-300/40 bg-black/70 px-2.5 py-1 text-[10px] text-amber-300 shadow-sm backdrop-blur-md">
               ★ Best Seller
             </span>
           ) : product.badge ? (
-            <span className="vl2-eyebrow absolute left-3 top-3 z-10 border border-white/20 bg-black/70 px-2.5 py-1 text-[10px] backdrop-blur">
+            <span className="vl2-eyebrow absolute left-3 top-3 z-10 rounded-full border border-white/20 bg-black/70 px-2.5 py-1 text-[10px] shadow-sm backdrop-blur-md">
               {BADGE_LABELS[product.badge]}
             </span>
           ) : null}
@@ -88,12 +88,12 @@ export function ProductCard({
             <p className="vl2-eyebrow text-[10px] text-white/45">{product.category}</p>
           </div>
 
-          <h3 className="mt-1.5 line-clamp-2 text-sm text-white sm:mt-2 sm:text-lg">{product.name}</h3>
+          <h3 className="mt-1.5 line-clamp-2 text-sm font-medium leading-snug text-white sm:mt-2 sm:text-lg">{product.name}</h3>
 
           <div className="mt-2 flex items-baseline gap-x-2 sm:mt-3">
-            <p className="text-base text-white sm:text-xl">{product.salePrice ?? product.price}</p>
+            <p className="text-lg font-semibold tracking-tight text-white sm:text-2xl">{product.salePrice ?? product.price}</p>
             {product.salePrice && product.compareAtPrice ? (
-              <p className="text-xs text-white/70 line-through sm:text-sm">{product.compareAtPrice}</p>
+              <p className="text-xs text-white/55 line-through sm:text-sm">{product.compareAtPrice}</p>
             ) : null}
           </div>
           {showMemberPricing && memberQuote ? (
@@ -105,19 +105,19 @@ export function ProductCard({
           ) : null}
           {/* Trust badges — data-driven, so they only appear when the real
               purity / COA / batch data is entered in Admin (no fabricated claims). */}
-          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[10px] leading-none">
+          <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-[10px] leading-none">
             {product.purityResult ? (
-              <span className="border border-emerald-400/30 bg-emerald-400/10 px-1.5 py-1 text-emerald-300">
+              <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 font-medium text-emerald-300">
                 {product.purityResult.includes("%") ? product.purityResult : `${product.purityResult} pure`}
               </span>
             ) : null}
             {product.coaUrl ? (
-              <span className="border border-sky-400/30 bg-sky-400/10 px-1.5 py-1 text-sky-300">
+              <span className="rounded-full border border-sky-400/30 bg-sky-400/10 px-2 py-1 font-medium text-sky-300">
                 COA verified
               </span>
             ) : null}
             {product.batchNumber ? (
-              <span className="border border-white/15 px-1.5 py-1 text-white/50">
+              <span className="rounded-full border border-white/15 px-2 py-1 text-white/50">
                 Batch {product.batchNumber}
               </span>
             ) : null}
