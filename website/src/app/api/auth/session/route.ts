@@ -30,7 +30,14 @@ export async function POST(request: Request) {
     // ambassador application flow or its "application received" email.
     const role = detectRoleFromUser(data.user);
 
-    if (role === "customer") {
+    // Points bonuses (signup + referral) are awarded only once the email is
+    // CONFIRMED. This stops throwaway/unverified accounts from farming signup
+    // and referral points at scale. Both awards are idempotent, so they fire on
+    // the first confirmed session and never double. If the project auto-confirms
+    // emails, email_confirmed_at is already set and this is a no-op.
+    const emailConfirmed = Boolean(data.user.email_confirmed_at);
+
+    if (role === "customer" && emailConfirmed) {
       try {
         await awardSignupBonusIfNeeded(data.user.id);
 
