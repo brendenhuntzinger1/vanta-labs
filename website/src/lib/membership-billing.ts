@@ -464,6 +464,110 @@ export async function getMembershipBillingHistory(userId: string, limit = 24): P
   }));
 }
 
+export interface MembershipScheduleResult {
+  status: string;
+  nextBillingAt: string | null;
+}
+
+// Pause a MONTHLY membership: billing stops (the sweep only ever charges
+// active/trialing rows) and member benefits pause too (isMembershipActive
+// requires active/trialing). Fully reversible via resumeMembership. Only valid
+// for an active monthly plan that isn't already ending — annual plans are a
+// one-time pass, and a plan set to cancel-at-period-end should just cancel.
+export async function pauseMembership(userId: string): Promise<MembershipScheduleResult> {
+  const { data: existing, error } = await supabaseAdmin
+    .from("customer_memberships")
+    .select("user_id, tier_id, status, billing_cycle, next_billing_at, cancel_at_period_end")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!existing) throw new Error("You don't have a membership to pause.");
+  if (existing.billing_cycle !== "monthly") throw new Error("Only monthly memberships can be paused.");
+  if (existing.status !== "active") throw new Error("Only an active membership can be paused.");
+  if (existing.cancel_at_period_end) throw new Error("This membership is already set to end — nothing to pause.");
+
+  const nowIso = new Date().toISOString();
+  const { error: updateError } = await supabaseAdmin
+    .from("customer_memberships")
+    .update({ status: "paused", updated_at: nowIso })
+    .eq("user_id", userId)
+    .eq("status", "active");
+  if (updateError) throw updateError;
+
+  await recordBillingEvent({ userId, tierId: existing.tier_id, eventType: "pause", amountCents: 0, status: "succeeded" });
+  return { status: "paused", nextBillingAt: (existing.next_billing_at as string | null) ?? null };
+}
+
+// Resume a paused membership. Benefits and billing turn back on. If the stored
+// next-billing date is already in the past (time passed while paused), it rolls
+// forward to a fresh 30-day cycle from now so the member is never retroactively
+// charged for the paused stretch.
+export async function resumeMembership(userId: string): Promise<MembershipScheduleResult> {
+  const { data: existing, error } = await supabaseAdmin
+    .from("customer_memberships")
+    .select("user_id, tier_id, status, next_billing_at")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!existing) throw new Error("You don't have a membership to resume.");
+  if (existing.status !== "paused") throw new Error("This membership isn't paused.");
+
+  const now = new Date();
+  const storedNext = existing.next_billing_at ? new Date(existing.next_billing_at as string) : null;
+  const nextBillingAt = !storedNext || storedNext.getTime() <= now.getTime() ? new Date(now.getTime() + 30 * ONE_DAY_MS) : storedNext;
+
+  const { error: updateError } = await supabaseAdmin
+    .from("customer_memberships")
+    .update({
+      status: "active",
+      next_billing_at: nextBillingAt.toISOString(),
+      renews_at: nextBillingAt.toISOString(),
+      renewal_reminder_sent_at: null,
+      updated_at: now.toISOString(),
+    })
+    .eq("user_id", userId)
+    .eq("status", "paused");
+  if (updateError) throw updateError;
+
+  await recordBillingEvent({ userId, tierId: existing.tier_id, eventType: "resume", amountCents: 0, status: "succeeded" });
+  return { status: "active", nextBillingAt: nextBillingAt.toISOString() };
+}
+
+// Skip the next monthly charge: push the next-billing date forward one cycle
+// (30 days) so exactly one renewal is skipped, and re-arm the renewal reminder.
+export async function skipNextBilling(userId: string): Promise<MembershipScheduleResult> {
+  const { data: existing, error } = await supabaseAdmin
+    .from("customer_memberships")
+    .select("user_id, tier_id, status, billing_cycle, next_billing_at, cancel_at_period_end")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (error) throw error;
+  if (!existing) throw new Error("You don't have a membership to skip.");
+  if (existing.billing_cycle !== "monthly") throw new Error("Only monthly memberships can skip a cycle.");
+  if (existing.status !== "active") throw new Error("Only an active membership can skip a cycle.");
+  if (existing.cancel_at_period_end) throw new Error("This membership is already set to end.");
+
+  const now = new Date();
+  const base = existing.next_billing_at ? new Date(existing.next_billing_at as string) : now;
+  const from = base.getTime() <= now.getTime() ? now : base;
+  const nextBillingAt = new Date(from.getTime() + 30 * ONE_DAY_MS);
+
+  const { error: updateError } = await supabaseAdmin
+    .from("customer_memberships")
+    .update({
+      next_billing_at: nextBillingAt.toISOString(),
+      renews_at: nextBillingAt.toISOString(),
+      renewal_reminder_sent_at: null,
+      updated_at: now.toISOString(),
+    })
+    .eq("user_id", userId)
+    .eq("status", "active");
+  if (updateError) throw updateError;
+
+  await recordBillingEvent({ userId, tierId: existing.tier_id, eventType: "skip", amountCents: 0, status: "succeeded" });
+  return { status: "active", nextBillingAt: nextBillingAt.toISOString() };
+}
+
 // A refunded or charged-back membership ends IMMEDIATELY. Unlike a normal
 // cancellation (which keeps benefits until the already-paid period ends), a
 // refund/chargeback means the customer no longer paid — so every benefit stops

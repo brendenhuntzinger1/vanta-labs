@@ -5,6 +5,7 @@ import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getCustomerMembership } from "@/lib/membership";
 import { getMembershipBillingHistory } from "@/lib/membership-billing";
 import { MembershipBillingPanel } from "@/components/membership-billing-panel";
+import { SubscriptionActions } from "@/components/subscription-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,9 @@ const EVENT_LABELS: Record<string, string> = {
   payment_failed: "Payment failed",
   cancellation: "Cancellation",
   tier_change: "Plan change",
+  pause: "Membership paused",
+  resume: "Membership resumed",
+  skip: "Skipped a charge",
 };
 
 export default async function AccountSubscriptionsPage() {
@@ -39,11 +43,13 @@ export default async function AccountSubscriptionsPage() {
   const isActive = membership.status === "active" || membership.status === "trialing";
   const statusPill = membership.cancelAtPeriodEnd
     ? { text: "Ending at period end", cls: "border-amber-300/40 bg-amber-300/10 text-amber-200" }
-    : membership.status === "past_due"
-      ? { text: "Payment needed", cls: "border-amber-300/40 bg-amber-300/10 text-amber-200" }
-      : isActive
-        ? { text: "Active", cls: "border-emerald-400/40 bg-emerald-400/10 text-emerald-200" }
-        : { text: membership.status.replace(/_/g, " "), cls: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" };
+    : membership.status === "paused"
+      ? { text: "Paused", cls: "border-amber-300/40 bg-amber-300/10 text-amber-200" }
+      : membership.status === "past_due"
+        ? { text: "Payment needed", cls: "border-amber-300/40 bg-amber-300/10 text-amber-200" }
+        : isActive
+          ? { text: "Active", cls: "border-emerald-400/40 bg-emerald-400/10 text-emerald-200" }
+          : { text: membership.status.replace(/_/g, " "), cls: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" };
 
   return (
     <div className="space-y-5">
@@ -98,6 +104,9 @@ export default async function AccountSubscriptionsPage() {
 
           {/* Billing + cancel controls (client) */}
           <MembershipBillingPanel membership={membership} />
+
+          {/* Pause / skip / resume (monthly plans) */}
+          <SubscriptionActions membership={{ status: membership.status, billingCycle: membership.billingCycle, cancelAtPeriodEnd: membership.cancelAtPeriodEnd }} />
 
           <div className="mt-4 flex flex-wrap gap-2.5">
             <Link href="/membership" className="vl2-btn-secondary vl-focus-ring inline-flex px-4 py-2 text-xs">Change plan</Link>
