@@ -252,9 +252,36 @@ textarea {
   box-shadow: 0 14px 32px rgba(255, 255, 255, 0.14);
 }
 
+.vl-btn-primary {
+  touch-action: manipulation;
+  transition: transform var(--duration-fast) var(--ease-out-premium), box-shadow var(--duration-fast) ease;
+}
+
 .vl-btn-primary:hover {
   transform: translateY(-1px);
   box-shadow: 0 16px 34px rgba(255, 255, 255, 0.2);
+}
+
+.vl-btn-primary:active {
+  transform: translateY(0) scale(0.985);
+  box-shadow: 0 8px 20px rgba(255, 255, 255, 0.12);
+}
+
+.vl-btn-secondary {
+  touch-action: manipulation;
+  transition: transform var(--duration-fast) var(--ease-out-premium), border-color var(--duration-fast) ease, background-color var(--duration-fast) ease;
+}
+
+.vl-btn-secondary:active {
+  transform: scale(0.985);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-btn-primary:hover,
+  .vl-btn-primary:active,
+  .vl-btn-secondary:active {
+    transform: none;
+  }
 }
 
 .vl-btn-secondary {

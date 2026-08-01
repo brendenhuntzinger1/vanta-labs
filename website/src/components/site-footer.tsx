@@ -57,24 +57,25 @@ export function SiteFooter() {
   return (
     <footer className="border-t border-white/10 bg-[#0b0b0b]">
       <div className="border-b border-white/10">
-        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-center gap-x-8 gap-y-3 px-6 py-6 lg:px-12">
+        <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-center gap-2.5 px-4 py-5 sm:gap-3 sm:px-6 sm:py-6 lg:px-12">
           {TRUST_POINTS.map((point) => (
-            <span key={point} className="text-[0.7rem] font-medium uppercase tracking-[0.14em] text-white/45">
+            <span key={point} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[0.66rem] font-medium uppercase tracking-[0.14em] text-white/55">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 text-emerald-300/80"><path d="m5 12 4 4 10-10" /></svg>
               {point}
             </span>
           ))}
         </div>
       </div>
 
-      <div className="mx-auto max-w-[1440px] px-4 sm:px-6 py-14 lg:px-12">
-        <div className="grid gap-10 md:grid-cols-[1.6fr_1fr_1fr_1fr]">
-          <div>
+      <div className="mx-auto max-w-[1440px] px-5 sm:px-6 py-12 sm:py-14 lg:px-12">
+        <div className="grid grid-cols-2 gap-x-6 gap-y-10 md:grid-cols-[1.6fr_1fr_1fr_1fr]">
+          <div className="col-span-2 md:col-span-1">
             <p className="vl2-serif text-lg tracking-[0.08em] text-white">Vanta Labs</p>
             <p className="mt-4 max-w-md text-sm leading-7 text-white/55">
               Premium biotech research supply with verified quality standards, transparent batch documentation,
               and streamlined fulfillment.
             </p>
-            <div className="mt-6 inline-flex items-center border border-white/20 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-white/70">
+            <div className="mt-6 inline-flex items-center rounded-full border border-white/15 bg-white/[0.03] px-3.5 py-1.5 text-[11px] uppercase tracking-[0.18em] text-white/70">
               Research Use Only
             </div>
           </div>
@@ -84,14 +85,14 @@ export function SiteFooter() {
           <FooterColumn title="Legal" links={FOOTER_COLUMNS.legal} />
         </div>
 
-        <div className="mt-10 flex flex-col gap-3 border-t border-white/10 pt-6 text-xs text-white/70 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mt-12 flex flex-col gap-3 border-t border-white/10 pt-6 text-xs text-white/70 sm:flex-row sm:items-center sm:justify-between">
           <p>
             Support{" "}
-            <a href="mailto:support@vantalabsresearch.com" className="text-white/60 transition hover:text-white">
+            <a href="mailto:support@vantalabsresearch.com" className="text-white/70 underline-offset-4 transition hover:text-white hover:underline">
               support@vantalabsresearch.com
             </a>
           </p>
-          <p>© 2026 Vanta Labs. All Rights Reserved.</p>
+          <p className="text-white/45">© 2026 Vanta Labs. All Rights Reserved.</p>
         </div>
       </div>
     </footer>
