@@ -174,7 +174,7 @@ function ProductsPageContent() {
 
         <CouponPromoBanner />
 
-        <section className="z-40 mt-10 border border-white/12 bg-[#0b0b0b]/95 p-3 backdrop-blur-xl sm:p-4 lg:sticky lg:top-[76px]">
+        <section className="z-40 mt-10 rounded-2xl border border-white/12 bg-[#0b0b0b]/95 p-3 backdrop-blur-xl sm:p-4 lg:sticky lg:top-[76px]">
           <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-[1fr_auto_auto]">
             <input
               type="search"
@@ -182,14 +182,14 @@ function ProductsPageContent() {
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               placeholder="Search compounds, categories, or notes"
-              className="col-span-2 border border-white/15 bg-black/40 px-4 py-2.5 text-sm text-white placeholder:text-white/35 outline-none transition focus:border-white/50 sm:py-3 lg:col-span-1"
+              className="col-span-2 rounded-xl border border-white/15 bg-black/40 px-4 py-2.5 text-sm text-white placeholder:text-white/35 outline-none transition focus:border-white/50 focus:bg-black/60 sm:py-3 lg:col-span-1"
             />
 
             <select
               value={selectedCategory}
               aria-label="Filter by category"
               onChange={(event) => setSelectedCategory(event.target.value)}
-              className="border border-white/15 bg-black/40 px-3 py-2.5 text-sm text-white outline-none transition focus:border-white/50 sm:py-3 lg:w-56"
+              className="rounded-xl border border-white/15 bg-black/40 px-3 py-2.5 text-sm text-white outline-none transition focus:border-white/50 sm:py-3 lg:w-56"
             >
               {categories.map((category) => (
                 <option key={category} value={category}>
@@ -198,7 +198,7 @@ function ProductsPageContent() {
               ))}
             </select>
 
-            <select value={sort} aria-label="Sort products" onChange={(event) => setSort(event.target.value as SortKey)} className="border border-white/15 bg-black/40 px-3 py-2.5 text-sm text-white outline-none transition focus:border-white/50 sm:py-3 lg:w-52">
+            <select value={sort} aria-label="Sort products" onChange={(event) => setSort(event.target.value as SortKey)} className="rounded-xl border border-white/15 bg-black/40 px-3 py-2.5 text-sm text-white outline-none transition focus:border-white/50 sm:py-3 lg:w-52">
               {SORT_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
@@ -216,10 +216,10 @@ function ProductsPageContent() {
                 key={category}
                 onClick={() => setSelectedCategory(category)}
                 type="button"
-                className={`hidden border px-3 py-2.5 text-xs uppercase tracking-[0.14em] transition sm:inline-flex ${
+                className={`hidden items-center rounded-full border px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] transition-all duration-200 sm:inline-flex ${
                   selectedCategory === category
-                    ? "border-white bg-white/10 text-white"
-                    : "border-white/15 text-white/55 hover:border-white/35 hover:text-white"
+                    ? "border-emerald-300/40 bg-gradient-to-b from-emerald-400/20 to-emerald-400/[0.04] text-white shadow-[0_0_0_1px_rgba(16,185,129,0.25),0_8px_22px_-10px_rgba(16,185,129,0.55)]"
+                    : "border-white/10 bg-white/[0.03] text-white/60 hover:-translate-y-px hover:border-white/25 hover:bg-white/[0.07] hover:text-white"
                 }`}
               >
                 {category}
@@ -229,10 +229,10 @@ function ProductsPageContent() {
               <button
                 type="button"
                 onClick={() => setBestSellersOnly((prev) => !prev)}
-                className={`w-full border px-3 py-2 text-xs uppercase tracking-[0.14em] transition sm:w-auto sm:py-2.5 ${
+                className={`w-full rounded-full border px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] transition-all duration-200 sm:w-auto ${
                   bestSellersOnly
-                    ? "border-amber-300/50 text-amber-200"
-                    : "border-white/15 text-white/45 hover:text-white"
+                    ? "border-amber-300/50 bg-gradient-to-b from-amber-300/20 to-amber-300/[0.04] text-amber-100 shadow-[0_0_0_1px_rgba(251,191,36,0.25),0_8px_22px_-10px_rgba(251,191,36,0.5)]"
+                    : "border-white/10 bg-white/[0.03] text-white/50 hover:-translate-y-px hover:border-amber-200/30 hover:text-amber-100"
                 }`}
               >
                 {bestSellersOnly ? "★ Best Sellers" : "☆ Best Sellers"}
@@ -241,10 +241,10 @@ function ProductsPageContent() {
             <button
               type="button"
               onClick={() => setStockFilter((prev) => !prev)}
-              className={`w-full border px-3 py-2 text-xs uppercase tracking-[0.14em] transition sm:ml-auto sm:w-auto sm:py-2.5 ${
+              className={`w-full rounded-full border px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] transition-all duration-200 sm:ml-auto sm:w-auto ${
                 stockFilter
-                  ? "border-emerald-300/40 text-emerald-200"
-                  : "border-white/15 text-white/45 hover:text-white"
+                  ? "border-emerald-300/50 bg-gradient-to-b from-emerald-400/20 to-emerald-400/[0.04] text-emerald-100 shadow-[0_0_0_1px_rgba(16,185,129,0.25),0_8px_22px_-10px_rgba(16,185,129,0.5)]"
+                  : "border-white/10 bg-white/[0.03] text-white/50 hover:-translate-y-px hover:border-emerald-200/30 hover:text-emerald-100"
               }`}
             >
               {stockFilter ? "✓ In Stock Only" : "In Stock Only"}
