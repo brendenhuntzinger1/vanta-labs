@@ -655,10 +655,28 @@ export function CartDrawer() {
         {/* Sticky pay bar — always in reach */}
         {hasItems ? (
           <div className="border-t border-white/[0.06] bg-[#0a0a0a]/95 px-5 pt-4 pb-[max(env(safe-area-inset-bottom),1rem)] backdrop-blur-2xl sm:px-6">
-            <div className="mb-3 flex items-baseline justify-between">
-              <span className="text-xs uppercase tracking-[0.24em] text-zinc-500">Total</span>
+            <div className="mb-1 flex items-baseline justify-between">
+              {/* With express on, this figure is pre-tax: the wallet sheet adds
+                  sales tax and shipping once it has the address. Labelling it
+                  "Total" there would read as a bait-and-switch when Apple Pay
+                  shows a higher number. */}
+              <span className="text-xs uppercase tracking-[0.24em] text-zinc-500">{showExpressSlot ? "Subtotal" : "Total"}</span>
               <span className="text-xl font-semibold text-white tabular-nums">{formatCartCurrency(total)}</span>
             </div>
+
+            {showExpressSlot ? (
+              <p className="mb-3 flex items-start gap-1.5 text-[11px] leading-snug text-zinc-500">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mt-[0.15rem] h-3.5 w-3.5 flex-shrink-0" aria-hidden>
+                  <circle cx="12" cy="12" r="9" /><path d="M12 16v-4M12 8h.01" />
+                </svg>
+                <span>
+                  Apple Pay adds <span className="text-zinc-300">sales tax</span> and shipping from your delivery address, so your final total there may be higher.
+                  {" "}Free shipping over {formatCartCurrency(FREE_SHIPPING_THRESHOLD)}.
+                </span>
+              </p>
+            ) : (
+              <div className="mb-3" />
+            )}
 
             <div className="space-y-3">
               {showExpressSlot ? (
