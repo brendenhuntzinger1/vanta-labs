@@ -8,6 +8,7 @@ import { formatCartCurrency, useCart, getShippingProgress } from "@/components/c
 import { bundleDiscountRate, getBundleDiscountedLineTotal, getNextBundleTier } from "@/lib/bundle-pricing";
 import { bestPaidTier, computeCartMembershipValue } from "@/lib/member-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
+import { FREE_SHIPPING_THRESHOLD } from "@/lib/shipping";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { ExpressApplePayButton } from "@/components/express-apple-pay-button";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
@@ -42,7 +43,9 @@ export function CartDrawer() {
     researchCompliance: false,
     ageLegalConfirmation: false,
   });
-  const [confirmationsOpen, setConfirmationsOpen] = useState(false);
+  // Default OPEN so the required confirmations are visible, not hidden behind a
+  // collapsed row — shoppers couldn't find why Apple Pay was disabled otherwise.
+  const [confirmationsOpen, setConfirmationsOpen] = useState(true);
   // Set when the express lane reports it can't run here (wrong platform,
   // unregistered host, or a cart this lane can't price). The drawer then falls
   // back to exactly what it showed before the express slot existed.
@@ -506,10 +509,16 @@ export function CartDrawer() {
             CTA can never scroll out of reach on a phone. */}
         {isHydrated && items.length > 0 ? (
         <div className="mt-3 border-t border-zinc-800 pt-3 pb-[max(env(safe-area-inset-bottom),0.25rem)]">
-          <div className="flex items-baseline justify-between pb-2.5">
+          <div className="flex items-baseline justify-between pb-1">
             <span className="text-xs uppercase tracking-[0.22em] text-zinc-500">Total</span>
             <span className="text-xl font-semibold text-white tabular-nums">{formatCartCurrency(total)}</span>
           </div>
+          {/* Set expectations before the wallet sheet adds these — so the higher
+              in-sheet total (Apple Pay shows shipping + tax as their own rows)
+              never reads as a surprise charge. */}
+          <p className="pb-2.5 text-[11px] leading-5 text-zinc-500">
+            Shipping &amp; sales tax are calculated from your address at payment. Free shipping over {formatCartCurrency(FREE_SHIPPING_THRESHOLD)}.
+          </p>
           {/* Shipping protection is a paid add-on that defaults ON, and its
               toggle lives up in the SCROLLING region — on a phone the express
               button is reachable with no scrolling and the opt-out is not. This
@@ -542,20 +551,22 @@ export function CartDrawer() {
                     capped scroller so it can never push the button off-screen
                     (the mobile "checkout does nothing" failure this file
                     already memorialises above). */}
-                <div className="rounded-[1.25rem] border border-zinc-800 bg-zinc-900/60">
+                <div className={`rounded-[1.25rem] border bg-zinc-900/60 ${allAcknowledged ? "border-zinc-800" : "border-amber-400/45"}`}>
                   <button
                     type="button"
                     onClick={() => setConfirmationsOpen((open) => !open)}
                     aria-expanded={confirmationsOpen}
                     className="flex w-full items-center justify-between gap-2 px-3.5 py-2.5 text-left"
                   >
-                    <span className="text-xs text-zinc-300">Required confirmations</span>
+                    <span className={`text-xs font-medium ${allAcknowledged ? "text-zinc-300" : "text-amber-200"}`}>
+                      {allAcknowledged ? "Required confirmations" : "Tick all 3 boxes to pay"}
+                    </span>
                     <span className="flex items-center gap-2">
-                      <span className={`text-xs tabular-nums ${allAcknowledged ? "text-emerald-400" : "text-zinc-500"}`}>
+                      <span className={`rounded-full px-2 py-0.5 text-xs tabular-nums ${allAcknowledged ? "bg-emerald-400/15 text-emerald-300" : "bg-amber-400/15 text-amber-200"}`}>
                         {acknowledgedCount} of {REQUIRED_CONFIRMATIONS.length}
                       </span>
                       <span className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-                        {confirmationsOpen ? "Hide" : "Review"}
+                        {confirmationsOpen ? "Hide" : "Show"}
                       </span>
                     </span>
                   </button>

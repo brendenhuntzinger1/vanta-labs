@@ -4,8 +4,11 @@ import type { Metadata } from "next";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { detectRoleFromUser } from "@/lib/auth-role";
+import { getPaymentMethodsConfig } from "@/lib/admin-control";
+import { getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ClearCartOnMount } from "@/components/clear-cart-on-mount";
+import { OrderConfirmationStatus } from "@/components/order-confirmation-status";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +38,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
 
   const { data: order } = await supabaseAdmin
     .from("orders")
-    .select("order_id, order_number, amount_paid, payment_status, fulfillment_status, customer_email, created_at, order_items(product_name, quantity, line_total)")
+    .select("order_id, order_number, amount_paid, payment_status, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -46,6 +49,17 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
   const orderNumber = String(order.order_number ?? order.order_id);
   const items = (order.order_items ?? []) as Array<{ product_name?: string; quantity?: number; line_total?: number }>;
   const isPaid = String(order.payment_status ?? "").toLowerCase() === "paid";
+
+  // A card order that's not paid yet is almost always mid-webhook-confirmation
+  // (the customer just paid); only a MANUAL method genuinely still owes payment.
+  let isManual = false;
+  try {
+    const methods = await getPaymentMethodsConfig();
+    const method = getPaymentMethodById(methods, order.payment_method ? String(order.payment_method) : null);
+    isManual = Boolean(method && isManualPaymentMethod(method));
+  } catch {
+    /* treat as card */
+  }
 
   // Only signed-in customers can use the account orders view; a guest who checked
   // out with just their email has no account to land on.
@@ -58,27 +72,13 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
       <SiteHeaderV2 />
       <main className="mx-auto max-w-2xl px-4 pb-24 pt-28 sm:px-6 sm:pt-32 lg:px-12">
         <section className="rounded-2xl border border-white/10 bg-white/[0.02] p-6 text-center sm:p-8">
-          {isPaid ? (
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-emerald-300/40 bg-emerald-400/15 text-2xl">✓</div>
-          ) : (
-            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-amber-300/40 bg-amber-400/15 text-2xl">⏳</div>
-          )}
-          <p className={`vl2-eyebrow mt-5 ${isPaid ? "text-emerald-300" : "text-amber-200"}`}>{isPaid ? "Order confirmed" : "Order received — payment pending"}</p>
-          <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">{isPaid ? "Thank you for your order" : "One step left"}</h1>
-          <p className="mt-3 text-sm leading-7 text-white/60">
-            Order <span className="font-semibold text-white">{orderNumber}</span>
-            {order.customer_email ? <> — a confirmation was sent to <span className="text-white/80">{maskEmail(String(order.customer_email))}</span>.</> : "."}
-          </p>
-          <p className="mt-2 text-sm text-white/50">
-            {isPaid
-              ? "We're preparing your order. You'll get a shipping email with tracking once it's on the way."
-              : "Your order is reserved but hasn't been paid yet — complete payment below and we'll ship it as soon as it clears."}
-          </p>
-          {!isPaid ? (
-            <Link href={`/pay/${encodeURIComponent(String(order.order_id))}`} className="vl2-btn-primary vl-focus-ring mt-6 inline-flex px-6 py-3 text-sm">
-              Complete payment →
-            </Link>
-          ) : null}
+          <OrderConfirmationStatus
+            orderId={String(order.order_id)}
+            orderNumber={orderNumber}
+            maskedEmail={order.customer_email ? maskEmail(String(order.customer_email)) : null}
+            initialPaid={isPaid}
+            isManual={isManual}
+          />
         </section>
 
         <section className="mt-6 rounded-2xl border border-white/10 p-5 sm:p-6">
