@@ -3,18 +3,19 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
-import { isPaidOrderStatus } from "@/lib/ledger";
+import { isPaidOrderStatus, isEarnedCommission } from "@/lib/ledger";
 
 // The order fields profit needs. Everything is stored on the order at checkout,
 // so profit is computed from the record — not from today's live product cost.
 // tax_amount is carried for display (never profit); the actual/estimated
 // shipping columns drive the estimate→exact reconciliation.
 const ORDER_FIELDS =
-  "order_id, order_number, subtotal, discount_amount, shipping_amount, tax_amount, refund_amount, amount_paid, payment_method, payment_status, paid_at, created_at";
+  "order_id, order_number, order_type, subtotal, discount_amount, shipping_amount, tax_amount, refund_amount, amount_paid, payment_method, payment_status, paid_at, created_at";
 
 type OrderRecord = {
   order_id: string;
   order_number?: string | null;
+  order_type?: string | null;
   subtotal: number | null;
   discount_amount: number | null;
   shipping_amount: number | null;
@@ -83,10 +84,17 @@ function profitForOrder(
   // of what the customer actually paid (bounded ≥ 0; store-credit / points
   // redemption simply make it 0).
   const additionalRevenue = Math.max(0, amountPaid - merch - shippingRevenue - taxCollected);
+
+  // Memberships are pure revenue: they have no product cost and never ship, so
+  // they must not carry COGS (the worst-case fallback) or a shipping cost.
+  const isMembership = String(order.order_type ?? "").toLowerCase() === "membership";
+
   const hasActual = overlay?.actualShippingCostCents != null;
-  const shippingCost = hasActual
-    ? Math.max(0, (overlay!.actualShippingCostCents as number) / 100)
-    : Math.max(0, config.shippingCostPerOrder);
+  const shippingCost = isMembership
+    ? 0
+    : hasActual
+      ? Math.max(0, (overlay!.actualShippingCostCents as number) / 100)
+      : Math.max(0, config.shippingCostPerOrder);
   return computeOrderProfit({
     netMerchandiseRevenue: merch,
     // What the customer paid for shipping (0 on free-shipping orders).
@@ -94,11 +102,13 @@ function profitForOrder(
     // Shipping protection + any card surcharge the customer paid.
     additionalRevenue,
     // Exact label cost once reconciled; the configured estimate until then.
+    // Memberships never ship, so their cost is a hard 0 (already finalized).
     shippingCost,
-    shippingCostIsEstimate: !hasActual,
+    shippingCostIsEstimate: isMembership ? false : !hasActual,
     taxCollected,
     countTaxAsProfit: config.countSalesTaxAsProfit,
-    lines,
+    // No COGS lines for a membership — it's not a physical product.
+    lines: isMembership ? [] : lines,
     commission,
     processingFee: processingFeeFor(order, config),
     refund: Math.max(0, Number(order.refund_amount ?? 0)),
@@ -141,10 +151,16 @@ async function commissionByOrderId(orderIds: string[]): Promise<Map<string, numb
     const chunk = orderIds.slice(i, i + IN_CHUNK);
     const { data } = await supabaseAdmin
       .from("commissions")
-      .select("order_id, commission_amount")
+      .select("order_id, commission_amount, payment_status")
       .in("order_id", chunk);
 
-    for (const raw of (data ?? []) as Array<{ order_id: string; commission_amount: number | null }>) {
+    for (const raw of (data ?? []) as Array<{ order_id: string; commission_amount: number | null; payment_status: string | null }>) {
+      // Only subtract commission the owner actually pays out. A reversed /
+      // voided / manual-review commission was clawed back (e.g. refunded order),
+      // so it must NOT reduce profit — otherwise the owner is charged for a
+      // commission that was never paid. The recorded amount is already at the
+      // ambassador's effective (tiered) rate, so this is their exact payout.
+      if (!isEarnedCommission(raw.payment_status)) continue;
       byOrder.set(raw.order_id, (byOrder.get(raw.order_id) ?? 0) + Math.max(0, Number(raw.commission_amount ?? 0)));
     }
   }
