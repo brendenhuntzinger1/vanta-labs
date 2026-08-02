@@ -133,14 +133,14 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
           className="vl2-fade-in vl-focus-ring relative w-full max-w-lg rounded-[1.75rem] border border-white/10 bg-[rgba(12,12,12,0.72)] p-6 text-center shadow-[0_28px_80px_rgba(0,0,0,0.6)] backdrop-blur-2xl sm:rounded-[2rem] sm:p-9"
         >
           {/* Monogram */}
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-amber-200/25 bg-gradient-to-br from-amber-200/[0.12] to-white/[0.02] shadow-[0_0_28px_rgba(242,201,76,0.14)]">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-[color:var(--accent-gold)]/25 bg-gradient-to-br from-[color:var(--accent-gold)]/[0.12] to-white/[0.02] shadow-[0_0_28px_rgba(242,201,76,0.14)]">
             <span className="vl2-serif text-xl tracking-[0.12em] text-white">VL</span>
           </div>
 
-          <p className="vl2-eyebrow mt-6 flex items-center justify-center gap-2 text-amber-200/70">
-            <span className="h-px w-6 bg-amber-200/30" />
+          <p className="vl2-eyebrow mt-6 flex items-center justify-center gap-2 text-[color:var(--accent-gold)]/70">
+            <span className="h-px w-6 bg-[color:var(--accent-gold)]/30" />
             Restricted Access · 21+
-            <span className="h-px w-6 bg-amber-200/30" />
+            <span className="h-px w-6 bg-[color:var(--accent-gold)]/30" />
           </p>
 
           <h1 id="age-gate-title" className="vl2-serif mt-4 text-4xl text-white sm:text-5xl">Vanta Labs</h1>
@@ -175,7 +175,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
             <span>I confirm that I am at least 21 years of age and understand that Vanta Labs products are intended only for lawful laboratory research purposes.</span>
           </label>
 
-          {showPrompt ? <p role="alert" className="mt-3 text-sm text-amber-200">Please confirm your age before continuing.</p> : null}
+          {showPrompt ? <p role="alert" className="mt-3 text-sm text-[color:var(--accent-gold)]">Please confirm your age before continuing.</p> : null}
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:justify-center">
             <button

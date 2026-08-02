@@ -119,20 +119,20 @@ function FaqAccordion({ items }: { items?: ProductFaqItem[] }) {
   const faqItems = items && items.length > 0 ? items : DEFAULT_PRODUCT_FAQ;
   const [openIndex, setOpenIndex] = useState<number | null>(null);
   return (
-    <div className="mt-3 divide-y divide-zinc-200">
+    <div className="mt-3 divide-y divide-white/[0.08]">
       {faqItems.map((item, idx) => (
         <div key={idx}>
           <button
             type="button"
             aria-expanded={openIndex === idx}
-            className="flex w-full items-center justify-between gap-4 py-4 text-left text-sm text-[#111] transition hover:text-zinc-600"
+            className="flex w-full items-center justify-between gap-4 py-4 text-left text-sm text-white transition hover:text-[#a3a3a3]"
             onClick={() => setOpenIndex(openIndex === idx ? null : idx)}
           >
             <span className="font-medium">{item.question}</span>
-            <span className={`shrink-0 text-zinc-400 transition-transform duration-200 ${openIndex === idx ? "rotate-180" : ""}`}>▼</span>
+            <span className={`shrink-0 text-white/45 transition-transform duration-200 ${openIndex === idx ? "rotate-180" : ""}`}>▼</span>
           </button>
           {openIndex === idx && (
-            <p className="pb-4 text-sm leading-7 text-zinc-500">{item.answer}</p>
+            <p className="pb-4 text-sm leading-7 text-[#a3a3a3]">{item.answer}</p>
           )}
         </div>
       ))}
@@ -275,21 +275,21 @@ export function ProductDetailClient({
       <SiteHeaderV2 />
 
       <main className="relative mx-auto max-w-[1440px] px-4 sm:px-6 pb-12 pt-24 sm:pb-16 sm:pt-28 lg:px-12 lg:pt-32">
-        <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-zinc-500">
-          <Link href="/" className="transition hover:text-[#111]">Home</Link>
+        <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-[#a3a3a3]">
+          <Link href="/" className="transition hover:text-white">Home</Link>
           <span>/</span>
-          <Link href="/products" className="transition hover:text-[#111]">Products</Link>
+          <Link href="/products" className="transition hover:text-white">Products</Link>
           <span>/</span>
-          <span className="text-zinc-700">{product.name}</span>
+          <span className="text-white">{product.name}</span>
         </nav>
 
         <CouponPromoBanner />
 
         {promoBuy3Get1Enabled ? (
-          <div className="vl2-lab-panel mt-6 flex flex-wrap items-center gap-2 border-emerald-200 bg-emerald-50 px-5 py-3 text-sm text-emerald-900">
+          <div className="vl2-lab-panel mt-6 flex flex-wrap items-center gap-2 border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.06] px-5 py-3 text-sm text-white">
             <span aria-hidden="true">🎁</span>
             <span className="font-medium">Buy 3, Get 1 Free</span>
-            <span className="text-emerald-700">— the lowest-priced item in your cart is automatically free at checkout.</span>
+            <span className="text-[color:var(--accent-gold)]">— the lowest-priced item in your cart is automatically free at checkout.</span>
           </div>
         ) : null}
 
@@ -297,7 +297,7 @@ export function ProductDetailClient({
           {/* Block A — product image. Mobile order 1; desktop top-left. */}
           <div className="order-1 min-w-0 lg:col-start-1 lg:row-start-1">
             <div className="vl2-lab-panel overflow-hidden">
-              <div className="relative min-h-[260px] bg-white sm:min-h-[460px]">
+              <div className="relative min-h-[260px] bg-[#141414] sm:min-h-[460px]">
                 {hasRealImage ? (
                   <Image
                     src={imageToDisplay as string}
@@ -309,7 +309,7 @@ export function ProductDetailClient({
                   />
                 ) : (
                   <div className="flex h-full min-h-[260px] items-center justify-center">
-                    <div className="border border-zinc-200 px-4 py-1.5 text-xs uppercase tracking-[0.2em] text-zinc-400">Image pending</div>
+                    <div className="border border-white/[0.08] px-4 py-1.5 text-xs uppercase tracking-[0.2em] text-white/45">Image pending</div>
                   </div>
                 )}
               </div>
@@ -322,7 +322,7 @@ export function ProductDetailClient({
                     key={item.id}
                     type="button"
                     onClick={() => setSelectedImageUrl(item.imageUrl)}
-                    className={`relative overflow-hidden border bg-white transition ${item.imageUrl === imageToDisplay ? "border-zinc-900" : "border-zinc-200 hover:border-zinc-400"}`}
+                    className={`relative overflow-hidden border bg-[#141414] transition ${item.imageUrl === imageToDisplay ? "border-[color:var(--accent-gold)]" : "border-white/[0.08] hover:border-white/[0.16]"}`}
                   >
                     <div className="relative aspect-square">
                       <Image src={item.imageUrl} alt={item.altText} fill sizes="90px" className="object-cover" />
@@ -344,7 +344,7 @@ export function ProductDetailClient({
                     type="button"
                     onClick={() => setActiveTab((current) => (current === tab.key ? null : tab.key))}
                     aria-expanded={activeTab === tab.key}
-                    className={`min-w-0 flex-1 rounded-full px-2 py-2.5 text-[11px] font-medium uppercase tracking-normal transition sm:px-3 sm:text-xs sm:tracking-[0.16em] ${activeTab === tab.key ? "bg-[#111] text-white shadow-sm" : "text-zinc-500 hover:text-[#111]"}`}
+                    className={`min-w-0 flex-1 rounded-full px-2 py-2.5 text-[11px] font-medium uppercase tracking-normal transition sm:px-3 sm:text-xs sm:tracking-[0.16em] ${activeTab === tab.key ? "bg-[#111] text-white shadow-sm" : "text-[#a3a3a3] hover:text-white"}`}
                   >
                     {tab.label}
                   </button>
@@ -354,12 +354,12 @@ export function ProductDetailClient({
               <div className="mt-4">
                 {activeTab === "description" && (
                   <div className="vl2-lab-panel p-5">
-                    <p className="text-sm leading-7 text-zinc-600">{product.longDescription ?? product.description}</p>
+                    <p className="text-sm leading-7 text-[#a3a3a3]">{product.longDescription ?? product.description}</p>
                     {product.molecularFormula && (
-                      <p className="mt-4 text-xs text-zinc-400">Molecular Formula: <span className="text-zinc-700">{product.molecularFormula}</span></p>
+                      <p className="mt-4 text-xs text-white/45">Molecular Formula: <span className="text-white">{product.molecularFormula}</span></p>
                     )}
-                    <div className="mt-5 border border-zinc-200 bg-zinc-50 p-4 text-xs leading-6 text-zinc-600">
-                      <strong className="text-[#111]">Research Use Only.</strong> This compound is intended strictly for laboratory research purposes. Not for human or veterinary use.
+                    <div className="mt-5 border border-white/[0.08] bg-[#141414] p-4 text-xs leading-6 text-[#a3a3a3]">
+                      <strong className="text-white">Research Use Only.</strong> This compound is intended strictly for laboratory research purposes. Not for human or veterinary use.
                     </div>
                   </div>
                 )}
@@ -382,17 +382,17 @@ export function ProductDetailClient({
                       ] as Array<[string, string | undefined]>)
                         .filter(([, value]) => value && String(value).trim().length > 0)
                         .map(([label, value]) => (
-                          <div key={label} className="flex justify-between gap-3 border-b border-zinc-100 pb-2 last:border-0">
-                            <dt className="text-zinc-400">{label}</dt>
-                            <dd className="min-w-0 break-words text-right font-medium text-[#111]">{value}</dd>
+                          <div key={label} className="flex justify-between gap-3 border-b border-white/[0.06] pb-2 last:border-0">
+                            <dt className="text-white/45">{label}</dt>
+                            <dd className="min-w-0 break-words text-right font-medium text-white">{value}</dd>
                           </div>
                         ))}
                     </dl>
                     {product.peptideSequence && product.peptideSequence.trim().length > 0 && (
-                      <div className="mt-4 border-t border-zinc-100 pt-4">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-400">Amino Acid Sequence</p>
+                      <div className="mt-4 border-t border-white/[0.06] pt-4">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Amino Acid Sequence</p>
                         <div className="mt-2 overflow-x-auto">
-                          <code className="block whitespace-pre-wrap break-all font-mono text-xs leading-6 text-[#111]">{product.peptideSequence}</code>
+                          <code className="block whitespace-pre-wrap break-all font-mono text-xs leading-6 text-white">{product.peptideSequence}</code>
                         </div>
                       </div>
                     )}
@@ -401,17 +401,17 @@ export function ProductDetailClient({
 
                 {activeTab === "coa" && (
                   <div className="vl2-lab-panel p-5">
-                    <p className="text-sm leading-7 text-zinc-600">
+                    <p className="text-sm leading-7 text-[#a3a3a3]">
                       Every product lot is linked to a third-party Certificate of Analysis. The COA includes purity percentage, testing methodology, batch traceability, and lab information. Download the report matching your selected dose below.
                     </p>
                     <div className="mt-5 grid gap-3 sm:grid-cols-2">
-                      <div className="border border-zinc-200 p-4">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-400">Purity</p>
-                        <p className="mt-1.5 text-xl font-semibold text-[#111]">{selectedPurity ?? "Pending"}</p>
+                      <div className="border border-white/[0.08] p-4">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Purity</p>
+                        <p className="mt-1.5 text-xl font-semibold text-white">{selectedPurity ?? "Pending"}</p>
                       </div>
-                      <div className="border border-zinc-200 p-4">
-                        <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-400">Batch</p>
-                        <p className="mt-1.5 text-sm font-medium text-[#111]">{selectedBatchNumber}</p>
+                      <div className="border border-white/[0.08] p-4">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Batch</p>
+                        <p className="mt-1.5 text-sm font-medium text-white">{selectedBatchNumber}</p>
                       </div>
                     </div>
                     {selectedCoaUrl && (
@@ -442,36 +442,36 @@ export function ProductDetailClient({
             <div className="vl2-lab-panel p-6 sm:p-7">
               <div className="flex items-start justify-between gap-3">
                 <div>
-                  <p className="text-[11px] uppercase tracking-[0.3em] text-zinc-400">{product.category}</p>
-                  <h1 className="vl2-serif mt-2 text-3xl text-[#111]">{product.name}</h1>
+                  <p className="text-[11px] uppercase tracking-[0.3em] text-white/45">{product.category}</p>
+                  <h1 className="vl2-serif mt-2 text-3xl text-white">{product.name}</h1>
                 </div>
                 {/* Only shown when the 3PL has reported the item as sold out —
                     never an "In Stock" badge, per product spec. */}
                 {isOutOfStock ? (
-                  <span className="shrink-0 border border-zinc-300 bg-zinc-100 px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-zinc-600">Out of Stock</span>
+                  <span className="shrink-0 border border-white/[0.12] bg-[#1a1a1a] px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-[#a3a3a3]">Out of Stock</span>
                 ) : null}
               </div>
 
               {doseFromSlug && (
-                <p className="mt-1 text-xs text-zinc-400">{doseFromSlug} · {product.labName}</p>
+                <p className="mt-1 text-xs text-white/45">{doseFromSlug} · {product.labName}</p>
               )}
 
               {(product.shortDescription ?? product.description) ? (
-                <p className="mt-4 text-sm leading-6 text-zinc-600">{product.shortDescription ?? product.description}</p>
+                <p className="mt-4 text-sm leading-6 text-[#a3a3a3]">{product.shortDescription ?? product.description}</p>
               ) : null}
 
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 {hasVerifiedTesting && (
-                  <span className="border border-emerald-300 bg-emerald-50 px-3 py-1 text-xs font-semibold text-emerald-700">
+                  <span className="border border-[color:var(--accent-gold)]/30 bg-[color:var(--accent-gold)]/[0.06] px-3 py-1 text-xs font-semibold text-[color:var(--accent-gold)]">
                     {selectedPurity} Purity Verified
                   </span>
                 )}
                 {selectedBatchNumber && (
-                  <span className="border border-zinc-200 bg-zinc-50 px-3 py-1 text-xs text-zinc-500">
+                  <span className="border border-white/[0.08] bg-[#141414] px-3 py-1 text-xs text-[#a3a3a3]">
                     Batch {selectedBatchNumber}
                   </span>
                 )}
-                <span className="border border-zinc-200 bg-white px-3 py-1 text-xs font-medium text-zinc-700">
+                <span className="border border-white/[0.08] bg-[#141414] px-3 py-1 text-xs font-medium text-white">
                   Research Use Only
                 </span>
               </div>
@@ -479,25 +479,25 @@ export function ProductDetailClient({
               {/* Trust row — third-party proof + guarantee, right next to the
                   buy decision (not hidden inside a tab). */}
               <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="flex items-start gap-2.5 rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-600">
+                <div className="flex items-start gap-2.5 rounded-lg border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.06] px-4 py-3">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-5 w-5 flex-shrink-0 text-[color:var(--accent-gold)]">
                     <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
                     <path d="m9 12 2 2 4-4" />
                   </svg>
                   <div>
-                    <p className="text-xs font-bold text-emerald-800">{hasVerifiedTesting ? `${selectedPurity} purity` : "COA pending"}</p>
-                    <p className="text-[11px] leading-4 text-emerald-700">{hasVerifiedTesting ? "Third-party batch tested" : "Published for this batch when available"}</p>
+                    <p className="text-xs font-bold text-white">{hasVerifiedTesting ? `${selectedPurity} purity` : "COA pending"}</p>
+                    <p className="text-[11px] leading-4 text-[color:var(--accent-gold)]">{hasVerifiedTesting ? "Third-party batch tested" : "Published for this batch when available"}</p>
                   </div>
                 </div>
-                <div className="flex items-start gap-2.5 rounded-lg border border-emerald-200 bg-emerald-50/70 px-4 py-3">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-5 w-5 flex-shrink-0 text-emerald-600">
+                <div className="flex items-start gap-2.5 rounded-lg border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.06] px-4 py-3">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-5 w-5 flex-shrink-0 text-[color:var(--accent-gold)]">
                     <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
                     <path d="M12 8v4" />
                     <path d="M12 16h.01" />
                   </svg>
                   <div>
-                    <p className="text-xs font-bold text-emerald-800">Damaged or incorrect? Made right.</p>
-                    <p className="text-[11px] leading-4 text-emerald-700">Discreet, tracked U.S. shipping</p>
+                    <p className="text-xs font-bold text-white">Damaged or incorrect? Made right.</p>
+                    <p className="text-[11px] leading-4 text-[color:var(--accent-gold)]">Discreet, tracked U.S. shipping</p>
                   </div>
                 </div>
               </div>
@@ -516,12 +516,12 @@ export function ProductDetailClient({
                           className={`relative rounded-full border px-4 py-2 text-sm transition active:scale-95 ${
                             selectedDose?.id === variant.id
                               ? "border-[#111] bg-[#111] text-white shadow-sm"
-                              : "border-zinc-200 text-zinc-600 hover:border-zinc-400 hover:text-[#111]"
+                              : "border-white/[0.08] text-[#a3a3a3] hover:border-white/[0.16] hover:text-white"
                           } ${variant.stockStatus === "Out of Stock" ? "opacity-40" : ""}`}
                         >
                           {variant.label}
                           {isMostPopular && (
-                            <span className="ml-1.5 inline-flex items-center gap-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-500">
+                            <span className="ml-1.5 inline-flex items-center gap-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-[color:var(--accent-gold)]">
                               <span aria-hidden="true">★</span> Most Popular
                             </span>
                           )}
@@ -534,9 +534,9 @@ export function ProductDetailClient({
               )}
 
               <div className="mt-6 flex items-end gap-3">
-                <p className="text-4xl font-semibold text-[#111]">{selectedPrice}</p>
+                <p className="text-4xl font-semibold text-white">{selectedPrice}</p>
                 {selectedCompareAtPrice && (
-                  <p className="mb-1 text-base text-zinc-400 line-through">{selectedCompareAtPrice}</p>
+                  <p className="mb-1 text-base text-white/45 line-through">{selectedCompareAtPrice}</p>
                 )}
               </div>
 
@@ -547,19 +547,38 @@ export function ProductDetailClient({
               {memberQuote && memberQuote.savings > 0 ? (
                 isMember ? (
                   <div className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm">
-                    <span className="font-semibold text-emerald-700">Your member price: {formatUsd(memberQuote.memberPrice)}</span>
-                    <span className="text-emerald-700/70">you save {formatUsd(memberQuote.savings)} ({memberQuote.percent}%)</span>
+                    <span className="font-semibold text-[color:var(--accent-gold)]">Your member price: {formatUsd(memberQuote.memberPrice)}</span>
+                    <span className="text-[#a3a3a3]">you save {formatUsd(memberQuote.savings)} ({memberQuote.percent}%)</span>
                   </div>
                 ) : (
                   <Link
                     href="/membership"
-                    className="mt-3 flex items-center justify-between gap-3 rounded-xl border border-emerald-300/70 bg-gradient-to-r from-emerald-50 to-white px-4 py-3 transition hover:border-emerald-500"
+                    className="group mt-5 block rounded-2xl border border-[color:var(--accent-gold)]/30 bg-[#141414] p-5 transition duration-200 hover:border-[color:var(--accent-gold)]/60 hover:shadow-[0_0_36px_-14px_rgba(212,175,55,0.5)]"
                   >
-                    <span className="min-w-0 text-sm text-zinc-700">
-                      <span className="block font-semibold text-zinc-900">Become a member — pay {formatUsd(memberQuote.memberPrice)} instead of {formatUsd(memberQuote.regularPrice)}</span>
-                      <span className="mt-0.5 block text-xs text-zinc-500">Save {formatUsd(memberQuote.savings)} on this vial today, plus monthly store credit &amp; free shipping</span>
+                    <span className="flex items-center gap-2">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" className="h-4 w-4 text-[color:var(--accent-gold)]" aria-hidden>
+                        <path d="m12 3.5 2.6 5.6 6.1.8-4.5 4.2 1.2 6-5.4-3-5.4 3 1.2-6L3.3 9.9l6.1-.8z" />
+                      </svg>
+                      <span className="text-[11px] font-semibold uppercase tracking-[0.22em] text-[color:var(--accent-gold)]">Member pricing</span>
                     </span>
-                    <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.12em] text-emerald-700">Join →</span>
+
+                    <span className="mt-4 block text-[11px] uppercase tracking-[0.2em] text-[#a3a3a3]">Today&apos;s price</span>
+                    <span className="mt-1 block text-[2.25rem] font-semibold leading-none tracking-tight text-white tabular-nums">
+                      {formatUsd(memberQuote.memberPrice)}
+                    </span>
+                    <span className="mt-2 block text-xs text-[#a3a3a3]">
+                      Regular price <span className="line-through">{formatUsd(memberQuote.regularPrice)}</span>
+                      <span className="ml-2 text-[color:var(--accent-gold)]">Save {formatUsd(memberQuote.savings)} today</span>
+                    </span>
+
+                    <span className="mt-4 block text-xs leading-relaxed text-[#a3a3a3]">
+                      Become a member for lower pricing, free shipping, and monthly store credit.
+                    </span>
+
+                    <span className="vl2-btn-primary mt-5 w-full px-5 py-3 text-xs">
+                      Join membership
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5 transition-transform duration-200 group-hover:translate-x-0.5" aria-hidden><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                    </span>
                   </Link>
                 )
               ) : null}
@@ -577,20 +596,20 @@ export function ProductDetailClient({
                         key={option.quantity}
                         type="button"
                         onClick={() => setQuantity(option.quantity)}
-                        className={`relative rounded-xl border px-2 py-3.5 text-center transition ${isSelected ? "border-emerald-600 bg-emerald-600 text-white shadow-sm" : "border-zinc-200 text-[#111] hover:border-emerald-400"}`}
+                        className={`relative rounded-xl border px-2 py-3.5 text-center transition ${isSelected ? "border-[color:var(--accent-gold)] bg-[color:var(--accent-gold)] text-black shadow-[0_0_24px_-6px_rgba(212,175,55,0.55)]" : "border-white/[0.08] text-white hover:border-[color:var(--accent-gold)]/50"}`}
                       >
                         {option.badge ? (
-                          <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-emerald-600 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-white shadow-sm">
+                          <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-[color:var(--accent-gold)] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-black shadow-sm">
                             {option.badge}
                           </span>
                         ) : null}
                         <span className="block text-sm font-medium">{option.label}</span>
-                        <span className={`mt-1 block text-xs ${isSelected ? "text-emerald-50" : "text-zinc-500"}`}>{formatUsd(lineTotal)}</span>
+                        <span className={`mt-1 block text-xs ${isSelected ? "text-black/65" : "text-[#a3a3a3]"}`}>{formatUsd(lineTotal)}</span>
                         {rate > 0 ? (
-                          <span className={`mt-0.5 block text-[10px] font-semibold ${isSelected ? "text-white" : "text-emerald-600"}`}>Save {Math.round(rate * 100)}%</span>
+                          <span className={`mt-0.5 block text-[10px] font-semibold ${isSelected ? "text-black" : "text-[color:var(--accent-gold)]"}`}>Save {Math.round(rate * 100)}%</span>
                         ) : null}
                         {freeShip ? (
-                          <span className={`mt-1 inline-flex items-center gap-1 text-[10px] font-medium ${isSelected ? "text-white" : "text-emerald-600"}`}>🚚 Free Ship</span>
+                          <span className={`mt-1 inline-flex items-center gap-1 text-[10px] font-medium ${isSelected ? "text-black" : "text-[color:var(--accent-gold)]"}`}>🚚 Free Ship</span>
                         ) : null}
                       </button>
                     );
@@ -602,29 +621,29 @@ export function ProductDetailClient({
                       type="button"
                       aria-label="Decrease quantity"
                       onClick={() => setQuantity((q) => Math.max(1, q - 1))}
-                      className="inline-flex h-11 w-11 items-center justify-center border border-zinc-200 text-lg text-zinc-600 transition hover:border-zinc-400"
+                      className="inline-flex h-11 w-11 items-center justify-center border border-white/[0.08] text-lg text-[#a3a3a3] transition hover:border-white/[0.16]"
                     >−</button>
-                    <span className="text-sm text-[#111]" aria-live="polite">{quantity} vials</span>
+                    <span className="text-sm text-white" aria-live="polite">{quantity} vials</span>
                     <button
                       type="button"
                       aria-label="Increase quantity"
                       onClick={() => setQuantity((q) => Math.min(10, q + 1))}
-                      className="inline-flex h-11 w-11 items-center justify-center border border-zinc-200 text-lg text-zinc-600 transition hover:border-zinc-400"
+                      className="inline-flex h-11 w-11 items-center justify-center border border-white/[0.08] text-lg text-[#a3a3a3] transition hover:border-white/[0.16]"
                     >+</button>
                     {currentBundleRate > 0 ? (
-                      <span className="text-xs font-medium text-emerald-600">Save {Math.round(currentBundleRate * 100)}% — {formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))} total</span>
+                      <span className="text-xs font-medium text-[color:var(--accent-gold)]">Save {Math.round(currentBundleRate * 100)}% — {formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))} total</span>
                     ) : null}
                   </div>
                 ) : null}
               </div>
 
               {currentBundleRate > 0 ? (
-                <div className="mt-4 flex items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                <div className="mt-4 flex items-center justify-between rounded-xl border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.06] px-4 py-3">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-700">{quantity}-Vial Bundle</p>
-                    <p className="text-sm text-emerald-900">You save {formatUsd(unitPrice * quantity - getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))} · {Math.round(currentBundleRate * 100)}% off</p>
+                    <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[color:var(--accent-gold)]">{quantity}-Vial Bundle</p>
+                    <p className="text-sm text-white">You save {formatUsd(unitPrice * quantity - getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))} · {Math.round(currentBundleRate * 100)}% off</p>
                   </div>
-                  <p className="text-xl font-bold text-emerald-700">{formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))}</p>
+                  <p className="text-xl font-bold text-[color:var(--accent-gold)]">{formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))}</p>
                 </div>
               ) : null}
 
@@ -633,7 +652,7 @@ export function ProductDetailClient({
                   onClick={(event) => handleAddToCart(event.currentTarget)}
                   type="button"
                   disabled={isOutOfStock}
-                  className="vl-focus-ring flex-1 rounded-xl bg-emerald-600 px-5 py-3.5 text-sm font-semibold uppercase tracking-[0.08em] text-white shadow-sm transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="vl-focus-ring flex-1 rounded-xl bg-[color:var(--accent-gold)] px-5 py-3.5 text-sm font-semibold uppercase tracking-[0.08em] text-black shadow-[0_8px_22px_-14px_rgba(212,175,55,0.7)] transition hover:bg-[color:var(--accent-gold-strong)] disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {isOutOfStock ? "Currently Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
                 </button>
@@ -665,15 +684,15 @@ export function ProductDetailClient({
               )}
 
               {message && (
-                <p role="status" aria-live="polite" className="mt-3 text-sm text-zinc-600">{message}</p>
+                <p role="status" aria-live="polite" className="mt-3 text-sm text-[#a3a3a3]">{message}</p>
               )}
 
-              <div className="mt-6 space-y-2 border-t border-zinc-200 pt-5">
+              <div className="mt-6 space-y-2 border-t border-white/[0.08] pt-5">
                 {TRUST_ROW.map((item) => (
-                  <div key={item.label} className="flex items-center gap-3 text-zinc-500">
+                  <div key={item.label} className="flex items-center gap-3 text-[#a3a3a3]">
                     <span aria-hidden="true">{item.icon}</span>
                     <span className="text-xs">
-                      <span className="font-medium text-zinc-700">{item.label}</span> — {item.detail}
+                      <span className="font-medium text-white">{item.label}</span> — {item.detail}
                     </span>
                   </div>
                 ))}
@@ -728,17 +747,19 @@ export function ProductDetailClient({
         />
       </main>
 
-      <div className="fixed inset-x-0 bottom-0 z-50 border-t border-zinc-200/80 bg-white/95 px-4 pt-3 pb-[max(env(safe-area-inset-bottom),0.75rem)] shadow-[0_-8px_24px_-12px_rgba(0,0,0,0.25)] backdrop-blur-xl lg:hidden">
-        <div className="flex items-center gap-3">
+      {/* Sticky add-to-cart: charcoal bar under a thin gold hairline, so it
+          reads as part of the brand rather than a floating utility strip. */}
+      <div className="fixed inset-x-0 bottom-0 z-50 border-t border-[color:var(--accent-gold)]/25 bg-[#141414]/95 px-5 pt-4 pb-[max(env(safe-area-inset-bottom),1rem)] shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.8)] backdrop-blur-xl lg:hidden">
+        <div className="flex items-center gap-4">
           <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium text-[#111]">{product.name}</p>
-            <p className="text-base font-semibold text-[#111]">{selectedPrice}</p>
+            <p className="truncate text-xs text-[#a3a3a3]">{product.name}</p>
+            <p className="mt-0.5 text-lg font-semibold leading-none text-white tabular-nums">{selectedPrice}</p>
           </div>
           <button
             onClick={(event) => handleAddToCart(event.currentTarget)}
             type="button"
             disabled={isOutOfStock}
-            className="vl2-lab-btn-primary vl-focus-ring shrink-0 rounded-full px-7 py-3.5 text-sm transition active:scale-95 disabled:opacity-50"
+            className="vl2-btn-primary vl-focus-ring shrink-0 rounded-full px-7 py-3.5 text-xs"
           >
             {isOutOfStock ? "Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
           </button>

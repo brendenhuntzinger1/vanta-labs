@@ -115,8 +115,8 @@ export function CartPageClient() {
               <div className="mt-5 border border-white/10 p-4">
                 {shippingProgress.isEligibleForFreeShipping ? (
                   <div>
-                    <p className="text-sm text-emerald-300">Free shipping unlocked</p>
-                    <div className="mt-3 h-[2px] w-full bg-emerald-300/40" />
+                    <p className="text-sm text-[color:var(--accent-gold)]">Free shipping unlocked</p>
+                    <div className="mt-3 h-[2px] w-full bg-[color:var(--accent-gold)]/40" />
                   </div>
                 ) : (
                   <div>
@@ -158,11 +158,11 @@ export function CartPageClient() {
                     type="checkbox"
                     checked={shippingProtectionEnabled}
                     onChange={(e) => setShippingProtectionEnabled(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 accent-emerald-500"
+                    className="mt-0.5 h-4 w-4 accent-[color:var(--accent-gold)]"
                     aria-label="Add shipping protection"
                   />
                   <span>
-                    <span className="block font-medium text-white">Shipping Protection <span className="font-normal text-emerald-300">(Recommended)</span> <span className="font-normal text-white/45">· optional</span></span>
+                    <span className="block font-medium text-white">Shipping Protection <span className="font-normal text-[color:var(--accent-gold)]">(Recommended)</span> <span className="font-normal text-white/45">· optional</span></span>
                     <span className="block text-xs text-white/45">Replace or refund items lost, stolen, or damaged in transit.</span>
                   </span>
                 </span>

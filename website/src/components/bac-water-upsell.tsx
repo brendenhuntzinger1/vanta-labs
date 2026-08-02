@@ -76,37 +76,39 @@ export function BacWaterAccessoryBlock({ bacWater, hostSlug }: { bacWater: Produ
   };
 
   return (
-    <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50/60 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-900">Recommended Accessories</p>
-        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-          ✅ Most Frequently Added Accessory
-        </span>
-      </div>
-      <div className="mt-3 space-y-2">
+    <div className="mt-5 rounded-2xl border border-white/[0.08] bg-[#141414] p-5">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--accent-gold)]">
+        Frequently purchased together
+      </p>
+      <div className="mt-4 space-y-2.5">
         {offers.map((offer) => (
           <button
             key={offer.cartKey}
             type="button"
             onClick={(event) => handleAdd(offer, event.currentTarget)}
-            className="vl-focus-ring flex w-full items-center justify-between gap-3 rounded-lg border border-sky-200 bg-white px-3.5 py-2.5 text-left transition hover:border-sky-400"
+            className="vl-focus-ring flex w-full items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-3 text-left transition duration-200 hover:border-[color:var(--accent-gold)]/40 hover:bg-white/[0.04] active:scale-[0.99]"
           >
-            <span className="text-sm text-zinc-700">
-              <span className="font-medium text-[#111]">BAC Water {offer.sizeLabel}</span>
-              <span className="ml-1.5 text-zinc-500">(+{offer.displayPrice})</span>
+            <span className="min-w-0 text-sm">
+              <span className="font-medium text-white">BAC Water {offer.sizeLabel}</span>
+              <span className="ml-1.5 text-[#a3a3a3]">+{offer.displayPrice}</span>
               {isFeaturedBacWaterOffer(offer) ? (
-                <span className="ml-1.5 inline-flex items-center gap-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-500">
-                  <span aria-hidden="true">★</span> Most Popular
+                <span className="ml-2 inline-flex items-center align-middle text-[10px] font-semibold uppercase tracking-wide text-[color:var(--accent-gold)]">
+                  Most popular
                 </span>
               ) : null}
             </span>
-            <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.1em] text-sky-700">
-              {addedKey === offer.cartKey ? "Added ✓" : "+ Add"}
+            <span
+              className={`shrink-0 text-xs font-semibold uppercase tracking-[0.1em] transition-colors duration-200 ${
+                addedKey === offer.cartKey ? "text-[color:var(--accent-gold)]" : "text-[color:var(--accent-gold)]"
+              }`}
+            >
+              {/* Green here is genuine success feedback, not branding. */}
+              {addedKey === offer.cartKey ? "Added ✓" : "Add"}
             </span>
           </button>
         ))}
       </div>
-      <p className="mt-2.5 text-xs leading-5 text-sky-900/70">
+      <p className="mt-3.5 text-xs leading-5 text-[#a3a3a3]">
         Over 70% of customers add BAC Water to complete their order.
       </p>
     </div>
@@ -162,17 +164,17 @@ export function FrequentlyBoughtTogether({
 
   return (
     <section className="vl2-lab-panel mt-10 p-5 sm:p-7">
-      <p className="vl2-lab-eyebrow">Frequently Bought Together</p>
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--accent-gold)]">Frequently bought together</p>
       <div className="mt-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex min-w-0 flex-wrap items-center gap-3 text-sm text-zinc-700">
-          <span className="min-w-0 truncate font-medium text-[#111]">
+        <div className="flex min-w-0 flex-wrap items-center gap-3 text-sm text-[#a3a3a3]">
+          <span className="min-w-0 truncate font-medium text-white">
             {product.name}
             {productDose ? ` · ${productDose.label}` : ""}
-            <span className="ml-1.5 font-normal text-zinc-500">{productPriceLabel}</span>
+            <span className="ml-1.5 font-normal text-[#a3a3a3]">{productPriceLabel}</span>
           </span>
-          <span aria-hidden="true" className="text-zinc-400">+</span>
+          <span aria-hidden="true" className="text-white/35">+</span>
           <span className="inline-flex flex-wrap items-center gap-1.5">
-            <span className="font-medium text-[#111]">BAC Water</span>
+            <span className="font-medium text-white">BAC Water</span>
             {offers.map((offer) => (
               <button
                 key={offer.cartKey}
@@ -181,8 +183,8 @@ export function FrequentlyBoughtTogether({
                 aria-pressed={selectedOffer.cartKey === offer.cartKey}
                 className={`rounded-full border px-2.5 py-1 text-xs transition ${
                   selectedOffer.cartKey === offer.cartKey
-                    ? "border-[#111] bg-[#111] text-white"
-                    : "border-zinc-300 text-zinc-600 hover:border-zinc-500"
+                    ? "border-[color:var(--accent-gold)] bg-[color:var(--accent-gold)]/15 text-[color:var(--accent-gold)]"
+                    : "border-white/[0.08] text-[#a3a3a3] hover:border-white/20 hover:text-white"
                 }`}
               >
                 {offer.sizeLabel} · {offer.displayPrice}
@@ -191,19 +193,19 @@ export function FrequentlyBoughtTogether({
           </span>
         </div>
         <div className="flex shrink-0 items-center gap-4">
-          <p className="text-lg font-semibold text-[#111]">{formatUsd(comboTotal)}</p>
+          <p className="text-lg font-semibold text-white tabular-nums">{formatUsd(comboTotal)}</p>
           <button
             type="button"
             disabled={isHostOutOfStock}
             onClick={(event) => handleAddBoth(event.currentTarget)}
-            className="vl-focus-ring rounded-xl bg-emerald-600 px-5 py-3 text-sm font-semibold uppercase tracking-[0.08em] text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+            className="vl2-btn-primary vl-focus-ring rounded-full px-6 py-3 text-xs"
           >
             Add Both to Cart
           </button>
         </div>
       </div>
       {confirmation ? (
-        <p role="status" aria-live="polite" className="mt-3 text-sm text-emerald-700">{confirmation}</p>
+        <p role="status" aria-live="polite" className="mt-3 text-sm text-[color:var(--success)]">{confirmation}</p>
       ) : null}
     </section>
   );
@@ -242,9 +244,9 @@ export function BacWaterCartCheckboxes() {
                   className="h-4 w-4 accent-emerald-500"
                   aria-label={`Add ${offer.sizeLabel} BAC Water`}
                 />
-                <span className="text-sm text-zinc-200">Add {offer.sizeLabel} BAC Water</span>
+                <span className="text-sm text-white">Add {offer.sizeLabel} BAC Water</span>
               </span>
-              <span className="whitespace-nowrap text-sm text-zinc-400">+{offer.displayPrice}</span>
+              <span className="whitespace-nowrap text-sm text-[#a3a3a3]">+{offer.displayPrice}</span>
             </label>
           );
         })}
@@ -335,13 +337,13 @@ export function BacWaterAddedPopup() {
         <div className="flex items-start justify-between gap-3">
           <div className="flex items-center gap-3">
             {hasRealImage ? (
-              <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-zinc-700 bg-zinc-950/50">
+              <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-white/[0.08] bg-black/40">
                 <Image src={image} alt={bacWater.name} fill sizes="56px" className="object-cover" />
               </div>
             ) : null}
             <div>
               <p id="bac-water-nudge-title" className="text-base font-semibold text-white">Don&apos;t forget BAC Water</p>
-              <p className="mt-1 text-xs leading-5 text-zinc-400">
+              <p className="mt-1 text-xs leading-5 text-[#a3a3a3]">
                 Lyophilized compounds require a sterile diluent for reconstitution.
               </p>
             </div>
@@ -351,7 +353,7 @@ export function BacWaterAddedPopup() {
             type="button"
             onClick={() => setIsOpen(false)}
             aria-label="Close"
-            className="-mr-1 -mt-1 inline-flex h-9 w-9 shrink-0 items-center justify-center text-zinc-400 transition hover:text-white"
+            className="-mr-1 -mt-1 inline-flex h-9 w-9 shrink-0 items-center justify-center text-[#a3a3a3] transition hover:text-white"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" className="h-4 w-4"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
@@ -362,24 +364,24 @@ export function BacWaterAddedPopup() {
               key={offer.cartKey}
               type="button"
               onClick={() => handleAdd(offer)}
-              className="vl-focus-ring flex w-full items-center justify-between gap-3 rounded-xl border border-zinc-700 bg-zinc-900/70 px-4 py-3 text-left transition hover:border-emerald-500"
+              className="vl-focus-ring flex w-full items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-3 text-left transition hover:border-[color:var(--accent-gold)]/40"
             >
-              <span className="text-sm text-zinc-200">
+              <span className="text-sm text-white">
                 BAC Water {offer.sizeLabel}
                 {isFeaturedBacWaterOffer(offer) ? (
-                  <span className="ml-1.5 inline-flex items-center gap-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+                  <span className="ml-1.5 inline-flex items-center gap-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-[color:var(--accent-gold)]">
                     <span aria-hidden="true">★</span> Most Popular
                   </span>
                 ) : null}
               </span>
-              <span className="text-sm font-semibold text-emerald-400">+{offer.displayPrice}</span>
+              <span className="text-sm font-semibold text-[color:var(--accent-gold)]">+{offer.displayPrice}</span>
             </button>
           ))}
         </div>
         <button
           type="button"
           onClick={() => setIsOpen(false)}
-          className="mt-3 w-full py-2 text-center text-xs text-zinc-500 transition hover:text-zinc-300"
+          className="mt-3 w-full py-2 text-center text-xs text-[#a3a3a3] transition hover:text-white"
         >
           No thanks, continue shopping
         </button>

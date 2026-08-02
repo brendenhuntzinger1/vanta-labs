@@ -61,7 +61,7 @@ export function ProductCard({
       <Link href={`/products/${product.slug}`} className="vl-focus-ring flex flex-1 flex-col">
         <div className="vl-product-card-media border-b border-white/10">
           {product.isBestSeller ? (
-            <span className="vl2-eyebrow absolute left-3 top-3 z-10 rounded-full border border-amber-300/40 bg-black/70 px-2.5 py-1 text-[10px] text-amber-300 shadow-sm backdrop-blur-md">
+            <span className="vl2-eyebrow absolute left-3 top-3 z-10 rounded-full border border-[color:var(--accent-gold)]/40 bg-black/70 px-2.5 py-1 text-[10px] text-[color:var(--accent-gold)] shadow-sm backdrop-blur-md">
               ★ Best Seller
             </span>
           ) : product.badge ? (
@@ -107,22 +107,22 @@ export function ProductCard({
             ) : null}
           </div>
           {showMemberPricing && memberQuote ? (
-            <p className="mt-1 text-xs text-emerald-300 sm:text-sm">
+            <p className="mt-1 text-xs text-[color:var(--accent-gold)] sm:text-sm">
               {isMember ? "Your member price " : "Member price "}
               <span className="font-semibold">{formatCartCurrency(memberQuote.memberPrice)}</span>
-              <span className="text-emerald-300/60"> · save {formatCartCurrency(memberQuote.savings)}</span>
+              <span className="text-[#a3a3a3]"> · save {formatCartCurrency(memberQuote.savings)}</span>
             </p>
           ) : null}
           {/* Trust badges — data-driven, so they only appear when the real
               purity / COA / batch data is entered in Admin (no fabricated claims). */}
           <div className="mt-2.5 flex flex-wrap items-center gap-1.5 text-[10px] leading-none">
             {product.purityResult ? (
-              <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 font-medium text-emerald-300">
+              <span className="rounded-full border border-[color:var(--accent-gold)]/30 bg-[color:var(--accent-gold)]/[0.08] px-2 py-1 font-medium text-[color:var(--accent-gold)]">
                 {product.purityResult.includes("%") ? product.purityResult : `${product.purityResult} pure`}
               </span>
             ) : null}
             {product.coaUrl ? (
-              <span className="rounded-full border border-sky-400/30 bg-sky-400/10 px-2 py-1 font-medium text-sky-300">
+              <span className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2 py-1 font-medium text-[#a3a3a3]">
                 COA verified
               </span>
             ) : null}
@@ -172,7 +172,7 @@ export function ProductCard({
         {!soldOut && showMemberPricing && memberQuote && !isMember ? (
           <Link
             href="/membership"
-            className="vl-focus-ring col-span-2 -mb-1 inline-flex items-center justify-center gap-1 py-1 text-[11px] text-emerald-300/70 transition hover:text-emerald-300"
+            className="vl-focus-ring col-span-2 -mb-1 inline-flex items-center justify-center gap-1 py-1 text-[11px] text-[color:var(--accent-gold)]/70 transition hover:text-[color:var(--accent-gold)]"
           >
             Become a member &amp; save {formatCartCurrency(memberQuote.savings)} today →
           </Link>
