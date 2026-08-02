@@ -7,6 +7,8 @@ export interface OrderProfitView {
   grossRevenue: number;
   merchandiseRevenue: number;
   shippingCharged: number;
+  additionalRevenue: number;
+  taxCountedAsProfit: boolean;
   cogs: number;
   shippingCost: number;
   shippingCostIsEstimate: boolean;
@@ -114,7 +116,7 @@ export function AdminOrderProfitPanel({
 
       <dl className="mt-4 space-y-1.5 text-sm">
         <div className="flex justify-between">
-          <dt className="text-zinc-300 font-medium">Gross revenue (ex-tax)</dt>
+          <dt className="text-zinc-300 font-medium">Gross revenue{profit.taxCountedAsProfit ? " (incl. tax)" : " (ex-tax)"}</dt>
           <dd className="text-zinc-100 tabular-nums font-medium">{money(profit.grossRevenue)}</dd>
         </div>
         <div className="flex justify-between pl-3">
@@ -125,6 +127,18 @@ export function AdminOrderProfitPanel({
           <dt className="text-zinc-500">Shipping charged</dt>
           <dd className="text-zinc-400 tabular-nums">{money(profit.shippingCharged)}</dd>
         </div>
+        {profit.additionalRevenue > 0 ? (
+          <div className="flex justify-between pl-3">
+            <dt className="text-zinc-500">Shipping protection &amp; fees</dt>
+            <dd className="text-zinc-400 tabular-nums">{money(profit.additionalRevenue)}</dd>
+          </div>
+        ) : null}
+        {profit.taxCountedAsProfit && profit.taxCollected > 0 ? (
+          <div className="flex justify-between pl-3">
+            <dt className="text-zinc-500">Sales tax (counted as profit)</dt>
+            <dd className="text-zinc-400 tabular-nums">{money(profit.taxCollected)}</dd>
+          </div>
+        ) : null}
 
         <div className="!mt-3 border-t border-white/10 pt-2" />
 
@@ -147,10 +161,12 @@ export function AdminOrderProfitPanel({
         {profit.commission > 0 ? <ExpenseRow label="Ambassador commission" amount={profit.commission} /> : null}
         {profit.refund > 0 ? <ExpenseRow label="Refunds" amount={profit.refund} /> : null}
 
-        <div className="flex justify-between pt-1">
-          <dt className="text-zinc-500">Sales tax collected (remitted — not profit)</dt>
-          <dd className="text-zinc-500 tabular-nums">{money(profit.taxCollected)}</dd>
-        </div>
+        {!profit.taxCountedAsProfit && profit.taxCollected > 0 ? (
+          <div className="flex justify-between pt-1">
+            <dt className="text-zinc-500">Sales tax collected (remitted — not profit)</dt>
+            <dd className="text-zinc-500 tabular-nums">{money(profit.taxCollected)}</dd>
+          </div>
+        ) : null}
 
         <div className="!mt-2 flex justify-between border-t border-white/10 pt-2 text-base font-semibold">
           <dt className={profit.profit >= 0 ? "text-emerald-300" : "text-rose-300"}>Net profit</dt>

@@ -524,6 +524,12 @@ export interface ProfitSettingsConfig {
    */
   processingFeeIncludesTax: boolean;
   /**
+   * Whether collected sales tax counts toward net profit. True = the owner
+   * keeps it (counted as profit); false = it's a pass-through remitted to the
+   * state and excluded from profit.
+   */
+  countSalesTaxAsProfit: boolean;
+  /**
    * Estimated shipping-label cost used for an order's profit BEFORE it ships
    * (and the cost charged to the checkout profit guard). Once an order ships,
    * this estimate is replaced per-order by the exact label cost — see
@@ -542,6 +548,7 @@ export const DEFAULT_PROFIT_CONFIG: ProfitSettingsConfig = {
   worstCaseUnitCost: 33,
   processingFeePercent: 8,
   processingFeeIncludesTax: true,
+  countSalesTaxAsProfit: true,
   shippingCostPerOrder: 6,
 };
 
@@ -564,6 +571,9 @@ export async function getProfitSettings(): Promise<ProfitSettingsConfig> {
       processingFeeIncludesTax: profit.processing_fee_includes_tax === undefined || profit.processing_fee_includes_tax === null || profit.processing_fee_includes_tax === ""
         ? DEFAULT_PROFIT_CONFIG.processingFeeIncludesTax
         : profit.processing_fee_includes_tax !== false && profit.processing_fee_includes_tax !== "false",
+      countSalesTaxAsProfit: profit.count_sales_tax_as_profit === undefined || profit.count_sales_tax_as_profit === null || profit.count_sales_tax_as_profit === ""
+        ? DEFAULT_PROFIT_CONFIG.countSalesTaxAsProfit
+        : profit.count_sales_tax_as_profit !== false && profit.count_sales_tax_as_profit !== "false",
       // The estimate reads the new "shipping_cost_estimate" key first, then the
       // legacy "shipping_cost_per_order" key, so existing configs keep working.
       shippingCostPerOrder: num(

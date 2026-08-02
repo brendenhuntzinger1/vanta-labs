@@ -91,6 +91,7 @@ export function AdminControlCenterClient() {
   const [profitProcessingFee, setProfitProcessingFee] = useState("");
   const [profitShippingEstimate, setProfitShippingEstimate] = useState("");
   const [profitFeeIncludesTax, setProfitFeeIncludesTax] = useState(true);
+  const [profitCountTax, setProfitCountTax] = useState(true);
 
   const loadSnapshot = async () => {
     const res = await fetch("/api/admin/control", { cache: "no-store" });
@@ -175,6 +176,7 @@ export function AdminControlCenterClient() {
           : "",
     );
     setProfitFeeIncludesTax(profit.processing_fee_includes_tax !== false && profit.processing_fee_includes_tax !== "false");
+    setProfitCountTax(profit.count_sales_tax_as_profit !== false && profit.count_sales_tax_as_profit !== "false");
   };
 
   useEffect(() => {
@@ -271,6 +273,7 @@ export function AdminControlCenterClient() {
       { section: "profit", key: "processing_fee_percent", value: profitProcessingFee },
       { section: "profit", key: "shipping_cost_estimate", value: profitShippingEstimate },
       { section: "profit", key: "processing_fee_includes_tax", value: profitFeeIncludesTax },
+      { section: "profit", key: "count_sales_tax_as_profit", value: profitCountTax },
     ];
 
     const res = await fetch("/api/admin/control", {
@@ -507,6 +510,12 @@ export function AdminControlCenterClient() {
                 <select value={profitFeeIncludesTax ? "yes" : "no"} onChange={(e) => setProfitFeeIncludesTax(e.target.value === "yes")} className="vl-input mt-1 w-full px-3 py-2">
                   <option value="yes">Yes — fee applies to the full total (incl. tax)</option>
                   <option value="no">No — fee excludes collected sales tax</option>
+                </select>
+              </label>
+              <label className="text-zinc-300">Count collected sales tax as profit?
+                <select value={profitCountTax ? "yes" : "no"} onChange={(e) => setProfitCountTax(e.target.value === "yes")} className="vl-input mt-1 w-full px-3 py-2">
+                  <option value="yes">Yes — I keep the sales tax (counted as profit)</option>
+                  <option value="no">No — tax is remitted to the state (not profit)</option>
                 </select>
               </label>
             </div>

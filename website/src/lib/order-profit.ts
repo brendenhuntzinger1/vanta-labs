@@ -59,12 +59,22 @@ export interface OrderProfitInput {
   netMerchandiseRevenue: number;
   /** Shipping the customer paid (0 for free-shipping orders). */
   shippingRevenue: number;
+  /**
+   * Other customer-paid revenue beyond merchandise + shipping — e.g. the
+   * shipping-protection add-on and any card surcharge. Counted as revenue.
+   */
+  additionalRevenue?: number;
   /** Shipping cost the store pays to ship this order (estimate or exact). */
   shippingCost: number;
   /** True while shippingCost is still the pre-ship estimate (not the exact label cost). */
   shippingCostIsEstimate?: boolean;
-  /** Sales tax collected — carried for display only; NEVER counted as profit. */
+  /** Sales tax collected. Display-only unless countTaxAsProfit is true. */
   taxCollected?: number;
+  /**
+   * When true, collected sales tax counts toward profit (owner keeps it). When
+   * false (default), tax is a pass-through remitted to the state and excluded.
+   */
+  countTaxAsProfit?: boolean;
   /** COGS lines (snapshotted unit cost × qty). */
   lines: OrderProfitLine[];
   /** Ambassador commission paid on this order (0 if none). */
@@ -95,6 +105,10 @@ export interface OrderProfitResult {
   shippingRevenue: number;
   /** Alias of shippingRevenue — what the customer was charged for shipping. */
   shippingCharged: number;
+  /** Other customer-paid revenue counted in (shipping protection, fees). */
+  additionalRevenue: number;
+  /** True when collected sales tax was counted toward profit. */
+  taxCountedAsProfit: boolean;
   cogs: number;
   commission: number;
   processingFee: number;
@@ -145,6 +159,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   const shippingCost = round(Math.max(0, input.shippingCost));
   const refund = round(Math.max(0, input.refund));
   const taxCollected = round(Math.max(0, input.taxCollected ?? 0));
+  const additionalRevenue = round(Math.max(0, input.additionalRevenue ?? 0));
+  const countTaxAsProfit = input.countTaxAsProfit ?? false;
   const shippingCostIsEstimate = input.shippingCostIsEstimate ?? false;
 
   // Ordered expense line items — the extensible ledger of deductions.
@@ -168,7 +184,10 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   }
 
   const totalExpenses = round(expenses.reduce((sum, line) => sum + line.amount, 0));
-  const grossRevenue = round(merchandiseRevenue + shippingRevenue);
+  // Gross revenue = merchandise + shipping charged + other customer-paid fees
+  // (shipping protection, surcharge). Collected sales tax is added only when the
+  // owner opts to count it (otherwise it's a pass-through, remitted to the state).
+  const grossRevenue = round(merchandiseRevenue + shippingRevenue + additionalRevenue + (countTaxAsProfit ? taxCollected : 0));
   const revenue = round(grossRevenue - refund);
   const profit = round(revenue - totalExpenses);
   const marginPercent = revenue > 0 ? round((profit / revenue) * 100) : 0;
@@ -181,6 +200,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     merchandiseRevenue,
     shippingRevenue,
     shippingCharged: shippingRevenue,
+    additionalRevenue,
+    taxCountedAsProfit: countTaxAsProfit,
     cogs,
     commission,
     processingFee,

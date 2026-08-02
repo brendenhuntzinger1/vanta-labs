@@ -158,6 +158,27 @@ describe("computeOrderProfit", () => {
     expect(r.profit).toBe(98); // 200 − 102
   });
 
+  it("counts sales tax as profit only when countTaxAsProfit is set", () => {
+    const excluded = computeOrderProfit(base({ netMerchandiseRevenue: 100, lines: [{ unitCostCents: 3000, quantity: 1 }], taxCollected: 8 }));
+    const included = computeOrderProfit(base({ netMerchandiseRevenue: 100, lines: [{ unitCostCents: 3000, quantity: 1 }], taxCollected: 8, countTaxAsProfit: true }));
+    expect(excluded.profit).toBe(70); // 100 − 30
+    expect(excluded.taxCountedAsProfit).toBe(false);
+    expect(included.profit).toBe(78); // 100 + 8 tax − 30
+    expect(included.grossRevenue).toBe(108);
+    expect(included.taxCountedAsProfit).toBe(true);
+  });
+
+  it("counts shipping protection / customer-paid fees as revenue", () => {
+    const r = computeOrderProfit(base({
+      netMerchandiseRevenue: 100,
+      lines: [{ unitCostCents: 3000, quantity: 1 }], // $30
+      additionalRevenue: 4, // 4% shipping protection on a $100 order
+    }));
+    expect(r.additionalRevenue).toBe(4);
+    expect(r.grossRevenue).toBe(104);
+    expect(r.profit).toBe(74); // 100 + 4 − 30
+  });
+
   it("EXTENSIBILITY: extra expense line items reduce profit without engine changes", () => {
     const r = computeOrderProfit(base({
       netMerchandiseRevenue: 200,
