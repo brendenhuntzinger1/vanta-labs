@@ -18,7 +18,10 @@ export interface AdminOrderRow {
   item_count: number;
 }
 
-export type AdminOrderPaymentStatusFilter = "all" | "pending_payment" | "paid" | "partially_refunded" | "refunded" | "payment_failed" | "canceled";
+// "active" is the default view: real orders only — it hides abandoned/unpaid
+// checkouts (pending_payment) and expired/canceled ones, which are just
+// abandoned carts, not sales. "all" shows everything including those.
+export type AdminOrderPaymentStatusFilter = "active" | "all" | "pending_payment" | "paid" | "partially_refunded" | "refunded" | "payment_failed" | "canceled";
 export type AdminOrderFulfillmentStatusFilter = "all" | "pending" | "awaiting_fulfillment" | "shipped" | "delivered" | "cancelled";
 
 export interface AdminOrderFilters {
@@ -64,7 +67,11 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
     query = query.or(`order_id.ilike.%${search}%,customer_email.ilike.%${search}%,customer_name.ilike.%${search}%`);
   }
 
-  if (filters.paymentStatus && filters.paymentStatus !== "all") {
+  if (filters.paymentStatus === "active") {
+    // Default view: exclude abandoned/unpaid checkouts and expired/canceled
+    // ones — those are abandoned carts, not orders.
+    query = query.not("payment_status", "in", "(pending_payment,canceled,cancelled)");
+  } else if (filters.paymentStatus && filters.paymentStatus !== "all") {
     query = query.eq("payment_status", filters.paymentStatus);
   }
 
