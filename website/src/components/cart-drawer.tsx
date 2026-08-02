@@ -45,7 +45,11 @@ export function CartDrawer() {
   });
   // Default OPEN so the required confirmations are visible, not hidden behind a
   // collapsed row — shoppers couldn't find why Apple Pay was disabled otherwise.
-  const [confirmationsOpen, setConfirmationsOpen] = useState(true);
+  // Collapsed by default so the cart leads with the order, not a wall of legal
+  // checkboxes. It sits right above the pay buttons as a compact, amber-
+  // highlighted "needs checking" bar, expands on tap, and auto-expands if a
+  // shopper taps Apple Pay before ticking the boxes.
+  const [confirmationsOpen, setConfirmationsOpen] = useState(false);
   // Set when the express lane reports it can't run here (wrong platform,
   // unregistered host, or a cart this lane can't price). The drawer then falls
   // back to exactly what it showed before the express slot existed.
@@ -551,7 +555,7 @@ export function CartDrawer() {
                     capped scroller so it can never push the button off-screen
                     (the mobile "checkout does nothing" failure this file
                     already memorialises above). */}
-                <div className={`rounded-[1.25rem] border bg-zinc-900/60 ${allAcknowledged ? "border-zinc-800" : "border-amber-400/45"}`}>
+                <div className={`rounded-[1.25rem] border ${allAcknowledged ? "border-zinc-800 bg-zinc-900/60" : "border-amber-400/60 bg-amber-400/[0.07] shadow-[0_0_0_1px_rgba(251,191,36,0.15)]"}`}>
                   <button
                     type="button"
                     onClick={() => setConfirmationsOpen((open) => !open)}
