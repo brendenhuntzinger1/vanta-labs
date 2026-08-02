@@ -123,8 +123,11 @@ describe("shipping / tax / handling edge cases", () => {
     expect(calculateTax(-100, 7)).toBe(0);
   });
   it("free shipping exactly at the threshold, charged one cent below", () => {
-    expect(calculateShipping(250, "United States")).toBe(0);
-    expect(calculateShipping(249.99, "United States")).toBe(DEFAULT_SHIPPING_CONFIG.domesticFee);
+    // Derived from the configured threshold, not a literal, so changing the
+    // free-shipping bar doesn't silently break this boundary test.
+    const threshold = DEFAULT_SHIPPING_CONFIG.freeShippingThreshold;
+    expect(calculateShipping(threshold, "United States")).toBe(0);
+    expect(calculateShipping(threshold - 0.01, "United States")).toBe(DEFAULT_SHIPPING_CONFIG.domesticFee);
   });
   it("Canada gets its own shipping zone", () => {
     expect(calculateShipping(100, "Canada")).toBe(DEFAULT_SHIPPING_CONFIG.northAmericaFee);

@@ -12,6 +12,9 @@ import Link from "next/link";
 import type { MembershipTier } from "@/lib/membership";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { useCart, formatCartCurrency } from "@/components/cart-context";
+// Shared with checkout so the calculator's shipping assumption always matches
+// what an order is actually charged.
+import { FREE_SHIPPING_THRESHOLD, DOMESTIC_SHIPPING_FEE } from "@/lib/shipping";
 
 type BillingCycle = "monthly" | "annual";
 
@@ -102,7 +105,7 @@ function SavingsCalculator({ tiers }: { tiers: MembershipTier[] }) {
 
   const usingCart = subtotal > 0;
   const basis = usingCart ? subtotal : simulatedSpend;
-  const basisShipping = usingCart ? shipping : basis >= 250 ? 0 : 15;
+  const basisShipping = usingCart ? shipping : basis >= FREE_SHIPPING_THRESHOLD ? 0 : DOMESTIC_SHIPPING_FEE;
 
   const discountSavings = Math.round(basis * tier.memberDiscountPercent) / 100;
   const shippingSavings = tier.freeShipping ? basisShipping : 0;

@@ -14,6 +14,9 @@ import { SubscribeSave } from "@/components/subscribe-save";
 import { bundleDiscountRate, getBundleDiscountedLineTotal, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
 import type { Product, ProductDose, ProductFaqItem } from "@/lib/catalog-types";
 import { isBacWater } from "@/lib/bac-water";
+// Free-shipping threshold comes from the shared shipping module so the "Free
+// Ship" badge can never disagree with what checkout actually charges.
+import { FREE_SHIPPING_THRESHOLD } from "@/lib/shipping";
 import { RecentlyViewed } from "@/components/recently-viewed";
 import { BacWaterAccessoryBlock, FrequentlyBoughtTogether } from "@/components/bac-water-upsell";
 import { CoaLibraryNotice } from "@/components/coa-library-notice";
@@ -47,9 +50,6 @@ const BUNDLE_OPTIONS = [
   { quantity: 10, label: "10 Vials", badge: "Best Value" },
 ] as const;
 
-// Free shipping threshold (mirrors the storefront default). Used to show the
-// "Free Ship" badge on vial sets that cross it.
-const FREE_SHIP_THRESHOLD_USD = 250;
 
 const TRUST_ROW = [
   {
@@ -598,7 +598,7 @@ export function ProductDetailClient({
                     const isSelected = option.quantity === 10 ? quantity >= 10 : quantity === option.quantity;
                     const rate = bundleDiscountRate(option.quantity, bundleConfig);
                     const lineTotal = getBundleDiscountedLineTotal(unitPrice, option.quantity, bundleConfig);
-                    const freeShip = lineTotal >= FREE_SHIP_THRESHOLD_USD;
+                    const freeShip = lineTotal >= FREE_SHIPPING_THRESHOLD;
                     return (
                       <button
                         key={option.quantity}

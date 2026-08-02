@@ -8,7 +8,7 @@
 // merchandise are shipping (when under the free-shipping threshold) and sales
 // tax. Do not reintroduce a handling/service fee here.
 
-export const FREE_SHIPPING_THRESHOLD = 250;
+export const FREE_SHIPPING_THRESHOLD = 200;
 export const DOMESTIC_SHIPPING_FEE = 15;
 export const INTERNATIONAL_FREE_SHIPPING_THRESHOLD = 600;
 export const INTERNATIONAL_SHIPPING_FEE = 60;
