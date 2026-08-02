@@ -50,8 +50,33 @@ double-charge.
   iframe charges a one-time session — it does not hand back a token intent.
 
 Refined and Evo both have first-party BT hosted fields; that is how they mint a
-token intent. Vanta does not. So this is a **new card-data path on a storefront
-that has never had one** — SAQ-A relevant. Do not shortcut it.
+token intent. Vanta does not.
+
+### ✅ PORT IT FROM EVO — do not design a new one
+
+An earlier draft of this doc called the remaining work "a new card-data path…
+do not shortcut it." **That was wrong and it overstated the risk.** A proven,
+live, SAQ-A-compliant implementation already exists two repos over. Port it,
+exactly as `express-apple-pay-button.tsx` was ported from Evo's
+`WalletButton.jsx` on 2026-08-01.
+
+Source of truth — `C:\Users\jakob\Documents\evolabs-lemon-release`:
+
+| File | Lines | What it gives you |
+|---|---|---|
+| `components/VeyraCardPanel.jsx` | 985 | The whole card capture. Fetches the session's BT public key from `/api/checkout/veyra-config`, mounts ONE combined BT `<CardElement>`, calls `tokenIntents.create()` → `token_intent_id`. PAN / MM-YY / CVC live only inside the `js.basistheory.com` iframe; the host never reads them. No Stripe.js. |
+| `lib/membership/veyra.js` | 145 | Membership-side Veyra calls. |
+| `pages/api/membership/subscribe.js` | 207 | The server route that ties signup → token intent → membership. |
+
+Dependency: `@basis-theory/basis-theory-react`
+(`BasisTheoryProvider`, `CardElement`, `useBasisTheory`).
+
+Translation needed, same as the Apple Pay port: Evo is Next.js **pages** router
+in JS; Vanta is **App Router + TypeScript**. Port the logic, keep the SAQ-A
+boundary byte-for-byte — never move PAN handling out of the BT iframe.
+
+The real reason this was not finished on 2026-08-02 was the assisting session
+running out of context mid-task, NOT the risk profile. Treat it as a port.
 
 ### Steps
 
@@ -70,10 +95,9 @@ that has never had one** — SAQ-A relevant. Do not shortcut it.
    the endpoint hard-gates on `destination_charge_with_obo` and 400s otherwise.
    `tier_override_charge_model` is NULL (inheriting). **Owner decision — this
    changes routing for ALL charges, not just memberships.**
-3. **Card capture.** Add BT hosted fields (or an equivalent SAQ-A-preserving
-   capture) to the membership signup. The BT public key is session-scoped and
-   comes from Veyra's `card_capture_config` — do not hardcode one. Never let a
-   PAN reach this origin.
+3. **Card capture — PORT `VeyraCardPanel.jsx`** (see the table above). Do not
+   write a new one. The BT public key is session-scoped and fetched at runtime —
+   never hardcode one, and never let a PAN reach this origin.
 4. **AMEX before tokenize.** Call `isAmexBrand()` at the form, BEFORE
    tokenizing. Rebills are no-CVC and AMEX CNP hard-declines, so an AMEX member
    signs up fine then fails every renewal. Refined checks AFTER tokenize, which
