@@ -26,7 +26,7 @@ export default async function AdminHomePage() {
   }
 
   const [orderList, products, partners, onlineVisitors, revenueWindows, revenueMetrics, lowStockCount, reconciliationFlagCount, profitWindows] = await Promise.all([
-    getAdminOrderRows({ pageSize: 1000 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 1000, pageCount: 1 })),
+    getAdminOrderRows({ pageSize: 25, paymentStatus: "active" }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 })),
     listAdminProducts({ search: "", category: "all", status: "all" }).catch(() => []),
     getAdminPartnerRows({ status: "all" }).catch(() => []),
     getCurrentOnlineVisitorCount().catch(() => 0),
@@ -65,7 +65,7 @@ export default async function AdminHomePage() {
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Paid Orders</p>
             <p className="mt-2 text-2xl font-semibold text-white">{revenueMetrics?.totalPaidOrders ?? 0}</p>
-            <p className="mt-1 text-[11px] text-zinc-500">{orderList.total} total incl. pending</p>
+            <p className="mt-1 text-[11px] text-zinc-500">completed sales</p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Revenue · 30d</p>

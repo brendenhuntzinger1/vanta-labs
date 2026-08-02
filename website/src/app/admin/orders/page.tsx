@@ -11,14 +11,28 @@ import { AdminOrdersClient } from "@/components/admin-orders-client";
 export const dynamic = "force-dynamic";
 
 const PAYMENT_STATUS_OPTIONS: AdminOrderPaymentStatusFilter[] = [
-  "all",
-  "pending_payment",
+  "active",
   "paid",
+  "pending_payment",
   "partially_refunded",
   "refunded",
   "payment_failed",
   "canceled",
+  "all",
 ];
+
+// Full, readable labels for the payment filter (the generic title-case fallback
+// produced awkward strings like "Active payment").
+const PAYMENT_STATUS_LABELS: Record<AdminOrderPaymentStatusFilter, string> = {
+  active: "Active orders (default)",
+  paid: "Paid",
+  pending_payment: "Pending / abandoned",
+  partially_refunded: "Partially refunded",
+  refunded: "Refunded",
+  payment_failed: "Payment failed",
+  canceled: "Canceled",
+  all: "All (incl. abandoned)",
+};
 
 const FULFILLMENT_STATUS_OPTIONS: AdminOrderFulfillmentStatusFilter[] = [
   "all",
@@ -45,7 +59,7 @@ export default async function AdminOrdersPage({
 
   const params = await searchParams;
   const search = typeof params.search === "string" ? params.search : "";
-  const paymentStatus = (typeof params.paymentStatus === "string" ? params.paymentStatus : "all") as AdminOrderPaymentStatusFilter;
+  const paymentStatus = (typeof params.paymentStatus === "string" ? params.paymentStatus : "active") as AdminOrderPaymentStatusFilter;
   const fulfillmentStatus = (typeof params.fulfillmentStatus === "string" ? params.fulfillmentStatus : "all") as AdminOrderFulfillmentStatusFilter;
   const page = Math.max(1, Number(params.page) || 1);
 
@@ -54,7 +68,7 @@ export default async function AdminOrdersPage({
   const buildPageHref = (targetPage: number) => {
     const query = new URLSearchParams();
     if (search) query.set("search", search);
-    if (paymentStatus !== "all") query.set("paymentStatus", paymentStatus);
+    if (paymentStatus !== "active") query.set("paymentStatus", paymentStatus);
     if (fulfillmentStatus !== "all") query.set("fulfillmentStatus", fulfillmentStatus);
     query.set("page", String(targetPage));
     return `/admin/orders?${query.toString()}`;
@@ -67,8 +81,10 @@ export default async function AdminOrdersPage({
           <div>
             <h1 className="text-2xl font-semibold sm:text-3xl">Admin Orders</h1>
             <p className="mt-2 text-sm text-zinc-400">
-              {result.total} order record{result.total === 1 ? "" : "s"} — includes pending / unpaid checkouts. Use the
-              <span className="text-zinc-300"> payment filter → Paid</span> to see completed sales only.
+              {result.total} {paymentStatus === "active" ? "active order" : "order record"}{result.total === 1 ? "" : "s"}
+              {paymentStatus === "active"
+                ? " — abandoned / unpaid checkouts are hidden. Switch the payment filter to “All” to see them."
+                : ""}
             </p>
           </div>
           <Link href="/api/admin/orders/export" className="vl-btn-secondary inline-flex px-4 py-2 text-xs">
@@ -86,7 +102,7 @@ export default async function AdminOrdersPage({
           />
           <select name="paymentStatus" defaultValue={paymentStatus} className="vl-input px-3 py-2 text-sm">
             {PAYMENT_STATUS_OPTIONS.map((status) => (
-              <option key={status} value={status}>{statusLabel(status)} payment</option>
+              <option key={status} value={status}>{PAYMENT_STATUS_LABELS[status]}</option>
             ))}
           </select>
           <select name="fulfillmentStatus" defaultValue={fulfillmentStatus} className="vl-input px-3 py-2 text-sm">
@@ -96,7 +112,7 @@ export default async function AdminOrdersPage({
           </select>
           <div className="sm:col-span-4">
             <button type="submit" className="vl-btn-primary px-4 py-2 text-xs">Apply filters</button>
-            {search || paymentStatus !== "all" || fulfillmentStatus !== "all" ? (
+            {search || paymentStatus !== "active" || fulfillmentStatus !== "all" ? (
               <Link href="/admin/orders" className="ml-3 text-xs text-zinc-400 hover:text-white">Clear</Link>
             ) : null}
           </div>
