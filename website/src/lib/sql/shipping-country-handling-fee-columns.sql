@@ -1,7 +1,7 @@
 -- Adds the columns needed for two checkout features:
 --   1. A 5% handling fee applied to every order (see calculateHandlingFee
 --      in src/lib/shipping.ts).
---   2. Country-aware shipping - flat $15 in the USA (free at $250+), flat
+--   2. Country-aware shipping - flat $15 in the USA (free at $200+), flat
 --      $60 international (free at $600+) - see calculateShipping in the
 --      same file.
 --

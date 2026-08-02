@@ -60,7 +60,7 @@ values
   (
     'essential', 'Vanta Essential', 999, 9990, 1999,
     2, false, false, true, false, 100,
-    '["🏷️ 5% member discount on all products","💳 $5 monthly store credit","🔔 Early access to restocks","🎁 Members-only promotions","🚚 Free standard shipping on $250+ orders","🎂 Birthday reward","✉️ Priority email support"]'::jsonb,
+    '["🏷️ 5% member discount on all products","💳 $5 monthly store credit","🔔 Early access to restocks","🎁 Members-only promotions","🚚 Free standard shipping on $200+ orders","🎂 Birthday reward","✉️ Priority email support"]'::jsonb,
     500, 5000, 100, 7, true, 5, 1, true
   ),
   (
@@ -78,7 +78,7 @@ values
   (
     'black', 'Vanta Black', 8999, 89990, 14999,
     5, true, true, true, true, 500,
-    '["🏷️ 12% member discount","💳 $75 monthly store credit","📊 Exclusive bulk discounts — $500+ save 5%, $1,000+ save 12%","🌙 Free overnight shipping on $250+ orders","🎧 Concierge priority support","👥 Private VIP community access","✨ Exclusive limited releases","🧬 Beta product access","🚀 Highest order priority","🧑‍💼 Dedicated account manager","🎁 Surprise member gifts throughout the year"]'::jsonb,
+    '["🏷️ 12% member discount","💳 $75 monthly store credit","📊 Exclusive bulk discounts — $500+ save 5%, $1,000+ save 12%","🌙 Free overnight shipping on $200+ orders","🎧 Concierge priority support","👥 Private VIP community access","✨ Exclusive limited releases","🧬 Beta product access","🚀 Highest order priority","🧑‍💼 Dedicated account manager","🎁 Surprise member gifts throughout the year"]'::jsonb,
     7500, 25000, 100, 7, true, 12, 4, true
   )
 on conflict (slug) do update set
