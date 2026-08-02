@@ -6,6 +6,7 @@ import { recordSystemAlert } from "@/lib/monitoring";
 import { deliveryConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { getFulfillmentRuntimeConfig, type FulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
 import { getFulfillmentProvider, type NormalizedFulfillmentOrder } from "@/lib/fulfillment/provider";
+import { recordActualShippingCost } from "@/lib/admin-profit";
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -242,6 +243,11 @@ export interface InboundFulfillmentEvent {
   carrier?: string;
   message?: string;
   /**
+   * Exact shipping-label cost, in cents, when the 3PL reports it (usually on a
+   * shipped/label-purchased event). Drives estimate→exact profit reconciliation.
+   */
+  shippingCostCents?: number | null;
+  /**
    * `sku` is the product slug; `variant` is this store's product_doses.id when the
    * 3PL is reporting a specific dose. Omitted/null means the product has no
    * options and stock applies at product level.
@@ -398,6 +404,18 @@ export async function applyInboundFulfillmentEvent(event: InboundFulfillmentEven
 
   await supabaseAdmin.from("fulfillment_orders").update(fulfillmentUpdate).eq("order_id", orderId);
   await supabaseAdmin.from("orders").update(orderUpdate).eq("order_id", orderId);
+
+  // Reconcile the exact shipping-label cost into the order's profit the moment
+  // the 3PL reports it (typically on the shipped / label-purchased event),
+  // replacing the estimate and flipping the order to Finalized profit. Only when
+  // an actual cost is present — a tracking number alone never finalizes profit.
+  if (event.shippingCostCents != null && event.shippingCostCents >= 0) {
+    await recordActualShippingCost({
+      orderId,
+      amountCents: event.shippingCostCents,
+      source: "provider",
+    }).catch(() => undefined);
+  }
 
   // Customer shipping / delivery notifications — only on a genuine status
   // transition (prev !== new), so repeated 3PL webhooks never re-send.

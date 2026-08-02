@@ -23,6 +23,14 @@ function str(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
+// A non-negative money value (dollars) from a webhook field, or null. Accepts
+// numbers and numeric strings; rejects anything else.
+function money(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : null;
+}
+
 // Maps a variety of common 3PL webhook shapes into our normalized event. A
 // genuinely non-standard provider can get its own mapping here without
 // touching the rest of the system.
@@ -37,6 +45,14 @@ function normalizeInbound(body: Record<string, unknown>): InboundFulfillmentEven
 
   const inventoryRaw = Array.isArray(body.inventory) ? (body.inventory as Array<Record<string, unknown>>) : [];
 
+  // Exact shipping-label cost, in dollars, under any of the common field names.
+  const shippingCostDollars =
+    money(body.shipping_cost) ??
+    money(body.label_cost) ??
+    money(body.shipping_label_cost) ??
+    money(body.postage_cost) ??
+    money(body.actual_shipping_cost);
+
   return {
     type,
     orderRef: str(body.reference) || str(body.order_id) || str(body.order_number) || undefined,
@@ -46,6 +62,7 @@ function normalizeInbound(body: Record<string, unknown>): InboundFulfillmentEven
     trackingUrl: str(body.tracking_url) || undefined,
     carrier: str(body.carrier) || undefined,
     message: str(body.message) || str(body.error) || undefined,
+    shippingCostCents: shippingCostDollars == null ? null : Math.round(shippingCostDollars * 100),
     inventory: inventoryRaw
       .map((row) => ({
         sku: str(row.sku),

@@ -515,19 +515,34 @@ export interface ProfitSettingsConfig {
   minProfitPercent: number;
   minProfitDollars: number;
   worstCaseUnitCost: number;
+  /** Payment-processor fee the store pays, as a percent of the amount charged. */
   processingFeePercent: number;
-  /** What the store pays to ship one order (used in profit reports). */
+  /**
+   * Whether the processor charges its fee on collected sales tax too. Most
+   * processors DO charge on the full transaction (default true); set false if
+   * yours excludes tax from the fee base.
+   */
+  processingFeeIncludesTax: boolean;
+  /**
+   * Estimated shipping-label cost used for an order's profit BEFORE it ships
+   * (and the cost charged to the checkout profit guard). Once an order ships,
+   * this estimate is replaced per-order by the exact label cost — see
+   * order-profit-shipping-reconciliation.sql.
+   */
   shippingCostPerOrder: number;
 }
 
 // Default: never sell at a loss (profit >= $0). Raise the minimums in the
-// Control Center to require a margin buffer beyond break-even.
+// Control Center to require a margin buffer beyond break-even. The processor
+// fee (8%) and shipping estimate ($6) are the store's real economics; both are
+// editable in the Control Center.
 export const DEFAULT_PROFIT_CONFIG: ProfitSettingsConfig = {
   minProfitPercent: 0,
   minProfitDollars: 0,
   worstCaseUnitCost: 33,
-  processingFeePercent: 10,
-  shippingCostPerOrder: 10,
+  processingFeePercent: 8,
+  processingFeeIncludesTax: true,
+  shippingCostPerOrder: 6,
 };
 
 export async function getProfitSettings(): Promise<ProfitSettingsConfig> {
@@ -546,7 +561,15 @@ export async function getProfitSettings(): Promise<ProfitSettingsConfig> {
       minProfitDollars: num(profit.min_profit_dollars, DEFAULT_PROFIT_CONFIG.minProfitDollars),
       worstCaseUnitCost: num(profit.worst_case_unit_cost, DEFAULT_PROFIT_CONFIG.worstCaseUnitCost),
       processingFeePercent: num(profit.processing_fee_percent, DEFAULT_PROFIT_CONFIG.processingFeePercent),
-      shippingCostPerOrder: num(profit.shipping_cost_per_order, DEFAULT_PROFIT_CONFIG.shippingCostPerOrder),
+      processingFeeIncludesTax: profit.processing_fee_includes_tax === undefined || profit.processing_fee_includes_tax === null || profit.processing_fee_includes_tax === ""
+        ? DEFAULT_PROFIT_CONFIG.processingFeeIncludesTax
+        : profit.processing_fee_includes_tax !== false && profit.processing_fee_includes_tax !== "false",
+      // The estimate reads the new "shipping_cost_estimate" key first, then the
+      // legacy "shipping_cost_per_order" key, so existing configs keep working.
+      shippingCostPerOrder: num(
+        profit.shipping_cost_estimate ?? profit.shipping_cost_per_order,
+        DEFAULT_PROFIT_CONFIG.shippingCostPerOrder,
+      ),
     };
   } catch {
     return DEFAULT_PROFIT_CONFIG;

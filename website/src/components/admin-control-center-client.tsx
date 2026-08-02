@@ -89,6 +89,8 @@ export function AdminControlCenterClient() {
   const [profitMinDollars, setProfitMinDollars] = useState("");
   const [profitWorstCaseCost, setProfitWorstCaseCost] = useState("");
   const [profitProcessingFee, setProfitProcessingFee] = useState("");
+  const [profitShippingEstimate, setProfitShippingEstimate] = useState("");
+  const [profitFeeIncludesTax, setProfitFeeIncludesTax] = useState(true);
 
   const loadSnapshot = async () => {
     const res = await fetch("/api/admin/control", { cache: "no-store" });
@@ -165,6 +167,14 @@ export function AdminControlCenterClient() {
     setProfitMinDollars(profit.min_profit_dollars != null ? String(profit.min_profit_dollars) : "");
     setProfitWorstCaseCost(profit.worst_case_unit_cost != null ? String(profit.worst_case_unit_cost) : "");
     setProfitProcessingFee(profit.processing_fee_percent != null ? String(profit.processing_fee_percent) : "");
+    setProfitShippingEstimate(
+      profit.shipping_cost_estimate != null
+        ? String(profit.shipping_cost_estimate)
+        : profit.shipping_cost_per_order != null
+          ? String(profit.shipping_cost_per_order)
+          : "",
+    );
+    setProfitFeeIncludesTax(profit.processing_fee_includes_tax !== false && profit.processing_fee_includes_tax !== "false");
   };
 
   useEffect(() => {
@@ -259,6 +269,8 @@ export function AdminControlCenterClient() {
       { section: "profit", key: "min_profit_dollars", value: profitMinDollars },
       { section: "profit", key: "worst_case_unit_cost", value: profitWorstCaseCost },
       { section: "profit", key: "processing_fee_percent", value: profitProcessingFee },
+      { section: "profit", key: "shipping_cost_estimate", value: profitShippingEstimate },
+      { section: "profit", key: "processing_fee_includes_tax", value: profitFeeIncludesTax },
     ];
 
     const res = await fetch("/api/admin/control", {
@@ -484,12 +496,19 @@ export function AdminControlCenterClient() {
 
           <section className="vl-panel-soft rounded-2xl p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">Profit Protection</h3>
-            <p className="mt-2 text-xs text-zinc-400">By default no order can ever finalize at a loss (profit stays at or above $0). Set a minimum margin or minimum profit here only if you want a buffer beyond break-even. Worst-case vial cost defaults to $33 and the processing-fee assumption to 10%.</p>
+            <p className="mt-2 text-xs text-zinc-400">By default no order can ever finalize at a loss (profit stays at or above $0). Set a minimum margin or minimum profit here only if you want a buffer beyond break-even. These figures also drive the net-profit reports: worst-case vial cost defaults to $33, the processor fee to 8%, and the shipping-cost estimate to $6 (replaced per-order by the exact label cost once an order ships).</p>
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
               <label className="text-zinc-300">Minimum margin (%)<input value={profitMinPercent} onChange={(e) => setProfitMinPercent(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Minimum profit ($)<input value={profitMinDollars} onChange={(e) => setProfitMinDollars(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Worst-case unit cost ($, when a product has no cost set)<input value={profitWorstCaseCost} onChange={(e) => setProfitWorstCaseCost(e.target.value)} placeholder="33" className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Processing fee assumption (%)<input value={profitProcessingFee} onChange={(e) => setProfitProcessingFee(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Payment processor fee (%)<input value={profitProcessingFee} onChange={(e) => setProfitProcessingFee(e.target.value)} placeholder="8" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Shipping cost estimate ($ per order, pre-ship)<input value={profitShippingEstimate} onChange={(e) => setProfitShippingEstimate(e.target.value)} placeholder="6" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Processor fee charged on sales tax?
+                <select value={profitFeeIncludesTax ? "yes" : "no"} onChange={(e) => setProfitFeeIncludesTax(e.target.value === "yes")} className="vl-input mt-1 w-full px-3 py-2">
+                  <option value="yes">Yes — fee applies to the full total (incl. tax)</option>
+                  <option value="no">No — fee excludes collected sales tax</option>
+                </select>
+              </label>
             </div>
           </section>
         </div>

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
-import { canManageRefunds } from "@/lib/admin-roles";
+import { canManageRefunds, canViewProfit } from "@/lib/admin-roles";
+import { recordActualShippingCost } from "@/lib/admin-profit";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
 import { deliveryConfirmationTemplate, orderConfirmationTemplate, refundConfirmationTemplate, replacementOrderTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
@@ -72,6 +73,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       estimatedDelivery?: string;
       reason?: string;
       items?: Array<{ itemId?: string | number; quantity?: number }>;
+      shippingCostAmount?: number;
     };
 
     const action = String(body.action ?? "");
@@ -533,6 +535,52 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
 
       if (auditError) {
         throw auditError;
+      }
+
+      return NextResponse.json({ success: true });
+    }
+
+    // Enter or correct the EXACT shipping-label cost for an order. This replaces
+    // the estimate, flips the order's profit to Finalized, and records an audit
+    // row (estimate, exact cost, profit before/after). Gated to profit-viewers
+    // since it directly changes reported net profit.
+    if (action === "set_shipping_cost") {
+      if (!canViewProfit(session.role)) {
+        return NextResponse.json({ success: false, error: "Your role cannot edit profit figures." }, { status: 403 });
+      }
+      const amount = Number(body.shippingCostAmount);
+      if (!Number.isFinite(amount) || amount < 0 || amount > 10000) {
+        return NextResponse.json({ success: false, error: "Enter a shipping cost between $0 and $10,000." }, { status: 400 });
+      }
+
+      const result = await recordActualShippingCost({
+        orderId,
+        amountCents: Math.round(amount * 100),
+        source: "manual",
+        changedBy: session.username,
+      });
+      if (!result.ok) {
+        return NextResponse.json({ success: false, error: result.error ?? "Unable to record shipping cost." }, { status: 400 });
+      }
+
+      const { error: auditError } = await supabaseAdmin
+        .from("admin_audit_logs")
+        .insert({
+          action: "order_set_shipping_cost",
+          target_table: "orders",
+          target_id: orderId,
+          metadata: {
+            shippingCost: roundMoney(amount),
+            performedAt: now,
+            performedBy: session.username,
+            ipAddress,
+            userAgent,
+          },
+        });
+      if (auditError) {
+        // The cost + its own audit row already persisted; the admin_audit_logs
+        // entry is secondary, so don't fail the request over it.
+        console.error("Unable to audit shipping cost update", auditError);
       }
 
       return NextResponse.json({ success: true });

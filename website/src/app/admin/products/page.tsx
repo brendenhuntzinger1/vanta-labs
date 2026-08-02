@@ -179,7 +179,7 @@ function VariantEditor({
         <label className="text-xs text-zinc-400">Price
           <input value={variant.price} onChange={(e) => onChange({ ...variant, price: e.target.value })} className="vl-input mt-1 w-full px-3 py-2" placeholder="89.00" />
         </label>
-        <label className="text-xs text-cyan-300/90">Product Cost (Internal)
+        <label className="text-xs text-cyan-300/90">Cost per unit — all-in (product + fulfillment + packaging)
           <input value={variant.productCost} onChange={(e) => onChange({ ...variant, productCost: e.target.value })} className="vl-input mt-1 w-full px-3 py-2" placeholder="26.14" inputMode="decimal" />
         </label>
         <label className="text-xs text-zinc-400">Compare-at price
@@ -1118,7 +1118,7 @@ function ProductEditor({
               <label className="text-xs text-zinc-400">Price
                 <input value={dose.price} onChange={(e) => setDose(dose.id, (prev) => ({ ...prev, price: e.target.value }))} className="vl-input mt-1 w-full px-3 py-2" />
               </label>
-              <label className="text-xs text-cyan-300/90">Product Cost (Internal)
+              <label className="text-xs text-cyan-300/90">Cost per unit — all-in (product + fulfillment + packaging)
                 <input
                   value={dose.productCostCents != null ? (dose.productCostCents / 100).toFixed(2) : ""}
                   onChange={(e) => {
@@ -1157,13 +1157,20 @@ function ProductEditor({
               if (priceCents <= 0 || costCents == null) {
                 return <p className="text-[11px] text-zinc-500">Enter a Product Cost to preview profit for this dose. Internal only — never shown to customers, and it doesn&apos;t change the price.</p>;
               }
-              const profit = (priceCents - costCents) / 100;
-              const margin = ((priceCents - costCents) / priceCents) * 100;
+              // Mirror the real net-profit engine at the per-unit level: subtract
+              // the all-in product cost AND the payment-processor fee (8% of the
+              // selling price — the store default). Shipping is a per-ORDER cost,
+              // so it's noted separately rather than folded into a per-unit view.
+              const PROCESSOR_FEE_PERCENT = 8;
+              const feeCents = priceCents * (PROCESSOR_FEE_PERCENT / 100);
+              const profit = (priceCents - costCents - feeCents) / 100;
+              const margin = ((priceCents - costCents - feeCents) / priceCents) * 100;
               const good = profit >= 0;
               return (
                 <p className={`text-[11px] ${good ? "text-emerald-300" : "text-rose-300"}`}>
-                  Selling ${(priceCents / 100).toFixed(2)} &nbsp;·&nbsp; Cost ${(costCents / 100).toFixed(2)} &nbsp;·&nbsp;
-                  <span className="font-semibold"> Profit ${profit.toFixed(2)}</span> &nbsp;·&nbsp; Margin {margin.toFixed(1)}%
+                  Selling ${(priceCents / 100).toFixed(2)} &nbsp;·&nbsp; Cost ${(costCents / 100).toFixed(2)} &nbsp;·&nbsp; Fee ${(feeCents / 100).toFixed(2)} &nbsp;·&nbsp;
+                  <span className="font-semibold"> Net ${profit.toFixed(2)}</span> &nbsp;·&nbsp; Margin {margin.toFixed(1)}%
+                  <span className="text-zinc-500"> · before per-order shipping</span>
                 </p>
               );
             })()}
