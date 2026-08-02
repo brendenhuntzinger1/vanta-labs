@@ -15,24 +15,48 @@ import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
 
 // Byte-identical to the copy on /checkout. This wording is legally
 // load-bearing: reuse it verbatim, never reword it, never merge the three into
-// one, never pre-tick a box.
+// one, never pre-tick a box. `short` is a display-only label for the compact
+// row; the full `body` remains one tap away behind "View details".
 const REQUIRED_CONFIRMATIONS = [
   {
     key: "researchResponsibility" as const,
+    short: "Research responsibility",
     title: "Research Responsibility Statement *",
     body: "The purchaser assumes full responsibility for the proper handling, storage, and use of these laboratory materials. The seller provides products solely as research reference materials and does not provide medical or dosing guidance.",
   },
   {
     key: "researchCompliance" as const,
+    short: "Research & compliance agreement",
     title: "Research & Compliance Agreement *",
     body: "I acknowledge that the products sold on this website are intended strictly for laboratory research purposes. I confirm that I am purchasing these materials for legitimate research use and not for human or veterinary use. I understand these products are not drugs, dietary supplements, or medical products, and no instructions for preparation, dosage, or administration are provided by the seller.",
   },
   {
     key: "ageLegalConfirmation" as const,
+    short: "I am 21+ and legally permitted",
     title: "Age & Legal Confirmation *",
     body: "I confirm that I am 21 years of age or older and legally permitted to purchase laboratory research materials.",
   },
 ];
+
+// A gentle tap on supported devices (Android/Chrome). No-op on iOS Safari and
+// anywhere Vibration isn't available — never throws, never blocks.
+function haptic(ms = 8) {
+  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+    try { navigator.vibrate(ms); } catch { /* ignore */ }
+  }
+}
+
+// Smooth, CLS-free expand/collapse: animate grid-template-rows 0fr→1fr with the
+// content clipped inside. GPU-friendly, no height measuring, no layout jump.
+function Collapse({ open, children, className = "" }: { open: boolean; children: React.ReactNode; className?: string }) {
+  return (
+    <div
+      className={`grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"} ${className}`}
+    >
+      <div className="overflow-hidden">{children}</div>
+    </div>
+  );
+}
 
 export function CartDrawer() {
   const router = useRouter();
@@ -43,13 +67,16 @@ export function CartDrawer() {
     researchCompliance: false,
     ageLegalConfirmation: false,
   });
-  // Default OPEN so the required confirmations are visible, not hidden behind a
-  // collapsed row — shoppers couldn't find why Apple Pay was disabled otherwise.
-  // Collapsed by default so the cart leads with the order, not a wall of legal
-  // checkboxes. It sits right above the pay buttons as a compact, amber-
-  // highlighted "needs checking" bar, expands on tap, and auto-expands if a
-  // shopper taps Apple Pay before ticking the boxes.
-  const [confirmationsOpen, setConfirmationsOpen] = useState(false);
+  // Collapsible sections — everything the majority of shoppers don't need stays
+  // out of the way until asked for. Legal detail, protection detail, and the
+  // code fields are each one tap from view.
+  const [codesOpen, setCodesOpen] = useState(false);
+  const [protectionOpen, setProtectionOpen] = useState(false);
+  const [openLegal, setOpenLegal] = useState<Record<string, boolean>>({});
+  // Flash the confirmations card if a shopper taps Apple Pay before ticking the
+  // boxes, and scroll it into view so they see exactly what's blocking payment.
+  const [highlightConfirm, setHighlightConfirm] = useState(false);
+  const confirmRef = useRef<HTMLDivElement | null>(null);
   // Set when the express lane reports it can't run here (wrong platform,
   // unregistered host, or a cart this lane can't price). The drawer then falls
   // back to exactly what it showed before the express slot existed.
@@ -96,7 +123,6 @@ export function CartDrawer() {
   } = useCart();
 
   const freeShipThreshold = shippingConfig.freeShippingThreshold;
-
   const shippingProgress = getShippingProgress(subtotal, freeShipThreshold);
 
   // Smart membership upsell: only for non-members, and only when joining
@@ -109,6 +135,12 @@ export function CartDrawer() {
   const showMembershipUpsell = Boolean(upsellTier && membershipValue && membershipValue.todayValue > 0 && subtotal > 0);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+
+  // Auto-reveal the code fields when a code is already applied, so an applied
+  // code is never hidden behind a collapsed row.
+  useEffect(() => {
+    if (referralCode || couponCode) setCodesOpen(true);
+  }, [referralCode, couponCode]);
 
   // Accessible modal behavior: move focus into the drawer on open, trap Tab
   // within it, close on Escape, lock body scroll, and restore focus on close.
@@ -154,6 +186,7 @@ export function CartDrawer() {
   const effectiveCouponInput = couponInput || couponCode || "";
 
   const handleContinueToCheckout = () => {
+    haptic(10);
     closeCart();
     router.push("/checkout");
   };
@@ -165,16 +198,28 @@ export function CartDrawer() {
   const showExpressSlot = EXPRESS_CHECKOUT_ENABLED && !expressUnavailable;
   const onUnavailable = useCallback(() => setExpressUnavailable(true), []);
 
+  // Draw attention to the confirmations when Apple Pay is tapped early.
+  const flagConfirmations = useCallback(() => {
+    if (allAcknowledged) return;
+    setHighlightConfirm(true);
+    confirmRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    window.setTimeout(() => setHighlightConfirm(false), 2200);
+  }, [allAcknowledged]);
+
+  const toggleLegal = (key: string) => setOpenLegal((prev) => ({ ...prev, [key]: !prev[key] }));
+
   if (!isCartOpen) {
     return null;
   }
 
+  const hasItems = isHydrated && items.length > 0;
+
   return (
-    <div className="fixed inset-0 z-[60] flex justify-end px-0 py-0 sm:px-4 sm:py-4">
+    <div className="fixed inset-0 z-[60] flex justify-end">
       <button
         type="button"
         tabIndex={-1}
-        className="absolute inset-0 bg-black/70 backdrop-blur-[2px] animate-[vl-fade-backdrop_0.28s_ease-out]"
+        className="absolute inset-0 bg-black/75 backdrop-blur-[3px] animate-[vl-fade-backdrop_0.28s_ease-out]"
         aria-label="Close cart drawer"
         onClick={closeCart}
       />
@@ -184,457 +229,477 @@ export function CartDrawer() {
         role="dialog"
         aria-modal="true"
         aria-labelledby="cart-drawer-title"
-        className="vl-panel relative z-10 flex h-full w-full max-w-xl flex-col rounded-none p-4 shadow-2xl animate-[vl-drawer-in-mobile_0.32s_cubic-bezier(0.2,0.8,0.2,1)] sm:rounded-[2rem] sm:p-6 sm:animate-[vl-drawer-in-desktop_0.32s_cubic-bezier(0.2,0.8,0.2,1)]"
+        className="relative z-10 flex h-full w-full max-w-md flex-col border-l border-white/[0.06] bg-[#0a0a0a]/95 shadow-[0_0_60px_rgba(0,0,0,0.7)] backdrop-blur-2xl animate-[vl-drawer-in-mobile_0.34s_cubic-bezier(0.2,0.8,0.2,1)] sm:my-4 sm:mr-4 sm:h-auto sm:max-h-[calc(100%-2rem)] sm:rounded-[1.75rem] sm:border sm:animate-[vl-drawer-in-desktop_0.34s_cubic-bezier(0.2,0.8,0.2,1)]"
       >
-        <div className="flex items-center justify-between border-b border-zinc-800 pb-4">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 pt-5 pb-4 sm:px-6">
           <div>
-            <p className="text-sm uppercase tracking-[0.3em] text-zinc-500">Cart</p>
-            <h2 id="cart-drawer-title" className="mt-2 text-2xl font-semibold text-white">Your order</h2>
+            <p className="text-[10px] uppercase tracking-[0.34em] text-zinc-500">Cart</p>
+            <h2 id="cart-drawer-title" className="mt-1.5 text-[1.65rem] font-semibold leading-none tracking-tight text-white">Your order</h2>
           </div>
-          <button ref={closeButtonRef} type="button" onClick={closeCart} aria-label="Close cart" className="-mr-2 inline-flex h-11 w-11 items-center justify-center text-sm text-zinc-400 transition hover:text-white">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" className="h-5 w-5"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          <button
+            ref={closeButtonRef}
+            type="button"
+            onClick={closeCart}
+            aria-label="Close cart"
+            className="vl-focus-ring -mr-1.5 inline-flex h-11 w-11 items-center justify-center rounded-full text-zinc-400 transition hover:bg-white/[0.06] hover:text-white active:scale-95"
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" className="h-5 w-5"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
 
-        <div className="mt-5 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1 sm:pr-2">
+        <div className="h-px bg-white/[0.06]" />
+
+        {/* Scroll region */}
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-5 sm:px-6">
           {isHydrated && items.length === 0 ? (
-            <div className="rounded-[1.5rem] border border-dashed border-zinc-700 bg-zinc-900/70 p-8 text-center text-zinc-400">
-              <p className="text-lg text-white">Your cart is currently empty.</p>
-              <p className="mt-3">Add products to begin building an order.</p>
+            <div className="flex flex-col items-center rounded-[1.5rem] border border-white/[0.06] bg-white/[0.02] px-6 py-14 text-center">
+              <div className="flex h-14 w-14 items-center justify-center rounded-full border border-white/[0.08] bg-white/[0.03]">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" className="h-6 w-6 text-zinc-500"><path d="M6 6h15l-1.5 9h-12z" strokeLinejoin="round" /><circle cx="9" cy="20" r="1.4" /><circle cx="18" cy="20" r="1.4" /><path d="M6 6 5 3H3" strokeLinecap="round" /></svg>
+              </div>
+              <p className="mt-5 text-lg font-medium text-white">Your cart is empty</p>
+              <p className="mt-2 text-sm text-zinc-500">Add products to begin building an order.</p>
               <Link
                 href="/products"
                 onClick={closeCart}
-                className="vl2-btn-primary vl-focus-ring mt-6 inline-flex px-6 py-3 text-sm"
+                className="vl-focus-ring mt-7 inline-flex items-center justify-center rounded-full bg-white px-7 py-3 text-sm font-semibold text-black transition hover:bg-zinc-200 active:scale-[0.98]"
               >
                 Browse products
               </Link>
             </div>
-          ) : (
-              <div className="space-y-3 sm:space-y-4">
-              {items.map((item) => {
-                const activeRate = bundleDiscountRate(item.quantity, bundleConfig);
-                const nextTier = getNextBundleTier(item.quantity, bundleConfig);
-                const lineTotal = getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig);
-                const fullTotal = item.price * item.quantity;
-                return (
-                <div key={item.key} className="vl-panel-soft rounded-[1.25rem] p-3.5 sm:p-4">
-                  <div className="flex gap-3 items-start justify-between mb-3">
-                    {/* Product image */}
-                    <div className="relative h-14 w-14 flex-shrink-0 rounded-lg border border-zinc-700 bg-zinc-950/50 overflow-hidden flex items-center justify-center sm:h-16 sm:w-16">
-                      {item.image ? (
-                        <Image src={item.image} alt={item.name} fill sizes="64px" className="h-full w-full object-cover" />
-                      ) : (
-                        <div className="text-xs text-zinc-500">No image</div>
-                      )}
-                    </div>
-
-                    <div className="flex-1">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <h3 className="text-xs font-semibold text-white sm:text-sm">{item.name}</h3>
-                          <p className="mt-1 text-xs text-zinc-400">{item.doseLabel ? `${item.doseLabel}${item.batchNumber ? " • " : ""}` : ""}{item.batchNumber ? `Batch ${item.batchNumber}` : ""}</p>
-                          {activeRate > 0 ? (
-                            <span className="mt-1.5 inline-flex items-center gap-1 rounded-full border border-amber-200/30 bg-amber-200/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
-                              Bundle · {Math.round(activeRate * 100)}% off applied
-                            </span>
-                          ) : null}
+          ) : hasItems ? (
+            <div className="space-y-5">
+              {/* Free shipping progress card */}
+              {subtotal > 0 ? (
+                <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
+                  {shippingProgress.isEligibleForFreeShipping ? (
+                    <div className="flex items-center gap-3">
+                      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full border border-[color:var(--accent-gold)]/30 bg-[color:var(--accent-gold)]/10">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-gold)" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4"><path d="M20 6 9 17l-5-5" /></svg>
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-white">Free shipping unlocked</p>
+                        <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+                          <div className="h-full rounded-full" style={{ width: "100%", background: "linear-gradient(90deg, rgba(242,201,76,0.6), var(--accent-gold))" }} />
                         </div>
-                        <button type="button" onClick={() => removeFromCart(item.key)} aria-label={`Remove ${item.name} from cart`} className="-my-1 flex-shrink-0 px-1 py-2 text-xs text-zinc-500 transition hover:text-rose-300">
-                          Remove
-                        </button>
                       </div>
                     </div>
-                  </div>
+                  ) : (
+                    <>
+                      <div className="flex items-baseline justify-between gap-3">
+                        <p className="text-sm text-zinc-400">
+                          You&apos;re <span className="font-semibold text-white">${shippingProgress.amountToFreeShipping.toFixed(2)}</span> away from
+                        </p>
+                        <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-500 tabular-nums">{Math.round(shippingProgress.progressPercentage)}%</span>
+                      </div>
+                      <p className="mt-0.5 text-xs font-semibold uppercase tracking-[0.24em] text-[color:var(--accent-gold)]">Free shipping</p>
+                      <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+                        <div
+                          className="h-full rounded-full transition-[width] duration-500 ease-out"
+                          style={{ width: `${shippingProgress.progressPercentage}%`, background: "linear-gradient(90deg, rgba(242,201,76,0.55), var(--accent-gold))" }}
+                        />
+                      </div>
+                    </>
+                  )}
+                </div>
+              ) : null}
 
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center rounded-full border border-zinc-700 bg-zinc-950/40 text-sm text-zinc-200">
-                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-l-full text-base transition hover:bg-white/5 hover:text-white active:bg-white/10" aria-label={`Decrease ${item.name} quantity`}>−</button>
-                      <span className="min-w-7 text-center text-sm font-semibold tabular-nums">{item.quantity}</span>
-                      <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="inline-flex h-10 w-10 items-center justify-center rounded-r-full text-base transition hover:bg-white/5 hover:text-white active:bg-white/10" aria-label={`Increase ${item.name} quantity`}>+</button>
-                    </div>
-                    <div className="text-right">
-                      {activeRate > 0 ? (
-                        <p className="text-[11px] text-zinc-500 line-through tabular-nums">{formatCartCurrency(fullTotal)}</p>
+              {/* Product cards */}
+              <div className="space-y-3">
+                {items.map((item) => {
+                  const activeRate = bundleDiscountRate(item.quantity, bundleConfig);
+                  const nextTier = getNextBundleTier(item.quantity, bundleConfig);
+                  const lineTotal = getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig);
+                  const fullTotal = item.price * item.quantity;
+                  const subtitle = [item.doseLabel, item.batchNumber ? `Batch ${item.batchNumber}` : ""].filter(Boolean).join(" · ");
+                  return (
+                    <div key={item.key} className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
+                      <div className="flex gap-4">
+                        <div className="relative h-[4.5rem] w-[4.5rem] flex-shrink-0 overflow-hidden rounded-xl border border-white/[0.06] bg-black/40">
+                          {item.image ? (
+                            <Image src={item.image} alt={item.name} fill sizes="72px" className="object-cover" />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-[10px] text-zinc-600">No image</div>
+                          )}
+                        </div>
+
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <h3 className="truncate text-sm font-semibold text-white">{item.name}</h3>
+                              {subtitle ? <p className="mt-0.5 truncate text-xs text-zinc-500">{subtitle}</p> : null}
+                            </div>
+                            <div className="flex-shrink-0 text-right">
+                              {activeRate > 0 ? (
+                                <p className="text-[11px] text-zinc-600 line-through tabular-nums">{formatCartCurrency(fullTotal)}</p>
+                              ) : null}
+                              <p className="text-sm font-semibold text-white tabular-nums">{formatCartCurrency(lineTotal)}</p>
+                            </div>
+                          </div>
+
+                          {activeRate > 0 ? (
+                            <span className="mt-2 inline-flex w-fit items-center rounded-full border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.08] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--accent-gold)]">
+                              {Math.round(activeRate * 100)}% bundle savings
+                            </span>
+                          ) : null}
+
+                          <div className="mt-3 flex items-center justify-between">
+                            <div className="flex items-center rounded-full border border-white/[0.08] bg-black/30">
+                              <button
+                                type="button"
+                                onClick={() => { haptic(); updateQuantity(item.key, item.quantity - 1); }}
+                                className="vl-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-l-full text-base text-zinc-300 transition hover:text-white active:scale-90"
+                                aria-label={`Decrease ${item.name} quantity`}
+                              >
+                                −
+                              </button>
+                              <span className="min-w-8 text-center text-sm font-semibold tabular-nums text-white">{item.quantity}</span>
+                              <button
+                                type="button"
+                                onClick={() => { haptic(); updateQuantity(item.key, item.quantity + 1); }}
+                                className="vl-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-r-full text-base text-zinc-300 transition hover:text-white active:scale-90"
+                                aria-label={`Increase ${item.name} quantity`}
+                              >
+                                +
+                              </button>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => { haptic(12); removeFromCart(item.key); }}
+                              aria-label={`Remove ${item.name} from cart`}
+                              className="vl-focus-ring rounded-md px-2 py-1.5 text-xs text-zinc-500 transition hover:text-rose-300"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {nextTier ? (
+                        <button
+                          type="button"
+                          onClick={() => { haptic(); updateQuantity(item.key, item.quantity + nextTier.addMore); }}
+                          className="vl-focus-ring mt-3 flex w-full items-center justify-between rounded-xl border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.05] px-3.5 py-2.5 text-left transition hover:border-[color:var(--accent-gold)]/40 hover:bg-[color:var(--accent-gold)]/[0.09] active:scale-[0.99]"
+                        >
+                          <span className="text-xs text-zinc-300">
+                            Buy <span className="font-semibold text-white">{nextTier.addMore} more</span> and save <span className="font-semibold text-[color:var(--accent-gold)]">{nextTier.percent}%</span>
+                          </span>
+                          <span className="inline-flex items-center gap-1 rounded-full bg-[color:var(--accent-gold)]/15 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] text-[color:var(--accent-gold)]">Add</span>
+                        </button>
                       ) : null}
-                      <p className="text-sm font-semibold text-white tabular-nums">{formatCartCurrency(lineTotal)}</p>
                     </div>
-                  </div>
+                  );
+                })}
+              </div>
 
-                  {nextTier ? (
-                    <button
-                      type="button"
-                      onClick={() => updateQuantity(item.key, item.quantity + nextTier.addMore)}
-                      className="mt-3 flex w-full items-center justify-between rounded-xl border border-amber-200/25 bg-gradient-to-r from-amber-200/[0.10] via-amber-200/[0.04] to-transparent px-3 py-2 text-left transition hover:border-amber-200/50 hover:from-amber-200/[0.16]"
-                    >
-                      <span className="text-xs text-amber-100/90">
-                        Buy <span className="font-semibold text-amber-200">{nextTier.addMore} more</span> → <span className="font-semibold text-amber-200">{nextTier.percent}% off</span> every unit
-                      </span>
-                      <span className="text-xs font-semibold uppercase tracking-[0.14em] text-amber-200">Add</span>
-                    </button>
-                  ) : null}
+              {/* Promotions & nudges — quiet charcoal cards, gold/emerald accents only */}
+              <BacWaterCartCheckboxes />
+
+              {isBuy3Get1FreeEligible ? (
+                <div className="rounded-2xl border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.05] p-4">
+                  <p className="text-sm font-semibold text-[color:var(--accent-gold)]">Buy 3, Get 1 Free — active</p>
+                  <p className="mt-1.5 text-xs text-zinc-400">Your lowest-priced eligible item is free. Referral discounts pause while this promotion applies.</p>
                 </div>
-                );
-              })}
-            </div>
-          )}
+              ) : null}
 
-          {/* Everything below scrolls WITH the items — on small screens the
-              old layout pinned all of this under the list, pushing the
-              checkout button off-screen (the mobile "checkout does nothing"
-              bug: the button was unreachable). Only the compact total + CTA
-              footer stays fixed now. */}
-          {isHydrated && items.length > 0 ? (
-          <div className="mt-4 space-y-3 border-t border-zinc-800 pt-4 sm:space-y-4">
-          {/* BAC Water quick-add — tick to add a size, untick to remove it */}
-          <BacWaterCartCheckboxes />
-
-          {/* Buy 3 Get 1 Free Promotion - Show when 3+ items in cart */}
-          {isBuy3Get1FreeEligible && (
-            <div className="rounded-[1.25rem] border border-amber-200/30 bg-gradient-to-r from-amber-200/[0.12] via-amber-200/[0.05] to-transparent p-4">
-              <p className="text-sm font-semibold text-amber-200 flex items-center gap-2">
-                🎁 Buy 3 Get 1 Free Active
-              </p>
-              <p className="text-xs text-amber-100/80 mt-2">
-                Lowest-priced eligible item is free.
-              </p>
-              <p className="text-xs text-amber-100/55 mt-1">
-                Referral discounts are disabled while this promotion is active.
-              </p>
-            </div>
-          )}
-
-          {/* Nudge: how many more items unlock the next free one */}
-          {buy3Get1UntilNextFree > 0 && (
-            <div className="vl-panel-soft rounded-[1.25rem] p-4">
-              <p className="text-sm text-zinc-200">
-                🎁 Add <span className="font-semibold text-amber-200">{buy3Get1UntilNextFree} more {buy3Get1UntilNextFree === 1 ? "item" : "items"}</span> to unlock a <span className="font-semibold text-amber-200">FREE item</span>.
-              </p>
-            </div>
-          )}
-
-          {showMembershipUpsell && upsellTier && membershipValue ? (
-            <Link
-              href="/membership"
-              onClick={closeCart}
-              className="block rounded-[1.25rem] border border-emerald-400/25 bg-gradient-to-r from-emerald-400/[0.10] via-emerald-400/[0.04] to-transparent p-4 transition hover:border-emerald-400/50"
-            >
-              <p className="text-sm font-semibold text-emerald-300">
-                You could save {formatCartCurrency(membershipValue.totalBenefit)} today with {upsellTier.name}
-              </p>
-              <p className="mt-1 text-xs text-emerald-100/60">
-                {formatCartCurrency(membershipValue.discountSavings)} off this cart
-                {membershipValue.shippingSavings > 0 ? ` + free shipping (${formatCartCurrency(membershipValue.shippingSavings)})` : ""}
-                {membershipValue.monthlyStoreCredit > 0 ? ` + ${formatCartCurrency(membershipValue.monthlyStoreCredit)} monthly credit` : ""}
-                {" "}— membership {formatCartCurrency(membershipValue.monthlyCost)}/mo. Join now →
-              </p>
-            </Link>
-          ) : null}
-
-          {bulkSavingsApplied && (
-            <div className="rounded-[1.25rem] border border-amber-700 bg-amber-950/40 p-4">
-              <p className="text-sm font-semibold text-amber-300">
-                Congratulations! Your exclusive member bulk discount has been applied.
-              </p>
-              <p className="text-xs text-amber-200/80 mt-1">{bulkSavingsPercent}% off this order.</p>
-            </div>
-          )}
-
-          {!bulkSavingsApplied && bulkSavingsProgress && (
-            <div className="vl-panel-soft rounded-[1.25rem] p-4">
-              <p className="text-sm text-zinc-300">
-                You&apos;re only {formatCartCurrency(bulkSavingsProgress.amountRemaining)} away from unlocking{" "}
-                {bulkSavingsProgress.nextPercent}% OFF your order.
-              </p>
-            </div>
-          )}
-
-          {/* Referral Code Section - Only show if buy 3 get 1 free is NOT active */}
-          {!isBuy3Get1FreeEligible && (
-            <label className="block text-sm text-zinc-400">
-              <span className="mb-2 block uppercase tracking-[0.3em]">Referral code</span>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={effectiveReferralInput}
-                  onChange={(event) => setReferralInput(event.target.value)}
-                  placeholder="VANTA10"
-                  className="vl-input flex-1 rounded-full px-4 py-3 text-sm"
-                />
-                <button
-                  type="button"
-                  onClick={() => applyReferralCode(effectiveReferralInput)}
-                  disabled={isApplyingReferral}
-                  className="vl-btn-secondary vl-focus-ring rounded-full px-4 py-3 text-sm disabled:opacity-60"
-                >
-                  {isApplyingReferral ? "Applying…" : "Apply"}
-                </button>
-              </div>
-            </label>
-          )}
-          {referralSuccess ? <p className="text-sm text-emerald-400">{referralSuccess}</p> : null}
-          {referralError ? <p className="text-sm text-rose-400">{referralError}</p> : null}
-          {referralDetails ? (
-            <p className="flex items-center justify-between text-sm text-zinc-300">
-              <span>Ambassador {referralDetails.ambassadorName} • {referralDetails.customerDiscountPercent}% off</span>
-              <button type="button" onClick={clearReferralCode} className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
-            </p>
-          ) : null}
-
-          {/* Coupon Code — a separate field from the referral code. Also hidden
-              while Buy 3 Get 1 is active (codes can't combine with it). */}
-          {!isBuy3Get1FreeEligible && (
-            <label className="block text-sm text-zinc-400">
-              <span className="mb-2 block uppercase tracking-[0.3em]">Coupon code</span>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  value={effectiveCouponInput}
-                  onChange={(event) => setCouponInput(event.target.value)}
-                  placeholder="LAUNCH"
-                  className="vl-input flex-1 rounded-full px-4 py-3 text-sm"
-                />
-                <button
-                  type="button"
-                  onClick={() => applyCouponCode(effectiveCouponInput)}
-                  disabled={isApplyingCoupon}
-                  className="vl-btn-secondary vl-focus-ring rounded-full px-4 py-3 text-sm disabled:opacity-60"
-                >
-                  {isApplyingCoupon ? "Applying…" : "Apply"}
-                </button>
-              </div>
-            </label>
-          )}
-          {couponSuccess ? <p className="text-sm text-emerald-400">{couponSuccess}</p> : null}
-          {couponError ? <p className="text-sm text-rose-400">{couponError}</p> : null}
-          {couponDetails ? (
-            <p className="flex items-center justify-between text-sm text-zinc-300">
-              <span>
-                Coupon {couponDetails.code} • {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off
-              </span>
-              <button type="button" onClick={clearCouponCode} className="text-xs text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
-            </p>
-          ) : null}
-          {subtotal > 0 && (
-            <div className="vl-panel-soft rounded-[1.25rem] p-4">
-              {shippingProgress.isEligibleForFreeShipping ? (
-                <div className="text-center">
-                  <p className="text-sm font-semibold text-emerald-400 flex items-center justify-center gap-2">
-                    🎉 Congratulations, you&apos;ve unlocked free shipping!
+              {buy3Get1UntilNextFree > 0 ? (
+                <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
+                  <p className="text-sm text-zinc-300">
+                    Add <span className="font-semibold text-[color:var(--accent-gold)]">{buy3Get1UntilNextFree} more {buy3Get1UntilNextFree === 1 ? "item" : "items"}</span> to unlock a free item.
                   </p>
-                  <div className="mt-3 w-full bg-zinc-800 rounded-full h-2 overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
-                      style={{ width: "100%" }}
-                    />
-                  </div>
                 </div>
-              ) : (
-                <div>
-                  <div className="flex justify-between text-sm mb-2">
-                    <span className="text-zinc-400">Free shipping at {formatCartCurrency(freeShipThreshold)}</span>
-                    <span className="text-white font-semibold">${shippingProgress.amountToFreeShipping.toFixed(2)} more</span>
-                  </div>
-                  <div className="w-full bg-zinc-800 rounded-full h-2 overflow-hidden">
-                    <div
-                      className="h-full bg-gradient-to-r from-zinc-200 to-zinc-400 transition-all duration-300"
-                      style={{ width: `${shippingProgress.progressPercentage}%` }}
-                    />
-                  </div>
-                  <p className="text-xs text-zinc-500 mt-2">{Math.round(shippingProgress.progressPercentage)}% to free shipping</p>
+              ) : null}
+
+              {showMembershipUpsell && upsellTier && membershipValue ? (
+                <Link
+                  href="/membership"
+                  onClick={closeCart}
+                  className="vl-focus-ring block rounded-2xl border border-emerald-400/20 bg-emerald-400/[0.04] p-4 transition hover:border-emerald-400/40"
+                >
+                  <p className="text-sm font-semibold text-emerald-300">
+                    Save {formatCartCurrency(membershipValue.totalBenefit)} today with {upsellTier.name}
+                  </p>
+                  <p className="mt-1 text-xs text-emerald-100/50">
+                    {formatCartCurrency(membershipValue.discountSavings)} off this cart
+                    {membershipValue.shippingSavings > 0 ? ` + free shipping` : ""}
+                    {membershipValue.monthlyStoreCredit > 0 ? ` + ${formatCartCurrency(membershipValue.monthlyStoreCredit)} monthly credit` : ""}
+                    {" · "}{formatCartCurrency(membershipValue.monthlyCost)}/mo — join →
+                  </p>
+                </Link>
+              ) : null}
+
+              {bulkSavingsApplied ? (
+                <div className="rounded-2xl border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.05] p-4">
+                  <p className="text-sm font-semibold text-[color:var(--accent-gold)]">Member bulk discount applied</p>
+                  <p className="mt-1 text-xs text-zinc-400">{bulkSavingsPercent}% off this order.</p>
                 </div>
-              )}
-            </div>
-          )}
+              ) : null}
 
-          {subtotal > 0 ? (
-            <label className="vl-panel-soft flex cursor-pointer items-start justify-between gap-3 rounded-[1.25rem] p-4">
-              <span className="flex items-start gap-2.5">
-                <input
-                  type="checkbox"
-                  checked={shippingProtectionEnabled}
-                  onChange={(e) => setShippingProtectionEnabled(e.target.checked)}
-                  className="mt-0.5 h-4 w-4 accent-emerald-500"
-                  aria-label="Add shipping protection"
-                />
-                <span className="text-sm">
-                  <span className="block font-medium text-white">Shipping Protection <span className="font-normal text-emerald-300">(Recommended)</span> <span className="font-normal text-zinc-500">· optional, untick to remove</span></span>
-                  <span className="block text-xs text-zinc-500">Store-backed: we&apos;ll replace or refund items lost, stolen, or damaged in transit. <a href="/legal/shipping" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-zinc-300">See terms</a></span>
-                </span>
-              </span>
-              <span className="whitespace-nowrap text-sm text-zinc-300">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>
-            </label>
-          ) : null}
+              {!bulkSavingsApplied && bulkSavingsProgress ? (
+                <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
+                  <p className="text-sm text-zinc-300">
+                    You&apos;re {formatCartCurrency(bulkSavingsProgress.amountRemaining)} away from <span className="font-semibold text-white">{bulkSavingsProgress.nextPercent}% off</span>.
+                  </p>
+                </div>
+              ) : null}
 
-          <div className="vl-panel-soft rounded-[1.25rem] p-4 text-sm text-zinc-300">
-            <div className="flex justify-between">
-              <span>Subtotal</span>
-              <span>{formatCartCurrency(subtotal)}</span>
-            </div>
-            <div className="mt-2 flex justify-between">
-              <span>Shipping</span>
-              <span>{formatCartCurrency(shipping)}</span>
-            </div>
-            {discountAmount > 0 ? (
-              <div className="mt-2 flex justify-between text-emerald-400">
-                <span>{appliedDiscountLabel ?? "You saved"}</span>
-                <span>-{formatCartCurrency(discountAmount)}</span>
-              </div>
-            ) : null}
-            {autoBestDiscountApplied ? (
-              <p className="mt-2 text-xs text-emerald-300/80">
-                ✓ We&apos;ve automatically applied your best available discount. Only one discount applies per order.
-              </p>
-            ) : null}
-            {shippingProtectionFee > 0 ? (
-              <div className="mt-2 flex justify-between">
-                <span>Shipping protection</span>
-                <span>+{formatCartCurrency(shippingProtectionFee)}</span>
-              </div>
-            ) : null}
-            {/* On the express path shipping and tax are finalised inside the
-                Apple Pay sheet, not on a later page — "at checkout" would read
-                as "tapping Apple Pay skips tax". */}
-            <div className="mt-2 flex justify-between text-white/40">
-              {showExpressSlot ? (
-                <span>Shipping &amp; sales tax — calculated at payment</span>
-              ) : (
-                <>
-                  <span>Sales tax</span>
-                  <span>Calculated at checkout</span>
-                </>
-              )}
-            </div>
-          </div>
-          </div>
-          ) : null}
-        </div>
-
-        {/* Sticky footer: always visible, safe-area padded, so the checkout
-            CTA can never scroll out of reach on a phone. */}
-        {isHydrated && items.length > 0 ? (
-        <div className="mt-3 border-t border-zinc-800 pt-3 pb-[max(env(safe-area-inset-bottom),0.25rem)]">
-          <div className="flex items-baseline justify-between pb-1">
-            <span className="text-xs uppercase tracking-[0.22em] text-zinc-500">Total</span>
-            <span className="text-xl font-semibold text-white tabular-nums">{formatCartCurrency(total)}</span>
-          </div>
-          {/* Set expectations before the wallet sheet adds these — so the higher
-              in-sheet total (Apple Pay shows shipping + tax as their own rows)
-              never reads as a surprise charge. */}
-          <p className="pb-2.5 text-[11px] leading-5 text-zinc-500">
-            Shipping &amp; sales tax are calculated from your address at payment. Free shipping over {formatCartCurrency(FREE_SHIPPING_THRESHOLD)}.
-          </p>
-          {/* Shipping protection is a paid add-on that defaults ON, and its
-              toggle lives up in the SCROLLING region — on a phone the express
-              button is reachable with no scrolling and the opt-out is not. This
-              line makes the charge, and the way out of it, visible right where
-              the shopper is about to pay. It is also its own labelled row in
-              the Apple Pay sheet. */}
-          {showExpressSlot && shippingProtectionFee > 0 ? (
-            <p className="flex items-center justify-between pb-2.5 text-xs text-zinc-400">
-              <span>Shipping protection +{formatCartCurrency(shippingProtectionFee)}</span>
-              <button
-                type="button"
-                onClick={() => setShippingProtectionEnabled(false)}
-                className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline"
-              >
-                Remove
-              </button>
-            </p>
-          ) : null}
-          <div className="space-y-2.5">
-            {/* Apple Pay express slot. Renders the real native sheet — the
-                button only appears once the platform, the registered host, the
-                required confirmations and a live server session all check out,
-                so a shopper never taps something that can't complete. */}
-            {showExpressSlot ? (
-              <>
-                <p className="text-center text-[10px] uppercase tracking-[0.22em] text-zinc-500">Express checkout</p>
-
-                {/* Required confirmations. The summary row and the pay button
-                    are BOTH always visible; the expanded copy gets its own
-                    capped scroller so it can never push the button off-screen
-                    (the mobile "checkout does nothing" failure this file
-                    already memorialises above). */}
-                <div className={`rounded-[1.25rem] border ${allAcknowledged ? "border-zinc-800 bg-zinc-900/60" : "border-amber-400/60 bg-amber-400/[0.07] shadow-[0_0_0_1px_rgba(251,191,36,0.15)]"}`}>
+              {/* Referral & coupon — collapsed by default */}
+              {!isBuy3Get1FreeEligible ? (
+                <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02]">
                   <button
                     type="button"
-                    onClick={() => setConfirmationsOpen((open) => !open)}
-                    aria-expanded={confirmationsOpen}
-                    className="flex w-full items-center justify-between gap-2 px-3.5 py-2.5 text-left"
+                    onClick={() => setCodesOpen((o) => !o)}
+                    aria-expanded={codesOpen}
+                    className="vl-focus-ring flex w-full items-center justify-between px-4 py-3.5 text-left"
                   >
-                    <span className={`text-xs font-medium ${allAcknowledged ? "text-zinc-300" : "text-amber-200"}`}>
-                      {allAcknowledged ? "Required confirmations" : "Tick all 3 boxes to pay"}
-                    </span>
-                    <span className="flex items-center gap-2">
-                      <span className={`rounded-full px-2 py-0.5 text-xs tabular-nums ${allAcknowledged ? "bg-emerald-400/15 text-emerald-300" : "bg-amber-400/15 text-amber-200"}`}>
-                        {acknowledgedCount} of {REQUIRED_CONFIRMATIONS.length}
-                      </span>
-                      <span className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">
-                        {confirmationsOpen ? "Hide" : "Show"}
-                      </span>
-                    </span>
+                    <span className="text-sm text-zinc-300">Have a referral or coupon code?</span>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 text-zinc-500 transition-transform duration-300 ${codesOpen ? "rotate-180" : ""}`}><path d="m6 9 6 6 6-6" /></svg>
                   </button>
-                  {confirmationsOpen ? (
-                    <div className="max-h-[45vh] space-y-3 overflow-y-auto overscroll-contain border-t border-zinc-800 px-3.5 py-3">
-                      {REQUIRED_CONFIRMATIONS.map((item) => (
-                        <label key={item.key} className="flex items-start gap-2.5 text-xs text-zinc-400">
+                  <Collapse open={codesOpen}>
+                    <div className="space-y-4 px-4 pb-4">
+                      <div>
+                        <label className="mb-1.5 block text-[10px] uppercase tracking-[0.24em] text-zinc-500">Referral code</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={effectiveReferralInput}
+                            onChange={(event) => setReferralInput(event.target.value)}
+                            placeholder="VANTA10"
+                            className="vl-input flex-1 px-4 py-2.5 text-sm"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => applyReferralCode(effectiveReferralInput)}
+                            disabled={isApplyingReferral}
+                            className="vl-focus-ring rounded-xl border border-white/[0.12] bg-white/[0.04] px-4 text-xs font-semibold uppercase tracking-wide text-zinc-200 transition hover:bg-white/[0.08] disabled:opacity-50"
+                          >
+                            {isApplyingReferral ? "…" : "Apply"}
+                          </button>
+                        </div>
+                        {referralSuccess ? <p className="mt-1.5 text-xs text-emerald-400">{referralSuccess}</p> : null}
+                        {referralError ? <p className="mt-1.5 text-xs text-rose-400">{referralError}</p> : null}
+                        {referralDetails ? (
+                          <p className="mt-1.5 flex items-center justify-between text-xs text-zinc-400">
+                            <span>{referralDetails.ambassadorName} · {referralDetails.customerDiscountPercent}% off</span>
+                            <button type="button" onClick={clearReferralCode} className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
+                          </p>
+                        ) : null}
+                      </div>
+
+                      <div>
+                        <label className="mb-1.5 block text-[10px] uppercase tracking-[0.24em] text-zinc-500">Coupon code</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="text"
+                            value={effectiveCouponInput}
+                            onChange={(event) => setCouponInput(event.target.value)}
+                            placeholder="LAUNCH"
+                            className="vl-input flex-1 px-4 py-2.5 text-sm"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => applyCouponCode(effectiveCouponInput)}
+                            disabled={isApplyingCoupon}
+                            className="vl-focus-ring rounded-xl border border-white/[0.12] bg-white/[0.04] px-4 text-xs font-semibold uppercase tracking-wide text-zinc-200 transition hover:bg-white/[0.08] disabled:opacity-50"
+                          >
+                            {isApplyingCoupon ? "…" : "Apply"}
+                          </button>
+                        </div>
+                        {couponSuccess ? <p className="mt-1.5 text-xs text-emerald-400">{couponSuccess}</p> : null}
+                        {couponError ? <p className="mt-1.5 text-xs text-rose-400">{couponError}</p> : null}
+                        {couponDetails ? (
+                          <p className="mt-1.5 flex items-center justify-between text-xs text-zinc-400">
+                            <span>{couponDetails.code} · {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off</span>
+                            <button type="button" onClick={clearCouponCode} className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
+                          </p>
+                        ) : null}
+                      </div>
+                    </div>
+                  </Collapse>
+                </div>
+              ) : null}
+
+              {/* Shipping protection — one compact row, details on demand */}
+              {subtotal > 0 ? (
+                <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02]">
+                  <label className="flex cursor-pointer items-center gap-3 px-4 py-3.5">
+                    <input
+                      type="checkbox"
+                      checked={shippingProtectionEnabled}
+                      onChange={(e) => { haptic(); setShippingProtectionEnabled(e.target.checked); }}
+                      className="h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-[color:var(--accent-gold)]"
+                      aria-label="Add shipping protection"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-medium text-white">Shipping protection</span>
+                      <span className="block text-xs text-zinc-500">Protect against loss, theft, or damage.</span>
+                    </span>
+                    <span className="flex-shrink-0 text-sm font-medium text-zinc-300 tabular-nums">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setProtectionOpen((o) => !o)}
+                    aria-expanded={protectionOpen}
+                    className="vl-focus-ring px-4 pb-1 text-[11px] text-zinc-500 underline-offset-2 hover:text-zinc-300"
+                  >
+                    {protectionOpen ? "Hide details" : "View details"}
+                  </button>
+                  <Collapse open={protectionOpen}>
+                    <p className="px-4 pb-4 pt-1 text-xs leading-relaxed text-zinc-500">
+                      Store-backed coverage: we&apos;ll replace or refund items lost, stolen, or damaged in transit — no claim runaround.{" "}
+                      <a href="/legal/shipping" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-zinc-300">See terms</a>
+                    </p>
+                  </Collapse>
+                </div>
+              ) : null}
+
+              {/* Legal confirmations — required only for the Apple Pay express lane */}
+              {showExpressSlot ? (
+                <div
+                  ref={confirmRef}
+                  className={`rounded-2xl border bg-white/[0.02] transition-all duration-300 ${highlightConfirm && !allAcknowledged ? "border-[color:var(--accent-gold)]/60 shadow-[0_0_0_3px_rgba(242,201,76,0.18)]" : allAcknowledged ? "border-white/[0.06]" : "border-[color:var(--accent-gold)]/25"}`}
+                >
+                  <div className="flex items-center justify-between px-4 pt-3.5 pb-1">
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-zinc-500">Required to purchase</p>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums ${allAcknowledged ? "bg-emerald-400/12 text-emerald-300" : "bg-[color:var(--accent-gold)]/12 text-[color:var(--accent-gold)]"}`}>
+                      {acknowledgedCount} of {REQUIRED_CONFIRMATIONS.length}
+                    </span>
+                  </div>
+                  <div className="divide-y divide-white/[0.05]">
+                    {REQUIRED_CONFIRMATIONS.map((item) => (
+                      <div key={item.key} className="px-4 py-2.5">
+                        <label className="flex items-center gap-3">
                           <input
                             type="checkbox"
                             checked={acknowledgements[item.key]}
-                            onChange={(event) =>
-                              setAcknowledgements((current) => ({ ...current, [item.key]: event.target.checked }))
-                            }
-                            className="mt-0.5 h-4 w-4 accent-emerald-500"
+                            onChange={(event) => { haptic(); setAcknowledgements((current) => ({ ...current, [item.key]: event.target.checked })); }}
+                            className="h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-emerald-500"
                           />
-                          <span>
-                            <span className="block text-white">{item.title}</span>
-                            <span className="mt-1 block leading-relaxed text-zinc-500">{item.body}</span>
-                          </span>
+                          <span className="flex-1 text-sm text-zinc-200">{item.short}</span>
+                          <button
+                            type="button"
+                            onClick={(e) => { e.preventDefault(); toggleLegal(item.key); }}
+                            className="vl-focus-ring flex-shrink-0 text-[11px] text-zinc-500 underline-offset-2 hover:text-zinc-300"
+                          >
+                            {openLegal[item.key] ? "Hide" : "View details"}
+                          </button>
                         </label>
-                      ))}
+                        <Collapse open={Boolean(openLegal[item.key])}>
+                          <p className="pl-8 pr-1 pt-2 text-xs leading-relaxed text-zinc-500">{item.body}</p>
+                        </Collapse>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+
+              {/* Trust row */}
+              <div className="grid grid-cols-2 gap-3 rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4">
+                {[
+                  { icon: <path d="M6 10V8a6 6 0 1 1 12 0v2M5 10h14v10H5z" strokeLinejoin="round" />, label: "Secure checkout" },
+                  { icon: <><path d="M12 3 5 6v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z" strokeLinejoin="round" /><path d="m9 12 2 2 4-4" strokeLinecap="round" strokeLinejoin="round" /></>, label: "256-bit SSL" },
+                  { icon: <><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z" strokeLinejoin="round" /><circle cx="7" cy="17" r="1.6" /><circle cx="17.5" cy="17" r="1.6" /></>, label: "Ships in 1 business day" },
+                  { icon: <><path d="M9 3h6M10 3v5l-4 9a2 2 0 0 0 1.8 2.9h8.4A2 2 0 0 0 18 17l-4-9V3" strokeLinejoin="round" /></>, label: "Research use only" },
+                ].map((t) => (
+                  <div key={t.label} className="flex items-center gap-2.5">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-gold)" strokeWidth="1.4" className="h-4 w-4 flex-shrink-0 opacity-80">{t.icon}</svg>
+                    <span className="text-[11px] leading-tight text-zinc-400">{t.label}</span>
+                  </div>
+                ))}
+              </div>
+
+              {/* Order summary / total */}
+              <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-5">
+                <dl className="space-y-2.5 text-sm">
+                  <div className="flex justify-between">
+                    <dt className="text-zinc-400">Subtotal</dt>
+                    <dd className="text-zinc-200 tabular-nums">{formatCartCurrency(subtotal)}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-zinc-400">Shipping</dt>
+                    <dd className="text-zinc-200 tabular-nums">{shipping > 0 ? formatCartCurrency(shipping) : "Calculated at payment"}</dd>
+                  </div>
+                  {discountAmount > 0 ? (
+                    <div className="flex justify-between text-emerald-400">
+                      <dt>{appliedDiscountLabel ?? "Discount"}</dt>
+                      <dd className="tabular-nums">−{formatCartCurrency(discountAmount)}</dd>
                     </div>
                   ) : null}
+                  {shippingProtectionFee > 0 ? (
+                    <div className="flex justify-between">
+                      <dt className="text-zinc-400">Shipping protection</dt>
+                      <dd className="text-zinc-200 tabular-nums">+{formatCartCurrency(shippingProtectionFee)}</dd>
+                    </div>
+                  ) : null}
+                </dl>
+                {autoBestDiscountApplied ? (
+                  <p className="mt-3 text-[11px] text-emerald-300/70">✓ Your best available discount was applied automatically.</p>
+                ) : null}
+                <div className="my-4 h-px bg-white/[0.06]" />
+                <div className="flex items-end justify-between">
+                  <span className="text-xs uppercase tracking-[0.24em] text-zinc-500">Total</span>
+                  <span className="text-[2rem] font-semibold leading-none tracking-tight text-white tabular-nums">{formatCartCurrency(total)}</span>
                 </div>
+                <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
+                  Shipping &amp; sales tax are calculated from your address at payment. Free shipping over {formatCartCurrency(FREE_SHIPPING_THRESHOLD)}.
+                </p>
+              </div>
+            </div>
+          ) : null}
+        </div>
 
-                <div onClickCapture={() => { if (!allAcknowledged) setConfirmationsOpen(true); }}>
-                  <ExpressApplePayButton
-                    acknowledged={allAcknowledged}
-                    acknowledgements={acknowledgements}
-                    onUnavailable={onUnavailable}
-                  />
-                </div>
+        {/* Sticky pay bar — always in reach */}
+        {hasItems ? (
+          <div className="border-t border-white/[0.06] bg-[#0a0a0a]/95 px-5 pt-4 pb-[max(env(safe-area-inset-bottom),1rem)] backdrop-blur-2xl sm:px-6">
+            <div className="mb-3 flex items-baseline justify-between">
+              <span className="text-xs uppercase tracking-[0.24em] text-zinc-500">Total</span>
+              <span className="text-xl font-semibold text-white tabular-nums">{formatCartCurrency(total)}</span>
+            </div>
 
-                <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.22em] text-zinc-600">
-                  <span className="h-px flex-1 bg-zinc-800" />or<span className="h-px flex-1 bg-zinc-800" />
-                </div>
-              </>
-            ) : null}
-            <button
-              type="button"
-              onClick={handleContinueToCheckout}
-              className="vl-btn-primary vl-focus-ring w-full px-4 py-3 text-center text-sm"
-            >
-              Proceed to checkout
-            </button>
-            {referralCode ? (
+            <div className="space-y-3">
+              {showExpressSlot ? (
+                <>
+                  {!allAcknowledged ? (
+                    <button
+                      type="button"
+                      onClick={flagConfirmations}
+                      className="vl-focus-ring w-full text-center text-[11px] text-[color:var(--accent-gold)]/90 underline-offset-2 hover:underline"
+                    >
+                      Tick the {REQUIRED_CONFIRMATIONS.length - acknowledgedCount} required {REQUIRED_CONFIRMATIONS.length - acknowledgedCount === 1 ? "box" : "boxes"} above to pay with Apple Pay
+                    </button>
+                  ) : null}
+                  <div onClickCapture={() => { if (!allAcknowledged) flagConfirmations(); }}>
+                    <ExpressApplePayButton
+                      acknowledged={allAcknowledged}
+                      acknowledgements={acknowledgements}
+                      onUnavailable={onUnavailable}
+                    />
+                  </div>
+                  <div className="flex items-center gap-3 text-[10px] uppercase tracking-[0.28em] text-zinc-600">
+                    <span className="h-px flex-1 bg-white/[0.08]" />or<span className="h-px flex-1 bg-white/[0.08]" />
+                  </div>
+                </>
+              ) : null}
+
               <button
                 type="button"
-                onClick={() => {
-                  clearReferralCode();
-                  setReferralInput("");
-                }}
-                className="vl-btn-secondary vl-focus-ring w-full rounded-full px-4 py-2.5 text-sm"
+                onClick={handleContinueToCheckout}
+                className="vl-focus-ring flex w-full items-center justify-center rounded-full bg-white px-6 py-4 text-sm font-semibold tracking-wide text-black transition hover:bg-zinc-200 active:scale-[0.985]"
               >
-                Remove code
+                Proceed to checkout
               </button>
-            ) : null}
-            <div className="flex flex-wrap items-center justify-center gap-1.5 pt-1">
-              {["Visa", "Mastercard", "Amex", "Discover", ...(showExpressSlot ? ["Apple Pay"] : [])].map((brand) => (
-                <span key={brand} className="rounded border border-zinc-700 bg-zinc-900/60 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-zinc-500">{brand}</span>
-              ))}
+
+              {referralCode ? (
+                <button
+                  type="button"
+                  onClick={() => { clearReferralCode(); setReferralInput(""); }}
+                  className="vl-focus-ring w-full py-1 text-center text-[11px] text-zinc-500 hover:text-zinc-300"
+                >
+                  Remove code
+                </button>
+              ) : null}
             </div>
           </div>
-        </div>
         ) : null}
       </div>
     </div>
