@@ -290,7 +290,7 @@ export function ProductDetailClient({
           <div className="vl2-lab-panel mt-6 flex flex-wrap items-center gap-2 border-white/[0.06] bg-[#141414] px-5 py-3.5 text-sm text-white">
             <span aria-hidden="true">🎁</span>
             <span className="font-medium">Buy 3, Get 1 Free</span>
-            <span className="text-[color:var(--accent-gold)]">— the lowest-priced item in your cart is automatically free at checkout.</span>
+            <span className="text-[#a3a3a3]">— the lowest-priced item in your cart is automatically free at checkout.</span>
           </div>
         ) : null}
 
@@ -555,7 +555,7 @@ export function ProductDetailClient({
               {memberQuote && memberQuote.savings > 0 ? (
                 isMember ? (
                   <div className="mt-2 flex flex-wrap items-baseline gap-x-2 text-sm">
-                    <span className="font-semibold text-[color:var(--accent-gold)]">Your member price: {formatUsd(memberQuote.memberPrice)}</span>
+                    <span className="font-semibold text-white">Your member price: <span className="tabular-nums">{formatUsd(memberQuote.memberPrice)}</span></span>
                     <span className="text-[#a3a3a3]">you save {formatUsd(memberQuote.savings)} ({memberQuote.percent}%)</span>
                   </div>
                 ) : (
@@ -646,7 +646,7 @@ export function ProductDetailClient({
                       className="inline-flex h-11 w-11 items-center justify-center border border-white/[0.08] text-lg text-[#a3a3a3] transition hover:border-white/[0.16]"
                     >+</button>
                     {currentBundleRate > 0 ? (
-                      <span className="text-xs font-medium text-[color:var(--accent-gold)]">Save {Math.round(currentBundleRate * 100)}% — {formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))} total</span>
+                      <span className="text-xs font-medium text-[color:var(--accent-gold)]">Save {Math.round(currentBundleRate * 100)}% <span className="text-white tabular-nums">— {formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))} total</span></span>
                     ) : null}
                   </div>
                 ) : null}
