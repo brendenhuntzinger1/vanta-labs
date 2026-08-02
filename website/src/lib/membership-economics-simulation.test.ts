@@ -39,7 +39,7 @@ const PROCESSING_RATE = 0.08;
 const PROTECTION_ATTACH = 0;
 const CLAIM_RATE = 0.02;
 const SERVICE_FEE_RATE = 0.03;
-const FREE_SHIP_THRESHOLD = 250;
+const FREE_SHIP_THRESHOLD = 200;
 const SHIPPING_FEE = 15;
 
 interface SimTier {

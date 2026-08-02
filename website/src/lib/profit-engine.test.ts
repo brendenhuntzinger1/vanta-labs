@@ -315,7 +315,7 @@ describe("simulation: no finalized order ever falls below the profit floor", () 
                         allowCouponStacking,
                         commissionPercent,
                         processingFeePercent: settings.processingFeePercent,
-                        shippingCollected: subtotal >= 250 ? 0 : 15,
+                        shippingCollected: subtotal >= 200 ? 0 : 15,
                         shippingCost: 8,
                         handlingCollected: 0,
                         taxPercent: 7,
