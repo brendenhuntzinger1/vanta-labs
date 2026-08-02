@@ -13,6 +13,7 @@ import { pointsToDollars } from "@/lib/points-math";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ManualPaymentInstructions } from "@/components/manual-payment-instructions";
 import { PaymentMethodPicker } from "@/components/payment-method-picker";
+import { TextField, SelectField, Collapse, CheckoutSection } from "@/components/checkout-fields";
 import {
   calculateCardProcessingFee,
   getEnabledPaymentMethods,
@@ -32,6 +33,13 @@ async function createSecureCheckoutSession(payload: unknown) {
     throw new Error(data.error ?? "Unable to create checkout session");
   }
   return data;
+}
+
+// A gentle tap on supported devices. No-op where Vibration isn't available.
+function haptic(ms = 8) {
+  if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+    try { navigator.vibrate(ms); } catch { /* ignore */ }
+  }
 }
 
 type CheckoutForm = {
@@ -63,6 +71,29 @@ const US_STATE_OPTIONS = [
   "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ", "NM", "NY",
   "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT", "VA", "WA", "WV",
   "WI", "WY", "DC", "PR",
+];
+
+// Verbatim, legally load-bearing copy. `short` is a display label for the
+// compact row; the full `body` stays one tap away behind "View details".
+const REQUIRED_CONFIRMATIONS = [
+  {
+    key: "researchResponsibility" as const,
+    short: "Research responsibility",
+    title: "Research Responsibility Statement *",
+    body: "The purchaser assumes full responsibility for the proper handling, storage, and use of these laboratory materials. The seller provides products solely as research reference materials and does not provide medical or dosing guidance.",
+  },
+  {
+    key: "researchCompliance" as const,
+    short: "Research & compliance agreement",
+    title: "Research & Compliance Agreement *",
+    body: "I acknowledge that the products sold on this website are intended strictly for laboratory research purposes. I confirm that I am purchasing these materials for legitimate research use and not for human or veterinary use. I understand these products are not drugs, dietary supplements, or medical products, and no instructions for preparation, dosage, or administration are provided by the seller.",
+  },
+  {
+    key: "ageLegalConfirmation" as const,
+    short: "I am 21+ and legally permitted",
+    title: "Age & Legal Confirmation *",
+    body: "I confirm that I am 21 years of age or older and legally permitted to purchase laboratory research materials.",
+  },
 ];
 
 function isUnitedStates(country: string) {
@@ -126,18 +157,64 @@ function validateCheckoutForm(form: CheckoutForm, sameAsShipping: boolean) {
   return errors;
 }
 
-function StepPill({
-  index,
-  label,
-  active,
-}: {
-  index: number;
-  label: string;
-  active?: boolean;
-}) {
+// Honest progress for a SINGLE-PAGE checkout: two real steps (enter details →
+// pay), not four page-like stages the shopper never actually navigates.
+function CheckoutProgress({ onPayment }: { onPayment: boolean }) {
+  const steps = ["Your details", "Payment"];
+  const current = onPayment ? 1 : 0;
   return (
-    <div className={`border px-3 py-1.5 text-xs uppercase tracking-[0.16em] ${active ? "border-white bg-white/10 text-white" : "border-white/15 text-white/70"}`}>
-      {index}. {label}
+    <div className="flex items-center gap-3" aria-label={`Step ${current + 1} of 2: ${steps[current]}`}>
+      {steps.map((label, index) => {
+        const done = index < current;
+        const active = index === current;
+        return (
+          <div key={label} className="flex flex-1 items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span
+                className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full border transition-all duration-300 ${
+                  done
+                    ? "border-[color:var(--accent-gold)]/50 bg-[color:var(--accent-gold)]/15"
+                    : active
+                      ? "border-[color:var(--accent-gold)]/60 bg-[color:var(--accent-gold)]/10"
+                      : "border-white/15"
+                }`}
+              >
+                {done ? (
+                  <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-gold)" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="h-2.5 w-2.5" aria-hidden><path d="M20 6 9 17l-5-5" /></svg>
+                ) : (
+                  <span className={`h-1.5 w-1.5 rounded-full transition-colors duration-300 ${active ? "bg-[color:var(--accent-gold)]" : "bg-white/25"}`} />
+                )}
+              </span>
+              <span className={`whitespace-nowrap text-xs transition-colors duration-300 ${active || done ? "text-white/85" : "text-white/35"}`}>{label}</span>
+            </div>
+            {index === 0 ? (
+              <span className="h-px flex-1 overflow-hidden bg-white/10">
+                <span className={`block h-full origin-left bg-[color:var(--accent-gold)]/50 transition-transform duration-500 ease-out ${current >= 1 ? "scale-x-100" : "scale-x-0"}`} />
+              </span>
+            ) : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const TRUST_POINTS = [
+  { label: "256-bit SSL encrypted", icon: <><path d="M6 10V8a6 6 0 1 1 12 0v2M5 10h14v10H5z" strokeLinejoin="round" /></> },
+  { label: "Secure payment processing", icon: <><path d="M12 3 5 6v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z" strokeLinejoin="round" /><path d="m9 12 2 2 4-4" strokeLinecap="round" strokeLinejoin="round" /></> },
+  { label: "Full batch traceability", icon: <><path d="M9 3h6M10 3v5l-4 9a2 2 0 0 0 1.8 2.9h8.4A2 2 0 0 0 18 17l-4-9V3" strokeLinejoin="round" /></> },
+  { label: "Ships within 1 business day", icon: <><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z" strokeLinejoin="round" /><circle cx="7" cy="17" r="1.6" /><circle cx="17.5" cy="17" r="1.6" /></> },
+];
+
+function TrustRow({ className = "" }: { className?: string }) {
+  return (
+    <div className={`grid grid-cols-2 gap-x-4 gap-y-3 ${className}`}>
+      {TRUST_POINTS.map((point) => (
+        <div key={point.label} className="flex items-center gap-2.5">
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-gold)" strokeWidth="1.4" className="h-4 w-4 flex-shrink-0 opacity-70" aria-hidden>{point.icon}</svg>
+          <span className="text-[11px] leading-tight text-white/45">{point.label}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -217,6 +294,12 @@ export default function CheckoutPage() {
   // follows the destination country until the shopper manually toggles it.
   const [marketingOptIn, setMarketingOptIn] = useState(true);
   const [marketingTouched, setMarketingTouched] = useState(false);
+  // Progressive disclosure: savings tools and legal detail stay out of the way
+  // until asked for, so the default path to payment is as short as possible.
+  const [savingsOpen, setSavingsOpen] = useState(false);
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [protectionOpen, setProtectionOpen] = useState(false);
+  const [openLegal, setOpenLegal] = useState<Record<string, boolean>>({});
   const [form, setForm] = useState<CheckoutForm>({
     fullName: "",
     email: "",
@@ -298,6 +381,7 @@ export default function CheckoutPage() {
     return calculateCardProcessingFee(total, cardFeeConfig);
   }, [cardFeeConfig, selectedMethod, total]);
   const finalTotal = Math.max(0, total + cardFee.amount);
+  const totalSaved = discountAmount + storeCreditApplied + pointsRedeemedDiscount;
 
   // Load the configured payment methods + card fee, and default to the first
   // recommended (no-fee) method.
@@ -341,6 +425,7 @@ export default function CheckoutPage() {
   // Lets a failed validation scroll the shopper back up to the form fields
   // (with their inline errors) instead of leaving them at the submit button.
   const shippingSectionRef = useRef<HTMLElement | null>(null);
+  const confirmationsRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (typeof window === "undefined" || beganCheckoutRef.current || items.length === 0) {
       return;
@@ -372,6 +457,12 @@ export default function CheckoutPage() {
       setMarketingOptIn(!isCanada(form.country));
     }
   }, [form.country, marketingTouched]);
+
+  // Reveal the savings panel when a code is already applied, so an applied code
+  // is never hidden behind a collapsed row.
+  useEffect(() => {
+    if (referralCode || couponCode) setSavingsOpen(true);
+  }, [referralCode, couponCode]);
 
   useEffect(() => {
     (async () => {
@@ -413,8 +504,12 @@ export default function CheckoutPage() {
   };
 
   const handleAcknowledgementChange = (key: keyof ComplianceAcknowledgements, checked: boolean) => {
+    haptic();
     setAcknowledgements((prev) => ({ ...prev, [key]: checked }));
   };
+
+  const allAcknowledged = Object.values(acknowledgements).every(Boolean);
+  const acknowledgedCount = Object.values(acknowledgements).filter(Boolean).length;
 
   const handleCheckout = async () => {
     if (items.length === 0) {
@@ -424,6 +519,7 @@ export default function CheckoutPage() {
 
     const errors = validateCheckoutForm(form, sameAsShipping);
     if (Object.keys(errors).length > 0) {
+      haptic(18);
       setFormErrors(errors);
       setCheckoutMessage("Please complete all required fields before placing your order.");
       // Bring the shopper back to the fields (and their inline errors); on a
@@ -433,7 +529,9 @@ export default function CheckoutPage() {
     }
 
     if (Object.values(acknowledgements).some((value) => !value)) {
+      haptic(18);
       setCheckoutMessage("Please confirm all required research and legal acknowledgements before placing the order.");
+      confirmationsRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
       return;
     }
 
@@ -445,6 +543,7 @@ export default function CheckoutPage() {
         : `idem-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
     }
 
+    haptic(12);
     setCheckoutState("loading");
     setCheckoutMessage(null);
     setIsSubmitting(true);
@@ -536,25 +635,19 @@ export default function CheckoutPage() {
 
   if (createdOrder) {
     return (
-      <div className="min-h-screen bg-[#0b0b0b] text-white">
+      <div className="min-h-screen bg-[#0a0a0a] text-white">
         <SiteHeaderV2 />
-        <main className="mx-auto max-w-3xl px-6 pb-20 pt-24 sm:pt-32 lg:px-12">
-          <section className="border border-white/10 p-5 sm:p-8">
-            <div className="flex flex-wrap items-center gap-2">
-              <StepPill index={1} label="Cart" active />
-              <StepPill index={2} label="Shipping" active />
-              <StepPill index={3} label="Payment" active />
-              <StepPill index={4} label="Confirmation" />
-            </div>
-            <p className="vl2-eyebrow mt-5">Almost there</p>
-            <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Send your {createdOrder.method.label} payment</h1>
-            <p className="mt-3 text-sm leading-7 text-white/60">
-              Your order is reserved. Send the exact amount, then submit your payment details below so we can verify and
-              ship it.
+        <main className="mx-auto max-w-3xl px-5 pb-24 pt-20 sm:px-6 sm:pt-24 lg:px-12">
+          <div className="rounded-2xl border border-white/[0.06] bg-white/[0.015] p-5 sm:p-7">
+            <CheckoutProgress onPayment />
+            <p className="mt-6 text-[10px] uppercase tracking-[0.34em] text-white/35">Almost there</p>
+            <h1 className="vl2-serif mt-2.5 text-[1.85rem] leading-tight text-white sm:text-4xl">Send your {createdOrder.method.label} payment</h1>
+            <p className="mt-3 text-sm leading-relaxed text-white/50">
+              Your order is reserved. Send the exact amount, then submit your payment details below so we can verify and ship it.
             </p>
-          </section>
+          </div>
 
-          <div className="mt-7">
+          <div className="mt-6">
             <ManualPaymentInstructions
               method={createdOrder.method}
               orderId={createdOrder.orderId}
@@ -564,7 +657,7 @@ export default function CheckoutPage() {
             />
           </div>
 
-          <Link href="/products" className="mt-8 inline-flex text-sm text-white/45 transition hover:text-white">
+          <Link href="/products" className="mt-8 inline-flex text-sm text-white/40 transition hover:text-white">
             Continue shopping
           </Link>
         </main>
@@ -572,503 +665,600 @@ export default function CheckoutPage() {
     );
   }
 
+  const ctaDisabled = isSubmitting || items.length === 0 || !checkoutOpen;
+  const ctaLabel = !checkoutOpen
+    ? "Checkout opening soon"
+    : checkoutState === "loading"
+      ? "Creating secure checkout…"
+      : selectedMethod && selectedMethod.kind === "manual"
+        ? `Continue to ${selectedMethod.label}`
+        : "Continue to secure payment";
+
+  // The money rows, rendered identically in the mobile summary and the desktop
+  // rail so the two can never drift apart.
+  const summaryLines = (
+    <div className="space-y-2.5 text-sm">
+      <div className="flex justify-between"><span className="text-white/45">Items</span><span className="text-white/70 tabular-nums">{orderCount}</span></div>
+      <div className="flex justify-between"><span className="text-white/45">Subtotal</span><span className="text-white/80 tabular-nums">{formatCartCurrency(subtotal)}</span></div>
+      <div className="flex justify-between">
+        <span className="text-white/45">Shipping</span>
+        <span className="text-white/80 tabular-nums">{shipping === 0 && memberFreeShipping ? "Free (member)" : shipping === 0 ? "Free" : formatCartCurrency(shipping)}</span>
+      </div>
+      {shippingProtectionFee > 0 ? (
+        <div className="flex justify-between"><span className="text-white/45">Shipping protection</span><span className="text-white/80 tabular-nums">+{formatCartCurrency(shippingProtectionFee)}</span></div>
+      ) : null}
+      {taxAmount > 0 ? (
+        <div className="flex justify-between">
+          <span className="text-white/45">Sales tax{taxQuote.state ? ` · ${taxQuote.state} ${taxQuote.ratePercent}%` : ""}</span>
+          <span className="text-white/80 tabular-nums">{formatCartCurrency(taxAmount)}</span>
+        </div>
+      ) : taxQuote.reason === "no_state" && isDomesticCountry(form.country) && salesTaxConfig.nexusStates.length > 0 ? (
+        <div className="flex justify-between"><span className="text-white/45">Sales tax</span><span className="text-white/30">Enter address</span></div>
+      ) : null}
+      {discountAmount > 0 ? (
+        <div className="flex justify-between text-emerald-300"><span>{ambassadorDiscountApplied ? `Ambassador ${ambassadorDiscountPercent}% off` : (appliedDiscountLabel ?? "Discount")}</span><span className="tabular-nums">−{formatCartCurrency(discountAmount)}</span></div>
+      ) : null}
+      {storeCreditApplied > 0 ? (
+        <div className="flex justify-between text-emerald-300"><span>Member store credit</span><span className="tabular-nums">−{formatCartCurrency(storeCreditApplied)}</span></div>
+      ) : null}
+      {pointsRedeemedDiscount > 0 ? (
+        <div className="flex justify-between text-emerald-300"><span>Points redeemed</span><span className="tabular-nums">−{formatCartCurrency(pointsRedeemedDiscount)}</span></div>
+      ) : null}
+      {cardFee.amount > 0 ? (
+        <div className="flex justify-between"><span className="text-white/45">{cardFeeConfig?.label ?? "Card processing fee"} ({cardFee.percentage}%)</span><span className="text-white/80 tabular-nums">+{formatCartCurrency(cardFee.amount)}</span></div>
+      ) : null}
+      {autoBestDiscountApplied ? (
+        <p className="pt-1 text-[11px] text-emerald-300/70">✓ Your best available discount was applied automatically.</p>
+      ) : null}
+    </div>
+  );
+
+  const productLines = items.map((item) => (
+    <div key={item.key} className="flex items-start gap-3">
+      <div className="relative h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg border border-white/[0.06] bg-black/40">
+        {item.image ? <Image src={item.image} alt={item.name} fill sizes="56px" className="object-cover" /> : <div className="flex h-full w-full items-center justify-center text-[10px] text-white/30">No image</div>}
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm text-white">{item.name}</p>
+        {item.doseLabel ? <p className="mt-0.5 text-xs text-white/40">{item.doseLabel}</p> : null}
+        <div className="mt-1.5 flex items-center gap-2.5">
+          <div className="flex items-center rounded-full border border-white/[0.08] bg-black/30 text-xs text-white/80">
+            <button type="button" onClick={() => { haptic(); updateQuantity(item.key, item.quantity - 1); }} className="vl-focus-ring inline-flex h-8 w-8 items-center justify-center rounded-l-full transition hover:text-white active:scale-90" aria-label={`Decrease ${item.name} quantity`}>−</button>
+            <span className="min-w-6 text-center font-semibold tabular-nums">{item.quantity}</span>
+            <button type="button" onClick={() => { haptic(); updateQuantity(item.key, item.quantity + 1); }} className="vl-focus-ring inline-flex h-8 w-8 items-center justify-center rounded-r-full transition hover:text-white active:scale-90" aria-label={`Increase ${item.name} quantity`}>+</button>
+          </div>
+          <button type="button" onClick={() => { haptic(12); removeFromCart(item.key); }} className="vl-focus-ring rounded px-1 py-1 text-xs text-white/35 transition hover:text-rose-300" aria-label={`Remove ${item.name} from cart`}>Remove</button>
+        </div>
+      </div>
+      <p className="text-sm text-white/75 tabular-nums">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
+    </div>
+  ));
+
   return (
-    <div className="min-h-screen bg-[#0b0b0b] text-white">
+    <div className="min-h-screen bg-[#0a0a0a] text-white">
       <SiteHeaderV2 />
 
-      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-24 sm:pt-32 lg:px-12">
-        <section className="border border-white/10 p-5 sm:p-8">
-          <p className="vl2-eyebrow">Secure Checkout</p>
-          <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Complete your order</h1>
-          <p className="mt-3 max-w-3xl text-sm leading-7 text-white/60 sm:text-base">
-            Transparent totals, encrypted payment processing, and full batch traceability from cart to confirmation.
+      {/* pb allows for the sticky mobile CTA bar so nothing is ever covered. */}
+      <main className="mx-auto max-w-[1200px] px-5 pb-44 pt-20 sm:px-6 sm:pt-24 lg:px-10 lg:pb-24">
+        {/* Compact hero — ~40% shorter than before, so the form starts almost
+            immediately on a phone. */}
+        <header className="pb-6">
+          <p className="text-[10px] uppercase tracking-[0.34em] text-white/35">Secure checkout</p>
+          <h1 className="vl2-serif mt-2 text-[1.85rem] leading-[1.1] text-white sm:text-[2.5rem]">Complete your order</h1>
+          <p className="mt-2 max-w-xl text-sm leading-relaxed text-white/45">
+            Transparent totals, encrypted payment, and full batch traceability.
           </p>
-
-          <div className="mt-5 flex flex-wrap gap-2">
-            <StepPill index={1} label="Cart" active />
-            <StepPill index={2} label="Shipping" active />
-            <StepPill index={3} label="Payment" active={checkoutState === "loading" || checkoutState === "success"} />
-            <StepPill index={4} label="Confirmation" active={checkoutState === "success"} />
+          <div className="mt-5 max-w-md">
+            <CheckoutProgress onPayment={checkoutState === "loading" || checkoutState === "success"} />
           </div>
-        </section>
+        </header>
 
-        <div className="mt-7 grid gap-7 lg:grid-cols-[1.05fr_0.95fr]">
-          <section ref={shippingSectionRef} className="border border-white/10 p-5 sm:p-7">
-            <div>
-              <p className="vl2-eyebrow">Shipping Information</p>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <label className="text-sm text-white/60 sm:col-span-2">
-                  <span className="mb-2 block">Full name</span>
-                  <input value={form.fullName} onChange={(e) => handleFieldChange("fullName", e.target.value)} autoComplete="shipping name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50" placeholder="Alex Morgan" />
-                  {formErrors.fullName ? <span className="mt-1 block text-xs text-rose-300">{formErrors.fullName}</span> : null}
-                </label>
-
-                <label className="text-sm text-white/60">
-                  <span className="mb-2 block">Email</span>
-                  <input type="email" value={form.email} onChange={(e) => handleFieldChange("email", e.target.value)} readOnly={emailLockedToAccount} aria-readonly={emailLockedToAccount} autoComplete="email" className={emailLockedToAccount ? "w-full cursor-not-allowed border border-white/15 bg-black/60 px-4 py-3 text-white/70 outline-none" : "w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50"} placeholder="alex@domain.com" title={emailLockedToAccount ? "Your order uses your account email" : "Where we'll send your order confirmation"} />
-                  {formErrors.email ? <span className="mt-1 block text-xs text-rose-300">{formErrors.email}</span> : null}
-                </label>
-
-                <label className="text-sm text-white/60">
-                  <span className="mb-2 block">Phone</span>
-                  <input type="tel" value={form.phone} onChange={(e) => handleFieldChange("phone", e.target.value)} autoComplete="tel" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50" placeholder="(555) 123-4567" title="Carriers require a phone number for delivery" />
-                  {formErrors.phone ? <span className="mt-1 block text-xs text-rose-300">{formErrors.phone}</span> : null}
-                </label>
-
-                <label className="text-sm text-white/60">
-                  <span className="mb-2 block">Country</span>
-                  <select value={form.country} onChange={(e) => handleFieldChange("country", e.target.value)} autoComplete="shipping country-name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white outline-none transition focus:border-white/50">
-                    {COUNTRY_OPTIONS.map((c) => (
-                      <option key={c} value={c} className="bg-black text-white">{c}</option>
-                    ))}
-                  </select>
-                  {formErrors.country ? <span className="mt-1 block text-xs text-rose-300">{formErrors.country}</span> : null}
-                </label>
-
-                <label className="text-sm text-white/60 sm:col-span-2">
-                  <span className="mb-2 block">Address</span>
-                  <input value={form.address} onChange={(e) => handleFieldChange("address", e.target.value)} autoComplete="shipping street-address" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50" placeholder="88 Meridian Avenue" />
-                  {formErrors.address ? <span className="mt-1 block text-xs text-rose-300">{formErrors.address}</span> : null}
-                </label>
-
-                <label className="text-sm text-white/60">
-                  <span className="mb-2 block">City</span>
-                  <input value={form.city} onChange={(e) => handleFieldChange("city", e.target.value)} autoComplete="shipping address-level2" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50" placeholder="Austin" />
-                  {formErrors.city ? <span className="mt-1 block text-xs text-rose-300">{formErrors.city}</span> : null}
-                </label>
-
-                <label className="text-sm text-white/60">
-                  <span className="mb-2 block">{isUnitedStates(form.country) ? "State" : "State / Province"}</span>
-                  {isUnitedStates(form.country) ? (
-                    <select value={form.state} onChange={(e) => handleFieldChange("state", e.target.value)} autoComplete="shipping address-level1" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white outline-none transition focus:border-white/50">
-                      <option value="" className="bg-black text-white/50">Select…</option>
-                      {US_STATE_OPTIONS.map((s) => (
-                        <option key={s} value={s} className="bg-black text-white">{s}</option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input value={form.state} onChange={(e) => handleFieldChange("state", e.target.value)} autoComplete="shipping address-level1" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50" placeholder="Region / Province" />
-                  )}
-                  {formErrors.state ? <span className="mt-1 block text-xs text-rose-300">{formErrors.state}</span> : null}
-                </label>
-
-                <label className="text-sm text-white/60">
-                  <span className="mb-2 block">Postal code</span>
-                  <input value={form.postalCode} onChange={(e) => handleFieldChange("postalCode", e.target.value)} autoComplete="shipping postal-code" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50" placeholder="78701" />
-                  {formErrors.postalCode ? <span className="mt-1 block text-xs text-rose-300">{formErrors.postalCode}</span> : null}
-                </label>
+        {/* Mobile order summary — collapsed, at the TOP. Previously the summary
+            sat below the entire form on mobile, so a shopper couldn't see what
+            they were paying without scrolling past every field. */}
+        {isHydrated && items.length > 0 ? (
+          <div className="mb-6 rounded-2xl border border-white/[0.06] bg-white/[0.02] lg:hidden">
+            <button
+              type="button"
+              onClick={() => setSummaryOpen((open) => !open)}
+              aria-expanded={summaryOpen}
+              className="vl-focus-ring flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left"
+            >
+              <span className="flex items-center gap-2 text-sm text-white/70">
+                Order summary
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 text-white/35 transition-transform duration-300 ${summaryOpen ? "rotate-180" : ""}`} aria-hidden><path d="m6 9 6 6 6-6" /></svg>
+              </span>
+              <span className="text-base font-semibold text-white tabular-nums">{formatCartCurrency(finalTotal)}</span>
+            </button>
+            <Collapse open={summaryOpen}>
+              <div className="space-y-4 border-t border-white/[0.06] px-4 py-4">
+                <div className="space-y-4">{productLines}</div>
+                <div className="border-t border-white/[0.06] pt-4">{summaryLines}</div>
               </div>
-            </div>
+            </Collapse>
+          </div>
+        ) : null}
 
-            <div className="mt-8">
-              <p className="vl2-eyebrow">Billing Information</p>
-              <label className="mt-3 flex items-center gap-2 text-sm text-white/60">
-                <input type="checkbox" checked={sameAsShipping} onChange={(e) => setSameAsShipping(e.target.checked)} className="h-4 w-4 border-white/25 bg-black/40" />
+        <div className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr] lg:gap-8">
+          {/* ---------------- Left column: the form ---------------- */}
+          <div className="space-y-5">
+            <CheckoutSection innerRef={shippingSectionRef} step="01" title="Contact" subtitle="Where we send your receipt and tracking.">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TextField
+                  label="Email"
+                  value={form.email}
+                  onChange={(v) => handleFieldChange("email", v)}
+                  error={formErrors.email}
+                  type="email"
+                  inputMode="email"
+                  autoComplete="email"
+                  autoCapitalize="none"
+                  readOnly={emailLockedToAccount}
+                />
+                <TextField
+                  label="Phone"
+                  value={form.phone}
+                  onChange={(v) => handleFieldChange("phone", v)}
+                  error={formErrors.phone}
+                  type="tel"
+                  inputMode="tel"
+                  autoComplete="tel"
+                />
+              </div>
+              {emailLockedToAccount ? (
+                <p className="mt-2 pl-1 text-[11px] text-white/35">Using your account email.</p>
+              ) : null}
+            </CheckoutSection>
+
+            <CheckoutSection step="02" title="Shipping address" subtitle="United States and Canada.">
+              <div className="grid gap-4 sm:grid-cols-2">
+                <TextField
+                  label="Full name"
+                  value={form.fullName}
+                  onChange={(v) => handleFieldChange("fullName", v)}
+                  error={formErrors.fullName}
+                  autoComplete="shipping name"
+                  className="sm:col-span-2"
+                />
+                <SelectField
+                  label="Country"
+                  value={form.country}
+                  onChange={(v) => handleFieldChange("country", v)}
+                  error={formErrors.country}
+                  autoComplete="shipping country-name"
+                  className="sm:col-span-2"
+                >
+                  {COUNTRY_OPTIONS.map((c) => (
+                    <option key={c} value={c} className="bg-[#0a0a0a] text-white">{c}</option>
+                  ))}
+                </SelectField>
+                <TextField
+                  label="Address"
+                  value={form.address}
+                  onChange={(v) => handleFieldChange("address", v)}
+                  error={formErrors.address}
+                  autoComplete="shipping street-address"
+                  className="sm:col-span-2"
+                />
+                <TextField
+                  label="City"
+                  value={form.city}
+                  onChange={(v) => handleFieldChange("city", v)}
+                  error={formErrors.city}
+                  autoComplete="shipping address-level2"
+                />
+                {isUnitedStates(form.country) ? (
+                  <SelectField
+                    label="State"
+                    value={form.state}
+                    onChange={(v) => handleFieldChange("state", v)}
+                    error={formErrors.state}
+                    autoComplete="shipping address-level1"
+                  >
+                    <option value="" className="bg-[#0a0a0a] text-white/50">Select…</option>
+                    {US_STATE_OPTIONS.map((s) => (
+                      <option key={s} value={s} className="bg-[#0a0a0a] text-white">{s}</option>
+                    ))}
+                  </SelectField>
+                ) : (
+                  <TextField
+                    label="Province / region"
+                    value={form.state}
+                    onChange={(v) => handleFieldChange("state", v)}
+                    error={formErrors.state}
+                    autoComplete="shipping address-level1"
+                  />
+                )}
+                <TextField
+                  label={isUnitedStates(form.country) ? "ZIP code" : "Postal code"}
+                  value={form.postalCode}
+                  onChange={(v) => handleFieldChange("postalCode", v)}
+                  error={formErrors.postalCode}
+                  // A numeric keypad for US ZIPs; Canadian codes are alphanumeric
+                  // so they keep the full keyboard.
+                  inputMode={isUnitedStates(form.country) ? "numeric" : "text"}
+                  autoComplete="shipping postal-code"
+                  autoCapitalize="characters"
+                  className="sm:col-span-2"
+                />
+              </div>
+
+              <p className="mt-4 flex items-center gap-2 text-[11px] text-white/35">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="h-3.5 w-3.5 flex-shrink-0" aria-hidden><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z" strokeLinejoin="round" /><circle cx="7" cy="17" r="1.5" /><circle cx="17.5" cy="17" r="1.5" /></svg>
+                {isDomesticCountry(form.country)
+                  ? `Standard secure shipping — free at ${formatCartCurrency(shippingConfig.freeShippingThreshold)}+, otherwise ${formatCartCurrency(shippingConfig.domesticFee)}.`
+                  : `Secure Canada shipping — free at ${formatCartCurrency(shippingConfig.northAmericaFreeShippingThreshold)}+, otherwise ${formatCartCurrency(shippingConfig.northAmericaFee)}.`}
+              </p>
+
+              {/* Shipping protection lives HERE, next to shipping, and must stay
+                  rendered wherever its fee is charged: the fee is added to the
+                  order total, so removing the control would bill a shopper for
+                  something they can't decline. */}
+              {subtotal > 0 ? (
+                <div className="mt-4 rounded-xl border border-white/[0.06] bg-white/[0.02]">
+                  <label className="flex cursor-pointer items-center gap-3 px-4 py-3.5">
+                    <input
+                      type="checkbox"
+                      checked={shippingProtectionEnabled}
+                      onChange={(e) => { haptic(); setShippingProtectionEnabled(e.target.checked); }}
+                      className="h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-[color:var(--accent-gold)]"
+                      aria-label="Add shipping protection"
+                    />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-medium text-white">Shipping protection</span>
+                      <span className="block text-xs text-white/40">Protect against loss, theft, or damage.</span>
+                    </span>
+                    <span className="flex-shrink-0 text-sm text-white/70 tabular-nums">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setProtectionOpen((o) => !o)}
+                    aria-expanded={protectionOpen}
+                    className="vl-focus-ring px-4 pb-1 text-[11px] text-white/35 underline-offset-2 hover:text-white/60"
+                  >
+                    {protectionOpen ? "Hide details" : "View details"}
+                  </button>
+                  <Collapse open={protectionOpen}>
+                    <p className="px-4 pb-4 pt-1 text-xs leading-relaxed text-white/40">
+                      Store-backed coverage: we&apos;ll replace or refund items lost, stolen, or damaged in transit.{" "}
+                      <a href="/legal/shipping" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white/70">See terms</a>
+                    </p>
+                  </Collapse>
+                </div>
+              ) : null}
+            </CheckoutSection>
+
+            <CheckoutSection step="03" title="Billing" subtitle="Must match your payment method.">
+              <label className="flex cursor-pointer items-center gap-3 text-sm text-white/70">
+                <input
+                  type="checkbox"
+                  checked={sameAsShipping}
+                  onChange={(e) => { haptic(); setSameAsShipping(e.target.checked); }}
+                  className="h-[1.15rem] w-[1.15rem] accent-[color:var(--accent-gold)]"
+                />
                 Same as shipping address
               </label>
 
-              {!sameAsShipping ? (
-                <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                  <label className="text-sm text-white/60 sm:col-span-2">
-                    <span className="mb-2 block">Billing full name</span>
-                    <input value={form.billingFullName} onChange={(e) => handleFieldChange("billingFullName", e.target.value)} autoComplete="billing name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50" />
-                    {formErrors.billingFullName ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingFullName}</span> : null}
-                  </label>
-                  <label className="text-sm text-white/60 sm:col-span-2">
-                    <span className="mb-2 block">Billing address</span>
-                    <input value={form.billingAddress} onChange={(e) => handleFieldChange("billingAddress", e.target.value)} autoComplete="billing street-address" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50" />
-                    {formErrors.billingAddress ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingAddress}</span> : null}
-                  </label>
-                  <label className="text-sm text-white/60">
-                    <span className="mb-2 block">Billing city</span>
-                    <input value={form.billingCity} onChange={(e) => handleFieldChange("billingCity", e.target.value)} autoComplete="billing address-level2" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50" />
-                    {formErrors.billingCity ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingCity}</span> : null}
-                  </label>
-                  <label className="text-sm text-white/60">
-                    <span className="mb-2 block">Billing postal code</span>
-                    <input value={form.billingPostalCode} onChange={(e) => handleFieldChange("billingPostalCode", e.target.value)} autoComplete="billing postal-code" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50" />
-                    {formErrors.billingPostalCode ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingPostalCode}</span> : null}
-                  </label>
-                  <label className="text-sm text-white/60 sm:col-span-2">
-                    <span className="mb-2 block">Billing country</span>
-                    <input value={form.billingCountry} onChange={(e) => handleFieldChange("billingCountry", e.target.value)} autoComplete="billing country-name" className="w-full border border-white/15 bg-black/40 px-4 py-3 text-white placeholder:text-white/60 outline-none transition focus:border-white/50" />
-                    {formErrors.billingCountry ? <span className="mt-1 block text-xs text-rose-300">{formErrors.billingCountry}</span> : null}
-                  </label>
+              <Collapse open={!sameAsShipping}>
+                <div className="grid gap-4 pt-4 sm:grid-cols-2">
+                  <TextField label="Billing full name" value={form.billingFullName} onChange={(v) => handleFieldChange("billingFullName", v)} error={formErrors.billingFullName} autoComplete="billing name" className="sm:col-span-2" />
+                  <TextField label="Billing address" value={form.billingAddress} onChange={(v) => handleFieldChange("billingAddress", v)} error={formErrors.billingAddress} autoComplete="billing street-address" className="sm:col-span-2" />
+                  <TextField label="Billing city" value={form.billingCity} onChange={(v) => handleFieldChange("billingCity", v)} error={formErrors.billingCity} autoComplete="billing address-level2" />
+                  <TextField label="Billing postal code" value={form.billingPostalCode} onChange={(v) => handleFieldChange("billingPostalCode", v)} error={formErrors.billingPostalCode} autoComplete="billing postal-code" autoCapitalize="characters" />
+                  <TextField label="Billing country" value={form.billingCountry} onChange={(v) => handleFieldChange("billingCountry", v)} error={formErrors.billingCountry} autoComplete="billing country-name" className="sm:col-span-2" />
                 </div>
-              ) : null}
-            </div>
+              </Collapse>
+            </CheckoutSection>
 
-            <div className="mt-8 grid gap-4 sm:grid-cols-2">
-              <div className="border border-white/10 p-4">
-                <p className="vl2-eyebrow">Shipping Method</p>
-                <p className="mt-2 text-sm text-white">
-                  {isDomesticCountry(form.country) ? "Standard secure shipping" : "Secure Canada shipping"}
-                </p>
-                <p className="mt-1 text-xs text-white/45">
-                  {isDomesticCountry(form.country)
-                    ? `Free at ${formatCartCurrency(shippingConfig.freeShippingThreshold)}+, otherwise flat ${formatCartCurrency(shippingConfig.domesticFee)} in the USA.`
-                    : `Free at ${formatCartCurrency(shippingConfig.northAmericaFreeShippingThreshold)}+, otherwise flat ${formatCartCurrency(shippingConfig.northAmericaFee)} to Canada.`}
-                </p>
-              </div>
-              <div className="border border-white/10 p-4">
-                <p className="vl2-eyebrow">Security</p>
-                <p className="mt-2 text-sm text-white">Encrypted checkout session</p>
-                <p className="mt-1 text-xs text-white/45">Payment credentials are handled by secure provider flow.</p>
-              </div>
-            </div>
-
-            <div className="mt-8">
-              <p className="vl2-eyebrow">Promo / Referral</p>
-              {isBuy3Get1FreeActive ? (
-                <p className="mt-3 border border-white/20 px-3 py-2 text-sm text-white/75">
-                  Buy 3 Get 1 Free is active. Referral discounts cannot be combined with this promotion.
-                </p>
-              ) : (
-                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                  <input type="text" value={effectiveReferralInput} onChange={(event) => setReferralInput(event.target.value)} aria-label="Referral code" placeholder="VANTA10" className="w-full flex-1 border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/60 outline-none transition focus:border-white/50" />
-                  <button type="button" onClick={() => applyReferralCode(effectiveReferralInput)} disabled={isApplyingReferral} className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm disabled:opacity-60">{isApplyingReferral ? "Applying…" : "Apply"}</button>
-                </div>
-              )}
-
-              {referralSuccess ? <p className="mt-2 text-sm text-emerald-300">{referralSuccess}</p> : null}
-              {referralError ? <p className="mt-2 text-sm text-rose-300">{referralError}</p> : null}
-              {referralDetails ? <p className="mt-2 text-sm text-white/60">Ambassador {referralDetails.ambassadorName} • {referralDetails.customerDiscountPercent}% discount</p> : null}
-              {referralCode && !isBuy3Get1FreeActive ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    clearReferralCode();
-                    setReferralInput("");
-                  }}
-                  className="mt-2 text-sm text-white/45 transition hover:text-white"
-                >
-                  Remove code
-                </button>
-              ) : null}
-            </div>
-
-            <div className="mt-8">
-              <p className="vl2-eyebrow">Coupon Code</p>
-              {isBuy3Get1FreeActive ? (
-                <p className="mt-3 border border-white/20 px-3 py-2 text-sm text-white/75">
-                  Buy 3 Get 1 Free is active. Coupon codes cannot be combined with this promotion.
-                </p>
-              ) : referralCode ? (
-                <p className="mt-3 border border-white/20 px-3 py-2 text-sm text-white/75">
-                  A referral code is applied. Remove it to use a coupon instead.
-                </p>
-              ) : (
-                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                  <input type="text" value={effectiveCouponInput} onChange={(event) => setCouponInput(event.target.value)} aria-label="Coupon code" placeholder="SAVE10" className="w-full flex-1 border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/60 outline-none transition focus:border-white/50" />
-                  <button type="button" onClick={() => applyCouponCode(effectiveCouponInput)} disabled={isApplyingCoupon} className="vl2-btn-secondary vl-focus-ring px-4 py-3 text-sm disabled:opacity-60">{isApplyingCoupon ? "Applying…" : "Apply"}</button>
-                </div>
-              )}
-
-              {couponSuccess ? <p className="mt-2 text-sm text-emerald-300">{couponSuccess}</p> : null}
-              {couponError ? <p className="mt-2 text-sm text-rose-300">{couponError}</p> : null}
-              {couponDetails ? (
-                <p className="mt-2 text-sm text-white/60">
-                  {couponDetails.code} • {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off
-                </p>
-              ) : null}
-              {couponCode && !isBuy3Get1FreeActive ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    clearCouponCode();
-                    setCouponInput("");
-                  }}
-                  className="mt-2 text-sm text-white/45 transition hover:text-white"
-                >
-                  Remove code
-                </button>
-              ) : null}
-            </div>
-
-            {isSignedIn ? (
-              <div className="mt-8">
-                <p className="vl2-eyebrow">Rewards Points</p>
-                <p className="mt-2 text-sm text-white/60">
-                  You have <span className="text-white">{pointsBalance.toLocaleString()}</span> points available
-                  ({formatCartCurrency(pointsBalance / 100)} value).
-                </p>
-                {referralDetails ? (
-                  <p className="mt-3 border border-white/20 px-3 py-2 text-sm text-white/75">
-                    A referral code is applied. Remove it to redeem points on this order.
-                  </p>
-                ) : pointsBalance > 0 ? (
-                  <div className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <input
-                      type="number"
-                      aria-label="Points to redeem"
-                      min={0}
-                      max={pointsBalance}
-                      value={pointsToRedeem || ""}
-                      onChange={(event) => setPointsToRedeem(Number(event.target.value) || 0)}
-                      placeholder="0"
-                      className="w-full border border-white/15 bg-black/40 px-4 py-3 text-sm text-white placeholder:text-white/60 outline-none transition focus:border-white/50 sm:w-40"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setPointsToRedeem(pointsBalance)}
-                      className="vl2-btn-secondary vl-focus-ring px-4 py-2 text-xs"
-                    >
-                      Use max
-                    </button>
-                    {pointsToRedeem > 0 ? (
-                      <span className="text-xs text-emerald-300">-{formatCartCurrency(pointsRedeemedDiscount)}</span>
+            {/* Savings — collapsed by default. A prominent empty promo field is a
+                known leak: it tells shoppers a discount exists that they don't
+                have, and sends them off-site to hunt for codes. */}
+            <div className="rounded-2xl border border-white/[0.06] bg-white/[0.015]">
+              <button
+                type="button"
+                onClick={() => setSavingsOpen((o) => !o)}
+                aria-expanded={savingsOpen}
+                className="vl-focus-ring flex w-full items-center justify-between px-5 py-4 text-left sm:px-6"
+              >
+                <span className="text-sm text-white/70">
+                  {isSignedIn ? "Referral, coupon, or rewards points?" : "Have a referral or coupon code?"}
+                </span>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className={`h-4 w-4 text-white/35 transition-transform duration-300 ${savingsOpen ? "rotate-180" : ""}`} aria-hidden><path d="m6 9 6 6 6-6" /></svg>
+              </button>
+              <Collapse open={savingsOpen}>
+                <div className="space-y-5 px-5 pb-5 sm:px-6 sm:pb-6">
+                  {/* Referral */}
+                  <div>
+                    <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/35">Referral code</p>
+                    {isBuy3Get1FreeActive ? (
+                      <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
+                        Buy 3 Get 1 Free is active — referral discounts can&apos;t be combined with it.
+                      </p>
+                    ) : (
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={effectiveReferralInput}
+                          onChange={(event) => setReferralInput(event.target.value)}
+                          aria-label="Referral code"
+                          placeholder="VANTA10"
+                          autoCapitalize="characters"
+                          className="w-full flex-1 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/25 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
+                        />
+                        <button type="button" onClick={() => applyReferralCode(effectiveReferralInput)} disabled={isApplyingReferral} className="vl-focus-ring flex-shrink-0 rounded-xl border border-white/[0.12] bg-white/[0.04] px-5 text-xs font-semibold uppercase tracking-wide text-white/80 transition hover:bg-white/[0.08] disabled:opacity-50">
+                          {isApplyingReferral ? "…" : "Apply"}
+                        </button>
+                      </div>
+                    )}
+                    {referralSuccess ? <p className="mt-2 text-xs text-emerald-300">{referralSuccess}</p> : null}
+                    {referralError ? <p className="mt-2 text-xs text-rose-300">{referralError}</p> : null}
+                    {referralDetails ? <p className="mt-2 text-xs text-white/45">{referralDetails.ambassadorName} · {referralDetails.customerDiscountPercent}% off</p> : null}
+                    {referralCode && !isBuy3Get1FreeActive ? (
+                      <button type="button" onClick={() => { clearReferralCode(); setReferralInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
                     ) : null}
                   </div>
-                ) : null}
-                {pointsToEarn > 0 ? (
-                  <p className="mt-2 text-xs text-white/70">You&apos;ll earn ~{pointsToEarn.toLocaleString()} points on this order.</p>
-                ) : null}
-              </div>
-            ) : (
-              <p className="mt-8 text-xs text-white/70">
-                <Link href="/account/login" className="text-white/70 underline-offset-4 hover:underline">Sign in</Link> to earn and redeem rewards points on this order.
-              </p>
-            )}
 
-            <div className="mt-8 space-y-4">
-              <p className="vl2-eyebrow">Required Confirmations</p>
-
-              <label className="flex items-start gap-3 border border-white/10 p-4 text-sm text-white/60">
-                <input
-                  type="checkbox"
-                  checked={acknowledgements.researchResponsibility}
-                  onChange={(event) => handleAcknowledgementChange("researchResponsibility", event.target.checked)}
-                  className="mt-1 h-4 w-4 border-white/25 bg-black/40"
-                />
-                <span>
-                  <span className="block text-white">Research Responsibility Statement *</span>
-                  <span className="mt-1 block text-white/50">
-                    The purchaser assumes full responsibility for the proper handling, storage, and use of these laboratory materials. The seller provides products solely as research reference materials and does not provide medical or dosing guidance.
-                  </span>
-                </span>
-              </label>
-
-              <label className="flex items-start gap-3 border border-white/10 p-4 text-sm text-white/60">
-                <input
-                  type="checkbox"
-                  checked={acknowledgements.researchCompliance}
-                  onChange={(event) => handleAcknowledgementChange("researchCompliance", event.target.checked)}
-                  className="mt-1 h-4 w-4 border-white/25 bg-black/40"
-                />
-                <span>
-                  <span className="block text-white">Research &amp; Compliance Agreement *</span>
-                  <span className="mt-1 block text-white/50">
-                    I acknowledge that the products sold on this website are intended strictly for laboratory research purposes. I confirm that I am purchasing these materials for legitimate research use and not for human or veterinary use. I understand these products are not drugs, dietary supplements, or medical products, and no instructions for preparation, dosage, or administration are provided by the seller.
-                  </span>
-                </span>
-              </label>
-
-              <label className="flex items-start gap-3 border border-white/10 p-4 text-sm text-white/60">
-                <input
-                  type="checkbox"
-                  checked={acknowledgements.ageLegalConfirmation}
-                  onChange={(event) => handleAcknowledgementChange("ageLegalConfirmation", event.target.checked)}
-                  className="mt-1 h-4 w-4 border-white/25 bg-black/40"
-                />
-                <span>
-                  <span className="block text-white">Age &amp; Legal Confirmation *</span>
-                  <span className="mt-1 block text-white/50">
-                    I confirm that I am 21 years of age or older and legally permitted to purchase laboratory research materials.
-                  </span>
-                </span>
-              </label>
-
-              <p className="text-xs leading-relaxed text-white/45">
-                By placing your order, you agree to our{" "}
-                <a href="/legal/terms" target="_blank" rel="noopener noreferrer" className="text-white/70 underline underline-offset-2 hover:text-white">
-                  Terms &amp; Conditions
-                </a>{" "}
-                and{" "}
-                <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="text-white/70 underline underline-offset-2 hover:text-white">
-                  Privacy Policy
-                </a>
-                .
-              </p>
-            </div>
-          </section>
-
-          <aside className="vl2-glass h-fit p-5 sm:p-7 lg:sticky lg:top-32">
-            <p className="vl2-eyebrow">Order Summary</p>
-
-            {!isHydrated ? (
-              // Don't flash "No items in cart" before localStorage hydrates — a
-              // refresh mid-checkout would otherwise look like a lost cart.
-              <div className="mt-5 space-y-3">
-                {[0, 1].map((i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <div className="vl-skeleton h-16 w-16 flex-shrink-0 rounded" />
-                    <div className="flex-1 space-y-2">
-                      <div className="vl-skeleton h-3 w-2/3 rounded" />
-                      <div className="vl-skeleton h-3 w-1/3 rounded" />
-                    </div>
+                  {/* Coupon */}
+                  <div>
+                    <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/35">Coupon code</p>
+                    {isBuy3Get1FreeActive ? (
+                      <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
+                        Buy 3 Get 1 Free is active — coupons can&apos;t be combined with it.
+                      </p>
+                    ) : referralCode ? (
+                      <p className="rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
+                        A referral code is applied. Remove it to use a coupon instead.
+                      </p>
+                    ) : (
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={effectiveCouponInput}
+                          onChange={(event) => setCouponInput(event.target.value)}
+                          aria-label="Coupon code"
+                          placeholder="SAVE10"
+                          autoCapitalize="characters"
+                          className="w-full flex-1 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/25 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
+                        />
+                        <button type="button" onClick={() => applyCouponCode(effectiveCouponInput)} disabled={isApplyingCoupon} className="vl-focus-ring flex-shrink-0 rounded-xl border border-white/[0.12] bg-white/[0.04] px-5 text-xs font-semibold uppercase tracking-wide text-white/80 transition hover:bg-white/[0.08] disabled:opacity-50">
+                          {isApplyingCoupon ? "…" : "Apply"}
+                        </button>
+                      </div>
+                    )}
+                    {couponSuccess ? <p className="mt-2 text-xs text-emerald-300">{couponSuccess}</p> : null}
+                    {couponError ? <p className="mt-2 text-xs text-rose-300">{couponError}</p> : null}
+                    {couponDetails ? (
+                      <p className="mt-2 text-xs text-white/45">{couponDetails.code} · {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off</p>
+                    ) : null}
+                    {couponCode && !isBuy3Get1FreeActive ? (
+                      <button type="button" onClick={() => { clearCouponCode(); setCouponInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
+                    ) : null}
                   </div>
-                ))}
-              </div>
-            ) : items.length === 0 ? (
-              <div className="mt-5 border border-dashed border-white/15 p-6 text-center text-sm text-white/45">No items in cart.</div>
-            ) : (
-              <div className="mt-5 space-y-4 border-b border-white/10 pb-4">
-                {items.map((item) => (
-                  <div key={item.key} className="flex items-start gap-3">
-                    <div className="relative h-16 w-16 flex-shrink-0 border border-white/10 bg-black/40">
-                      {item.image ? <Image src={item.image} alt={item.name} fill sizes="64px" className="object-cover" /> : <div className="flex h-full w-full items-center justify-center text-[10px] text-white/35">No image</div>}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm text-white">{item.name}</p>
-                      {item.doseLabel ? <p className="mt-0.5 text-xs text-white/70">{item.doseLabel}</p> : null}
-                      <div className="mt-1.5 flex items-center gap-2.5">
-                        <div className="flex items-center rounded-full border border-white/15 bg-black/40 text-xs text-white/80">
-                          <button type="button" onClick={() => updateQuantity(item.key, item.quantity - 1)} className="inline-flex h-7 w-7 items-center justify-center rounded-l-full transition hover:bg-white/10 hover:text-white" aria-label={`Decrease ${item.name} quantity`}>−</button>
-                          <span className="min-w-5 text-center font-semibold tabular-nums">{item.quantity}</span>
-                          <button type="button" onClick={() => updateQuantity(item.key, item.quantity + 1)} className="inline-flex h-7 w-7 items-center justify-center rounded-r-full transition hover:bg-white/10 hover:text-white" aria-label={`Increase ${item.name} quantity`}>+</button>
+
+                  {/* Points */}
+                  {isSignedIn ? (
+                    <div>
+                      <p className="mb-2 text-[10px] uppercase tracking-[0.24em] text-white/35">Rewards points</p>
+                      <p className="text-xs text-white/45">
+                        <span className="text-white/80">{pointsBalance.toLocaleString()}</span> available ({formatCartCurrency(pointsBalance / 100)} value).
+                      </p>
+                      {referralDetails ? (
+                        <p className="mt-2 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
+                          A referral code is applied. Remove it to redeem points.
+                        </p>
+                      ) : pointsBalance > 0 ? (
+                        <div className="mt-2 flex items-center gap-2">
+                          <input
+                            type="number"
+                            aria-label="Points to redeem"
+                            min={0}
+                            max={pointsBalance}
+                            inputMode="numeric"
+                            value={pointsToRedeem || ""}
+                            onChange={(event) => setPointsToRedeem(Number(event.target.value) || 0)}
+                            placeholder="0"
+                            className="w-32 rounded-xl border border-white/[0.10] bg-black/30 px-4 py-3 text-[16px] text-white outline-none transition placeholder:text-white/25 focus:border-white/40 focus:shadow-[0_0_0_4px_rgba(255,255,255,0.05)]"
+                          />
+                          <button type="button" onClick={() => setPointsToRedeem(pointsBalance)} className="vl-focus-ring rounded-xl border border-white/[0.12] bg-white/[0.04] px-4 py-3 text-xs font-semibold uppercase tracking-wide text-white/80 transition hover:bg-white/[0.08]">Use max</button>
+                          {pointsToRedeem > 0 ? <span className="text-xs text-emerald-300 tabular-nums">−{formatCartCurrency(pointsRedeemedDiscount)}</span> : null}
                         </div>
-                        <button type="button" onClick={() => removeFromCart(item.key)} className="text-xs text-white/40 underline-offset-2 transition hover:text-rose-300 hover:underline" aria-label={`Remove ${item.name} from cart`}>Remove</button>
+                      ) : null}
+                      {pointsToEarn > 0 ? <p className="mt-2 text-[11px] text-white/35">You&apos;ll earn ~{pointsToEarn.toLocaleString()} points on this order.</p> : null}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-white/40">
+                      <Link href="/account/login" className="text-white/70 underline underline-offset-4 hover:text-white">Sign in</Link> to earn and redeem rewards points.
+                    </p>
+                  )}
+                </div>
+              </Collapse>
+            </div>
+
+            {/* Required confirmations — compact rows, full legal text on demand */}
+            <CheckoutSection innerRef={confirmationsRef} step="04" title="Required confirmations" subtitle="All three are required to place a research order.">
+              <div className="overflow-hidden rounded-xl border border-white/[0.06]">
+                <div className="flex items-center justify-between bg-white/[0.02] px-4 py-2.5">
+                  <span className="text-[11px] text-white/40">Confirm to continue</span>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums ${allAcknowledged ? "bg-emerald-400/12 text-emerald-300" : "bg-[color:var(--accent-gold)]/12 text-[color:var(--accent-gold)]"}`}>
+                    {acknowledgedCount} of {REQUIRED_CONFIRMATIONS.length}
+                  </span>
+                </div>
+                <div className="divide-y divide-white/[0.05]">
+                  {REQUIRED_CONFIRMATIONS.map((item) => (
+                    <div key={item.key} className="px-4 py-3">
+                      <label className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          checked={acknowledgements[item.key]}
+                          onChange={(event) => handleAcknowledgementChange(item.key, event.target.checked)}
+                          className="h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-emerald-500"
+                        />
+                        <span className="flex-1 text-sm text-white/85">{item.short}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => { e.preventDefault(); setOpenLegal((prev) => ({ ...prev, [item.key]: !prev[item.key] })); }}
+                          className="vl-focus-ring flex-shrink-0 rounded px-1 text-[11px] text-white/35 underline-offset-2 hover:text-white/70"
+                          aria-expanded={Boolean(openLegal[item.key])}
+                        >
+                          {openLegal[item.key] ? "Hide" : "View details"}
+                        </button>
+                      </label>
+                      <Collapse open={Boolean(openLegal[item.key])}>
+                        <p className="pl-8 pr-1 pt-2 text-xs leading-relaxed text-white/40">{item.body}</p>
+                      </Collapse>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-white/60">
+                <input type="checkbox" checked={marketingOptIn} onChange={(e) => { haptic(); setMarketingTouched(true); setMarketingOptIn(e.target.checked); }} className="mt-0.5 h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-emerald-500" />
+                <span className="text-xs leading-relaxed">Email me exclusive offers, coupons &amp; restock alerts. <span className="text-white/30">Optional — unsubscribe anytime.</span></span>
+              </label>
+
+              <p className="mt-4 text-[11px] leading-relaxed text-white/30">
+                By placing your order, you agree to our{" "}
+                <a href="/legal/terms" target="_blank" rel="noopener noreferrer" className="text-white/50 underline underline-offset-2 hover:text-white">Terms &amp; Conditions</a>{" "}
+                and{" "}
+                <a href="/legal/privacy" target="_blank" rel="noopener noreferrer" className="text-white/50 underline underline-offset-2 hover:text-white">Privacy Policy</a>.
+              </p>
+            </CheckoutSection>
+          </div>
+
+          {/* ---------------- Right column: summary (sticky on desktop) ------- */}
+          <aside className="hidden h-fit lg:sticky lg:top-24 lg:block">
+            <div className="rounded-2xl border border-white/[0.06] bg-white/[0.02] p-6">
+              <p className="text-[10px] uppercase tracking-[0.28em] text-white/35">Order summary</p>
+
+              {!isHydrated ? (
+                // Don't flash "No items in cart" before localStorage hydrates — a
+                // refresh mid-checkout would otherwise look like a lost cart.
+                <div className="mt-5 space-y-3">
+                  {[0, 1].map((i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <div className="vl-skeleton h-14 w-14 flex-shrink-0 rounded-lg" />
+                      <div className="flex-1 space-y-2">
+                        <div className="vl-skeleton h-3 w-2/3 rounded" />
+                        <div className="vl-skeleton h-3 w-1/3 rounded" />
                       </div>
                     </div>
-                    <p className="text-sm text-white/75">{formatCartCurrency(getBundleDiscountedLineTotal(item.price, item.quantity, bundleConfig))}</p>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="mt-5 space-y-3 text-sm text-white/70">
-              <div className="flex justify-between"><span>Items</span><span>{orderCount}</span></div>
-              <div className="flex justify-between"><span>Subtotal</span><span>{formatCartCurrency(subtotal)}</span></div>
-              <div className="flex justify-between">
-                <span>Shipping</span>
-                <span>{shipping === 0 && memberFreeShipping ? "Free (member)" : formatCartCurrency(shipping)}</span>
-              </div>
-              {taxAmount > 0 ? (
-                <div className="flex justify-between">
-                  <span>Sales tax{taxQuote.state ? ` (${taxQuote.state} · ${taxQuote.ratePercent}%)` : ""}</span>
-                  <span>{formatCartCurrency(taxAmount)}</span>
+                  ))}
                 </div>
-              ) : taxQuote.reason === "no_state" && isDomesticCountry(form.country) && salesTaxConfig.nexusStates.length > 0 ? (
-                // Only worth prompting for the address when tax collection is
-                // actually configured — with no nexus states, no address ever
-                // produces tax, so show nothing instead of a dead hint row.
-                <div className="flex justify-between text-white/40"><span>Sales tax</span><span>Enter address</span></div>
-              ) : null}
-              <label className="flex cursor-pointer items-start justify-between gap-3 rounded-lg border border-white/10 bg-white/[0.02] p-3">
-                <span className="flex items-start gap-2.5">
-                  <input
-                    type="checkbox"
-                    checked={shippingProtectionEnabled}
-                    onChange={(e) => setShippingProtectionEnabled(e.target.checked)}
-                    className="mt-0.5 h-4 w-4 accent-emerald-500"
-                    aria-label="Add shipping protection"
-                  />
-                  <span>
-                    <span className="block font-medium text-white">Shipping Protection <span className="font-normal text-emerald-300">(Recommended)</span> <span className="font-normal text-white/45">· optional, untick to remove</span></span>
-                    <span className="block text-xs text-white/45">Store-backed: we&apos;ll replace or refund items lost, stolen, or damaged in transit. <a href="/legal/shipping" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white/70">See terms</a></span>
-                  </span>
-                </span>
-                <span className="whitespace-nowrap text-white/80">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>
-              </label>
-              {discountAmount > 0 ? (
-                <div className="flex justify-between text-emerald-300"><span>{ambassadorDiscountApplied ? `Ambassador ${ambassadorDiscountPercent}% off` : (appliedDiscountLabel ?? "Discount")}</span><span>-{formatCartCurrency(discountAmount)}</span></div>
-              ) : null}
-              {autoBestDiscountApplied ? (
-                <p className="text-xs text-emerald-300/80">
-                  ✓ We&apos;ve automatically applied your best available discount. Only one discount applies per order.
+              ) : items.length === 0 ? (
+                <div className="mt-5 rounded-xl border border-dashed border-white/[0.10] p-6 text-center text-sm text-white/35">No items in cart.</div>
+              ) : (
+                <div className="mt-5 space-y-4 border-b border-white/[0.06] pb-5">{productLines}</div>
+              )}
+
+              <div className="mt-5">{summaryLines}</div>
+
+              <div className="my-5 h-px bg-white/[0.06]" />
+
+              <div className="flex items-end justify-between">
+                <span className="text-xs uppercase tracking-[0.24em] text-white/40">Total</span>
+                <span className="text-[2rem] font-semibold leading-none tracking-tight text-white tabular-nums">{formatCartCurrency(finalTotal)}</span>
+              </div>
+
+              {totalSaved > 0 ? (
+                <p className="mt-3 flex justify-between rounded-xl bg-emerald-400/[0.08] px-3.5 py-2 text-sm font-medium text-emerald-300">
+                  <span>You saved</span><span className="tabular-nums">{formatCartCurrency(totalSaved)}</span>
                 </p>
               ) : null}
-              {storeCreditApplied > 0 ? (
-                <div className="flex justify-between text-emerald-300"><span>Member store credit</span><span>-{formatCartCurrency(storeCreditApplied)}</span></div>
-              ) : null}
-              {pointsRedeemedDiscount > 0 ? (
-                <div className="flex justify-between"><span>Points redeemed</span><span>-{formatCartCurrency(pointsRedeemedDiscount)}</span></div>
-              ) : null}
-              {cardFee.amount > 0 ? (
-                <div className="flex justify-between text-white/80">
-                  <span>{cardFeeConfig?.label ?? "Card Processing Fee"} ({cardFee.percentage}%)</span>
-                  <span>+{formatCartCurrency(cardFee.amount)}</span>
-                </div>
-              ) : null}
-              <div className="mt-3 flex justify-between border-t border-white/10 pt-3 text-base text-white"><span>Total</span><span>{formatCartCurrency(finalTotal)}</span></div>
-              {(discountAmount + storeCreditApplied + pointsRedeemedDiscount) > 0 ? (
-                <div className="flex justify-between rounded-lg bg-emerald-400/10 px-3 py-2 text-sm font-semibold text-emerald-300"><span>You saved</span><span>{formatCartCurrency(discountAmount + storeCreditApplied + pointsRedeemedDiscount)}</span></div>
-              ) : null}
+
               {selectedMethod && selectedMethod.kind === "manual" ? (
-                <p className="flex items-center justify-center gap-1.5 rounded-lg border border-emerald-400/25 bg-emerald-400/5 py-2 text-xs font-medium text-emerald-300">
-                  ✅ No processing fee with {selectedMethod.label}
+                <p className="mt-3 rounded-xl border border-emerald-400/20 bg-emerald-400/[0.05] py-2 text-center text-xs text-emerald-300">
+                  No processing fee with {selectedMethod.label}
                 </p>
               ) : null}
+
+              {/* Payment method chooser — shown only when more than one method is
+                  enabled (today card is the only one, so this stays hidden until a
+                  manual method like Cash App / Zelle is turned on in admin). The
+                  server honors the chosen method authoritatively. */}
+              {paymentMethods.length > 1 ? (
+                <div className="mt-5">
+                  <PaymentMethodPicker
+                    methods={paymentMethods}
+                    cardFeeConfig={cardFeeConfig}
+                    baseTotal={total}
+                    selectedMethodId={selectedMethodId}
+                    onSelect={setSelectedMethodId}
+                  />
+                </div>
+              ) : null}
+
+              {!checkoutOpen ? (
+                <div className="mt-5 rounded-xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] p-4 text-sm" role="status">
+                  <p className="font-semibold text-[color:var(--accent-gold)]">Checkout is opening soon</p>
+                  <p className="mt-1 text-xs leading-relaxed text-white/50">
+                    We&apos;re finalizing secure payment setup. Your cart is saved — no charge is made until then.
+                  </p>
+                </div>
+              ) : null}
+
+              <button
+                type="button"
+                onClick={handleCheckout}
+                disabled={ctaDisabled}
+                className="vl-focus-ring mt-5 flex w-full items-center justify-center gap-2.5 rounded-full bg-white px-6 py-4 text-sm font-semibold tracking-wide text-black transition hover:bg-zinc-200 active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-white"
+              >
+                {checkoutState === "loading" ? (
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-black/25 border-t-black" aria-hidden />
+                ) : (
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4" aria-hidden><path d="M7 11V8a5 5 0 0 1 10 0v3M5 11h14v9H5z" strokeLinejoin="round" /></svg>
+                )}
+                {ctaLabel}
+              </button>
+
+              {checkoutMessage ? <p className="mt-3 text-sm text-white/60" role="alert">{checkoutMessage}</p> : null}
+
+              <TrustRow className="mt-6 border-t border-white/[0.06] pt-5" />
+
+              <Link href="/cart" className="mt-5 inline-flex text-xs text-white/35 transition hover:text-white">
+                ← Back to cart
+              </Link>
             </div>
-
-            {/* Payment method chooser — shown only when more than one method is
-                enabled (today card is the only one, so this stays hidden until a
-                manual method like Cash App / Zelle is turned on in admin). The
-                server honors the chosen method authoritatively. */}
-            {paymentMethods.length > 1 ? (
-              <div className="mt-6">
-                <PaymentMethodPicker
-                  methods={paymentMethods}
-                  cardFeeConfig={cardFeeConfig}
-                  baseTotal={total}
-                  selectedMethodId={selectedMethodId}
-                  onSelect={setSelectedMethodId}
-                />
-              </div>
-            ) : null}
-
-            <label className="mt-5 flex cursor-pointer items-start gap-2.5 text-sm text-white/70">
-              <input type="checkbox" checked={marketingOptIn} onChange={(e) => { setMarketingTouched(true); setMarketingOptIn(e.target.checked); }} className="mt-0.5 h-4 w-4 accent-emerald-500" />
-              <span>Email me exclusive offers, coupons &amp; restock alerts. <span className="text-white/45">Optional — unsubscribe anytime.</span></span>
-            </label>
-
-            <div className="mt-5 grid grid-cols-1 gap-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 text-xs text-white/70">
-              <span className="flex items-center gap-2"><span aria-hidden>🔒</span><span>SSL-encrypted secure checkout</span></span>
-              <span className="flex items-center gap-2"><span aria-hidden>🧪</span><span>Third-party lab tested — COAs published</span></span>
-              <span className="flex items-center gap-2"><span aria-hidden>🇺🇸</span><span>Ships from the USA</span></span>
-              <span className="flex items-center gap-2"><span aria-hidden>📦</span><span>Same-day dispatch before daily cutoff</span></span>
-              <span className="flex items-center gap-2"><span aria-hidden>⭐</span><span>Premium customer support</span></span>
-            </div>
-
-            {!checkoutOpen ? (
-              <div className="mt-6 rounded-xl border border-amber-300/30 bg-amber-300/[0.06] p-4 text-sm text-amber-100/90" role="status">
-                <p className="font-semibold text-amber-100">Checkout is opening soon</p>
-                <p className="mt-1 text-amber-100/70">
-                  We&apos;re finalizing secure payment setup. You can browse and build your cart now —
-                  it&apos;ll be saved — and complete your order as soon as checkout opens. No charge is made until then.
-                </p>
-              </div>
-            ) : null}
-
-            <button
-              type="button"
-              onClick={handleCheckout}
-              disabled={isSubmitting || items.length === 0 || !checkoutOpen}
-              className="vl2-btn-primary vl-focus-ring mt-6 w-full px-5 py-3 text-sm disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {!checkoutOpen
-                ? "Checkout opening soon"
-                : checkoutState === "loading"
-                  ? "Creating secure checkout..."
-                  : selectedMethod && selectedMethod.kind === "manual"
-                    ? `Continue to ${selectedMethod.label}`
-                    : "Continue to Secure Payment"}
-            </button>
-
-            {checkoutMessage ? <p className="mt-3 text-sm text-white/65">{checkoutMessage}</p> : null}
-
-            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-              {["Visa", "Mastercard", "Amex", "Discover", ...(EXPRESS_CHECKOUT_ENABLED ? ["Apple Pay"] : [])].map((brand) => (
-                <span key={brand} className="rounded-md border border-white/15 bg-white/5 px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wide text-white/60">{brand}</span>
-              ))}
-            </div>
-
-            <Link href="/cart" className="mt-4 inline-flex text-sm text-white/45 transition hover:text-white">
-              Back to cart
-            </Link>
           </aside>
         </div>
+
+        {/* Mobile trust row — the desktop rail is hidden here, so trust signals
+            still land immediately before the sticky CTA. */}
+        <div className="mt-6 rounded-2xl border border-white/[0.06] bg-white/[0.015] p-5 lg:hidden">
+          <TrustRow />
+          <Link href="/cart" className="mt-5 inline-flex text-xs text-white/35 transition hover:text-white">← Back to cart</Link>
+        </div>
       </main>
+
+      {/* Sticky mobile CTA — the primary action is always within thumb reach. */}
+      {isHydrated && items.length > 0 ? (
+        <div className="fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.06] bg-[#0a0a0a]/95 px-5 pt-3.5 pb-[max(env(safe-area-inset-bottom),0.875rem)] backdrop-blur-2xl lg:hidden">
+          {!checkoutOpen ? (
+            <p className="mb-2 text-center text-[11px] text-[color:var(--accent-gold)]">Checkout is opening soon — your cart is saved.</p>
+          ) : checkoutMessage ? (
+            <p className="mb-2 text-center text-[11px] text-rose-300" role="alert">{checkoutMessage}</p>
+          ) : null}
+          <div className="mb-2.5 flex items-baseline justify-between">
+            <span className="text-[11px] uppercase tracking-[0.24em] text-white/40">Total</span>
+            <span className="text-xl font-semibold text-white tabular-nums">{formatCartCurrency(finalTotal)}</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleCheckout}
+            disabled={ctaDisabled}
+            className="vl-focus-ring flex w-full items-center justify-center gap-2.5 rounded-full bg-white px-6 py-4 text-sm font-semibold tracking-wide text-black transition hover:bg-zinc-200 active:scale-[0.985] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {checkoutState === "loading" ? (
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-black/25 border-t-black" aria-hidden />
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4" aria-hidden><path d="M7 11V8a5 5 0 0 1 10 0v3M5 11h14v9H5z" strokeLinejoin="round" /></svg>
+            )}
+            {ctaLabel}
+          </button>
+          <p className="mt-2 text-center text-[10px] text-white/25">
+            {EXPRESS_CHECKOUT_ENABLED ? "Apple Pay · Visa · Mastercard · Amex · Discover" : "Visa · Mastercard · Amex · Discover"}
+          </p>
+        </div>
+      ) : null}
     </div>
   );
 }

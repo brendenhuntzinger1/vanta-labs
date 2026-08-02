@@ -48,12 +48,16 @@ function haptic(ms = 8) {
 
 // Smooth, CLS-free expand/collapse: animate grid-template-rows 0fr→1fr with the
 // content clipped inside. GPU-friendly, no height measuring, no layout jump.
+//
+// `inert` when closed is load-bearing: `overflow: hidden` clips content visually
+// but leaves it focusable and exposed to screen readers, so without it a
+// keyboard user tabs into collapsed, invisible controls.
 function Collapse({ open, children, className = "" }: { open: boolean; children: React.ReactNode; className?: string }) {
   return (
     <div
       className={`grid transition-[grid-template-rows] duration-300 ease-[cubic-bezier(0.2,0.8,0.2,1)] motion-reduce:transition-none ${open ? "grid-rows-[1fr]" : "grid-rows-[0fr]"} ${className}`}
     >
-      <div className="overflow-hidden">{children}</div>
+      <div className="overflow-hidden" inert={!open}>{children}</div>
     </div>
   );
 }
