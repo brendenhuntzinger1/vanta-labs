@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
+import { CoaLibraryNotice } from "@/components/coa-library-notice";
 import type { CoaRecord } from "@/lib/catalog-types";
 
 export function CoaLibraryPageClient() {
@@ -47,10 +48,12 @@ export function CoaLibraryPageClient() {
   const hasRecords = coaRecords.length > 0;
 
   return (
-    <div className="min-h-screen bg-[#0b0b0b] text-white">
+    <div className="min-h-screen bg-[#0a0a0a] text-white">
       <SiteHeaderV2 />
 
-      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-32 lg:px-12">
+      <main className="mx-auto max-w-[1200px] px-5 sm:px-6 pb-20 pt-24 lg:px-10">
+        <CoaLibraryNotice className="mb-8" />
+
         <div className="max-w-2xl">
           <p className="vl2-eyebrow">COA Archive</p>
           <h1 className="vl2-serif mt-3 text-4xl text-white sm:text-5xl">

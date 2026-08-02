@@ -16,6 +16,7 @@ import type { Product, ProductDose, ProductFaqItem } from "@/lib/catalog-types";
 import { isBacWater } from "@/lib/bac-water";
 import { RecentlyViewed } from "@/components/recently-viewed";
 import { BacWaterAccessoryBlock, FrequentlyBoughtTogether } from "@/components/bac-water-upsell";
+import { CoaLibraryNotice } from "@/components/coa-library-notice";
 import Image from "next/image";
 
 function parseDose(slug: string) {
@@ -401,7 +402,8 @@ export function ProductDetailClient({
 
                 {activeTab === "coa" && (
                   <div className="vl2-lab-panel p-5">
-                    <p className="text-sm leading-7 text-[#a3a3a3]">
+                    <CoaLibraryNotice className="mb-5" />
+                    <p className="text-sm leading-relaxed text-[#a3a3a3]">
                       Every product lot is linked to a third-party Certificate of Analysis. The COA includes purity percentage, testing methodology, batch traceability, and lab information. Download the report matching your selected dose below.
                     </p>
                     <div className="mt-5 grid gap-3 sm:grid-cols-2">
