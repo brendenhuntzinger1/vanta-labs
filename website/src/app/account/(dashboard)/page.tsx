@@ -101,7 +101,7 @@ export default async function AccountDashboardPage() {
       getLifetimeSavings(user.id),
       getDefaultCustomerAddress(user.id).catch(() => null),
       getWishlistSlugs(user.id).catch(() => [] as string[]),
-      getBestSellerSlugs(8).catch(() => new Set<string>()),
+      getBestSellerSlugs().catch(() => new Set<string>()),
     ]);
 
   const fullName = (user.user_metadata?.full_name as string | undefined)?.trim() || "";

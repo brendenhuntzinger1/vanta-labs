@@ -65,7 +65,9 @@ async function computeBestSellerSlugs(limit: number): Promise<Set<string>> {
   );
 }
 
-export async function getBestSellerSlugs(limit = 6): Promise<Set<string>> {
+// Best sellers = the top 10 most-purchased products (by units sold across
+// recent paid orders).
+export async function getBestSellerSlugs(limit = 10): Promise<Set<string>> {
   const now = Date.now();
   if (cache && now - cache.at < CACHE_TTL_MS) {
     return cache.slugs;
