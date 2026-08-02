@@ -75,6 +75,14 @@ function profitForOrder(
   overlay: ShippingOverlay | undefined,
 ): OrderProfitResult {
   const merch = Math.max(0, Number(order.subtotal ?? 0) - Number(order.discount_amount ?? 0));
+  const shippingRevenue = Math.max(0, Number(order.shipping_amount ?? 0));
+  const taxCollected = Math.max(0, Number(order.tax_amount ?? 0));
+  const amountPaid = Math.max(0, Number(order.amount_paid ?? 0));
+  // Other customer-paid revenue beyond merchandise + shipping + tax — the
+  // shipping-protection add-on and any card surcharge. Derived as the residual
+  // of what the customer actually paid (bounded ≥ 0; store-credit / points
+  // redemption simply make it 0).
+  const additionalRevenue = Math.max(0, amountPaid - merch - shippingRevenue - taxCollected);
   const hasActual = overlay?.actualShippingCostCents != null;
   const shippingCost = hasActual
     ? Math.max(0, (overlay!.actualShippingCostCents as number) / 100)
@@ -82,11 +90,14 @@ function profitForOrder(
   return computeOrderProfit({
     netMerchandiseRevenue: merch,
     // What the customer paid for shipping (0 on free-shipping orders).
-    shippingRevenue: Math.max(0, Number(order.shipping_amount ?? 0)),
+    shippingRevenue,
+    // Shipping protection + any card surcharge the customer paid.
+    additionalRevenue,
     // Exact label cost once reconciled; the configured estimate until then.
     shippingCost,
     shippingCostIsEstimate: !hasActual,
-    taxCollected: Math.max(0, Number(order.tax_amount ?? 0)),
+    taxCollected,
+    countTaxAsProfit: config.countSalesTaxAsProfit,
     lines,
     commission,
     processingFee: processingFeeFor(order, config),
