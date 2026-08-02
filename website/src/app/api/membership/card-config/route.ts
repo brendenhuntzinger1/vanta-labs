@@ -61,7 +61,21 @@ export async function POST(request: Request) {
 
   const amountCents = body.billingCycle === "annual" ? tier.annual_price_cents : tier.monthly_price_cents;
   if (!amountCents || amountCents <= 0) {
+    // Also catches the active $0 "free" tier, which is below the 50c processor
+    // floor and would be refused upstream with a far less obvious error.
     return NextResponse.json({ error: "This membership is not available right now." }, { status: 400 });
+  }
+
+  // Veyra needs a real customer email. Refuse here rather than sending "" and
+  // taking an opaque upstream failure that the UI would report as "card entry
+  // temporarily unavailable" — which would send the shopper down the one-time
+  // fallback for a fixable account problem.
+  const customerEmail = (user.email ?? "").trim();
+  if (!customerEmail) {
+    return NextResponse.json(
+      { error: "Add an email to your account before starting a membership." },
+      { status: 400 },
+    );
   }
 
   try {
@@ -70,7 +84,7 @@ export async function POST(request: Request) {
     // which passes the resulting token intent to Veyra.
     const session = await getPaymentProvider().createCheckoutSession({
       orderId: `membership-${user.id}-${tier.id}-${body.billingCycle}`,
-      customerEmail: user.email ?? "",
+      customerEmail,
       amount: amountCents,
       currency: "USD",
       metadata: { kind: "membership_card_capture", tier_id: tier.id, billing_cycle: body.billingCycle },
