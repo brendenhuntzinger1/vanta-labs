@@ -1,31 +1,36 @@
 @import "tailwindcss";
 
 :root {
-  /* Surface scale — deep warm charcoal, layered for real depth (not flat black) */
-  --background: #101014;
-  --surface-0: #131318;
-  --surface-1: #1a1a21;
-  --surface-2: #22222b;
-  --surface-elevated: #2a2a34;
+  /* ——— Luxury surface scale ———————————————————————————————————————
+     One palette for the whole storefront: near-black page, #141414 cards,
+     hairline borders. Everything (product, collection, cart, checkout) reads
+     as a single brand. */
+  --background: #0a0a0a;
+  --surface-0: #0f0f0f;
+  --surface-1: #141414;      /* the canonical card colour */
+  --surface-2: #1a1a1a;
+  --surface-elevated: #202020;
 
   /* Graphite accent scale — replaces glow/gradient accents on v2 surfaces */
   --graphite-100: #d4d4d4;
   --graphite-300: #8a8a8a;
   --graphite-500: #4a4a4a;
-  --hairline: rgba(255, 255, 255, 0.1);
-  --hairline-strong: rgba(255, 255, 255, 0.18);
+  --hairline: rgba(255, 255, 255, 0.08);
+  --hairline-strong: rgba(255, 255, 255, 0.16);
 
-  --foreground: #f4f4f4;
-  --foreground-muted: rgba(244, 244, 244, 0.72);
-  --foreground-subtle: rgba(244, 244, 244, 0.52);
+  --foreground: #ffffff;
+  --foreground-muted: #a3a3a3;          /* the one secondary-text value */
+  --foreground-subtle: rgba(255, 255, 255, 0.45);
 
-  --border-soft: rgba(255, 255, 255, 0.14);
-  --border-strong: rgba(255, 255, 255, 0.28);
+  /* Hairline borders. 0.08 is the default weight everywhere. */
+  --border-soft: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
 
-  /* Brand accent — warm lab-gold, used sparingly as a signal color */
-  --accent-gold: #f2c94c;
-  --accent-gold-soft: rgba(242, 201, 76, 0.16);
-  --accent-gold-strong: #ffd873;
+  /* THE brand accent — luxury gold. This is the only accent colour on the
+     storefront; green is reserved for success/system feedback. */
+  --accent-gold: #d4af37;
+  --accent-gold-soft: rgba(212, 175, 55, 0.14);
+  --accent-gold-strong: #e6c65c;
 
   --accent: #f4f4f4;
   --accent-strong: #ffffff;
@@ -1252,29 +1257,71 @@ textarea.vl-input { min-height: 6rem; }
   gap: 2.5rem;
 }
 
+/* ——— THE button system ————————————————————————————————————————————
+   Three styles, site-wide, no exceptions:
+     .vl2-btn-primary    gold fill, black text      (the brand action)
+     .vl2-btn-secondary   dark fill, gold hairline, white text
+     .vl2-btn-ghost       transparent, gold text
+   Gold #d4af37 with black text is ~9.2:1 — comfortably AA for all sizes. */
 .vl2-btn-primary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
   min-height: 2.875rem;
-  border: 1px solid #fff;
+  border: 1px solid var(--accent-gold);
   border-radius: 12px;
-  background: #fff;
-  color: #0b0b0b;
+  background: var(--accent-gold);
+  color: #0a0a0a;
   font-size: 0.8rem;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 20px -12px rgba(255, 255, 255, 0.25);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 22px -14px rgba(212, 175, 55, 0.55);
   transition: background-color var(--duration-fast) ease, color var(--duration-fast) ease, border-color var(--duration-fast) ease, transform var(--duration-fast) var(--ease-out-premium), box-shadow var(--duration-fast) ease;
   touch-action: manipulation;
 }
 
 .vl2-btn-primary:hover {
-  background: transparent;
-  color: #fff;
+  background: var(--accent-gold-strong);
+  border-color: var(--accent-gold-strong);
+  transform: translateY(-1px);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35), 0 12px 26px -14px rgba(212, 175, 55, 0.7);
 }
+
+.vl2-btn-primary:active { transform: translateY(0) scale(0.985); }
+
+.vl2-btn-primary:disabled {
+  opacity: 0.45;
+  transform: none;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+
+.vl2-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 2.875rem;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  background: transparent;
+  color: var(--accent-gold);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  transition: background-color var(--duration-fast) ease, color var(--duration-fast) ease, transform var(--duration-fast) var(--ease-out-premium);
+  touch-action: manipulation;
+}
+
+.vl2-btn-ghost:hover {
+  background: var(--accent-gold-soft);
+  color: var(--accent-gold-strong);
+}
+
+.vl2-btn-ghost:active { transform: scale(0.985); }
 
 /* Tactile press — a subtle sink + shrink that reads as a real "click". */
 .vl2-btn-primary:active {
@@ -1282,15 +1329,16 @@ textarea.vl-input { min-height: 6rem; }
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
 }
 
+/* Secondary: dark fill, gold hairline, white text. */
 .vl2-btn-secondary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.5rem;
   min-height: 2.875rem;
-  border: 1px solid var(--hairline-strong);
+  border: 1px solid rgba(212, 175, 55, 0.35);
   border-radius: 12px;
-  background: transparent;
+  background: var(--surface-1);
   color: var(--foreground);
   font-size: 0.8rem;
   font-weight: 600;
@@ -1301,8 +1349,8 @@ textarea.vl-input { min-height: 6rem; }
 }
 
 .vl2-btn-secondary:hover {
-  border-color: #fff;
-  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--accent-gold);
+  background: var(--surface-2);
 }
 
 .vl2-btn-secondary:active {

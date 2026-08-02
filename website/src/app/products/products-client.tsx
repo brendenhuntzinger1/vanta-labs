@@ -218,7 +218,7 @@ function ProductsPageContent() {
                 type="button"
                 className={`hidden items-center rounded-full border px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] transition-all duration-200 sm:inline-flex ${
                   selectedCategory === category
-                    ? "border-emerald-300/40 bg-gradient-to-b from-emerald-400/20 to-emerald-400/[0.04] text-white shadow-[0_0_0_1px_rgba(16,185,129,0.25),0_8px_22px_-10px_rgba(16,185,129,0.55)]"
+                    ? "border-[color:var(--accent-gold)]/40 bg-gradient-to-b from-[color:var(--accent-gold)]/20 to-[color:var(--accent-gold)]/[0.04] text-white shadow-[0_0_0_1px_rgba(212,175,55,0.25),0_8px_22px_-10px_rgba(212,175,55,0.5)]"
                     : "border-white/10 bg-white/[0.03] text-white/60 hover:-translate-y-px hover:border-white/25 hover:bg-white/[0.07] hover:text-white"
                 }`}
               >
@@ -243,8 +243,8 @@ function ProductsPageContent() {
               onClick={() => setStockFilter((prev) => !prev)}
               className={`w-full rounded-full border px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] transition-all duration-200 sm:ml-auto sm:w-auto ${
                 stockFilter
-                  ? "border-emerald-300/50 bg-gradient-to-b from-emerald-400/20 to-emerald-400/[0.04] text-emerald-100 shadow-[0_0_0_1px_rgba(16,185,129,0.25),0_8px_22px_-10px_rgba(16,185,129,0.5)]"
-                  : "border-white/10 bg-white/[0.03] text-white/50 hover:-translate-y-px hover:border-emerald-200/30 hover:text-emerald-100"
+                  ? "border-[color:var(--accent-gold)]/50 bg-gradient-to-b from-[color:var(--accent-gold)]/20 to-[color:var(--accent-gold)]/[0.04] text-white shadow-[0_0_0_1px_rgba(212,175,55,0.25),0_8px_22px_-10px_rgba(212,175,55,0.5)]"
+                  : "border-white/10 bg-white/[0.03] text-white/50 hover:-translate-y-px hover:border-[color:var(--accent-gold)]/30 hover:text-white"
               }`}
             >
               {stockFilter ? "✓ In Stock Only" : "In Stock Only"}
@@ -273,9 +273,9 @@ function ProductsPageContent() {
                 </span>
               )}
               {stockFilter && (
-                <span className="flex items-center gap-1.5 border border-emerald-300/25 px-2.5 py-1 text-xs text-emerald-200">
+                <span className="flex items-center gap-1.5 border border-[color:var(--accent-gold)]/25 px-2.5 py-1 text-xs text-[color:var(--accent-gold)]">
                   In Stock
-                  <button type="button" aria-label="Clear in-stock filter" onClick={() => setStockFilter(false)} className="-mr-1 inline-flex h-6 w-6 items-center justify-center text-emerald-300/70 hover:text-emerald-100">×</button>
+                  <button type="button" aria-label="Clear in-stock filter" onClick={() => setStockFilter(false)} className="-mr-1 inline-flex h-6 w-6 items-center justify-center text-[color:var(--accent-gold)]/70 hover:text-[color:var(--accent-gold)]">×</button>
                 </span>
               )}
               <button

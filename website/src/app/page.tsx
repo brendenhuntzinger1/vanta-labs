@@ -147,7 +147,7 @@ export default async function HomePage() {
             <ul className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-white/65 sm:mt-8 sm:text-[0.8rem]">
               {["Third-party batch tested", "99%+ purity", "COA on every lot", "Ships from the USA"].map((claim) => (
                 <li key={claim} className="inline-flex items-center gap-1.5">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5 text-emerald-300">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5 text-[color:var(--accent-gold)]">
                     <path d="m5 12 4 4 10-10" />
                   </svg>
                   {claim}
@@ -237,12 +237,12 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <section className="border-t border-white/10 bg-gradient-to-b from-emerald-500/[0.06] to-transparent py-10 sm:py-20">
+      <section className="border-t border-white/10 bg-gradient-to-b from-[color:var(--accent-gold)]/[0.06] to-transparent py-10 sm:py-20">
         <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
           <div className="grid gap-10 lg:grid-cols-[1fr_1.2fr] lg:items-center">
             <ScrollReveal>
               <div className="max-w-lg">
-                <p className="vl2-eyebrow text-emerald-300/80">Testing &amp; Transparency</p>
+                <p className="vl2-eyebrow text-[color:var(--accent-gold)]/80">Testing &amp; Transparency</p>
                 <h2 className="vl2-serif mt-2 text-2xl text-white sm:mt-3 sm:text-4xl lg:text-5xl">Every batch, third-party tested.</h2>
                 <p className="mt-5 text-sm leading-7 text-white/65 sm:text-base">
                   Anyone can print a label. We publish the proof. Every lot Vanta Labs ships is
@@ -260,7 +260,7 @@ export default async function HomePage() {
               {TESTING_PROOFS.map((proof, index) => (
                 <ScrollReveal key={proof.title} delayMs={index * 80}>
                   <article className="vl2-product-card h-full p-6">
-                    <div className="mb-4 inline-flex h-9 w-9 items-center justify-center border border-emerald-400/30 bg-emerald-400/10 text-emerald-300">
+                    <div className="mb-4 inline-flex h-9 w-9 items-center justify-center border border-[color:var(--accent-gold)]/30 bg-[color:var(--accent-gold)]/10 text-[color:var(--accent-gold)]">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
                         <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
                         <path d="m9 12 2 2 4-4" />

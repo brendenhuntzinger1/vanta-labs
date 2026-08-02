@@ -76,37 +76,39 @@ export function BacWaterAccessoryBlock({ bacWater, hostSlug }: { bacWater: Produ
   };
 
   return (
-    <div className="mt-4 rounded-xl border border-sky-200 bg-sky-50/60 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-sky-900">Recommended Accessories</p>
-        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-300 bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-          ✅ Most Frequently Added Accessory
-        </span>
-      </div>
-      <div className="mt-3 space-y-2">
+    <div className="mt-5 rounded-2xl border border-white/[0.08] bg-[#141414] p-5">
+      <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--accent-gold)]">
+        Frequently purchased together
+      </p>
+      <div className="mt-4 space-y-2.5">
         {offers.map((offer) => (
           <button
             key={offer.cartKey}
             type="button"
             onClick={(event) => handleAdd(offer, event.currentTarget)}
-            className="vl-focus-ring flex w-full items-center justify-between gap-3 rounded-lg border border-sky-200 bg-white px-3.5 py-2.5 text-left transition hover:border-sky-400"
+            className="vl-focus-ring flex w-full items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-3 text-left transition duration-200 hover:border-[color:var(--accent-gold)]/40 hover:bg-white/[0.04] active:scale-[0.99]"
           >
-            <span className="text-sm text-zinc-700">
-              <span className="font-medium text-[#111]">BAC Water {offer.sizeLabel}</span>
-              <span className="ml-1.5 text-zinc-500">(+{offer.displayPrice})</span>
+            <span className="min-w-0 text-sm">
+              <span className="font-medium text-white">BAC Water {offer.sizeLabel}</span>
+              <span className="ml-1.5 text-[#a3a3a3]">+{offer.displayPrice}</span>
               {isFeaturedBacWaterOffer(offer) ? (
-                <span className="ml-1.5 inline-flex items-center gap-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-500">
-                  <span aria-hidden="true">★</span> Most Popular
+                <span className="ml-2 inline-flex items-center align-middle text-[10px] font-semibold uppercase tracking-wide text-[color:var(--accent-gold)]">
+                  Most popular
                 </span>
               ) : null}
             </span>
-            <span className="shrink-0 text-xs font-semibold uppercase tracking-[0.1em] text-sky-700">
-              {addedKey === offer.cartKey ? "Added ✓" : "+ Add"}
+            <span
+              className={`shrink-0 text-xs font-semibold uppercase tracking-[0.1em] transition-colors duration-200 ${
+                addedKey === offer.cartKey ? "text-emerald-400" : "text-[color:var(--accent-gold)]"
+              }`}
+            >
+              {/* Green here is genuine success feedback, not branding. */}
+              {addedKey === offer.cartKey ? "Added ✓" : "Add"}
             </span>
           </button>
         ))}
       </div>
-      <p className="mt-2.5 text-xs leading-5 text-sky-900/70">
+      <p className="mt-3.5 text-xs leading-5 text-[#a3a3a3]">
         Over 70% of customers add BAC Water to complete their order.
       </p>
     </div>

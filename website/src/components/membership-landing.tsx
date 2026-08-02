@@ -114,7 +114,7 @@ function SavingsCalculator({ tiers }: { tiers: MembershipTier[] }) {
   const row = (label: string, value: string, tone: "plus" | "minus" | "muted" = "muted") => (
     <div className="flex items-center justify-between py-2.5 text-sm">
       <span className="text-white/60">{label}</span>
-      <span className={`tabular-nums font-medium ${tone === "plus" ? "text-emerald-300/80" : tone === "minus" ? "text-white/70" : "text-white"}`}>{value}</span>
+      <span className={`tabular-nums font-medium ${tone === "plus" ? "text-[color:var(--accent-gold)]/80" : tone === "minus" ? "text-white/70" : "text-white"}`}>{value}</span>
     </div>
   );
 
@@ -169,9 +169,9 @@ function SavingsCalculator({ tiers }: { tiers: MembershipTier[] }) {
         {row(`${tier.name} membership`, `−${formatCartCurrency(monthlyCost)}/mo`, "minus")}
       </div>
 
-      <div className={`mt-4 flex items-center justify-between rounded-xl border px-4 py-3.5 ${todayValue >= 0 ? "border-emerald-400/25 bg-emerald-400/[0.07]" : "border-white/10 bg-white/[0.03]"}`}>
+      <div className={`mt-4 flex items-center justify-between rounded-xl border px-4 py-3.5 ${todayValue >= 0 ? "border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.07]" : "border-white/10 bg-white/[0.03]"}`}>
         <span className="text-sm font-semibold text-white">{usingCart ? "Joining today is worth" : "Each month, membership is worth"}</span>
-        <span className={`text-xl font-bold tabular-nums ${todayValue >= 0 ? "text-emerald-300" : "text-white/70"}`}>
+        <span className={`text-xl font-bold tabular-nums ${todayValue >= 0 ? "text-[color:var(--accent-gold)]" : "text-white/70"}`}>
           {todayValue >= 0 ? "+" : "−"}{formatCartCurrency(Math.abs(todayValue))}
         </span>
       </div>
@@ -266,7 +266,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
               onClick={() => setBillingCycle("annual")}
               className={billingCycle === "annual" ? "inline-flex items-center justify-center bg-white/10 px-4 py-2.5 text-sm min-h-[44px] text-white sm:px-5" : "inline-flex items-center justify-center px-4 py-2.5 text-sm min-h-[44px] text-white/50 sm:px-5"}
             >
-              Annual <span className="ml-1.5 rounded-full border border-emerald-300/25 px-2 py-0.5 text-[10px] font-medium text-emerald-300/90">2 months free</span>
+              Annual <span className="ml-1.5 rounded-full border border-[color:var(--accent-gold)]/25 px-2 py-0.5 text-[10px] font-medium text-[color:var(--accent-gold)]">2 months free</span>
             </button>
           </div>
         </div>
@@ -290,11 +290,11 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                   className={`vl2-product-card group relative flex h-full flex-col p-6 sm:p-7 ${isFeatured ? "border-white/45" : isBestValue ? "border-white/25" : ""}`}
                 >
                   {isFeatured ? (
-                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap border border-white/30 bg-[#101014] px-4 py-1 text-[9px] font-medium uppercase tracking-[0.3em] text-white/90">
+                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap border border-white/30 bg-[#0a0a0a] px-4 py-1 text-[9px] font-medium uppercase tracking-[0.3em] text-white/90">
                       Most Popular
                     </span>
                   ) : isBestValue ? (
-                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap border border-emerald-300/30 bg-[#101014] px-4 py-1 text-[9px] font-medium uppercase tracking-[0.3em] text-emerald-200/90">
+                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap border border-[color:var(--accent-gold)]/30 bg-[#0a0a0a] px-4 py-1 text-[9px] font-medium uppercase tracking-[0.3em] text-[color:var(--accent-gold)]">
                       Best Value
                     </span>
                   ) : null}
@@ -320,8 +320,8 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                   ) : null}
 
                   {tier.monthlyStoreCreditCents > 0 ? (
-                    <div className="mt-2 border border-emerald-400/20 bg-emerald-400/[0.05] px-4 py-3.5">
-                      <p className="text-sm font-semibold text-emerald-300/90">{money(tier.monthlyStoreCreditCents)}/mo store credit</p>
+                    <div className="mt-2 border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.05] px-4 py-3.5">
+                      <p className="text-sm font-semibold text-[color:var(--accent-gold)]">{money(tier.monthlyStoreCreditCents)}/mo store credit</p>
                       <p className="text-[11px] text-white/45">
                         {tier.storeCreditMinOrderCents > 0
                           ? `redeem on orders of ${money(tier.storeCreditMinOrderCents)}+`
@@ -348,7 +348,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                   <ul className="mt-6 flex-1 space-y-3 border-t border-white/10 pt-5 text-sm leading-6 text-white/70">
                     {tier.benefits.map((benefit) => (
                       <li key={benefit} className="flex items-start gap-2.5">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-emerald-300/70">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-[color:var(--accent-gold)]/70">
                           <path d="m5 13 4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
                         </svg>
                         {/* Strip any leading emoji/symbols from admin-entered benefit copy —
