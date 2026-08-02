@@ -480,17 +480,23 @@ export function ProductDetailClient({
 
               {/* Trust row — third-party proof + guarantee, right next to the
                   buy decision (not hidden inside a tab). */}
-              <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <div className="flex items-start gap-2.5 rounded-lg border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.06] px-4 py-3">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-5 w-5 flex-shrink-0 text-[color:var(--accent-gold)]">
-                    <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
-                    <path d="m9 12 2 2 4-4" />
-                  </svg>
-                  <div>
-                    <p className="text-xs font-bold text-white">{hasVerifiedTesting ? `${selectedPurity} purity` : "COA pending"}</p>
-                    <p className="text-[11px] leading-4 text-[color:var(--accent-gold)]">{hasVerifiedTesting ? "Third-party batch tested" : "Published for this batch when available"}</p>
+              <div className={`mt-4 grid grid-cols-1 gap-3 ${hasVerifiedTesting ? "sm:grid-cols-2" : ""}`}>
+                {/* Purity card only renders once this batch actually has a
+                    published COA. There is no "COA pending" state on the buy
+                    panel — an unverified batch simply says nothing here rather
+                    than advertising a gap. */}
+                {hasVerifiedTesting ? (
+                  <div className="flex items-start gap-2.5 rounded-lg border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.06] px-4 py-3">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-5 w-5 flex-shrink-0 text-[color:var(--accent-gold)]">
+                      <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
+                      <path d="m9 12 2 2 4-4" />
+                    </svg>
+                    <div>
+                      <p className="text-xs font-bold text-white">{selectedPurity} purity</p>
+                      <p className="text-[11px] leading-4 text-[color:var(--accent-gold)]">Third-party batch tested</p>
+                    </div>
                   </div>
-                </div>
+                ) : null}
                 <div className="flex items-start gap-2.5 rounded-lg border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.06] px-4 py-3">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-5 w-5 flex-shrink-0 text-[color:var(--accent-gold)]">
                     <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
