@@ -26,11 +26,16 @@
   --border-soft: rgba(255, 255, 255, 0.08);
   --border-strong: rgba(255, 255, 255, 0.16);
 
-  /* THE brand accent — luxury gold. This is the only accent colour on the
-     storefront; green is reserved for success/system feedback. */
-  --accent-gold: #d4af37;
-  --accent-gold-soft: rgba(212, 175, 55, 0.14);
-  --accent-gold-strong: #e6c65c;
+  /* THE brand accent, in two weights. Gold only reads as luxury when it is
+     rationed, so the DEFAULT is a muted champagne (−25% saturation) used for
+     borders, labels and savings text, while the brighter gold is reserved for
+     primary CTAs — the one thing that should out-shine everything else.
+     Roughly: 90% charcoal, 8% champagne, 2% bright gold. */
+  --accent-gold: #c7ae5e;                 /* champagne — accents, borders, labels */
+  --accent-gold-soft: rgba(199, 174, 94, 0.10);
+  --accent-gold-strong: #d8c07a;          /* champagne hover */
+  --accent-gold-bright: #d4af37;          /* primary CTA only */
+  --accent-gold-bright-hover: #e0bd4d;
 
   --accent: #f4f4f4;
   --accent-strong: #ffffff;
@@ -1268,24 +1273,24 @@ textarea.vl-input { min-height: 6rem; }
   justify-content: center;
   gap: 0.5rem;
   min-height: 2.875rem;
-  border: 1px solid var(--accent-gold);
-  border-radius: 12px;
-  background: var(--accent-gold);
+  border: 1px solid var(--accent-gold-bright);
+  border-radius: 14px;
+  background: var(--accent-gold-bright);
   color: #0a0a0a;
   font-size: 0.8rem;
   font-weight: 600;
   letter-spacing: 0.05em;
   text-transform: uppercase;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 22px -14px rgba(212, 175, 55, 0.55);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 24px -16px rgba(212, 175, 55, 0.45);
   transition: background-color var(--duration-fast) ease, color var(--duration-fast) ease, border-color var(--duration-fast) ease, transform var(--duration-fast) var(--ease-out-premium), box-shadow var(--duration-fast) ease;
   touch-action: manipulation;
 }
 
 .vl2-btn-primary:hover {
-  background: var(--accent-gold-strong);
-  border-color: var(--accent-gold-strong);
+  background: var(--accent-gold-bright-hover);
+  border-color: var(--accent-gold-bright-hover);
   transform: translateY(-1px);
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35), 0 12px 26px -14px rgba(212, 175, 55, 0.7);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.35), 0 14px 30px -16px rgba(212, 175, 55, 0.55);
 }
 
 .vl2-btn-primary:active { transform: translateY(0) scale(0.985); }
