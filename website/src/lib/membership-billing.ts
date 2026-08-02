@@ -851,6 +851,14 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     const { data, error } = await supabaseAdmin
       .from("customer_memberships")
       .select(DUE_ROW_SELECT)
+      // Veyra owns the renewal schedule for any membership created through
+      // /api/v1/membership — it charges the card AND runs the retry/dunning
+      // cron itself. This sweep must therefore never see those rows: not to
+      // charge them, not to remind on them, not to mark them past-due. If both
+      // sides billed, every Veyra-backed member would be charged twice a month.
+      // (Same double-fire shape as the EVO confirm-backfill leak, 2026-08-01:
+      // a second system acting on rows it does not own.)
+      .is("veyra_membership_id", null)
       .eq("status", "trialing")
       .eq("intro_status", "active")
       .eq("cancel_at_period_end", false)
@@ -891,6 +899,14 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     const { data, error } = await supabaseAdmin
       .from("customer_memberships")
       .select(DUE_ROW_SELECT)
+      // Veyra owns the renewal schedule for any membership created through
+      // /api/v1/membership — it charges the card AND runs the retry/dunning
+      // cron itself. This sweep must therefore never see those rows: not to
+      // charge them, not to remind on them, not to mark them past-due. If both
+      // sides billed, every Veyra-backed member would be charged twice a month.
+      // (Same double-fire shape as the EVO confirm-backfill leak, 2026-08-01:
+      // a second system acting on rows it does not own.)
+      .is("veyra_membership_id", null)
       .eq("status", "trialing")
       .eq("intro_status", "active")
       .eq("cancel_at_period_end", false)
@@ -955,6 +971,14 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     const { data, error } = await supabaseAdmin
       .from("customer_memberships")
       .select(DUE_ROW_SELECT)
+      // Veyra owns the renewal schedule for any membership created through
+      // /api/v1/membership — it charges the card AND runs the retry/dunning
+      // cron itself. This sweep must therefore never see those rows: not to
+      // charge them, not to remind on them, not to mark them past-due. If both
+      // sides billed, every Veyra-backed member would be charged twice a month.
+      // (Same double-fire shape as the EVO confirm-backfill leak, 2026-08-01:
+      // a second system acting on rows it does not own.)
+      .is("veyra_membership_id", null)
       .eq("status", "active")
       .eq("cancel_at_period_end", true)
       .lte("next_billing_at", now.toISOString());
@@ -992,6 +1016,14 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     const { data, error } = await supabaseAdmin
       .from("customer_memberships")
       .select(DUE_ROW_SELECT)
+      // Veyra owns the renewal schedule for any membership created through
+      // /api/v1/membership — it charges the card AND runs the retry/dunning
+      // cron itself. This sweep must therefore never see those rows: not to
+      // charge them, not to remind on them, not to mark them past-due. If both
+      // sides billed, every Veyra-backed member would be charged twice a month.
+      // (Same double-fire shape as the EVO confirm-backfill leak, 2026-08-01:
+      // a second system acting on rows it does not own.)
+      .is("veyra_membership_id", null)
       .eq("status", "active")
       .eq("cancel_at_period_end", false)
       .is("renewal_reminder_sent_at", null)
@@ -1031,6 +1063,14 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     const { data, error } = await supabaseAdmin
       .from("customer_memberships")
       .select(DUE_ROW_SELECT)
+      // Veyra owns the renewal schedule for any membership created through
+      // /api/v1/membership — it charges the card AND runs the retry/dunning
+      // cron itself. This sweep must therefore never see those rows: not to
+      // charge them, not to remind on them, not to mark them past-due. If both
+      // sides billed, every Veyra-backed member would be charged twice a month.
+      // (Same double-fire shape as the EVO confirm-backfill leak, 2026-08-01:
+      // a second system acting on rows it does not own.)
+      .is("veyra_membership_id", null)
       .eq("status", "active")
       .eq("cancel_at_period_end", false)
       .lte("next_billing_at", now.toISOString());
