@@ -287,7 +287,7 @@ export function ProductDetailClient({
         <CouponPromoBanner />
 
         {promoBuy3Get1Enabled ? (
-          <div className="vl2-lab-panel mt-6 flex flex-wrap items-center gap-2 border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.06] px-5 py-3 text-sm text-white">
+          <div className="vl2-lab-panel mt-6 flex flex-wrap items-center gap-2 border-white/[0.06] bg-[#141414] px-5 py-3.5 text-sm text-white">
             <span aria-hidden="true">🎁</span>
             <span className="font-medium">Buy 3, Get 1 Free</span>
             <span className="text-[color:var(--accent-gold)]">— the lowest-priced item in your cart is automatically free at checkout.</span>
@@ -464,7 +464,7 @@ export function ProductDetailClient({
 
               <div className="mt-4 flex flex-wrap items-center gap-2">
                 {hasVerifiedTesting && (
-                  <span className="border border-[color:var(--accent-gold)]/30 bg-[color:var(--accent-gold)]/[0.06] px-3 py-1 text-xs font-semibold text-[color:var(--accent-gold)]">
+                  <span className="rounded-full border border-white/[0.08] bg-[#141414] px-3 py-1 text-xs font-medium text-[color:var(--accent-gold)]">
                     {selectedPurity} Purity Verified
                   </span>
                 )}
@@ -486,26 +486,26 @@ export function ProductDetailClient({
                     panel — an unverified batch simply says nothing here rather
                     than advertising a gap. */}
                 {hasVerifiedTesting ? (
-                  <div className="flex items-start gap-2.5 rounded-lg border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.06] px-4 py-3">
+                  <div className="flex items-start gap-2.5 rounded-xl border border-white/[0.06] bg-[#141414] px-4 py-3.5">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-5 w-5 flex-shrink-0 text-[color:var(--accent-gold)]">
                       <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
                       <path d="m9 12 2 2 4-4" />
                     </svg>
                     <div>
-                      <p className="text-xs font-bold text-white">{selectedPurity} purity</p>
-                      <p className="text-[11px] leading-4 text-[color:var(--accent-gold)]">Third-party batch tested</p>
+                      <p className="text-xs font-semibold text-white">{selectedPurity} purity</p>
+                      <p className="text-[11px] leading-4 text-[#a3a3a3]">Third-party batch tested</p>
                     </div>
                   </div>
                 ) : null}
-                <div className="flex items-start gap-2.5 rounded-lg border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.06] px-4 py-3">
+                <div className="flex items-start gap-2.5 rounded-xl border border-white/[0.06] bg-[#141414] px-4 py-3.5">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 h-5 w-5 flex-shrink-0 text-[color:var(--accent-gold)]">
                     <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
                     <path d="M12 8v4" />
                     <path d="M12 16h.01" />
                   </svg>
                   <div>
-                    <p className="text-xs font-bold text-white">Damaged or incorrect? Made right.</p>
-                    <p className="text-[11px] leading-4 text-[color:var(--accent-gold)]">Discreet, tracked U.S. shipping</p>
+                    <p className="text-xs font-semibold text-white">Damaged or incorrect? Made right.</p>
+                    <p className="text-[11px] leading-4 text-[#a3a3a3]">Discreet, tracked U.S. shipping</p>
                   </div>
                 </div>
               </div>
@@ -561,7 +561,7 @@ export function ProductDetailClient({
                 ) : (
                   <Link
                     href="/membership"
-                    className="group mt-5 block rounded-2xl border border-[color:var(--accent-gold)]/30 bg-[#141414] p-5 transition duration-200 hover:border-[color:var(--accent-gold)]/60 hover:shadow-[0_0_36px_-14px_rgba(212,175,55,0.5)]"
+                    className="group mt-6 block rounded-2xl border border-[color:var(--accent-gold)]/20 bg-gradient-to-b from-[#161616] to-[#121212] p-6 shadow-[0_10px_30px_-20px_rgba(0,0,0,0.9)] transition duration-200 hover:border-[color:var(--accent-gold)]/40"
                   >
                     <span className="flex items-center gap-2">
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" className="h-4 w-4 text-[color:var(--accent-gold)]" aria-hidden>
@@ -583,9 +583,11 @@ export function ProductDetailClient({
                       Become a member for lower pricing, free shipping, and monthly store credit.
                     </span>
 
-                    <span className="vl2-btn-primary mt-5 w-full px-5 py-3 text-xs">
+                    {/* Secondary by design: the page's one bright-gold action is
+                        Add to Cart. This is a refined outline button. */}
+                    <span className="mt-5 inline-flex items-center gap-1.5 rounded-lg border border-[color:var(--accent-gold)]/35 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.12em] text-[color:var(--accent-gold)] transition duration-200 group-hover:border-[color:var(--accent-gold)]/60 group-hover:bg-[color:var(--accent-gold)]/[0.06]">
                       Join membership
-                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5 transition-transform duration-200 group-hover:translate-x-0.5" aria-hidden><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 transition-transform duration-200 group-hover:translate-x-0.5" aria-hidden><path d="M5 12h14M13 6l6 6-6 6" /></svg>
                     </span>
                   </Link>
                 )
@@ -604,20 +606,25 @@ export function ProductDetailClient({
                         key={option.quantity}
                         type="button"
                         onClick={() => setQuantity(option.quantity)}
-                        className={`relative rounded-xl border px-2 py-3.5 text-center transition ${isSelected ? "border-[color:var(--accent-gold)] bg-[color:var(--accent-gold)] text-black shadow-[0_0_24px_-6px_rgba(212,175,55,0.55)]" : "border-white/[0.08] text-white hover:border-[color:var(--accent-gold)]/50"}`}
+                        className={`relative rounded-xl border px-2 py-3.5 text-center transition duration-200 ${isSelected ? "border-[color:var(--accent-gold)]/70 bg-[#181818] text-white shadow-[0_8px_20px_-12px_rgba(0,0,0,0.9)]" : "border-white/[0.06] bg-[#121212] text-white hover:border-white/20"}`}
                       >
                         {option.badge ? (
-                          <span className="absolute -top-2.5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-[color:var(--accent-gold)] px-2 py-0.5 text-[9px] font-semibold uppercase tracking-[0.08em] text-black shadow-sm">
+                          <span className={`absolute -top-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border px-1.5 py-[0.1rem] text-[9px] font-medium uppercase tracking-[0.1em] ${option.badge === "Best Value" ? "border-[color:var(--accent-gold)]/50 bg-[#0f0f0f] text-white" : "border-[color:var(--accent-gold)]/30 bg-[#0f0f0f] text-[color:var(--accent-gold)]"}`}>
                             {option.badge}
                           </span>
                         ) : null}
+                        {isSelected ? (
+                          <span className="absolute right-1.5 top-1.5 text-[color:var(--accent-gold)]" aria-hidden>
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" className="h-2.5 w-2.5"><path d="M20 6 9 17l-5-5" /></svg>
+                          </span>
+                        ) : null}
                         <span className="block text-sm font-medium">{option.label}</span>
-                        <span className={`mt-1 block text-xs ${isSelected ? "text-black/65" : "text-[#a3a3a3]"}`}>{formatUsd(lineTotal)}</span>
+                        <span className={`mt-1 block text-xs tabular-nums ${isSelected ? "text-white" : "text-[#a3a3a3]"}`}>{formatUsd(lineTotal)}</span>
                         {rate > 0 ? (
-                          <span className={`mt-0.5 block text-[10px] font-semibold ${isSelected ? "text-black" : "text-[color:var(--accent-gold)]"}`}>Save {Math.round(rate * 100)}%</span>
+                          <span className="mt-0.5 block text-[10px] font-semibold text-[color:var(--accent-gold)]">Save {Math.round(rate * 100)}%</span>
                         ) : null}
                         {freeShip ? (
-                          <span className={`mt-1 inline-flex items-center gap-1 text-[10px] font-medium ${isSelected ? "text-black" : "text-[color:var(--accent-gold)]"}`}>🚚 Free Ship</span>
+                          <span className="mt-1 inline-flex items-center gap-1 text-[10px] font-medium text-[#a3a3a3]">Free ship</span>
                         ) : null}
                       </button>
                     );
@@ -646,12 +653,12 @@ export function ProductDetailClient({
               </div>
 
               {currentBundleRate > 0 ? (
-                <div className="mt-4 flex items-center justify-between rounded-xl border border-[color:var(--accent-gold)]/20 bg-[color:var(--accent-gold)]/[0.06] px-4 py-3">
+                <div className="mt-4 flex items-center justify-between rounded-xl border border-white/[0.06] bg-[#141414] px-4 py-3.5">
                   <div>
                     <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-[color:var(--accent-gold)]">{quantity}-Vial Bundle</p>
                     <p className="text-sm text-white">You save {formatUsd(unitPrice * quantity - getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))} · {Math.round(currentBundleRate * 100)}% off</p>
                   </div>
-                  <p className="text-xl font-bold text-[color:var(--accent-gold)]">{formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))}</p>
+                  <p className="text-xl font-semibold text-white tabular-nums">{formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))}</p>
                 </div>
               ) : null}
 
@@ -660,7 +667,9 @@ export function ProductDetailClient({
                   onClick={(event) => handleAddToCart(event.currentTarget)}
                   type="button"
                   disabled={isOutOfStock}
-                  className="vl-focus-ring flex-1 rounded-xl bg-[color:var(--accent-gold)] px-5 py-3.5 text-sm font-semibold uppercase tracking-[0.08em] text-black shadow-[0_8px_22px_-14px_rgba(212,175,55,0.7)] transition hover:bg-[color:var(--accent-gold-strong)] disabled:cursor-not-allowed disabled:opacity-50"
+                  // The one bright-gold element on the page. Everything else is
+                  // champagne or charcoal so this reads as THE action.
+                  className="vl-focus-ring flex-1 rounded-2xl bg-[color:var(--accent-gold-bright)] px-5 py-4 text-sm font-semibold uppercase tracking-[0.08em] text-black shadow-[0_10px_26px_-16px_rgba(212,175,55,0.55)] transition duration-200 hover:-translate-y-px hover:bg-[color:var(--accent-gold-bright-hover)] hover:shadow-[0_14px_32px_-16px_rgba(212,175,55,0.6)] active:translate-y-0 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 motion-reduce:hover:translate-y-0"
                 >
                   {isOutOfStock ? "Currently Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
                 </button>
@@ -757,7 +766,7 @@ export function ProductDetailClient({
 
       {/* Sticky add-to-cart: charcoal bar under a thin gold hairline, so it
           reads as part of the brand rather than a floating utility strip. */}
-      <div className="fixed inset-x-0 bottom-0 z-50 border-t border-[color:var(--accent-gold)]/25 bg-[#141414]/95 px-5 pt-4 pb-[max(env(safe-area-inset-bottom),1rem)] shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.8)] backdrop-blur-xl lg:hidden">
+      <div className="fixed inset-x-0 bottom-0 z-50 border-t border-[color:var(--accent-gold)]/20 bg-[#141414]/95 px-5 pt-4 pb-[max(env(safe-area-inset-bottom),1rem)] shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.8)] backdrop-blur-xl lg:hidden">
         <div className="flex items-center gap-4">
           <div className="min-w-0 flex-1">
             <p className="truncate text-xs text-[#a3a3a3]">{product.name}</p>

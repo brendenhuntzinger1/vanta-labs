@@ -76,7 +76,7 @@ export function BacWaterAccessoryBlock({ bacWater, hostSlug }: { bacWater: Produ
   };
 
   return (
-    <div className="mt-5 rounded-2xl border border-white/[0.08] bg-[#141414] p-5">
+    <div className="mt-6 rounded-2xl border border-white/[0.06] bg-[#141414] p-5 sm:p-6">
       <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-[color:var(--accent-gold)]">
         Frequently purchased together
       </p>
@@ -86,7 +86,7 @@ export function BacWaterAccessoryBlock({ bacWater, hostSlug }: { bacWater: Produ
             key={offer.cartKey}
             type="button"
             onClick={(event) => handleAdd(offer, event.currentTarget)}
-            className="vl-focus-ring flex w-full items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-3 text-left transition duration-200 hover:border-[color:var(--accent-gold)]/40 hover:bg-white/[0.04] active:scale-[0.99]"
+            className="vl-focus-ring group flex w-full items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-[#181818] px-4 py-3.5 text-left transition duration-200 hover:border-white/[0.14] active:scale-[0.99]"
           >
             <span className="min-w-0 text-sm">
               <span className="font-medium text-white">BAC Water {offer.sizeLabel}</span>
@@ -97,13 +97,17 @@ export function BacWaterAccessoryBlock({ bacWater, hostSlug }: { bacWater: Produ
                 </span>
               ) : null}
             </span>
+            {/* Outline by default, fills gold only on hover — an accessory
+                add-on shouldn't compete with Add to Cart for attention. */}
             <span
-              className={`shrink-0 text-xs font-semibold uppercase tracking-[0.1em] transition-colors duration-200 ${
-                addedKey === offer.cartKey ? "text-[color:var(--accent-gold)]" : "text-[color:var(--accent-gold)]"
+              className={`shrink-0 rounded-lg border px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.1em] transition duration-200 ${
+                addedKey === offer.cartKey
+                  ? "border-[color:var(--success)]/40 text-[color:var(--success)]"
+                  : "border-[color:var(--accent-gold)]/40 text-[color:var(--accent-gold)] group-hover:bg-[color:var(--accent-gold)] group-hover:text-black"
               }`}
             >
               {/* Green here is genuine success feedback, not branding. */}
-              {addedKey === offer.cartKey ? "Added ✓" : "Add"}
+              {addedKey === offer.cartKey ? "Added" : "Add"}
             </span>
           </button>
         ))}
