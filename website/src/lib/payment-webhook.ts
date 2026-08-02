@@ -16,7 +16,7 @@ import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
 import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
 import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
-import { activateAnnualMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
+import { activatePaidMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 import { recordSystemAlert } from "@/lib/monitoring";
 
 export interface WebhookEventState {
@@ -410,7 +410,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_number, order_type, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, points_redeemed, store_credit_redeemed_cents")
+    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, points_redeemed, store_credit_redeemed_cents")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -1046,7 +1046,8 @@ export async function finalizeManualPayment(
     // Turn on the membership + perks now that payment is verified.
     try {
       if (order.customer_user_id && order.membership_tier_id) {
-        await activateAnnualMembership(String(order.customer_user_id), String(order.membership_tier_id));
+        const cycle = String(order.membership_cycle ?? "annual") === "monthly" ? "monthly" : "annual";
+        await activatePaidMembership(String(order.customer_user_id), String(order.membership_tier_id), cycle);
       }
     } catch (membershipError) {
       console.error("Unable to activate membership for order", orderId, membershipError);
@@ -1316,6 +1317,8 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     const runSideEffects = Boolean(seClaim && seClaim.length > 0);
 
     if (runSideEffects) {
+      const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
+
       // Ambassador commission — MUST be gated (an ungated replay reset a paid
       // commission back to pending and paid the ambassador twice).
       try {
@@ -1379,7 +1382,9 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       }
 
       const customerUserId = eventPayload.customerUserId ?? orderRecord?.customer_user_id ?? null;
-      if (customerUserId) {
+      // Memberships are a digital purchase: no loyalty points earned or redeemed
+      // (matches the manual-approval path).
+      if (customerUserId && !isMembershipOrder) {
         try {
           const pointsRedeemed = Number(orderRecord?.points_redeemed ?? eventPayload.pointsRedeemed ?? 0);
           if (pointsRedeemed > 0) {
@@ -1460,12 +1465,21 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         }
       }
 
+      // Turn on the membership + perks now that a card payment has cleared.
+      if (isMembershipOrder && customerUserId && orderRecord?.membership_tier_id) {
+        try {
+          const cycle = String(orderRecord.membership_cycle ?? "annual") === "monthly" ? "monthly" : "annual";
+          await activatePaidMembership(String(customerUserId), String(orderRecord.membership_tier_id), cycle);
+        } catch (membershipError) {
+          console.error("Unable to activate membership for order", orderId, membershipError);
+        }
+      }
+
       // Commit stock exactly once. Read the line items from the DB order_items
       // (authoritative from checkout) so decrement and the refund restock use
       // the SAME source — a real processor's callback may omit cart items, which
       // would otherwise decrement nothing yet restock real units on refund.
       // Membership orders are digital and hold no inventory.
-      const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
       if (!isMembershipOrder) {
         try {
           // Finalize the checkout reservation (permanent deduct). Fall back to

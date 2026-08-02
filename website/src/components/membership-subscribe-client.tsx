@@ -51,6 +51,14 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
         setMessage(data.error ?? "Unable to start your membership right now.");
         return;
       }
+      // Card payments live: go to secure checkout. Perks activate the moment the
+      // payment clears (the webhook turns on the membership), and the customer
+      // lands on the order confirmation.
+      if (data.checkoutUrl) {
+        window.location.assign(data.checkoutUrl as string);
+        return;
+      }
+      // Fallback (no processor connected): the request is saved, not charged.
       setStatus("success");
       setMessage(
         data.chargeSucceeded

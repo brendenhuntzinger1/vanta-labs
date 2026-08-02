@@ -3,6 +3,7 @@ import "server-only";
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getBillingProvider } from "@/lib/billing-provider";
+import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling } from "@/lib/membership-billing-math";
 import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
@@ -234,6 +235,148 @@ export async function activateAnnualMembership(userId: string, tierId: string) {
       }),
     });
   }
+}
+
+// Activates a MONTHLY membership after its first payment clears. Benefits turn
+// on immediately and the next charge is scheduled ~30 days out; the billing
+// sweep renews it once a recurring billing provider is connected (until then a
+// renewal attempt fails honestly and the member goes past-due).
+export async function activateMonthlyMembership(userId: string, tierId: string) {
+  const tier = await getTierById(tierId);
+  if (!tier) return;
+
+  const now = new Date();
+  const nextBillingAt = new Date(now.getTime() + 30 * ONE_DAY_MS);
+
+  await supabaseAdmin.from("customer_memberships").upsert({
+    user_id: userId,
+    tier_id: tier.id,
+    billing_cycle: "monthly",
+    status: "active",
+    started_at: now.toISOString(),
+    renews_at: nextBillingAt.toISOString(),
+    intro_status: "not_applicable",
+    next_billing_at: nextBillingAt.toISOString(),
+    next_billing_amount_cents: tier.monthly_price_cents ?? 0,
+    cancel_at_period_end: false,
+    updated_at: now.toISOString(),
+  }, { onConflict: "user_id" });
+
+  await recordBillingEvent({ userId, tierId: tier.id, eventType: "renewal", amountCents: tier.monthly_price_cents ?? 0, status: "succeeded" });
+
+  const contact = await getAuthUserContact(userId);
+  if (contact) {
+    await sendMarketingEmail({
+      to: contact.email,
+      campaignType: "membership_welcome",
+      referenceId: userId,
+      templateKey: "membershipWelcomeTemplate",
+      ...membershipWelcomeTemplate({ name: contact.name, tierName: tier.name }),
+    });
+
+    await sendEmail({
+      to: contact.email,
+      ...membershipSignupReceiptTemplate({
+        name: contact.name,
+        tierName: tier.name,
+        amountCents: tier.monthly_price_cents ?? 0,
+        billingCycle: "monthly",
+        nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+        autoRenews: true,
+      }),
+    });
+  }
+}
+
+// Turns on a membership after its order is PAID (card webhook or manual
+// approval), picking the right cycle. This is the single activation entry point
+// used by the payment paths.
+export async function activatePaidMembership(userId: string, tierId: string, billingCycle: "monthly" | "annual") {
+  if (billingCycle === "monthly") {
+    await activateMonthlyMembership(userId, tierId);
+  } else {
+    await activateAnnualMembership(userId, tierId);
+  }
+}
+
+// Creates a membership ORDER and a live checkout session for it, so the customer
+// pays through the same processor as any product order. On payment the webhook
+// flips the order paid and activates the membership + perks (see
+// payment-webhook.ts). Returns the hosted checkout URL to redirect the buyer to.
+export async function createMembershipCheckoutSession(input: {
+  userId: string;
+  tierId: string;
+  billingCycle: "monthly" | "annual";
+}): Promise<{ orderId: string; orderNumber: string; hostedCheckoutUrl: string }> {
+  if (!isCheckoutOpen()) {
+    throw new Error("Checkout isn't open yet — card payments aren't connected. Contact support to activate your membership.");
+  }
+
+  const tier = await getTierById(input.tierId);
+  if (!tier) {
+    throw new Error("Membership tier not found");
+  }
+
+  const amountCents = input.billingCycle === "annual"
+    ? Number(tier.annual_price_cents ?? 0)
+    : Number(tier.monthly_price_cents ?? 0);
+  if (!Number.isFinite(amountCents) || amountCents <= 0) {
+    throw new Error(`This membership has no ${input.billingCycle} price set.`);
+  }
+  const amount = roundMoney(amountCents / 100);
+
+  const contact = await getAuthUserContact(input.userId);
+  if (!contact) {
+    throw new Error("Unable to load your account details.");
+  }
+
+  const orderId = `order-${randomUUID()}`;
+  const orderNumber = `VL-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+  const now = new Date().toISOString();
+
+  const { error } = await supabaseAdmin.from("orders").insert({
+    order_id: orderId,
+    order_number: orderNumber,
+    order_type: "membership",
+    membership_tier_id: tier.id,
+    membership_cycle: input.billingCycle,
+    payment_method: "card",
+    customer_email: contact.email,
+    customer_name: contact.name,
+    currency: "USD",
+    subtotal: amount,
+    shipping_amount: 0,
+    handling_fee: 0,
+    tax_amount: 0,
+    discount_amount: 0,
+    amount_paid: amount,
+    customer_user_id: input.userId,
+    payment_status: "pending_payment",
+    fulfillment_status: "pending",
+    created_at: now,
+    updated_at: now,
+  });
+  if (error) throw error;
+
+  await supabaseAdmin.from("order_items").insert({
+    order_id: orderId,
+    product_id: `membership:${tier.slug ?? tier.id}`,
+    product_name: `${input.billingCycle === "annual" ? "Annual" : "Monthly"} Membership — ${tier.name}`,
+    unit_price: amount,
+    quantity: 1,
+    line_total: amount,
+  });
+
+  const provider = getPaymentProvider();
+  const session = await provider.createCheckoutSession({
+    orderId,
+    amount: amountCents, // minor units, as LivePaymentProvider expects
+    currency: "USD",
+    customerEmail: contact.email,
+    metadata: { orderNumber },
+  });
+
+  return { orderId, orderNumber, hostedCheckoutUrl: session.hostedCheckoutUrl };
 }
 
 export interface StartMembershipSignupInput {

@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
-import { startMembershipSignup } from "@/lib/membership-billing";
+import { createMembershipCheckoutSession, startMembershipSignup } from "@/lib/membership-billing";
+import { isCheckoutOpen } from "@/lib/payment-provider";
 
 export async function POST(request: Request) {
   const user = await getAuthenticatedUser();
@@ -20,6 +21,15 @@ export async function POST(request: Request) {
   }
 
   try {
+    // Card payments are live: create a membership order + checkout session and
+    // send the customer to pay. On payment the webhook activates the membership
+    // and its perks. If checkout isn't open (no processor), fall back to the
+    // legacy "request saved" flow so nothing breaks.
+    if (isCheckoutOpen()) {
+      const session = await createMembershipCheckoutSession({ userId: user.id, tierId: body.tierId, billingCycle: body.billingCycle });
+      return NextResponse.json({ success: true, checkoutUrl: session.hostedCheckoutUrl, orderId: session.orderId });
+    }
+
     const result = await startMembershipSignup({ userId: user.id, tierId: body.tierId, billingCycle: body.billingCycle });
     return NextResponse.json({ success: true, chargeSucceeded: result.success });
   } catch (error) {
