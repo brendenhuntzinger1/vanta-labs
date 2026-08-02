@@ -189,6 +189,8 @@ function SavingsCalculator({ tiers }: { tiers: MembershipTier[] }) {
 
 export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: MembershipTier[]; isSignedInCustomer: boolean }) {
   const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
+  // Per-tier benefit-list disclosure, mobile only (see the toggle below).
+  const [expandedBenefits, setExpandedBenefits] = useState<Record<string, boolean>>({});
 
   const paidTiers = useMemo(
     () => tiers.filter((tier) => tier.slug !== "free" && tier.monthlyPriceCents > 0).sort((a, b) => a.monthlyPriceCents - b.monthlyPriceCents),
@@ -210,7 +212,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
   ], []);
 
   return (
-    <div className="relative z-10 px-4 pb-24 pt-24 sm:px-6 sm:pt-28 lg:px-12">
+    <div className="relative z-10 px-4 pb-24 pt-16 sm:px-6 sm:pt-28 lg:px-12">
       <div className="mx-auto max-w-6xl">
         {tiers.length === 0 ? (
           <>
@@ -242,8 +244,8 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
         {/* Hero: the club, not the coupon. */}
         <div className="mx-auto max-w-2xl text-center">
           <p className="vl2-eyebrow">Vanta Labs Membership</p>
-          <h1 className="vl2-serif mt-4 text-4xl text-white sm:text-5xl">The inner circle of research.</h1>
-          <p className="mt-3 text-sm leading-7 text-white/55">
+          <h1 className="vl2-serif mt-3 text-[2rem] leading-[1.12] text-white sm:mt-4 sm:text-5xl">The inner circle of research.</h1>
+          <p className="mt-3 text-sm leading-relaxed text-white/55">
             Member pricing on every vial, monthly store credit, free priority shipping, and first access to new
             compounds — a membership that pays for itself on your first order.
           </p>
@@ -274,8 +276,11 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
           </div>
         </div>
 
-        {/* Tier cards: cost, credit, real average savings, and who it's for. */}
-        <div className="mt-8 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-pl-4 px-1 pb-2 pt-4 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:grid sm:snap-none sm:grid-cols-2 sm:overflow-visible sm:px-0 sm:pb-0 sm:pt-0 lg:grid-cols-4">
+        {/* Tier cards: cost, credit, real average savings, and who it's for.
+            Stacked vertically on mobile — the old horizontal carousel showed
+            one plan at a time, so plans 2-4 were invisible until you happened
+            to swipe, and you could never compare two side by side. */}
+        <div className="mt-8 grid grid-cols-1 gap-4 pt-4 sm:grid-cols-2 lg:grid-cols-4">
           {paidTiers.map((tier, index) => {
             const price = billingCycle === "monthly" ? tier.monthlyPriceCents : tier.annualPriceCents;
             const isFeatured = tier.slug === "pro";
@@ -288,7 +293,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
             const avgMonthlySavingsCents = Math.round(20000 * (tier.memberDiscountPercent / 100)) + tier.monthlyStoreCreditCents;
             const bestFor = BEST_FOR_BY_RANK[Math.min(index, BEST_FOR_BY_RANK.length - 1)];
             return (
-              <div key={tier.id} className="w-[82%] shrink-0 snap-center sm:w-auto sm:shrink">
+              <div key={tier.id}>
                 <div
                   className={`vl2-product-card group relative flex h-full flex-col p-6 sm:p-7 ${isFeatured || isBestValue ? "vl-tier-glow vl-tier-glow-featured" : "vl-tier-glow"}`}
                 >
@@ -348,18 +353,37 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                     </ul>
                   </div>
 
-                  <ul className="mt-6 flex-1 space-y-3 border-t border-white/10 pt-5 text-sm leading-6 text-white/70">
-                    {tier.benefits.map((benefit) => (
-                      <li key={benefit} className="flex items-start gap-2.5">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-[color:var(--accent-gold)]/70">
-                          <path d="m5 13 4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                        {/* Strip any leading emoji/symbols from admin-entered benefit copy —
-                            the gold check is the icon; doubled glyphs read as clutter. */}
-                        <span>{benefit.replace(/^[^\p{L}\p{N}$]+\s*/u, "")}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  {/* Full benefit list. A tier can carry 11 bullets, which made
+                      each card taller than a phone screen — so on mobile it is
+                      collapsed behind a toggle and the headline value (price,
+                      discount, credit) stays visible. Always open from sm up,
+                      where there is room for it. */}
+                  <div className={`${expandedBenefits[tier.id] ? "block" : "hidden"} sm:block sm:flex-1`}>
+                    <ul className="mt-5 space-y-3 border-t border-white/10 pt-5 text-sm leading-6 text-white/70 sm:mt-6">
+                      {tier.benefits.map((benefit) => (
+                        <li key={benefit} className="flex items-start gap-2.5">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-[color:var(--accent-gold)]/70">
+                            <path d="m5 13 4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                          {/* Strip any leading emoji/symbols from admin-entered benefit copy —
+                              the gold check is the icon; doubled glyphs read as clutter. */}
+                          <span>{benefit.replace(/^[^\p{L}\p{N}$]+\s*/u, "")}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setExpandedBenefits((prev) => ({ ...prev, [tier.id]: !prev[tier.id] }))}
+                    aria-expanded={Boolean(expandedBenefits[tier.id])}
+                    className="vl-focus-ring mt-4 flex w-full items-center justify-center gap-1.5 border-t border-white/10 pt-4 text-xs text-[color:var(--accent-gold)] sm:hidden"
+                  >
+                    {expandedBenefits[tier.id] ? "Hide benefits" : `See all ${tier.benefits.length} benefits`}
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={`h-3.5 w-3.5 transition-transform duration-200 ${expandedBenefits[tier.id] ? "rotate-180" : ""}`} aria-hidden>
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
+                  </button>
 
                   <div className="mt-6">
                     <Link
@@ -382,7 +406,6 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
             );
           })}
         </div>
-        <p className="mt-3 text-center text-[11px] uppercase tracking-[0.24em] text-white/70 sm:hidden">← Swipe to compare plans →</p>
 
         {/* Live calculator — right under the cards, priced off the real cart. */}
         <ScrollReveal delayMs={60}>
