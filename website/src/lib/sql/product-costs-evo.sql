@@ -85,6 +85,14 @@ where d.product_id = p.id
     'kisspeptin','hcg','snap-8'
   );
 
+-- 2b. Standalone ipamorelin (10mg) — live, but not on the EVO sheet. Cost per
+--     vial set manually by the owner ($30.00).
+update public.product_doses d
+set product_cost_cents = 3000, updated_at = now()
+from public.products p
+where d.product_id = p.id and p.slug = 'ipamorelin';
+update public.products set product_cost_cents = 3000, updated_at = now() where slug = 'ipamorelin';
+
 -- 3. Verify (optional): every dose should now have a cost. Expect 0 rows.
 --   select p.slug, d.label, d.product_cost_cents
 --   from public.product_doses d join public.products p on p.id = d.product_id
