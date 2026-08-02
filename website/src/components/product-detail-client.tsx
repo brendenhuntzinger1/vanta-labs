@@ -521,7 +521,7 @@ export function ProductDetailClient({
                         >
                           {variant.label}
                           {isMostPopular && (
-                            <span className="ml-1.5 inline-flex items-center gap-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-amber-500">
+                            <span className="ml-1.5 inline-flex items-center gap-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-[color:var(--accent-gold)]">
                               <span aria-hidden="true">★</span> Most Popular
                             </span>
                           )}

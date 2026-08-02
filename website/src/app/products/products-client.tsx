@@ -231,8 +231,8 @@ function ProductsPageContent() {
                 onClick={() => setBestSellersOnly((prev) => !prev)}
                 className={`w-full rounded-full border px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] transition-all duration-200 sm:w-auto ${
                   bestSellersOnly
-                    ? "border-amber-300/50 bg-gradient-to-b from-amber-300/20 to-amber-300/[0.04] text-amber-100 shadow-[0_0_0_1px_rgba(251,191,36,0.25),0_8px_22px_-10px_rgba(251,191,36,0.5)]"
-                    : "border-white/10 bg-white/[0.03] text-white/50 hover:-translate-y-px hover:border-amber-200/30 hover:text-amber-100"
+                    ? "border-[color:var(--accent-gold)]/50 bg-gradient-to-b from-[color:var(--accent-gold)]/20 to-[color:var(--accent-gold)]/[0.04] text-[color:var(--accent-gold)] shadow-[0_0_0_1px_rgba(212,175,55,0.25),0_8px_22px_-10px_rgba(212,175,55,0.5)]"
+                    : "border-white/10 bg-white/[0.03] text-white/50 hover:-translate-y-px hover:border-[color:var(--accent-gold)]/30 hover:text-[color:var(--accent-gold)]"
                 }`}
               >
                 {bestSellersOnly ? "★ Best Sellers" : "☆ Best Sellers"}
@@ -255,9 +255,9 @@ function ProductsPageContent() {
             <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/10 pt-3">
               <span className="text-[10px] uppercase tracking-[0.18em] text-white/35">Active:</span>
               {bestSellersOnly && (
-                <span className="flex items-center gap-1.5 border border-amber-300/30 px-2.5 py-1 text-xs text-amber-200">
+                <span className="flex items-center gap-1.5 border border-[color:var(--accent-gold)]/30 px-2.5 py-1 text-xs text-[color:var(--accent-gold)]">
                   Best Sellers
-                  <button type="button" aria-label="Clear best sellers filter" onClick={() => setBestSellersOnly(false)} className="-mr-1 inline-flex h-6 w-6 items-center justify-center text-amber-300/70 hover:text-amber-100">×</button>
+                  <button type="button" aria-label="Clear best sellers filter" onClick={() => setBestSellersOnly(false)} className="-mr-1 inline-flex h-6 w-6 items-center justify-center text-[color:var(--accent-gold)]/70 hover:text-[color:var(--accent-gold)]">×</button>
                 </span>
               )}
               {selectedCategory !== "All" && (

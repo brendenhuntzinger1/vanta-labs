@@ -61,7 +61,7 @@ export function ProductCard({
       <Link href={`/products/${product.slug}`} className="vl-focus-ring flex flex-1 flex-col">
         <div className="vl-product-card-media border-b border-white/10">
           {product.isBestSeller ? (
-            <span className="vl2-eyebrow absolute left-3 top-3 z-10 rounded-full border border-amber-300/40 bg-black/70 px-2.5 py-1 text-[10px] text-amber-300 shadow-sm backdrop-blur-md">
+            <span className="vl2-eyebrow absolute left-3 top-3 z-10 rounded-full border border-[color:var(--accent-gold)]/40 bg-black/70 px-2.5 py-1 text-[10px] text-[color:var(--accent-gold)] shadow-sm backdrop-blur-md">
               ★ Best Seller
             </span>
           ) : product.badge ? (
@@ -122,7 +122,7 @@ export function ProductCard({
               </span>
             ) : null}
             {product.coaUrl ? (
-              <span className="rounded-full border border-sky-400/30 bg-sky-400/10 px-2 py-1 font-medium text-sky-300">
+              <span className="rounded-full border border-white/[0.08] bg-white/[0.03] px-2 py-1 font-medium text-[#a3a3a3]">
                 COA verified
               </span>
             ) : null}
