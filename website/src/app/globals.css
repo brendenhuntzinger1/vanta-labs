@@ -1763,13 +1763,40 @@ textarea {
    which leaves older Safari — the exact browser this button exists for — with
    an unrecognised declaration and no button at all. It is set inline on the
    element instead, where the minifier cannot reach it. */
+/* Cart drawer entrance. These were referenced by the drawer but never defined,
+   so the panel appeared with no transition. Transform/opacity only — GPU
+   composited, no layout work, no CLS. */
+@keyframes vl-fade-backdrop {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes vl-drawer-in-mobile {
+  from { opacity: 0; transform: translate3d(0, 2%, 0) scale(0.995); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); }
+}
+
+@keyframes vl-drawer-in-desktop {
+  from { opacity: 0; transform: translate3d(3%, 0, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-\[vl-drawer-in-mobile_0\.34s_cubic-bezier\(0\.2\,0\.8\,0\.2\,1\)\],
+  .animate-\[vl-fade-backdrop_0\.28s_ease-out\] {
+    animation: none !important;
+  }
+}
+
 .vl-apple-pay-button {
   appearance: -apple-pay-button;
   -apple-pay-button-type: buy;
   -apple-pay-button-style: white;
   display: block;
   width: 100%;
-  height: 46px;
+  /* Matches the secondary "Proceed to checkout" pill so express checkout reads
+     as the primary action, not a smaller afterthought. */
+  height: 56px;
   border: 0;
   border-radius: 9999px;
   cursor: pointer;

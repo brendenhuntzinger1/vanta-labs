@@ -712,7 +712,7 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
   // button is invisible rather than a layout jump.
   if (warming || !session?.sessionId || !config?.basis_theory?.public_api_key) {
     if (warming) {
-      return <div className="h-[46px] w-full animate-pulse rounded-full bg-white/20" aria-hidden="true" />;
+      return <div className="h-[56px] w-full animate-pulse rounded-full bg-white/10" aria-hidden="true" />;
     }
     // Not warming and still no usable session: never render a dead button.
     return null;
@@ -727,7 +727,7 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
         <div
           role="status"
           aria-live="polite"
-          className="flex h-[46px] w-full items-center justify-center rounded-full bg-white/25 text-sm font-semibold text-black/60"
+          className="flex h-[56px] w-full items-center justify-center rounded-full bg-white/25 text-sm font-semibold text-black/60"
         >
           {paid ? "Order placed" : "Confirming…"}
         </div>
