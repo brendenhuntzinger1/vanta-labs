@@ -4,6 +4,7 @@ import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canViewProfit } from "@/lib/admin-roles";
 import { getCurrentOnlineVisitorCount, getRevenueWindowMetrics } from "@/lib/admin-analytics";
 import { getProfitWindowMetrics } from "@/lib/admin-profit";
+import { getRevenueMetrics } from "@/lib/admin-revenue";
 import { getAdminOrderRows } from "@/lib/admin-orders";
 import { listAdminProducts } from "@/lib/admin-products";
 import { getLowStockCount } from "@/lib/admin-inventory";
@@ -24,12 +25,13 @@ export default async function AdminHomePage() {
     redirect("/vault");
   }
 
-  const [orderList, products, partners, onlineVisitors, revenueWindows, lowStockCount, reconciliationFlagCount, profitWindows] = await Promise.all([
+  const [orderList, products, partners, onlineVisitors, revenueWindows, revenueMetrics, lowStockCount, reconciliationFlagCount, profitWindows] = await Promise.all([
     getAdminOrderRows({ pageSize: 1000 }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 1000, pageCount: 1 })),
     listAdminProducts({ search: "", category: "all", status: "all" }).catch(() => []),
     getAdminPartnerRows({ status: "all" }).catch(() => []),
     getCurrentOnlineVisitorCount().catch(() => 0),
     getRevenueWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0 })),
+    getRevenueMetrics().catch(() => null),
     getLowStockCount().catch(() => 0),
     getReconciliationFlagCount().catch(() => 0),
     getProfitWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, ordersLast30Days: 0, hasEstimatedCost: false })),
@@ -61,8 +63,9 @@ export default async function AdminHomePage() {
 
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
           <div className="vl-panel rounded-2xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Orders</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{orderList.total}</p>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Paid Orders</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{revenueMetrics?.totalPaidOrders ?? 0}</p>
+            <p className="mt-1 text-[11px] text-zinc-500">{orderList.total} total incl. pending</p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Revenue · 30d</p>

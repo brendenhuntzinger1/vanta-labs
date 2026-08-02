@@ -66,7 +66,10 @@ export default async function AdminOrdersPage({
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h1 className="text-2xl font-semibold sm:text-3xl">Admin Orders</h1>
-            <p className="mt-2 text-sm text-zinc-400">{result.total} order{result.total === 1 ? "" : "s"} — real Supabase orders and commissions.</p>
+            <p className="mt-2 text-sm text-zinc-400">
+              {result.total} order record{result.total === 1 ? "" : "s"} — includes pending / unpaid checkouts. Use the
+              <span className="text-zinc-300"> payment filter → Paid</span> to see completed sales only.
+            </p>
           </div>
           <Link href="/api/admin/orders/export" className="vl-btn-secondary inline-flex px-4 py-2 text-xs">
             Export Orders CSV
