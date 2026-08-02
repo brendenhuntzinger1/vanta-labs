@@ -20,6 +20,7 @@ import { getBestSellerSlugs } from "@/lib/best-sellers";
 import type { Product } from "@/lib/catalog-types";
 import { ReorderButton } from "@/components/reorder-button";
 import { AccountRecentlyViewed } from "@/components/account-recently-viewed";
+import { FREE_SHIPPING_THRESHOLD } from "@/lib/shipping";
 
 function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -204,7 +205,7 @@ export default async function AccountDashboardPage() {
         {lifetimeSavings.total > 0 ? (
           <StatTile label="Lifetime saved" value={money(lifetimeSavings.total)} sub="member savings" />
         ) : (
-          <StatTile label="Free shipping" value="$250+" sub="on qualifying orders" />
+          <StatTile label="Free shipping" value={`$${FREE_SHIPPING_THRESHOLD}+`} sub="on qualifying orders" />
         )}
         <StatTile label="Orders" value={orders.length.toLocaleString()} sub="all time" href="/account/orders" />
       </section>
