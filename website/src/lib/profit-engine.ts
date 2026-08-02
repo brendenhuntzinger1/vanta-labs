@@ -47,7 +47,7 @@ export const DEFAULT_PROFIT_SETTINGS: ProfitSettings = {
   minProfitPercent: 0,
   minProfitDollars: 0,
   worstCaseUnitCost: 33,
-  processingFeePercent: 10,
+  processingFeePercent: 8,
 };
 
 /** A customer discount component, in the order promotions are peeled off when
@@ -112,6 +112,12 @@ export interface OrderInputs {
   commissionPercent: number;
   /** Payment-processor fee assumption (percent of amount charged). */
   processingFeePercent: number;
+  /**
+   * Whether the processor fee applies to collected sales tax too. Defaults to
+   * true (most processors charge on the full transaction). When false, the fee
+   * base excludes tax.
+   */
+  processingFeeIncludesTax?: boolean;
   /** Shipping charged to the customer. */
   shippingCollected: number;
   /** Actual shipping cost to the business. */
@@ -239,7 +245,10 @@ export function computeProfit(inputs: OrderInputs, discount: DiscountBreakdown):
   const taxCollected = pct(discountedSubtotal, inputs.taxPercent);
   const revenue = round(discountedSubtotal + inputs.shippingCollected + inputs.handlingCollected);
   const amountCharged = round(revenue + taxCollected);
-  const processingFee = pct(amountCharged, inputs.processingFeePercent);
+  // Most processors charge their fee on the full transaction (incl. tax);
+  // config can exclude tax from the fee base.
+  const feeBase = inputs.processingFeeIncludesTax === false ? revenue : amountCharged;
+  const processingFee = pct(feeBase, inputs.processingFeePercent);
   const grossProfit = round(
     revenue - inputs.productCost - processingFee - commission - inputs.shippingCost,
   );

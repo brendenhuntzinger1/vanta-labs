@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
-import { canManageSettings } from "@/lib/admin-roles";
+import { canManageSettings, canViewProfit } from "@/lib/admin-roles";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getOrderProfitMap } from "@/lib/admin-profit";
 
 function csvEscape(value: unknown) {
   let text = String(value ?? "");
@@ -61,9 +62,52 @@ export async function GET(request: Request) {
     "created_at",
   ];
 
+  // Profit columns are internal — only for roles that can view profit. They come
+  // from the shared profit engine so the export never disagrees with the admin
+  // order/dashboard figures.
+  const includeProfit = canViewProfit(session.role);
+  const profitHeader = [
+    "gross_revenue",
+    "product_cost",
+    "shipping_charged",
+    "shipping_cost",
+    "shipping_profit",
+    "processor_fee",
+    "ambassador_commission",
+    "sales_tax_collected",
+    "net_profit",
+    "net_margin_percent",
+    "profit_status",
+  ];
+  const profitByOrder = includeProfit
+    ? await getOrderProfitMap(rows.map((row) => String(row.order_id)))
+    : new Map();
+
+  const fullHeader = includeProfit ? [...header, ...profitHeader] : header;
+
   const csv = [
-    header.join(","),
-    ...rows.map((row) => header.map((key) => csvEscape(row[key as keyof typeof row])).join(",")),
+    fullHeader.join(","),
+    ...rows.map((row) => {
+      const base = header.map((key) => csvEscape(row[key as keyof typeof row]));
+      if (!includeProfit) return base.join(",");
+      const p = profitByOrder.get(String(row.order_id));
+      const profitCells = p
+        ? [
+            p.grossRevenue,
+            p.cogs,
+            p.shippingCharged,
+            p.shippingCost,
+            p.shippingProfit,
+            p.processingFee,
+            p.commission,
+            p.taxCollected,
+            p.profit,
+            p.marginPercent,
+            p.profitStatus,
+          ].map((value) => csvEscape(value))
+        : profitHeader.map(() => "");
+      return [...base, ...profitCells].join(",");
+    }),
   ].join("\n");
 
   return new NextResponse(csv, {

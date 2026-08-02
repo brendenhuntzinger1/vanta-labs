@@ -646,6 +646,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       allowCouponStacking: false,
       commissionPercent: guardCommissionPercent,
       processingFeePercent: profitSettings.processingFeePercent,
+      processingFeeIncludesTax: profitSettings.processingFeeIncludesTax,
       shippingCollected: shipping,
       // Charge the guard for what the store actually pays to ship this order
       // (admin-configurable, same figure used in profit reports). Previously 0,

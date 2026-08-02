@@ -3,7 +3,7 @@ import Link from "next/link";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canViewProfit } from "@/lib/admin-roles";
 import { getCurrentOnlineVisitorCount, getRevenueWindowMetrics } from "@/lib/admin-analytics";
-import { getProfitWindowMetrics } from "@/lib/admin-profit";
+import { getProfitWindowMetrics, getProfitDashboard } from "@/lib/admin-profit";
 import { getRevenueMetrics } from "@/lib/admin-revenue";
 import { getAdminOrderRows } from "@/lib/admin-orders";
 import { listAdminProducts } from "@/lib/admin-products";
@@ -36,6 +36,12 @@ export default async function AdminHomePage() {
     getReconciliationFlagCount().catch(() => 0),
     getProfitWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, ordersLast30Days: 0, hasEstimatedCost: false })),
   ]);
+
+  // Full profit analytics (calendar windows + lifetime aggregates) — only
+  // fetched for roles allowed to see profit.
+  const profitDashboard = canViewProfit(session.role)
+    ? await getProfitDashboard().catch(() => null)
+    : null;
 
   const orders = orderList.rows;
   const publishedProducts = products.filter((product) => product.isPublished && product.isEnabled && !product.isArchived).length;
@@ -110,6 +116,61 @@ export default async function AdminHomePage() {
             }}
           />
         </section>
+
+        {profitDashboard ? (
+          <section className="vl-panel rounded-[1.6rem] p-5 sm:p-7">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.28em] text-zinc-400">Profit Analytics</p>
+                <h2 className="mt-2 text-2xl font-semibold text-white">Net Profit</h2>
+                <p className="mt-2 text-sm text-zinc-400">
+                  Real net profit — revenue minus product cost, processor fees, and shipping. Sales tax is excluded (it&apos;s remitted to the state).
+                  {profitDashboard.hasEstimatedProfit
+                    ? ` ${profitDashboard.estimatedOrderCount} order${profitDashboard.estimatedOrderCount === 1 ? "" : "s"} still estimated (exact shipping cost pending).`
+                    : ""}
+                </p>
+              </div>
+              <Link href="/admin/revenue" className="vl-btn-secondary px-4 py-2 text-xs">Revenue Detail</Link>
+            </div>
+
+            <div className="mt-5 grid gap-3 sm:grid-cols-3 lg:grid-cols-6">
+              {([
+                ["Today", profitDashboard.profit.today],
+                ["Yesterday", profitDashboard.profit.yesterday],
+                ["This Week", profitDashboard.profit.thisWeek],
+                ["This Month", profitDashboard.profit.thisMonth],
+                ["This Year", profitDashboard.profit.thisYear],
+                ["Lifetime", profitDashboard.profit.lifetime],
+              ] as Array<[string, number]>).map(([label, value]) => (
+                <div key={label} className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+                  <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">{label}</p>
+                  <p className={`mt-2 text-xl font-semibold tabular-nums ${value >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{money(value)}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+              {([
+                ["Gross revenue", money(profitDashboard.lifetime.grossRevenue)],
+                ["Net margin", `${profitDashboard.lifetime.netMarginPercent.toFixed(1)}%`],
+                ["Gross margin", `${profitDashboard.lifetime.grossMarginPercent.toFixed(1)}%`],
+                ["Avg order value", money(profitDashboard.lifetime.averageOrderValue)],
+                ["Avg profit / order", money(profitDashboard.lifetime.averageProfitPerOrder)],
+                ["Product costs", money(profitDashboard.lifetime.totalProductCosts)],
+                ["Processor fees", money(profitDashboard.lifetime.totalProcessorFees)],
+                ["Shipping revenue", money(profitDashboard.lifetime.totalShippingRevenue)],
+                ["Shipping expense", money(profitDashboard.lifetime.totalShippingExpense)],
+                ["Shipping profit", money(profitDashboard.lifetime.totalShippingProfit)],
+              ] as Array<[string, string]>).map(([label, value]) => (
+                <div key={label} className="flex items-baseline justify-between rounded-xl border border-white/5 bg-white/[0.015] px-3 py-2">
+                  <span className="text-zinc-400">{label}</span>
+                  <span className="tabular-nums text-zinc-100">{value}</span>
+                </div>
+              ))}
+            </div>
+            <p className="mt-3 text-[11px] text-zinc-500">Lifetime figures across {profitDashboard.lifetime.orderCount} paid order{profitDashboard.lifetime.orderCount === 1 ? "" : "s"}.</p>
+          </section>
+        ) : null}
 
         <section className="vl-panel rounded-[1.6rem] p-5 sm:p-7">
           <div className="flex flex-wrap items-center justify-between gap-3">
