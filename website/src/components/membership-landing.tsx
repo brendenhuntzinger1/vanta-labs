@@ -287,10 +287,10 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
             return (
               <div key={tier.id} className="w-[82%] shrink-0 snap-center sm:w-auto sm:shrink">
                 <div
-                  className={`vl2-product-card group relative flex h-full flex-col p-6 sm:p-7 ${isFeatured ? "border-white/45" : isBestValue ? "border-white/25" : ""}`}
+                  className={`vl2-product-card group relative flex h-full flex-col p-6 sm:p-7 ${isFeatured || isBestValue ? "vl-tier-glow vl-tier-glow-featured" : "vl-tier-glow"}`}
                 >
                   {isFeatured ? (
-                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap border border-white/30 bg-[#0a0a0a] px-4 py-1 text-[9px] font-medium uppercase tracking-[0.3em] text-white/90">
+                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap border border-[color:var(--accent-gold)]/40 bg-[#0a0a0a] px-4 py-1 text-[9px] font-medium uppercase tracking-[0.3em] text-[color:var(--accent-gold)] shadow-[0_0_18px_-6px_rgba(212,175,55,0.6)]">
                       Most Popular
                     </span>
                   ) : isBestValue ? (

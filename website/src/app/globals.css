@@ -1873,3 +1873,72 @@ textarea {
     font-weight: 600;
   }
 }
+
+/* ── Membership tier cards ─────────────────────────────────────────────────
+   A lit gold edge rather than a drawn outline: a hairline gold border plus a
+   soft outer halo, so the cards read as glowing objects on the near-black
+   page. Featured tiers get a stronger halo and a slow breathe. Purely
+   box-shadow/opacity — no layout work, no repaint of the card contents. */
+.vl-tier-glow {
+  border-color: rgba(212, 175, 55, 0.26) !important;
+  box-shadow:
+    0 0 0 1px rgba(212, 175, 55, 0.10),
+    0 0 26px -8px rgba(212, 175, 55, 0.26),
+    0 24px 48px -28px rgba(0, 0, 0, 0.85);
+  transition:
+    border-color var(--duration-fast) ease,
+    box-shadow var(--duration-fast) ease,
+    transform var(--duration-fast) var(--ease-out-premium);
+}
+
+.vl-tier-glow:hover {
+  border-color: rgba(212, 175, 55, 0.55) !important;
+  box-shadow:
+    0 0 0 1px rgba(212, 175, 55, 0.20),
+    0 0 44px -8px rgba(212, 175, 55, 0.44),
+    0 28px 56px -28px rgba(0, 0, 0, 0.9);
+  transform: translateY(-2px);
+}
+
+.vl-tier-glow-featured {
+  border-color: rgba(212, 175, 55, 0.52) !important;
+  box-shadow:
+    0 0 0 1px rgba(212, 175, 55, 0.20),
+    0 0 48px -8px rgba(212, 175, 55, 0.42),
+    0 28px 56px -28px rgba(0, 0, 0, 0.9);
+  animation: vl-tier-breathe 4.5s ease-in-out infinite;
+}
+
+.vl-tier-glow-featured:hover {
+  border-color: rgba(212, 175, 55, 0.75) !important;
+  box-shadow:
+    0 0 0 1px rgba(212, 175, 55, 0.3),
+    0 0 64px -8px rgba(212, 175, 55, 0.6),
+    0 30px 60px -28px rgba(0, 0, 0, 0.92);
+}
+
+@keyframes vl-tier-breathe {
+  0%, 100% {
+    box-shadow:
+      0 0 0 1px rgba(212, 175, 55, 0.20),
+      0 0 44px -10px rgba(212, 175, 55, 0.36),
+      0 28px 56px -28px rgba(0, 0, 0, 0.9);
+  }
+  50% {
+    box-shadow:
+      0 0 0 1px rgba(212, 175, 55, 0.28),
+      0 0 58px -8px rgba(212, 175, 55, 0.52),
+      0 28px 56px -28px rgba(0, 0, 0, 0.9);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-tier-glow,
+  .vl-tier-glow-featured {
+    animation: none;
+  }
+  .vl-tier-glow:hover,
+  .vl-tier-glow-featured:hover {
+    transform: none;
+  }
+}
