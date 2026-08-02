@@ -28,6 +28,11 @@ export function ProductCard({
 }) {
   const hasRealImage = Boolean(image) && !image.includes(".svg");
   const dosePreview = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0];
+  // Out of stock is honored only when the 3PL inventory feed is live (the
+  // catalog resolves everything to "In Stock" otherwise), so this simply
+  // reflects what fulfillment reports. A sold-out card can't be added to the
+  // cart — the shopper opens the product to sign up for a restock alert.
+  const soldOut = product.stockStatus === "Out of Stock" || product.stockStatus === "Reserved";
 
   // Member pricing — dollars first. Members see THEIR price; everyone else
   // sees what the strongest paid tier would charge, with the exact savings.
@@ -64,6 +69,11 @@ export function ProductCard({
               {BADGE_LABELS[product.badge]}
             </span>
           ) : null}
+          {soldOut ? (
+            <span className="absolute right-3 top-3 z-10 rounded-full border border-white/20 bg-black/75 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-white/80 shadow-sm backdrop-blur-md">
+              Out of Stock
+            </span>
+          ) : null}
           {hasRealImage ? (
             <Image
               src={image}
@@ -72,7 +82,7 @@ export function ProductCard({
               priority={priority}
               loading={priority ? undefined : "lazy"}
               sizes="(max-width: 640px) 50vw, (max-width: 1280px) 50vw, 25vw"
-              className="object-cover"
+              className={`object-cover ${soldOut ? "opacity-45 grayscale" : ""}`}
             />
           ) : (
             <div className="flex h-full items-center justify-center">
@@ -129,18 +139,37 @@ export function ProductCard({
       {/* Side-by-side compact buttons on phones (stacking them doubled the
           card height); full-size two-up from sm. */}
       <div className="grid grid-cols-2 gap-1.5 p-3 pt-0 sm:gap-2 sm:p-5 sm:pt-0">
-        {onAddToCart ? (
-          <button onClick={onAddToCart} className="vl2-btn-primary vl-focus-ring px-2 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm" type="button">
-            Add to Cart
-          </button>
-        ) : null}
-        <Link
-          href={`/products/${product.slug}`}
-          className={`vl2-btn-secondary vl-focus-ring inline-flex items-center justify-center px-2 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm ${onAddToCart ? "" : "col-span-2"}`}
-        >
-          View Details
-        </Link>
-        {showMemberPricing && memberQuote && !isMember ? (
+        {soldOut ? (
+          // Sold out: no working Add button. The disabled pill makes the state
+          // obvious and "Get restock alert" sends them to the product page,
+          // which carries the notify-me signup form.
+          <>
+            <button type="button" disabled aria-disabled className="vl2-btn-secondary vl-focus-ring cursor-not-allowed px-2 py-2 text-xs opacity-50 sm:px-4 sm:py-2.5 sm:text-sm" title="Out of stock">
+              Out of Stock
+            </button>
+            <Link
+              href={`/products/${product.slug}`}
+              className="vl2-btn-primary vl-focus-ring inline-flex items-center justify-center px-2 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm"
+            >
+              Get restock alert
+            </Link>
+          </>
+        ) : (
+          <>
+            {onAddToCart ? (
+              <button onClick={onAddToCart} className="vl2-btn-primary vl-focus-ring px-2 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm" type="button">
+                Add to Cart
+              </button>
+            ) : null}
+            <Link
+              href={`/products/${product.slug}`}
+              className={`vl2-btn-secondary vl-focus-ring inline-flex items-center justify-center px-2 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm ${onAddToCart ? "" : "col-span-2"}`}
+            >
+              View Details
+            </Link>
+          </>
+        )}
+        {!soldOut && showMemberPricing && memberQuote && !isMember ? (
           <Link
             href="/membership"
             className="vl-focus-ring col-span-2 -mb-1 inline-flex items-center justify-center gap-1 py-1 text-[11px] text-emerald-300/70 transition hover:text-emerald-300"
