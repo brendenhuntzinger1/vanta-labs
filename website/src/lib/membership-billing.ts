@@ -2,7 +2,8 @@ import "server-only";
 
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { getBillingProvider } from "@/lib/billing-provider";
+import { getBillingProvider, type ChargeCardResult } from "@/lib/billing-provider";
+import { startVeyraMembership } from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling } from "@/lib/membership-billing-math";
 import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
@@ -383,6 +384,22 @@ export interface StartMembershipSignupInput {
   userId: string;
   tierId: string;
   billingCycle: "monthly" | "annual";
+  /**
+   * Basis Theory token intent from the card capture that just ran.
+   *
+   * PRESENT  -> the Veyra recurring lane. One POST /api/v1/membership does the
+   *             first charge + vault + membership row + Veyra's own renewal
+   *             cron. We store the returned id in `veyra_membership_id`, which
+   *             is what makes runMembershipBillingSweep() skip the row. Veyra
+   *             bills every period after this one; we never do.
+   * ABSENT   -> the legacy local lane (noop/mock BillingProvider). Unchanged.
+   *
+   * Price is ALWAYS resolved server-side from the tier row — never accept an
+   * amount from the client (mirrors Evo's pages/api/membership/subscribe.js).
+   */
+  tokenIntentId?: string | null;
+  /** Recorded with the membership for audit; version the consent copy. */
+  consentTextVersion?: string;
 }
 
 export async function startMembershipSignup(input: StartMembershipSignupInput) {
@@ -461,22 +478,68 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
     const amountCents = input.billingCycle === "annual" ? tier.annual_price_cents : tier.monthly_price_cents;
     const nextBillingAt = new Date(now.getTime() + (input.billingCycle === "annual" ? 365 : 30) * ONE_DAY_MS);
 
-    const chargeResult = await billingProvider.chargeCard({
-      billingProviderCustomerId: null,
-      paymentMethodRef: null,
-      amountCents,
-      currency: "usd",
-      description: `${tier.name} - ${input.billingCycle} membership`,
-      // Date-scoped: dedupes any duplicate submission of THIS signup while
-      // still allowing a genuine cancel-and-rejoin on a later day.
-      idempotencyKey: `signup-${input.userId}-${tier.id}-${input.billingCycle}-${now.toISOString().slice(0, 10)}`,
-    });
+    // Two lanes. A token intent means the shopper just entered a card and we
+    // hand the whole subscription to Veyra; without one we fall back to the
+    // legacy local provider (noop/mock) exactly as before.
+    let chargeResult: ChargeCardResult;
+    let veyraMembershipId: string | null = null;
+
+    if (input.tokenIntentId) {
+      if (!contact?.email) {
+        // Veyra requires a customer email. Refuse rather than charge a card we
+        // cannot attach to anyone — an orphaned recurring subscription is far
+        // worse than a failed signup.
+        chargeResult = { success: false, error: "No email on file for this account." };
+      } else {
+        const veyra = await startVeyraMembership({
+          planCode: tier.slug || tier.id,
+          amountCents,
+          // "annual" is the Veyra spelling. "yearly" 400s.
+          interval: input.billingCycle === "annual" ? "annual" : "monthly",
+          tokenIntentId: input.tokenIntentId,
+          customerEmail: contact.email,
+          subscriptionKind: "shippable",
+          customerNamespace: input.userId,
+          ...(input.consentTextVersion ? { consentTextVersion: input.consentTextVersion } : {}),
+        });
+
+        if (veyra.ok) {
+          veyraMembershipId = veyra.membershipId;
+          chargeResult = { success: true, providerChargeId: veyra.membershipId };
+        } else {
+          // Both failure kinds leave the member past-due and unbilled, but they
+          // are NOT the same event: `payment_unavailable` is the shopper's to
+          // fix (try another card), while config/transport is ours. Log the
+          // distinction so a misconfigured merchant does not read as a store
+          // full of declining cards.
+          if (veyra.kind !== "payment_unavailable") {
+            console.error(`[membership] Veyra ${veyra.kind} for user ${input.userId}: ${veyra.message}`);
+          }
+          chargeResult = { success: false, error: veyra.message };
+        }
+      }
+    } else {
+      chargeResult = await billingProvider.chargeCard({
+        billingProviderCustomerId: null,
+        paymentMethodRef: null,
+        amountCents,
+        currency: "usd",
+        description: `${tier.name} - ${input.billingCycle} membership`,
+        // Date-scoped: dedupes any duplicate submission of THIS signup while
+        // still allowing a genuine cancel-and-rejoin on a later day.
+        idempotencyKey: `signup-${input.userId}-${tier.id}-${input.billingCycle}-${now.toISOString().slice(0, 10)}`,
+      });
+    }
 
     await supabaseAdmin.from("customer_memberships").upsert({
       user_id: input.userId,
       tier_id: tier.id,
       billing_cycle: input.billingCycle,
       status: chargeResult.success ? "active" : "past_due",
+      // THE load-bearing write. Non-null makes every sweep query skip this row,
+      // because Veyra now owns its renewals. Drop this and the member is billed
+      // twice a month — once by Veyra's cron, once by our sweep.
+      veyra_membership_id: veyraMembershipId,
       started_at: now.toISOString(),
       renews_at: nextBillingAt.toISOString(),
       intro_status: "not_applicable",
@@ -851,6 +914,14 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     const { data, error } = await supabaseAdmin
       .from("customer_memberships")
       .select(DUE_ROW_SELECT)
+      // Veyra owns the renewal schedule for any membership created through
+      // /api/v1/membership — it charges the card AND runs the retry/dunning
+      // cron itself. This sweep must therefore never see those rows: not to
+      // charge them, not to remind on them, not to mark them past-due. If both
+      // sides billed, every Veyra-backed member would be charged twice a month.
+      // (Same double-fire shape as the EVO confirm-backfill leak, 2026-08-01:
+      // a second system acting on rows it does not own.)
+      .is("veyra_membership_id", null)
       .eq("status", "trialing")
       .eq("intro_status", "active")
       .eq("cancel_at_period_end", false)
@@ -891,6 +962,14 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     const { data, error } = await supabaseAdmin
       .from("customer_memberships")
       .select(DUE_ROW_SELECT)
+      // Veyra owns the renewal schedule for any membership created through
+      // /api/v1/membership — it charges the card AND runs the retry/dunning
+      // cron itself. This sweep must therefore never see those rows: not to
+      // charge them, not to remind on them, not to mark them past-due. If both
+      // sides billed, every Veyra-backed member would be charged twice a month.
+      // (Same double-fire shape as the EVO confirm-backfill leak, 2026-08-01:
+      // a second system acting on rows it does not own.)
+      .is("veyra_membership_id", null)
       .eq("status", "trialing")
       .eq("intro_status", "active")
       .eq("cancel_at_period_end", false)
@@ -955,6 +1034,14 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     const { data, error } = await supabaseAdmin
       .from("customer_memberships")
       .select(DUE_ROW_SELECT)
+      // Veyra owns the renewal schedule for any membership created through
+      // /api/v1/membership — it charges the card AND runs the retry/dunning
+      // cron itself. This sweep must therefore never see those rows: not to
+      // charge them, not to remind on them, not to mark them past-due. If both
+      // sides billed, every Veyra-backed member would be charged twice a month.
+      // (Same double-fire shape as the EVO confirm-backfill leak, 2026-08-01:
+      // a second system acting on rows it does not own.)
+      .is("veyra_membership_id", null)
       .eq("status", "active")
       .eq("cancel_at_period_end", true)
       .lte("next_billing_at", now.toISOString());
@@ -992,6 +1079,14 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     const { data, error } = await supabaseAdmin
       .from("customer_memberships")
       .select(DUE_ROW_SELECT)
+      // Veyra owns the renewal schedule for any membership created through
+      // /api/v1/membership — it charges the card AND runs the retry/dunning
+      // cron itself. This sweep must therefore never see those rows: not to
+      // charge them, not to remind on them, not to mark them past-due. If both
+      // sides billed, every Veyra-backed member would be charged twice a month.
+      // (Same double-fire shape as the EVO confirm-backfill leak, 2026-08-01:
+      // a second system acting on rows it does not own.)
+      .is("veyra_membership_id", null)
       .eq("status", "active")
       .eq("cancel_at_period_end", false)
       .is("renewal_reminder_sent_at", null)
@@ -1031,6 +1126,14 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
     const { data, error } = await supabaseAdmin
       .from("customer_memberships")
       .select(DUE_ROW_SELECT)
+      // Veyra owns the renewal schedule for any membership created through
+      // /api/v1/membership — it charges the card AND runs the retry/dunning
+      // cron itself. This sweep must therefore never see those rows: not to
+      // charge them, not to remind on them, not to mark them past-due. If both
+      // sides billed, every Veyra-backed member would be charged twice a month.
+      // (Same double-fire shape as the EVO confirm-backfill leak, 2026-08-01:
+      // a second system acting on rows it does not own.)
+      .is("veyra_membership_id", null)
       .eq("status", "active")
       .eq("cancel_at_period_end", false)
       .lte("next_billing_at", now.toISOString());

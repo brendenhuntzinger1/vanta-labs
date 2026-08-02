@@ -1,6 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import nextDynamic from "next/dynamic";
+import type { MembershipCardConfig } from "@/components/membership-card-form";
+
+// Browser-only: the Basis Theory SDK touches `window` at module scope, so it
+// must never be pulled into the server render.
+const MembershipCardForm = nextDynamic(() => import("@/components/membership-card-form"), {
+  ssr: false,
+  loading: () => <p className="text-sm text-white/60">Loading secure card entry…</p>,
+});
 import { useRouter } from "next/navigation";
 import type { MembershipTier } from "@/lib/membership";
 import { MembershipPaymentMethodPlaceholder } from "@/components/membership-payment-method";
@@ -16,6 +25,9 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [status, setStatus] = useState<"idle" | "success">("idle");
+  // Non-null once a Veyra session + BT public key have been minted: the card
+  // form takes over from here and creates the recurring subscription.
+  const [cardConfig, setCardConfig] = useState<MembershipCardConfig | null>(null);
 
   // Intro/trial flow removed per the owner: every signup charges the full
   // period immediately and benefits start the moment the charge succeeds.
@@ -41,6 +53,29 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
     setIsSubmitting(true);
     setMessage(null);
     try {
+      // Preferred lane: capture a card here and create a REAL recurring
+      // subscription at the processor. Without this the fallback below hands the
+      // shopper a one-time hosted checkout, which charges once and flips the
+      // membership flag — month 2 never bills. (Same defect Refined shipped and
+      // had to be re-ported off, 2026-07-16.)
+      const cardCfgRes = await fetch("/api/membership/card-config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tierId: tier.id, billingCycle }),
+      });
+
+      if (cardCfgRes.ok) {
+        const cfg = (await cardCfgRes.json()) as MembershipCardConfig;
+        if (cfg?.apiKey && cfg?.sessionId) {
+          // Hand off to the card form; it tokenizes and POSTs to
+          // /api/membership/subscribe with the token intent.
+          setCardConfig(cfg);
+          return;
+        }
+      }
+
+      // Card entry unavailable (no processor, misconfig, 503). Fall back to the
+      // pre-existing behaviour rather than dead-ending the shopper.
       const response = await fetch("/api/membership/subscribe", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -71,6 +106,39 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
       setIsSubmitting(false);
     }
   };
+
+  if (cardConfig) {
+    return (
+      <div className="mx-auto max-w-xl px-6 py-24 text-white">
+        <p className="vl2-eyebrow">Membership</p>
+        <h1 className="vl2-serif mt-3 text-3xl">Payment details</h1>
+        <p className="mt-3 text-sm text-white/70">
+          {cardConfig.tierName} &middot; {money(cardConfig.amountCents)}
+          {cardConfig.billingCycle === "annual" ? " per year" : " per month"}
+        </p>
+
+        <div className="mt-8">
+          <MembershipCardForm
+            tierId={tier.id}
+            config={cardConfig}
+            onSuccess={() => {
+              setCardConfig(null);
+              setStatus("success");
+              setMessage("Your membership is active.");
+            }}
+          />
+        </div>
+
+        <button
+          type="button"
+          onClick={() => { setCardConfig(null); setMessage(null); }}
+          className="mt-6 text-xs text-white/50 underline"
+        >
+          Back
+        </button>
+      </div>
+    );
+  }
 
   if (status === "success") {
     return (
