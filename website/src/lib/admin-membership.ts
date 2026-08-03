@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { isPaidBillingEvent } from "@/lib/membership-status";
 import type { MembershipTier } from "@/lib/membership";
 
 function mapTier(row: Record<string, unknown>): MembershipTier {
@@ -567,8 +568,17 @@ export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
   const events30d = billingEvents30d ?? [];
   const introAttempts = events30d.filter((row) => row.event_type === "intro_charge" || row.event_type === "first_month_remainder");
   const introSucceeded = introAttempts.filter((row) => row.status === "succeeded");
+  // Revenue counts PAID events only. cancellation/pause/resume/skip/tier_change
+  // are also stored as "succeeded" (the operation worked) with amount 0, so a
+  // bare status check would sweep them in — see PAID_EVENT_TYPES.
   const realRecurringRevenueCents30d = events30d
-    .filter((row) => row.status === "succeeded" && (row.event_type === "renewal" || row.event_type === "first_month_remainder" || row.event_type === "intro_charge"))
+    .filter((row) =>
+      isPaidBillingEvent({
+        eventType: String(row.event_type ?? ""),
+        status: String(row.status ?? ""),
+        amountCents: Number(row.amount_cents ?? 0),
+      }),
+    )
     .reduce((sum, row) => sum + Number(row.amount_cents ?? 0), 0);
 
   return {

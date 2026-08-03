@@ -6,6 +6,7 @@ import { getBillingProvider, type ChargeCardResult } from "@/lib/billing-provide
 import { startVeyraMembership } from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling } from "@/lib/membership-billing-math";
+import { PAID_EVENT_TYPES } from "@/lib/membership-status";
 import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
 import { sendMarketingEmail } from "@/lib/email/marketing";
@@ -54,6 +55,26 @@ async function getAuthUserContact(userId: string): Promise<{ email: string; name
 
   const fullName = typeof data.user.user_metadata?.full_name === "string" ? data.user.user_metadata.full_name : "";
   return { email: data.user.email, name: fullName || data.user.email.split("@")[0] };
+}
+
+/**
+ * Has this account ever completed a real membership charge?
+ *
+ * Asks for a PAID event specifically — see PAID_EVENT_TYPES in
+ * membership-status.ts for why "has a succeeded billing event" is not the same
+ * question and will wrongly clear an account that only ever cancelled.
+ */
+export async function hasSuccessfulPayment(userId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from("membership_billing_events")
+    .select("id")
+    .eq("user_id", userId)
+    .eq("status", "succeeded")
+    .gt("amount_cents", 0)
+    .in("event_type", PAID_EVENT_TYPES as unknown as string[])
+    .limit(1);
+  if (error) throw error;
+  return (data ?? []).length > 0;
 }
 
 async function recordBillingEvent(input: {
