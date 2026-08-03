@@ -15,14 +15,31 @@
 //   - `postal_code`         NOT "zip"
 //   - `exp_month`/`exp_year` NOT "expiration_month"/"expiration_year"
 //
-// Preconditions on the merchant (verify before enabling, the endpoint fails
-// closed on each):
-//   - API key carries `memberships:read` + `memberships:write`. Vanta's live key
-//     was minted WITHOUT them (2026-08-01) — same gap Refined hit.
-//   - `policy.charge_model` must be `destination_charge_with_obo`. Vanta is
-//     currently `destination_charge_without_on_behalf_of`, which 400s.
+// Preconditions on the merchant. ⚠️ BOTH WERE RESOLVED 2026-08-02 — an earlier
+// version of this comment listed them as unmet and, being read as current state,
+// sent a later session to the wrong conclusion ("recurring billing cannot
+// succeed regardless of code"). Re-verified against the live DB 2026-08-02:
+//
+//   - API key scopes — ✅ RESOLVED. `memberships:read` + `memberships:write`
+//     were added to Vanta's live key. (They were genuinely missing at mint,
+//     the same gap Refined hit.)
+//   - `policy.charge_model` — ✅ WAS NEVER A BLOCKER. It resolves as
+//     `merchant.tier_override_charge_model ?? base.charge_model`
+//     (veyragate `lib/risk/tier-policy.ts:1320`), and the tier_3 base is already
+//     `destination_charge_with_obo` (:837). Vanta is tier_3 with a NULL
+//     override, so it already satisfies the gate.
+//     ⚠️ Do NOT "fix" this by reading `merchants.stripe_charge_mode` — that is a
+//     DIFFERENT column (it reads `destination_charge_without_on_behalf_of`) and
+//     confusing the two is what produced the false blocker. Setting
+//     `tier_override_charge_model` to force it would also plant an explicit
+//     override where inheritance is already correct, which the tier-cascade
+//     engine treats differently and surfaces as a collision on any tier change.
+//
 //   - AMEX is hard-blocked on this lane: rebills are no-CVC and AMEX CNP hard-
 //     declines. Reject the brand at the card form, before tokenizing.
+//
+// If a signup still fails, the cause is NOT merchant config — look at the client
+// (tokenize) or the response body from this endpoint.
 
 import { getRequiredEnv } from "@/lib/env";
 
