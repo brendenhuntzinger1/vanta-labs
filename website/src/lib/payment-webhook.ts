@@ -37,7 +37,7 @@ import { recordSystemAlert } from "@/lib/monitoring";
  * cheaper, shorter, self-correcting option — monthly renews in 30 days, and a
  * wrong monthly costs the customer 30 days of benefits rather than 365 of ours.
  */
-function resolveMembershipCycle(raw: unknown, orderId: string): "monthly" | "annual" {
+export function resolveMembershipCycle(raw: unknown, orderId: string): "monthly" | "annual" {
   const value = String(raw ?? "").trim().toLowerCase();
   if (value === "monthly" || value === "annual") return value;
   console.error(
