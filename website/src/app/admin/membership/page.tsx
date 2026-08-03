@@ -109,6 +109,16 @@ export default async function AdminMembershipPage() {
                           {member.billingCycle === "free" || !member.nextBillingAt
                             ? "—"
                             : `${new Date(member.nextBillingAt).toLocaleDateString()} · $${(member.nextBillingAmountCents / 100).toFixed(2)}`}
+                          {/* A paid membership with no processor subscription was
+                              charged once and will LAPSE, not renew. Every other
+                              column reads identically to a real subscription, so
+                              without this the owner cannot tell recurring revenue
+                              from a one-off. */}
+                          {member.billingCycle !== "free" && !member.autoRenews && member.status !== "cancelled" ? (
+                            <span className="mt-1 block text-[10px] font-medium text-amber-300">
+                              Won&apos;t renew — no card stored
+                            </span>
+                          ) : null}
                         </td>
                         <td className="py-3 pr-4 text-zinc-300 tabular-nums">
                           {member.storeCreditCents > 0 ? `$${(member.storeCreditCents / 100).toFixed(2)}` : "—"}
