@@ -17,6 +17,11 @@ import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRes
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
 import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
 import { activatePaidMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
+import {
+  isMembershipEvent,
+  handleMembershipEvent,
+  type MembershipEventData,
+} from "@/lib/membership-webhook";
 import { recordSystemAlert } from "@/lib/monitoring";
 
 export interface WebhookEventState {
@@ -1080,6 +1085,33 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   }
 
   const eventPayload = normalizeOrderPayload(payload);
+
+  // ── Membership lifecycle events ───────────────────────────────────────────
+  // These describe a SUBSCRIPTION, not an order, so they must not fall through
+  // to the order pipeline below: it would resolve no order, synthesise a random
+  // order id, and return early having recorded nothing. That silent drop is why
+  // a Veyra-billed renewal never advanced next_billing_at, leaving the member
+  // to lose access ~3 days later while still being charged.
+  //
+  // Claimed through the SAME payment_events path as order events, so a
+  // duplicate delivery cannot double-apply a renewal.
+  const rawEventType = (eventPayload.type ?? "").trim();
+  if (isMembershipEvent(rawEventType)) {
+    // `data` is typed here for the ORDER envelope (metadata/object); a membership
+    // event carries a different, non-overlapping projection on the same field.
+    const membershipData = (eventPayload.data ?? {}) as unknown as MembershipEventData;
+    // event_id is the unique key; the membership id occupies order_id purely as
+    // a human-readable scope for the claim row.
+    const claimKey = `membership-${(membershipData.membership_id ?? "unknown").slice(0, 64)}`;
+    const claimedMembershipEvent = await claimEvent(eventId, claimKey, "pending_payment");
+    if (!claimedMembershipEvent) {
+      return { duplicate: true, eventId, membership: true, handled: false };
+    }
+    const outcome = await handleMembershipEvent(rawEventType, membershipData);
+    await markEventProcessed(eventId, claimKey, "pending_payment");
+    return { duplicate: false, eventId, membership: true, ...outcome };
+  }
+
   // Match on the processor's own session id FIRST (server-minted, unspoofable,
   // and recorded on our order as payment_id), falling back to the order id in
   // metadata. Falls back to a synthetic id ONLY when no sender put one
