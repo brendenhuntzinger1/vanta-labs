@@ -3,6 +3,8 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 
 export interface CustomerOrderRow {
   orderId: string;
+  /** Customer-facing reference (VL-XXXXXXXX). Never show orderId to a shopper. */
+  orderNumber: string | null;
   amountPaid: number;
   paymentStatus: string;
   fulfillmentStatus: string;
@@ -31,8 +33,13 @@ export async function getCustomerOrders(userId: string, email?: string | null): 
 
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("order_id, amount_paid, payment_status, fulfillment_status, tracking_number, created_at, order_items(product_id, product_name, quantity, line_total, unit_price)")
+    .select("order_id, order_number, amount_paid, payment_status, fulfillment_status, tracking_number, created_at, order_items(product_id, product_name, quantity, line_total, unit_price)")
     .or(orFilter)
+    // Orders = things that ship. A membership is a subscription, so it has no
+    // fulfilment state — listing one here showed the dashboard a $1.00 order
+    // stuck on "Awaiting fulfillment" forever. getCustomerOrdersDetailed already
+    // filters these out; this narrower dashboard query did not.
+    .not("order_type", "eq", "membership")
     .order("created_at", { ascending: false })
     .limit(200);
 
@@ -42,6 +49,7 @@ export async function getCustomerOrders(userId: string, email?: string | null): 
 
   return (data ?? []).map((order) => ({
     orderId: String(order.order_id),
+    orderNumber: order.order_number ? String(order.order_number) : null,
     amountPaid: Number(order.amount_paid ?? 0),
     paymentStatus: String(order.payment_status ?? ""),
     fulfillmentStatus: String(order.fulfillment_status ?? ""),

@@ -11,7 +11,13 @@ function currentPeriodMonth(now = new Date()): string {
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-function startOfCurrentMonthIso(now = new Date()): string {
+/**
+ * Start of the current month. The monthly membership grant does not roll
+ * over, so this window IS the definition of spendable store credit. Exported so
+ * admin reporting uses the same boundary the customer's balance uses — summing
+ * the whole ledger made admin show $35.00 against a real balance of $5.00.
+ */
+export function startOfCurrentMonthIso(now = new Date()): string {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
 }
 

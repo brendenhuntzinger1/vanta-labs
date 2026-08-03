@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isPaidBillingEvent } from "@/lib/membership-status";
+import { startOfCurrentMonthIso } from "@/lib/store-credit";
 import type { MembershipTier } from "@/lib/membership";
 
 function mapTier(row: Record<string, unknown>): MembershipTier {
@@ -341,7 +342,17 @@ export async function listMembershipRoster(): Promise<MembershipRosterRow[]> {
     supabaseAdmin
       .from("customer_memberships")
       .select("user_id, status, billing_cycle, started_at, next_billing_at, next_billing_amount_cents, renews_at, cancel_at_period_end, membership_tiers(name, slug)"),
-    supabaseAdmin.from("store_credit_ledger").select("user_id, amount_cents").then((r) => r, () => ({ data: null })),
+    // SPENDABLE balance only. getStoreCreditBalanceCents — the number the
+    // customer can actually redeem at checkout — sums only rows from the current
+    // month, because the monthly membership grant does not roll over. Summing
+    // the whole ledger here made admin report $35.00 for an account whose real
+    // spendable balance was $5.00: a $30 grant from a previous month plus this
+    // month's $5. Admin must show the same money the customer has.
+    supabaseAdmin
+      .from("store_credit_ledger")
+      .select("user_id, amount_cents")
+      .gte("created_at", startOfCurrentMonthIso())
+      .then((r) => r, () => ({ data: null })),
   ]);
   if (error) throw error;
 

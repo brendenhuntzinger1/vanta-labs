@@ -146,7 +146,7 @@ export interface CustomerMembership {
 }
 
 const MEMBERSHIP_SELECT_FIELDS =
-  "tier_id, billing_cycle, status, started_at, renews_at, intro_status, intro_ends_at, next_billing_at, next_billing_amount_cents, cancel_at_period_end, payment_method_ref, membership_tiers(*)";
+  "tier_id, billing_cycle, status, started_at, renews_at, intro_status, intro_ends_at, next_billing_at, next_billing_amount_cents, cancel_at_period_end, payment_method_ref, veyra_membership_id, membership_tiers(*)";
 
 function mapCustomerMembership(data: Record<string, unknown>): CustomerMembership {
   return {
@@ -160,7 +160,11 @@ function mapCustomerMembership(data: Record<string, unknown>): CustomerMembershi
     nextBillingAt: data.next_billing_at ? String(data.next_billing_at) : null,
     nextBillingAmountCents: data.next_billing_amount_cents !== null && data.next_billing_amount_cents !== undefined ? Number(data.next_billing_amount_cents) : null,
     cancelAtPeriodEnd: Boolean(data.cancel_at_period_end),
-    hasPaymentMethod: Boolean(data.payment_method_ref),
+    // A card can live in EITHER place: payment_method_ref for the legacy lane,
+    // or vaulted at the processor for a recurring subscription, where we hold
+    // only veyra_membership_id. Checking one field told a member who had just
+    // paid — and whose card is on file for renewals — "Not connected yet".
+    hasPaymentMethod: Boolean(data.payment_method_ref) || Boolean(data.veyra_membership_id),
   };
 }
 
