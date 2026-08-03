@@ -82,8 +82,21 @@ export async function POST(request: Request) {
     // The session exists so a card can be captured against it; the actual
     // recurring subscription is created later by /api/membership/subscribe,
     // which passes the resulting token intent to Veyra.
+    // UNIQUE per attempt. This used to be a deterministic
+    // `membership-{user}-{tier}-{cycle}`, which collided with the still-open
+    // session from any previous attempt — so it succeeded exactly ONCE per
+    // user+tier+cycle and every retry threw here, fell through to the one-time
+    // hosted checkout, and produced a membership with no Veyra subscription
+    // behind it (charged once, never renews). Observed 2026-08-03: the same
+    // account signed up cleanly at 03:12 and silently took the wrong lane at
+    // 10:26.
+    //
+    // A card-capture session is per-ATTEMPT, not per-membership, so it has no
+    // business being idempotent on the membership identity. The prefix still
+    // carries user + tier for traceability.
+    const attemptSuffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
     const session = await getPaymentProvider().createCheckoutSession({
-      orderId: `membership-${user.id}-${tier.id}-${body.billingCycle}`,
+      orderId: `membership-${user.id}-${tier.id}-${body.billingCycle}-${attemptSuffix}`,
       customerEmail,
       amount: amountCents,
       currency: "USD",
