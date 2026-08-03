@@ -330,6 +330,13 @@ export interface MembershipRosterRow {
   nextBillingAt: string | null;
   nextBillingAmountCents: number;
   cancelAtPeriodEnd: boolean;
+  /**
+   * False when a paid membership has no processor subscription behind it — it
+   * was charged once and will lapse rather than renew. Two such rows look
+   * IDENTICAL in every other column ("active monthly"), so without this the
+   * owner cannot tell recurring revenue from a one-off.
+   */
+  autoRenews: boolean;
   storeCreditCents: number;
 }
 
@@ -341,7 +348,7 @@ export async function listMembershipRoster(): Promise<MembershipRosterRow[]> {
     listAllAuthUsers(),
     supabaseAdmin
       .from("customer_memberships")
-      .select("user_id, status, billing_cycle, started_at, next_billing_at, next_billing_amount_cents, renews_at, cancel_at_period_end, membership_tiers(name, slug)"),
+      .select("user_id, status, billing_cycle, started_at, next_billing_at, next_billing_amount_cents, renews_at, cancel_at_period_end, veyra_membership_id, membership_tiers(name, slug)"),
     // SPENDABLE balance only. getStoreCreditBalanceCents — the number the
     // customer can actually redeem at checkout — sums only rows from the current
     // month, because the monthly membership grant does not roll over. Summing
@@ -381,6 +388,7 @@ export async function listMembershipRoster(): Promise<MembershipRosterRow[]> {
       nextBillingAt: row.next_billing_at ? String(row.next_billing_at) : (row.renews_at ? String(row.renews_at) : null),
       nextBillingAmountCents: Number(row.next_billing_amount_cents ?? 0),
       cancelAtPeriodEnd: Boolean(row.cancel_at_period_end),
+      autoRenews: Boolean(row.veyra_membership_id),
       storeCreditCents: creditByUser.get(String(row.user_id)) ?? 0,
     };
   });
