@@ -24,6 +24,28 @@ import {
 } from "@/lib/membership-webhook";
 import { recordSystemAlert } from "@/lib/monitoring";
 
+/**
+ * The billing cycle to activate for a paid membership order.
+ *
+ * This used to be `String(cycle ?? "annual") === "monthly" ? "monthly" : "annual"`,
+ * so a missing membership_cycle silently granted a ONE-YEAR term. Annual
+ * activation also writes cancel_at_period_end = true (an annual pass does not
+ * auto-renew), so a guessed cycle produced a member whose account page read
+ * "set to cancel at the end of your period" immediately after paying.
+ *
+ * A missing cycle is a data fault, not an annual purchase. Default to the
+ * cheaper, shorter, self-correcting option — monthly renews in 30 days, and a
+ * wrong monthly costs the customer 30 days of benefits rather than 365 of ours.
+ */
+function resolveMembershipCycle(raw: unknown, orderId: string): "monthly" | "annual" {
+  const value = String(raw ?? "").trim().toLowerCase();
+  if (value === "monthly" || value === "annual") return value;
+  console.error(
+    `[membership] order ${orderId} has no membership_cycle ("${String(raw)}") — defaulting to monthly rather than granting a year.`,
+  );
+  return "monthly";
+}
+
 export interface WebhookEventState {
   eventId: string;
   orderId: string;
@@ -1051,7 +1073,7 @@ export async function finalizeManualPayment(
     // Turn on the membership + perks now that payment is verified.
     try {
       if (order.customer_user_id && order.membership_tier_id) {
-        const cycle = String(order.membership_cycle ?? "annual") === "monthly" ? "monthly" : "annual";
+        const cycle = resolveMembershipCycle(order.membership_cycle, orderId);
         await activatePaidMembership(String(order.customer_user_id), String(order.membership_tier_id), cycle);
       }
     } catch (membershipError) {
@@ -1500,7 +1522,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // Turn on the membership + perks now that a card payment has cleared.
       if (isMembershipOrder && customerUserId && orderRecord?.membership_tier_id) {
         try {
-          const cycle = String(orderRecord.membership_cycle ?? "annual") === "monthly" ? "monthly" : "annual";
+          const cycle = resolveMembershipCycle(orderRecord.membership_cycle, orderId);
           await activatePaidMembership(String(customerUserId), String(orderRecord.membership_tier_id), cycle);
         } catch (membershipError) {
           console.error("Unable to activate membership for order", orderId, membershipError);

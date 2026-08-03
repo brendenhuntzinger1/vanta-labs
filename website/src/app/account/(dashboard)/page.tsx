@@ -22,6 +22,7 @@ import type { Product } from "@/lib/catalog-types";
 import { ReorderButton } from "@/components/reorder-button";
 import { AccountRecentlyViewed } from "@/components/account-recently-viewed";
 import { FREE_SHIPPING_THRESHOLD } from "@/lib/shipping";
+import { displayOrderReference } from "@/lib/order-reference";
 
 function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -256,7 +257,7 @@ export default async function AccountDashboardPage() {
                     className="vl-focus-ring flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3.5 transition-colors duration-200 hover:border-white/25"
                   >
                     <div className="min-w-0">
-                      <p className="truncate text-sm font-medium text-white">Order {shortOrderId(order.orderId)}</p>
+                      <p className="truncate text-sm font-medium text-white">Order {displayOrderReference(order.orderNumber, order.orderId)}</p>
                       <p className="mt-0.5 text-xs text-zinc-500">
                         {new Date(order.createdAt).toLocaleDateString()} · {order.items.length} item{order.items.length === 1 ? "" : "s"}
                       </p>

@@ -232,7 +232,12 @@ export async function activateAnnualMembership(userId: string, tierId: string) {
     intro_status: "not_applicable",
     next_billing_at: nextBillingAt.toISOString(),
     next_billing_amount_cents: 0,
+    // Annual is a one-year non-renewing pass, so it is "ending" by design.
     cancel_at_period_end: true,
+    // A rejoin must not inherit the previous cancellation's timestamp — the row
+    // would read active with a cancelled_at date, and every UI that treats
+    // cancelled_at as "this membership was cancelled" shows a stale banner.
+    cancelled_at: null,
     updated_at: now.toISOString(),
   }, { onConflict: "user_id" });
 
@@ -284,7 +289,13 @@ export async function activateMonthlyMembership(userId: string, tierId: string) 
     intro_status: "not_applicable",
     next_billing_at: nextBillingAt.toISOString(),
     next_billing_amount_cents: tier.monthly_price_cents ?? 0,
+    // Paying REVIVES the membership: clear any prior cancel-at-period-end and
+    // its timestamp. Without this a member who cancelled and then re-subscribed
+    // stayed flagged "ending", so the account page said "set to cancel at the
+    // end of your period" and admin read "active · ending" — moments after a
+    // successful charge.
     cancel_at_period_end: false,
+    cancelled_at: null,
     updated_at: now.toISOString(),
   }, { onConflict: "user_id" });
 
