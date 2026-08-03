@@ -74,32 +74,26 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
         }
       }
 
-      // Card entry unavailable (no processor, misconfig, 503). Fall back to the
-      // pre-existing behaviour rather than dead-ending the shopper.
-      const response = await fetch("/api/membership/subscribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tierId: tier.id, billingCycle, agreedToTerms }),
-      });
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        setMessage(data.error ?? "Unable to start your membership right now.");
-        return;
+      // 🔴 DO NOT silently fall through to the one-time lane here.
+      //
+      // It "works" — it charges the card and flips the membership active — but
+      // it creates NO Veyra subscription, so `veyra_membership_id` stays null,
+      // month 2 never bills, and the local sweep then picks the row up, fails
+      // against the noop provider and marks a paying member past_due.
+      //
+      // That is the exact defect Refined shipped (2026-07-16) and it happened
+      // here on 2026-08-03: order VL-49CA32C1 charged $1.00 with no
+      // subscription behind it, because a card-config failure fell through
+      // unnoticed. A visible error is strictly better than a charge that buys
+      // the customer nothing.
+      let cardConfigError = "Card entry is temporarily unavailable. Please try again in a moment.";
+      try {
+        const body = (await cardCfgRes.json()) as { error?: string };
+        if (body?.error) cardConfigError = body.error;
+      } catch {
+        /* keep the generic message */
       }
-      // Card payments live: go to secure checkout. Perks activate the moment the
-      // payment clears (the webhook turns on the membership), and the customer
-      // lands on the order confirmation.
-      if (data.checkoutUrl) {
-        window.location.assign(data.checkoutUrl as string);
-        return;
-      }
-      // Fallback (no processor connected): the request is saved, not charged.
-      setStatus("success");
-      setMessage(
-        data.chargeSucceeded
-          ? "Your membership is active."
-          : "Your membership request is saved. Card payments aren't connected yet, so no charge was made — we'll follow up, or contact support to activate.",
-      );
+      setMessage(cardConfigError);
     } catch {
       setMessage("Unable to start your membership right now. Please try again.");
     } finally {
