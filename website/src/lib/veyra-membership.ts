@@ -15,14 +15,31 @@
 //   - `postal_code`         NOT "zip"
 //   - `exp_month`/`exp_year` NOT "expiration_month"/"expiration_year"
 //
-// Preconditions on the merchant (verify before enabling, the endpoint fails
-// closed on each):
-//   - API key carries `memberships:read` + `memberships:write`. Vanta's live key
-//     was minted WITHOUT them (2026-08-01) — same gap Refined hit.
-//   - `policy.charge_model` must be `destination_charge_with_obo`. Vanta is
-//     currently `destination_charge_without_on_behalf_of`, which 400s.
+// Preconditions on the merchant. ⚠️ BOTH WERE RESOLVED 2026-08-02 — an earlier
+// version of this comment listed them as unmet and, being read as current state,
+// sent a later session to the wrong conclusion ("recurring billing cannot
+// succeed regardless of code"). Re-verified against the live DB 2026-08-02:
+//
+//   - API key scopes — ✅ RESOLVED. `memberships:read` + `memberships:write`
+//     were added to Vanta's live key. (They were genuinely missing at mint,
+//     the same gap Refined hit.)
+//   - `policy.charge_model` — ✅ WAS NEVER A BLOCKER. It resolves as
+//     `merchant.tier_override_charge_model ?? base.charge_model`
+//     (veyragate `lib/risk/tier-policy.ts:1320`), and the tier_3 base is already
+//     `destination_charge_with_obo` (:837). Vanta is tier_3 with a NULL
+//     override, so it already satisfies the gate.
+//     ⚠️ Do NOT "fix" this by reading `merchants.stripe_charge_mode` — that is a
+//     DIFFERENT column (it reads `destination_charge_without_on_behalf_of`) and
+//     confusing the two is what produced the false blocker. Setting
+//     `tier_override_charge_model` to force it would also plant an explicit
+//     override where inheritance is already correct, which the tier-cascade
+//     engine treats differently and surfaces as a collision on any tier change.
+//
 //   - AMEX is hard-blocked on this lane: rebills are no-CVC and AMEX CNP hard-
 //     declines. Reject the brand at the card form, before tokenizing.
+//
+// If a signup still fails, the cause is NOT merchant config — look at the client
+// (tokenize) or the response body from this endpoint.
 
 import { getRequiredEnv } from "@/lib/env";
 
@@ -182,4 +199,91 @@ export async function startVeyraMembership(
 export function isAmexBrand(brand: string | null | undefined): boolean {
   const b = (brand ?? "").toLowerCase().replace(/[\s_-]/g, "");
   return b === "amex" || b === "americanexpress";
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle control — cancel / skip.
+//
+// 🔴 WHY THIS EXISTS. Veyra owns the billing schedule once a membership is
+// created, so a lifecycle change written ONLY to our own table does not stop
+// anything. Observed live 2026-08-03: a member was paused on the storefront
+// (local status "paused") while the Veyra membership stayed "active" with its
+// next charge still booked. Cancel had the identical hole, which is far worse —
+// a customer who cancels keeps being charged, every month, indefinitely.
+//
+// Rule: for any membership carrying a `veyra_membership_id`, tell Veyra FIRST
+// and only update local state if Veyra accepted. Local-only is how you charge
+// someone who asked you to stop.
+// ---------------------------------------------------------------------------
+
+export type VeyraLifecycleResult =
+  | { ok: true; status?: string }
+  | { ok: false; message: string };
+
+async function veyraPost(path: string, body: unknown): Promise<VeyraLifecycleResult> {
+  try {
+    const res = await fetch(`${veyraBase()}/api/v1/membership/${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${veyraSecret()}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body ?? {}),
+    });
+    const text = await res.text();
+    let parsed: Record<string, unknown> = {};
+    try {
+      parsed = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    } catch {
+      /* fall through to the status-based message below */
+    }
+    if (!res.ok) {
+      const message =
+        (parsed.message as string | undefined) ??
+        (parsed.error as string | undefined) ??
+        `Membership update failed (HTTP ${res.status}).`;
+      return { ok: false, message };
+    }
+    return { ok: true, status: parsed.status as string | undefined };
+  } catch (e) {
+    return {
+      ok: false,
+      message: e instanceof Error ? e.message : "Could not reach the payment provider.",
+    };
+  }
+}
+
+/**
+ * Stop future billing at Veyra.
+ *
+ * `atPeriodEnd: true` keeps the member through the period they already paid for
+ * and takes no further charge — the correct default for a customer-initiated
+ * cancel. `false` ends it immediately.
+ */
+export function cancelVeyraMembership(
+  veyraMembershipId: string,
+  atPeriodEnd = true,
+): Promise<VeyraLifecycleResult> {
+  return veyraPost(`${encodeURIComponent(veyraMembershipId)}/cancel`, {
+    at_period_end: atPeriodEnd,
+  });
+}
+
+/**
+ * Push the next charge forward by one cycle. Moves dates only — not a charge,
+ * refund or cancel.
+ *
+ * ⚠️ This is also what a PAUSE maps to, because Veyra has no pause endpoint
+ * (verified 2026-08-03: only cancel / skip_cycle / change / card / retention).
+ * So a pause defers exactly ONE cycle. A member left paused past that cycle
+ * would be charged again. Callers must treat pause as "skip one period", and
+ * this should be revisited if Veyra adds real pause support.
+ */
+export function skipVeyraMembershipCycle(
+  veyraMembershipId: string,
+  reason?: string,
+): Promise<VeyraLifecycleResult> {
+  return veyraPost(`${encodeURIComponent(veyraMembershipId)}/skip_cycle`, {
+    ...(reason ? { reason: reason.slice(0, 200) } : {}),
+  });
 }

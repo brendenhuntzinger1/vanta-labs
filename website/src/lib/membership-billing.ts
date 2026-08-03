@@ -3,7 +3,11 @@ import "server-only";
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getBillingProvider, type ChargeCardResult } from "@/lib/billing-provider";
-import { startVeyraMembership } from "@/lib/veyra-membership";
+import {
+  startVeyraMembership,
+  cancelVeyraMembership,
+  skipVeyraMembershipCycle,
+} from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling, decideMembershipAttempt } from "@/lib/membership-billing-math";
 import { PAID_EVENT_TYPES } from "@/lib/membership-status";
@@ -685,7 +689,7 @@ export interface MembershipCancellationResult {
 export async function cancelMembership(userId: string): Promise<MembershipCancellationResult> {
   const { data: existing, error: existingError } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status, billing_cycle, next_billing_at, renews_at")
+    .select("user_id, tier_id, status, billing_cycle, next_billing_at, renews_at, veyra_membership_id")
     .eq("user_id", userId)
     .maybeSingle();
 
@@ -702,6 +706,24 @@ export async function cancelMembership(userId: string): Promise<MembershipCancel
   // ends. For a fully-paid (active) term we keep the original behavior: stop
   // auto-renewal, let access run to the end of the already-paid period.
   const isTrialing = existing.status === "trialing";
+
+  // Tell Veyra FIRST. It owns the billing schedule for these rows, so a
+  // local-only cancel stops nothing — the customer sees "cancelled" and keeps
+  // being charged every month, indefinitely. If Veyra refuses we abort and
+  // leave local state untouched rather than show a cancellation that isn't real.
+  //
+  // Trialing cancels immediately (the remainder charge must not fire); a paid
+  // term cancels at period end so access runs out the period already paid for.
+  const veyraIdForCancel = (existing as { veyra_membership_id?: string | null }).veyra_membership_id;
+  if (veyraIdForCancel) {
+    const res = await cancelVeyraMembership(veyraIdForCancel, !isTrialing);
+    if (!res.ok) {
+      throw new Error(
+        `We couldn't cancel your membership with the payment provider (${res.message}). Nothing was changed — please try again or contact support.`,
+      );
+    }
+  }
+
   const cancelUpdate = isTrialing
     ? {
         status: "cancelled",
@@ -772,7 +794,7 @@ export interface MembershipScheduleResult {
 export async function pauseMembership(userId: string): Promise<MembershipScheduleResult> {
   const { data: existing, error } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status, billing_cycle, next_billing_at, cancel_at_period_end")
+    .select("user_id, tier_id, status, billing_cycle, next_billing_at, cancel_at_period_end, veyra_membership_id")
     .eq("user_id", userId)
     .maybeSingle();
   if (error) throw error;
@@ -780,6 +802,23 @@ export async function pauseMembership(userId: string): Promise<MembershipSchedul
   if (existing.billing_cycle !== "monthly") throw new Error("Only monthly memberships can be paused.");
   if (existing.status !== "active") throw new Error("Only an active membership can be paused.");
   if (existing.cancel_at_period_end) throw new Error("This membership is already set to end — nothing to pause.");
+
+  // Defer the charge at Veyra before flipping local state. A local-only pause
+  // does not stop anything: observed live 2026-08-03, a membership paused here
+  // stayed "active" at Veyra with its next charge still booked.
+  //
+  // ⚠️ Veyra has no pause endpoint (only cancel / skip_cycle / change / card /
+  // retention), so a pause defers exactly ONE cycle. A member left paused past
+  // that cycle would be charged again. Revisit if Veyra adds real pause.
+  const veyraIdForPause = (existing as { veyra_membership_id?: string | null }).veyra_membership_id;
+  if (veyraIdForPause) {
+    const res = await skipVeyraMembershipCycle(veyraIdForPause, "member paused");
+    if (!res.ok) {
+      throw new Error(
+        `We couldn't pause your billing with the payment provider (${res.message}). Nothing was changed — please try again or contact support.`,
+      );
+    }
+  }
 
   const nowIso = new Date().toISOString();
   const { error: updateError } = await supabaseAdmin
@@ -833,7 +872,7 @@ export async function resumeMembership(userId: string): Promise<MembershipSchedu
 export async function skipNextBilling(userId: string): Promise<MembershipScheduleResult> {
   const { data: existing, error } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status, billing_cycle, next_billing_at, cancel_at_period_end")
+    .select("user_id, tier_id, status, billing_cycle, next_billing_at, cancel_at_period_end, veyra_membership_id")
     .eq("user_id", userId)
     .maybeSingle();
   if (error) throw error;
@@ -849,6 +888,19 @@ export async function skipNextBilling(userId: string): Promise<MembershipSchedul
   // charge is already deferred more than a cycle out, they've already skipped.
   if (existing.next_billing_at && new Date(existing.next_billing_at as string).getTime() > now.getTime() + 33 * ONE_DAY_MS) {
     throw new Error("You've already skipped a charge this cycle — your next billing is already deferred.");
+  }
+
+  // Same rule as pause/cancel: Veyra owns the schedule, so move the date THERE
+  // first. A local-only skip leaves Veyra's charge booked on the original date
+  // and the member is billed on a cycle they were told was skipped.
+  const veyraIdForSkip = (existing as { veyra_membership_id?: string | null }).veyra_membership_id;
+  if (veyraIdForSkip) {
+    const res = await skipVeyraMembershipCycle(veyraIdForSkip, "member skipped a cycle");
+    if (!res.ok) {
+      throw new Error(
+        `We couldn't skip your next charge with the payment provider (${res.message}). Nothing was changed — please try again or contact support.`,
+      );
+    }
   }
 
   const base = existing.next_billing_at ? new Date(existing.next_billing_at as string) : now;
