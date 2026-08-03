@@ -7,6 +7,8 @@ import { deliveryConfirmationTemplate, shippingUpdateTemplate } from "@/lib/emai
 import { getFulfillmentRuntimeConfig, type FulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
 import { getFulfillmentProvider, type NormalizedFulfillmentOrder } from "@/lib/fulfillment/provider";
 import { recordActualShippingCost } from "@/lib/admin-profit";
+import { buildCarrierTrackingUrl } from "@/lib/tracking-url";
+import { getSiteUrl } from "@/lib/env";
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -434,7 +436,14 @@ export async function applyInboundFulfillmentEvent(event: InboundFulfillmentEven
             status: "Shipped",
             carrier: event.carrier ?? undefined,
             trackingNumber: event.trackingNumber ?? undefined,
-            trackingUrl: event.trackingUrl ?? undefined,
+            // NOT event.trackingUrl. The 3PL sends its own storefront URL, so
+            // "Track Package" was taking Vanta Labs customers to the fulfilment
+            // provider's branded site. Derive the carrier's own link instead,
+            // and when the carrier can't be identified keep the customer on
+            // Vanta Labs rather than handing them off to another brand.
+            trackingUrl:
+              buildCarrierTrackingUrl(event.carrier, event.trackingNumber)
+              ?? `${getSiteUrl()}/account/orders`,
           }),
         });
       } else if (newStatus === "delivered") {

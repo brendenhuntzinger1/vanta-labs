@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds, canViewProfit } from "@/lib/admin-roles";
 import { recordActualShippingCost } from "@/lib/admin-profit";
+import { buildCarrierTrackingUrl } from "@/lib/tracking-url";
+import { getSiteUrl } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
 import { deliveryConfirmationTemplate, orderConfirmationTemplate, refundConfirmationTemplate, replacementOrderTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
@@ -20,18 +22,6 @@ function roundMoney(value: number) {
 // Build a clickable carrier tracking URL from the carrier name + tracking
 // number so shipping emails can render a working "Track Package" button.
 // Unknown carriers fall back to a Google-based lookup rather than no link.
-function buildTrackingUrl(carrier: string | null | undefined, trackingNumber: string | null | undefined): string | undefined {
-  const tn = (trackingNumber ?? "").trim();
-  if (!tn) return undefined;
-  const key = (carrier ?? "").trim().toLowerCase();
-  const encoded = encodeURIComponent(tn);
-  if (key.includes("usps")) return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${encoded}`;
-  if (key.includes("ups")) return `https://www.ups.com/track?tracknum=${encoded}`;
-  if (key.includes("fedex")) return `https://www.fedex.com/fedextrack/?trknbr=${encoded}`;
-  if (key.includes("dhl")) return `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${encoded}`;
-  return `https://www.google.com/search?q=${encoded}`;
-}
-
 async function getOrderWithItems(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
@@ -230,7 +220,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
                   status: String(updatePayload.fulfillment_status ?? order.fulfillment_status ?? "updated"),
                   carrier,
                   trackingNumber,
-                  trackingUrl: buildTrackingUrl(carrier, trackingNumber),
+                  // Carrier link, or the customer's own Vanta Labs order list.
+                  // Previously fell back to a Google search for the tracking
+                  // number, which is not a link to put in a customer email.
+                  trackingUrl:
+                    buildCarrierTrackingUrl(carrier, trackingNumber)
+                    ?? `${getSiteUrl()}/account/orders`,
                 });
             await sendEmail({ to: String(order.customer_email), ...template });
           }

@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
+import { buildCarrierTrackingUrl } from "@/lib/tracking-url";
 
 /**
  * Customer-facing order detail for the account dashboard. Widens the narrow
@@ -89,17 +90,6 @@ type OrderRow = {
   order_items: Array<{ product_id: string | null; product_name: string | null; quantity: number | null; unit_price: number | null; line_total: number | null }> | null;
 };
 
-function buildTrackingUrl(carrier: string | null, tracking: string | null): string | null {
-  if (!tracking) return null;
-  const c = (carrier ?? "").toLowerCase();
-  const t = encodeURIComponent(tracking);
-  if (c.includes("ups")) return `https://www.ups.com/track?tracknum=${t}`;
-  if (c.includes("usps")) return `https://tools.usps.com/go/TrackConfirmAction?tLabels=${t}`;
-  if (c.includes("fedex")) return `https://www.fedex.com/fedextrack/?trknbr=${t}`;
-  if (c.includes("dhl")) return `https://www.dhl.com/us-en/home/tracking.html?tracking-id=${t}`;
-  return null;
-}
-
 async function resolveItems(rows: OrderRow[]): Promise<Map<string, AccountOrderItem[]>> {
   // Collect every base slug across all orders in one catalog round-trip.
   const slugs = new Set<string>();
@@ -149,7 +139,7 @@ async function attachShipments(orderIds: string[]): Promise<Map<string, AccountO
     map.set(String(row.order_id), {
       carrier,
       trackingNumber: tracking,
-      trackingUrl: buildTrackingUrl(carrier, tracking),
+      trackingUrl: buildCarrierTrackingUrl(carrier, tracking),
       status: row.shipping_status ? String(row.shipping_status) : null,
       estimatedDelivery: row.estimated_delivery ? String(row.estimated_delivery) : null,
     });
