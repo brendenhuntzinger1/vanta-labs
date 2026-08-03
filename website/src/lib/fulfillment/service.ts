@@ -15,11 +15,15 @@ function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
-interface OrderRow {
+export interface OrderRow {
   order_id: string;
   order_number: string | null;
   customer_name: string | null;
-  customer_email: string | null;
+  // customer_email is deliberately ABSENT. This row feeds the 3PL payload, and
+  // the buyer's address must never be reachable from there — see
+  // fulfillmentContactEmail. Leaving the field off makes reintroducing it a
+  // COMPILE ERROR rather than a code-review catch. The inbound path, which
+  // emails the buyer from Vanta, reads the address in its own query.
   shipping_address: string | null;
   city: string | null;
   postal_code: string | null;
@@ -70,7 +74,7 @@ async function logEvent(input: {
   }
 }
 
-function normalizeOrder(order: OrderRow, relayDomain: string): NormalizedFulfillmentOrder {
+export function normalizeOrder(order: OrderRow, relayDomain: string): NormalizedFulfillmentOrder {
   return {
     orderId: order.order_id,
     orderNumber: order.order_number ?? order.order_id,
@@ -158,7 +162,7 @@ export async function transmitOrderToFulfillment(orderId: string): Promise<void>
 
     const { data: order } = await supabaseAdmin
       .from("orders")
-      .select("order_id, order_number, customer_name, customer_email, shipping_address, city, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, order_items(*)")
+      .select("order_id, order_number, customer_name, shipping_address, city, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, order_items(*)")
       .eq("order_id", orderId)
       .maybeSingle();
 
