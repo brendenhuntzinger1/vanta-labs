@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { isMockPaymentMode } from "@/lib/payment-provider";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { MockCheckoutForm } from "@/components/mock-checkout-form";
+import { displayOrderReference } from "@/lib/order-reference";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,7 @@ export default async function MockCheckoutPage({ params }: { params: Promise<{ o
     notFound();
   }
 
-  const orderNumber = String(order.order_number ?? order.order_id);
+  const orderNumber = displayOrderReference(order.order_number as string | null, order.order_id as string | null);
   const amountDue = Number(order.amount_paid ?? 0);
   const currency = String(order.currency ?? "USD");
   const alreadyPaid = order.payment_status === "paid";

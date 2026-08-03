@@ -7,6 +7,7 @@ import { getCustomerOrderDetail } from "@/lib/account-orders";
 import { getOrderProgress, isUnpaid } from "@/lib/order-status";
 import { OrderTracking } from "@/components/order-tracking";
 import { ReorderButton } from "@/components/reorder-button";
+import { displayOrderReference } from "@/lib/order-reference";
 
 export const dynamic = "force-dynamic";
 
@@ -44,7 +45,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
       <div className="vl-fade-up flex items-center justify-between">
         <div>
           <Link href="/account/orders" className="vl-focus-ring text-xs text-zinc-400 underline-offset-2 hover:text-white">← All orders</Link>
-          <h1 className="vl2-serif mt-2 text-2xl text-white sm:text-3xl">Order {order.orderNumber ?? order.orderId}</h1>
+          <h1 className="vl2-serif mt-2 text-2xl text-white sm:text-3xl">Order {displayOrderReference(order.orderNumber, order.orderId)}</h1>
           <p className="mt-1 text-sm text-zinc-500">Placed {new Date(order.createdAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</p>
         </div>
       </div>

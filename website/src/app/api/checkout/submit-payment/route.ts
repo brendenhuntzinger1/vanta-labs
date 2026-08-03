@@ -7,6 +7,7 @@ import { sendEmail } from "@/lib/email/send";
 import { manualPaymentReceivedTemplate, newPaymentToVerifyTemplate } from "@/lib/email/templates";
 import { getBusinessSettings } from "@/lib/admin-control";
 import { getSiteUrl } from "@/lib/env";
+import { displayOrderReference } from "@/lib/order-reference";
 
 export const dynamic = "force-dynamic";
 // This route uploads a proof screenshot and sends two emails; give it headroom
@@ -96,7 +97,7 @@ export async function POST(request: Request) {
       throw updateError;
     }
 
-    const orderNumber = String(order.order_number ?? order.order_id);
+    const orderNumber = displayOrderReference(order.order_number as string | null, order.order_id as string | null);
 
     if (order.customer_email) {
       const template = manualPaymentReceivedTemplate({
