@@ -1,8 +1,7 @@
 import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
-import { createMembershipCheckoutSession, startMembershipSignup } from "@/lib/membership-billing";
-import { isCheckoutOpen } from "@/lib/payment-provider";
+import { startMembershipSignup } from "@/lib/membership-billing";
 import { customerSafeMessage } from "@/lib/safe-error";
 
 export async function POST(request: Request) {
@@ -60,16 +59,30 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, recurring: true, chargeSucceeded: true });
     }
 
-    // LANE 2 — legacy one-time hosted checkout. Left intact so nothing breaks
-    // while the card panel rolls out, but it does NOT create a subscription.
-    if (isCheckoutOpen()) {
-      const session = await createMembershipCheckoutSession({ userId: user.id, tierId: body.tierId, billingCycle: body.billingCycle });
-      return NextResponse.json({ success: true, checkoutUrl: session.hostedCheckoutUrl, orderId: session.orderId });
-    }
-
-    // LANE 3 — no processor configured. Records the intent, charges nothing.
-    const result = await startMembershipSignup({ userId: user.id, tierId: body.tierId, billingCycle: body.billingCycle });
-    return NextResponse.json({ success: true, chargeSucceeded: result.success });
+    // NO SILENT ONE-TIME FALLBACK.
+    //
+    // This used to drop through to the hosted-checkout lane whenever the card
+    // token was missing. That lane charges ONCE and stores no card, so the
+    // shopper paid, saw "success", and owned a "subscription" that could never
+    // renew — it simply lapsed at the end of the period with no notice and no
+    // second payment. A real account was sold this way: an active monthly
+    // membership with veyra_membership_id NULL, silently non-renewing.
+    //
+    // A membership is a recurring product by definition. If the card capture
+    // did not produce a token intent, the correct outcome is a FAILED sale the
+    // shopper can retry, not a successful charge for something that will not do
+    // what they bought. Failing a sale is recoverable; taking money for a
+    // broken subscription is not.
+    console.error(
+      `[membership] subscribe called without a card token for user ${user.id} — refusing rather than selling a non-renewing membership.`,
+    );
+    return NextResponse.json(
+      {
+        success: false,
+        error: "We couldn't set up recurring billing for this membership. Please re-enter your card and try again, or contact support.",
+      },
+      { status: 400 },
+    );
   } catch (error) {
     return NextResponse.json({ success: false, error: customerSafeMessage(error, "Unable to start membership") }, { status: 400 });
   }
