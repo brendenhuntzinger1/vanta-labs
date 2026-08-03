@@ -77,16 +77,27 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
     blocksLaunch: true,
   });
 
-  // Membership billing provider.
-  const billingName = (process.env.BILLING_PROVIDER ?? "noop").trim().toLowerCase();
-  const billingConfigured = billingName !== "" && billingName !== "noop";
+  // Membership billing.
+  //
+  // Recurring memberships run through the Veyra subscription lane (card captured
+  // via Basis Theory, then Veyra owns every renewal) — see veyra-membership.ts.
+  // That lane authenticates with VEYRA_SECRET_KEY / PAYMENT_SECRET_KEY, NOT the
+  // legacy BILLING_PROVIDER flag, so checking BILLING_PROVIDER reported
+  // "Not set up" even with recurring fully wired. Check the real credential.
+  const veyraKey = (process.env.VEYRA_SECRET_KEY || process.env.PAYMENT_SECRET_KEY || "").trim();
+  const legacyBilling = (process.env.BILLING_PROVIDER ?? "noop").trim().toLowerCase();
+  const recurringConfigured = veyraKey.length > 0;
+  const legacyConfigured = legacyBilling !== "" && legacyBilling !== "noop";
+  const billingConfigured = recurringConfigured || legacyConfigured;
   out.push({
     key: "billing",
     label: "Membership billing",
     level: billingConfigured ? "ok" : "not_configured",
-    detail: billingConfigured
-      ? `Provider: ${billingName}`
-      : "Not configured — monthly memberships can't charge yet (annual works via the order flow)",
+    detail: recurringConfigured
+      ? "Recurring subscriptions live via Veyra — card captured at signup, renewals billed automatically"
+      : legacyConfigured
+        ? `Provider: ${legacyBilling}`
+        : "Not configured — monthly memberships can't charge yet (annual works via the order flow)",
     blocksLaunch: false,
   });
 
