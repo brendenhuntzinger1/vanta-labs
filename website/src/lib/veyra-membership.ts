@@ -200,3 +200,90 @@ export function isAmexBrand(brand: string | null | undefined): boolean {
   const b = (brand ?? "").toLowerCase().replace(/[\s_-]/g, "");
   return b === "amex" || b === "americanexpress";
 }
+
+// ---------------------------------------------------------------------------
+// Lifecycle control — cancel / skip.
+//
+// 🔴 WHY THIS EXISTS. Veyra owns the billing schedule once a membership is
+// created, so a lifecycle change written ONLY to our own table does not stop
+// anything. Observed live 2026-08-03: a member was paused on the storefront
+// (local status "paused") while the Veyra membership stayed "active" with its
+// next charge still booked. Cancel had the identical hole, which is far worse —
+// a customer who cancels keeps being charged, every month, indefinitely.
+//
+// Rule: for any membership carrying a `veyra_membership_id`, tell Veyra FIRST
+// and only update local state if Veyra accepted. Local-only is how you charge
+// someone who asked you to stop.
+// ---------------------------------------------------------------------------
+
+export type VeyraLifecycleResult =
+  | { ok: true; status?: string }
+  | { ok: false; message: string };
+
+async function veyraPost(path: string, body: unknown): Promise<VeyraLifecycleResult> {
+  try {
+    const res = await fetch(`${veyraBase()}/api/v1/membership/${path}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${veyraSecret()}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body ?? {}),
+    });
+    const text = await res.text();
+    let parsed: Record<string, unknown> = {};
+    try {
+      parsed = text ? (JSON.parse(text) as Record<string, unknown>) : {};
+    } catch {
+      /* fall through to the status-based message below */
+    }
+    if (!res.ok) {
+      const message =
+        (parsed.message as string | undefined) ??
+        (parsed.error as string | undefined) ??
+        `Membership update failed (HTTP ${res.status}).`;
+      return { ok: false, message };
+    }
+    return { ok: true, status: parsed.status as string | undefined };
+  } catch (e) {
+    return {
+      ok: false,
+      message: e instanceof Error ? e.message : "Could not reach the payment provider.",
+    };
+  }
+}
+
+/**
+ * Stop future billing at Veyra.
+ *
+ * `atPeriodEnd: true` keeps the member through the period they already paid for
+ * and takes no further charge — the correct default for a customer-initiated
+ * cancel. `false` ends it immediately.
+ */
+export function cancelVeyraMembership(
+  veyraMembershipId: string,
+  atPeriodEnd = true,
+): Promise<VeyraLifecycleResult> {
+  return veyraPost(`${encodeURIComponent(veyraMembershipId)}/cancel`, {
+    at_period_end: atPeriodEnd,
+  });
+}
+
+/**
+ * Push the next charge forward by one cycle. Moves dates only — not a charge,
+ * refund or cancel.
+ *
+ * ⚠️ This is also what a PAUSE maps to, because Veyra has no pause endpoint
+ * (verified 2026-08-03: only cancel / skip_cycle / change / card / retention).
+ * So a pause defers exactly ONE cycle. A member left paused past that cycle
+ * would be charged again. Callers must treat pause as "skip one period", and
+ * this should be revisited if Veyra adds real pause support.
+ */
+export function skipVeyraMembershipCycle(
+  veyraMembershipId: string,
+  reason?: string,
+): Promise<VeyraLifecycleResult> {
+  return veyraPost(`${encodeURIComponent(veyraMembershipId)}/skip_cycle`, {
+    ...(reason ? { reason: reason.slice(0, 200) } : {}),
+  });
+}
