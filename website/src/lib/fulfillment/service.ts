@@ -5,9 +5,10 @@ import { sendEmail } from "@/lib/email/send";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { deliveryConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { getFulfillmentRuntimeConfig, type FulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
-import { getFulfillmentProvider, type NormalizedFulfillmentOrder } from "@/lib/fulfillment/provider";
+import { getFulfillmentProvider, fulfillmentContactEmail, type NormalizedFulfillmentOrder } from "@/lib/fulfillment/provider";
 import { recordActualShippingCost } from "@/lib/admin-profit";
 import { buildCarrierTrackingUrl } from "@/lib/tracking-url";
+import { getFulfillmentRelayDomain } from "@/lib/fulfillment/relay-domain";
 import { getSiteUrl } from "@/lib/env";
 
 function roundMoney(value: number) {
@@ -69,11 +70,19 @@ async function logEvent(input: {
   }
 }
 
-function normalizeOrder(order: OrderRow): NormalizedFulfillmentOrder {
+function normalizeOrder(order: OrderRow, relayDomain: string): NormalizedFulfillmentOrder {
   return {
     orderId: order.order_id,
     orderNumber: order.order_number ?? order.order_id,
-    customer: { name: order.customer_name ?? "", email: order.customer_email ?? "" },
+    // The buyer's real email is deliberately withheld — the 3PL emails its own
+    // branded order confirmation to whatever address it is given. See
+    // fulfillmentContactEmail. Falls back to an empty string rather than the
+    // buyer's address when no relay domain is configured: no contact channel is
+    // correct, the buyer's inbox is not.
+    customer: {
+      name: order.customer_name ?? "",
+      email: fulfillmentContactEmail(order.order_number ?? order.order_id, relayDomain),
+    },
     shipping: {
       address: order.shipping_address ?? "",
       city: order.city ?? "",
@@ -155,7 +164,7 @@ export async function transmitOrderToFulfillment(orderId: string): Promise<void>
 
     if (!order) return;
 
-    const normalized = normalizeOrder(order as OrderRow);
+    const normalized = normalizeOrder(order as OrderRow, await getFulfillmentRelayDomain());
     const now = new Date().toISOString();
 
     // Upsert the fulfillment order (idempotent per order).
