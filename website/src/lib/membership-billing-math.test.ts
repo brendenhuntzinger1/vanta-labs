@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeTierChangeBilling } from "@/lib/membership-billing-math";
+import { computeTierChangeBilling, decideMembershipAttempt } from "@/lib/membership-billing-math";
 
 // Tiers used across cases (cents).
 const ESSENTIAL = { monthlyPriceCents: 999, annualPriceCents: 9900, introPriceCents: 100 }; // $9.99 / $1 intro → remainder $8.99
@@ -43,5 +43,48 @@ describe("computeTierChangeBilling", () => {
     const r = computeTierChangeBilling({ isTrialing: true, billingCycle: "monthly", monthlyPriceCents: 100, annualPriceCents: null, introPriceCents: 999 });
     expect(r.firstMonthRemainderCents).toBe(0);
     expect(r.nextBillingAmountCents).toBe(0);
+  });
+});
+
+describe("decideMembershipAttempt — checkout idempotency", () => {
+  const attempt = { orderId: "order-abc", orderNumber: "VL-02506E34", amountPaid: 249.9 };
+
+  it("creates a first attempt when nothing is open", () => {
+    expect(decideMembershipAttempt(null, 249.9)).toEqual({ action: "create" });
+  });
+
+  it("reuses the open attempt instead of opening a second order", () => {
+    expect(decideMembershipAttempt(attempt, 249.9)).toEqual({
+      action: "reuse", orderId: "order-abc", orderNumber: "VL-02506E34",
+    });
+  });
+
+  it("a double click cannot produce two orders", () => {
+    // The real defect: two annual $249.90 attempts seven minutes apart both
+    // inserted. Repeated calls against the same open attempt must all reuse.
+    const decisions = [1, 2, 3].map(() => decideMembershipAttempt(attempt, 249.9));
+    expect(decisions.every((d) => d.action === "reuse")).toBe(true);
+  });
+
+  it("tolerates float representation on the money round-trip", () => {
+    expect(decideMembershipAttempt({ ...attempt, amountPaid: 249.9000001 }, 249.9).action).toBe("reuse");
+    expect(decideMembershipAttempt({ ...attempt, amountPaid: 249.8999999 }, 249.9).action).toBe("reuse");
+  });
+
+  it("retires the stale attempt when the tier has been repriced", () => {
+    expect(decideMembershipAttempt(attempt, 299.9)).toEqual({
+      action: "replace", retireOrderId: "order-abc",
+    });
+  });
+
+  it("treats even a one-cent difference as a reprice, never a reuse", () => {
+    expect(decideMembershipAttempt(attempt, 249.91).action).toBe("replace");
+    expect(decideMembershipAttempt(attempt, 249.89).action).toBe("replace");
+  });
+
+  it("reuse is not time-boxed — a stale attempt is reused, never blocked", () => {
+    // Deliberate: a unique index would hard-fail a legitimate retry once an
+    // abandoned row lingered. Reuse is self-healing instead.
+    expect(decideMembershipAttempt(attempt, 249.9).action).toBe("reuse");
   });
 });
