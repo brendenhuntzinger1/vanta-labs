@@ -9,6 +9,34 @@
 // expired/stalled membership still loses benefits promptly.
 export const MEMBERSHIP_EXPIRY_GRACE_DAYS = 3;
 
+/**
+ * The event types that represent MONEY CHANGING HANDS. Everything else written
+ * to membership_billing_events — cancellation, pause, resume, skip, tier_change
+ * — is a lifecycle record stored with status "succeeded" and amount_cents 0,
+ * because the *operation* succeeded, not because anyone paid.
+ *
+ * Never treat "has a succeeded billing event" as proof of payment: an account
+ * that only ever failed to pay and then cancelled has succeeded rows. That
+ * mistake produced a false all-clear when auditing the first test account,
+ * which had two succeeded cancellations and zero real charges.
+ */
+export const PAID_EVENT_TYPES = ["intro_charge", "first_month_remainder", "renewal"] as const;
+
+export interface BillingEventLike {
+  eventType: string;
+  status: string;
+  amountCents: number;
+}
+
+/** True only if this event moved money. */
+export function isPaidBillingEvent(event: BillingEventLike): boolean {
+  return (
+    event.status === "succeeded" &&
+    event.amountCents > 0 &&
+    (PAID_EVENT_TYPES as readonly string[]).includes(event.eventType)
+  );
+}
+
 export interface MembershipActivityInput {
   status: string;
   nextBillingAt: string | null;
