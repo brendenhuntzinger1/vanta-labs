@@ -18,6 +18,8 @@ function roundMoney(value: number) {
 export interface OrderRow {
   order_id: string;
   order_number: string | null;
+  /** "product" | "membership". A membership never goes to fulfilment. */
+  order_type?: string | null;
   customer_name: string | null;
   // customer_email is deliberately ABSENT. This row feeds the 3PL payload, and
   // the buyer's address must never be reachable from there — see
@@ -162,11 +164,37 @@ export async function transmitOrderToFulfillment(orderId: string): Promise<void>
 
     const { data: order } = await supabaseAdmin
       .from("orders")
-      .select("order_id, order_number, customer_name, shipping_address, city, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, order_items(*)")
+      .select("order_id, order_number, order_type, customer_name, shipping_address, city, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, order_items(*)")
       .eq("order_id", orderId)
       .maybeSingle();
 
     if (!order) return;
+
+    // A MEMBERSHIP IS NOT A PARCEL. Nothing physical exists to pick, pack or
+    // ship, and a membership order carries no shipping address by design.
+    //
+    // Both paid paths used to transmit these anyway: finalizeManualPayment
+    // computes isMembershipOrder to skip points and mark the order fulfilled,
+    // then called transmit without consulting it, and the card webhook never
+    // checked at all. The result was a subscription sent to the 3PL as an order
+    // with an empty name, empty address and empty email — which Arcline
+    // rejected as 422 "A `customer.email` is required", raising a critical
+    // "customer is paid but the order did not reach fulfilment" alert for an
+    // order that must never reach fulfilment. It also wrote a per-unit payout
+    // row, so the 3PL was credited for shipping a subscription.
+    //
+    // Guarding here rather than at the two call sites covers every caller,
+    // including the replacement flow and any added later.
+    if (String(order.order_type ?? "product") === "membership") {
+      await logEvent({
+        orderId: String(order.order_id),
+        direction: "outbound",
+        eventType: "order.skipped_membership",
+        ok: true,
+        message: "Membership order — digital subscription, nothing to fulfil.",
+      });
+      return;
+    }
 
     const relayDomain = await getFulfillmentRelayDomain();
 
