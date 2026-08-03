@@ -326,7 +326,11 @@ export function AdminMembershipClient({
           <div className="vl-panel-soft rounded-xl p-4">
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Real Revenue (30d)</p>
             <p className="mt-2 text-2xl font-semibold text-white">{money(analytics.realRecurringRevenueCents30d)}</p>
-            <p className="mt-1 text-xs text-zinc-500">From actual successful charges. $0 until a billing processor is connected.</p>
+            {analytics.membershipRefundsCents30d > 0 ? (
+              <p className="mt-1 text-xs text-rose-300">Net of {money(analytics.membershipRefundsCents30d)} refunded / charged back.</p>
+            ) : (
+              <p className="mt-1 text-xs text-zinc-500">Successful charges only, net of refunds. Failed and pending charges are excluded.</p>
+            )}
           </div>
           <div className="vl-panel-soft rounded-xl p-4">
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Points Outstanding</p>

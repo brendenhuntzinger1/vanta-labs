@@ -104,6 +104,25 @@ export function getBillingProvider(providerName = process.env.BILLING_PROVIDER ?
   switch ((providerName ?? "").trim().toLowerCase()) {
     case "mock":
     case "test":
+      // HARD STOP: the simulated recurring gateway must never run in
+      // production. MockBillingProvider.chargeCard returns success for any
+      // paymentMethodRef that is not a decline test card — and the membership
+      // signup path passes `paymentMethodRef: null`. So with BILLING_PROVIDER
+      // =mock in prod, any authenticated customer who POSTs /api/membership/
+      // subscribe WITHOUT a card token gets a fully active membership, a
+      // succeeded billing event at the full tier price, and a welcome email,
+      // having paid nothing.
+      //
+      // resolvePaymentProviderName in payment-provider.ts has guarded the
+      // one-time order lane this way for a while; the recurring lane was left
+      // open. Same escape hatch, so a non-prod environment opts in explicitly.
+      if (process.env.NODE_ENV === "production" && process.env.ALLOW_MOCK_PAYMENTS !== "true") {
+        throw new Error(
+          "BILLING_PROVIDER=mock/test is forbidden in production — it would activate memberships without charging. " +
+          "Unset it (defaults to noop) or connect a real recurring provider. " +
+          "(ALLOW_MOCK_PAYMENTS=true may be set ONLY in a non-production environment.)",
+        );
+      }
       return new MockBillingProvider();
     case "noop":
     default:

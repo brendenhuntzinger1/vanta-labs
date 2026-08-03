@@ -493,7 +493,10 @@ export interface MembershipAnalytics {
   activePromotionalEventCount: number;
   activeIntroMembers: number;
   trialToPaidConversionRate: number;
+  /** Paid charges MINUS refunds/chargebacks in the window — money actually kept. */
   realRecurringRevenueCents30d: number;
+  /** Refunded/charged-back membership money in the window, reported separately. */
+  membershipRefundsCents30d: number;
   cancellationsCount30d: number;
   renewalsCount30d: number;
   failedPaymentsCount30d: number;
@@ -515,6 +518,7 @@ export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
     { data: events, error: eventsError },
     { data: introMembers, error: introError },
     { data: billingEvents30d, error: billingEventsError },
+    { data: membershipRefunds30d, error: refundsError },
   ] = await Promise.all([
     supabaseAdmin
       .from("customer_memberships")
@@ -533,12 +537,23 @@ export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
       .from("membership_billing_events")
       .select("event_type, amount_cents, status")
       .gte("created_at", since30d),
+    // Refunds and chargebacks never appear in membership_billing_events as
+    // negative money — revokeMembershipForRefund records a $0 "cancellation" —
+    // so membership revenue was counted gross and a refunded membership kept
+    // inflating it. Attributed by refunded_at, the date the money went back.
+    supabaseAdmin
+      .from("orders")
+      .select("refund_amount")
+      .eq("order_type", "membership")
+      .gt("refund_amount", 0)
+      .gte("refunded_at", since30d),
   ]);
 
   if (membershipError) throw membershipError;
   if (eventsError) throw eventsError;
   if (introError) throw introError;
   if (billingEventsError) throw billingEventsError;
+  if (refundsError) throw refundsError;
 
   let mrrCents = 0;
   const tierCounts = new Map<string, number>();
@@ -571,7 +586,7 @@ export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
   // Revenue counts PAID events only. cancellation/pause/resume/skip/tier_change
   // are also stored as "succeeded" (the operation worked) with amount 0, so a
   // bare status check would sweep them in — see PAID_EVENT_TYPES.
-  const realRecurringRevenueCents30d = events30d
+  const grossRecurringRevenueCents30d = events30d
     .filter((row) =>
       isPaidBillingEvent({
         eventType: String(row.event_type ?? ""),
@@ -581,6 +596,14 @@ export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
     )
     .reduce((sum, row) => sum + Number(row.amount_cents ?? 0), 0);
 
+  // orders.refund_amount is DOLLARS; billing events are CENTS.
+  const membershipRefundsCents30d = Math.round(
+    (membershipRefunds30d ?? []).reduce((sum, row) => sum + Number(row.refund_amount ?? 0), 0) * 100,
+  );
+  // Never report negative revenue: a refund of a charge taken before the window
+  // would otherwise drag the 30d figure below zero.
+  const realRecurringRevenueCents30d = Math.max(0, grossRecurringRevenueCents30d - membershipRefundsCents30d);
+
   return {
     monthlyRecurringRevenueCents: Math.round(mrrCents),
     activeMembersByTier: Array.from(tierCounts.entries()).map(([tierName, count]) => ({ tierName, count })),
@@ -589,6 +612,7 @@ export async function getMembershipAnalytics(): Promise<MembershipAnalytics> {
     activeIntroMembers: (introMembers ?? []).length,
     trialToPaidConversionRate: introAttempts.length > 0 ? Math.round((introSucceeded.length / introAttempts.length) * 1000) / 10 : 0,
     realRecurringRevenueCents30d,
+    membershipRefundsCents30d,
     cancellationsCount30d: events30d.filter((row) => row.event_type === "cancellation").length,
     renewalsCount30d: events30d.filter((row) => row.event_type === "renewal" && row.status === "succeeded").length,
     failedPaymentsCount30d: events30d.filter((row) => row.status === "failed").length,
