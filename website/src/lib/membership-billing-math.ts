@@ -106,7 +106,7 @@ export type MembershipPurchaseDecision =
  * tier" is refused.
  */
 export function guardDuplicateMembershipPurchase(
-  existing: { status: string; tierId: string; tierName?: string } | null,
+  existing: { status: string; tierId: string; tierName?: string; cancelAtPeriodEnd?: boolean } | null,
   requestedTierId: string,
 ): MembershipPurchaseDecision {
   if (!existing) return { allowed: true, kind: "new" };
@@ -114,6 +114,12 @@ export function guardDuplicateMembershipPurchase(
   const status = (existing.status ?? "").trim().toLowerCase();
   const holdsBenefits = status === "active" || status === "trialing";
   if (!holdsBenefits) return { allowed: true, kind: "rejoin" };
+
+  // A member winding down is NOT continuing — they are on their way out, and
+  // buying again is a legitimate way back in. Refusing them left an account
+  // with no route to reinstate at all: "Keep my membership" is the cheaper
+  // path (no charge), but the purchase must not be blocked either.
+  if (existing.cancelAtPeriodEnd) return { allowed: true, kind: "rejoin" };
 
   if (existing.tierId !== requestedTierId) return { allowed: true, kind: "plan_change" };
 

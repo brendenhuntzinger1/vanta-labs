@@ -137,3 +137,25 @@ describe("guardDuplicateMembershipPurchase — never charge twice", () => {
     if (!decision.allowed) expect(decision.reason).toMatch(/active membership/i);
   });
 });
+
+describe("guardDuplicateMembershipPurchase — a cancelling member can come back", () => {
+  const TIER_A = "tier-essential";
+
+  it("ALLOWS re-purchase while winding down", () => {
+    // Refusing this left an account with no route back at all: resume only
+    // handled "paused", and the status is still "active" during the wind-down.
+    expect(guardDuplicateMembershipPurchase(
+      { status: "active", tierId: TIER_A, cancelAtPeriodEnd: true }, TIER_A,
+    )).toEqual({ allowed: true, kind: "rejoin" });
+  });
+
+  it("still refuses a member who is NOT winding down", () => {
+    expect(guardDuplicateMembershipPurchase(
+      { status: "active", tierId: TIER_A, cancelAtPeriodEnd: false }, TIER_A,
+    ).allowed).toBe(false);
+  });
+
+  it("treats a missing flag as not winding down", () => {
+    expect(guardDuplicateMembershipPurchase({ status: "active", tierId: TIER_A }, TIER_A).allowed).toBe(false);
+  });
+});
