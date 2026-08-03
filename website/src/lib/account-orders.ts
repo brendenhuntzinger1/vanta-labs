@@ -200,6 +200,11 @@ export async function getCustomerOrdersDetailed(userId: string, email?: string |
     .from("orders")
     .select(ORDER_SELECT)
     .or(ownershipFilter(userId, email))
+    // Orders = things that ship. A membership is a subscription, not a parcel,
+    // and an UNPAID membership attempt is not an order at all — every retry used
+    // to leave another "awaiting payment" row here. Paid membership receipts
+    // live under Subscriptions / billing history instead.
+    .not("order_type", "eq", "membership")
     .order("created_at", { ascending: false })
     .limit(100);
 

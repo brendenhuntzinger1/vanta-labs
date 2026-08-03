@@ -531,23 +531,37 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
       });
     }
 
-    await supabaseAdmin.from("customer_memberships").upsert({
-      user_id: input.userId,
-      tier_id: tier.id,
-      billing_cycle: input.billingCycle,
-      status: chargeResult.success ? "active" : "past_due",
-      // THE load-bearing write. Non-null makes every sweep query skip this row,
-      // because Veyra now owns its renewals. Drop this and the member is billed
-      // twice a month — once by Veyra's cron, once by our sweep.
-      veyra_membership_id: veyraMembershipId,
-      started_at: now.toISOString(),
-      renews_at: nextBillingAt.toISOString(),
-      intro_status: "not_applicable",
-      next_billing_at: nextBillingAt.toISOString(),
-      next_billing_amount_cents: amountCents,
-      cancel_at_period_end: false,
-      updated_at: now.toISOString(),
-    }, { onConflict: "user_id" });
+    // A membership record is created ONLY by a CONFIRMED successful charge.
+    //
+    // This upsert used to run unconditionally, writing tier_id, started_at,
+    // renews_at and next_billing_at with status "past_due" whenever the charge
+    // failed. That is what made a failed FIRST payment look like a real
+    // membership: the account showed a tier name, an access-until date and a
+    // next-billing date it had never paid for.
+    //
+    // A failed first payment now leaves the account with NO membership row at
+    // all. "past_due" is reserved for an account that was already a member and
+    // whose RENEWAL failed — handleChargeFailure below issues that as an UPDATE,
+    // which is a no-op when no row exists, so the distinction holds automatically.
+    if (chargeResult.success) {
+      await supabaseAdmin.from("customer_memberships").upsert({
+        user_id: input.userId,
+        tier_id: tier.id,
+        billing_cycle: input.billingCycle,
+        status: "active",
+        // THE load-bearing write. Non-null makes every sweep query skip this row,
+        // because Veyra now owns its renewals. Drop this and the member is billed
+        // twice a month — once by Veyra's cron, once by our sweep.
+        veyra_membership_id: veyraMembershipId,
+        started_at: now.toISOString(),
+        renews_at: nextBillingAt.toISOString(),
+        intro_status: "not_applicable",
+        next_billing_at: nextBillingAt.toISOString(),
+        next_billing_amount_cents: amountCents,
+        cancel_at_period_end: false,
+        updated_at: now.toISOString(),
+      }, { onConflict: "user_id" });
+    }
 
     if (chargeResult.success) {
       await recordBillingEvent({ userId: input.userId, tierId: tier.id, eventType: "renewal", amountCents, status: "succeeded", providerChargeId: chargeResult.providerChargeId });

@@ -306,7 +306,9 @@ export async function listCustomerBalances(search?: string): Promise<CustomerBal
         userId: user.id,
         email: user.email ?? "(no email)",
         tierName: membership?.tierName ?? "Research Member",
-        status: membership?.status ?? "active",
+        // A customer with no membership row is NOT active — defaulting to
+        // "active" made every non-member read as one in admin.
+        status: membership?.status ?? "none",
         pointsBalance: balanceByUser.get(user.id) ?? 0,
       };
     });

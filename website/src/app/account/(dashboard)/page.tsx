@@ -8,6 +8,7 @@ import {
   checkAndAwardBirthdayBonus,
   getActivePointsMultiplier,
   getCustomerMembership,
+  getMembershipPerks,
   getPointsBalance,
   getPointsHistory,
   getProgressToNextReward,
@@ -91,10 +92,11 @@ export default async function AccountDashboardPage() {
   const preferences = await getCustomerPreferences(user.id);
   await checkAndAwardBirthdayBonus(user.id, preferences.birthday).catch(() => {});
 
-  const [orders, membership, pointsBalance, pointsHistory, activeCoupons, pointsMultiplier, lifetimeSavings, defaultAddress, wishlistSlugs, bestSellerSlugs] =
+  const [orders, membership, perks, pointsBalance, pointsHistory, activeCoupons, pointsMultiplier, lifetimeSavings, defaultAddress, wishlistSlugs, bestSellerSlugs] =
     await Promise.all([
       getCustomerOrders(user.id, user.email).catch(() => []),
       getCustomerMembership(user.id),
+      getMembershipPerks(user.id),
       getPointsBalance(user.id).catch(() => 0),
       getPointsHistory(user.id, 5).catch(() => []),
       getActiveCouponsForDisplay().catch(() => []),
@@ -117,8 +119,10 @@ export default async function AccountDashboardPage() {
   ]);
   const recommended = bestSellerProducts.filter((p) => !wishlistSlugs.includes(p.slug)).slice(0, 4);
 
-  const isPaid = membership.billingCycle !== "free";
-  const isActiveMember = membership.status === "active" || membership.status === "trialing";
+  const isActiveMember = perks.isActiveMember;
+  // "Paid" means an ACTIVE paid plan. A row that exists but was never paid for
+  // (or has lapsed) must not surface billing dates or a tier badge.
+  const isPaid = membership.billingCycle !== "free" && isActiveMember;
   const pastDue = membership.status === "past_due";
   const recentOrders = orders.slice(0, 3);
   const lastOrder = orders[0];
@@ -130,7 +134,7 @@ export default async function AccountDashboardPage() {
       ? { text: "Active member", cls: "border-emerald-400/40 bg-emerald-400/10 text-emerald-200" }
       : membership.status === "cancelled"
         ? { text: "Membership ending", cls: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" }
-        : { text: "Free account", cls: "border-white/15 bg-white/[0.04] text-zinc-300" };
+        : { text: "No active membership", cls: "border-white/15 bg-white/[0.04] text-zinc-300" };
 
   return (
     <div className="space-y-5">
@@ -145,9 +149,11 @@ export default async function AccountDashboardPage() {
                 <span className="inline-block h-1.5 w-1.5 rounded-full bg-current opacity-80" />
                 {status.text}
               </span>
-              <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-200/25 bg-amber-200/[0.06] px-3 py-1 text-xs text-amber-100/90">
-                {membership.tier.name}
-              </span>
+              {isActiveMember && membership.tier.slug !== "free" ? (
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.06] px-3 py-1 text-xs text-[color:var(--accent-gold)]">
+                  {membership.tier.name}
+                </span>
+              ) : null}
             </div>
           </div>
 
@@ -166,7 +172,7 @@ export default async function AccountDashboardPage() {
               </div>
             ) : (
               <Link href="/membership" className="vl2-btn-primary vl-focus-ring inline-flex px-5 py-3 text-xs">
-                Upgrade membership
+                Choose a membership
               </Link>
             )}
           </div>
@@ -199,7 +205,7 @@ export default async function AccountDashboardPage() {
         <StatTile label="Point balance" value={pointsBalance.toLocaleString()} sub={`≈ ${money(pointsToDollars(pointsBalance))} in rewards`} href="/account/rewards" />
         <StatTile
           label="Earn rate"
-          value={`${membership.tier.pointsPerDollar}×`}
+          value={`${perks.pointsPerDollar}×`}
           sub={pointsMultiplier.multiplier > 1 ? `${pointsMultiplier.eventName} (${pointsMultiplier.multiplier}× active)` : "points per $1"}
         />
         {lifetimeSavings.total > 0 ? (
