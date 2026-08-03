@@ -22,7 +22,7 @@
 //  3. The BT public key and the session are fetched from ONE authenticated
 //     endpoint (/api/membership/card-config) rather than two calls.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   BasisTheoryProvider,
   CardElement,
@@ -91,6 +91,12 @@ export default function MembershipCardForm({ tierId, config, onSuccess }: Props)
 
 function CardFormInner({ tierId, config, onSuccess }: Props) {
   const { bt } = useBasisTheory();
+  // The element is reached by REF, not bt.getElement(id). getElement resolves by
+  // element id and returns something that is not a usable tokenization target
+  // here — tokenIntents.create() then throws and the shopper sees a generic
+  // "couldn't process that card" on every card. Evo's live form uses a ref;
+  // match it exactly.
+  const cardRef = useRef<unknown>(null);
   const [cardBrand, setCardBrand] = useState<string | null>(null);
   const [complete, setComplete] = useState(false);
   const [agreed, setAgreed] = useState(false);
@@ -132,9 +138,9 @@ function CardFormInner({ tierId, config, onSuccess }: Props) {
     setError(null);
 
     try {
-      const cardEl = bt?.getElement?.("card");
+      const cardEl = cardRef.current;
       if (!bt || !cardEl) {
-        setError("Secure card entry isn't ready yet. Please try again in a moment.");
+        setError("Could not read the card form. Please refresh and try again.");
         return;
       }
 
@@ -143,16 +149,23 @@ function CardFormInner({ tierId, config, onSuccess }: Props) {
       //
       // The cast bridges a gap in BT's own TS types, not a real mismatch:
       // `CreateTokenIntent.data` is typed as a plain DataObject, but the hosted-
-      // fields flow is documented to pass the Element INSTANCE (the SDK reads
-      // the PAN inside its own iframe). This is the exact call Evo runs in
-      // production. Narrowed to this one line rather than loosening the import.
-      const intent = await bt.tokenIntents.create({
-        type: "card",
-        data: cardEl,
-      } as unknown as Parameters<typeof bt.tokenIntents.create>[0]);
-      const tokenIntentId: string | undefined = (intent as { id?: string })?.id;
+      // fields flow passes the Element INSTANCE (the SDK reads the PAN inside
+      // its own iframe). This is the exact call Evo runs in production.
+      let intent: { id?: string } | undefined;
+      try {
+        intent = (await bt.tokenIntents.create({
+          type: "card",
+          data: cardEl,
+        } as unknown as Parameters<typeof bt.tokenIntents.create>[0])) as { id?: string };
+      } catch {
+        // Split from the outer catch so a tokenize failure reads differently
+        // from a downstream one — they need different shopper actions.
+        setError("We couldn't process that card. Please check the details and try again.");
+        return;
+      }
 
-      if (!tokenIntentId || !TOKEN_INTENT_RE.test(tokenIntentId)) {
+      const tokenIntentId = intent?.id;
+      if (typeof tokenIntentId !== "string" || !TOKEN_INTENT_RE.test(tokenIntentId)) {
         setError("We couldn't process that card. Please try another card.");
         return;
       }
@@ -191,7 +204,10 @@ function CardFormInner({ tierId, config, onSuccess }: Props) {
       <div className="rounded-lg border border-white/15 bg-black/30 p-3">
         <CardElement
           id="membership-card"
+          ref={cardRef as never}
           cardTypes={CARD_TYPES}
+          inputMode="numeric"
+          validateOnChange
           onChange={handleChange}
           style={{
             base: {
