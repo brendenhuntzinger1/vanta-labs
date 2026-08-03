@@ -85,3 +85,43 @@ export function decideMembershipAttempt(
   }
   return { action: "replace", retireOrderId: openAttempt.orderId };
 }
+
+// ── Duplicate-purchase guard ───────────────────────────────────────────────
+
+export type MembershipPurchaseDecision =
+  | { allowed: true; kind: "new" | "plan_change" | "rejoin" }
+  | { allowed: false; reason: string };
+
+/**
+ * Whether a membership purchase may proceed.
+ *
+ * startMembershipSignup already no-ops when the buyer is active on the same
+ * tier, but createMembershipCheckoutSession — the hosted-checkout lane — had no
+ * such guard, so an ACTIVE member who reached the subscribe page again was sent
+ * to a live checkout and charged a second time for a membership they already
+ * hold.
+ *
+ * A different tier is a legitimate plan change, and a lapsed/cancelled/paused
+ * member rejoining is exactly what we want. Only "already active on this very
+ * tier" is refused.
+ */
+export function guardDuplicateMembershipPurchase(
+  existing: { status: string; tierId: string; tierName?: string } | null,
+  requestedTierId: string,
+): MembershipPurchaseDecision {
+  if (!existing) return { allowed: true, kind: "new" };
+
+  const status = (existing.status ?? "").trim().toLowerCase();
+  const holdsBenefits = status === "active" || status === "trialing";
+  if (!holdsBenefits) return { allowed: true, kind: "rejoin" };
+
+  if (existing.tierId !== requestedTierId) return { allowed: true, kind: "plan_change" };
+
+  const tier = (existing.tierName ?? "").trim();
+  return {
+    allowed: false,
+    reason: tier
+      ? `You're already a ${tier} member. Manage your plan from your account instead of purchasing again.`
+      : "You already have an active membership. Manage your plan from your account instead of purchasing again.",
+  };
+}

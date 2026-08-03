@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeTierChangeBilling, decideMembershipAttempt } from "@/lib/membership-billing-math";
+import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase } from "@/lib/membership-billing-math";
 
 // Tiers used across cases (cents).
 const ESSENTIAL = { monthlyPriceCents: 999, annualPriceCents: 9900, introPriceCents: 100 }; // $9.99 / $1 intro → remainder $8.99
@@ -86,5 +86,54 @@ describe("decideMembershipAttempt — checkout idempotency", () => {
     // Deliberate: a unique index would hard-fail a legitimate retry once an
     // abandoned row lingered. Reuse is self-healing instead.
     expect(decideMembershipAttempt(attempt, 249.9).action).toBe("reuse");
+  });
+});
+
+describe("guardDuplicateMembershipPurchase — never charge twice", () => {
+  const TIER_A = "tier-essential";
+  const TIER_B = "tier-pro";
+
+  it("allows a first purchase", () => {
+    expect(guardDuplicateMembershipPurchase(null, TIER_A)).toEqual({ allowed: true, kind: "new" });
+  });
+
+  it("REFUSES buying the same tier you already hold", () => {
+    const decision = guardDuplicateMembershipPurchase(
+      { status: "active", tierId: TIER_A, tierName: "Vanta Essential" }, TIER_A,
+    );
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toContain("Vanta Essential");
+  });
+
+  it("refuses a trialing member on the same tier too", () => {
+    expect(guardDuplicateMembershipPurchase({ status: "trialing", tierId: TIER_A }, TIER_A).allowed).toBe(false);
+  });
+
+  it("a repeated click cannot slip through", () => {
+    const existing = { status: "active", tierId: TIER_A };
+    const decisions = [1, 2, 3].map(() => guardDuplicateMembershipPurchase(existing, TIER_A));
+    expect(decisions.every((d) => !d.allowed)).toBe(true);
+  });
+
+  it("ALLOWS a genuine plan change to a different tier", () => {
+    expect(guardDuplicateMembershipPurchase({ status: "active", tierId: TIER_A }, TIER_B))
+      .toEqual({ allowed: true, kind: "plan_change" });
+  });
+
+  it("ALLOWS a lapsed member to rejoin", () => {
+    for (const status of ["past_due", "cancelled", "expired", "paused", "none"]) {
+      expect(guardDuplicateMembershipPurchase({ status, tierId: TIER_A }, TIER_A))
+        .toEqual({ allowed: true, kind: "rejoin" });
+    }
+  });
+
+  it("is case- and whitespace-insensitive about status", () => {
+    expect(guardDuplicateMembershipPurchase({ status: "  ACTIVE  ", tierId: TIER_A }, TIER_A).allowed).toBe(false);
+  });
+
+  it("still refuses without a tier name, using generic wording", () => {
+    const decision = guardDuplicateMembershipPurchase({ status: "active", tierId: TIER_A }, TIER_A);
+    expect(decision.allowed).toBe(false);
+    if (!decision.allowed) expect(decision.reason).toMatch(/active membership/i);
   });
 });
