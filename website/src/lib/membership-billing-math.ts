@@ -44,3 +44,44 @@ export function computeTierChangeBilling(input: TierChangeBillingInput): TierCha
 
   return { nextBillingAmountCents, firstMonthRemainderCents: null };
 }
+
+// ── Membership checkout idempotency ────────────────────────────────────────
+
+export interface OpenMembershipAttempt {
+  orderId: string;
+  orderNumber: string;
+  amountPaid: number;
+}
+
+export type MembershipAttemptDecision =
+  | { action: "reuse"; orderId: string; orderNumber: string }
+  | { action: "replace"; retireOrderId: string }
+  | { action: "create" };
+
+/**
+ * Decides what to do when a buyer starts membership checkout and an unpaid
+ * attempt for the same tier + cycle already exists.
+ *
+ * createMembershipCheckoutSession used to insert a new order unconditionally,
+ * so a double click, a back-and-retry, or a page refresh each left another
+ * "awaiting payment" order behind — the first test account accumulated one per
+ * signup attempt.
+ *
+ * Reuse is deliberately not time-boxed: a stale open attempt is reused rather
+ * than blocked. The only reason to abandon one is a PRICE change, where sending
+ * the buyer back to a checkout for the old amount would be wrong.
+ */
+export function decideMembershipAttempt(
+  openAttempt: OpenMembershipAttempt | null,
+  amount: number,
+): MembershipAttemptDecision {
+  if (!openAttempt) return { action: "create" };
+
+  // Money compared with a half-cent tolerance — amount_paid round-trips through
+  // the DB as a numeric and must not fail an equality check on representation.
+  const priceMatches = Math.abs(Number(openAttempt.amountPaid ?? 0) - amount) < 0.005;
+  if (priceMatches) {
+    return { action: "reuse", orderId: openAttempt.orderId, orderNumber: openAttempt.orderNumber };
+  }
+  return { action: "replace", retireOrderId: openAttempt.orderId };
+}

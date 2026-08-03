@@ -5,7 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { getBillingProvider, type ChargeCardResult } from "@/lib/billing-provider";
 import { startVeyraMembership } from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
-import { computeTierChangeBilling } from "@/lib/membership-billing-math";
+import { computeTierChangeBilling, decideMembershipAttempt } from "@/lib/membership-billing-math";
 import { PAID_EVENT_TYPES } from "@/lib/membership-status";
 import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
@@ -352,42 +352,96 @@ export async function createMembershipCheckoutSession(input: {
     throw new Error("Unable to load your account details.");
   }
 
-  const orderId = `order-${randomUUID()}`;
-  const orderNumber = `VL-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
   const now = new Date().toISOString();
 
-  const { error } = await supabaseAdmin.from("orders").insert({
-    order_id: orderId,
-    order_number: orderNumber,
-    order_type: "membership",
-    membership_tier_id: tier.id,
-    membership_cycle: input.billingCycle,
-    payment_method: "card",
-    customer_email: contact.email,
-    customer_name: contact.name,
-    currency: "USD",
-    subtotal: amount,
-    shipping_amount: 0,
-    handling_fee: 0,
-    tax_amount: 0,
-    discount_amount: 0,
-    amount_paid: amount,
-    customer_user_id: input.userId,
-    payment_status: "pending_payment",
-    fulfillment_status: "pending",
-    created_at: now,
-    updated_at: now,
-  });
-  if (error) throw error;
+  // IDEMPOTENCY. This used to mint a fresh order row on every call, so a double
+  // click, a back-and-retry, or a refresh of the subscribe page left one
+  // "awaiting payment" order behind per attempt — four signup attempts on the
+  // first test account produced four orders. Reuse the buyer's existing OPEN
+  // attempt for the same tier and cycle instead.
+  //
+  // No time window: a stale open attempt is reused rather than blocked, which
+  // is why this is app-level reuse and not a unique index — an index would hard
+  // fail a legitimate retry once an abandoned row lingered.
+  const { data: openAttempt, error: lookupError } = await supabaseAdmin
+    .from("orders")
+    .select("order_id, order_number, amount_paid")
+    .eq("customer_user_id", input.userId)
+    .eq("order_type", "membership")
+    .eq("membership_tier_id", tier.id)
+    .eq("membership_cycle", input.billingCycle)
+    .eq("payment_status", "pending_payment")
+    .is("paid_at", null)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (lookupError) throw lookupError;
 
-  await supabaseAdmin.from("order_items").insert({
-    order_id: orderId,
-    product_id: `membership:${tier.slug ?? tier.id}`,
-    product_name: `${input.billingCycle === "annual" ? "Annual" : "Monthly"} Membership — ${tier.name}`,
-    unit_price: amount,
-    quantity: 1,
-    line_total: amount,
-  });
+  // Reuse only at the same price. If the tier has been repriced since the
+  // abandoned attempt, retire that row and open a fresh one so the buyer is
+  // never sent to a checkout for a stale amount.
+  const decision = decideMembershipAttempt(
+    openAttempt
+      ? {
+          orderId: String(openAttempt.order_id),
+          orderNumber: String(openAttempt.order_number),
+          amountPaid: Number(openAttempt.amount_paid ?? 0),
+        }
+      : null,
+    amount,
+  );
+
+  let orderId: string;
+  let orderNumber: string;
+
+  if (decision.action === "reuse") {
+    orderId = decision.orderId;
+    orderNumber = decision.orderNumber;
+    await supabaseAdmin.from("orders").update({ updated_at: now }).eq("order_id", orderId);
+  } else {
+    if (decision.action === "replace") {
+      await supabaseAdmin
+        .from("orders")
+        .update({ payment_status: "canceled", updated_at: now })
+        .eq("order_id", decision.retireOrderId);
+    }
+
+    orderId = `order-${randomUUID()}`;
+    orderNumber = `VL-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
+
+    const { error } = await supabaseAdmin.from("orders").insert({
+      order_id: orderId,
+      order_number: orderNumber,
+      order_type: "membership",
+      membership_tier_id: tier.id,
+      membership_cycle: input.billingCycle,
+      payment_method: "card",
+      customer_email: contact.email,
+      customer_name: contact.name,
+      currency: "USD",
+      subtotal: amount,
+      shipping_amount: 0,
+      handling_fee: 0,
+      tax_amount: 0,
+      discount_amount: 0,
+      amount_paid: amount,
+      customer_user_id: input.userId,
+      payment_status: "pending_payment",
+      fulfillment_status: "pending",
+      created_at: now,
+      updated_at: now,
+    });
+    if (error) throw error;
+
+    await supabaseAdmin.from("order_items").insert({
+      order_id: orderId,
+      product_id: `membership:${tier.slug ?? tier.id}`,
+      product_name: `${input.billingCycle === "annual" ? "Annual" : "Monthly"} Membership — ${tier.name}`,
+      unit_price: amount,
+      quantity: 1,
+      line_total: amount,
+    });
+  }
 
   const provider = getPaymentProvider();
   const session = await provider.createCheckoutSession({
