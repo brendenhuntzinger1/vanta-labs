@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds, canViewProfit } from "@/lib/admin-roles";
 import { recordActualShippingCost } from "@/lib/admin-profit";
+import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
 import { buildCarrierTrackingUrl } from "@/lib/tracking-url";
 import { getSiteUrl } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase-server";
@@ -19,9 +20,6 @@ function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
-// Build a clickable carrier tracking URL from the carrier name + tracking
-// number so shipping emails can render a working "Track Package" button.
-// Unknown carriers fall back to a Google-based lookup rather than no link.
 async function getOrderWithItems(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
@@ -539,6 +537,58 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
     // the estimate, flips the order's profit to Finalized, and records an audit
     // row (estimate, exact cost, profit before/after). Gated to profit-viewers
     // since it directly changes reported net profit.
+    // Re-send a paid order to the 3PL after a failed transmit. Without this a
+    // 3PL rejection (e.g. Arcline's 422 "A `customer.email` is required") left
+    // the order permanently stranded: the customer is charged, nothing ships,
+    // and the payment webhook will never fire again for that order. Safe to
+    // press repeatedly — fulfillment_orders upserts on order_id and the payout
+    // row is left alone once marked paid.
+    if (action === "retry_fulfillment") {
+      const { data: orderRow } = await supabaseAdmin
+        .from("orders")
+        .select("payment_status, fulfillment_status")
+        .eq("order_id", orderId)
+        .maybeSingle();
+
+      if (!orderRow) {
+        return NextResponse.json({ success: false, error: "Order not found." }, { status: 404 });
+      }
+      // Only PAID orders go to fulfilment — re-transmitting an unpaid one would
+      // ship goods that were never bought.
+      if (String(orderRow.payment_status ?? "") !== "paid") {
+        return NextResponse.json(
+          { success: false, error: "Only a paid order can be sent to fulfilment." },
+          { status: 400 },
+        );
+      }
+
+      await transmitOrderToFulfillment(orderId);
+
+      // transmitOrderToFulfillment is best-effort and never throws, so read back
+      // what actually happened rather than reporting a blind success.
+      const { data: fulfillmentRow } = await supabaseAdmin
+        .from("fulfillment_orders")
+        .select("status, last_error")
+        .eq("order_id", orderId)
+        .maybeSingle();
+
+      const status = String(fulfillmentRow?.status ?? "unknown");
+      const succeeded = status === "sent" || status === "accepted" || status === "queued";
+
+      await supabaseAdmin.from("admin_audit_logs").insert({
+        action: "order_retry_fulfillment",
+        target_table: "orders",
+        target_id: orderId,
+        metadata: { status, performedAt: now, performedBy: session.username, ipAddress, userAgent },
+      });
+
+      return NextResponse.json({
+        success: succeeded,
+        status,
+        error: succeeded ? undefined : (fulfillmentRow?.last_error ?? "The 3PL rejected the order. Check Recent Alerts for the reason."),
+      });
+    }
+
     if (action === "set_shipping_cost") {
       if (!canViewProfit(session.role)) {
         return NextResponse.json({ success: false, error: "Your role cannot edit profit figures." }, { status: 403 });

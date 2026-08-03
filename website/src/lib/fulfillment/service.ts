@@ -168,7 +168,26 @@ export async function transmitOrderToFulfillment(orderId: string): Promise<void>
 
     if (!order) return;
 
-    const normalized = normalizeOrder(order as OrderRow, await getFulfillmentRelayDomain());
+    const relayDomain = await getFulfillmentRelayDomain();
+
+    // Arcline rejects an order with no customer.email — 422 invalid_request
+    // "A `customer.email` is required." Since we deliberately no longer send the
+    // buyer's address, the per-order alias IS the email, and an unresolved relay
+    // domain would send an empty one and strand EVERY paid order instead of the
+    // occasional one. Alert before attempting so the cause is named rather than
+    // arriving as an opaque 422.
+    if (!relayDomain) {
+      await recordSystemAlert({
+        type: "fulfillment_config",
+        severity: "critical",
+        message:
+          "No fulfilment contact domain resolved, so orders are transmitted with an empty customer email and the 3PL will reject them. "
+          + "Set FULFILLMENT_CONTACT_DOMAIN, or an outbound email From address, or NEXT_PUBLIC_SITE_URL.",
+        context: { orderId },
+      });
+    }
+
+    const normalized = normalizeOrder(order as OrderRow, relayDomain);
     const now = new Date().toISOString();
 
     // Upsert the fulfillment order (idempotent per order).
