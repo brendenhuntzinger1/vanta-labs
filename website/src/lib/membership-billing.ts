@@ -361,7 +361,7 @@ export async function createMembershipCheckoutSession(input: {
   // A different tier is a legitimate plan change and still goes through.
   const { data: existingMembership } = await supabaseAdmin
     .from("customer_memberships")
-    .select("status, tier_id, membership_tiers(name)")
+    .select("status, tier_id, cancel_at_period_end, membership_tiers(name)")
     .eq("user_id", input.userId)
     .maybeSingle();
 
@@ -372,6 +372,7 @@ export async function createMembershipCheckoutSession(input: {
           status: String(existingMembership.status ?? ""),
           tierId: String(existingMembership.tier_id ?? ""),
           tierName: existingTier?.name ? String(existingTier.name) : undefined,
+          cancelAtPeriodEnd: Boolean(existingMembership.cancel_at_period_end),
         }
       : null,
     tier.id,
@@ -887,12 +888,29 @@ export async function pauseMembership(userId: string): Promise<MembershipSchedul
 export async function resumeMembership(userId: string): Promise<MembershipScheduleResult> {
   const { data: existing, error } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status, next_billing_at")
+    .select("user_id, tier_id, status, next_billing_at, cancel_at_period_end")
     .eq("user_id", userId)
     .maybeSingle();
   if (error) throw error;
   if (!existing) throw new Error("You don't have a membership to resume.");
-  if (existing.status !== "paused") throw new Error("This membership isn't paused.");
+
+  // TWO things can be "resumed", and only one of them was handled.
+  //
+  //   • paused                — billing is suspended, restart it.
+  //   • cancel_at_period_end  — still active and paid through the period, but
+  //                             set to lapse. Undoing this is just clearing the
+  //                             flag; NO charge is due, because the current
+  //                             period is already paid for.
+  //
+  // Handling only "paused" left a cancelled member with no way back: the button
+  // refused, and buying again was refused too by the duplicate-purchase guard
+  // (their status is still "active"). The account was stuck reading "Ending at
+  // period end" with nothing that could clear it.
+  const isPaused = existing.status === "paused";
+  const isEnding = Boolean((existing as { cancel_at_period_end?: boolean }).cancel_at_period_end);
+  if (!isPaused && !isEnding) {
+    throw new Error("This membership is already active and set to renew.");
+  }
 
   const now = new Date();
   const storedNext = existing.next_billing_at ? new Date(existing.next_billing_at as string) : null;
@@ -904,11 +922,14 @@ export async function resumeMembership(userId: string): Promise<MembershipSchedu
       status: "active",
       next_billing_at: nextBillingAt.toISOString(),
       renews_at: nextBillingAt.toISOString(),
+      // Undo the wind-down: the membership renews again, and the old
+      // cancellation timestamp must not linger on a row that is now continuing.
+      cancel_at_period_end: false,
+      cancelled_at: null,
       renewal_reminder_sent_at: null,
       updated_at: now.toISOString(),
     })
-    .eq("user_id", userId)
-    .eq("status", "paused");
+    .eq("user_id", userId);
   if (updateError) throw updateError;
 
   await recordBillingEvent({ userId, tierId: existing.tier_id, eventType: "resume", amountCents: 0, status: "succeeded" });

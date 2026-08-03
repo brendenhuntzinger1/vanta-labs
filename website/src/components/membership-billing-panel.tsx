@@ -21,6 +21,7 @@ function introCountdown(introEndsAt: string) {
 export function MembershipBillingPanel({ membership }: { membership: CustomerMembership }) {
   const router = useRouter();
   const [isCanceling, setIsCanceling] = useState(false);
+  const [isResuming, setIsResuming] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   if (membership.billingCycle === "free") {
@@ -29,6 +30,27 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
 
   const isAnnual = membership.billingCycle === "annual";
   const accessUntilLabel = membership.nextBillingAt ? formatDate(membership.nextBillingAt) : "the end of your current term";
+
+  // Undo a wind-down. No charge — the current period is already paid for, so
+  // this only clears cancel_at_period_end and lets the next renewal happen.
+  const handleResume = async () => {
+    setIsResuming(true);
+    setMessage(null);
+    try {
+      const response = await fetch("/api/membership/resume", { method: "POST" });
+      const data = await response.json() as { success: boolean; error?: string };
+      if (!response.ok || !data.success) {
+        setMessage(data.error ?? "Unable to restore your membership right now.");
+        return;
+      }
+      setMessage("Your membership will renew as normal. Nothing was charged.");
+      router.refresh();
+    } catch {
+      setMessage("Unable to restore your membership right now.");
+    } finally {
+      setIsResuming(false);
+    }
+  };
 
   const handleCancel = async () => {
     // Memberships are non-refundable for both cycles. Annual members keep
@@ -111,7 +133,26 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
       </div>
 
       {membership.cancelAtPeriodEnd ? (
-        <p className="mt-4 text-xs text-amber-400">Your membership is set to cancel at the end of your current period.</p>
+        // A cancellation must be UNDOABLE. This used to be the amber warning
+        // alone, with no control beside it — so a member who changed their mind
+        // had no way back: resuming only handled "paused", and buying again was
+        // refused because their status is still "active". The account simply
+        // read "Ending at period end" forever.
+        //
+        // Nothing is charged here. The current period is already paid for; this
+        // only clears the wind-down so the next renewal happens.
+        <div className="mt-4">
+          <p className="text-xs text-amber-400">Your membership is set to cancel at the end of your current period.</p>
+          <button
+            type="button"
+            onClick={handleResume}
+            disabled={isResuming}
+            className="vl2-btn-secondary vl-focus-ring mt-3 inline-flex px-4 py-2 text-xs disabled:opacity-50"
+          >
+            {isResuming ? "Restoring…" : "Keep my membership"}
+          </button>
+          <p className="mt-2 text-[11px] text-zinc-500">You won&apos;t be charged now — this just turns renewal back on.</p>
+        </div>
       ) : membership.status === "cancelled" ? null : (
         <button
           type="button"
