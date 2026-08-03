@@ -80,9 +80,22 @@ limit 50;
 -- =========================================================================
 
 -- 4. Remove memberships that never had a real payment.
---    Guarded three ways: no PAID billing event, not admin-comped (comps have
---    next_billing_at IS NULL), and no processor subscription id. A real paid
---    member can never match all three.
+--
+--    CORRECTION to an earlier version of this comment, which claimed "a real
+--    paid member can never match all three" guards. That was overstated. A
+--    member who paid through the HOSTED CHECKOUT (not the Veyra recurring lane)
+--    has next_billing_at set and veyra_membership_id NULL — they match guards 2
+--    and 3. Only the payment guard separates them from a false activation.
+--
+--    So the payment evidence is doubled, using two INDEPENDENT sources:
+--      (a) no PAID membership_billing_events row, AND
+--      (b) no membership order that actually settled (orders.paid_at not null).
+--    activateAnnualMembership / activateMonthlyMembership both write (a), and
+--    the payment webhook writes (b) before calling them, so a real member fails
+--    this delete on either one even if the other never got written.
+--
+--    Guards 3 and 4 remain as cheap extra safety: comps have next_billing_at
+--    NULL, and a Veyra-managed subscription carries veyra_membership_id.
 delete from public.customer_memberships cm
 where not exists (
         select 1 from public.membership_billing_events be
@@ -90,6 +103,12 @@ where not exists (
           and be.status = 'succeeded'
           and be.amount_cents > 0
           and be.event_type in ('intro_charge', 'first_month_remainder', 'renewal')
+      )
+  and not exists (
+        select 1 from public.orders o
+        where o.customer_user_id = cm.user_id
+          and o.order_type = 'membership'
+          and o.paid_at is not null
       )
   and cm.next_billing_at is not null
   and coalesce(cm.veyra_membership_id, '') = '';
@@ -121,16 +140,19 @@ where order_type = 'membership'
 --   );
 
 
--- ── 7. VERIFY — both should return 0 ────────────────────────────────────────
--- Memberships with no real payment:
---   select count(*) from public.customer_memberships cm
---   where not exists (
---           select 1 from public.membership_billing_events be
---           where be.user_id = cm.user_id and be.status = 'succeeded'
---             and be.amount_cents > 0
---             and be.event_type in ('intro_charge','first_month_remainder','renewal'))
---     and cm.next_billing_at is not null;
---
--- Live unpaid membership orders:
---   select count(*) from public.orders
---   where order_type = 'membership' and payment_status = 'pending_payment';
+-- ── 7. VERIFY — both counts should return 0 ─────────────────────────────────
+select
+  (select count(*) from public.customer_memberships cm
+   where not exists (
+           select 1 from public.membership_billing_events be
+           where be.user_id = cm.user_id and be.status = 'succeeded'
+             and be.amount_cents > 0
+             and be.event_type in ('intro_charge', 'first_month_remainder', 'renewal'))
+     and not exists (
+           select 1 from public.orders o
+           where o.customer_user_id = cm.user_id
+             and o.order_type = 'membership' and o.paid_at is not null)
+     and cm.next_billing_at is not null)        as false_activations_remaining,
+  (select count(*) from public.orders
+   where order_type = 'membership'
+     and payment_status = 'pending_payment')    as live_unpaid_membership_orders;
