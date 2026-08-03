@@ -99,3 +99,38 @@ describe("the 3PL still receives everything needed to pick, pack and ship", () =
     expect(payload.totals).toEqual({ subtotal: 54.99, shipping: 15, tax: 3.85, total: 76.04 });
   });
 });
+
+// A membership is a subscription, not a parcel. Both paid paths used to send
+// them to the 3PL anyway — finalizeManualPayment computed isMembershipOrder to
+// skip points and mark the order fulfilled, then transmitted without consulting
+// it, and the card webhook never checked. Arcline received a $1.00 "Monthly
+// Membership — Vanta Essential" with an empty name, address and email, rejected
+// it 422, and raised a critical "customer is paid but the order did not reach
+// fulfilment" alert for an order that must never reach fulfilment.
+describe("membership orders are structurally unfit for fulfilment", () => {
+  const MEMBERSHIP_ORDER = {
+    ...ORDER,
+    order_type: "membership",
+    order_number: "VL-49CA32C1",
+    customer_name: null,
+    shipping_address: null,
+    city: null,
+    postal_code: null,
+    country: null,
+    order_items: [
+      { product_id: "membership:essential", product_name: "Monthly Membership — Vanta Essential", quantity: 1, unit_price: 1 },
+    ],
+  } as unknown as typeof ORDER;
+
+  it("has no shippable destination — proving there is nothing to fulfil", () => {
+    const payload = normalizeOrder(MEMBERSHIP_ORDER, DOMAIN);
+    expect(payload.shipping).toEqual({ address: "", city: "", postalCode: "", country: "" });
+    expect(payload.customer.name).toBe("");
+  });
+
+  it("its line item is a plan, not a SKU the 3PL could pick", () => {
+    const payload = normalizeOrder(MEMBERSHIP_ORDER, DOMAIN);
+    expect(payload.items[0].sku).toBe("membership:essential");
+    expect(payload.items[0].sku?.startsWith("membership:")).toBe(true);
+  });
+});
