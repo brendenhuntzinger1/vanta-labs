@@ -811,6 +811,7 @@ export async function pauseMembership(userId: string): Promise<MembershipSchedul
   // retention), so a pause defers exactly ONE cycle. A member left paused past
   // that cycle would be charged again. Revisit if Veyra adds real pause.
   const veyraIdForPause = (existing as { veyra_membership_id?: string | null }).veyra_membership_id;
+  let pausedNextRenewalAt: string | null = null;
   if (veyraIdForPause) {
     const res = await skipVeyraMembershipCycle(veyraIdForPause, "member paused");
     if (!res.ok) {
@@ -818,12 +819,22 @@ export async function pauseMembership(userId: string): Promise<MembershipSchedul
         `We couldn't pause your billing with the payment provider (${res.message}). Nothing was changed — please try again or contact support.`,
       );
     }
+    pausedNextRenewalAt = res.nextRenewalAt ?? null;
   }
 
   const nowIso = new Date().toISOString();
   const { error: updateError } = await supabaseAdmin
     .from("customer_memberships")
-    .update({ status: "paused", updated_at: nowIso })
+    .update({
+      status: "paused",
+      updated_at: nowIso,
+      // Adopt VEYRA's new date. Without this the row keeps the pre-pause date
+      // and disagrees with the day the card is actually charged — observed
+      // 2026-08-03: Veyra moved to Oct 3 while local still read Sep 2.
+      ...(pausedNextRenewalAt
+        ? { next_billing_at: pausedNextRenewalAt, renews_at: pausedNextRenewalAt, renewal_reminder_sent_at: null }
+        : {}),
+    })
     .eq("user_id", userId)
     .eq("status", "active");
   if (updateError) throw updateError;
@@ -894,6 +905,7 @@ export async function skipNextBilling(userId: string): Promise<MembershipSchedul
   // first. A local-only skip leaves Veyra's charge booked on the original date
   // and the member is billed on a cycle they were told was skipped.
   const veyraIdForSkip = (existing as { veyra_membership_id?: string | null }).veyra_membership_id;
+  let veyraSkippedTo: string | null = null;
   if (veyraIdForSkip) {
     const res = await skipVeyraMembershipCycle(veyraIdForSkip, "member skipped a cycle");
     if (!res.ok) {
@@ -901,11 +913,17 @@ export async function skipNextBilling(userId: string): Promise<MembershipSchedul
         `We couldn't skip your next charge with the payment provider (${res.message}). Nothing was changed — please try again or contact support.`,
       );
     }
+    veyraSkippedTo = res.nextRenewalAt ?? null;
   }
 
   const base = existing.next_billing_at ? new Date(existing.next_billing_at as string) : now;
   const from = base.getTime() <= now.getTime() ? now : base;
-  const nextBillingAt = new Date(from.getTime() + 30 * ONE_DAY_MS);
+  // Prefer VEYRA's date over the local +30d computation whenever Veyra owns the
+  // schedule — the local arithmetic is an approximation and drifts from the day
+  // the card is actually charged.
+  const nextBillingAt = veyraSkippedTo
+    ? new Date(veyraSkippedTo)
+    : new Date(from.getTime() + 30 * ONE_DAY_MS);
 
   const { error: updateError } = await supabaseAdmin
     .from("customer_memberships")

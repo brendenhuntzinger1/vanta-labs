@@ -217,7 +217,20 @@ export function isAmexBrand(brand: string | null | undefined): boolean {
 // ---------------------------------------------------------------------------
 
 export type VeyraLifecycleResult =
-  | { ok: true; status?: string }
+  | {
+      ok: true;
+      status?: string;
+      /**
+       * Veyra's NEW next-charge date after the call. Callers MUST write this to
+       * their local row — Veyra owns the schedule, so a local date left at its
+       * old value silently disagrees with the date the card is actually charged.
+       *
+       * Observed 2026-08-03: a pause deferred the charge Sep 3 -> Oct 3 at Veyra
+       * while the local row still read Sep 2, so every UI and forecast reading
+       * it was a month wrong.
+       */
+      nextRenewalAt?: string | null;
+    }
   | { ok: false; message: string };
 
 async function veyraPost(path: string, body: unknown): Promise<VeyraLifecycleResult> {
@@ -244,7 +257,11 @@ async function veyraPost(path: string, body: unknown): Promise<VeyraLifecycleRes
         `Membership update failed (HTTP ${res.status}).`;
       return { ok: false, message };
     }
-    return { ok: true, status: parsed.status as string | undefined };
+    return {
+      ok: true,
+      status: parsed.status as string | undefined,
+      nextRenewalAt: (parsed.next_renewal_at as string | null | undefined) ?? null,
+    };
   } catch (e) {
     return {
       ok: false,
