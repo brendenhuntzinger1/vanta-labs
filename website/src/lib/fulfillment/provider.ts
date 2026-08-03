@@ -2,9 +2,15 @@ import "server-only";
 
 import type { FulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
 
+// The buyer's real email must never reach the 3PL — see contact-email.ts.
+export { fulfillmentContactEmail } from "@/lib/fulfillment/contact-email";
+
 export interface NormalizedFulfillmentOrder {
   orderId: string;
   orderNumber: string;
+  /**
+   * NEVER the buyer's address — see fulfillmentContactEmail above.
+   */
   customer: { name: string; email: string };
   shipping: { address: string; city: string; postalCode: string; country: string };
   // `sku` is the base product SKU (product slug) — the SAME key the inbound
