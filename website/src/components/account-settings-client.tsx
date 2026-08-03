@@ -4,6 +4,7 @@ import { useState } from "react";
 import { supabase } from "@/lib/supabase";
 import type { CustomerPreferences, CustomerAddress } from "@/lib/customer-account";
 import { AccountAddressesClient } from "@/components/account-addresses-client";
+import Link from "next/link";
 
 type Category = "profile" | "security" | "addresses" | "payments" | "notifications" | "privacy";
 
@@ -347,7 +348,7 @@ export function AccountSettingsClient({
             </a>
           </div>
           <p className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-zinc-500">
-            See our <a href="/legal/privacy" className="text-cyan-300 underline-offset-2 hover:underline">Privacy Policy</a> for how we handle and protect your data.
+            See our <Link href="/legal/privacy" className="text-cyan-300 underline-offset-2 hover:underline">Privacy Policy</Link> for how we handle and protect your data.
           </p>
         </section>
       ) : null}

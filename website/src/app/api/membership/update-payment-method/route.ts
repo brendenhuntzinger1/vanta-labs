@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { updatePaymentMethod } from "@/lib/membership-billing";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 // paymentMethodRef is an opaque token from whichever billing processor's
 // client SDK eventually collects the card (Stripe Elements, etc.) - this
@@ -24,6 +25,6 @@ export async function POST(request: Request) {
     await updatePaymentMethod(user.id, body.paymentMethodRef);
     return NextResponse.json({ success: true });
   } catch (error) {
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Unable to update payment method" }, { status: 400 });
+    return NextResponse.json({ success: false, error: customerSafeMessage(error, "Unable to update payment method") }, { status: 400 });
   }
 }

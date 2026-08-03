@@ -9,6 +9,7 @@ import { getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-metho
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ClearCartOnMount } from "@/components/clear-cart-on-mount";
 import { OrderConfirmationStatus } from "@/components/order-confirmation-status";
+import { displayOrderReference } from "@/lib/order-reference";
 
 export const dynamic = "force-dynamic";
 
@@ -46,7 +47,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
     notFound();
   }
 
-  const orderNumber = String(order.order_number ?? order.order_id);
+  const orderNumber = displayOrderReference(order.order_number as string | null, order.order_id as string | null);
   const items = (order.order_items ?? []) as Array<{ product_name?: string; quantity?: number; line_total?: number }>;
   const isPaid = String(order.payment_status ?? "").toLowerCase() === "paid";
 

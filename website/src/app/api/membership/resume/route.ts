@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { resumeMembership } from "@/lib/membership-billing";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 export async function POST() {
   const user = await getAuthenticatedUser();
@@ -13,6 +14,6 @@ export async function POST() {
     const result = await resumeMembership(user.id);
     return NextResponse.json({ success: true, status: result.status, nextBillingAt: result.nextBillingAt });
   } catch (error) {
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Unable to resume membership" }, { status: 400 });
+    return NextResponse.json({ success: false, error: customerSafeMessage(error, "Unable to resume membership") }, { status: 400 });
   }
 }

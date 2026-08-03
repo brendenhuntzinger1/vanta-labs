@@ -6,6 +6,7 @@ import { getPaymentMethodsConfig } from "@/lib/admin-control";
 import { getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ManualPaymentInstructions } from "@/components/manual-payment-instructions";
+import { displayOrderReference } from "@/lib/order-reference";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +34,7 @@ export default async function ResubmitPaymentPage({ params }: { params: Promise<
   const methods = await getPaymentMethodsConfig();
   const method = getPaymentMethodById(methods, order.payment_method ? String(order.payment_method) : null);
   const isManual = Boolean(method && isManualPaymentMethod(method));
-  const orderNumber = String(order.order_number ?? order.order_id);
+  const orderNumber = displayOrderReference(order.order_number as string | null, order.order_id as string | null);
   const alreadyPaid = order.payment_status === "paid";
 
   return (

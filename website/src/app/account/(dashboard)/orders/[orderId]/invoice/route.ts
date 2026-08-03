@@ -2,6 +2,7 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getCustomerOrderDetail } from "@/lib/account-orders";
 import { isUnpaid } from "@/lib/order-status";
+import { displayOrderReference } from "@/lib/order-reference";
 
 function money(value: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(value);
@@ -55,7 +56,7 @@ export async function GET(_request: Request, context: { params: Promise<{ orderI
 
   const html = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Invoice ${esc(order.orderNumber ?? order.orderId)} — Vanta Labs</title>
+<title>Invoice ${esc(displayOrderReference(order.orderNumber, order.orderId))} — Vanta Labs</title>
 <style>
   :root { color-scheme: light; }
   * { box-sizing: border-box; }
@@ -88,7 +89,7 @@ export async function GET(_request: Request, context: { params: Promise<{ orderI
       </div>
       <div style="text-align:right;">
         <div class="eyebrow">Invoice</div>
-        <h1>${esc(order.orderNumber ?? order.orderId)}</h1>
+        <h1>${esc(displayOrderReference(order.orderNumber, order.orderId))}</h1>
         <div class="muted" style="font-size:12px;margin-top:4px;">${new Date(order.paidAt ?? order.createdAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}</div>
       </div>
     </div>

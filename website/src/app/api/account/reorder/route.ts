@@ -3,6 +3,7 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 export async function POST(request: Request) {
   const user = await getAuthenticatedUser();
@@ -88,7 +89,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, available, unavailable });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to reorder";
+    const message = customerSafeMessage(error, "Unable to reorder");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

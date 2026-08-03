@@ -13,7 +13,7 @@ import { useEffect, useRef, useState } from "react";
 // settles the order.
 
 const SCRIPT_SRC = "https://veyragate.com/v1/checkout.js";
-const SCRIPT_ID = "veyra-checkout-js";
+const SCRIPT_ID = "secure-card-entry-js";
 
 type MountHandle = { destroy?: () => void };
 
@@ -100,8 +100,14 @@ export default function VeyraCheckout({
       .catch((err: Error) => {
         if (cancelled) return;
         setStatus("error");
+        // NEVER surface err.message — loadScript throws messages naming the
+        // payment processor ("… checkout script failed to load"), and a blocked
+        // or slow CDN is the common case, so a shopper would be shown a
+        // supplier's brand at the moment of payment. The technical detail goes
+        // to the console for debugging; the shopper gets Vanta Labs' own words.
+        console.error("[checkout] secure card entry failed to load", err);
         setMessage(
-          `${err.message} Your card has not been charged. Please refresh, or contact support if this continues.`,
+          "We couldn't load secure card entry. Your card has not been charged. Please refresh, or contact support if this continues.",
         );
       });
 
@@ -125,8 +131,9 @@ export default function VeyraCheckout({
           {message}
         </div>
       )}
-      {/* Veyra replaces this node's contents with the checkout iframe. */}
-      <div ref={containerRef} id="veyra-checkout" className="min-h-[420px] w-full" />
+      {/* The processor replaces this node's contents with the card iframe.
+          The id is intentionally generic — it is visible in page source. */}
+      <div ref={containerRef} id="secure-card-entry" className="min-h-[420px] w-full" />
     </div>
   );
 }
