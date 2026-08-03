@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { cancelMembership } from "@/lib/membership-billing";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 export async function POST() {
   const user = await getAuthenticatedUser();
@@ -18,6 +19,6 @@ export async function POST() {
       refundable: result.refundable,
     });
   } catch (error) {
-    return NextResponse.json({ success: false, error: error instanceof Error ? error.message : "Unable to cancel membership" }, { status: 400 });
+    return NextResponse.json({ success: false, error: customerSafeMessage(error, "Unable to cancel membership") }, { status: 400 });
   }
 }

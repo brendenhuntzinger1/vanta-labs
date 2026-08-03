@@ -4,6 +4,7 @@ import { useCart } from "@/components/cart-context";
 import { ProductCard } from "@/components/product-card";
 import { BackInStockForm } from "@/components/back-in-stock-form";
 import type { Product } from "@/lib/catalog-types";
+import Link from "next/link";
 
 const SOLD_OUT = new Set(["Out of Stock", "Reserved"]);
 
@@ -16,7 +17,7 @@ export function AccountWishlistClient({ products, email }: { products: Product[]
         <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-white/12 bg-white/[0.03] text-2xl">♡</div>
         <h2 className="mt-5 text-lg font-semibold text-white">Your wishlist is empty</h2>
         <p className="mx-auto mt-2 max-w-sm text-sm text-zinc-500">Tap the heart on any product to save it here — we&apos;ll even alert you if a saved item sells out and comes back.</p>
-        <a href="/products" className="vl2-btn-primary vl-focus-ring mt-6 inline-flex px-6 py-3 text-sm">Browse products</a>
+        <Link href="/products" className="vl2-btn-primary vl-focus-ring mt-6 inline-flex px-6 py-3 text-sm">Browse products</Link>
       </section>
     );
   }
