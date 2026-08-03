@@ -9,7 +9,7 @@ import {
   skipVeyraMembershipCycle,
 } from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
-import { computeTierChangeBilling, decideMembershipAttempt } from "@/lib/membership-billing-math";
+import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase } from "@/lib/membership-billing-math";
 import { PAID_EVENT_TYPES } from "@/lib/membership-status";
 import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
@@ -352,6 +352,32 @@ export async function createMembershipCheckoutSession(input: {
   const tier = await getTierById(input.tierId);
   if (!tier) {
     throw new Error("Membership tier not found");
+  }
+
+  // NEVER CHARGE TWICE FOR THE SAME MEMBERSHIP. startMembershipSignup no-ops
+  // when the buyer is already active on this tier; this hosted-checkout lane had
+  // no equivalent guard, so an active member who reached the subscribe page
+  // again was sent to a live checkout and charged for a plan they already hold.
+  // A different tier is a legitimate plan change and still goes through.
+  const { data: existingMembership } = await supabaseAdmin
+    .from("customer_memberships")
+    .select("status, tier_id, membership_tiers(name)")
+    .eq("user_id", input.userId)
+    .maybeSingle();
+
+  const existingTier = existingMembership?.membership_tiers as unknown as { name?: string } | null;
+  const purchaseDecision = guardDuplicateMembershipPurchase(
+    existingMembership
+      ? {
+          status: String(existingMembership.status ?? ""),
+          tierId: String(existingMembership.tier_id ?? ""),
+          tierName: existingTier?.name ? String(existingTier.name) : undefined,
+        }
+      : null,
+    tier.id,
+  );
+  if (!purchaseDecision.allowed) {
+    throw new Error(purchaseDecision.reason);
   }
 
   const amountCents = input.billingCycle === "annual"

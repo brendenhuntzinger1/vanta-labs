@@ -353,6 +353,70 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                     </ul>
                   </div>
 
+                  {/* EXACTLY what this tier grants, read from the tier's own
+                      fields — the same numbers getMembershipPerks enforces at
+                      checkout. The free-text benefit bullets below are
+                      admin-authored copy and can drift from reality; these
+                      cannot, so a shopper always sees the real discount, the
+                      real credit, and its true minimum-order condition. */}
+                  <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/40">What you get</p>
+                    <dl className="mt-2 space-y-1.5 text-xs">
+                      {tier.memberDiscountPercent > 0 ? (
+                        <div className="flex items-baseline justify-between gap-3">
+                          <dt className="text-white/55">Member pricing</dt>
+                          <dd className="font-semibold text-white">{tier.memberDiscountPercent}% off</dd>
+                        </div>
+                      ) : null}
+                      {tier.monthlyStoreCreditCents > 0 ? (
+                        <div className="flex items-baseline justify-between gap-3">
+                          <dt className="text-white/55">Store credit</dt>
+                          <dd className="text-right font-semibold text-emerald-300">
+                            {money(tier.monthlyStoreCreditCents)}/mo
+                            {tier.storeCreditMinOrderCents > 0 ? (
+                              <span className="block text-[10px] font-normal text-white/40">
+                                on orders {money(tier.storeCreditMinOrderCents)}+
+                              </span>
+                            ) : null}
+                          </dd>
+                        </div>
+                      ) : null}
+                      <div className="flex items-baseline justify-between gap-3">
+                        <dt className="text-white/55">Points</dt>
+                        <dd className="font-semibold text-white">{tier.pointsPerDollar}× per $1</dd>
+                      </div>
+                      {tier.freeShipping ? (
+                        <div className="flex items-baseline justify-between gap-3">
+                          <dt className="text-white/55">Shipping</dt>
+                          <dd className="font-semibold text-white">Free, every order</dd>
+                        </div>
+                      ) : null}
+                      {tier.priorityShipping ? (
+                        <div className="flex items-baseline justify-between gap-3">
+                          <dt className="text-white/55">Processing</dt>
+                          <dd className="font-semibold text-white">Priority</dd>
+                        </div>
+                      ) : null}
+                      {tier.earlyAccess ? (
+                        <div className="flex items-baseline justify-between gap-3">
+                          <dt className="text-white/55">New releases</dt>
+                          <dd className="font-semibold text-white">Early access</dd>
+                        </div>
+                      ) : null}
+                      {tier.referralBonusPoints > 0 ? (
+                        <div className="flex items-baseline justify-between gap-3">
+                          <dt className="text-white/55">Referral bonus</dt>
+                          <dd className="font-semibold text-white">{tier.referralBonusPoints.toLocaleString()} pts</dd>
+                        </div>
+                      ) : null}
+                    </dl>
+                    {tier.monthlyStoreCreditCents > 0 ? (
+                      <p className="mt-2.5 border-t border-white/10 pt-2 text-[10px] leading-4 text-white/40">
+                        Store credit is granted monthly and does not roll over.
+                      </p>
+                    ) : null}
+                  </div>
+
                   {/* Full benefit list. A tier can carry 11 bullets, which made
                       each card taller than a phone screen — so on mobile it is
                       collapsed behind a toggle and the headline value (price,

@@ -94,7 +94,19 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
 
         <div>
           <p className="text-xs text-zinc-500">Payment method</p>
-          <p className="mt-1 text-sm text-white">{membership.hasPaymentMethod ? "On file" : "Not connected yet"}</p>
+          {/* "Not connected yet" read as a failure to a member who had just
+              paid. Two different situations were collapsed into one label: a
+              card IS vaulted for renewals, or the membership was paid once at
+              checkout with nothing stored — in which case the honest thing to
+              say is that it will not renew on its own. */}
+          <p className="mt-1 text-sm text-white">
+            {membership.hasPaymentMethod ? "Card on file" : "Paid at checkout"}
+          </p>
+          {!membership.hasPaymentMethod ? (
+            <p className="mt-1 text-xs text-zinc-500">
+              No card is stored, so this membership won&apos;t renew automatically.
+            </p>
+          ) : null}
         </div>
       </div>
 
