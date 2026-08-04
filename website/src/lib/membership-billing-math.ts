@@ -106,7 +106,7 @@ export type MembershipPurchaseDecision =
  * tier" is refused.
  */
 export function guardDuplicateMembershipPurchase(
-  existing: { status: string; tierId: string; tierName?: string; cancelAtPeriodEnd?: boolean } | null,
+  existing: { status: string; tierId: string; tierName?: string; cancelAtPeriodEnd?: boolean; hasProcessorSubscription?: boolean } | null,
   requestedTierId: string,
 ): MembershipPurchaseDecision {
   if (!existing) return { allowed: true, kind: "new" };
@@ -120,6 +120,13 @@ export function guardDuplicateMembershipPurchase(
   // with no route to reinstate at all: "Keep my membership" is the cheaper
   // path (no charge), but the purchase must not be blocked either.
   if (existing.cancelAtPeriodEnd) return { allowed: true, kind: "rejoin" };
+
+  // A membership with no processor subscription behind it was charged ONCE and
+  // will lapse — it cannot renew. Buying again is the only way to turn it into
+  // a real subscription, so refusing it as a "duplicate" traps the member on a
+  // broken plan with no route to a working one. This is a repair, not a
+  // double-purchase.
+  if (existing.hasProcessorSubscription === false) return { allowed: true, kind: "rejoin" };
 
   if (existing.tierId !== requestedTierId) return { allowed: true, kind: "plan_change" };
 

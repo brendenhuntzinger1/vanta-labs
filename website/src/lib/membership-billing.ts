@@ -361,7 +361,7 @@ export async function createMembershipCheckoutSession(input: {
   // A different tier is a legitimate plan change and still goes through.
   const { data: existingMembership } = await supabaseAdmin
     .from("customer_memberships")
-    .select("status, tier_id, cancel_at_period_end, membership_tiers(name)")
+    .select("status, tier_id, cancel_at_period_end, veyra_membership_id, membership_tiers(name)")
     .eq("user_id", input.userId)
     .maybeSingle();
 
@@ -373,6 +373,7 @@ export async function createMembershipCheckoutSession(input: {
           tierId: String(existingMembership.tier_id ?? ""),
           tierName: existingTier?.name ? String(existingTier.name) : undefined,
           cancelAtPeriodEnd: Boolean(existingMembership.cancel_at_period_end),
+          hasProcessorSubscription: Boolean(existingMembership.veyra_membership_id),
         }
       : null,
     tier.id,
