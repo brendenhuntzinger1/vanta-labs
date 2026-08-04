@@ -4,7 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getCustomerOrderDetail } from "@/lib/account-orders";
-import { getOrderProgress, isUnpaid } from "@/lib/order-status";
+import { isUnpaid } from "@/lib/order-status";
 import { OrderTracking } from "@/components/order-tracking";
 import { ReorderButton } from "@/components/reorder-button";
 import { displayOrderReference } from "@/lib/order-reference";
@@ -36,7 +36,6 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
     notFound();
   }
 
-  const progress = getOrderProgress(order.paymentStatus, order.fulfillmentStatus);
   const unpaid = isUnpaid(order.paymentStatus);
   const addressLines = [order.customerName, order.shippingAddress, [order.city, order.state, order.postalCode].filter(Boolean).join(", "), order.country].filter(Boolean) as string[];
 

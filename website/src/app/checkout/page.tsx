@@ -292,7 +292,11 @@ export default function CheckoutPage() {
   // Pre-checked by default for US shoppers (offers, coupons, restock alerts),
   // but defaults OFF for Canada where CASL requires express opt-in. The default
   // follows the destination country until the shopper manually toggles it.
-  const [marketingOptIn, setMarketingOptIn] = useState(true);
+  // Not an effect: this is derived state. CASL wants the opt-in defaulted OFF
+  // for Canadian destinations and ON for the US, until the shopper toggles it —
+  // after which their explicit choice wins. Computing it during render removes
+  // the cascading re-render an effect caused, with identical behaviour.
+  const [marketingChoice, setMarketingChoice] = useState(true);
   const [marketingTouched, setMarketingTouched] = useState(false);
   // Progressive disclosure: savings tools and legal detail stay out of the way
   // until asked for, so the default path to payment is as short as possible.
@@ -450,19 +454,22 @@ export default function CheckoutPage() {
     }
   }, [form.email, setKnownEmail]);
 
-  // CASL: default the marketing opt-in OFF for Canadian destinations, ON for the
-  // US — until the shopper manually toggles it (then respect their choice).
-  useEffect(() => {
-    if (!marketingTouched) {
-      setMarketingOptIn(!isCanada(form.country));
-    }
-  }, [form.country, marketingTouched]);
+  const marketingOptIn = marketingTouched ? marketingChoice : !isCanada(form.country);
 
-  // Reveal the savings panel when a code is already applied, so an applied code
-  // is never hidden behind a collapsed row.
-  useEffect(() => {
+  // Reveal the savings panel when a code becomes applied, so an applied code is
+  // never hidden behind a collapsed row — while still letting the shopper
+  // collapse it again afterwards.
+  //
+  // Adjusted DURING RENDER rather than in an effect (React's documented
+  // "adjusting state when props change" pattern). An effect here fired a second
+  // render pass on every code change; this settles in one, and unlike deriving
+  // `savingsOpen` outright it does not trap the panel open.
+  const codesKey = `${referralCode ?? ""}|${couponCode ?? ""}`;
+  const [prevCodesKey, setPrevCodesKey] = useState(codesKey);
+  if (codesKey !== prevCodesKey) {
+    setPrevCodesKey(codesKey);
     if (referralCode || couponCode) setSavingsOpen(true);
-  }, [referralCode, couponCode]);
+  }
 
   useEffect(() => {
     (async () => {
@@ -1112,7 +1119,7 @@ export default function CheckoutPage() {
               </div>
 
               <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-white/60">
-                <input type="checkbox" checked={marketingOptIn} onChange={(e) => { haptic(); setMarketingTouched(true); setMarketingOptIn(e.target.checked); }} className="mt-0.5 h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-emerald-500" />
+                <input type="checkbox" checked={marketingOptIn} onChange={(e) => { haptic(); setMarketingTouched(true); setMarketingChoice(e.target.checked); }} className="mt-0.5 h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-emerald-500" />
                 <span className="text-xs leading-relaxed">Email me exclusive offers, coupons &amp; restock alerts. <span className="text-white/30">Optional — unsubscribe anytime.</span></span>
               </label>
 

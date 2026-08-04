@@ -140,11 +140,19 @@ export function CartDrawer() {
   const panelRef = useRef<HTMLDivElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
 
-  // Auto-reveal the code fields when a code is already applied, so an applied
-  // code is never hidden behind a collapsed row.
-  useEffect(() => {
+  // Auto-reveal the code fields when a code becomes applied, so an applied code
+  // is never hidden behind a collapsed row — while still letting the shopper
+  // collapse it again afterwards.
+  //
+  // Adjusted DURING RENDER rather than in an effect (React's documented
+  // "adjusting state when props change" pattern): one render pass instead of
+  // two, and unlike deriving `codesOpen` outright it does not trap the row open.
+  const codesKey = `${referralCode ?? ""}|${couponCode ?? ""}`;
+  const [prevCodesKey, setPrevCodesKey] = useState(codesKey);
+  if (codesKey !== prevCodesKey) {
+    setPrevCodesKey(codesKey);
     if (referralCode || couponCode) setCodesOpen(true);
-  }, [referralCode, couponCode]);
+  }
 
   // Accessible modal behavior: move focus into the drawer on open, trap Tab
   // within it, close on Escape, lock body scroll, and restore focus on close.
