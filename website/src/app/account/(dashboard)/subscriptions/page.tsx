@@ -64,7 +64,11 @@ export default async function AccountSubscriptionsPage() {
           ? { text: "Canceled", cls: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" }
           : isLapsed
             ? { text: "Expired", cls: "border-zinc-500/40 bg-zinc-500/10 text-zinc-300" }
-            : membership.cancelAtPeriodEnd
+            // An ANNUAL membership carries cancel_at_period_end BY DESIGN — it is
+            // a one-year pass that never auto-renews. Showing "Ending at period
+            // end" would alarm a member whose plan is behaving exactly as sold.
+            // Only a MONTHLY plan winding down is genuinely "ending".
+            : membership.cancelAtPeriodEnd && membership.billingCycle !== "annual"
               ? { text: "Ending at period end", cls: "border-amber-300/40 bg-amber-300/10 text-amber-200" }
               : { text: "Active", cls: "border-emerald-400/40 bg-emerald-400/10 text-emerald-200" };
 
