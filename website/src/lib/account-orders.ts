@@ -1,6 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
-import { buildCarrierTrackingUrl } from "@/lib/tracking-url";
+import { resolveCarrier } from "@/lib/tracking-url";
 
 /**
  * Customer-facing order detail for the account dashboard. Widens the narrow
@@ -134,12 +134,15 @@ async function attachShipments(orderIds: string[]): Promise<Map<string, AccountO
     .select("order_id, carrier, tracking_number, shipping_status, estimated_delivery")
     .in("order_id", orderIds);
   for (const row of data ?? []) {
-    const carrier = row.carrier ? String(row.carrier) : null;
     const tracking = row.tracking_number ? String(row.tracking_number) : null;
+    // The stored carrier is free text from the 3PL and is NEVER surfaced as-is
+    // — only a canonical name from the allow-list reaches the customer. An
+    // unrecognised carrier yields null and the UI shows a neutral label.
+    const resolved = resolveCarrier(row.carrier ? String(row.carrier) : null, tracking);
     map.set(String(row.order_id), {
-      carrier,
+      carrier: resolved?.name ?? null,
       trackingNumber: tracking,
-      trackingUrl: buildCarrierTrackingUrl(carrier, tracking),
+      trackingUrl: resolved?.trackingUrl ?? null,
       status: row.shipping_status ? String(row.shipping_status) : null,
       estimatedDelivery: row.estimated_delivery ? String(row.estimated_delivery) : null,
     });

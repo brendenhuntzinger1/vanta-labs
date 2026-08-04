@@ -7,7 +7,7 @@ import { deliveryConfirmationTemplate, shippingUpdateTemplate } from "@/lib/emai
 import { getFulfillmentRuntimeConfig, type FulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
 import { getFulfillmentProvider, fulfillmentContactEmail, type NormalizedFulfillmentOrder } from "@/lib/fulfillment/provider";
 import { recordActualShippingCost } from "@/lib/admin-profit";
-import { buildCarrierTrackingUrl } from "@/lib/tracking-url";
+import { resolveCarrier } from "@/lib/tracking-url";
 import { getFulfillmentRelayDomain } from "@/lib/fulfillment/relay-domain";
 import { getSiteUrl } from "@/lib/env";
 
@@ -488,22 +488,23 @@ export async function applyInboundFulfillmentEvent(event: InboundFulfillmentEven
     const displayOrderId = priorOrder?.order_number ? String(priorOrder.order_number) : orderId;
     try {
       if (newStatus === "shipped") {
+        // NOT event.trackingUrl and NOT event.carrier. The 3PL sends its own
+        // storefront URL, so "Track Package" was taking Vanta Labs customers to
+        // the fulfilment provider's branded site — and its free-text carrier
+        // field was printed straight into the email. Resolve both against the
+        // carrier allow-list: the link goes to the carrier's own page, the name
+        // is the carrier's canonical name, and an unrecognised carrier keeps the
+        // customer on Vanta Labs with no name shown at all.
+        const shipCarrier = resolveCarrier(event.carrier, event.trackingNumber);
         await sendEmail({
           to: customerEmail,
           ...shippingUpdateTemplate({
             customerName: String(priorOrder?.customer_name ?? ""),
             orderId: displayOrderId,
             status: "Shipped",
-            carrier: event.carrier ?? undefined,
+            carrier: shipCarrier?.name,
             trackingNumber: event.trackingNumber ?? undefined,
-            // NOT event.trackingUrl. The 3PL sends its own storefront URL, so
-            // "Track Package" was taking Vanta Labs customers to the fulfilment
-            // provider's branded site. Derive the carrier's own link instead,
-            // and when the carrier can't be identified keep the customer on
-            // Vanta Labs rather than handing them off to another brand.
-            trackingUrl:
-              buildCarrierTrackingUrl(event.carrier, event.trackingNumber)
-              ?? `${getSiteUrl()}/account/orders`,
+            trackingUrl: shipCarrier?.trackingUrl ?? `${getSiteUrl()}/account/orders`,
           }),
         });
       } else if (newStatus === "delivered") {
