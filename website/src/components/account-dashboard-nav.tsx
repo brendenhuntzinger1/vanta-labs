@@ -291,10 +291,16 @@ function MobileNav({
   const [sheetOpen, setSheetOpen] = useState(false);
   const { signOut, signingOut } = useSignOut();
 
-  // Close the sheet on route change + lock body scroll while open.
-  useEffect(() => {
+  // Close the sheet on route change. Adjusted DURING RENDER rather than in an
+  // effect — the sheet then never paints open on the new route, where an effect
+  // let one frame through before closing it.
+  const [prevPathname, setPrevPathname] = useState(pathname);
+  if (pathname !== prevPathname) {
+    setPrevPathname(pathname);
     setSheetOpen(false);
-  }, [pathname]);
+  }
+
+  // Lock body scroll while the sheet is open.
   useEffect(() => {
     if (!sheetOpen) return;
     const prev = document.body.style.overflow;

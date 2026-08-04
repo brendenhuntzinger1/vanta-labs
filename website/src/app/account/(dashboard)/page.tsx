@@ -30,10 +30,6 @@ function money(value: number) {
 function statusLabel(value: string) {
   return value.replace(/_/g, " ").replace(/^\w/, (c) => c.toUpperCase());
 }
-function shortOrderId(id: string) {
-  return id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id;
-}
-
 const LEDGER_REASON_LABELS: Record<string, string> = {
   order_earn: "Order reward",
   order_refund_reversal: "Refund adjustment",
