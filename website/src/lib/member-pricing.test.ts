@@ -73,6 +73,36 @@ describe("bestPaidTier", () => {
     expect(bestPaidTier([tier({ discountPercent: 0 })])).toBeNull();
     expect(bestPaidTier([])).toBeNull();
   });
+
+  it("advertises the top of the real seeded tier ladder on the catalog", () => {
+    // The shipped ladder: Essential 5%, Pro 8%, Elite 10%, Black 12%. The
+    // catalog must quote the BIGGEST discount available, not the cheapest tier's
+    // — that is the whole point of the non-member price on a product card.
+    const ladder = [
+      tier({ slug: "essential", name: "Vanta Essential", discountPercent: 5, monthlyPriceCents: 999 }),
+      tier({ slug: "pro", name: "Vanta Pro", discountPercent: 8, monthlyPriceCents: 2499 }),
+      tier({ slug: "elite", name: "Vanta Elite", discountPercent: 10, monthlyPriceCents: 3999 }),
+      tier({ slug: "black", name: "Vanta Black", discountPercent: 12, monthlyPriceCents: 8999 }),
+    ];
+    const best = bestPaidTier(ladder);
+    expect(best?.name).toBe("Vanta Black");
+
+    // The figures a shopper actually reads on a $54.99 card.
+    const quote = quoteMemberPrice("$54.99", best!.discountPercent);
+    expect(quote.memberPrice).toBe(48.39);
+    expect(quote.savings).toBe(6.6);
+    expect(quote.percent).toBe(12);
+  });
+
+  it("is order-independent — the ladder may arrive in any order", () => {
+    const shuffled = [
+      tier({ slug: "black", discountPercent: 12 }),
+      tier({ slug: "essential", discountPercent: 5 }),
+      tier({ slug: "elite", discountPercent: 10 }),
+    ];
+    expect(bestPaidTier(shuffled)?.slug).toBe("black");
+    expect(bestPaidTier([...shuffled].reverse())?.slug).toBe("black");
+  });
 });
 
 describe("computeCartMembershipValue", () => {

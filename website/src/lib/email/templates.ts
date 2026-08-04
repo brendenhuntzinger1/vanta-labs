@@ -397,7 +397,9 @@ export function shippingUpdateTemplate(input: {
       `${input.customerName || "there"}, your order status changed.`,
       "",
       `Order ${input.orderId} is now: ${input.status}.`,
-      input.trackingNumber ? `Carrier: ${input.carrier ?? ""}` : null,
+      // Only when the carrier was actually recognised — this printed a bare
+      // "Carrier: " line whenever the name was missing or withheld.
+      input.trackingNumber && input.carrier ? `Carrier: ${input.carrier}` : null,
       input.trackingNumber ? `Tracking number: ${input.trackingNumber}` : null,
       input.trackingUrl ?? null,
       "",

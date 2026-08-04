@@ -34,8 +34,11 @@ export function ProductCard({
   // cart — the shopper opens the product to sign up for a restock alert.
   const soldOut = product.stockStatus === "Out of Stock" || product.stockStatus === "Reserved";
 
-  // Member pricing — dollars first. Members see THEIR price; everyone else
-  // sees what the strongest paid tier would charge, with the exact savings.
+  // Member pricing — dollars first. Members see THEIR real price; everyone else
+  // sees the STRONGEST paid tier's price, which is the biggest discount the
+  // catalog can honestly advertise. A member is never shown a lower tier's
+  // price they can't actually get, and never a higher one they'd have to
+  // upgrade for — `memberDiscountPercent` is their own.
   const { membershipTiers, memberDiscountPercent } = useCart();
   const numericPrice = parsePriceValue(product.salePrice ?? product.price);
   const isMember = memberDiscountPercent > 0;
@@ -106,12 +109,27 @@ export function ProductCard({
               <p className="text-xs text-white/55 line-through sm:text-sm">{product.compareAtPrice}</p>
             ) : null}
           </div>
+          {/* The member price used to be one line of small grey-gold text that
+              read past. The saving is the strongest thing on the card after the
+              price itself, so it gets the price's weight and a percent chip —
+              and the tier is NAMED, because "member price" alone doesn't tell a
+              shopper which membership actually buys it. */}
           {showMemberPricing && memberQuote ? (
-            <p className="mt-1 text-xs text-[color:var(--accent-gold)] sm:text-sm">
-              {isMember ? "Your member price " : "Member price "}
-              <span className="font-semibold">{formatCartCurrency(memberQuote.memberPrice)}</span>
-              <span className="text-[#a3a3a3]"> · save {formatCartCurrency(memberQuote.savings)}</span>
-            </p>
+            <div className="mt-1.5">
+              <div className="flex flex-wrap items-baseline gap-x-1.5 gap-y-1">
+                <span className="text-base font-semibold tracking-tight text-[color:var(--accent-gold)] sm:text-lg">
+                  {formatCartCurrency(memberQuote.memberPrice)}
+                </span>
+                <span className="rounded-full border border-[color:var(--accent-gold)]/35 bg-[color:var(--accent-gold)]/10 px-1.5 py-0.5 text-[10px] font-semibold leading-none text-[color:var(--accent-gold)]">
+                  −{memberQuote.percent}%
+                </span>
+              </div>
+              <p className="mt-0.5 text-[11px] leading-tight text-[#a3a3a3] sm:text-xs">
+                {isMember ? "Your member price" : `With ${upsellTier?.name ?? "membership"}`}
+                {" · save "}
+                <span className="text-white/75">{formatCartCurrency(memberQuote.savings)}</span>
+              </p>
+            </div>
           ) : null}
           {/* Trust badges — data-driven, so they only appear when the real
               purity / COA / batch data is entered in Admin (no fabricated claims). */}
@@ -136,38 +154,57 @@ export function ProductCard({
         </div>
       </Link>
 
-      {/* Side-by-side compact buttons on phones (stacking them doubled the
-          card height); full-size two-up from sm. */}
+      {/* ONE action per card on a phone, two-up from sm.
+          Two side-by-side buttons in a 2-up catalog grid leaves ~71px of button
+          width at 390px, so "Add to Cart" wrapped onto three lines — taller than
+          the stacking this layout was meant to avoid, and it looked broken.
+          The secondary button is the one to drop: the whole card is already a
+          link to the product page, so "View Details" duplicates the tap target
+          surrounding it. It returns at sm where there's room.
+
+          The mobile-hidden button is wrapped rather than given `hidden`
+          directly: .vl2-btn-* sets `display:inline-flex` and is defined after
+          the utilities, so `hidden` on the button itself loses the cascade and
+          does nothing. The wrapper isn't a button, so it wins. */}
       <div className="grid grid-cols-2 gap-1.5 p-3 pt-0 sm:gap-2 sm:p-5 sm:pt-0">
         {soldOut ? (
-          // Sold out: no working Add button. The disabled pill makes the state
-          // obvious and "Get restock alert" sends them to the product page,
-          // which carries the notify-me signup form.
+          // Sold out: no working Add button. "Get restock alert" sends them to
+          // the product page, which carries the notify-me signup form. The
+          // disabled pill restates the corner badge, so on a phone the badge
+          // carries the state alone and the alert takes the full width.
           <>
-            <button type="button" disabled aria-disabled className="vl2-btn-secondary vl-focus-ring cursor-not-allowed px-2 py-2 text-xs opacity-50 sm:px-4 sm:py-2.5 sm:text-sm" title="Out of stock">
-              Out of Stock
-            </button>
+            <div className="hidden sm:block">
+              <button type="button" disabled aria-disabled className="vl2-btn-secondary vl-focus-ring w-full cursor-not-allowed px-4 py-2.5 text-sm opacity-50" title="Out of stock">
+                Out of Stock
+              </button>
+            </div>
             <Link
               href={`/products/${product.slug}`}
-              className="vl2-btn-primary vl-focus-ring inline-flex items-center justify-center px-2 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm"
+              className="vl2-btn-primary vl-focus-ring col-span-2 whitespace-nowrap px-2 py-2.5 text-xs sm:col-span-1 sm:px-4 sm:text-sm"
             >
               Get restock alert
             </Link>
           </>
-        ) : (
+        ) : onAddToCart ? (
           <>
-            {onAddToCart ? (
-              <button onClick={onAddToCart} className="vl2-btn-primary vl-focus-ring px-2 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm" type="button">
-                Add to Cart
-              </button>
-            ) : null}
-            <Link
-              href={`/products/${product.slug}`}
-              className={`vl2-btn-secondary vl-focus-ring inline-flex items-center justify-center px-2 py-2 text-xs sm:px-4 sm:py-2.5 sm:text-sm ${onAddToCart ? "" : "col-span-2"}`}
-            >
-              View Details
-            </Link>
+            <button onClick={onAddToCart} className="vl2-btn-primary vl-focus-ring col-span-2 whitespace-nowrap px-2 py-2.5 text-xs sm:col-span-1 sm:px-4 sm:text-sm" type="button">
+              Add to Cart
+            </button>
+            <div className="hidden sm:block">
+              <Link href={`/products/${product.slug}`} className="vl2-btn-secondary vl-focus-ring w-full px-4 py-2.5 text-sm">
+                View Details
+              </Link>
+            </div>
           </>
+        ) : (
+          // No Add button — View Details is the card's only action and must stay
+          // visible at every width.
+          <Link
+            href={`/products/${product.slug}`}
+            className="vl2-btn-secondary vl-focus-ring col-span-2 whitespace-nowrap px-2 py-2.5 text-xs sm:px-4 sm:text-sm"
+          >
+            View Details
+          </Link>
         )}
         {!soldOut && showMemberPricing && memberQuote && !isMember ? (
           <Link
