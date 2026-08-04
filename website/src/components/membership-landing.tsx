@@ -534,7 +534,17 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
         <ScrollReveal delayMs={100}>
           <div className="mt-16">
             <h2 className="vl2-serif text-center text-2xl text-white">Compare plans</h2>
-            <div className="mt-6 overflow-x-auto border border-white/10">
+            {/* Side-by-side comparison needs width it cannot have on a phone —
+                five columns at a 560px minimum meant every mobile visitor got a
+                horizontally-scrolling table, with the strongest tiers hidden off
+                the right edge where most people never look. The tier cards above
+                already state every one of these values per tier, so on mobile
+                this is redundant rather than missing. Shown from sm up, where
+                there is room to read it. */}
+            <p className="mt-3 text-center text-sm text-white/45 sm:hidden">
+              Every benefit is listed on each plan above.
+            </p>
+            <div className="mt-6 hidden overflow-x-auto border border-white/10 sm:block">
               <table className="w-full min-w-[560px] text-left text-sm">
                 <thead>
                   <tr className="border-b border-white/10 text-white/45">
