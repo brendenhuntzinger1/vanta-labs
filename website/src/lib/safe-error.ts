@@ -61,6 +61,8 @@ const TECHNICAL_PATTERNS: RegExp[] = [
   /relation "|column "|constraint "/i,            // Postgres detail
   /\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/i, // UUID
   /\b(api[_-]?key|secret|token|bearer)\b/i,       // credential words
+  /\b[A-Z][A-Z0-9]*(_[A-Z0-9]+){1,}\b/,          // ENV_VAR_NAMES ("Set BILLING_PROVIDER…")
+  /\brequest_id\b|\bdecline_code\b/i,            // processor envelope fields
 ];
 
 /** True when this message is safe to show a customer verbatim. */
@@ -91,4 +93,46 @@ export function isCustomerSafeMessage(message: string): boolean {
 export function customerSafeMessage(error: unknown, fallback: string): string {
   const raw = error instanceof Error ? error.message : typeof error === "string" ? error : "";
   return isCustomerSafeMessage(raw) ? raw : fallback;
+}
+
+/**
+ * The failure reason to show a customer in billing history.
+ *
+ * Stored `failure_reason` values come straight from the processor or from our
+ * own internal wiring, and both leak badly into a customer-facing list:
+ *
+ *   {"type":"invalid_request_error","code":"payment_unavailable",
+ *    "message":"We couldn't process your card…","decline_code":"generic_decline",
+ *    "request_id":"req_0JetRM3XaYXkNEB6VrF7jD3X"}
+ *
+ *   "No billing processor configured. Set BILLING_PROVIDER and the matching
+ *    credentials once one is connected."
+ *
+ * The first dumps a raw JSON blob with a request id; the second tells a
+ * customer to configure an environment variable. Both were rendered verbatim
+ * on the subscriptions page.
+ *
+ * A processor's `message` field IS usually written for the cardholder ("We
+ * couldn't process your card. Please try a different card."), so pull it out of
+ * the envelope and keep it when it passes the safety check. Otherwise fall back
+ * to plain wording.
+ */
+export function customerSafeFailureReason(raw: string | null | undefined): string | null {
+  const text = (raw ?? "").trim();
+  if (!text) return null;
+
+  // Unwrap a JSON error envelope and prefer its human message.
+  if (text.startsWith("{") || text.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(text) as Record<string, unknown>;
+      const nested = (parsed.error ?? parsed) as Record<string, unknown>;
+      const message = typeof nested.message === "string" ? nested.message : "";
+      if (message && isCustomerSafeMessage(message)) return message;
+    } catch {
+      // Not valid JSON after all — fall through to the generic reason.
+    }
+    return "The card was declined.";
+  }
+
+  return isCustomerSafeMessage(text) ? text : "The card was declined.";
 }

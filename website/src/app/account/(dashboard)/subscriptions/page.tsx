@@ -4,6 +4,7 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getCustomerMembership, getMembershipPerks } from "@/lib/membership";
 import { isPaidBillingEvent } from "@/lib/membership-status";
+import { customerSafeFailureReason } from "@/lib/safe-error";
 import { getMembershipBillingHistory } from "@/lib/membership-billing";
 import { MembershipBillingPanel } from "@/components/membership-billing-panel";
 import { SubscriptionActions } from "@/components/subscription-actions";
@@ -202,6 +203,7 @@ export default async function AccountSubscriptionsPage() {
               // amount because the OPERATION worked — labelling it "Succeeded"
               // in green next to real charges reads as "you were billed".
               const paid = isPaidBillingEvent(event);
+              const safeReason = customerSafeFailureReason(event.failureReason);
               const badge = failed
                 ? { text: "Failed", cls: "text-rose-300" }
                 : paid
@@ -213,7 +215,12 @@ export default async function AccountSubscriptionsPage() {
                     <p className="truncate text-zinc-200">{EVENT_LABELS[event.eventType] ?? event.eventType.replace(/_/g, " ")}</p>
                     <p className="text-xs text-zinc-500">
                       {formatDate(event.createdAt)}
-                      {failed && event.failureReason ? ` · ${event.failureReason}` : ""}
+                      {/* NEVER the stored failure_reason verbatim. It carries the
+                          processor's raw JSON envelope (request_id, decline_code)
+                          or our own internal wiring notes naming environment
+                          variables — both were rendered straight into a
+                          customer's billing history. */}
+                      {failed && safeReason ? ` · ${safeReason}` : ""}
                     </p>
                   </div>
                   <div className="shrink-0 text-right">
