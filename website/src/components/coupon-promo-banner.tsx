@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { formatDisplayDate } from "@/lib/format-date";
 
 type FeaturedCoupon = {
   code: string;
@@ -20,9 +21,8 @@ function discountHeadline(coupon: FeaturedCoupon): string {
 
 function endsLabel(endsAt: string | null): string | null {
   if (!endsAt) return null;
-  const end = new Date(endsAt);
-  if (Number.isNaN(end.getTime())) return null;
-  return `Ends ${end.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+  const label = formatDisplayDate(endsAt, "short");
+  return label ? `Ends ${label}` : null;
 }
 
 export function CouponPromoBanner() {

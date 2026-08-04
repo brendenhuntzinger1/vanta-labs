@@ -8,6 +8,7 @@ import { customerSafeFailureReason } from "@/lib/safe-error";
 import { getMembershipBillingHistory } from "@/lib/membership-billing";
 import { MembershipBillingPanel } from "@/components/membership-billing-panel";
 import { SubscriptionActions } from "@/components/subscription-actions";
+import { formatDisplayDate } from "@/lib/format-date";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,7 @@ function money(cents: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
 }
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+  return formatDisplayDate(iso, "medium") ?? "";
 }
 
 const EVENT_LABELS: Record<string, string> = {

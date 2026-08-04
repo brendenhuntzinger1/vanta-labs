@@ -1,4 +1,5 @@
 import type { EmailTemplate } from "@/lib/email/types";
+import { formatDisplayDate } from "@/lib/format-date";
 
 function escapeHtml(value: string) {
   return value
@@ -12,7 +13,15 @@ function money(value: number) {
   return `$${value.toFixed(2)}`;
 }
 
-function renderLayout(input: { preheader: string; title: string; bodyHtml: string; ctaLabel?: string; ctaUrl?: string }) {
+// `titleHtml` and `bodyHtml` are ALREADY-ESCAPED HTML supplied by the caller;
+// `preheader`, `ctaLabel` and `ctaUrl` are raw text escaped here.
+//
+// The title used to be escaped here too, but every caller escapes the customer
+// name before interpolating it — so it was escaped twice, and anyone whose name
+// or product contained an ampersand read "Ben &amp; Jerry" in the heading of
+// their receipt. Naming it `titleHtml` states the contract the way `bodyHtml`
+// already did, instead of leaving two plausible readings of `title`.
+function renderLayout(input: { preheader: string; titleHtml: string; bodyHtml: string; ctaLabel?: string; ctaUrl?: string }) {
   const cta = input.ctaUrl && input.ctaLabel
     ? `<tr><td style="padding:28px 0 4px;"><a href="${escapeHtml(input.ctaUrl)}" style="display:inline-block;background:#f4f4f4;color:#111111;text-decoration:none;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;font-size:13px;padding:12px 24px;border-radius:999px;">${escapeHtml(input.ctaLabel)}</a></td></tr>`
     : "";
@@ -29,7 +38,7 @@ function renderLayout(input: { preheader: string; title: string; bodyHtml: strin
           <p style="margin:0;font-size:13px;letter-spacing:0.32em;text-transform:uppercase;color:#f2c94c;font-weight:700;">Vanta Labs</p>
         </td></tr>
         <tr><td style="padding:16px 32px 8px;">
-          <h1 style="margin:0;font-size:22px;line-height:1.3;color:#ffffff;">${escapeHtml(input.title)}</h1>
+          <h1 style="margin:0;font-size:22px;line-height:1.3;color:#ffffff;">${input.titleHtml}</h1>
         </td></tr>
         <tr><td style="padding:8px 32px 4px;font-size:14px;line-height:1.7;color:#d4d4d4;">
           ${input.bodyHtml}
@@ -61,9 +70,9 @@ export function couponAnnouncementTemplate(input: {
   const discountLabel = escapeHtml(input.discountLabel);
   const headline = escapeHtml(input.headline);
   const message = input.message ? `<p>${escapeHtml(input.message)}</p>` : "";
-  const expiryHuman = input.endsAt
-    ? new Date(input.endsAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })
-    : null;
+  // Pinned to the display zone like every other customer-facing date, so the
+  // offer's end date reads the same wherever this is rendered or sent from.
+  const expiryHuman = formatDisplayDate(input.endsAt, "long");
   const expiryHtml = expiryHuman ? `<p style="margin:12px 0 0;font-size:12px;color:#a1a1aa;">Offer ends ${escapeHtml(expiryHuman)}.</p>` : "";
   const codeBlock = `<div style="margin:18px 0 4px;padding:14px;border:1px dashed rgba(255,255,255,0.35);border-radius:12px;text-align:center;"><span style="font-size:20px;font-weight:800;letter-spacing:0.14em;color:#ffffff;">${code}</span></div>`;
 
@@ -71,7 +80,7 @@ export function couponAnnouncementTemplate(input: {
     subject: `${input.headline} — use code ${input.code}`,
     html: renderLayout({
       preheader: `${input.discountLabel} with code ${input.code}`,
-      title: headline,
+      titleHtml: headline,
       bodyHtml: `${message}<p>Use this code at checkout for <strong style="color:#ffffff;">${discountLabel}</strong>:</p>${codeBlock}${expiryHtml}`,
       ctaLabel: "Shop Now",
       ctaUrl: input.shopUrl,
@@ -97,7 +106,7 @@ export function emailVerificationTemplate(input: { name: string; verifyUrl: stri
     subject: "Verify your Vanta Labs account",
     html: renderLayout({
       preheader: "Confirm your email to activate your account.",
-      title: `Hi ${name}, please verify your email`,
+      titleHtml: `Hi ${name}, please verify your email`,
       bodyHtml: `<p>Click below to confirm your email address and activate your account.</p><p>If you didn't create this account, you can safely ignore this email.</p>`,
       ctaLabel: "Verify Email",
       ctaUrl: input.verifyUrl,
@@ -121,7 +130,7 @@ export function passwordResetTemplate(input: { name: string; resetUrl: string })
     subject: "Reset your Vanta Labs password",
     html: renderLayout({
       preheader: "Reset your password.",
-      title: `Hi ${name}, reset your password`,
+      titleHtml: `Hi ${name}, reset your password`,
       bodyHtml: `<p>We received a request to reset your password. Click below to choose a new one. This link expires shortly for your security.</p><p>If you didn't request this, you can safely ignore this email — your password won't change.</p>`,
       ctaLabel: "Reset Password",
       ctaUrl: input.resetUrl,
@@ -178,7 +187,7 @@ export function orderConfirmationTemplate(input: {
     subject: `Order Confirmed - ${input.orderId}`,
     html: renderLayout({
       preheader: `Your order ${input.orderId} is confirmed.`,
-      title: `Thanks, ${name}. Your order is confirmed.`,
+      titleHtml: `Thanks, ${name}. Your order is confirmed.`,
       bodyHtml: `
         <p>Order <strong>${escapeHtml(input.orderId)}</strong> has been received and is being prepared.</p>
         <table role="presentation" width="100%" style="margin-top:12px;font-size:14px;">
@@ -227,7 +236,7 @@ export function refundConfirmationTemplate(input: {
     subject: `Refund processed - ${input.orderId}`,
     html: renderLayout({
       preheader: `A ${kind} of ${money(input.refundAmount)} has been issued for order ${input.orderId}.`,
-      title: `Your refund has been processed`,
+      titleHtml: `Your refund has been processed`,
       bodyHtml: `
         <p>Hi ${name},</p>
         <p>We've issued a <strong>${kind}</strong> for order <strong>${escapeHtml(input.orderId)}</strong>.</p>
@@ -274,7 +283,7 @@ export function manualPaymentReceivedTemplate(input: {
     subject: `Payment received — verifying order ${input.orderNumber}`,
     html: renderLayout({
       preheader: `We received your ${method} payment details for ${input.orderNumber}.`,
-      title: `Thanks, ${name}. We're verifying your payment.`,
+      titleHtml: `Thanks, ${name}. We're verifying your payment.`,
       bodyHtml: `
         <p>We've received your <strong>${method}</strong> payment details for order <strong>${escapeHtml(input.orderNumber)}</strong>.</p>
         <p>Amount: <strong>${money(input.amount)}</strong></p>
@@ -309,7 +318,7 @@ export function newPaymentToVerifyTemplate(input: {
     subject: `New payment to verify — ${input.orderNumber} (${money(input.amount)})`,
     html: renderLayout({
       preheader: `${paymentMethodLabel(input.paymentMethod)} payment submitted for ${input.orderNumber}.`,
-      title: `New ${escapeHtml(paymentMethodLabel(input.paymentMethod))} payment to verify`,
+      titleHtml: `New ${escapeHtml(paymentMethodLabel(input.paymentMethod))} payment to verify`,
       bodyHtml: `
         <p>Order <strong>${escapeHtml(input.orderNumber)}</strong> — <strong>${money(input.amount)}</strong></p>
         <p>Customer: ${escapeHtml(input.customerName || "—")} (${escapeHtml(input.customerEmail)})<br/>
@@ -348,7 +357,7 @@ export function manualPaymentRejectedTemplate(input: {
     subject: `Action needed — payment not verified for ${input.orderNumber}`,
     html: renderLayout({
       preheader: `We couldn't verify the payment for order ${input.orderNumber}.`,
-      title: `${name}, we couldn't verify your payment`,
+      titleHtml: `${name}, we couldn't verify your payment`,
       bodyHtml: `
         <p>We weren't able to verify the payment for order <strong>${escapeHtml(input.orderNumber)}</strong>.</p>
         ${reasonLine}
@@ -388,7 +397,7 @@ export function shippingUpdateTemplate(input: {
     subject: `Shipping Update - ${input.orderId}`,
     html: renderLayout({
       preheader: `Your order ${input.orderId} status: ${input.status}.`,
-      title: `${name}, your order status changed`,
+      titleHtml: `${name}, your order status changed`,
       bodyHtml: `<p>Order <strong>${escapeHtml(input.orderId)}</strong> is now: <strong>${escapeHtml(input.status)}</strong>.</p>${trackingLine}`,
       ctaLabel: input.trackingUrl ? "Track Package" : undefined,
       ctaUrl: input.trackingUrl,
@@ -424,7 +433,7 @@ export function replacementOrderTemplate(input: {
     subject: `Your replacement is on the way — ${input.replacementOrderNumber}`,
     html: renderLayout({
       preheader: `We're sending a replacement for order ${input.originalOrderNumber} at no charge.`,
-      title: `Your replacement is on the way`,
+      titleHtml: `Your replacement is on the way`,
       bodyHtml: `
         <p>Hi ${name},</p>
         <p>We're sorry your order <strong>${escapeHtml(input.originalOrderNumber)}</strong> didn't arrive in perfect condition. A replacement is being prepared and shipped to you <strong>at no charge</strong>.</p>
@@ -457,7 +466,7 @@ export function deliveryConfirmationTemplate(input: {
     subject: `Delivered — order ${input.orderId}`,
     html: renderLayout({
       preheader: `Your order ${input.orderId} has been delivered.`,
-      title: `${name}, your order was delivered`,
+      titleHtml: `${name}, your order was delivered`,
       bodyHtml: `<p>Order <strong>${escapeHtml(input.orderId)}</strong> has been marked <strong>delivered</strong>. We hope everything arrived in great shape.</p><p>If anything's not right, just reply to this email and we'll help.</p>`,
     }),
     text: toText([
@@ -477,7 +486,7 @@ export function ambassadorApplicationReceivedTemplate(input: { name: string }): 
     subject: "Your Vanta Labs Ambassador Application Was Received",
     html: renderLayout({
       preheader: "Your application is under review.",
-      title: `Thanks for applying, ${name}`,
+      titleHtml: `Thanks for applying, ${name}`,
       bodyHtml: `<p>Your ambassador application has been received and is under review. Most applications are reviewed within 24 hours — we'll email you as soon as a decision is made.</p>`,
     }),
     text: toText([
@@ -547,7 +556,7 @@ export function ambassadorApprovedTemplate(input: {
     subject: "You're approved — welcome to the Vanta Labs Ambassador Program",
     html: renderLayout({
       preheader: "You're approved. Set your payout method and start sharing.",
-      title: `You're approved, ${name}!`,
+      titleHtml: `You're approved, ${name}!`,
       bodyHtml,
       ctaLabel: "Open Your Dashboard",
       ctaUrl: input.dashboardUrl,
@@ -605,7 +614,7 @@ export function ambassadorPayoutSentTemplate(input: {
     subject: `Your Vanta Labs payout of ${amount} is on the way`,
     html: renderLayout({
       preheader: `We've sent your ${amount} ambassador payout.`,
-      title: `Payment sent, ${name}`,
+      titleHtml: `Payment sent, ${name}`,
       bodyHtml: `
         <p>Good news — we've sent your ambassador payout.</p>
         <ul>
@@ -639,7 +648,7 @@ export function ambassadorDeniedTemplate(input: { name: string }): EmailTemplate
     subject: "Update on Your Vanta Labs Ambassador Application",
     html: renderLayout({
       preheader: "An update on your application.",
-      title: `Hi ${name}, an update on your application`,
+      titleHtml: `Hi ${name}, an update on your application`,
       bodyHtml: `<p>Thank you for applying to the Vanta Labs ambassador program. At this time, your application was not approved.</p><p>You're welcome to reapply in the future as your audience or content evolves.</p>`,
     }),
     text: toText([
@@ -674,7 +683,7 @@ export function commissionEarnedTemplate(input: {
     subject: `You earned a commission — ${money(input.commissionAmount)}`,
     html: renderLayout({
       preheader: `You earned ${money(input.commissionAmount)} from a new sale.`,
-      title: `Nice work, ${name} — you earned a commission`,
+      titleHtml: `Nice work, ${name} — you earned a commission`,
       bodyHtml: `
         <p>A new sale came through your referral. Here's what you earned:</p>
         <p style="margin:14px 0 2px;font-size:22px;font-weight:800;color:#ffffff;">${money(input.commissionAmount)}</p>
@@ -713,7 +722,7 @@ export function newAmbassadorApplicationTemplate(input: {
     subject: `New ambassador application — ${input.applicantName || input.applicantEmail}`,
     html: renderLayout({
       preheader: `${input.applicantName || input.applicantEmail} applied to the ambassador program.`,
-      title: "New ambassador application",
+      titleHtml: "New ambassador application",
       bodyHtml: `
         <p>A new ambassador application is awaiting review.</p>
         <p>Applicant: ${escapeHtml(input.applicantName || "—")}<br/>Email: ${escapeHtml(input.applicantEmail)}</p>
@@ -746,7 +755,7 @@ export function referralCodeAssignedTemplate(input: {
     subject: "Your Vanta Labs Referral Code Is Ready",
     html: renderLayout({
       preheader: `Your referral code: ${input.referralCode}`,
-      title: `${name}, your referral code is ready`,
+      titleHtml: `${name}, your referral code is ready`,
       bodyHtml: `
         <p>Your referral code: <strong>${escapeHtml(input.referralCode)}</strong></p>
         <p>Your referral link: <a href="${escapeHtml(input.referralLink)}" style="color:#f2c94c;">${escapeHtml(input.referralLink)}</a></p>
@@ -780,7 +789,7 @@ export function membershipWelcomeTemplate(input: { name: string; tierName: strin
     subject: `Welcome to ${input.tierName}`,
     html: renderLayout({
       preheader: `Welcome to ${input.tierName} at Vanta Labs.`,
-      title: `Welcome, ${name}`,
+      titleHtml: `Welcome, ${name}`,
       bodyHtml: `<p>You're now a <strong>${escapeHtml(input.tierName)}</strong> member. Faster point earning, member pricing, early access, and priority processing are active on your account starting now.</p>`,
     }),
     text: toText([`Welcome, ${input.name || "there"}.`, "", `You're now a ${input.tierName} member.`, "", "- Vanta Labs"]),
@@ -800,7 +809,7 @@ export function membershipTrialConfirmationTemplate(input: {
     subject: `Your ${input.tierName} billing schedule`,
     html: renderLayout({
       preheader: "Your exact intro billing schedule.",
-      title: `${name}, here's your exact billing schedule`,
+      titleHtml: `${name}, here's your exact billing schedule`,
       bodyHtml: `
         <p>You were charged <strong>${money(input.introChargeCents / 100)}</strong> today for your 7-day introductory period of ${escapeHtml(input.tierName)}.</p>
         <p>On <strong>${escapeHtml(input.remainderChargeDate)}</strong>, you'll be charged the remaining balance of your first month: <strong>${money(input.remainderCents / 100)}</strong>.</p>
@@ -825,7 +834,7 @@ export function membershipRemainderReminderTemplate(input: { name: string; remai
     subject: "Your first-month balance is charged in 3 days",
     html: renderLayout({
       preheader: `${money(input.remainderCents / 100)} will be charged on ${input.chargeDate}.`,
-      title: `${name}, a reminder about your upcoming charge`,
+      titleHtml: `${name}, a reminder about your upcoming charge`,
       bodyHtml: `<p>In 3 days (${escapeHtml(input.chargeDate)}), we'll charge the remaining balance of your first month's membership: <strong>${money(input.remainderCents / 100)}</strong>.</p><p>No action is needed - this completes the 7-day intro offer you signed up for.</p>`,
     }),
     text: toText([`${input.name || "there"}, a reminder about your upcoming charge.`, "", `${input.chargeDate}: ${money(input.remainderCents / 100)} will be charged.`, "", "- Vanta Labs"]),
@@ -838,7 +847,7 @@ export function membershipRemainderReceiptTemplate(input: { name: string; remain
     subject: `Receipt: ${money(input.remainderCents / 100)} charged`,
     html: renderLayout({
       preheader: "Your first-month balance was charged successfully.",
-      title: `${name}, your payment was successful`,
+      titleHtml: `${name}, your payment was successful`,
       bodyHtml: `<p>We charged <strong>${money(input.remainderCents / 100)}</strong> to complete your first month's membership.</p><p>Your next charge of <strong>${money(input.monthlyPriceCents / 100)}</strong> is scheduled for <strong>${escapeHtml(input.nextBillingDate)}</strong>.</p>`,
     }),
     text: toText([`${input.name || "there"}, your payment was successful.`, "", `Charged: ${money(input.remainderCents / 100)}`, `Next charge: ${money(input.monthlyPriceCents / 100)} on ${input.nextBillingDate}`, "", "- Vanta Labs"]),
@@ -851,7 +860,7 @@ export function membershipRenewalReminderTemplate(input: { name: string; monthly
     subject: "Your membership renews in 3 days",
     html: renderLayout({
       preheader: `${money(input.monthlyPriceCents / 100)} will be charged on ${input.chargeDate}.`,
-      title: `${name}, your renewal is coming up`,
+      titleHtml: `${name}, your renewal is coming up`,
       bodyHtml: `<p>In 3 days (${escapeHtml(input.chargeDate)}), your membership renews at <strong>${money(input.monthlyPriceCents / 100)}</strong>.</p><p>Want to make a change? You can cancel anytime before your renewal date from your account dashboard.</p>`,
     }),
     text: toText([`${input.name || "there"}, your renewal is coming up.`, "", `${input.chargeDate}: ${money(input.monthlyPriceCents / 100)} will be charged.`, "", "- Vanta Labs"]),
@@ -864,7 +873,7 @@ export function membershipRenewalReceiptTemplate(input: { name: string; monthlyP
     subject: `Receipt: ${money(input.monthlyPriceCents / 100)} charged`,
     html: renderLayout({
       preheader: "Your membership renewal was successful.",
-      title: `${name}, your renewal was successful`,
+      titleHtml: `${name}, your renewal was successful`,
       bodyHtml: `<p>We charged <strong>${money(input.monthlyPriceCents / 100)}</strong> for this month's membership.</p><p>Your next renewal is scheduled for <strong>${escapeHtml(input.nextBillingDate)}</strong>.</p>`,
     }),
     text: toText([`${input.name || "there"}, your renewal was successful.`, "", `Charged: ${money(input.monthlyPriceCents / 100)}`, `Next renewal: ${input.nextBillingDate}`, "", "- Vanta Labs"]),
@@ -894,7 +903,7 @@ export function membershipSignupReceiptTemplate(input: {
     subject: `Receipt: ${money(input.amountCents / 100)} — ${input.tierName} membership`,
     html: renderLayout({
       preheader: `Your ${input.tierName} membership is active.`,
-      title: `${name}, welcome to ${escapeHtml(input.tierName)}`,
+      titleHtml: `${name}, welcome to ${escapeHtml(input.tierName)}`,
       bodyHtml: `<p>We charged <strong>${money(input.amountCents / 100)}</strong> for your ${escapeHtml(cycleLabel)} <strong>${escapeHtml(input.tierName)}</strong> membership.</p>${renewLine}<p style="margin:14px 0 0;font-size:12px;color:#a1a1aa;">Your member perks are active now and tied to your account.</p>`,
     }),
     text: toText([
@@ -916,7 +925,7 @@ export function membershipPaymentFailedTemplate(input: { name: string; amountCen
     subject: "Action needed: your payment didn't go through",
     html: renderLayout({
       preheader: "Update your payment method to keep your membership active.",
-      title: `${name}, we couldn't process your payment`,
+      titleHtml: `${name}, we couldn't process your payment`,
       bodyHtml: `<p>We attempted to charge <strong>${money(input.amountCents / 100)}</strong> and it didn't go through. Update your payment method to keep your membership active.</p>`,
       ctaLabel: "Update Payment Method",
       ctaUrl: input.updatePaymentUrl,
@@ -925,13 +934,17 @@ export function membershipPaymentFailedTemplate(input: { name: string; amountCen
   };
 }
 
+// `bodyHtml` is the ONE deliberate raw-HTML channel here: this is the monthly
+// benefits mailer, whose body is composed in admin. `headline` is not — it is
+// plain text that happened to be interpolated into the heading unescaped, so an
+// ampersand in it rendered as markup rather than as an ampersand.
 export function membershipBenefitsMonthlyTemplate(input: { name: string; headline: string; bodyHtml: string; ctaLabel?: string; ctaUrl?: string }): EmailTemplate {
   const name = escapeHtml(input.name || "there");
   return {
     subject: input.headline,
     html: renderLayout({
       preheader: input.headline,
-      title: `${name}, ${input.headline}`,
+      titleHtml: `${name}, ${escapeHtml(input.headline)}`,
       bodyHtml: input.bodyHtml,
       ctaLabel: input.ctaLabel,
       ctaUrl: input.ctaUrl,
@@ -946,7 +959,7 @@ export function membershipBirthdayTemplate(input: { name: string; bonusPoints: n
     subject: "Happy birthday from Vanta Labs",
     html: renderLayout({
       preheader: `A birthday gift of ${input.bonusPoints} points is in your account.`,
-      title: `Happy birthday, ${name}!`,
+      titleHtml: `Happy birthday, ${name}!`,
       bodyHtml: `<p>We've added <strong>${input.bonusPoints} bonus points</strong> to your account as a birthday gift.</p>`,
     }),
     text: toText([`Happy birthday, ${input.name || "there"}!`, "", `${input.bonusPoints} bonus points have been added to your account.`, "", "- Vanta Labs"]),
@@ -959,7 +972,7 @@ export function membershipWinBackTemplate(input: { name: string; tierName: strin
     subject: "We'd love to have you back",
     html: renderLayout({
       preheader: `${input.offerPercent}% off if you rejoin ${input.tierName}.`,
-      title: `${name}, come back to ${escapeHtml(input.tierName)}`,
+      titleHtml: `${name}, come back to ${escapeHtml(input.tierName)}`,
       bodyHtml: `<p>Your membership was canceled. As a thank-you for being a member, here's <strong>${input.offerPercent}% off</strong> your first month if you rejoin.</p>`,
       ctaLabel: "Rejoin",
       ctaUrl: input.resubscribeUrl,
@@ -974,7 +987,7 @@ export function newProductLaunchTemplate(input: { name: string; productName: str
     subject: `Early access: ${input.productName}`,
     html: renderLayout({
       preheader: `${input.productName} is available to members before public launch.`,
-      title: `${name}, you have early access to ${escapeHtml(input.productName)}`,
+      titleHtml: `${name}, you have early access to ${escapeHtml(input.productName)}`,
       bodyHtml: `<p>As a member, you can shop <strong>${escapeHtml(input.productName)}</strong> before it's available to the public.</p>`,
       ctaLabel: "Shop Now",
       ctaUrl: input.productUrl,
@@ -989,7 +1002,7 @@ export function backInStockTemplate(input: { name: string; productName: string; 
     subject: `Back in stock: ${input.productName}`,
     html: renderLayout({
       preheader: `${input.productName} is back in stock.`,
-      title: `${name}, ${escapeHtml(input.productName)} is back`,
+      titleHtml: `${name}, ${escapeHtml(input.productName)} is back`,
       bodyHtml: `<p><strong>${escapeHtml(input.productName)}</strong> is back in stock.</p>`,
       ctaLabel: "Shop Now",
       ctaUrl: input.productUrl,
@@ -1013,7 +1026,7 @@ export function cartRecoveryT30mTemplate(input: { name: string; items: Array<{ n
     subject: "You left something behind",
     html: renderLayout({
       preheader: "Your cart is saved and waiting for you.",
-      title: `${name}, you left something behind`,
+      titleHtml: `${name}, you left something behind`,
       bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p>`,
       ctaLabel: "Restore My Cart",
       ctaUrl: input.restoreUrl,
@@ -1028,7 +1041,7 @@ export function cartRecoveryT12hTemplate(input: { name: string; items: Array<{ n
     subject: "Your cart is still waiting for you",
     html: renderLayout({
       preheader: "Friendly reminder - your cart hasn't gone anywhere.",
-      title: `${name}, your cart is still here`,
+      titleHtml: `${name}, your cart is still here`,
       bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p>`,
       ctaLabel: "Resume Checkout",
       ctaUrl: input.restoreUrl,
@@ -1050,7 +1063,7 @@ export function cartRecoveryT24hTemplate(input: {
     subject: "5% off - your cart is waiting",
     html: renderLayout({
       preheader: `Use code ${input.couponCode} for 5% off.`,
-      title: `${name}, here's 5% off to complete your order`,
+      titleHtml: `${name}, here's 5% off to complete your order`,
       bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p><p>Use code <strong>${escapeHtml(input.couponCode)}</strong> for 5% off - expires ${escapeHtml(input.expiresAt)}.</p>`,
       ctaLabel: "Resume Checkout",
       ctaUrl: input.restoreUrl,
@@ -1072,7 +1085,7 @@ export function cartRecoveryT72hTemplate(input: {
     subject: "Last chance - your cart expires soon",
     html: renderLayout({
       preheader: `Use code ${input.couponCode} before it expires.`,
-      title: `${name}, last chance on your cart`,
+      titleHtml: `${name}, last chance on your cart`,
       bodyHtml: `<table role="presentation" width="100%" style="margin-top:8px;font-size:14px;">${cartItemsHtml(input.items)}</table><p style="margin-top:16px;">Cart total: <strong>${money(input.cartValueCents / 100)}</strong></p><p>Use code <strong>${escapeHtml(input.couponCode)}</strong> for 5% off - expires ${escapeHtml(input.expiresAt)}.</p>`,
       ctaLabel: "Resume Checkout",
       ctaUrl: input.restoreUrl,
@@ -1130,7 +1143,7 @@ export function contactFormAutoReplyTemplate(input: {
     subject: `We received your message — Vanta Labs`,
     html: renderLayout({
       preheader: "Thanks for contacting Vanta Labs. We'll be in touch within 1–2 business days.",
-      title: "We got your message",
+      titleHtml: "We got your message",
       bodyHtml,
     }),
     text: toText([

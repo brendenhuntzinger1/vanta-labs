@@ -8,6 +8,7 @@ import { getOrderProgress, isUnpaid, statusLabel } from "@/lib/order-status";
 import { OrderTracking } from "@/components/order-tracking";
 import { ReorderButton } from "@/components/reorder-button";
 import { displayOrderReference } from "@/lib/order-reference";
+import { formatDisplayDate } from "@/lib/format-date";
 
 export const dynamic = "force-dynamic";
 
@@ -55,7 +56,7 @@ export default async function AccountOrdersPage() {
                   <div>
                     <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Order</p>
                     <p className="mt-1 text-sm font-semibold text-white">{displayOrderReference(order.orderNumber, order.orderId)}</p>
-                    <p className="mt-1 text-xs text-zinc-500">{new Date(order.createdAt).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}</p>
+                    <p className="mt-1 text-xs text-zinc-500">{formatDisplayDate(order.createdAt, "long")}</p>
                   </div>
                   <div className="text-right">
                     <p className="text-lg font-semibold text-white">{money(order.amountPaid, order.currency)}</p>

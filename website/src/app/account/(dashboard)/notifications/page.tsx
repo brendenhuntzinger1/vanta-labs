@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getCustomerNotifications, type AccountNotification } from "@/lib/account-notifications";
+import { formatDisplayDate } from "@/lib/format-date";
 
 export const dynamic = "force-dynamic";
 
@@ -16,7 +17,7 @@ function timeAgo(iso: string): string {
   if (hrs < 24) return `${hrs}h ago`;
   const days = Math.floor(hrs / 24);
   if (days < 7) return `${days}d ago`;
-  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  return formatDisplayDate(iso, "short") ?? "";
 }
 
 function Icon({ type }: { type: AccountNotification["icon"] }) {

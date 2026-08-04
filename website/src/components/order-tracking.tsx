@@ -1,4 +1,5 @@
 import { getOrderProgress } from "@/lib/order-status";
+import { formatDisplayDate } from "@/lib/format-date";
 
 function CheckIcon() {
   return (
@@ -44,7 +45,7 @@ export function OrderTracking({
           <p className="text-sm font-medium text-white">{progress.headline}</p>
           {estimatedDelivery ? (
             <p className="text-xs text-zinc-500">
-              Est. delivery {new Date(estimatedDelivery).toLocaleDateString("en-US", { month: "short", day: "numeric" })}
+              Est. delivery {formatDisplayDate(estimatedDelivery, "short")}
             </p>
           ) : null}
         </div>

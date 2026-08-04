@@ -23,6 +23,7 @@ import { ReorderButton } from "@/components/reorder-button";
 import { AccountRecentlyViewed } from "@/components/account-recently-viewed";
 import { FREE_SHIPPING_THRESHOLD } from "@/lib/shipping";
 import { displayOrderReference } from "@/lib/order-reference";
+import { formatDisplayDate } from "@/lib/format-date";
 
 function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -161,7 +162,7 @@ export default async function AccountDashboardPage() {
                   {membership.cancelAtPeriodEnd ? "Access until" : "Next billing"}
                 </p>
                 <p className="mt-1 text-sm font-semibold text-white">
-                  {membership.nextBillingAt ? new Date(membership.nextBillingAt).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                  {formatDisplayDate(membership.nextBillingAt, "medium") ?? "—"}
                 </p>
                 <Link href="/account/subscriptions" className="mt-2 inline-block text-xs text-cyan-300 underline-offset-2 hover:underline">
                   Manage subscription →
@@ -255,7 +256,7 @@ export default async function AccountDashboardPage() {
                     <div className="min-w-0">
                       <p className="truncate text-sm font-medium text-white">Order {displayOrderReference(order.orderNumber, order.orderId)}</p>
                       <p className="mt-0.5 text-xs text-zinc-500">
-                        {new Date(order.createdAt).toLocaleDateString()} · {order.items.length} item{order.items.length === 1 ? "" : "s"}
+                        {formatDisplayDate(order.createdAt, "medium")} · {order.items.length} item{order.items.length === 1 ? "" : "s"}
                       </p>
                     </div>
                     <div className="shrink-0 text-right">
@@ -336,7 +337,7 @@ export default async function AccountDashboardPage() {
                 <li key={entry.id} className="flex items-center justify-between py-2.5 text-sm">
                   <div className="min-w-0">
                     <p className="truncate text-zinc-200">{LEDGER_REASON_LABELS[entry.reason] ?? entry.reason}</p>
-                    <p className="text-xs text-zinc-500">{new Date(entry.createdAt).toLocaleDateString()}</p>
+                    <p className="text-xs text-zinc-500">{formatDisplayDate(entry.createdAt, "medium")}</p>
                   </div>
                   <span className={entry.amount >= 0 ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>
                     {entry.amount >= 0 ? "+" : ""}{entry.amount.toLocaleString()}

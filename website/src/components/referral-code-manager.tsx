@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
+import { formatDisplayDate } from "@/lib/format-date";
 
 type CheckState =
   | { status: "idle" }
@@ -130,7 +131,7 @@ export function ReferralCodeManager({
       <div className="flex items-center justify-between">
         <p className="text-[11px] uppercase tracking-[0.25em] text-zinc-500">Your Referral Code</p>
         {lastChangedAt ? (
-          <p className="text-[11px] text-zinc-500">Last changed {new Date(lastChangedAt).toLocaleDateString("en-US")}</p>
+          <p className="text-[11px] text-zinc-500">Last changed {formatDisplayDate(lastChangedAt, "medium")}</p>
         ) : null}
       </div>
 

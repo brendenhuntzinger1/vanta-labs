@@ -5,6 +5,7 @@ import { RevenueBars } from "@/components/revenue-bars";
 import { ReferralCodeManager } from "@/components/referral-code-manager";
 import { ReferralShare } from "@/components/referral-share";
 import type { PartnerSummary } from "@/lib/partner-portal";
+import { formatDisplayDate } from "@/lib/format-date";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -229,7 +230,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
                 {filteredCommissions.map((row) => (
                   <tr key={row.orderId} className="border-t border-white/[0.06] text-zinc-200">
                     <td className="px-2 py-2.5 font-mono text-xs">{row.orderId.slice(0, 12)}…</td>
-                    <td className="px-2 py-2.5 text-zinc-400">{new Date(row.createdAt).toLocaleDateString()}</td>
+                    <td className="px-2 py-2.5 text-zinc-400">{formatDisplayDate(row.createdAt, "medium")}</td>
                     <td className="px-2 py-2.5 text-zinc-400">{row.customerEmail ?? "—"}</td>
                     <td className="px-2 py-2.5 text-right">{currency(row.amountPaid)}</td>
                     <td className="px-2 py-2.5 text-right font-medium text-white">{currency(row.commissionAmount)}</td>
@@ -265,7 +266,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
               <tbody>
                 {liveSummary.payoutHistory.map((row) => (
                   <tr key={row.id} className="border-t border-white/[0.06] text-zinc-200">
-                    <td className="px-2 py-2.5 text-zinc-400">{new Date(row.createdAt).toLocaleDateString()}</td>
+                    <td className="px-2 py-2.5 text-zinc-400">{formatDisplayDate(row.createdAt, "medium")}</td>
                     <td className="px-2 py-2.5 text-right font-medium text-white">{currency(row.amount)}</td>
                     <td className="px-2 py-2.5 text-zinc-400">{row.note ?? "—"}</td>
                   </tr>

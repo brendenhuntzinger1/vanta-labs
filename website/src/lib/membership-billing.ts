@@ -10,13 +10,14 @@ import {
   updateVeyraMembershipCard,
 } from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
-import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase } from "@/lib/membership-billing-math";
+import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase, membershipTermPlan } from "@/lib/membership-billing-math";
 import { PAID_EVENT_TYPES } from "@/lib/membership-status";
 import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { getSiteUrl } from "@/lib/env";
 import { recordSystemAlert } from "@/lib/monitoring";
+import { formatDisplayDate } from "@/lib/format-date";
 import {
   membershipWelcomeTemplate,
   membershipSignupReceiptTemplate,
@@ -263,7 +264,7 @@ export async function activateAnnualMembership(userId: string, tierId: string) {
         tierName: tier.name,
         amountCents: tier.annual_price_cents ?? 0,
         billingCycle: "annual",
-        nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+        nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
         autoRenews: false,
       }),
     });
@@ -320,7 +321,7 @@ export async function activateMonthlyMembership(userId: string, tierId: string) 
         tierName: tier.name,
         amountCents: tier.monthly_price_cents ?? 0,
         billingCycle: "monthly",
-        nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+        nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
         autoRenews: true,
       }),
     });
@@ -622,7 +623,11 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
   // person can never be charged twice for the same signup.
   {
     const amountCents = input.billingCycle === "annual" ? tier.annual_price_cents : tier.monthly_price_cents;
-    const nextBillingAt = new Date(now.getTime() + (input.billingCycle === "annual" ? 365 : 30) * ONE_DAY_MS);
+    // Term shape (end date, next amount, wind-down flags, processor interval)
+    // lives in membership-billing-math so the five values that must agree with
+    // each other are decided together — and can be tested without Supabase.
+    const term = membershipTermPlan(input.billingCycle, amountCents, now);
+    const nextBillingAt = term.nextBillingAt;
 
     // Two lanes. A token intent means the shopper just entered a card and we
     // hand the whole subscription to Veyra; without one we fall back to the
@@ -641,7 +646,7 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
           planCode: tier.slug || tier.id,
           amountCents,
           // "annual" is the Veyra spelling. "yearly" 400s.
-          interval: input.billingCycle === "annual" ? "annual" : "monthly",
+          interval: term.processorInterval,
           tokenIntentId: input.tokenIntentId,
           customerEmail: contact.email,
           subscriptionKind: "shippable",
@@ -663,7 +668,7 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
           // We still create the subscription rather than a bare one-time charge:
           // that is what vaults the card and gives us a processor-side record to
           // cancel or refund against.
-          if (input.billingCycle === "annual") {
+          if (term.stopAutoRenewAtProcessor) {
             const stopRenewal = await cancelVeyraMembership(veyra.membershipId, true);
             if (!stopRenewal.ok) {
               // The charge succeeded, so the member is entitled to their year.
@@ -733,13 +738,13 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
         // Annual takes no further charge, so there is no "next billing amount"
         // to promise. Showing the year's price here would tell the member they
         // are about to be charged again.
-        next_billing_amount_cents: input.billingCycle === "annual" ? 0 : amountCents,
+        next_billing_amount_cents: term.nextBillingAmountCents,
         // Annual is a one-year pass that does not auto-renew (owner decision),
         // and we just told Veyra to stop at period end — so the local row must
         // say the same thing. Leaving this false would show "renews on <date>"
         // for a membership that is actually ending, which is the same class of
         // lie as showing "ending" for one that is not.
-        cancel_at_period_end: input.billingCycle === "annual",
+        cancel_at_period_end: term.cancelAtPeriodEnd,
         updated_at: now.toISOString(),
       }, { onConflict: "user_id" });
     }
@@ -764,7 +769,7 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
             tierName: tier.name,
             amountCents,
             billingCycle: input.billingCycle,
-            nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+            nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
             autoRenews: input.billingCycle === "monthly",
           }),
         });
@@ -1286,7 +1291,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
           ...membershipRemainderReminderTemplate({
             name: contact.name,
             remainderCents: row.first_month_remainder_cents,
-            chargeDate: new Date(row.intro_ends_at).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+            chargeDate: formatDisplayDate(row.intro_ends_at, "long") ?? "",
           }),
         });
       }
@@ -1353,7 +1358,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
             ...membershipRemainderReceiptTemplate({
               name: contact.name,
               remainderCents: amountCents,
-              nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+              nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
               monthlyPriceCents: tier.monthly_price_cents,
             }),
           });
@@ -1450,7 +1455,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
           ...membershipRenewalReminderTemplate({
             name: contact.name,
             monthlyPriceCents: tier.monthly_price_cents,
-            chargeDate: new Date(row.next_billing_at).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+            chargeDate: formatDisplayDate(row.next_billing_at, "long") ?? "",
           }),
         });
       }
@@ -1514,7 +1519,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
             ...membershipRenewalReceiptTemplate({
               name: contact.name,
               monthlyPriceCents: amountCents,
-              nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+              nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
             }),
           });
         }
