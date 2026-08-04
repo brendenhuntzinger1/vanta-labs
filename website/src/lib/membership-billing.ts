@@ -652,6 +652,33 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
         if (veyra.ok) {
           veyraMembershipId = veyra.membershipId;
           chargeResult = { success: true, providerChargeId: veyra.membershipId };
+
+          // ANNUAL DOES NOT AUTO-RENEW (owner decision). Veyra was asked for
+          // `interval: "annual"`, and it would happily rebill the card a year
+          // later — charging a customer for a second year they never agreed to,
+          // on a card vaulted 12 months earlier. Tell Veyra to stop at the end
+          // of this term immediately, so the year is paid for and nothing
+          // follows it.
+          //
+          // We still create the subscription rather than a bare one-time charge:
+          // that is what vaults the card and gives us a processor-side record to
+          // cancel or refund against.
+          if (input.billingCycle === "annual") {
+            const stopRenewal = await cancelVeyraMembership(veyra.membershipId, true);
+            if (!stopRenewal.ok) {
+              // The charge succeeded, so the member is entitled to their year.
+              // Do NOT fail the signup — alert instead, because the live risk is
+              // an unwanted renewal 12 months out, not anything today.
+              await recordSystemAlert({
+                type: "membership_annual_autorenew_not_stopped",
+                severity: "critical",
+                message:
+                  `Annual membership ${veyra.membershipId} for user ${input.userId} was created, but the payment provider refused to stop auto-renewal (${stopRenewal.message}). `
+                  + "This customer will be charged again in a year unless it is cancelled manually at the processor.",
+                context: { userId: input.userId, veyraMembershipId: veyra.membershipId, error: stopRenewal.message },
+              }).catch(() => {});
+            }
+          }
         } else {
           // Both failure kinds leave the member past-due and unbilled, but they
           // are NOT the same event: `payment_unavailable` is the shopper's to
@@ -703,8 +730,16 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
         renews_at: nextBillingAt.toISOString(),
         intro_status: "not_applicable",
         next_billing_at: nextBillingAt.toISOString(),
-        next_billing_amount_cents: amountCents,
-        cancel_at_period_end: false,
+        // Annual takes no further charge, so there is no "next billing amount"
+        // to promise. Showing the year's price here would tell the member they
+        // are about to be charged again.
+        next_billing_amount_cents: input.billingCycle === "annual" ? 0 : amountCents,
+        // Annual is a one-year pass that does not auto-renew (owner decision),
+        // and we just told Veyra to stop at period end — so the local row must
+        // say the same thing. Leaving this false would show "renews on <date>"
+        // for a membership that is actually ending, which is the same class of
+        // lie as showing "ending" for one that is not.
+        cancel_at_period_end: input.billingCycle === "annual",
         updated_at: now.toISOString(),
       }, { onConflict: "user_id" });
     }

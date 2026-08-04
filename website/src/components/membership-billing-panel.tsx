@@ -102,12 +102,14 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
 
         {membership.nextBillingAt ? (
           <div>
-            <p className="text-xs text-zinc-500">Next billing date</p>
+            {/* Annual never rebills, so "next billing date" would promise a
+                charge that is not coming. It is an access-through date. */}
+            <p className="text-xs text-zinc-500">{isAnnual ? "Access through" : "Next billing date"}</p>
             <p className="mt-1 text-sm text-white">{formatDate(membership.nextBillingAt)}</p>
           </div>
         ) : null}
 
-        {membership.nextBillingAmountCents !== null ? (
+        {membership.nextBillingAmountCents !== null && !isAnnual ? (
           <div>
             <p className="text-xs text-zinc-500">Next billing amount</p>
             <p className="mt-1 text-sm text-white">{money(membership.nextBillingAmountCents)}</p>
@@ -132,7 +134,7 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
         </div>
       </div>
 
-      {membership.cancelAtPeriodEnd ? (
+      {membership.cancelAtPeriodEnd && !isAnnual ? (
         // A cancellation must be UNDOABLE. This used to be the amber warning
         // alone, with no control beside it — so a member who changed their mind
         // had no way back: resuming only handled "paused", and buying again was
@@ -168,7 +170,7 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
 
       <p className="mt-4 border-t border-white/10 pt-3 text-[11px] leading-5 text-zinc-500">
         {isAnnual
-          ? "Annual memberships are non-refundable. You can cancel anytime to stop auto-renewal and keep access for the remainder of your paid year."
+          ? "Your annual membership covers one year and does not auto-renew — you'll never be charged again without buying another year. Annual memberships are non-refundable."
           : "You can cancel anytime to stop auto-renewal and keep access through your current month. Membership charges are non-refundable."}
       </p>
     </div>
