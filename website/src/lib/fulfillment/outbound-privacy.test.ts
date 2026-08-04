@@ -22,6 +22,7 @@ const ORDER = {
   customer_name: "Brenden H",
   shipping_address: "123 Research Way",
   city: "Austin",
+  state: "TX",
   postal_code: "78701",
   country: "US",
   subtotal: 54.99,
@@ -76,7 +77,7 @@ describe("the 3PL still receives everything needed to pick, pack and ship", () =
 
   it("carries the full shipping destination", () => {
     expect(payload.shipping).toEqual({
-      address: "123 Research Way", city: "Austin", postalCode: "78701", country: "US",
+      address: "123 Research Way", city: "Austin", state: "TX", postalCode: "78701", country: "US",
     });
   });
 
@@ -115,6 +116,7 @@ describe("membership orders are structurally unfit for fulfilment", () => {
     customer_name: null,
     shipping_address: null,
     city: null,
+    state: null,
     postal_code: null,
     country: null,
     order_items: [
@@ -124,7 +126,7 @@ describe("membership orders are structurally unfit for fulfilment", () => {
 
   it("has no shippable destination — proving there is nothing to fulfil", () => {
     const payload = normalizeOrder(MEMBERSHIP_ORDER, DOMAIN);
-    expect(payload.shipping).toEqual({ address: "", city: "", postalCode: "", country: "" });
+    expect(payload.shipping).toEqual({ address: "", city: "", state: "", postalCode: "", country: "" });
     expect(payload.customer.name).toBe("");
   });
 
@@ -132,5 +134,30 @@ describe("membership orders are structurally unfit for fulfilment", () => {
     const payload = normalizeOrder(MEMBERSHIP_ORDER, DOMAIN);
     expect(payload.items[0].sku).toBe("membership:essential");
     expect(payload.items[0].sku?.startsWith("membership:")).toBe(true);
+  });
+});
+
+describe("outbound 3PL payload carries a shippable address", () => {
+  // Checkout REQUIRES a state ("Please select the state for your shipping
+  // address") and stores it on the order, but normalizeOrder never forwarded
+  // it — so every US order reached the 3PL with no state, which no domestic
+  // carrier will accept and which no packing slip can be printed from.
+  it("includes the state", () => {
+    const payload = normalizeOrder(ORDER, DOMAIN);
+    expect(payload.shipping.state).toBe("TX");
+    expect(serialized()).toContain('"state":"TX"');
+  });
+
+  it("carries every field a label needs", () => {
+    const { address, city, state, postalCode, country } = normalizeOrder(ORDER, DOMAIN).shipping;
+    for (const field of [address, city, state, postalCode, country]) {
+      expect(field.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it("degrades to an empty string rather than 'undefined' when a field is absent", () => {
+    const payload = normalizeOrder({ ...ORDER, state: null }, DOMAIN);
+    expect(payload.shipping.state).toBe("");
+    expect(JSON.stringify(payload)).not.toContain("undefined");
   });
 });
