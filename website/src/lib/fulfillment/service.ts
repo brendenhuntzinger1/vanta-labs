@@ -28,6 +28,10 @@ export interface OrderRow {
   // emails the buyer from Vanta, reads the address in its own query.
   shipping_address: string | null;
   city: string | null;
+  // REQUIRED for a US shipping label. Checkout demands it and stores it, but it
+  // was never forwarded — the 3PL received a US address with no state, which is
+  // an invalid destination for every domestic carrier.
+  state: string | null;
   postal_code: string | null;
   country: string | null;
   subtotal: number | null;
@@ -92,6 +96,7 @@ export function normalizeOrder(order: OrderRow, relayDomain: string): Normalized
     shipping: {
       address: order.shipping_address ?? "",
       city: order.city ?? "",
+      state: order.state ?? "",
       postalCode: order.postal_code ?? "",
       country: order.country ?? "",
     },
@@ -164,7 +169,7 @@ export async function transmitOrderToFulfillment(orderId: string): Promise<void>
 
     const { data: order } = await supabaseAdmin
       .from("orders")
-      .select("order_id, order_number, order_type, customer_name, shipping_address, city, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, order_items(*)")
+      .select("order_id, order_number, order_type, customer_name, shipping_address, city, state, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, order_items(*)")
       .eq("order_id", orderId)
       .maybeSingle();
 

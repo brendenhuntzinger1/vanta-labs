@@ -12,7 +12,8 @@ export interface NormalizedFulfillmentOrder {
    * NEVER the buyer's address — see fulfillmentContactEmail above.
    */
   customer: { name: string; email: string };
-  shipping: { address: string; city: string; postalCode: string; country: string };
+  /** `state` is required for any US label — carriers reject a domestic address without it. */
+  shipping: { address: string; city: string; state: string; postalCode: string; country: string };
   // `sku` is the base product SKU (product slug) — the SAME key the inbound
   // inventory-sync webhook matches on, so stock stays consistent. `variant`
   // carries the specific dose/option when the product has variants, so the 3PL
