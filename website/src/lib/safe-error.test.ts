@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { customerSafeMessage, isCustomerSafeMessage } from "@/lib/safe-error";
+import { customerSafeFailureReason, customerSafeMessage, isCustomerSafeMessage } from "@/lib/safe-error";
 
 // Vanta Labs must be the only brand a customer ever sees. Routes echoing
 // `error.message` leak vendor names exactly when something breaks — the moment
@@ -92,5 +92,55 @@ describe("customerSafeMessage", () => {
     expect(customerSafeMessage("Veyra exploded", FALLBACK)).toBe(FALLBACK);
     expect(customerSafeMessage(null, FALLBACK)).toBe(FALLBACK);
     expect(customerSafeMessage({ weird: true }, FALLBACK)).toBe(FALLBACK);
+  });
+});
+
+describe("customerSafeFailureReason — billing history must not leak", () => {
+  // Both of these were rendered VERBATIM in a customer's billing history.
+  const PROCESSOR_JSON = '{"type":"invalid_request_error","code":"payment_unavailable","message":"We couldn\'t process your card. Please try a different card.","decline_code":"generic_decline","request_id":"req_0JetRM3XaYXkNEB6VrF7jD3X"}';
+  const INTERNAL_OPS = "No billing processor configured. Set BILLING_PROVIDER and the matching credentials once one is connected.";
+
+  it("extracts the cardholder message from a processor JSON envelope", () => {
+    const shown = customerSafeFailureReason(PROCESSOR_JSON);
+    expect(shown).toBe("We couldn't process your card. Please try a different card.");
+  });
+
+  it("drops request_id, decline_code and the raw envelope", () => {
+    const shown = customerSafeFailureReason(PROCESSOR_JSON) ?? "";
+    expect(shown).not.toContain("req_0JetRM3XaYXkNEB6VrF7jD3X");
+    expect(shown).not.toContain("decline_code");
+    expect(shown).not.toContain("invalid_request_error");
+    expect(shown).not.toContain("{");
+  });
+
+  it("never tells a customer to configure an environment variable", () => {
+    const shown = customerSafeFailureReason(INTERNAL_OPS) ?? "";
+    expect(shown).not.toContain("BILLING_PROVIDER");
+    expect(shown).toBe("The card was declined.");
+  });
+
+  it("blocks any SCREAMING_SNAKE env var name", () => {
+    expect(isCustomerSafeMessage("Set VEYRA_SECRET_KEY to continue")).toBe(false);
+    expect(isCustomerSafeMessage("NEXT_PUBLIC_SITE_URL is missing")).toBe(false);
+  });
+
+  it("falls back to plain wording for an unparseable blob", () => {
+    expect(customerSafeFailureReason('{"broken json')).toBe("The card was declined.");
+  });
+
+  it("keeps a plain cardholder-facing reason as written", () => {
+    expect(customerSafeFailureReason("Your card was declined.")).toBe("Your card was declined.");
+    expect(customerSafeFailureReason("Insufficient funds.")).toBe("Insufficient funds.");
+  });
+
+  it("returns null for no reason at all, so nothing is appended", () => {
+    expect(customerSafeFailureReason(null)).toBeNull();
+    expect(customerSafeFailureReason("")).toBeNull();
+    expect(customerSafeFailureReason("   ")).toBeNull();
+  });
+
+  it("does not let a vendor name through inside an envelope message", () => {
+    const shown = customerSafeFailureReason('{"message":"Veyra rejected this card"}');
+    expect(shown).toBe("The card was declined.");
   });
 });
