@@ -538,7 +538,11 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
   // reconciles this month's store credit to the new tier.
   const { data: existingMembership } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status, billing_cycle")
+    // cancel_at_period_end + veyra_membership_id are REQUIRED by the same-tier
+    // branch below: without them it reads undefined, treats every member as
+    // having no subscription, and falls through — which would charge a
+    // legitimate member again on a double-submit.
+    .select("user_id, tier_id, status, billing_cycle, cancel_at_period_end, veyra_membership_id")
     .eq("user_id", input.userId)
     .maybeSingle();
 
@@ -581,9 +585,31 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
   }
 
   if (existingMembership && (existingMembership.status === "active" || existingMembership.status === "trialing")) {
-    // Same tier, already active/trialing — no-op (prevents duplicate intro
-    // charges and duplicate welcome/trial emails on a double-submit).
-    return { success: true, changed: false };
+    // Same tier, already active/trialing — normally a no-op, which is what
+    // stops a double-submit charging twice.
+    //
+    // BUT there are two states where this member is NOT actually served by an
+    // ongoing subscription, and silently returning success traps them forever:
+    //
+    //   • No veyra_membership_id — charged once, nothing at the processor, so
+    //     it can never renew. Buying again is the ONLY repair.
+    //   • cancel_at_period_end — winding down; re-subscribing is the way back.
+    //
+    // Both were hitting this branch and getting `success: true` with NO charge,
+    // NO Veyra call, NO card vaulted and NO billing event. The UI reported
+    // success, the card was never presented, and the member stayed exactly as
+    // broken as before with nothing in their history to explain it.
+    const hasProcessorSubscription = Boolean(
+      (existingMembership as { veyra_membership_id?: string | null }).veyra_membership_id,
+    );
+    const isWindingDown = Boolean(
+      (existingMembership as { cancel_at_period_end?: boolean }).cancel_at_period_end,
+    );
+
+    if (hasProcessorSubscription && !isWindingDown) {
+      return { success: true, changed: false };
+    }
+    // Otherwise fall through and create a REAL subscription below.
   }
 
   // No intro/trial flow — REMOVED per the owner (2026-07): every signup

@@ -143,3 +143,63 @@ describe("scenario: nothing customer-facing leaks internals", () => {
     expect(shown).not.toMatch(/veyra/i);
   });
 });
+
+// startMembershipSignup no-ops when the buyer is already active on the same
+// tier — correct for a double-submit, catastrophic for a member whose
+// membership has no subscription behind it. It returned success with NO charge,
+// NO processor call, NO card vaulted and NO billing event, so retrying looked
+// like it worked and changed nothing. The billing history had no row to explain
+// it, because no attempt was ever made.
+//
+// Mirrors the branch's decision so the contract is pinned even though the
+// function itself is database-bound.
+function shouldNoOpSameTierSignup(existing: {
+  status: string;
+  hasProcessorSubscription: boolean;
+  cancelAtPeriodEnd: boolean;
+}): boolean {
+  const holdsBenefits = existing.status === "active" || existing.status === "trialing";
+  if (!holdsBenefits) return false;
+  return existing.hasProcessorSubscription && !existing.cancelAtPeriodEnd;
+}
+
+describe("scenario: re-purchasing when already active", () => {
+  it("no-ops for a healthy member — that is the double-submit guard", () => {
+    expect(shouldNoOpSameTierSignup({
+      status: "active", hasProcessorSubscription: true, cancelAtPeriodEnd: false,
+    })).toBe(true);
+  });
+
+  it("proceeds when there is NO processor subscription — the only repair path", () => {
+    expect(shouldNoOpSameTierSignup({
+      status: "active", hasProcessorSubscription: false, cancelAtPeriodEnd: false,
+    })).toBe(false);
+  });
+
+  it("proceeds while winding down, so a cancelling member can come back", () => {
+    expect(shouldNoOpSameTierSignup({
+      status: "active", hasProcessorSubscription: true, cancelAtPeriodEnd: true,
+    })).toBe(false);
+  });
+
+  it("proceeds for both broken conditions at once", () => {
+    expect(shouldNoOpSameTierSignup({
+      status: "active", hasProcessorSubscription: false, cancelAtPeriodEnd: true,
+    })).toBe(false);
+  });
+
+  it("never no-ops a lapsed member", () => {
+    for (const status of ["past_due", "cancelled", "paused", "expired"]) {
+      expect(shouldNoOpSameTierSignup({
+        status, hasProcessorSubscription: true, cancelAtPeriodEnd: false,
+      })).toBe(false);
+    }
+  });
+
+  it("reproduces the stuck account: active, no subscription, cancelling", () => {
+    // Every retry returned success and did nothing. This must proceed.
+    expect(shouldNoOpSameTierSignup({
+      status: "active", hasProcessorSubscription: false, cancelAtPeriodEnd: true,
+    })).toBe(false);
+  });
+});
