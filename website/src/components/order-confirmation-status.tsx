@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
+import { OrderStatusTimeline } from "@/components/order-status-timeline";
 
 /**
  * Confirmation hero that resolves the brief gap between a card/Apple Pay charge
@@ -17,12 +18,14 @@ export function OrderConfirmationStatus({
   maskedEmail,
   initialPaid,
   isManual,
+  fulfillmentStatus,
 }: {
   orderId: string;
   orderNumber: string;
   maskedEmail: string | null;
   initialPaid: boolean;
   isManual: boolean;
+  fulfillmentStatus: string | null;
 }) {
   const [paid, setPaid] = useState(initialPaid);
   const [timedOut, setTimedOut] = useState(false);
@@ -66,21 +69,32 @@ export function OrderConfirmationStatus({
     };
   }, [paid, isManual, orderId]);
 
+  // break-words so a long masked address wraps instead of forcing the card wide
+  // and clipping the reference on a narrow phone.
   const orderLine = (
-    <p className="mt-3 text-sm leading-7 text-white/60">
+    <p className="mt-2.5 break-words text-sm leading-6 text-white/60">
       Order <span className="font-semibold text-white">{orderNumber}</span>
       {maskedEmail ? <> — a confirmation was sent to <span className="text-white/80">{maskedEmail}</span>.</> : "."}
     </p>
   );
 
+  // Tightened from h-14/mt-5/mt-3/text-4xl: on a phone the hero occupied most of
+  // the first screen, pushing the order summary below the fold.
+  const icon = "mx-auto flex h-12 w-12 items-center justify-center rounded-full border";
+  const heading = "vl2-serif mt-2.5 text-[26px] leading-tight text-white sm:text-[32px]";
+
   if (paid) {
     return (
       <>
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-emerald-300/40 bg-emerald-400/15 text-2xl">✓</div>
-        <p className="vl2-eyebrow mt-5 text-emerald-300">Order confirmed</p>
-        <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Thank you for your order</h1>
+        <div className={`${icon} border-emerald-300/40 bg-emerald-400/15 text-xl`}>✓</div>
+        <p className="vl2-eyebrow mt-4 text-emerald-300">Order confirmed</p>
+        <h1 className={heading}>Thank you for your order</h1>
         {orderLine}
-        <p className="mt-2 text-sm text-white/50">We&apos;re preparing your order. You&apos;ll get a shipping email with tracking once it&apos;s on the way.</p>
+        <p className="mt-2 text-sm leading-6 text-white/50">We&apos;re preparing your order. You&apos;ll get a shipping email with tracking once it&apos;s on the way.</p>
+        {/* Only on the confirmed branch — a timeline whose first step reads
+            "Order confirmed" must not appear while we're still verifying the
+            charge. It renders the moment polling flips `paid` to true. */}
+        <OrderStatusTimeline fulfillmentStatus={fulfillmentStatus} />
       </>
     );
   }
@@ -88,13 +102,13 @@ export function OrderConfirmationStatus({
   if (confirming) {
     return (
       <>
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-cyan-300/40 bg-cyan-400/15">
+        <div className={`${icon} border-cyan-300/40 bg-cyan-400/15`}>
           <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-cyan-200/40 border-t-cyan-200" aria-hidden="true" />
         </div>
-        <p className="vl2-eyebrow mt-5 text-cyan-200" role="status" aria-live="polite">Confirming your payment…</p>
-        <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Thank you for your order</h1>
+        <p className="vl2-eyebrow mt-4 text-cyan-200" role="status" aria-live="polite">Confirming your payment…</p>
+        <h1 className={heading}>Thank you for your order</h1>
         {orderLine}
-        <p className="mt-2 text-sm text-white/50">This usually takes just a few seconds — no need to pay again. You&apos;ll get an email confirmation the moment it clears.</p>
+        <p className="mt-2 text-sm leading-6 text-white/50">This usually takes just a few seconds — no need to pay again. You&apos;ll get an email confirmation the moment it clears.</p>
       </>
     );
   }
@@ -103,12 +117,12 @@ export function OrderConfirmationStatus({
   if (isManual) {
     return (
       <>
-        <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-amber-300/40 bg-amber-400/15 text-2xl">⏳</div>
-        <p className="vl2-eyebrow mt-5 text-amber-200">Order received — payment pending</p>
-        <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">One step left</h1>
+        <div className={`${icon} border-amber-300/40 bg-amber-400/15 text-xl`}>⏳</div>
+        <p className="vl2-eyebrow mt-4 text-amber-200">Order received — payment pending</p>
+        <h1 className={heading}>One step left</h1>
         {orderLine}
-        <p className="mt-2 text-sm text-white/50">Your order is reserved but hasn&apos;t been paid yet — complete payment below and we&apos;ll ship it as soon as it clears.</p>
-        <Link href={`/pay/${encodeURIComponent(orderId)}`} className="vl2-btn-primary vl-focus-ring mt-6 inline-flex px-6 py-3 text-sm">
+        <p className="mt-2 text-sm leading-6 text-white/50">Your order is reserved but hasn&apos;t been paid yet — complete payment below and we&apos;ll ship it as soon as it clears.</p>
+        <Link href={`/pay/${encodeURIComponent(orderId)}`} className="vl2-btn-primary vl-focus-ring mt-5 flex w-full items-center justify-center px-6 py-3.5 text-sm">
           Complete payment →
         </Link>
       </>
@@ -119,11 +133,11 @@ export function OrderConfirmationStatus({
   // tell them to pay again.
   return (
     <>
-      <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full border border-cyan-300/40 bg-cyan-400/15 text-2xl">✓</div>
-      <p className="vl2-eyebrow mt-5 text-cyan-200">Order received</p>
-      <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Thank you for your order</h1>
+      <div className={`${icon} border-cyan-300/40 bg-cyan-400/15 text-xl`}>✓</div>
+      <p className="vl2-eyebrow mt-4 text-cyan-200">Order received</p>
+      <h1 className={heading}>Thank you for your order</h1>
       {orderLine}
-      <p className="mt-2 text-sm text-white/50">
+      <p className="mt-2 text-sm leading-6 text-white/50">
         Your payment is still being confirmed — this can occasionally take a minute. You&apos;ll get an email as soon as it clears; there&apos;s no need to pay again.
       </p>
     </>

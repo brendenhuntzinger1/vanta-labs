@@ -10,6 +10,7 @@ import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ClearCartOnMount } from "@/components/clear-cart-on-mount";
 import { OrderConfirmationStatus } from "@/components/order-confirmation-status";
 import { displayOrderReference } from "@/lib/order-reference";
+import { buildOrderSummaryLines } from "@/lib/order-summary-breakdown";
 
 export const dynamic = "force-dynamic";
 
@@ -39,7 +40,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
 
   const { data: order } = await supabaseAdmin
     .from("orders")
-    .select("order_id, order_number, amount_paid, payment_status, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
+    .select("order_id, order_number, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, amount_paid, payment_status, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -50,6 +51,21 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
   const orderNumber = displayOrderReference(order.order_number as string | null, order.order_id as string | null);
   const items = (order.order_items ?? []) as Array<{ product_name?: string; quantity?: number; line_total?: number }>;
   const isPaid = String(order.payment_status ?? "").toLowerCase() === "paid";
+
+  // THE TOTAL IS WHAT WAS CHARGED. amount_paid is the settled figure — never a
+  // sum recomputed here, which could disagree with the card statement. The line
+  // items are derived from it so the column always adds up (see
+  // order-summary-breakdown.ts for why the residual line exists).
+  const total = Number(order.amount_paid ?? 0);
+  const summaryLines = buildOrderSummaryLines({
+    total,
+    subtotal: Number(order.subtotal ?? 0),
+    shipping: Number(order.shipping_amount ?? 0),
+    handling: Number(order.handling_fee ?? 0),
+    tax: Number(order.tax_amount ?? 0),
+    discount: Number(order.discount_amount ?? 0),
+    itemsTotal: items.reduce((running, item) => running + Number(item.line_total ?? 0), 0),
+  });
 
   // A card order that's not paid yet is almost always mid-webhook-confirmation
   // (the customer just paid); only a MANUAL method genuinely still owes payment.
@@ -71,47 +87,99 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <ClearCartOnMount />
       <SiteHeaderV2 />
-      <main className="mx-auto max-w-2xl px-4 pb-24 pt-28 sm:px-6 sm:pt-32 lg:px-12">
-        <section className="rounded-2xl border border-white/10 bg-white/[0.02] p-6 text-center sm:p-8">
+      {/* pt clears the fixed header and no more. This was pt-28/32, which left a
+          screen-height gap above the confirmation on a phone — the first thing a
+          customer saw after paying was empty space. */}
+      <main className="mx-auto max-w-xl px-4 pb-16 pt-20 sm:px-6 sm:pt-24">
+        <section className="rounded-2xl border border-white/10 bg-white/[0.02] px-5 py-7 text-center sm:px-8 sm:py-9">
           <OrderConfirmationStatus
             orderId={String(order.order_id)}
             orderNumber={orderNumber}
             maskedEmail={order.customer_email ? maskEmail(String(order.customer_email)) : null}
             initialPaid={isPaid}
             isManual={isManual}
+            fulfillmentStatus={order.fulfillment_status ? String(order.fulfillment_status) : null}
           />
         </section>
 
-        <section className="mt-6 rounded-2xl border border-white/10 p-5 sm:p-6">
-          <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-white/50">Order summary</h2>
-          <ul className="mt-4 space-y-2 text-sm text-white/80">
+        <section className="mt-4 rounded-2xl border border-white/10 px-5 py-5 sm:px-6">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.22em] text-white/45">Order summary</h2>
+
+          <ul className="mt-4 space-y-2.5">
             {items.map((item, index) => (
-              <li key={index} className="flex justify-between gap-3">
-                <span>{item.product_name ?? "Item"} × {item.quantity ?? 1}</span>
-                <span className="text-white/60 tabular-nums">{money(Number(item.line_total ?? 0))}</span>
+              <li key={index} className="flex items-baseline justify-between gap-4">
+                <span className="min-w-0 text-sm text-white/85">
+                  {item.product_name ?? "Item"}
+                  <span className="text-white/40"> × {item.quantity ?? 1}</span>
+                </span>
+                <span className="flex-shrink-0 text-sm tabular-nums text-white/85">{money(Number(item.line_total ?? 0))}</span>
               </li>
             ))}
           </ul>
-          <div className="mt-4 flex justify-between border-t border-white/10 pt-4 text-base font-semibold text-white">
-            <span>Total</span>
-            <span className="tabular-nums">{money(Number(order.amount_paid ?? 0))}</span>
+
+          <div className="mt-4 border-t border-white/10 pt-2">
+            {summaryLines.map((line) => (
+              <div key={line.key} className="flex items-baseline justify-between gap-4 py-2">
+                <span className="text-sm text-white/55">{line.label}</span>
+                <span
+                  className={`flex-shrink-0 text-sm tabular-nums ${line.tone === "credit" ? "text-emerald-300" : "text-white/85"}`}
+                >
+                  {/* Free shipping is the one line worth naming rather than
+                      showing as $0.00 — it reads as a perk, not a blank. */}
+                  {line.key === "shipping" && line.amount === 0
+                    ? "Free"
+                    : line.amount < 0
+                      ? `−${money(Math.abs(line.amount))}`
+                      : money(line.amount)}
+                </span>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-2 flex items-baseline justify-between gap-4 border-t border-white/10 pt-4">
+            <span className="text-base font-semibold text-white">Total paid</span>
+            <span className="text-lg font-semibold tabular-nums text-white">{money(total)}</span>
           </div>
         </section>
 
-        <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-center">
-          <Link href="/products" className="vl2-btn-primary vl-focus-ring px-6 py-3 text-sm">
-            Continue shopping
-          </Link>
+        {/* Full-width, stacked, thumb-sized. The PRIMARY action is tracking the
+            order they just placed — "Continue shopping" was the white button
+            here, which pushed the customer away from the thing they actually
+            came to this page for. */}
+        <div className="mt-6 flex flex-col gap-2.5">
           {isCustomer ? (
-            <Link href="/account/orders" className="vl2-btn-secondary vl-focus-ring px-6 py-3 text-sm">
-              View my orders
+            <Link
+              href="/account/orders"
+              className="vl2-btn-primary vl-focus-ring flex w-full items-center justify-center px-6 py-3.5 text-sm"
+            >
+              View order details
             </Link>
           ) : (
-            <Link href={`/account/login?next=${encodeURIComponent("/account/orders")}`} className="vl2-btn-secondary vl-focus-ring px-6 py-3 text-sm">
-              Create an account to track orders
+            <Link
+              href={`/account/login?next=${encodeURIComponent("/account/orders")}`}
+              className="vl2-btn-primary vl-focus-ring flex w-full items-center justify-center px-6 py-3.5 text-sm"
+            >
+              Create account &amp; track order
             </Link>
           )}
+          <Link
+            href="/products"
+            className="vl2-btn-secondary vl-focus-ring flex w-full items-center justify-center px-6 py-3.5 text-sm"
+          >
+            Continue shopping
+          </Link>
         </div>
+
+        <p className="mt-6 text-center text-xs leading-6 text-white/40">
+          Questions about your order?{" "}
+          <Link
+            href="/contact"
+            className="vl-focus-ring rounded text-white/70 underline decoration-white/20 underline-offset-4 transition hover:text-white hover:decoration-white/50"
+          >
+            Contact Vanta Labs Support
+          </Link>
+          .
+        </p>
       </main>
     </div>
   );
