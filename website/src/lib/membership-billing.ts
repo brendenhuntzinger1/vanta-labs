@@ -16,6 +16,7 @@ import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/stor
 import { sendEmail } from "@/lib/email/send";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { getSiteUrl } from "@/lib/env";
+import { recordSystemAlert } from "@/lib/monitoring";
 import {
   membershipWelcomeTemplate,
   membershipSignupReceiptTemplate,
@@ -1034,12 +1035,43 @@ export async function skipNextBilling(userId: string): Promise<MembershipSchedul
 export async function revokeMembershipForRefund(userId: string): Promise<void> {
   const { data: existing } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status")
+    .select("user_id, tier_id, status, veyra_membership_id")
     .eq("user_id", userId)
     .maybeSingle();
 
   if (!existing) {
     return;
+  }
+
+  // STOP THE BILLING AT VEYRA, not just in our table.
+  //
+  // A refund or chargeback that only flips a local column leaves the Veyra
+  // subscription running: the customer who just disputed a charge keeps being
+  // billed every month, with our own records showing them cancelled. That is
+  // the same local-only failure already fixed for cancel, pause and card
+  // update — this path was missed, and it is the worst place to have it.
+  //
+  // Immediate (at_period_end: false), NOT at period end: the money has been
+  // returned, so there is no paid period left to honour.
+  //
+  // Unlike customer-initiated cancel, we do NOT abort when Veyra refuses. The
+  // refund already happened, so leaving them locally active would be wrong too.
+  // Revoke locally either way and raise a CRITICAL alert so an operator cancels
+  // at the processor by hand — an un-cancelled subscription after a refund
+  // bills a disputing customer indefinitely.
+  const veyraIdForRevoke = (existing as { veyra_membership_id?: string | null }).veyra_membership_id;
+  if (veyraIdForRevoke) {
+    const res = await cancelVeyraMembership(veyraIdForRevoke, false);
+    if (!res.ok) {
+      await recordSystemAlert({
+        type: "membership_refund_not_cancelled",
+        severity: "critical",
+        message:
+          `Refund/chargeback revoked membership for user ${userId} locally, but the payment provider REFUSED to cancel subscription ${veyraIdForRevoke} (${res.message}). `
+          + "This customer will keep being charged until it is cancelled manually at the processor.",
+        context: { userId, veyraMembershipId: veyraIdForRevoke, error: res.message },
+      }).catch(() => {});
+    }
   }
 
   await supabaseAdmin
