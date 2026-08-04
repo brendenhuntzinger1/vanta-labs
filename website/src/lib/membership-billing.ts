@@ -17,6 +17,7 @@ import { sendEmail } from "@/lib/email/send";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { getSiteUrl } from "@/lib/env";
 import { recordSystemAlert } from "@/lib/monitoring";
+import { formatDisplayDate } from "@/lib/format-date";
 import {
   membershipWelcomeTemplate,
   membershipSignupReceiptTemplate,
@@ -263,7 +264,7 @@ export async function activateAnnualMembership(userId: string, tierId: string) {
         tierName: tier.name,
         amountCents: tier.annual_price_cents ?? 0,
         billingCycle: "annual",
-        nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+        nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
         autoRenews: false,
       }),
     });
@@ -320,7 +321,7 @@ export async function activateMonthlyMembership(userId: string, tierId: string) 
         tierName: tier.name,
         amountCents: tier.monthly_price_cents ?? 0,
         billingCycle: "monthly",
-        nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+        nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
         autoRenews: true,
       }),
     });
@@ -764,7 +765,7 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
             tierName: tier.name,
             amountCents,
             billingCycle: input.billingCycle,
-            nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+            nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
             autoRenews: input.billingCycle === "monthly",
           }),
         });
@@ -1286,7 +1287,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
           ...membershipRemainderReminderTemplate({
             name: contact.name,
             remainderCents: row.first_month_remainder_cents,
-            chargeDate: new Date(row.intro_ends_at).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+            chargeDate: formatDisplayDate(row.intro_ends_at, "long") ?? "",
           }),
         });
       }
@@ -1353,7 +1354,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
             ...membershipRemainderReceiptTemplate({
               name: contact.name,
               remainderCents: amountCents,
-              nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+              nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
               monthlyPriceCents: tier.monthly_price_cents,
             }),
           });
@@ -1450,7 +1451,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
           ...membershipRenewalReminderTemplate({
             name: contact.name,
             monthlyPriceCents: tier.monthly_price_cents,
-            chargeDate: new Date(row.next_billing_at).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+            chargeDate: formatDisplayDate(row.next_billing_at, "long") ?? "",
           }),
         });
       }
@@ -1514,7 +1515,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
             ...membershipRenewalReceiptTemplate({
               name: contact.name,
               monthlyPriceCents: amountCents,
-              nextBillingDate: nextBillingAt.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" }),
+              nextBillingDate: formatDisplayDate(nextBillingAt, "long") ?? "",
             }),
           });
         }

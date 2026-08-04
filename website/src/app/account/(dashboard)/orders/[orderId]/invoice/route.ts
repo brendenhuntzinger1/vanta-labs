@@ -3,6 +3,7 @@ import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getCustomerOrderDetail } from "@/lib/account-orders";
 import { isUnpaid } from "@/lib/order-status";
 import { displayOrderReference } from "@/lib/order-reference";
+import { formatDisplayDate } from "@/lib/format-date";
 
 function money(value: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(value);
@@ -90,7 +91,7 @@ export async function GET(_request: Request, context: { params: Promise<{ orderI
       <div style="text-align:right;">
         <div class="eyebrow">Invoice</div>
         <h1>${esc(displayOrderReference(order.orderNumber, order.orderId))}</h1>
-        <div class="muted" style="font-size:12px;margin-top:4px;">${new Date(order.paidAt ?? order.createdAt).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}</div>
+        <div class="muted" style="font-size:12px;margin-top:4px;">${formatDisplayDate(order.paidAt ?? order.createdAt, "long") ?? ""}</div>
       </div>
     </div>
 

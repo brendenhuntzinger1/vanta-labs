@@ -1,21 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import type { CustomerMembership } from "@/lib/membership";
+import { daysUntil, formatDisplayDate } from "@/lib/format-date";
+
+/** The countdown never changes after mount, so there is nothing to subscribe to. */
+const noopSubscribe = () => () => {};
 
 function money(cents: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
 }
 
+// This panel is a client component rendered inside a SERVER page, so its first
+// render happens on Vercel (UTC) and is then hydrated in the browser (local).
+// Both date helpers used to read the ambient zone/clock, which meant the server
+// and the browser produced different text — a hydration mismatch, and a billing
+// date reported a day late for any renewal falling in a US evening.
 function formatDate(iso: string) {
-  return new Date(iso).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
-}
-
-function introCountdown(introEndsAt: string) {
-  const msRemaining = new Date(introEndsAt).getTime() - Date.now();
-  const daysRemaining = Math.max(0, Math.ceil(msRemaining / (24 * 60 * 60 * 1000)));
-  return daysRemaining;
+  return formatDisplayDate(iso, "long") ?? "";
 }
 
 export function MembershipBillingPanel({ membership }: { membership: CustomerMembership }) {
@@ -23,6 +26,19 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
   const [isCanceling, setIsCanceling] = useState(false);
   const [isResuming, setIsResuming] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  // Dates are pinned to one zone so the server and the browser render identical
+  // text. The COUNTDOWN can't be — it reads the clock, and a render that spans
+  // midnight would disagree across hydration. useSyncExternalStore renders the
+  // server snapshot (null) through hydration and the real count immediately
+  // after, so the two can never mismatch. The fallback isn't a blank or a
+  // spinner: it's the intro end date, the same fact stated another way.
+  const introEndsAt = membership.introEndsAt;
+  const introDaysLeft = useSyncExternalStore(
+    noopSubscribe,
+    () => (introEndsAt ? daysUntil(introEndsAt) : null),
+    () => null,
+  );
 
   if (membership.billingCycle === "free") {
     return null;
@@ -96,7 +112,11 @@ export function MembershipBillingPanel({ membership }: { membership: CustomerMem
         {membership.introStatus === "active" && membership.introEndsAt ? (
           <div>
             <p className="text-xs text-zinc-500">Intro period</p>
-            <p className="mt-1 text-sm text-white">{introCountdown(membership.introEndsAt)} day(s) remaining</p>
+            <p className="mt-1 text-sm text-white">
+              {introDaysLeft === null
+                ? `Ends ${formatDate(membership.introEndsAt)}`
+                : `${introDaysLeft} day${introDaysLeft === 1 ? "" : "s"} remaining`}
+            </p>
           </div>
         ) : null}
 
