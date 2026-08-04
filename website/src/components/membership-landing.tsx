@@ -90,6 +90,30 @@ const BEST_FOR_BY_RANK: string[][] = [
   ["High-volume researchers", "Bulk and team orders", "Weekly ordering"],
 ];
 
+// The admin-authored benefit bullets restate what the structured card already
+// shows — "5% member discount on all products" next to a 5% MEMBER PRICING box,
+// "$5 monthly store credit" next to a $5.00/MO STORE CREDIT box, "Priority order
+// processing" next to Processing · Priority. Every card was saying the same
+// handful of facts three times over.
+//
+// Drop a bullet only when it clearly restates a fact the card already displays
+// structurally. Conservative on purpose: an unrecognised bullet is KEPT, because
+// hiding a real perk is worse than showing one twice.
+function restatesStructuredPerk(benefit: string, tier: MembershipTier): boolean {
+  const text = benefit.toLowerCase();
+  const has = (...words: string[]) => words.every((w) => text.includes(w));
+
+  if (tier.memberDiscountPercent > 0 && (has("member", "discount") || has("member", "pricing") || has(`${tier.memberDiscountPercent}%`))) return true;
+  if (tier.monthlyStoreCreditCents > 0 && has("store credit")) return true;
+  if (tier.freeShipping && has("free", "shipping")) return true;
+  if (tier.priorityShipping && (has("priority", "processing") || has("priority", "order"))) return true;
+  if (tier.earlyAccess && has("early access")) return true;
+  if (tier.referralBonusPoints > 0 && has("referral")) return true;
+  if (has("points", "per $1") || has("point", "multiplier")) return true;
+
+  return false;
+}
+
 // ——— Live savings calculator ————————————————————————————————————————————
 // Prices membership against the shopper's REAL cart (live — updates as items
 // are added). With an empty cart it falls back to a spend slider so the page
@@ -362,25 +386,10 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                   <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-3.5">
                     <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-white/40">What you get</p>
                     <dl className="mt-2 space-y-1.5 text-xs">
-                      {tier.memberDiscountPercent > 0 ? (
-                        <div className="flex items-baseline justify-between gap-3">
-                          <dt className="text-white/55">Member pricing</dt>
-                          <dd className="font-semibold text-white">{tier.memberDiscountPercent}% off</dd>
-                        </div>
-                      ) : null}
-                      {tier.monthlyStoreCreditCents > 0 ? (
-                        <div className="flex items-baseline justify-between gap-3">
-                          <dt className="text-white/55">Store credit</dt>
-                          <dd className="text-right font-semibold text-emerald-300">
-                            {money(tier.monthlyStoreCreditCents)}/mo
-                            {tier.storeCreditMinOrderCents > 0 ? (
-                              <span className="block text-[10px] font-normal text-white/40">
-                                on orders {money(tier.storeCreditMinOrderCents)}+
-                              </span>
-                            ) : null}
-                          </dd>
-                        </div>
-                      ) : null}
+                      {/* Member pricing and store credit are DELIBERATELY absent:
+                          both are already the two highlight boxes immediately
+                          above. Repeating them here (and again in the bullets
+                          below) put the same two facts on the card three times. */}
                       <div className="flex items-baseline justify-between gap-3">
                         <dt className="text-white/55">Points</dt>
                         <dd className="font-semibold text-white">{tier.pointsPerDollar}× per $1</dd>
@@ -424,7 +433,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                       where there is room for it. */}
                   <div className={`${expandedBenefits[tier.id] ? "block" : "hidden"} sm:block sm:flex-1`}>
                     <ul className="mt-5 space-y-3 border-t border-white/10 pt-5 text-sm leading-6 text-white/70 sm:mt-6">
-                      {tier.benefits.map((benefit) => (
+                      {tier.benefits.filter((benefit) => !restatesStructuredPerk(benefit, tier)).map((benefit) => (
                         <li key={benefit} className="flex items-start gap-2.5">
                           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-[color:var(--accent-gold)]/70">
                             <path d="m5 13 4 4L19 7" strokeLinecap="round" strokeLinejoin="round" />
@@ -443,7 +452,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
                     aria-expanded={Boolean(expandedBenefits[tier.id])}
                     className="vl-focus-ring mt-4 flex w-full items-center justify-center gap-1.5 border-t border-white/10 pt-4 text-xs text-[color:var(--accent-gold)] sm:hidden"
                   >
-                    {expandedBenefits[tier.id] ? "Hide benefits" : `See all ${tier.benefits.length} benefits`}
+                    {expandedBenefits[tier.id] ? "Hide benefits" : `See all ${tier.benefits.filter((b) => !restatesStructuredPerk(b, tier)).length} benefits`}
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className={`h-3.5 w-3.5 transition-transform duration-200 ${expandedBenefits[tier.id] ? "rotate-180" : ""}`} aria-hidden>
                       <path d="m6 9 6 6 6-6" />
                     </svg>
