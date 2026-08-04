@@ -360,7 +360,7 @@ export function CartDrawer() {
                               <button
                                 type="button"
                                 onClick={() => { haptic(); updateQuantity(item.key, item.quantity - 1); }}
-                                className="vl-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-l-full text-base text-zinc-300 transition hover:text-white active:scale-90"
+                                className="vl-focus-ring inline-flex h-11 w-11 items-center justify-center rounded-l-full text-base text-zinc-300 transition hover:text-white active:scale-90 sm:h-9 sm:w-9"
                                 aria-label={`Decrease ${item.name} quantity`}
                               >
                                 −
@@ -369,7 +369,7 @@ export function CartDrawer() {
                               <button
                                 type="button"
                                 onClick={() => { haptic(); updateQuantity(item.key, item.quantity + 1); }}
-                                className="vl-focus-ring inline-flex h-9 w-9 items-center justify-center rounded-r-full text-base text-zinc-300 transition hover:text-white active:scale-90"
+                                className="vl-focus-ring inline-flex h-11 w-11 items-center justify-center rounded-r-full text-base text-zinc-300 transition hover:text-white active:scale-90 sm:h-9 sm:w-9"
                                 aria-label={`Increase ${item.name} quantity`}
                               >
                                 +
@@ -379,7 +379,7 @@ export function CartDrawer() {
                               type="button"
                               onClick={() => { haptic(12); removeFromCart(item.key); }}
                               aria-label={`Remove ${item.name} from cart`}
-                              className="vl-focus-ring rounded-md px-2 py-1.5 text-xs text-zinc-500 transition hover:text-rose-300"
+                              className="vl-focus-ring -mx-1 inline-flex min-h-11 items-center rounded-md px-3 py-1.5 text-xs text-zinc-500 transition hover:text-rose-300 sm:mx-0 sm:min-h-0 sm:px-2"
                             >
                               Remove
                             </button>
