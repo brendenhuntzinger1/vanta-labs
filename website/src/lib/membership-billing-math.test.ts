@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase } from "@/lib/membership-billing-math";
+import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase,
+  membershipTermPlan,
+} from "@/lib/membership-billing-math";
 
 // Tiers used across cases (cents).
 const ESSENTIAL = { monthlyPriceCents: 999, annualPriceCents: 9900, introPriceCents: 100 }; // $9.99 / $1 intro → remainder $8.99
@@ -181,5 +183,54 @@ describe("guardDuplicateMembershipPurchase — a broken membership can be repair
     // Absent means "not checked", not "broken" — never open the double-charge
     // door on missing information.
     expect(guardDuplicateMembershipPurchase({ status: "active", tierId: TIER_A }, TIER_A).allowed).toBe(false);
+  });
+});
+
+describe("membershipTermPlan — the annual membership does not renew", () => {
+  const now = new Date("2026-08-04T15:00:00Z");
+  const ANNUAL_CENTS = 89990;
+  const MONTHLY_CENTS = 8999;
+
+  it("gives an annual member a year of access and NO next charge", () => {
+    const plan = membershipTermPlan("annual", ANNUAL_CENTS, now);
+
+    expect(plan.nextBillingAmountCents).toBe(0);
+    expect(plan.cancelAtPeriodEnd).toBe(true);
+    expect(plan.stopAutoRenewAtProcessor).toBe(true);
+    expect(plan.nextBillingAt.toISOString()).toBe("2027-08-04T15:00:00.000Z");
+  });
+
+  it("still auto-renews monthly", () => {
+    const plan = membershipTermPlan("monthly", MONTHLY_CENTS, now);
+
+    expect(plan.nextBillingAmountCents).toBe(MONTHLY_CENTS);
+    expect(plan.cancelAtPeriodEnd).toBe(false);
+    expect(plan.stopAutoRenewAtProcessor).toBe(false);
+    expect(plan.nextBillingAt.toISOString()).toBe("2026-09-03T15:00:00.000Z");
+  });
+
+  it("uses the processor's spelling of the interval", () => {
+    // Veyra 400s on "yearly".
+    expect(membershipTermPlan("annual", ANNUAL_CENTS, now).processorInterval).toBe("annual");
+    expect(membershipTermPlan("monthly", MONTHLY_CENTS, now).processorInterval).toBe("monthly");
+  });
+
+  it("keeps the five values consistent with each other", () => {
+    // The failure mode is a plan that half-renews: stopped at the processor but
+    // still promising a next charge locally (or the reverse), which shows the
+    // member either a charge that never comes or a renewal that never happens.
+    for (const cycle of ["monthly", "annual"] as const) {
+      const plan = membershipTermPlan(cycle, 12345, now);
+      expect(plan.stopAutoRenewAtProcessor).toBe(plan.cancelAtPeriodEnd);
+      expect(plan.nextBillingAmountCents > 0).toBe(!plan.cancelAtPeriodEnd);
+      expect(plan.processorInterval).toBe(cycle);
+      expect(plan.nextBillingAt.getTime()).toBeGreaterThan(now.getTime());
+    }
+  });
+
+  it("never promises a charge on an annual plan, whatever the price", () => {
+    for (const cents of [0, 1, 999, 89990, 500000]) {
+      expect(membershipTermPlan("annual", cents, now).nextBillingAmountCents).toBe(0);
+    }
   });
 });

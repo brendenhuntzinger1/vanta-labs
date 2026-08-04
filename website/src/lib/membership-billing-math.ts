@@ -138,3 +138,53 @@ export function guardDuplicateMembershipPurchase(
       : "You already have an active membership. Manage your plan from your account instead of purchasing again.",
   };
 }
+
+/** Days in each billing term. Annual is a flat 365 — no calendar arithmetic. */
+const TERM_DAYS = { monthly: 30, annual: 365 } as const;
+
+export interface MembershipTermPlan {
+  /** When this term ends. For annual that is an ACCESS-through date, not a charge date. */
+  nextBillingAt: Date;
+  /**
+   * What the member will be charged next. Zero for annual: there is no next
+   * charge, and showing the year's price would tell them one is coming.
+   */
+  nextBillingAmountCents: number;
+  /** Annual is a one-year pass, so the local row must say it is ending. */
+  cancelAtPeriodEnd: boolean;
+  /**
+   * Whether to tell the processor to stop after this term. Veyra would happily
+   * rebill an `interval: "annual"` subscription twelve months later, charging a
+   * customer for a second year they never agreed to on a card vaulted a year
+   * earlier. The subscription is still created — that is what vaults the card
+   * and gives us something to cancel or refund against — and then immediately
+   * told to stop at period end.
+   */
+  stopAutoRenewAtProcessor: boolean;
+  /** Veyra's spelling. "yearly" 400s. */
+  processorInterval: "monthly" | "annual";
+}
+
+/**
+ * The billing shape of a membership term, in one place.
+ *
+ * These five values have to agree with each other: a plan that stops at the
+ * processor but still shows a next-billing amount locally tells the member a
+ * charge is coming that isn't, and one that says `cancelAtPeriodEnd: false`
+ * while the processor has stopped shows "renews on <date>" for a membership
+ * that is actually ending.
+ */
+export function membershipTermPlan(
+  billingCycle: "monthly" | "annual",
+  priceCents: number,
+  now: Date,
+): MembershipTermPlan {
+  const isAnnual = billingCycle === "annual";
+  return {
+    nextBillingAt: new Date(now.getTime() + TERM_DAYS[billingCycle] * 24 * 60 * 60 * 1000),
+    nextBillingAmountCents: isAnnual ? 0 : priceCents,
+    cancelAtPeriodEnd: isAnnual,
+    stopAutoRenewAtProcessor: isAnnual,
+    processorInterval: isAnnual ? "annual" : "monthly",
+  };
+}
