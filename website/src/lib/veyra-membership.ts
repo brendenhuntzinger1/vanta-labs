@@ -304,3 +304,25 @@ export function skipVeyraMembershipCycle(
     ...(reason ? { reason: reason.slice(0, 200) } : {}),
   });
 }
+
+/**
+ * Replace the card Veyra bills for this membership.
+ *
+ * 🔴 WHY THIS EXISTS. updatePaymentMethod used to write ONLY our local
+ * `payment_method_ref` column. For a Veyra-managed membership the card lives at
+ * VEYRA — a local write changes nothing, so a past-due member who "updated
+ * their card" was still billed against the dead one on every retry and could
+ * never recover. Same failure shape as the pause/cancel holes above: local-only
+ * state for a subscription somebody else owns.
+ *
+ * Takes a Basis Theory token intent from a fresh card capture — the PAN never
+ * touches this origin, exactly as at signup.
+ */
+export function updateVeyraMembershipCard(
+  veyraMembershipId: string,
+  tokenIntentId: string,
+): Promise<VeyraLifecycleResult> {
+  return veyraPost(`${encodeURIComponent(veyraMembershipId)}/card`, {
+    token_intent_id: tokenIntentId,
+  });
+}

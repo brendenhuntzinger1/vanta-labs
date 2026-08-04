@@ -7,6 +7,7 @@ import {
   startVeyraMembership,
   cancelVeyraMembership,
   skipVeyraMembershipCycle,
+  updateVeyraMembershipCard,
 } from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase } from "@/lib/membership-billing-math";
@@ -1035,11 +1036,36 @@ export async function revokeMembershipForRefund(userId: string): Promise<void> {
 }
 
 export async function updatePaymentMethod(userId: string, paymentMethodRef: string) {
-  // ONLY update the stored card reference. Do NOT force status to "active":
-  // a cancelled/refund-revoked or past_due member updating their card must not
-  // silently regain paid perks without an actual successful charge. A past_due
-  // member is recovered by the next sweep charge succeeding on the new card,
-  // not by the card update itself.
+  const { data: existing, error: readError } = await supabaseAdmin
+    .from("customer_memberships")
+    .select("user_id, veyra_membership_id")
+    .eq("user_id", userId)
+    .maybeSingle();
+  if (readError) throw readError;
+  if (!existing) throw new Error("You don't have a membership to update.");
+
+  // TELL VEYRA FIRST for a Veyra-managed membership. The card lives THERE, not
+  // here, so writing our local column alone changed nothing: a past-due member
+  // who "updated their card" was still billed against the dead one on every
+  // retry and could never recover. Same failure shape as the pause/cancel holes
+  // — local-only state for a subscription somebody else owns.
+  //
+  // If Veyra refuses, abort and leave local state untouched rather than show a
+  // card change that never happened.
+  const veyraId = (existing as { veyra_membership_id?: string | null }).veyra_membership_id;
+  if (veyraId) {
+    const res = await updateVeyraMembershipCard(veyraId, paymentMethodRef);
+    if (!res.ok) {
+      throw new Error(
+        `We couldn't update your card with the payment provider (${res.message}). Nothing was changed — please try again or contact support.`,
+      );
+    }
+  }
+
+  // Do NOT force status to "active": a cancelled/refund-revoked or past_due
+  // member updating their card must not silently regain paid perks without an
+  // actual successful charge. A past_due member is recovered by the next charge
+  // succeeding on the new card, not by the card update itself.
   const { error } = await supabaseAdmin
     .from("customer_memberships")
     .update({ payment_method_ref: paymentMethodRef, updated_at: new Date().toISOString() })
