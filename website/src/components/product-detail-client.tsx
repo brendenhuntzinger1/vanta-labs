@@ -403,9 +403,20 @@ export function ProductDetailClient({
                 {activeTab === "coa" && (
                   <div className="vl2-lab-panel p-5">
                     <CoaLibraryNotice className="mb-5" />
-                    <p className="text-sm leading-relaxed text-[#a3a3a3]">
-                      Every product lot is linked to a third-party Certificate of Analysis. The COA includes purity percentage, testing methodology, batch traceability, and lab information. Download the report matching your selected dose below.
-                    </p>
+                    {/* Only describe a downloadable COA when one actually
+                        exists. This paragraph used to render unconditionally —
+                        "Every product lot is linked to a third-party
+                        Certificate of Analysis… Download the report below" —
+                        directly under a notice saying Vanta-branded COAs are
+                        still being prepared, with no download beneath it. Two
+                        contradictory claims, stacked. */}
+                    {selectedCoaUrl ? (
+                      <p className="text-sm leading-relaxed text-[#a3a3a3]">
+                        This lot is linked to a third-party Certificate of Analysis covering purity, testing
+                        methodology, batch traceability, and lab information. Download the report for your
+                        selected dose below.
+                      </p>
+                    ) : null}
                     <div className="mt-5 grid gap-3 sm:grid-cols-2">
                       <div className="border border-white/[0.08] p-4">
                         <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">Purity</p>
