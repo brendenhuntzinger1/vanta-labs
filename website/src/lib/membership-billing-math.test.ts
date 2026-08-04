@@ -159,3 +159,27 @@ describe("guardDuplicateMembershipPurchase — a cancelling member can come back
     expect(guardDuplicateMembershipPurchase({ status: "active", tierId: TIER_A }, TIER_A).allowed).toBe(false);
   });
 });
+
+describe("guardDuplicateMembershipPurchase — a broken membership can be repaired", () => {
+  const TIER_A = "tier-essential";
+
+  it("ALLOWS re-purchase when no processor subscription exists", () => {
+    // Charged once, cannot renew. Buying again is the ONLY way to turn it into
+    // a real subscription — refusing traps the member on a broken plan.
+    expect(guardDuplicateMembershipPurchase(
+      { status: "active", tierId: TIER_A, hasProcessorSubscription: false }, TIER_A,
+    )).toEqual({ allowed: true, kind: "rejoin" });
+  });
+
+  it("still refuses when a real subscription IS in place", () => {
+    expect(guardDuplicateMembershipPurchase(
+      { status: "active", tierId: TIER_A, hasProcessorSubscription: true }, TIER_A,
+    ).allowed).toBe(false);
+  });
+
+  it("an unknown subscription state is treated as intact, so it still refuses", () => {
+    // Absent means "not checked", not "broken" — never open the double-charge
+    // door on missing information.
+    expect(guardDuplicateMembershipPurchase({ status: "active", tierId: TIER_A }, TIER_A).allowed).toBe(false);
+  });
+});
