@@ -16,6 +16,7 @@ import { SendgridEmailProvider } from "@/lib/email/providers/sendgrid";
 import { SmtpEmailProvider } from "@/lib/email/providers/smtp";
 import { NoopEmailProvider } from "@/lib/email/providers/noop";
 import { emailConfigIsReady, type EmailRuntimeConfig } from "@/lib/email/settings";
+import { resolveSenderIdentity } from "@/lib/email/sender-identity";
 
 const MESSAGE = {
   to: "customer@example.com",
@@ -30,6 +31,7 @@ function baseConfig(overrides: Partial<EmailRuntimeConfig> = {}): EmailRuntimeCo
     enabled: true,
     provider: "resend",
     from: "orders@vantalabsresearch.com",
+    sender: resolveSenderIdentity("orders@vantalabsresearch.com"),
     smtp: { host: "", port: 587, secure: false, user: "", password: "" },
     resend: { apiKey: "" },
     sendgrid: { apiKey: "" },

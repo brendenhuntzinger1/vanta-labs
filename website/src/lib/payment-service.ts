@@ -196,6 +196,9 @@ export async function createCheckoutSession(
    storeCreditRedeemedCents,
    taxRatePercent: taxQuote.collected ? taxQuote.ratePercent : 0,
    taxState: taxQuote.collected ? taxQuote.state : null,
+   // The volume tier in force when this order was priced. Stored so a past
+   // order's margin can always be explained, even after the tier changes.
+   extraColumns: { volume_cost_discount_percent: quote.volumeCostDiscountPercent },
  });
 
  // A unique-index violation on idempotency_key means a truly-simultaneous

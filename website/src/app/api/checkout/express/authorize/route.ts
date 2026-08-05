@@ -282,7 +282,10 @@ export async function POST(request: Request) {
     // column for it, and the intent row already holds it (with the copy version
     // and the timestamp) keyed by this same order_id. One record, not two that
     // can disagree.
-    extraColumns: { checkout_channel: "express_apple_pay" },
+    extraColumns: {
+      checkout_channel: "express_apple_pay",
+      volume_cost_discount_percent: quoteA.volumeCostDiscountPercent,
+    },
   });
 
   const insertOutcome = await insertOrderRow(orderRow);

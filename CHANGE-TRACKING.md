@@ -66,6 +66,40 @@ No third-party changes recorded yet — this is the starting line.
 
 _(New entries appended here, newest first, as changes are detected.)_
 
+### 2026-08-05 — pre-launch checklist pass (Claude, at the owner's request)
+
+Three code gaps from the owner's pre-launch list, plus an honest status writeup
+of the rest. Full item-by-item detail:
+`website/docs/PRE-LAUNCH-CHECKLIST-STATUS.md`.
+
+1. **Volume-based product cost discount** (was not implemented at all):
+   $5,000/mo in sales → 20% off product cost, $10,000/mo → 30%. Resolved from
+   sales banked in the current month at quote time, frozen onto the order, and
+   fed to BOTH the recorded COGS and the checkout profit floor so the guard and
+   the books can't disagree. Fails to 0% (full cost) if sales can't be read.
+   Editable in Control Center → Volume Cost Discount. Migration:
+   `volume-cost-discount.sql` (audit column only; the discount works without it).
+2. **Shipment confirmation gated on movement, not paperwork**: a label event can
+   no longer produce a "shipped" signal or email, even when the 3PL reports a
+   label purchase as `status: "shipped"`. Labelled orders read "Being prepared".
+   Shipment progress is now monotonic, so a late webhook can't reverse a shipped
+   order or re-fire the email.
+3. **Sender identity forced to Vanta Labs**: the From line was unguarded free
+   text (template bodies were already swept). The display name is now always
+   rewritten to "Vanta Labs"; a From address belonging to another company blocks
+   sending entirely rather than mis-branding it, and Admin → Status names the
+   offending address.
+
+Verified: 859 tests (was 817), tsc clean, lint clean, production build succeeds.
+
+**Not actioned, deliberately:** the fulfilment checks (owner asked for Stephan's
+team, not Claude), the end-to-end test order (needs real money/label/package),
+and the 40-product COA order (a commercial decision, no code involved).
+
+**Could not verify:** this session has no access to the live Vanta Supabase
+project (permission denied), so the stuck orders and the payment processor's
+live state could not be inspected. Diagnosis path is in §3 of the status doc.
+
 ### 2026-07-30 — PR #26 merged to `main` (Claude, at the owner's request)
 
 **PR #26** (`b51b2a4`): membership page fully redesigned to the site's brand

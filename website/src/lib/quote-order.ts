@@ -20,6 +20,8 @@ import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethod
 import { computeProfit, resolveCustomerDiscount } from "@/lib/profit-engine";
 import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod, type PaymentMethodConfig } from "@/lib/payment-methods";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getCurrentVolumeCostDiscount } from "@/lib/volume-cost-service";
+import { applyVolumeCostDiscountDollars } from "@/lib/volume-cost-discount";
 
 import type { CartItemInput, CustomerInput } from "@/lib/payment-types";
 
@@ -136,6 +138,12 @@ export interface QuoteResult {
   finalTotal: number;
   /** Per-line COGS in cents (null when no cost is on record). */
   unitCostCentsForLine: (line: QuoteOrderLine) => number | null;
+  /**
+   * Volume cost reduction applied to every cost figure above, as a percent
+   * (0 when no tier was earned). Recorded on the order so a historical margin
+   * can always be explained by the tier that was in force when it was placed.
+   */
+  volumeCostDiscountPercent: number;
   /**
    * The address-independent amount in cents (merchandise − discounts − credit +
    * protection + service fee), i.e. `A`. In "full" mode this equals
@@ -317,18 +325,34 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // so fetch it directly here — the profit guard must price against the ACTUAL
   // product/dose cost, not a single flat worst-case assumption (which let a
   // deeply-discounted order on a high-cost SKU finalize below true break-even).
-  const { data: costRows } = await supabaseAdmin
-    .from("products")
-    .select("slug, product_cost_cents, product_doses(id, product_cost_cents)")
-    .in("slug", requestedSlugs);
+  //
+  // Fetched alongside the volume tier earned from this month's banked sales
+  // ($5k → 20% off cost, $10k → 30%). The tier is applied HERE, to the cost
+  // maps, so exactly one discounted figure feeds both the checkout profit floor
+  // and the cost snapshotted onto the order — the guard and the books can never
+  // disagree about what a unit cost. Resolves to 0% (full cost) if sales can't
+  // be read, and is memoized, so checkout pays for at most one extra read a
+  // minute rather than one per order.
+  const [{ data: costRows }, volumeCostDiscount] = await Promise.all([
+    supabaseAdmin
+      .from("products")
+      .select("slug, product_cost_cents, product_doses(id, product_cost_cents)")
+      .in("slug", requestedSlugs),
+    getCurrentVolumeCostDiscount(),
+  ]);
+
   const unitCostBySlug = new Map<string, number>();
   const unitCostByDoseId = new Map<string, number>();
   for (const row of (costRows ?? []) as Array<{ slug: string; product_cost_cents: number | null; product_doses: Array<{ id: string; product_cost_cents: number | null }> | null }>) {
     const productCostCents = Number(row.product_cost_cents ?? 0);
-    if (productCostCents > 0) unitCostBySlug.set(String(row.slug), productCostCents / 100);
+    if (productCostCents > 0) {
+      unitCostBySlug.set(String(row.slug), applyVolumeCostDiscountDollars(productCostCents / 100, volumeCostDiscount.percent));
+    }
     for (const dose of row.product_doses ?? []) {
       const doseCostCents = Number(dose.product_cost_cents ?? 0);
-      if (doseCostCents > 0) unitCostByDoseId.set(String(dose.id), doseCostCents / 100);
+      if (doseCostCents > 0) {
+        unitCostByDoseId.set(String(dose.id), applyVolumeCostDiscountDollars(doseCostCents / 100, volumeCostDiscount.percent));
+      }
     }
   }
 
@@ -810,6 +834,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     cardFee,
     finalTotal,
     unitCostCentsForLine,
+    volumeCostDiscountPercent: volumeCostDiscount.percent,
     addressIndependentCents: Math.round(finalTotal * 100),
     displayLineItems,
   };
@@ -944,7 +969,7 @@ export async function insertOrderRow(draft: OrderRowDraft): Promise<OrderInsertO
   }
   if (insertError) {
     const message = String(insertError.message ?? "").toLowerCase();
-    const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state") || message.includes("idempotency_key") || message.includes("billing_") || message.includes("checkout_channel");
+    const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state") || message.includes("idempotency_key") || message.includes("billing_") || message.includes("checkout_channel") || message.includes("volume_cost_discount_percent");
     const looksLikeMissingColumn = message.includes("does not exist")
       || message.includes("schema cache")
       || message.includes("could not find")

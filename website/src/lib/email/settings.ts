@@ -1,6 +1,7 @@
 import "server-only";
 
 import { getControlSnapshot } from "@/lib/admin-control";
+import { resolveSenderIdentity, type SenderIdentity } from "@/lib/email/sender-identity";
 
 // -------------------------------------------------------------------------
 // Email delivery settings.
@@ -26,7 +27,10 @@ export type EmailProviderName = "smtp" | "resend" | "sendgrid";
 export interface EmailRuntimeConfig {
   enabled: boolean;
   provider: EmailProviderName;
+  /** The enforced Vanta Labs sender line — empty when sending is blocked. */
   from: string;
+  /** Why `from` is what it is (corrected label, or blocked address). */
+  sender: SenderIdentity;
   smtp: {
     host: string;
     port: number;
@@ -67,11 +71,19 @@ export async function getEmailRuntimeConfig(): Promise<EmailRuntimeConfig> {
   const providerRaw = (str(cfg.provider) || process.env.EMAIL_PROVIDER || "smtp").toLowerCase();
   const provider: EmailProviderName = providerRaw === "resend" ? "resend" : providerRaw === "sendgrid" ? "sendgrid" : "smtp";
 
+  // Every outgoing customer email is forced to present as Vanta Labs. A
+  // configured sender that names another company gets its label corrected, or
+  // — when the sending address itself is another company's — is refused
+  // outright. See sender-identity.ts for why those two cases differ.
+  const configuredFrom = str(cfg.from) || process.env.EMAIL_FROM || process.env.SMTP_FROM || "";
+  const sender = resolveSenderIdentity(configuredFrom);
+
   return {
     // Off unless explicitly enabled in admin (or via EMAIL_ENABLED=true).
     enabled: bool(cfg.enabled, envEnabled),
     provider,
-    from: str(cfg.from) || process.env.EMAIL_FROM || process.env.SMTP_FROM || "",
+    from: sender.from ?? "",
+    sender,
     smtp: {
       host: str(cfg.smtp_host) || process.env.SMTP_HOST || "",
       port: Number(cfg.smtp_port ?? process.env.SMTP_PORT ?? 587) || 587,
@@ -97,6 +109,10 @@ export interface EmailAdminSettings {
   sendgrid: { apiKeySet: boolean };
   /** True when the selected provider has everything it needs to send. */
   ready: boolean;
+  /** True when the configured From belongs to another company — nothing sends. */
+  senderBlocked: boolean;
+  /** Plain-English explanation of a corrected or refused sender. */
+  senderNote: string;
 }
 
 function isReady(config: EmailRuntimeConfig): boolean {
@@ -125,6 +141,8 @@ export async function getEmailAdminSettings(): Promise<EmailAdminSettings> {
     resend: { apiKeySet: Boolean(config.resend.apiKey) },
     sendgrid: { apiKeySet: Boolean(config.sendgrid.apiKey) },
     ready: isReady(config),
+    senderBlocked: config.sender.blocked,
+    senderNote: config.sender.reason,
   };
 }
 

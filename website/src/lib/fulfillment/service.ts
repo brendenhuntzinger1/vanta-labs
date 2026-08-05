@@ -9,6 +9,11 @@ import { getFulfillmentProvider, fulfillmentContactEmail, type NormalizedFulfill
 import { recordActualShippingCost } from "@/lib/admin-profit";
 import { resolveCarrier } from "@/lib/tracking-url";
 import { getFulfillmentRelayDomain } from "@/lib/fulfillment/relay-domain";
+import {
+  classifyShipmentStatus,
+  fulfillmentProgressRank,
+  fulfillmentStatusForSignal,
+} from "@/lib/fulfillment/shipment-signal";
 import { getSiteUrl } from "@/lib/env";
 
 function roundMoney(value: number) {
@@ -305,6 +310,13 @@ export interface InboundFulfillmentEvent {
   orderRef?: string; // our order_id or order_number
   externalId?: string;
   status?: string; // shipped | delivered | processing | cancelled ...
+  /**
+   * The provider's OWN event name, before we bucketed it into `type` above
+   * (e.g. "label_created", "shipment.tracking_updated"). Kept because it is
+   * what tells a label purchase apart from a real shipment — some providers
+   * report both with `status: "shipped"`.
+   */
+  rawEventType?: string;
   trackingNumber?: string;
   trackingUrl?: string;
   carrier?: string;
@@ -347,12 +359,12 @@ async function findFulfillmentOrder(event: InboundFulfillmentEvent) {
   return null;
 }
 
+// Statuses that carry no shipment meaning of their own — they only move the
+// order along the internal queue. Shipment states are NOT listed here: they go
+// through classifyShipmentStatus, which is what keeps a label out of the
+// customer's "it shipped" email.
 const STATUS_TO_FULFILLMENT: Record<string, string> = {
   processing: "processing",
-  shipped: "shipped",
-  delivered: "delivered",
-  cancelled: "cancelled",
-  canceled: "cancelled",
 };
 
 export async function applyInboundFulfillmentEvent(event: InboundFulfillmentEvent): Promise<{ ok: boolean; message: string }> {
@@ -450,8 +462,17 @@ export async function applyInboundFulfillmentEvent(event: InboundFulfillmentEven
   } else {
     if (event.status) {
       fulfillmentUpdate.status = event.status;
-      const mapped = STATUS_TO_FULFILLMENT[event.status.toLowerCase()];
-      if (mapped) orderUpdate.fulfillment_status = mapped;
+      // What this status says about the PACKAGE, not about our paperwork. A
+      // label-creation event resolves to "pre_transit" and parks the order at
+      // awaiting_fulfillment — visible to the admin, silent to the customer.
+      const signal = classifyShipmentStatus(event.status, event.rawEventType);
+      const mappedSignal = fulfillmentStatusForSignal(signal);
+      if (mappedSignal) {
+        orderUpdate.fulfillment_status = mappedSignal;
+      } else {
+        const mapped = STATUS_TO_FULFILLMENT[event.status.toLowerCase()];
+        if (mapped) orderUpdate.fulfillment_status = mapped;
+      }
     }
     if (event.trackingNumber) {
       fulfillmentUpdate.tracking_number = event.trackingNumber;
@@ -468,6 +489,17 @@ export async function applyInboundFulfillmentEvent(event: InboundFulfillmentEven
     .select("fulfillment_status, customer_email, customer_name, order_number")
     .eq("order_id", orderId)
     .maybeSingle();
+
+  // Shipment progress only ever moves forward. Providers re-send and reorder
+  // events, so a late "manifested" arriving after "in transit" must not drag a
+  // shipped order back to awaiting_fulfillment — which would both mislead the
+  // customer and re-arm the shipping email to fire a second time. Cancellation
+  // is exempt: it can land at any point.
+  if (typeof orderUpdate.fulfillment_status === "string" && orderUpdate.fulfillment_status !== "cancelled") {
+    const priorRank = fulfillmentProgressRank(priorOrder?.fulfillment_status);
+    const nextRank = fulfillmentProgressRank(orderUpdate.fulfillment_status);
+    if (nextRank < priorRank) delete orderUpdate.fulfillment_status;
+  }
 
   await supabaseAdmin.from("fulfillment_orders").update(fulfillmentUpdate).eq("order_id", orderId);
   await supabaseAdmin.from("orders").update(orderUpdate).eq("order_id", orderId);
@@ -531,7 +563,10 @@ export async function applyInboundFulfillmentEvent(event: InboundFulfillmentEven
         order_id: orderId,
         carrier: event.carrier ?? null,
         tracking_number: event.trackingNumber ?? null,
-        shipping_status: String(orderUpdate.fulfillment_status ?? event.status ?? "processing"),
+        // Falls back to the order's EXISTING status, not the raw provider
+        // string, so a suppressed backwards transition doesn't show the admin a
+        // shipped order reverting to "label_created".
+        shipping_status: String(orderUpdate.fulfillment_status ?? priorOrder?.fulfillment_status ?? event.status ?? "processing"),
         updated_at: now,
       },
       { onConflict: "order_id" },

@@ -92,6 +92,12 @@ export function AdminControlCenterClient() {
   const [profitShippingEstimate, setProfitShippingEstimate] = useState("");
   const [profitFeeIncludesTax, setProfitFeeIncludesTax] = useState(true);
   const [profitCountTax, setProfitCountTax] = useState(true);
+  // Volume-based product cost reduction ($5k/mo → 20%, $10k/mo → 30%).
+  const [volumeCostEnabled, setVolumeCostEnabled] = useState(true);
+  const [volumeTier1Sales, setVolumeTier1Sales] = useState("5000");
+  const [volumeTier1Percent, setVolumeTier1Percent] = useState("20");
+  const [volumeTier2Sales, setVolumeTier2Sales] = useState("10000");
+  const [volumeTier2Percent, setVolumeTier2Percent] = useState("30");
 
   const loadSnapshot = async () => {
     const res = await fetch("/api/admin/control", { cache: "no-store" });
@@ -177,6 +183,22 @@ export function AdminControlCenterClient() {
     );
     setProfitFeeIncludesTax(profit.processing_fee_includes_tax !== false && profit.processing_fee_includes_tax !== "false");
     setProfitCountTax(profit.count_sales_tax_as_profit !== false && profit.count_sales_tax_as_profit !== "false");
+    setVolumeCostEnabled(profit.volume_cost_discount_enabled !== false && profit.volume_cost_discount_enabled !== "false");
+    // Stored as a JSON list; fall back to the agreed schedule if it's absent.
+    const storedTiers = Array.isArray(profit.volume_cost_tiers) ? (profit.volume_cost_tiers as Array<Record<string, unknown>>) : [];
+    const tier = (index: number, fallbackSales: string, fallbackPercent: string) => {
+      const row = storedTiers[index];
+      return {
+        sales: row?.minMonthlySales != null ? String(row.minMonthlySales) : fallbackSales,
+        percent: row?.costReductionPercent != null ? String(row.costReductionPercent) : fallbackPercent,
+      };
+    };
+    const first = tier(0, "5000", "20");
+    const second = tier(1, "10000", "30");
+    setVolumeTier1Sales(first.sales);
+    setVolumeTier1Percent(first.percent);
+    setVolumeTier2Sales(second.sales);
+    setVolumeTier2Percent(second.percent);
   };
 
   useEffect(() => {
@@ -274,6 +296,17 @@ export function AdminControlCenterClient() {
       { section: "profit", key: "shipping_cost_estimate", value: profitShippingEstimate },
       { section: "profit", key: "processing_fee_includes_tax", value: profitFeeIncludesTax },
       { section: "profit", key: "count_sales_tax_as_profit", value: profitCountTax },
+      { section: "profit", key: "volume_cost_discount_enabled", value: volumeCostEnabled },
+      {
+        section: "profit",
+        key: "volume_cost_tiers",
+        // A blank row is omitted rather than saved as a zero-threshold tier,
+        // which would apply its reduction to every order.
+        value: [
+          { minMonthlySales: Number(volumeTier1Sales), costReductionPercent: Number(volumeTier1Percent) },
+          { minMonthlySales: Number(volumeTier2Sales), costReductionPercent: Number(volumeTier2Percent) },
+        ].filter((tier) => Number.isFinite(tier.minMonthlySales) && Number.isFinite(tier.costReductionPercent) && tier.costReductionPercent > 0),
+      },
     ];
 
     const res = await fetch("/api/admin/control", {
@@ -518,6 +551,26 @@ export function AdminControlCenterClient() {
                   <option value="no">No — tax is remitted to the state (not profit)</option>
                 </select>
               </label>
+            </div>
+          </section>
+
+          <section className="vl-panel-soft rounded-2xl p-4">
+            <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">Volume Cost Discount</h3>
+            <p className="mt-2 text-xs text-zinc-400">
+              Your product cost drops as monthly sales grow. The tier is worked out from sales already banked in the
+              current month, and the reduced cost is locked onto each order as it is placed — so profit reports show
+              your real margin, and crossing a threshold never rewrites orders you already took. Customers see no
+              change; this is your cost, not their price.
+            </p>
+            <label className="mt-3 flex items-center gap-2 text-sm text-zinc-300">
+              <input type="checkbox" checked={volumeCostEnabled} onChange={(e) => setVolumeCostEnabled(e.target.checked)} className="h-4 w-4" />
+              Apply volume cost discounts
+            </label>
+            <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+              <label className="text-zinc-300">Tier 1 — monthly sales ($)<input value={volumeTier1Sales} onChange={(e) => setVolumeTier1Sales(e.target.value)} placeholder="5000" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Tier 1 — cost reduction (%)<input value={volumeTier1Percent} onChange={(e) => setVolumeTier1Percent(e.target.value)} placeholder="20" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Tier 2 — monthly sales ($)<input value={volumeTier2Sales} onChange={(e) => setVolumeTier2Sales(e.target.value)} placeholder="10000" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Tier 2 — cost reduction (%)<input value={volumeTier2Percent} onChange={(e) => setVolumeTier2Percent(e.target.value)} placeholder="30" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
           </section>
         </div>

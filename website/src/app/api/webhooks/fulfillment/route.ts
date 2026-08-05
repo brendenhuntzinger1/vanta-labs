@@ -55,6 +55,9 @@ function normalizeInbound(body: Record<string, unknown>): InboundFulfillmentEven
 
   return {
     type,
+    // Preserved verbatim: the bucketing above throws away the one detail that
+    // distinguishes "we bought a label" from "the carrier has it".
+    rawEventType: rawType || undefined,
     orderRef: str(body.reference) || str(body.order_id) || str(body.order_number) || undefined,
     externalId: str(body.id) || str(body.external_id) || undefined,
     status: str(body.status) || undefined,

@@ -64,16 +64,28 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
 
   // Store (transactional commerce) email.
   let emailReady = false;
+  let emailSenderBlocked = false;
+  let emailSenderNote = "";
   try {
-    emailReady = (await getEmailAdminSettings()).ready;
+    const emailSettings = await getEmailAdminSettings();
+    emailReady = emailSettings.ready;
+    emailSenderBlocked = emailSettings.senderBlocked;
+    emailSenderNote = emailSettings.senderNote;
   } catch {
     emailReady = false;
   }
   out.push({
     key: "email",
     label: "Store email (orders, shipping, refunds)",
-    level: emailReady ? "ok" : "not_configured",
-    detail: emailReady ? "Configured & ready" : "Not configured — receipts and shipping emails won't send",
+    // A blocked sender is its own failure and needs its own wording: the
+    // credentials may be perfect, and "not configured" would send the owner
+    // looking in the wrong place.
+    level: emailSenderBlocked ? "error" : emailReady ? "ok" : "not_configured",
+    detail: emailSenderBlocked
+      ? `Sending is blocked — ${emailSenderNote}`
+      : emailReady
+        ? "Configured & ready"
+        : "Not configured — receipts and shipping emails won't send",
     blocksLaunch: true,
   });
 

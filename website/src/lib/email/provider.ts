@@ -21,6 +21,13 @@ export async function getEmailProvider(): Promise<EmailProvider> {
     return new NoopEmailProvider();
   }
 
+  // A sender that would put another company's address on a Vanta Labs
+  // customer's email sends nothing at all. Every provider below is handed
+  // config.from, so this is the one place the check has to live.
+  if (config.sender.blocked) {
+    return new NoopEmailProvider();
+  }
+
   switch (config.provider) {
     case "resend":
       return new ResendEmailProvider({ apiKey: config.resend.apiKey, from: config.from });
