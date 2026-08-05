@@ -122,6 +122,50 @@ export async function loadDoseIdentities(order: OrderRow): Promise<Map<string, D
   }
 }
 
+/** True for a canonical UUID — used to tell an internal dose id from a dose
+ *  label like "5mg", which must never be fed to a uuid column comparison. */
+export function looksLikeUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+}
+
+/** "5 MG" / "5mg" / "5-mg" all compare equal. */
+function normalizeDoseToken(value: string | null | undefined): string {
+  return String(value ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+/**
+ * Find the dose a partner means by `variant`, within one product.
+ *
+ * The contract says `variant` is the dose ("5mg"), so that is matched first,
+ * against both the display label and the slug suffix. The internal UUID is
+ * still accepted, so a partner already sending ids keeps working.
+ *
+ * Comparing in JS rather than in the query is deliberate: `.eq("id", "5mg")`
+ * against a uuid column is a Postgres type error, which is precisely how this
+ * failed silently before.
+ */
+export async function resolveDoseId(productId: string, variantToken: string): Promise<string | null> {
+  const token = normalizeDoseToken(variantToken);
+  if (!token) return null;
+
+  const { data } = await supabaseAdmin
+    .from("product_doses")
+    .select("id, label, slug_suffix")
+    .eq("product_id", productId);
+
+  const rows = (data ?? []) as Array<{ id: string; label: string | null; slug_suffix: string | null }>;
+
+  if (looksLikeUuid(variantToken)) {
+    const byId = rows.find((row) => String(row.id) === variantToken.trim());
+    if (byId) return String(byId.id);
+  }
+
+  const byDose = rows.find(
+    (row) => normalizeDoseToken(row.label) === token || normalizeDoseToken(row.slug_suffix) === token,
+  );
+  return byDose ? String(byDose.id) : null;
+}
+
 /** Catalogue identity of one dose, keyed by product_doses.id. */
 export interface DoseIdentity {
   sku: string | null;
@@ -158,17 +202,18 @@ export function normalizeOrder(
       // slug is the real SKU (and what inventory sync matches on); the suffix,
       // if any, is the chosen variant.
       const rawId = item.product_id ?? "";
-      const [baseSku, variant] = rawId.split("::");
-      // The dose's own catalogue identity, so the 3PL can key a per-strength
-      // vial label off something other than our internal UUID. A product with
-      // no doses simply has none of this, and its base SKU already identifies
-      // the vial on its own.
-      const dose = variant ? doses.get(variant) : undefined;
+      const [baseSku, variantId] = rawId.split("::");
+      // Send the DOSE as `variant`, as the integration contract documents —
+      // not the internal id. If the dose can't be resolved we fall back to the
+      // raw suffix rather than null: null would tell the partner this product
+      // has no doses at all, which is how a wrong strength gets picked.
+      const dose = variantId ? doses.get(variantId) : undefined;
+      const doseLabel = dose?.label ?? (variantId && !looksLikeUuid(variantId) ? variantId : null);
       return {
         sku: baseSku || null,
-        variant: variant || null,
+        variant: doseLabel ?? variantId ?? null,
+        variantId: variantId || null,
         variantSku: dose?.sku ?? null,
-        variantLabel: dose?.label ?? null,
         batchNumber: dose?.batchNumber ?? null,
         name: item.product_name ?? "Item",
         quantity: Number(item.quantity ?? 0),
@@ -454,12 +499,27 @@ export async function applyInboundFulfillmentEvent(event: InboundFulfillmentEven
       touchedProducts.add(String(product.id));
 
       if (item.variant) {
+        // Resolve the dose the partner named — "5mg" per the contract, or an
+        // internal id. An unresolvable dose is skipped rather than written to
+        // the product, because writing it product-wide is what made a sold-out
+        // dose look sellable.
+        const doseId = await resolveDoseId(String(product.id), item.variant);
+        if (!doseId) {
+          await logEvent({
+            direction: "inbound",
+            eventType: "inventory.unknown_variant",
+            ok: false,
+            message: `No dose matched "${item.variant}" on ${item.sku} — stock for that dose was not updated.`,
+            payload: { sku: item.sku, variant: item.variant },
+          });
+          continue;
+        }
         // Scoped by product_id as well as id so a mismatched pair can never write
         // stock onto some other product's dose.
         await supabaseAdmin
           .from("product_doses")
           .update({ inventory_quantity: item.quantity, stock_status: stockStatus, updated_at: now })
-          .eq("id", item.variant)
+          .eq("id", doseId)
           .eq("product_id", product.id);
       } else {
         // No dose named: the product has no options, so product level IS the level.

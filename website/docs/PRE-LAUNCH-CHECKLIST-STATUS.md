@@ -245,44 +245,66 @@ the process needs agreeing and testing, not building.
 Reported from the warehouse (order 127902, a Vanta Labs reship): the MOTS-C
 line offered **print vial label**, the GLP-1 5mg line did not.
 
-**Most likely cause, and it's on our side.** A vial label is per-*strength* — a
-5mg label is not a 10mg label — so a 3PL keying its label template on a SKU
-needs something that names the exact dose. Here is what we were sending:
+**Root cause confirmed — it's ours, and it's a straight contract violation.**
+The integration spec we sent the partner
+(`docs/3PL-INTEGRATION-REQUIREMENTS.md` §5) says, verbatim:
 
-| Line | `sku` | `variant` |
-|---|---|---|
-| MOTS-C (single dose) | `mots-c` | *(none)* |
-| GLP-1 5mg (dosed) | `glp-1` | `6d1f0a8e-…` (our internal UUID) |
+> Our `sku` is the product slug (e.g. `glp-1`) and `variant` is the dose
+> (e.g. `5mg`). Inventory callbacks must match on the **same** pair.
 
-MOTS-C's plain slug identifies the vial by itself, so its label prints. For
-GLP-1 the 3PL got a base slug that doesn't name the strength, plus a UUID from
-our database that matches nothing in their catalogue — so there was nothing for
-a label template to key on. That is exactly the asymmetry reported.
+The code was sending this store's internal `product_doses.id` as `variant`:
 
-Meanwhile `product_doses.sku` — a real per-dose SKU — already exists in our
-schema and was never sent.
+| Line | `sku` | `variant` sent | `variant` promised |
+|---|---|---|---|
+| MOTS-C (single dose) | `mots-c` | *(none)* | *(none)* |
+| GLP-1 5mg (dosed) | `glp-1` | `6d1f0a8e-…` (UUID) | `5mg` |
 
-**Fixed.** Each line now also carries `variant_sku` (the dose's real SKU),
-`variant_label` / `dose` (e.g. "5mg"), and `batch_number`. These are **added
-alongside** the existing `sku`/`variant`, which are untouched, so inbound
-inventory sync still matches exactly as before. If the dose lookup fails the
-order still transmits with what it always had — a label field is worth having,
-never worth stranding a paid order over.
+A vial label is per-*strength* — a 5mg label is not a 10mg label — so the
+partner needs the dose to pick a label template. They were handed a UUID that
+matches nothing in their catalogue. MOTS-C has no dose at all, so its plain slug
+identified the vial and its label printed. That is exactly the reported
+asymmetry, and it affects **every dosed product**, not just this reship.
 
-**Two things to check before calling this closed:**
+### The same bug was silently breaking inventory
 
-1. **Ask Steph which field their vial label keys on**, and point her at
-   `variant_sku` / `dose` / `batch_number` on the line items. If their template
-   reads a field we still aren't sending, this needs one more small change
-   rather than a guess.
-2. **Confirm the dose SKUs are actually populated** in Admin → Products. If
-   `product_doses.sku` is blank for the GLP-1 doses, we'll now be sending
-   `variant_sku: null` and nothing improves. Filling those in is an admin task,
-   not a code one.
+This is the more expensive half. A partner following our written spec sends:
 
-There is a real chance this is instead (or also) a missing label template on
-their side for that SKU — I can't see their system to rule it out. Question 1
-settles which it is.
+```json
+{ "type": "inventory", "inventory": [{ "sku": "glp-1", "variant": "5mg", "quantity": 42 }] }
+```
+
+The handler matched that against a UUID column (`.eq("id", "5mg")`). That is a
+Postgres type error, and the result was discarded unchecked — so **dose-level
+stock updates never applied for any dosed product, silently.** Since the 3PL is
+the source of truth for stock, that means sold-out doses could keep selling.
+This is the very failure an earlier fix claimed to have closed.
+
+**Fixed, both directions:**
+
+- **Outbound:** `variant` is now the dose (`"5mg"`) as documented. The internal
+  id still travels as `variant_id` for round-tripping, and the line also carries
+  `variant_sku` (the dose's real SKU) and `batch_number` for the label itself.
+  If a dose can't be resolved we fall back to the raw suffix rather than `null`
+  — `null` would tell the partner the product has no strengths, which is how a
+  wrong vial gets picked.
+- **Inbound:** the dose is matched on label or slug suffix (`"5mg"`, `"5 MG"`,
+  `"5-mg"` all compare equal), with the UUID still accepted so a partner already
+  sending ids keeps working. Matching happens in JS, not in the query, because
+  comparing a label to a uuid column is exactly what failed silently before. An
+  unresolvable dose is now **logged and skipped** rather than written
+  product-wide.
+
+**Two things to confirm — neither is code:**
+
+1. **Ask Steph to re-check "print vial label" on a dosed order** once this
+   deploys, and to confirm which field their template reads. It should now find
+   `variant` / `dose` = `"5mg"`, plus `variant_sku` and `batch_number`.
+2. **Check the per-dose SKUs are populated** in Admin → Products. If
+   `product_doses.sku` is blank we'll send `variant_sku: null`; the dose itself
+   still goes through, but the label may want the SKU.
+
+It remains possible their label template is also missing for that SKU — but the
+contract violation above is real regardless, and had to be fixed either way.
 
 ### The full end-to-end test order
 

@@ -29,8 +29,8 @@ function sampleOrder(): NormalizedFulfillmentOrder {
     items: [{
       sku: "test-sku",
       variant: null,
+      variantId: null,
       variantSku: null,
-      variantLabel: null,
       batchNumber: null,
       name: "Connectivity Test Item",
       quantity: 1,

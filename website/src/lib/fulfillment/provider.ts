@@ -14,28 +14,35 @@ export interface NormalizedFulfillmentOrder {
   customer: { name: string; email: string };
   /** `state` is required for any US label — carriers reject a domestic address without it. */
   shipping: { address: string; city: string; state: string; postalCode: string; country: string };
-  // `sku` is the base product SKU (product slug) — the SAME key the inbound
-  // inventory-sync webhook matches on, so stock stays consistent. `variant`
-  // carries the specific dose/option when the product has variants, so the 3PL
-  // can pick the right pack without the SKU itself changing.
+  // The pair the integration contract is written around
+  // (docs/3PL-INTEGRATION-REQUIREMENTS.md §5): "Our `sku` is the product slug
+  // (e.g. `glp-1`) and `variant` is the dose (e.g. `5mg`). Inventory callbacks
+  // must match on the same pair."
   //
-  // `variant` alone is this store's internal product_doses.id — a UUID that is
-  // meaningless in anyone else's catalog. A vial label is per-STRENGTH (a 5mg
-  // label is not a 10mg label), so a 3PL keying its label template on a SKU has
-  // nothing to match for a dosed product: it receives "glp-1" plus a UUID. A
-  // single-dose product like MOTS-C has no variant at all, so its plain slug
-  // matches and its label prints — which is exactly the asymmetry reported
-  // (MOTS-C could print a vial label, GLP-1 5mg could not).
+  // `variant` was sending this store's internal product_doses.id — a UUID that
+  // means nothing in anyone else's catalogue and is not what the partner was
+  // told to expect. Two consequences, both observed:
   //
-  // So the dose's own catalogue identity travels with the line: `variantSku`
-  // (product_doses.sku), `variantLabel` ("5mg"), and `batchNumber` for the
-  // label itself. Added ALONGSIDE sku/variant rather than replacing them, so
-  // the inventory-sync contract is untouched.
+  //  - A vial label is per-STRENGTH (a 5mg label is not a 10mg label), so a
+  //    partner keying a label template on the dose had a UUID where "5mg"
+  //    should have been, and offered no "print vial label" for dosed products.
+  //    A single-dose product like MOTS-C has no variant at all, so its plain
+  //    slug identified the vial and its label printed — exactly the asymmetry
+  //    reported from the warehouse.
+  //  - Inventory sync: a partner following the written spec sends
+  //    `variant: "5mg"`, which never matched a UUID column, so dose-level stock
+  //    silently never updated.
+  //
+  // `variant` is now the dose as documented. `variantId` carries the internal
+  // id for round-tripping, and `variantSku` / `batchNumber` give a label
+  // template the dose's own catalogue identity and batch.
   items: Array<{
     sku: string | null;
+    /** The DOSE, e.g. "5mg" — the contract's `variant`. */
     variant: string | null;
+    /** Our internal product_doses.id, for round-tripping only. */
+    variantId: string | null;
     variantSku: string | null;
-    variantLabel: string | null;
     batchNumber: string | null;
     name: string;
     quantity: number;
@@ -100,13 +107,14 @@ export class GenericRestFulfillmentProvider implements FulfillmentProvider {
           shipping_address: order.shipping,
           line_items: order.items.map((item) => ({
             sku: item.sku,
+            // The dose, per the contract — "5mg", not a UUID.
             variant: item.variant,
-            // The dose's real catalogue SKU / strength / batch — what a vial
-            // label is keyed and printed from.
+            dose: item.variant,
+            // The dose's catalogue SKU and batch, for the vial label itself.
             variant_sku: item.variantSku,
-            variant_label: item.variantLabel,
-            dose: item.variantLabel,
             batch_number: item.batchNumber,
+            // Our internal id, so a callback can round-trip it if preferred.
+            variant_id: item.variantId,
             name: item.name,
             quantity: item.quantity,
             unit_price: item.unitPrice,

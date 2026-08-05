@@ -66,7 +66,39 @@ No third-party changes recorded yet — this is the starting line.
 
 _(New entries appended here, newest first, as changes are detected.)_
 
-### 2026-08-05 (later) — vial-label identity on outbound line items
+### 2026-08-05 (later, revised) — `variant` now means the dose, per the contract
+
+Confirmed root cause of the warehouse report (order 127902: "print vial label"
+offered for MOTS-C, not for GLP-1 5mg). It is a straight violation of our own
+integration spec, `docs/3PL-INTEGRATION-REQUIREMENTS.md` §5: *"Our `sku` is the
+product slug (e.g. `glp-1`) and `variant` is the dose (e.g. `5mg`). Inventory
+callbacks must match on the same pair."* The code sent `product_doses.id` — a
+UUID — as `variant`.
+
+Two consequences, both real:
+1. **Vial labels.** A label is per-strength, so the partner needs the dose to
+   choose a template and got a UUID instead. MOTS-C has no dose, so its slug
+   identified the vial and printed. Affects every dosed product.
+2. **Inventory sync, silently broken.** A partner following the spec sends
+   `variant: "5mg"`; the handler ran `.eq("id", "5mg")` against a uuid column —
+   a Postgres type error whose result was discarded unchecked. Dose-level stock
+   never updated for any dosed product, so a sold-out dose could keep selling.
+   This is the exact failure an earlier fix claimed to have closed.
+
+Fixed both directions. Outbound `variant` is the dose label; the internal id
+moves to `variant_id`; `variant_sku` and `batch_number` added for the label
+itself; an unresolvable dose falls back to the raw suffix rather than null
+(null would read as "no strengths", which is how a wrong vial gets picked).
+Inbound matches on label or slug suffix (case/space-insensitive) with UUIDs
+still accepted, compared in JS rather than in the query, and an unmatched dose
+is logged and skipped instead of written product-wide.
+
+**Still to confirm (not code):** Steph re-checking a dosed order after deploy,
+and whether per-dose SKUs are populated in Admin → Products.
+
+873 tests (was 865), tsc and lint clean, production build succeeds.
+
+### 2026-08-05 (superseded by the entry above) — vial-label identity, first pass
 
 Warehouse report (order 127902, a Vanta Labs reship): "print vial label" was
 offered for the MOTS-C line but not for GLP-1 5mg.
