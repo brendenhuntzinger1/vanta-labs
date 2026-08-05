@@ -13,7 +13,7 @@ import {
 const config = DEFAULT_VOLUME_COST_DISCOUNT_CONFIG;
 
 describe("volume cost discount — the agreed schedule", () => {
-  it("gives no reduction below $5,000 of monthly sales", () => {
+  it("gives no reduction below $5,000 of prior-month purchases", () => {
     expect(resolveVolumeCostDiscount(0, config).percent).toBe(0);
     expect(resolveVolumeCostDiscount(4999.99, config).percent).toBe(0);
   });

@@ -73,12 +73,20 @@ of the rest. Full item-by-item detail:
 `website/docs/PRE-LAUNCH-CHECKLIST-STATUS.md`.
 
 1. **Volume-based product cost discount** (was not implemented at all):
-   $5,000/mo in sales → 20% off product cost, $10,000/mo → 30%. Resolved from
-   sales banked in the current month at quote time, frozen onto the order, and
-   fed to BOTH the recorded COGS and the checkout profit floor so the guard and
-   the books can't disagree. Fails to 0% (full cost) if sales can't be read.
+   $5,000 → 20% off per-vial cost, $10,000 → 30%. Built to the terms printed on
+   the EVO wholesale sheet (June 16, 2026): *"Tier set each month from the prior
+   month's total product purchases."* That is **prior month**, not month-to-date,
+   and **product purchases** (per-vial spend with EVO, shipping excluded), not
+   retail sales revenue — the owner's brief said "sales", and at ~$30/vial the
+   two differ by the whole retail margin, so measuring revenue would have granted
+   tiers never earned under the sheet. Rate is fixed for the whole month; first
+   month is 0% (no prior month). The resolved cost is frozen onto each order and
+   fed to BOTH the recorded COGS and the checkout profit floor, so the guard and
+   the books can't disagree. Fails to 0% (full cost) if the total can't be read.
    Editable in Control Center → Volume Cost Discount. Migration:
    `volume-cost-discount.sql` (audit column only; the discount works without it).
+   **Open with EVO:** whether "purchases" is measured pre- or post-discount, and
+   that the sheet's own 30-day validity has lapsed.
 2. **Shipment confirmation gated on movement, not paperwork**: a label event can
    no longer produce a "shipped" signal or email, even when the 3PL reports a
    label purchase as `status: "shipped"`. Labelled orders read "Being prepared".

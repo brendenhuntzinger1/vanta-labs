@@ -557,19 +557,22 @@ export function AdminControlCenterClient() {
           <section className="vl-panel-soft rounded-2xl p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">Volume Cost Discount</h3>
             <p className="mt-2 text-xs text-zinc-400">
-              Your product cost drops as monthly sales grow. The tier is worked out from sales already banked in the
-              current month, and the reduced cost is locked onto each order as it is placed — so profit reports show
-              your real margin, and crossing a threshold never rewrites orders you already took. Customers see no
-              change; this is your cost, not their price.
+              Your product cost drops as your buying volume grows. Per the wholesale sheet, the tier is set each month
+              from the <strong>prior month&apos;s total product purchases</strong> — so the rate is fixed for the whole
+              of this month and does not climb mid-month. The reduced cost is locked onto each order as it is placed,
+              so profit reports show your real margin and a later tier change never rewrites orders you already took.
+              Note this is measured on what you <em>buy</em> (per-vial spend, excluding shipping), not on retail sales.
+              In your first month there is no prior month, so the rate is 0% — full cost. Customers see no change; this
+              is your cost, not their price.
             </p>
             <label className="mt-3 flex items-center gap-2 text-sm text-zinc-300">
               <input type="checkbox" checked={volumeCostEnabled} onChange={(e) => setVolumeCostEnabled(e.target.checked)} className="h-4 w-4" />
               Apply volume cost discounts
             </label>
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
-              <label className="text-zinc-300">Tier 1 — monthly sales ($)<input value={volumeTier1Sales} onChange={(e) => setVolumeTier1Sales(e.target.value)} placeholder="5000" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Tier 1 — prior-month purchases ($)<input value={volumeTier1Sales} onChange={(e) => setVolumeTier1Sales(e.target.value)} placeholder="5000" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Tier 1 — cost reduction (%)<input value={volumeTier1Percent} onChange={(e) => setVolumeTier1Percent(e.target.value)} placeholder="20" className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Tier 2 — monthly sales ($)<input value={volumeTier2Sales} onChange={(e) => setVolumeTier2Sales(e.target.value)} placeholder="10000" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Tier 2 — prior-month purchases ($)<input value={volumeTier2Sales} onChange={(e) => setVolumeTier2Sales(e.target.value)} placeholder="10000" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Tier 2 — cost reduction (%)<input value={volumeTier2Percent} onChange={(e) => setVolumeTier2Percent(e.target.value)} placeholder="30" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
           </section>

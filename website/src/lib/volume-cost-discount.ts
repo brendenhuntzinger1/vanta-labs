@@ -19,10 +19,21 @@
 //     promotional pricing that lower cost supports. Guard and books never
 //     disagree about what a unit cost.
 //
-// The tier is resolved from sales ALREADY BANKED this month at the moment the
-// order is quoted, and the resulting cost is then frozen onto the order. An
-// order placed before the store crossed $5,000 keeps its full-cost snapshot;
-// crossing a threshold changes the cost of subsequent orders, never of history.
+// Per the supplier's wholesale sheet, the tier is "set each month from the
+// PRIOR month's total product purchases". Two things follow, and both matter:
+//
+//  - The rate is FIXED for the whole of the current month. It does not climb
+//    mid-month as orders come in.
+//  - The measure is PRODUCT PURCHASES — money spent with the supplier on vials
+//    — not retail sales revenue. The two differ by the whole retail margin, so
+//    reading it as revenue would hand out tiers that were never earned.
+//
+// The resolved cost is frozen onto each order as it is placed, so a later
+// change of tier never rewrites the margin on orders already taken.
+//
+// Consequence worth stating plainly: in the first month of trading, the prior
+// month has no purchases, so the rate is 0% — full cost. That is the sheet's
+// terms, not a bug.
 //
 // This module is deliberately pure (no database, no `server-only`) so every
 // boundary below is unit-tested. The month-to-date sales figure it consumes is
@@ -30,7 +41,7 @@
 // -------------------------------------------------------------------------
 
 export interface VolumeCostTier {
-  /** Net paid sales in the month, in dollars, required to reach this tier. */
+  /** Prior-month product purchases, in dollars, required to reach this tier. */
   minMonthlySales: number;
   /** Percent taken OFF product cost while this tier is held (0–100). */
   costReductionPercent: number;
@@ -57,8 +68,8 @@ export interface ResolvedVolumeCostDiscount {
   percent: number;
   /** The tier that applied, or null when none did. */
   tier: VolumeCostTier | null;
-  /** Sales figure the decision was made from, in dollars. */
-  monthlySales: number;
+  /** Prior-month product purchases the decision was made from, in dollars. */
+  priorMonthPurchases: number;
 }
 
 function finiteNumber(value: unknown): number | null {
@@ -103,21 +114,22 @@ export function normalizeVolumeCostTiers(raw: unknown): VolumeCostTier[] {
  * entered in, so $12,000 of sales gets 30% and not the 20% that also qualifies.
  */
 export function resolveVolumeCostDiscount(
-  monthlySalesDollars: number,
+  priorMonthPurchasesDollars: number,
   config: VolumeCostDiscountConfig = DEFAULT_VOLUME_COST_DISCOUNT_CONFIG,
 ): ResolvedVolumeCostDiscount {
-  const monthlySales = Number.isFinite(monthlySalesDollars) && monthlySalesDollars > 0 ? monthlySalesDollars : 0;
-  if (!config.enabled) return { percent: 0, tier: null, monthlySales };
+  const priorMonthPurchases =
+    Number.isFinite(priorMonthPurchasesDollars) && priorMonthPurchasesDollars > 0 ? priorMonthPurchasesDollars : 0;
+  if (!config.enabled) return { percent: 0, tier: null, priorMonthPurchases };
 
   let best: VolumeCostTier | null = null;
   for (const tier of normalizeVolumeCostTiers(config.tiers)) {
     // `>=` — hitting the threshold exactly earns the tier.
-    if (monthlySales >= tier.minMonthlySales) {
+    if (priorMonthPurchases >= tier.minMonthlySales) {
       if (!best || tier.costReductionPercent > best.costReductionPercent) best = tier;
     }
   }
 
-  return { percent: best?.costReductionPercent ?? 0, tier: best, monthlySales };
+  return { percent: best?.costReductionPercent ?? 0, tier: best, priorMonthPurchases };
 }
 
 /**

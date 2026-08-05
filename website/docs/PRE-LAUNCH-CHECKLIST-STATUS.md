@@ -70,28 +70,53 @@ order stays on the estimate and says so.
 
 ### Volume-based product cost discounts — NEW this session
 
-**Built.** $5,000/month in sales → 20% off product cost. $10,000/month → 30%.
+**Built, to the terms printed on the EVO wholesale sheet** (dated June 16, 2026).
 
-- The tier is resolved from sales **already banked in the current calendar
-  month** at the moment an order is quoted.
-- The reduced cost is frozen onto the order. Crossing a threshold changes the
-  cost of later orders and never rewrites orders already taken.
+The sheet's exact wording is: *"Tier set each month from the prior month's total
+product purchases. Discount applies to all per-vial pricing above."* That is what
+is implemented — and it differs in two ways from a plain reading of "$5,000/month
+in sales":
+
+| | Sheet's rule (implemented) | "Sales" reading |
+|---|---|---|
+| **When** | Set by the **prior** month; fixed all month | Moves mid-month as sales land |
+| **What** | **Product purchases** — per-vial spend with EVO | Retail sales revenue |
+
+The second difference is the big one. At roughly $30/vial wholesale, $5,000 of
+*purchases* is about 167 vials, which retail for far more than $5,000. Measuring
+on retail revenue would have handed out tiers that were never earned under the
+sheet.
+
+- $5,000+ of prior-month product purchases → 20% off per-vial cost.
+- $10,000+ → 30%.
+- Shipping is excluded from the measure, matching the sheet ("everything except
+  shipment cost").
+- The reduced cost is frozen onto each order as placed, so a later tier change
+  never rewrites the margin on orders already taken.
 - The same discounted figure feeds both the recorded COGS *and* the checkout
   profit floor, so the guard and the books can't disagree about what a unit cost.
-- If the sales total can't be read, it resolves to 0% — full cost. It fails
-  toward charging you more, never toward approving an order against a cost you
-  aren't actually getting.
-- Editable in **Admin → Control Center → Volume Cost Discount** (thresholds,
-  percentages, and an on/off switch).
+- If the total can't be read, it resolves to 0% — full cost. It fails toward
+  charging you more, never toward approving an order against a cost you aren't
+  actually getting.
+- Editable in **Admin → Control Center → Volume Cost Discount**.
 - Customers see nothing change. This is your cost, not their price.
+
+**In the first month there is no prior month, so the rate is 0% — full cost.**
+That's the sheet's terms, not a bug, but it's worth knowing before launch: the
+first month is bought at full per-vial price no matter how well it goes.
 
 To record which tier applied per order, run `src/lib/sql/volume-cost-discount.sql`
 once. The discount works without it; the migration only adds the audit column.
 
-**One judgement call worth confirming:** "$5,000/month" is implemented as
-*sales banked so far this month*, so the discount begins the moment you cross
-the threshold and resets on the 1st. If it was meant as *last month's* total
-setting this month's rate, that's a one-line change — say the word.
+**Two things to confirm with EVO**, because the sheet doesn't say and the
+difference is real money:
+
+1. **Is "total product purchases" measured before or after the discount?** This
+   is implemented as actual spend (post-discount), which is the natural reading
+   of "purchases". Under that reading a 30% month can drop you back under
+   $10,000 and cost you the tier — worth pinning down in writing.
+2. **The sheet says "Valid 30 days from date above" (June 16, 2026), so it has
+   lapsed.** Confirm the pricing and tiers still stand before relying on them.
 
 ### Payment processor
 
@@ -233,6 +258,32 @@ the same reason the earlier orders did.
 decision between you and the 3PL: selling 40 products at cost, taking payment by
 Zelle, and shipping to a residential address are all calls for a person, not for
 me. There is no code change involved.
+
+### What the 40 vials actually cost
+
+All 40 requested items map cleanly to the June 16 wholesale sheet. Priced at
+sheet wholesale, one vial of each:
+
+| | |
+|---|---|
+| Vials | 40 |
+| **Total at sheet wholesale** | **$1,194.95** |
+| Average per vial | $29.87 |
+| Plus | shipping (the sheet includes packaging, envelope and fulfilment — *not* shipment cost) |
+
+For reference only, since neither applies here: at a 20% tier this basket would
+be $955.96, at 30% $836.47.
+
+Two things that bear on what to ask for:
+
+- **This order earns no volume tier.** It's $1,194.95 against a $5,000
+  threshold, and the tier is set by the *prior* month regardless. Full sheet
+  price is the correct basis.
+- **He asked for "the same price you guys pay for them" — that is below the
+  wholesale sheet, not equal to it.** The sheet is EVO's price *to* Vanta; his
+  wording asks for EVO's own cost. Those are different numbers and it's worth
+  settling which one is meant before quoting. The $1,194.95 above is sheet
+  wholesale.
 
 Flagging one practical point in your favour, since it affects sequencing: if
 these ship under Vanta Labs labels, that shipment is itself a live test of

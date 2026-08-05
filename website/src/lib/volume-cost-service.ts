@@ -2,7 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getControlSnapshot } from "@/lib/admin-control";
-import { PAID_ORDER_STATUSES, netOrderRevenue } from "@/lib/ledger";
+import { PAID_ORDER_STATUSES } from "@/lib/ledger";
 import {
   DEFAULT_VOLUME_COST_DISCOUNT_CONFIG,
   normalizeVolumeCostTiers,
@@ -13,16 +13,32 @@ import {
 
 // -------------------------------------------------------------------------
 // Reads the live inputs for the volume cost discount: the admin-editable tier
-// schedule, and how much the store has actually sold this month.
+// schedule, and the PRIOR month's total product purchases that the wholesale
+// sheet sets the tier from.
 //
 // Kept separate from the pure math in `volume-cost-discount.ts` so the tier
 // boundaries stay unit-testable without a database.
 // -------------------------------------------------------------------------
 
-/** Start of the current month, matching the UTC boundary the revenue dashboard
- *  already uses for "today" — so the tier and the reports agree on the period. */
-export function startOfCurrentMonthIso(now: Date = new Date()): string {
-  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+/**
+ * The PRIOR calendar month's window, [start, end).
+ *
+ * Per the wholesale sheet: "Tier set each month from the prior month's total
+ * product purchases." So the rate is fixed for the whole of the current month
+ * by what was bought last month — it does not move mid-month as orders come in.
+ *
+ * UTC boundaries, matching the convention the revenue dashboard already uses,
+ * so the tier and the reports agree on where a month starts.
+ */
+export function priorMonthWindow(now: Date = new Date()): { start: string; end: string } {
+  const end = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  return { start: start.toISOString(), end: end.toISOString() };
+}
+
+/** Stable key for the month a tier decision belongs to. */
+function currentMonthKey(now: Date = new Date()): string {
+  return `${now.getUTCFullYear()}-${now.getUTCMonth()}`;
 }
 
 export async function getVolumeCostDiscountConfig(): Promise<VolumeCostDiscountConfig> {
@@ -61,28 +77,63 @@ export async function getVolumeCostDiscountConfig(): Promise<VolumeCostDiscountC
   }
 }
 
-/** Net sales (paid minus refunded) banked so far in the current month. */
-export async function getMonthToDateNetSales(now: Date = new Date()): Promise<number> {
-  const monthStart = startOfCurrentMonthIso(now);
-  const { data, error } = await supabaseAdmin
+/**
+ * Total PRODUCT PURCHASES in the prior month — what was actually spent with the
+ * supplier on vials, which is what the wholesale sheet sets the tier from.
+ *
+ * This is deliberately NOT retail sales revenue. The two differ by roughly the
+ * whole retail margin, so using revenue would hand out tiers that were never
+ * earned. Product purchases = the per-vial cost of everything fulfilled, which
+ * is exactly the cost snapshotted onto each order line at checkout.
+ *
+ * Shipping is excluded, matching the sheet ("everything except shipment cost").
+ */
+export async function getPriorMonthProductPurchases(now: Date = new Date()): Promise<number> {
+  const { start, end } = priorMonthWindow(now);
+
+  const { data: orderRows, error: orderError } = await supabaseAdmin
     .from("orders")
-    .select("amount_paid, refund_amount")
+    .select("order_id")
     .in("payment_status", Array.from(PAID_ORDER_STATUSES))
-    .gte("paid_at", monthStart)
+    .gte("paid_at", start)
+    .lt("paid_at", end)
     .limit(10000);
 
-  if (error) throw error;
+  if (orderError) throw orderError;
 
-  const total = (data ?? []).reduce((sum, row) => sum + netOrderRevenue(row), 0);
-  return Math.round(total * 100) / 100;
+  const orderIds = (orderRows ?? []).map((row) => String(row.order_id)).filter(Boolean);
+  if (orderIds.length === 0) return 0;
+
+  // Chunked so a busy month doesn't build a URL the API will reject.
+  let totalCents = 0;
+  const CHUNK = 200;
+  for (let i = 0; i < orderIds.length; i += CHUNK) {
+    const { data: itemRows, error: itemError } = await supabaseAdmin
+      .from("order_items")
+      .select("quantity, unit_cost_cents")
+      .in("order_id", orderIds.slice(i, i + CHUNK));
+
+    if (itemError) throw itemError;
+
+    for (const row of (itemRows ?? []) as Array<{ quantity: number | null; unit_cost_cents: number | null }>) {
+      const unitCost = Number(row.unit_cost_cents ?? 0);
+      const quantity = Number(row.quantity ?? 0);
+      // A line with no recorded cost contributes nothing rather than an
+      // assumed one — an assumption here would invent purchases that never
+      // happened and could award a tier that was not earned.
+      if (unitCost > 0 && quantity > 0) totalCents += unitCost * quantity;
+    }
+  }
+
+  return Math.round(totalCents) / 100;
 }
 
-// A checkout must not pay for a fresh aggregate every time. The figure only
-// moves as orders are captured, and a stale-by-a-minute reading can only mean a
-// tier is honoured a minute late — never that cost is understated on a tier the
-// store has not earned.
-const CACHE_TTL_MS = 60_000;
-let cached: { at: number; value: ResolvedVolumeCostDiscount } | null = null;
+// The tier is fixed for the whole month, so this is near-constant. Cached with
+// a short TTL anyway (an admin can edit the schedule mid-month) and keyed by
+// month, so the roll into a new month always recomputes rather than serving
+// last month's rate from a warm cache.
+const CACHE_TTL_MS = 300_000;
+let cached: { at: number; monthKey: string; value: ResolvedVolumeCostDiscount } | null = null;
 
 /**
  * The cost reduction the store has earned right now.
@@ -93,18 +144,22 @@ let cached: { at: number; value: ResolvedVolumeCostDiscount } | null = null;
  * actually paying.
  */
 export async function getCurrentVolumeCostDiscount(options?: { force?: boolean }): Promise<ResolvedVolumeCostDiscount> {
-  if (!options?.force && cached && Date.now() - cached.at < CACHE_TTL_MS) {
+  const monthKey = currentMonthKey();
+  if (!options?.force && cached && cached.monthKey === monthKey && Date.now() - cached.at < CACHE_TTL_MS) {
     return cached.value;
   }
 
   try {
-    const [config, monthlySales] = await Promise.all([getVolumeCostDiscountConfig(), getMonthToDateNetSales()]);
-    const resolved = resolveVolumeCostDiscount(monthlySales, config);
-    cached = { at: Date.now(), value: resolved };
+    const [config, priorMonthPurchases] = await Promise.all([
+      getVolumeCostDiscountConfig(),
+      getPriorMonthProductPurchases(),
+    ]);
+    const resolved = resolveVolumeCostDiscount(priorMonthPurchases, config);
+    cached = { at: Date.now(), monthKey, value: resolved };
     return resolved;
   } catch {
-    const fallback: ResolvedVolumeCostDiscount = { percent: 0, tier: null, monthlySales: 0 };
-    cached = { at: Date.now(), value: fallback };
+    const fallback: ResolvedVolumeCostDiscount = { percent: 0, tier: null, priorMonthPurchases: 0 };
+    cached = { at: Date.now(), monthKey, value: fallback };
     return fallback;
   }
 }
