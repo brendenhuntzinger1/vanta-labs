@@ -66,6 +66,30 @@ No third-party changes recorded yet — this is the starting line.
 
 _(New entries appended here, newest first, as changes are detected.)_
 
+### 2026-08-05 (later) — vial-label identity on outbound line items
+
+Warehouse report (order 127902, a Vanta Labs reship): "print vial label" was
+offered for the MOTS-C line but not for GLP-1 5mg.
+
+Cause on our side: a vial label is per-strength, but a dosed line was sent as
+base slug (`glp-1`) plus this store's internal `product_doses.id` UUID — which
+matches nothing in the 3PL's catalogue, leaving a label template nothing to key
+on. A single-dose product like MOTS-C has no variant, so its plain slug
+identifies the vial and its label prints. `product_doses.sku` already existed in
+our schema and was never transmitted.
+
+Line items now also carry `variant_sku`, `variant_label` / `dose`, and
+`batch_number`, ADDED alongside the untouched `sku`/`variant` so the inbound
+inventory-sync contract is unchanged. Dose lookup is best-effort: a failure
+transmits the order with the identifiers it always had rather than stranding it.
+
+**Still to confirm with the 3PL:** which field their label template reads, and
+whether the per-dose SKUs are actually populated in Admin → Products (a blank
+one sends `variant_sku: null` and changes nothing). It remains possible the
+label template is simply missing on their side for that SKU.
+
+871 tests (was 865), tsc and lint clean, production build succeeds.
+
 ### 2026-08-05 — pre-launch checklist pass (Claude, at the owner's request)
 
 Three code gaps from the owner's pre-launch list, plus an honest status writeup

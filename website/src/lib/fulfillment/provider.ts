@@ -18,7 +18,29 @@ export interface NormalizedFulfillmentOrder {
   // inventory-sync webhook matches on, so stock stays consistent. `variant`
   // carries the specific dose/option when the product has variants, so the 3PL
   // can pick the right pack without the SKU itself changing.
-  items: Array<{ sku: string | null; variant: string | null; name: string; quantity: number; unitPrice: number }>;
+  //
+  // `variant` alone is this store's internal product_doses.id — a UUID that is
+  // meaningless in anyone else's catalog. A vial label is per-STRENGTH (a 5mg
+  // label is not a 10mg label), so a 3PL keying its label template on a SKU has
+  // nothing to match for a dosed product: it receives "glp-1" plus a UUID. A
+  // single-dose product like MOTS-C has no variant at all, so its plain slug
+  // matches and its label prints — which is exactly the asymmetry reported
+  // (MOTS-C could print a vial label, GLP-1 5mg could not).
+  //
+  // So the dose's own catalogue identity travels with the line: `variantSku`
+  // (product_doses.sku), `variantLabel` ("5mg"), and `batchNumber` for the
+  // label itself. Added ALONGSIDE sku/variant rather than replacing them, so
+  // the inventory-sync contract is untouched.
+  items: Array<{
+    sku: string | null;
+    variant: string | null;
+    variantSku: string | null;
+    variantLabel: string | null;
+    batchNumber: string | null;
+    name: string;
+    quantity: number;
+    unitPrice: number;
+  }>;
   notes: string;
   totals: { subtotal: number; shipping: number; tax: number; total: number };
 }
@@ -79,6 +101,12 @@ export class GenericRestFulfillmentProvider implements FulfillmentProvider {
           line_items: order.items.map((item) => ({
             sku: item.sku,
             variant: item.variant,
+            // The dose's real catalogue SKU / strength / batch — what a vial
+            // label is keyed and printed from.
+            variant_sku: item.variantSku,
+            variant_label: item.variantLabel,
+            dose: item.variantLabel,
+            batch_number: item.batchNumber,
             name: item.name,
             quantity: item.quantity,
             unit_price: item.unitPrice,

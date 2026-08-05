@@ -240,6 +240,50 @@ with a reason, note, and per-item selection; it flows through the normal 3PL
 pipeline, decrements stock, audit-logs the claim, and emails the customer. So
 the process needs agreeing and testing, not building.
 
+### Vial labels — "print vial label" missing on dosed products
+
+Reported from the warehouse (order 127902, a Vanta Labs reship): the MOTS-C
+line offered **print vial label**, the GLP-1 5mg line did not.
+
+**Most likely cause, and it's on our side.** A vial label is per-*strength* — a
+5mg label is not a 10mg label — so a 3PL keying its label template on a SKU
+needs something that names the exact dose. Here is what we were sending:
+
+| Line | `sku` | `variant` |
+|---|---|---|
+| MOTS-C (single dose) | `mots-c` | *(none)* |
+| GLP-1 5mg (dosed) | `glp-1` | `6d1f0a8e-…` (our internal UUID) |
+
+MOTS-C's plain slug identifies the vial by itself, so its label prints. For
+GLP-1 the 3PL got a base slug that doesn't name the strength, plus a UUID from
+our database that matches nothing in their catalogue — so there was nothing for
+a label template to key on. That is exactly the asymmetry reported.
+
+Meanwhile `product_doses.sku` — a real per-dose SKU — already exists in our
+schema and was never sent.
+
+**Fixed.** Each line now also carries `variant_sku` (the dose's real SKU),
+`variant_label` / `dose` (e.g. "5mg"), and `batch_number`. These are **added
+alongside** the existing `sku`/`variant`, which are untouched, so inbound
+inventory sync still matches exactly as before. If the dose lookup fails the
+order still transmits with what it always had — a label field is worth having,
+never worth stranding a paid order over.
+
+**Two things to check before calling this closed:**
+
+1. **Ask Steph which field their vial label keys on**, and point her at
+   `variant_sku` / `dose` / `batch_number` on the line items. If their template
+   reads a field we still aren't sending, this needs one more small change
+   rather than a guess.
+2. **Confirm the dose SKUs are actually populated** in Admin → Products. If
+   `product_doses.sku` is blank for the GLP-1 doses, we'll now be sending
+   `variant_sku: null` and nothing improves. Filling those in is an admin task,
+   not a code one.
+
+There is a real chance this is instead (or also) a missing label template on
+their side for that SKU — I can't see their system to rule it out. Question 1
+settles which it is.
+
 ### The full end-to-end test order
 
 Needs a human — it involves real money, a real label, and a real package. It is

@@ -26,7 +26,16 @@ function sampleOrder(): NormalizedFulfillmentOrder {
     orderNumber: "TEST-CONNECTION",
     customer: { name: "Connection Test", email: "test@example.com" },
     shipping: { address: "123 Test St", city: "Testville", state: "TX", postalCode: "00000", country: "US" },
-    items: [{ sku: "test-sku", variant: null, name: "Connectivity Test Item", quantity: 1, unitPrice: 0 }],
+    items: [{
+      sku: "test-sku",
+      variant: null,
+      variantSku: null,
+      variantLabel: null,
+      batchNumber: null,
+      name: "Connectivity Test Item",
+      quantity: 1,
+      unitPrice: 0,
+    }],
     notes: "This is an automated connectivity test from Vanta Labs. Please ignore or cancel — do not ship.",
     totals: { subtotal: 0, shipping: 0, tax: 0, total: 0 },
   };

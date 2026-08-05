@@ -85,7 +85,55 @@ async function logEvent(input: {
   }
 }
 
-export function normalizeOrder(order: OrderRow, relayDomain: string): NormalizedFulfillmentOrder {
+/**
+ * Look up the catalogue identity of every dose on an order.
+ *
+ * Best-effort by design: if the lookup fails, the order still transmits with
+ * the identifiers it always had. A vial-label field is worth having, but never
+ * worth stranding a paid order over.
+ */
+export async function loadDoseIdentities(order: OrderRow): Promise<Map<string, DoseIdentity>> {
+  const doseIds = Array.from(
+    new Set(
+      (order.order_items ?? [])
+        .map((item) => String(item.product_id ?? "").split("::")[1])
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+  if (doseIds.length === 0) return new Map();
+
+  try {
+    const { data } = await supabaseAdmin
+      .from("product_doses")
+      .select("id, sku, label, batch_number")
+      .in("id", doseIds);
+
+    const map = new Map<string, DoseIdentity>();
+    for (const row of (data ?? []) as Array<{ id: string; sku: string | null; label: string | null; batch_number: string | null }>) {
+      map.set(String(row.id), {
+        sku: row.sku ?? null,
+        label: row.label ?? null,
+        batchNumber: row.batch_number ?? null,
+      });
+    }
+    return map;
+  } catch {
+    return new Map();
+  }
+}
+
+/** Catalogue identity of one dose, keyed by product_doses.id. */
+export interface DoseIdentity {
+  sku: string | null;
+  label: string | null;
+  batchNumber: string | null;
+}
+
+export function normalizeOrder(
+  order: OrderRow,
+  relayDomain: string,
+  doses: Map<string, DoseIdentity> = new Map(),
+): NormalizedFulfillmentOrder {
   return {
     orderId: order.order_id,
     orderNumber: order.order_number ?? order.order_id,
@@ -111,9 +159,17 @@ export function normalizeOrder(order: OrderRow, relayDomain: string): Normalized
       // if any, is the chosen variant.
       const rawId = item.product_id ?? "";
       const [baseSku, variant] = rawId.split("::");
+      // The dose's own catalogue identity, so the 3PL can key a per-strength
+      // vial label off something other than our internal UUID. A product with
+      // no doses simply has none of this, and its base SKU already identifies
+      // the vial on its own.
+      const dose = variant ? doses.get(variant) : undefined;
       return {
         sku: baseSku || null,
         variant: variant || null,
+        variantSku: dose?.sku ?? null,
+        variantLabel: dose?.label ?? null,
+        batchNumber: dose?.batchNumber ?? null,
         name: item.product_name ?? "Item",
         quantity: Number(item.quantity ?? 0),
         unitPrice: Number(item.unit_price ?? 0),
@@ -225,7 +281,7 @@ export async function transmitOrderToFulfillment(orderId: string): Promise<void>
       });
     }
 
-    const normalized = normalizeOrder(order as OrderRow, relayDomain);
+    const normalized = normalizeOrder(order as OrderRow, relayDomain, await loadDoseIdentities(order as OrderRow));
     const now = new Date().toISOString();
 
     // Upsert the fulfillment order (idempotent per order).
