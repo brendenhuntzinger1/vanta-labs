@@ -85,6 +85,18 @@ export function isFulfillmentStatus(value: unknown): value is FulfillmentStatus 
 }
 
 /**
+ * Own-property lookup for the string tables below.
+ *
+ * Plain bracket access walks the prototype chain, so a webhook body containing
+ * "__proto__" or "constructor" would resolve to an object or a function and sail
+ * past a `?? null` fallback as if it were a valid status. Every lookup keyed by
+ * untrusted text goes through here.
+ */
+function lookupOwn<T>(table: Record<string, T>, key: string): T | null {
+  return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : null;
+}
+
+/**
  * How far along the shipping ladder a status is, or null for the exception
  * statuses which are deliberately unranked. Only ever compare two non-null
  * ranks - a null means "this outcome is not on the ladder", never "rank zero".
@@ -176,7 +188,7 @@ export function normalizeLegacyStatus(value: string | null | undefined): Fulfill
   if (!key) {
     return null;
   }
-  return LEGACY_STATUS_MAP[key] ?? null;
+  return lookupOwn(LEGACY_STATUS_MAP, key);
 }
 
 /**
@@ -497,7 +509,7 @@ export function mapShippoTrackingStatus(status: string | null | undefined): Fulf
     return null;
   }
   const key = status.trim().toUpperCase();
-  return TRACKING_STATUS_MAP[key as ShippoTrackingStatus] ?? null;
+  return lookupOwn(TRACKING_STATUS_MAP as Record<string, FulfillmentStatus>, key);
 }
 
 /**
