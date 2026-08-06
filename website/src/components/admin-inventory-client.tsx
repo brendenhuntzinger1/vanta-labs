@@ -101,6 +101,42 @@ export function AdminInventoryClient({
   const zeroCount = useMemo(() => rows.filter((row) => row.inventoryQuantity <= 0).length, [rows]);
   const unweighedCount = useMemo(() => rows.filter((row) => row.shippingWeightSource !== "line").length, [rows]);
 
+  // Bulk weight fill. Weighing products is the single most tedious part of
+  // getting set up — a catalog of thirty vials is thirty identical edits, and
+  // the tedium is why it gets skipped, which then quietly misprices postage on
+  // every order.
+  //
+  // This only fills the DRAFTS for rows currently visible; nothing is written
+  // until "Save changes". That keeps one review step between "apply 0.5 to
+  // everything" and the database, and it reuses the existing dirty-tracking and
+  // save path rather than adding a second way to write inventory.
+  const [bulkWeight, setBulkWeight] = useState("");
+
+  const applyBulkWeight = () => {
+    const raw = bulkWeight.trim();
+    const parsed = Number(raw);
+    if (raw === "" || !Number.isFinite(parsed) || parsed <= 0 || parsed > MAX_UNIT_WEIGHT_OZ) {
+      setMessage(`Enter a weight between 0 and ${MAX_UNIT_WEIGHT_OZ} oz to apply.`);
+      return;
+    }
+    // Deliberately scoped to filteredRows, not every row: the whole point is to
+    // filter to "Not weighed yet" and fill only those, leaving weights you have
+    // already measured alone.
+    const targets = filteredRows;
+    if (targets.length === 0) {
+      setMessage("No rows match the current filter.");
+      return;
+    }
+    setDrafts((prev) => {
+      const next = { ...prev };
+      for (const row of targets) {
+        next[row.key] = { ...(next[row.key] ?? draftFromRow(row)), weight: raw };
+      }
+      return next;
+    });
+    setMessage(`Filled ${targets.length} row${targets.length === 1 ? "" : "s"} with ${raw} oz — review, then Save changes.`);
+  };
+
   const dirtyKeys = useMemo(
     () => rows.filter((row) => !sameDraft(draftFor(row), draftFromRow(row))).map((row) => row.key),
     // draftFor closes over `drafts`, which is the dependency that matters here.
@@ -295,6 +331,27 @@ export function AdminInventoryClient({
           {inventoryTrackingActive ? <option value="out">Out of stock</option> : null}
           <option value="unweighed">Not weighed yet</option>
         </select>
+        {canManage ? (
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={0}
+              step="0.1"
+              value={bulkWeight}
+              onChange={(e) => setBulkWeight(e.target.value)}
+              placeholder="oz"
+              aria-label="Weight to apply to all filtered rows"
+              className="vl-input w-20 px-2 py-2 text-sm"
+            />
+            <button
+              type="button"
+              onClick={applyBulkWeight}
+              className="vl-btn-secondary whitespace-nowrap px-3 py-2 text-sm"
+            >
+              Fill {filteredRows.length} shown
+            </button>
+          </div>
+        ) : null}
         {canManage ? (
           <button
             type="button"
