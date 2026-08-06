@@ -324,6 +324,15 @@ export interface CreateShipmentInput {
   addressFrom: ShippoAddress;
   addressTo: ShippoAddress;
   parcel: ShippoParcel;
+  /**
+   * Printed as the return address, and where an undeliverable parcel goes.
+   *
+   * Shippo DEFAULTS this to address_from when omitted, which publishes the
+   * ship-from address on every parcel. When the origin is a home address that
+   * is a privacy leak, so callers pass this explicitly; the resolution and
+   * fallback live in src/lib/shipping-origin.ts.
+   */
+  addressReturn?: ShippoAddress;
 }
 
 export interface ShipmentWithRates {
@@ -349,6 +358,7 @@ export async function createShipmentWithRates(
     body: {
       address_from: input.addressFrom,
       address_to: input.addressTo,
+      ...(input.addressReturn ? { address_return: input.addressReturn } : {}),
       parcels: [input.parcel],
       async: false,
     },
