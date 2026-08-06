@@ -86,50 +86,33 @@ export type ShippoServiceErrorCode =
   /** The caller passed something unusable. */
   | "invalid_request";
 
-/**
- * HTTP status per failure, so every route answers the same way for the same
- * cause. The distinctions that matter: 409 is "the world is not in a state
- * where this can happen" (fix the address, re-quote, wait), 502 is "Shippo let
- * us down", 503 is "we are not configured", and 5xx generally means a retry is
- * reasonable while 4xx means it is not.
- */
-const HTTP_STATUS_BY_CODE: Record<ShippoServiceErrorCode, number> = {
-  invalid_request: 400,
-  order_not_found: 404,
-  no_label: 404,
-  not_shippable: 409,
-  origin_incomplete: 409,
-  destination_incomplete: 409,
-  label_voided: 409,
-  rate_expired: 409,
-  purchase_in_progress: 409,
-  cost_unrecorded: 500,
-  db_error: 500,
-  no_rates: 502,
-  shippo_error: 502,
-  not_configured: 503,
-};
-
 export interface ShippoServiceFailure {
   ok: false;
   code: ShippoServiceErrorCode;
   /** One sentence, safe to show an admin. Never contains the API token. */
   message: string;
-  /** Suggested HTTP status for a route handler. */
-  status: number;
   detail?: string;
-  /** The label, when one exists despite the failure — so it can still be printed. */
+  /**
+   * THE LABEL EXISTS AND WAS PAID FOR, even though this call failed.
+   *
+   * Set only by the two post-purchase failures (`db_error` after the buy,
+   * `cost_unrecorded`). Its presence is the signal that money was spent: the
+   * caller must audit the spend and must NOT retry.
+   */
   label?: OrderLabel;
 }
 
 export type ServiceResult<T> = { ok: true; data: T } | ShippoServiceFailure;
 
+// Deliberately no HTTP status here. The service says WHAT went wrong; how an
+// HTTP client should read that is the route layer's business, and it owns the
+// mapping (src/app/api/admin/orders/[orderId]/shipping/error-status.ts).
 function fail(
   code: ShippoServiceErrorCode,
   message: string,
   extra: Partial<Omit<ShippoServiceFailure, "ok" | "code">> = {},
 ): ShippoServiceFailure {
-  return { ok: false, code, message, status: HTTP_STATUS_BY_CODE[code], ...extra };
+  return { ok: false, code, message, ...extra };
 }
 
 /**
@@ -809,11 +792,15 @@ export interface OrderLabel {
   postageCostCents: number | null;
   purchasedAt: string | null;
   fulfillmentStatus: string;
-  /** True when this call bought nothing — the label already existed. */
-  alreadyPurchased: boolean;
+  /**
+   * True when this call changed nothing — the label already existed (or was
+   * already voided). A caller auditing a SPEND must skip these, or one purchase
+   * shows up in the audit log as several.
+   */
+  reused: boolean;
 }
 
-function labelFromOrder(order: OrderShippingRow, alreadyPurchased: boolean): OrderLabel | null {
+function labelFromOrder(order: OrderShippingRow, reused: boolean): OrderLabel | null {
   const transactionId = text(order.shippo_transaction_id);
   if (!transactionId || order.label_voided_at) return null;
 
@@ -831,7 +818,7 @@ function labelFromOrder(order: OrderShippingRow, alreadyPurchased: boolean): Ord
     postageCostCents: order.postage_cost_cents == null ? null : Number(order.postage_cost_cents),
     purchasedAt: text(order.label_purchased_at),
     fulfillmentStatus: String(order.fulfillment_status ?? ""),
-    alreadyPurchased,
+    reused,
   };
 }
 
@@ -1099,7 +1086,7 @@ export async function purchaseLabelForOrder(
     postageCostCents,
     purchasedAt: now,
     fulfillmentStatus: transition.ok ? transition.next : String(order.fulfillment_status ?? ""),
-    alreadyPurchased: false,
+    reused: false,
   };
 
   if (updateError) {
@@ -1167,16 +1154,13 @@ export async function purchaseLabelForOrder(
   return { ok: true, data: label };
 }
 
-/** A label that is definitely printable — labelUrl is non-null. */
-export interface PrintableLabel extends OrderLabel {
-  labelUrl: string;
-}
-
 /**
- * Reprint. Returns the SAME stored label and never touches Shippo — a second
- * purchase is not a printing problem, it is a second charge.
+ * Reprint. Returns the SAME stored label and never touches Shippo — reprinting
+ * is a printing problem, and a second call to /transactions/ is a second
+ * charge. On success `labelUrl` is always a real URL; the no-file case is
+ * reported as `no_label` rather than handing back a null to dereference.
  */
-export async function getLabelForOrder(orderId: string): Promise<ServiceResult<PrintableLabel>> {
+export async function getLabelUrlForOrder(orderId: string): Promise<ServiceResult<OrderLabel>> {
   const loaded = await loadOrder(orderId);
   if (!loaded.ok) return loaded;
 
@@ -1190,19 +1174,19 @@ export async function getLabelForOrder(orderId: string): Promise<ServiceResult<P
     return fail("no_label", "No shipping label has been purchased for this order yet.");
   }
   if (!label.labelUrl) {
-    return fail("no_label", "This order has a Shippo transaction but no stored label file.", { label });
+    // Deliberately NOT `{ label }` — that field means "postage was just spent
+    // on this call", and this order's label was bought long ago.
+    return fail("no_label", "This order has a Shippo transaction but no stored label file.");
   }
-  return { ok: true, data: { ...label, labelUrl: label.labelUrl } };
+  return { ok: true, data: label };
 }
 
-/** Same thing, named for the "give me the label URL" call site. */
-export async function getLabelUrlForOrder(orderId: string): Promise<ServiceResult<PrintableLabel>> {
-  return getLabelForOrder(orderId);
+/** Alias for call sites that read as "get the label", not "get its URL". */
+export async function getLabelForOrder(orderId: string): Promise<ServiceResult<OrderLabel>> {
+  return getLabelUrlForOrder(orderId);
 }
 
-export interface VoidedOrderLabel {
-  orderId: string;
-  transactionId: string;
+export interface VoidedLabel extends OrderLabel {
   /**
    * The carrier accepted the refund but has not settled it — the normal case
    * for USPS. The charge WILL be reversed, so the recorded cost is cleared now
@@ -1210,8 +1194,11 @@ export interface VoidedOrderLabel {
    * longer exists.
    */
   refundPending: boolean;
-  fulfillmentStatus: string;
-  /** True when the label was already voided — a double-click, not an error. */
+  /**
+   * The label was already void when this call arrived: a double-click, not a
+   * second void. Same value as the inherited `reused` — named for what it means
+   * here, so an audit row reads honestly.
+   */
   alreadyVoided: boolean;
 }
 
@@ -1227,7 +1214,7 @@ export interface VoidedOrderLabel {
 export async function voidLabelForOrder(
   orderIdOrRequest: string | { orderId: string; actor?: string | null },
   actorArg?: string | null,
-): Promise<ServiceResult<VoidedOrderLabel>> {
+): Promise<ServiceResult<VoidedLabel>> {
   const orderId = typeof orderIdOrRequest === "string" ? orderIdOrRequest : orderIdOrRequest.orderId;
   const actor = typeof orderIdOrRequest === "string" ? actorArg ?? null : orderIdOrRequest.actor ?? null;
 
@@ -1239,17 +1226,29 @@ export async function voidLabelForOrder(
   if (!transactionId) {
     return fail("no_label", "There is no label on this order to void.");
   }
+
+  /** The shape a voided label reports: no file, no tracking, no cost. */
+  const voidedLabel = (refundPending: boolean, reused: boolean, fulfillmentStatus: string): VoidedLabel => ({
+    orderId: order.order_id,
+    orderNumber: text(order.order_number) ?? order.order_id,
+    transactionId,
+    rateId: text(order.shippo_rate_id),
+    carrier: text(order.shipping_carrier),
+    service: text(order.shipping_service),
+    trackingNumber: null,
+    trackingUrl: null,
+    labelUrl: null,
+    postageCostCents: null,
+    purchasedAt: text(order.label_purchased_at),
+    fulfillmentStatus,
+    reused,
+    refundPending,
+    alreadyVoided: reused,
+  });
+
   if (order.label_voided_at) {
-    return {
-      ok: true,
-      data: {
-        orderId: order.order_id,
-        transactionId,
-        refundPending: false,
-        fulfillmentStatus: String(order.fulfillment_status ?? ""),
-        alreadyVoided: true,
-      },
-    };
+    // Voiding twice is a double-click, not an error.
+    return { ok: true, data: voidedLabel(false, true, String(order.fulfillment_status ?? "")) };
   }
 
   const result = await voidLabel(transactionId);
@@ -1309,13 +1308,11 @@ export async function voidLabelForOrder(
 
   return {
     ok: true,
-    data: {
-      orderId: order.order_id,
-      transactionId,
-      refundPending: result.data.pending,
-      fulfillmentStatus: transition.ok ? transition.next : String(order.fulfillment_status ?? ""),
-      alreadyVoided: false,
-    },
+    data: voidedLabel(
+      result.data.pending,
+      false,
+      transition.ok ? transition.next : String(order.fulfillment_status ?? ""),
+    ),
   };
 }
 

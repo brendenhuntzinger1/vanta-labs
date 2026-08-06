@@ -117,7 +117,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     status: 200,
     headers: {
       "Content-Type": upstream.headers.get("content-type") ?? "application/pdf",
-      "Content-Disposition": `${download ? "attachment" : "inline"}; filename="${safeFilename(result.data.orderId)}"`,
+      "Content-Disposition": `${download ? "attachment" : "inline"}; filename="${safeFilename(result.data.orderNumber || result.data.orderId)}"`,
       // No proxy, browser or CDN may keep a copy of a document with the
       // customer's address on it.
       "Cache-Control": "private, no-store, max-age=0",

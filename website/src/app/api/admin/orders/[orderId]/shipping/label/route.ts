@@ -197,8 +197,13 @@ export async function DELETE(request: Request, context: { params: Promise<{ orde
       shippoTransactionId: result.data.transactionId,
       carrier: result.data.carrier,
       service: result.data.service,
-      // Whether this call did the voiding or found it already done, so a
-      // double-click is distinguishable from two separate voids.
+      // The carrier accepted the refund but may not have settled it yet; the
+      // recorded postage is cleared either way, so the audit trail records
+      // which of the two it was.
+      refundPending: result.data.refundPending,
+      fulfillmentStatus: result.data.fulfillmentStatus,
+      // `reused` means this call found the label already voided — a
+      // double-click, distinguishable here from two separate voids.
       alreadyVoided: result.data.reused,
       performedAt: new Date().toISOString(),
       performedBy: session.username,
@@ -210,5 +215,5 @@ export async function DELETE(request: Request, context: { params: Promise<{ orde
     console.error("Unable to audit label void for order", orderId, auditError);
   }
 
-  return NextResponse.json({ success: true, label: result.data });
+  return NextResponse.json({ success: true, voided: result.data });
 }
