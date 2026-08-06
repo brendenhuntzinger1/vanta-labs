@@ -2,6 +2,8 @@ import "server-only";
 
 import { ShippoNotConfiguredError, requireShippoToken } from "@/lib/shippo/config";
 import type {
+  ShippoOrder,
+  ShippoOrderInput,
   ShippoAddress,
   ShippoLabelFileType,
   ShippoParcel,
@@ -658,4 +660,49 @@ export async function getTransaction(transactionId: string): Promise<ShippoResul
   }
 
   return result;
+}
+
+
+// ------------------------------------------------------------------ orders ----
+
+/**
+ * Push a paid order into Shippo's Orders tab.
+ *
+ * This is what makes the owner's workflow possible: they open Shippo, see the
+ * order already populated with the customer's address, the line items and the
+ * computed parcel weight, and buy the label without retyping anything.
+ *
+ * Creating an order in Shippo NEVER buys postage and never costs money — it is
+ * a record, not a purchase. That is why this is safe to call automatically on
+ * payment while label purchase stays a deliberate human action.
+ */
+export async function createShippoOrder(input: ShippoOrderInput): Promise<ShippoResult<ShippoOrder>> {
+  const result = await shippoRequest<ShippoOrder>({
+    method: "POST",
+    path: "/orders/",
+    body: input as unknown as Record<string, unknown>,
+  });
+  if (!result.ok) return result;
+
+  const orderId = asNonEmptyString(result.data?.object_id);
+  if (!orderId) {
+    // Without Shippo's order id there is no reliable way to match the label
+    // purchase back to this order later, so an id-less success is a failure.
+    return {
+      ok: false,
+      kind: "invalid_response",
+      message: "Shippo created an order without an id.",
+      // NOT safe to retry: Shippo answered 2xx, so the order almost certainly
+      // exists on their side. Retrying would create a second order for the same
+      // purchase and the owner would see the same shipment twice in the Orders
+      // tab, with no way to tell which one to buy the label against.
+      safeToRetry: false,
+    };
+  }
+  return { ok: true, data: { ...result.data, object_id: orderId } };
+}
+
+/** Read an order back, used to confirm a sync that timed out actually landed. */
+export async function getShippoOrder(orderId: string): Promise<ShippoResult<ShippoOrder>> {
+  return shippoRequest<ShippoOrder>({ method: "GET", path: `/orders/${encodeURIComponent(orderId)}` });
 }

@@ -210,3 +210,85 @@ export interface ShippoWebhookPayload {
   event: string;
   data: ShippoTrackingUpdate;
 }
+
+// ------------------------------------------------------------------ orders ----
+
+/**
+ * A line on a Shippo ORDER — what appears in the Orders tab of Shippo's
+ * dashboard when the owner opens an order to buy its label.
+ *
+ * Distinct from a parcel: the parcel is one box with one total weight, while
+ * these are the individual products, shown so the packer can verify what goes
+ * in the box before buying postage.
+ */
+export interface ShippoOrderLineItem {
+  title: string;
+  sku?: string;
+  quantity: number;
+  total_price: string;
+  currency: string;
+  weight: string;
+  weight_unit: "oz" | "lb" | "g" | "kg";
+}
+
+export interface ShippoOrderInput {
+  to_address: ShippoAddress;
+  from_address: ShippoAddress;
+  line_items: ShippoOrderLineItem[];
+  placed_at: string;
+  /**
+   * The Vanta Labs order number, verbatim.
+   *
+   * This is the human-readable join between the two systems: it is what the
+   * owner reads in Shippo's Orders list and matches against the admin. It is
+   * NOT the machine matching key — see ShippoOrder.object_id for that.
+   */
+  order_number: string;
+  order_status: "PAID" | "AWAITPAY" | "SHIPPED" | "CANCELLED" | "REFUNDED";
+  shipping_cost: string;
+  shipping_cost_currency: string;
+  shipping_method?: string;
+  subtotal_price: string;
+  total_price: string;
+  total_tax: string;
+  currency: string;
+  /** The computed parcel weight, so Shippo pre-fills it rather than asking. */
+  weight: string;
+  weight_unit: "oz" | "lb" | "g" | "kg";
+  notes?: string;
+}
+
+export interface ShippoOrder {
+  /**
+   * Shippo's id for the order. Persisted on our order row as the AUTHORITATIVE
+   * matching key when a label is later bought in Shippo's dashboard — matching
+   * on customer name or email would collide the moment one customer places two
+   * orders, and would silently attach a label cost to the wrong one.
+   */
+  object_id: string;
+  order_number?: string | null;
+  order_status?: string | null;
+}
+
+/**
+ * The `transaction_created` webhook body, fired when a label is purchased —
+ * including a purchase made by hand in Shippo's own dashboard, which is the
+ * whole point of this integration.
+ */
+export interface ShippoTransactionCreated {
+  object_id?: string | null;
+  status?: string | null;
+  tracking_number?: string | null;
+  tracking_url_provider?: string | null;
+  label_url?: string | null;
+  /** Present when the label was bought against a Shippo Order. */
+  order?: string | null;
+  rate?: {
+    object_id?: string | null;
+    amount?: string | null;
+    currency?: string | null;
+    provider?: string | null;
+    servicelevel?: { name?: string | null; token?: string | null } | null;
+  } | null;
+  metadata?: string | null;
+}
