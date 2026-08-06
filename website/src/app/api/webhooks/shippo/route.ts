@@ -2,6 +2,8 @@ import { createHash, timingSafeEqual } from "crypto";
 import { NextResponse } from "next/server";
 
 import { applyTrackingUpdate } from "@/lib/shippo/service";
+import { applyTransactionCreated } from "@/lib/shippo/order-sync";
+import { supabaseAdmin } from "@/lib/supabase-server";
 import type { ShippoWebhookPayload } from "@/lib/shippo/types";
 
 // ---------------------------------------------------------------------------
@@ -100,6 +102,41 @@ export async function POST(request: Request) {
     // The sender is authenticated but sent something that is not JSON. Retrying
     // will not fix that, but it IS worth surfacing in Shippo's delivery log.
     return NextResponse.json({ error: "Invalid JSON body." }, { status: 400 });
+  }
+
+  // transaction_created fires when a label is bought — including by hand in
+  // Shippo's dashboard, which is now the owner's normal workflow. It is the
+  // ONLY way the real postage cost ever reaches this system, so an unmatched
+  // one is logged rather than dropped: it means money was spent on a label we
+  // could not attribute to an order.
+  if (String(payload?.event ?? "") === "transaction_created") {
+    try {
+      const data = payload.data as unknown as Parameters<typeof applyTransactionCreated>[0];
+      const outcome = await applyTransactionCreated(data);
+
+      await supabaseAdmin
+        .from("shippo_webhook_events")
+        .upsert(
+          {
+            event_key: `transaction_created:${String(data?.object_id ?? "unknown")}`,
+            event_type: "transaction_created",
+            order_id: outcome.orderId,
+            shippo_object_id: String(data?.object_id ?? "") || null,
+            matched: outcome.matched,
+            error: outcome.matched ? null : (outcome.reason ?? "unmatched"),
+            processed_at: new Date().toISOString(),
+          },
+          { onConflict: "event_key" },
+        );
+
+      // A 200 even when unmatched: the event is recorded and redelivering it
+      // would not find an order either. The reconciliation queue is the fix,
+      // not a retry loop.
+      return NextResponse.json({ received: true, matched: outcome.matched, orderId: outcome.orderId });
+    } catch (error) {
+      console.error("Unexpected failure handling a Shippo transaction webhook", error);
+      return NextResponse.json({ error: "Could not process this event." }, { status: 500 });
+    }
   }
 
   try {

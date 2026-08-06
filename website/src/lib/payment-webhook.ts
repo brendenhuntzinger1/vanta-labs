@@ -15,6 +15,7 @@ import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
 import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
+import { syncOrderToShippo } from "@/lib/shippo/order-sync";
 import { activatePaidMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 import {
   isMembershipEvent,
@@ -1090,8 +1091,14 @@ export async function finalizeManualPayment(
         (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
       );
     }
-    // Fulfillment is in-house: the approved order surfaces in the admin
-    // fulfillment queue. Nothing is transmitted to an outside provider.
+    // Same push as the card path above — a record in Shippo's Orders tab, not
+    // a postage purchase. Guarded by the atomic order claim above, so an
+    // approval retry cannot create a second Shippo order.
+    try {
+      await syncOrderToShippo(orderId);
+    } catch (syncError) {
+      console.error("Unable to sync order to Shippo", orderId, syncError);
+    }
   }
 
   return { orderId, alreadyPaid: false, status: "paid" };
@@ -1552,9 +1559,21 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         }
       }
 
-      // Fulfillment is in-house: a paid order is picked up from the admin
-      // fulfillment queue, not transmitted anywhere. Nothing outbound belongs
-      // here — an order's shipping data must never leave Vanta Labs.
+      // Push the paid order into Shippo's Orders tab so the owner can buy its
+      // label there without retyping the address, items or weight.
+      //
+      // This creates a RECORD, not a purchase: no postage is bought and no
+      // money moves, which is what makes it safe to do automatically. Buying
+      // the label stays a deliberate human action in Shippo.
+      //
+      // Best-effort and non-blocking, like every other side-effect here. A
+      // Shippo outage must never strand a paid order: the sync records its own
+      // error state and the admin exposes a retry.
+      try {
+        await syncOrderToShippo(orderId);
+      } catch (syncError) {
+        console.error("Unable to sync order to Shippo", orderId, syncError);
+      }
     }
   }
 
