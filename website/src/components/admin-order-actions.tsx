@@ -190,7 +190,7 @@ export function AdminOrderActions({
       </div>
 
       {/* Replacement shipment — the Shipping Protection promise. Creates a
-          linked $0 order, sends it to the 3PL, and emails the customer. */}
+          linked $0 order, queues it for shipping, and emails the customer. */}
       {canRefund && orderItems.length > 0 ? (
         <div className="mt-6 border-t border-white/10 pt-4">
           <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Replacement</p>

@@ -45,7 +45,7 @@ export default async function AdminFulfillmentPage({
           <div>
             <h1 className="text-2xl font-semibold sm:text-3xl">Fulfillment Queue</h1>
             <p className="mt-2 text-sm text-zinc-400">
-              {result.total} order{result.total === 1 ? "" : "s"} — 3PL-friendly view. Copy the Order Number to send to your fulfillment partner.
+              {result.total} order{result.total === 1 ? "" : "s"} ready to pack and ship.
             </p>
           </div>
           <Link href="/admin/payments" className="vl-btn-secondary inline-flex px-4 py-2 text-xs">

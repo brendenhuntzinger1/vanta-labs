@@ -401,7 +401,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
     }
 
     // One-click replacement shipment (damaged / lost / stolen — the Shipping
-    // Protection promise). Creates a linked $0 order, pushes it to the 3PL,
+    // Protection promise). Creates a linked $0 order, queues it for shipping,
     // audits who sent it and why, and emails the customer.
     if (action === "send_replacement") {
       if (!canManageRefunds(session.role)) {
@@ -536,12 +536,6 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
     // the estimate, flips the order's profit to Finalized, and records an audit
     // row (estimate, exact cost, profit before/after). Gated to profit-viewers
     // since it directly changes reported net profit.
-    // Re-send a paid order to the 3PL after a failed transmit. Without this a
-    // 3PL rejection (e.g. Arcline's 422 "A `customer.email` is required") left
-    // the order permanently stranded: the customer is charged, nothing ships,
-    // and the payment webhook will never fire again for that order. Safe to
-    // press repeatedly — fulfillment_orders upserts on order_id and the payout
-    // row is left alone once marked paid.
     if (action === "set_shipping_cost") {
       if (!canViewProfit(session.role)) {
         return NextResponse.json({ success: false, error: "Your role cannot edit profit figures." }, { status: 403 });

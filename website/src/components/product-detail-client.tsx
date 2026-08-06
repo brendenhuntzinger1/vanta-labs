@@ -458,7 +458,7 @@ export function ProductDetailClient({
                   <p className="text-[11px] uppercase tracking-[0.3em] text-white/45">{product.category}</p>
                   <h1 className="vl2-serif mt-2 text-3xl text-white">{product.name}</h1>
                 </div>
-                {/* Only shown when the 3PL has reported the item as sold out —
+                {/* Only shown when inventory enforcement is on and stock is sold out —
                     never an "In Stock" badge, per product spec. */}
                 {isOutOfStock ? (
                   <span className="shrink-0 border border-white/[0.12] bg-[#1a1a1a] px-3 py-1 text-[10px] uppercase tracking-[0.2em] text-[#a3a3a3]">Out of Stock</span>

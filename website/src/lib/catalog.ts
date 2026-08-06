@@ -2,7 +2,7 @@ import "server-only";
 
 import { unstable_cache } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { getFulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
+import { isInventoryTrackingActive } from "@/lib/inventory-settings";
 import type { CoaRecord, Product, ProductDose, ProductImage } from "@/lib/catalog-types";
 import { parseProductFaq } from "@/lib/product-faq";
 
@@ -18,10 +18,11 @@ const CATALOG_CACHE_TTL = 60; // seconds
 const PRODUCT_SELECT_COLUMNS =
   "id, slug, name, category, short_description, long_description, description, price_cents, compare_at_price_cents, sale_price_cents, stock_status, inventory_quantity, is_published, is_enabled, is_archived, is_featured, badge, position, batch_number, purity_result, image_url, testing_date, lab_name, coa_url, molecular_formula, molecular_weight, cas_number, peptide_sequence, storage_recommendation, reconstitution_note, product_faq, seo_title, seo_description";
 
-// A stored "Out of Stock" is only honored once the 3PL integration is live and
-// feeding real inventory. Until then every product is treated as In Stock, so
-// the whole catalog stays purchasable and nothing shows "Out of Stock" /
-// "Unavailable" — exactly one source of truth for availability: the 3PL.
+// A stored "Out of Stock" is only honored once inventory tracking is switched
+// on in admin settings. Until then every product is treated as In Stock, so the
+// whole catalog stays purchasable and nothing shows "Out of Stock" /
+// "Unavailable". Vanta Labs is now the sole source of truth for availability —
+// this used to be answered by whether a 3PL integration was connected.
 function resolveStockStatus(rawStatus: string, inventoryActive: boolean): Product["stockStatus"] {
   if (!inventoryActive) {
     return "In Stock";
@@ -30,12 +31,7 @@ function resolveStockStatus(rawStatus: string, inventoryActive: boolean): Produc
 }
 
 async function isInventoryActive(): Promise<boolean> {
-  try {
-    const config = await getFulfillmentRuntimeConfig();
-    return Boolean(config.enabled);
-  } catch {
-    return false;
-  }
+  return isInventoryTrackingActive();
 }
 
 function formatPriceFromCents(priceCents: number) {
@@ -158,7 +154,7 @@ function mapProductRow(
 
   const displayPrice = defaultDose?.salePrice ?? defaultDose?.price ?? formatPriceFromCents(rowPrice);
   const defaultInventoryQuantity = defaultDose?.inventoryQuantity ?? parseNumber(row.inventory_quantity, 0);
-  // Availability has exactly one source of truth: the 3PL. Until it's live
+  // Availability has exactly one source of truth: Vanta Labs. Until tracking is on
   // (inventoryActive === false) everything is In Stock; the doses were already
   // resolved the same way in fetchProductRelations.
   const stockStatus = resolveStockStatus(

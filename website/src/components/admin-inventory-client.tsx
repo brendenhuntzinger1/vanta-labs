@@ -88,9 +88,9 @@ export function AdminInventoryClient({
     <section className="vl-panel rounded-2xl p-5 sm:p-6">
       {!inventoryTrackingActive ? (
         <div className="mb-4 rounded-xl border border-cyan-400/25 bg-cyan-400/[0.06] px-4 py-3 text-sm text-cyan-100">
-          <p className="font-semibold">Inventory is managed by your 3PL</p>
+          <p className="font-semibold">Inventory enforcement is off</p>
           <p className="mt-1 text-cyan-100/80">
-            These counts don&apos;t control the storefront — every product stays purchasable and your fulfillment provider owns the real stock. The numbers below are a reference only, until your 3PL feed is connected.
+            These counts don&apos;t control the storefront yet — every product stays purchasable regardless of stock. Set real quantities below, then turn on &quot;Enforce inventory on the storefront&quot; in Settings to make them binding.
           </p>
         </div>
       ) : null}
@@ -122,7 +122,7 @@ export function AdminInventoryClient({
               <th className="pb-2 pr-4">Quantity</th>
               <th className="pb-2 pr-4">Low-stock threshold</th>
               <th className="pb-2 pr-4">Status</th>
-              {canManage && inventoryTrackingActive ? <th className="pb-2 pr-4">Actions</th> : null}
+              {canManage ? <th className="pb-2 pr-4">Actions</th> : null}
             </tr>
           </thead>
           <tbody>
@@ -136,9 +136,7 @@ export function AdminInventoryClient({
                   </td>
                   <td className="py-3 pr-4 text-zinc-400">{row.sku ?? "—"}</td>
                   <td className="py-3 pr-4">
-                    {!inventoryTrackingActive ? (
-                      <span className="text-zinc-600">—</span>
-                    ) : canManage ? (
+                    {canManage ? (
                       <input
                         value={draft.quantity}
                         onChange={(e) => setDraft(row.key, "quantity", e.target.value)}
@@ -147,9 +145,7 @@ export function AdminInventoryClient({
                     ) : row.inventoryQuantity}
                   </td>
                   <td className="py-3 pr-4">
-                    {!inventoryTrackingActive ? (
-                      <span className="text-zinc-600">—</span>
-                    ) : canManage ? (
+                    {canManage ? (
                       <input
                         value={draft.threshold}
                         onChange={(e) => setDraft(row.key, "threshold", e.target.value)}
@@ -159,7 +155,7 @@ export function AdminInventoryClient({
                   </td>
                   <td className="py-3 pr-4">
                     {!inventoryTrackingActive ? (
-                      <span className="rounded-full bg-cyan-400/15 px-2 py-1 text-xs text-cyan-200">Managed by 3PL</span>
+                      <span className="rounded-full bg-cyan-400/15 px-2 py-1 text-xs text-cyan-200">Not enforced</span>
                     ) : row.isOutOfStock ? (
                       <span className="rounded-full bg-rose-500/15 px-2 py-1 text-xs text-rose-300">Out of stock</span>
                     ) : row.isLowStock ? (
@@ -168,7 +164,7 @@ export function AdminInventoryClient({
                       <span className="rounded-full bg-emerald-400/15 px-2 py-1 text-xs text-emerald-300">In stock</span>
                     )}
                   </td>
-                  {canManage && inventoryTrackingActive ? (
+                  {canManage ? (
                     <td className="py-3 pr-4">
                       <button
                         type="button"

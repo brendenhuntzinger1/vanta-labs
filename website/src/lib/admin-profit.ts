@@ -472,7 +472,7 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
 
 // -------------------------------------------------------------------------
 // Shipping-cost reconciliation. Called when the exact shipping-label cost
-// becomes available (3PL webhook, fulfillment provider, or manual admin entry)
+// becomes available (Shippo label purchase, or manual admin entry)
 // to replace the estimate, flip the order to Finalized profit, and record an
 // audit row capturing the estimate, the exact cost, and the profit before/after.
 // -------------------------------------------------------------------------

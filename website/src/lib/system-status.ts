@@ -3,7 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isCheckoutOpen, isMockPaymentMode } from "@/lib/payment-provider";
 import { getEmailAdminSettings } from "@/lib/email/settings";
-import { getFulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
+import { getShippoStatus } from "@/lib/shippo/config";
 import { getSalesTaxSettings } from "@/lib/admin-control";
 
 // Owner-facing integration health. NEVER exposes secrets — only whether each
@@ -101,21 +101,20 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
     blocksLaunch: false,
   });
 
-  // 3PL fulfillment.
-  let fulfillmentEnabled = false;
-  let fulfillmentMode = "";
-  try {
-    const ful = await getFulfillmentRuntimeConfig();
-    fulfillmentEnabled = ful.enabled;
-    fulfillmentMode = ful.mode;
-  } catch {
-    fulfillmentEnabled = false;
-  }
+  // Shipping labels (Shippo). Orders are fulfilled in-house, so this reports
+  // whether labels can be bought — never whether an outside warehouse is
+  // reachable. The token's prefix is the ONLY thing read from it; the value
+  // itself is never surfaced.
+  const shippo = getShippoStatus();
   out.push({
-    key: "fulfillment",
-    label: "3PL fulfillment",
-    level: fulfillmentEnabled ? "ok" : "not_configured",
-    detail: fulfillmentEnabled ? `Enabled (${fulfillmentMode})` : "Not connected — paid orders won't hand off to a warehouse",
+    key: "shipping_labels",
+    label: "Shipping labels (Shippo)",
+    level: shippo.configured ? (shippo.mode === "live" ? "ok" : "warn") : "not_configured",
+    detail: shippo.configured
+      ? shippo.mode === "live"
+        ? "Live mode — label purchases charge real postage"
+        : "TEST mode — labels are simulated and carry no real postage"
+      : "SHIPPO_API_TOKEN not set — rates and labels are unavailable",
     blocksLaunch: false,
   });
 

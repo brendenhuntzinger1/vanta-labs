@@ -46,10 +46,10 @@ export class InventoryReservationModel {
 
   // A SKU that was given a count (via setStock) is TRACKED forever — even at 0,
   // where it is sold out, not "untracked". A SKU never given a count is
-  // untracked (3PL authority) and always available.
+  // untracked (no enforced count) and always available.
   available(sku: string): number {
     const s = this.skus.get(sku);
-    if (!s) return Number.POSITIVE_INFINITY; // untracked / 3PL authority
+    if (!s) return Number.POSITIVE_INFINITY; // untracked / no enforced count
     return s.inventory - s.reserved;
   }
 

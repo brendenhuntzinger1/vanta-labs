@@ -3,7 +3,7 @@
 import { useState } from "react";
 import type { EmailAdminSettings } from "@/lib/email/settings";
 import type { PaymentProcessorAdminSettings } from "@/lib/payment-processor-config";
-import type { FulfillmentAdminSettings } from "@/lib/fulfillment/config";
+import type { FulfillmentAdminSettings } from "@/lib/fulfillment-settings";
 import type { BusinessSettings, WelcomeOffer } from "@/lib/admin-control";
 
 function Labeled({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
@@ -51,81 +51,9 @@ export function AdminSettingsClient({
   const [procSecret, setProcSecret] = useState("");
   const [procWebhook, setProcWebhook] = useState("");
 
-  // 3PL fulfillment state
-  const [fEnabled, setFEnabled] = useState(fulfillment.enabled);
-  const [fAuto, setFAuto] = useState(fulfillment.autoTransmit);
-  const [fMode, setFMode] = useState(fulfillment.mode);
-  const [fProvider, setFProvider] = useState(fulfillment.providerName);
-  const [fBaseUrl, setFBaseUrl] = useState(fulfillment.apiBaseUrl);
-  const [fApiKey, setFApiKey] = useState("");
-  const [fWebhook, setFWebhook] = useState("");
-  const [fPayoutModel, setFPayoutModel] = useState(fulfillment.payoutModel);
-  const [fPayoutRate, setFPayoutRate] = useState(String(fulfillment.payoutRate));
-
-  // 3PL onboarding / self-test tools
-  const webhookUrl = `${siteUrl.replace(/\/+$/, "")}/api/webhooks/fulfillment`;
-  const [busyAction, setBusyAction] = useState<string | null>(null);
-  const [generatedSecret, setGeneratedSecret] = useState<string | null>(null);
-  const [skuText, setSkuText] = useState<string | null>(null);
-  const [testResult, setTestResult] = useState<{ ok: boolean; text: string } | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
-
-  const copy = async (value: string, key: string) => {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(key);
-      setTimeout(() => setCopied((c) => (c === key ? null : c)), 1500);
-    } catch {
-      // Clipboard can be blocked; the value is still visible to copy manually.
-    }
-  };
-
-  const runOnboarding = async (action: string) => {
-    setBusyAction(action);
-    setTestResult(null);
-    if (action === "generate_secret") setGeneratedSecret(null);
-    if (action === "sku_list") setSkuText(null);
-    try {
-      const res = await fetch("/api/admin/fulfillment/onboarding", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
-      });
-      const json = await res.json();
-      if (action === "generate_secret") {
-        if (json.success) setGeneratedSecret(String(json.secret));
-        else setTestResult({ ok: false, text: json.error ?? "Could not generate a secret." });
-      } else if (action === "sku_list") {
-        if (json.success) {
-          const lines = (json.skus as Array<{ sku: string; name: string; stock: number }>).map(
-            (s) => `${s.sku}\t${s.name}\t(stock: ${s.stock})`,
-          );
-          setSkuText(lines.length ? lines.join("\n") : "No enabled products found.");
-        } else {
-          setTestResult({ ok: false, text: json.error ?? "Could not load SKUs." });
-        }
-      } else if (action === "test_connection") {
-        const o = json.outbound;
-        setTestResult({
-          ok: Boolean(json.success),
-          text: json.success
-            ? `✅ 3PL reached and accepted the test order${o?.externalId ? ` (their ref: ${o.externalId})` : ""}. You can cancel that test order on their side.`
-            : `❌ ${o?.message ?? json.error ?? "Could not reach the 3PL."}${o?.statusCode ? ` (HTTP ${o.statusCode})` : ""}`,
-        });
-      } else if (action === "self_test_webhook") {
-        setTestResult({
-          ok: Boolean(json.success),
-          text: json.success
-            ? "✅ Inbound webhook works: signature verified and the event was accepted end-to-end (no data changed — test SKU)."
-            : `❌ ${json.inbound?.message ?? json.error ?? "Self-test failed."}`,
-        });
-      }
-    } catch {
-      setTestResult({ ok: false, text: "Request failed. Try again." });
-    } finally {
-      setBusyAction(null);
-    }
-  };
+  // In-house fulfillment state. The only writable setting is whether stock
+  // levels gate sales — there are no provider credentials to enter any more.
+  const [fInventoryTracking, setFInventoryTracking] = useState(fulfillment.inventoryTrackingEnabled);
 
   // Business info state
   const [supportEmail, setSupportEmail] = useState(business.supportEmail);
@@ -173,15 +101,7 @@ export function AdminSettingsClient({
             webhook_secret: procWebhook,
           },
           fulfillment: {
-            enabled: fEnabled,
-            auto_transmit: fAuto,
-            mode: fMode,
-            provider_name: fProvider,
-            api_base_url: fBaseUrl,
-            api_key: fApiKey,
-            webhook_secret: fWebhook,
-            payout_model: fPayoutModel,
-            payout_rate: Number(fPayoutRate) || 0,
+            inventory_tracking_enabled: fInventoryTracking,
           },
           business: {
             support_email: supportEmail,
@@ -208,8 +128,6 @@ export function AdminSettingsClient({
       setSendgridKey("");
       setProcSecret("");
       setProcWebhook("");
-      setFApiKey("");
-      setFWebhook("");
     } catch {
       setMessage("Save failed");
     } finally {
@@ -358,121 +276,62 @@ export function AdminSettingsClient({
         </div>
       </div>
 
-      {/* 3PL fulfillment */}
+      {/* Fulfillment (in-house) */}
       <div className="vl-panel rounded-2xl p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold">3PL / Fulfillment</h2>
-          <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${fEnabled ? (fulfillment.ready ? "border-emerald-300/40 bg-emerald-300/10 text-emerald-200" : "border-amber-300/40 bg-amber-300/10 text-amber-200") : "border-white/20 bg-white/5 text-zinc-300"}`}>
-            {fEnabled ? (fulfillment.ready ? "Connected" : "Enabled — needs credentials") : "Disabled"}
+          <h2 className="text-lg font-semibold">Fulfillment &amp; shipping</h2>
+          <span
+            className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+              !fulfillment.shippo.configured
+                ? "border-white/20 bg-white/5 text-zinc-300"
+                : fulfillment.shippo.mode === "live"
+                  ? "border-rose-300/40 bg-rose-300/10 text-rose-200"
+                  : "border-amber-300/40 bg-amber-300/10 text-amber-200"
+            }`}
+          >
+            Shippo: {fulfillment.shippo.label}
           </span>
         </div>
         <p className="mt-1 text-sm text-zinc-400">
-          Paid &amp; verified orders auto-transmit to your 3PL. In <strong>Manual</strong> mode nothing is sent — orders are
-          queued and payout reports generated. In <strong>Generic REST</strong> mode, enter your 3PL&apos;s API base URL and
-          key. Switching providers later is just new credentials.
+          Orders are fulfilled in-house. Paid orders appear in the fulfillment queue, where you buy a
+          Shippo label and print it. Nothing is transmitted to any outside fulfillment provider.
         </p>
 
-        <div className="mt-4 flex flex-wrap gap-4">
-          <label className="flex items-center gap-2 text-sm text-zinc-200">
-            <input type="checkbox" checked={fEnabled} onChange={(e) => setFEnabled(e.target.checked)} className="h-4 w-4" />
-            Enable fulfillment
-          </label>
-          <label className="flex items-center gap-2 text-sm text-zinc-200">
-            <input type="checkbox" checked={fAuto} onChange={(e) => setFAuto(e.target.checked)} className="h-4 w-4" />
-            Auto-transmit paid orders
-          </label>
-        </div>
-
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <Labeled label="Mode">
-            <select value={fMode} onChange={(e) => setFMode(e.target.value as FulfillmentAdminSettings["mode"])} className="vl-input mt-1 w-full px-3 py-2 text-sm">
-              <option value="manual">Manual (reports / invoices, no API)</option>
-              <option value="generic_rest">Generic REST API</option>
-            </select>
-          </Labeled>
-          <Labeled label="Provider name (label)"><input value={fProvider} onChange={(e) => setFProvider(e.target.value)} placeholder="my-3pl" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
-          {fMode === "generic_rest" ? (
-            <>
-              <Labeled label="API base URL" hint="Orders are POSTed to {base}/orders."><input value={fBaseUrl} onChange={(e) => setFBaseUrl(e.target.value)} placeholder="https://api.your3pl.com/v1" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
-              <Labeled label="API key" hint={fulfillment.apiKeySet ? "A key is saved. Leave blank to keep it." : "Not set."}><input type="password" value={fApiKey} onChange={(e) => setFApiKey(e.target.value)} placeholder="••••••••" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
-              <Labeled label="Inbound webhook secret" hint={fulfillment.webhookSecretSet ? "A secret is saved. Leave blank to keep it. Point the 3PL webhook at /api/webhooks/fulfillment." : "Point the 3PL webhook at /api/webhooks/fulfillment."}><input type="password" value={fWebhook} onChange={(e) => setFWebhook(e.target.value)} placeholder="••••••••" className="vl-input mt-1 w-full px-3 py-2 text-sm" /></Labeled>
-            </>
-          ) : null}
-        </div>
-
-        <div className="mt-4 grid gap-3 border-t border-white/10 pt-4 sm:grid-cols-2">
-          <Labeled label="Payout model" hint="What you owe the 3PL per order.">
-            <select value={fPayoutModel} onChange={(e) => setFPayoutModel(e.target.value as FulfillmentAdminSettings["payoutModel"])} className="vl-input mt-1 w-full px-3 py-2 text-sm">
-              <option value="per_unit">Fixed $ per vial/unit</option>
-              <option value="percent">Percentage of order total</option>
-            </select>
-          </Labeled>
-          <Labeled label={fPayoutModel === "percent" ? "Rate (% of order)" : "Rate ($ per vial)"}>
-            <input type="number" min={0} step="0.01" value={fPayoutRate} onChange={(e) => setFPayoutRate(e.target.value)} className="vl-input mt-1 w-full px-3 py-2 text-sm" />
-          </Labeled>
-        </div>
-
-        {/* Onboarding & self-test toolkit */}
-        <div className="mt-5 rounded-xl border border-cyan-300/25 bg-cyan-400/[0.04] p-4">
-          <h3 className="text-sm font-semibold text-cyan-100">Connect a 3PL / dropshipper — onboarding &amp; tests</h3>
-          <p className="mt-1 text-[13px] text-zinc-400">
-            Give the 3PL the two items below, paste their API URL + key above, then run the two tests. No credentials needed to generate your side.
+        {fulfillment.shippo.configured ? (
+          fulfillment.shippo.mode === "live" ? (
+            <p className="mt-3 rounded-xl border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-[13px] text-rose-100">
+              <strong>LIVE mode.</strong> Buying a label charges real postage to your Shippo account.
+            </p>
+          ) : (
+            <p className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
+              <strong>TEST mode.</strong> Labels are simulated and carry no real postage — they are not
+              valid for shipping. Swap <code>SHIPPO_API_TOKEN</code> for a live token when you are ready.
+            </p>
+          )
+        ) : (
+          <p className="mt-3 rounded-xl border border-white/15 bg-white/5 px-3 py-2 text-[13px] text-zinc-300">
+            <code>SHIPPO_API_TOKEN</code> is not set on the server, so rates and labels are unavailable.
+            Add it in your hosting environment — it is never entered or stored here.
           </p>
+        )}
 
-          {/* 1. Webhook URL to hand over */}
-          <div className="mt-4">
-            <p className="text-xs font-semibold text-zinc-300">1. Send the 3PL your webhook URL</p>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <code className="min-w-0 flex-1 truncate rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[12px] text-zinc-200">{webhookUrl}</code>
-              <button type="button" onClick={() => copy(webhookUrl, "url")} className="vl-btn-secondary px-3 py-2 text-xs">{copied === "url" ? "✓ Copied" : "Copy"}</button>
-            </div>
-          </div>
-
-          {/* 2. Shared secret */}
-          <div className="mt-4">
-            <p className="text-xs font-semibold text-zinc-300">2. Generate a shared signing secret</p>
-            <p className="text-[11px] text-zinc-500">They sign every webhook with this. Shown once — copy it now and give it to them. Saving happens automatically.</p>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <button type="button" disabled={busyAction === "generate_secret"} onClick={() => runOnboarding("generate_secret")} className="vl-btn-secondary px-3 py-2 text-xs disabled:opacity-50">
-                {busyAction === "generate_secret" ? "Generating…" : (fulfillment.webhookSecretSet ? "Regenerate secret" : "Generate secret")}
-              </button>
-              {generatedSecret ? (
-                <>
-                  <code className="min-w-0 flex-1 truncate rounded-lg border border-emerald-300/30 bg-black/40 px-3 py-2 text-[12px] text-emerald-200">{generatedSecret}</code>
-                  <button type="button" onClick={() => copy(generatedSecret, "secret")} className="vl-btn-secondary px-3 py-2 text-xs">{copied === "secret" ? "✓ Copied" : "Copy"}</button>
-                </>
-              ) : null}
-            </div>
-          </div>
-
-          {/* 3. SKU list */}
-          <div className="mt-4">
-            <p className="text-xs font-semibold text-zinc-300">3. Share your product SKU list</p>
-            <p className="text-[11px] text-zinc-500">The 3PL must use these exact SKUs so tracking + inventory match your products.</p>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
-              <button type="button" disabled={busyAction === "sku_list"} onClick={() => runOnboarding("sku_list")} className="vl-btn-secondary px-3 py-2 text-xs disabled:opacity-50">
-                {busyAction === "sku_list" ? "Loading…" : "Load SKU list"}
-              </button>
-              {skuText ? <button type="button" onClick={() => copy(skuText, "skus")} className="vl-btn-secondary px-3 py-2 text-xs">{copied === "skus" ? "✓ Copied" : "Copy all"}</button> : null}
-            </div>
-            {skuText ? <pre className="mt-2 max-h-48 overflow-auto whitespace-pre rounded-lg border border-white/10 bg-black/40 p-3 text-[12px] text-zinc-300">{skuText}</pre> : null}
-          </div>
-
-          {/* 4. Tests */}
-          <div className="mt-4 border-t border-white/10 pt-4">
-            <p className="text-xs font-semibold text-zinc-300">4. Test the connection (both directions)</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              <button type="button" disabled={busyAction === "test_connection"} onClick={() => runOnboarding("test_connection")} className="vl-btn-secondary px-3 py-2 text-xs disabled:opacity-50">
-                {busyAction === "test_connection" ? "Sending…" : "Send test order → 3PL"}
-              </button>
-              <button type="button" disabled={busyAction === "self_test_webhook"} onClick={() => runOnboarding("self_test_webhook")} className="vl-btn-secondary px-3 py-2 text-xs disabled:opacity-50">
-                {busyAction === "self_test_webhook" ? "Testing…" : "Test inbound webhook ← 3PL"}
-              </button>
-            </div>
-            {testResult ? (
-              <p className={`mt-2 rounded-lg border px-3 py-2 text-[13px] ${testResult.ok ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-100" : "border-rose-300/30 bg-rose-300/10 text-rose-100"}`}>{testResult.text}</p>
-            ) : null}
-          </div>
+        <div className="mt-4 border-t border-white/10 pt-4">
+          <label className="flex items-start gap-3 text-sm text-zinc-200">
+            <input
+              type="checkbox"
+              checked={fInventoryTracking}
+              onChange={(e) => setFInventoryTracking(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0"
+            />
+            <span>
+              Enforce inventory on the storefront
+              <span className="mt-1 block text-[12px] font-normal text-zinc-500">
+                When off, every product stays purchasable regardless of stock. When on, a stored
+                &quot;Out of Stock&quot; or a zero quantity blocks the sale. Populate real counts in
+                Inventory before turning this on, or products may go unpurchasable immediately.
+              </span>
+            </span>
+          </label>
         </div>
       </div>
 

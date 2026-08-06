@@ -11,7 +11,6 @@ const ACTION_LABELS: Record<string, string> = {
   order_cancel: "Order cancelled",
   order_resend_confirmation: "Confirmation email resent",
   order_print_packing_slip: "Packing slip printed",
-  order_retry_fulfillment: "Re-sent to 3PL",
 };
 
 function actionLabel(action: string) {

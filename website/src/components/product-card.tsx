@@ -28,7 +28,7 @@ export function ProductCard({
 }) {
   const hasRealImage = Boolean(image) && !image.includes(".svg");
   const dosePreview = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0];
-  // Out of stock is honored only when the 3PL inventory feed is live (the
+  // Out of stock is honored only when inventory enforcement is on (the
   // catalog resolves everything to "In Stock" otherwise), so this simply
   // reflects what fulfillment reports. A sold-out card can't be added to the
   // cart — the shopper opens the product to sign up for a restock alert.

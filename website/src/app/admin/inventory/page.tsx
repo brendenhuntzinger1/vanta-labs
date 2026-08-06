@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canManageInventory } from "@/lib/admin-roles";
 import { getInventoryRows } from "@/lib/admin-inventory";
-import { getFulfillmentRuntimeConfig } from "@/lib/fulfillment/config";
+import { isInventoryTrackingActive } from "@/lib/inventory-settings";
 import { AdminInventoryClient } from "@/components/admin-inventory-client";
 
 export const dynamic = "force-dynamic";
@@ -14,12 +14,11 @@ export default async function AdminInventoryPage() {
   }
 
   const rows = await getInventoryRows().catch(() => []);
-  // Stock is only enforced once the 3PL fulfillment integration is live and
-  // feeding real quantities. Until then these numbers are just a reference and
-  // never gate sales (see resolveStockStatus in catalog.ts).
-  const inventoryTrackingActive = await getFulfillmentRuntimeConfig()
-    .then((config) => Boolean(config.enabled))
-    .catch(() => false);
+  // Stock is only enforced once inventory tracking is switched on. Until then
+  // these numbers are a reference and never gate sales (see resolveStockStatus
+  // in catalog.ts). Vanta Labs owns these counts now — nothing external feeds
+  // them.
+  const inventoryTrackingActive = await isInventoryTrackingActive();
   const lowStockCount = inventoryTrackingActive
     ? rows.filter((row) => row.isLowStock || row.isOutOfStock).length
     : 0;
@@ -33,7 +32,7 @@ export default async function AdminInventoryPage() {
           <p className="mt-3 max-w-3xl text-sm text-zinc-400 sm:text-base">
             {inventoryTrackingActive
               ? `Live stock counts from every product and variant, with per-line low-stock thresholds.${lowStockCount > 0 ? ` ${lowStockCount} line${lowStockCount === 1 ? "" : "s"} need attention.` : " Everything is stocked above threshold."}`
-              : "Stock is managed by your 3PL. The counts below are a reference only — they don't gate sales, and every product stays purchasable until your fulfillment feed is connected."}
+              : "Inventory tracking is off. The counts below are a reference only — they don't gate sales, and every product stays purchasable. Populate real quantities here, then turn tracking on in Settings to start enforcing them."}
           </p>
         </section>
 

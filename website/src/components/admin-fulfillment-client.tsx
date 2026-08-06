@@ -79,7 +79,7 @@ function FulfillmentCard({ row }: { row: FulfillmentRow }) {
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.02] p-4 sm:p-5">
-      {/* Order number is the single most prominent element for the 3PL. */}
+      {/* Order number is the single most prominent element when packing. */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 pb-4">
         <div>
           <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Order Number</p>

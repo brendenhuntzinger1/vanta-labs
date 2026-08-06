@@ -58,7 +58,7 @@ function shippingMethodLabel(shippingAmount: number, country: string | null) {
 
 // The fulfillment queue only ever contains PAID orders (an approved payment
 // moves an order here automatically). By default it shows the active queue -
-// paid + awaiting fulfillment - so the 3PL sees exactly what needs to ship.
+// paid + awaiting fulfillment - so you see exactly what needs to be packed.
 export async function getFulfillmentRows(filters: FulfillmentFilters = {}): Promise<FulfillmentListResult> {
   const page = Math.max(1, Math.trunc(filters.page ?? 1));
   const pageSize = Math.min(100, Math.max(1, Math.trunc(filters.pageSize ?? 25)));
@@ -73,7 +73,7 @@ export async function getFulfillmentRows(filters: FulfillmentFilters = {}): Prom
       { count: "exact" },
     )
     .eq("payment_status", "paid")
-    // Membership orders are digital — never shipped, so keep them out of the 3PL queue.
+    // Membership orders are digital — never shipped, so keep them out of the queue.
     .neq("order_type", "membership")
     .order("paid_at", { ascending: true, nullsFirst: false });
 

@@ -2,7 +2,7 @@ import "server-only";
 
 // One-click replacement shipments for damaged / lost / stolen orders (the
 // store-backed Shipping Protection promise). A replacement is a REAL order
-// row — so the existing 3PL pipeline, tracking emails, packing slips, and
+// row — so the existing fulfillment queue, tracking emails, packing slips, and
 // payout accounting all just work — but a $0 one: the customer is never
 // charged, no commission/points/coupons apply, and revenue dashboards see
 // $0. It is linked back to the original order for the audit trail.
@@ -88,7 +88,7 @@ export async function createReplacementOrder(input: {
   const now = new Date().toISOString();
 
   // $0 order: every money/promo field zeroed or nulled; customer + shipping
-  // address copied verbatim so the 3PL ships to the same destination.
+  // address copied verbatim so the replacement ships to the same destination.
   const baseOrderRow: Record<string, unknown> = {
     order_id: orderId,
     order_number: orderNumber,

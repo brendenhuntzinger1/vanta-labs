@@ -4,7 +4,7 @@ import { canManageSettings } from "@/lib/admin-roles";
 import { upsertControlValue, getBusinessSettings, getWelcomeOffer } from "@/lib/admin-control";
 import { getEmailAdminSettings } from "@/lib/email/settings";
 import { getPaymentProcessorAdminSettings } from "@/lib/payment-processor-config";
-import { getFulfillmentAdminSettings } from "@/lib/fulfillment/config";
+import { getFulfillmentAdminSettings } from "@/lib/fulfillment-settings";
 import { sendEmail } from "@/lib/email/send";
 
 function unauthorizedResponse() {
@@ -86,17 +86,17 @@ export async function PATCH(request: Request) {
       await setIfPresent("payment_processor", "webhook_secret", p.webhook_secret);
     }
 
+    // Fulfillment is in-house: the only writable setting is whether stock
+    // levels gate sales. There are deliberately no provider credentials, API
+    // base URL, webhook secret or payout fields here — accepting any of those
+    // again would be the first step to reconnecting an outside provider.
+    // The Shippo token lives in the server environment and is never writable
+    // through this endpoint.
     if (body.fulfillment) {
       const f = body.fulfillment;
-      if (typeof f.enabled === "boolean") await set("fulfillment", "enabled", f.enabled);
-      if (typeof f.auto_transmit === "boolean") await set("fulfillment", "auto_transmit", f.auto_transmit);
-      if (typeof f.mode === "string") await set("fulfillment", "mode", f.mode);
-      if (typeof f.provider_name === "string") await set("fulfillment", "provider_name", f.provider_name);
-      if (typeof f.api_base_url === "string") await set("fulfillment", "api_base_url", f.api_base_url);
-      await setIfPresent("fulfillment", "api_key", f.api_key);
-      await setIfPresent("fulfillment", "webhook_secret", f.webhook_secret);
-      if (typeof f.payout_model === "string") await set("fulfillment", "payout_model", f.payout_model);
-      if (f.payout_rate !== undefined) await set("fulfillment", "payout_rate", Number(f.payout_rate) || 0);
+      if (typeof f.inventory_tracking_enabled === "boolean") {
+        await set("inventory", "tracking_enabled", f.inventory_tracking_enabled);
+      }
     }
 
     if (body.business) {

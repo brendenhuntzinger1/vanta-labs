@@ -943,7 +943,7 @@ export async function finalizeManualPayment(
   const commissionableSubtotal = roundMoney(Math.max(0, subtotal - discountAmount));
 
   // Membership orders are digital — nothing ships, so they go straight to
-  // "fulfilled" and are never sent to the 3PL.
+  // "fulfilled" and never enter the shipping queue.
   const isMembershipOrder = String(order.order_type ?? "product") === "membership";
 
   // Atomic claim: the update only succeeds if the status is still what we
@@ -1181,7 +1181,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // Refund/cancel are terminal money states. A late or replayed
   // `payment.succeeded` (arriving with a fresh event_id after a refund) must
   // NOT flip the order back to "paid" and re-award commissions, points,
-  // coupons, the confirmation email, and 3PL transmission. Record the event
+  // coupons and the confirmation email. Record the event
   // against the existing status and stop.
   const REFUND_TERMINAL_STATES = new Set(["refunded", "partially_refunded", "canceled"]);
   const priorPaymentStatus = orderRecord?.payment_status ? String(orderRecord.payment_status) : null;
@@ -1270,7 +1270,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // SECOND distinct success event (different event_id, so not caught by the
   // event-claim dedup) updates zero rows here and skips the side-effects,
   // preventing double commission / points / coupon redemption / confirmation
-  // email / inventory decrement / 3PL transmit. Mirrors finalizeManualPayment.
+  // email / inventory decrement. Mirrors finalizeManualPayment.
   // Atomic paid-flip: exactly one delivery flips a not-yet-paid EXISTING order
   // to paid. It sets fulfillment_status/paid_at ONLY on this first transition
   // (via .neq("payment_status","paid")), so a duplicate delivery — or a later
