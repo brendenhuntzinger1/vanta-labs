@@ -4,7 +4,12 @@ import { useState } from "react";
 import type { EmailAdminSettings } from "@/lib/email/settings";
 import type { PaymentProcessorAdminSettings } from "@/lib/payment-processor-config";
 import type { FulfillmentAdminSettings } from "@/lib/fulfillment-settings";
+import type { InventoryReadiness } from "@/lib/admin-inventory";
+import type { PackagePresetRecord } from "@/lib/shippo/packages";
+import type { ShippingAddress } from "@/lib/shipping-origin";
 import type { BusinessSettings, WelcomeOffer } from "@/lib/admin-control";
+import { AdminShippingPackagesClient } from "@/components/admin-shipping-packages-client";
+import { AdminShippingOriginClient } from "@/components/admin-shipping-origin-client";
 
 function Labeled({ label, children, hint }: { label: string; children: React.ReactNode; hint?: string }) {
   return (
@@ -16,6 +21,21 @@ function Labeled({ label, children, hint }: { label: string; children: React.Rea
   );
 }
 
+/**
+ * A fingerprint of the RISK a readiness check describes, not of the check
+ * itself.
+ *
+ * The operator's confirmation has to survive the re-check that happens at save
+ * time — keying it on the timestamp would invalidate every confirmation the
+ * instant it was re-verified, and the save could never complete. Keying it on
+ * the numbers means the confirmation stands while the situation is unchanged
+ * and is withdrawn the moment it is not, which is exactly what was consented
+ * to.
+ */
+function riskSignature(readiness: InventoryReadiness): string {
+  return [readiness.isEffectivelyEmpty, readiness.totalLines, readiness.stockedLines, readiness.blockedLines].join("|");
+}
+
 export function AdminSettingsClient({
   email,
   processor,
@@ -23,6 +43,13 @@ export function AdminSettingsClient({
   business,
   welcomeOffer,
   siteUrl,
+  inventoryReadiness,
+  packages,
+  shippingOrigin,
+  shippingReturnAddress,
+  usesSeparateReturnAddress,
+  shippingOriginMissing,
+  canManage,
 }: {
   email: EmailAdminSettings;
   processor: PaymentProcessorAdminSettings;
@@ -30,6 +57,14 @@ export function AdminSettingsClient({
   business: BusinessSettings;
   welcomeOffer: WelcomeOffer;
   siteUrl: string;
+  /** Server-measured at page render. Re-measured before enforcement is armed. */
+  inventoryReadiness: InventoryReadiness | null;
+  packages: PackagePresetRecord[];
+  shippingOrigin: ShippingAddress;
+  shippingReturnAddress: ShippingAddress;
+  usesSeparateReturnAddress: boolean;
+  shippingOriginMissing: string[];
+  canManage: boolean;
 }) {
   // Email state
   const [enabled, setEnabled] = useState(email.enabled);
@@ -55,6 +90,29 @@ export function AdminSettingsClient({
   // levels gate sales — there are no provider credentials to enter any more.
   const [fInventoryTracking, setFInventoryTracking] = useState(fulfillment.inventoryTrackingEnabled);
 
+  // ----------------------------------------------------------------------
+  // Inventory enforcement guard.
+  //
+  // Arming this flag makes stored stock levels start blocking sales the moment
+  // it saves. On a catalog whose quantities were never populated — the likely
+  // state, since nothing has been enforcing them — that empties the storefront
+  // instantly and silently. So the switch is checked against the DATABASE, not
+  // against this page's copy of it: the tab may have been open for an hour, or
+  // a second admin may have been entering counts in another window.
+  //
+  // `savedInventoryTracking` tracks what is actually persisted, so re-saving
+  // unrelated settings while enforcement is already on doesn't re-interrogate
+  // the operator about a decision they already made.
+  // ----------------------------------------------------------------------
+  const [savedInventoryTracking, setSavedInventoryTracking] = useState(fulfillment.inventoryTrackingEnabled);
+  const [readiness, setReadiness] = useState<InventoryReadiness | null>(inventoryReadiness);
+  const [checkingReadiness, setCheckingReadiness] = useState(false);
+  const [confirmedSignature, setConfirmedSignature] = useState<string | null>(null);
+
+  const isArmingEnforcement = fInventoryTracking && !savedInventoryTracking;
+  const enforcementRisky = isArmingEnforcement && readiness !== null && readiness.isEffectivelyEmpty;
+  const enforcementConfirmed = readiness !== null && confirmedSignature === riskSignature(readiness);
+
   // Business info state
   const [supportEmail, setSupportEmail] = useState(business.supportEmail);
   const [businessName, setBusinessName] = useState(business.businessName);
@@ -72,9 +130,71 @@ export function AdminSettingsClient({
   const [testing, setTesting] = useState(false);
   const [testMessage, setTestMessage] = useState<string | null>(null);
 
+  /** Ask the server what the inventory actually looks like right now. */
+  const fetchReadiness = async (): Promise<InventoryReadiness | null> => {
+    try {
+      const res = await fetch("/api/admin/inventory?summary=1", { cache: "no-store" });
+      const json = (await res.json()) as { success: boolean; readiness?: InventoryReadiness };
+      return json.success && json.readiness ? json.readiness : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const toggleInventoryTracking = async (next: boolean) => {
+    setFInventoryTracking(next);
+    setMessage(null);
+
+    if (!next) {
+      // Switching enforcement OFF only ever makes more things purchasable.
+      // Nothing to warn about, and any prior confirmation is now meaningless.
+      setConfirmedSignature(null);
+      return;
+    }
+
+    setCheckingReadiness(true);
+    const fresh = await fetchReadiness();
+    setCheckingReadiness(false);
+    // A failed check leaves the previous figures on screen but withdraws any
+    // confirmation, so save() re-checks and refuses rather than arming blind.
+    setConfirmedSignature(null);
+    if (fresh) {
+      setReadiness(fresh);
+    }
+  };
+
   const save = async () => {
     setSaving(true);
     setMessage(null);
+
+    // Re-verify against the database immediately before arming enforcement.
+    // The check that rendered this page may be minutes or hours old, and this
+    // is the one setting on the screen where acting on a stale reading takes
+    // the whole catalog off sale.
+    if (isArmingEnforcement) {
+      const fresh = await fetchReadiness();
+      if (!fresh) {
+        setMessage("Couldn't check your inventory counts, so enforcement wasn't turned on. Nothing else was saved either — try again.");
+        setSaving(false);
+        return;
+      }
+      setReadiness(fresh);
+
+      if (fresh.isEffectivelyEmpty && confirmedSignature !== riskSignature(fresh)) {
+        // Either they never confirmed, or the situation changed since they did.
+        // Withdraw the stale confirmation so the checkbox re-arms against the
+        // numbers now on screen.
+        setConfirmedSignature(null);
+        setMessage(
+          fresh.totalLines === 0
+            ? "Nothing was saved. There are no products to enforce stock against yet."
+            : `Nothing was saved. ${fresh.zeroQuantityLines} of ${fresh.totalLines} inventory lines are still at zero — tick the confirmation to enable enforcement anyway.`,
+        );
+        setSaving(false);
+        return;
+      }
+    }
+
     try {
       const res = await fetch("/api/admin/settings", {
         method: "PATCH",
@@ -122,7 +242,15 @@ export function AdminSettingsClient({
         setSaving(false);
         return;
       }
-      setMessage("Saved. Settings are live.");
+      setMessage(
+        fInventoryTracking && !savedInventoryTracking
+          ? "Saved. Inventory enforcement is live — stock levels now gate the storefront."
+          : "Saved. Settings are live.",
+      );
+      // What's persisted has moved, so the guard shouldn't re-interrogate the
+      // operator the next time they save something unrelated.
+      setSavedInventoryTracking(fInventoryTracking);
+      setConfirmedSignature(null);
       setSmtpPassword("");
       setResendKey("");
       setSendgridKey("");
@@ -320,7 +448,7 @@ export function AdminSettingsClient({
             <input
               type="checkbox"
               checked={fInventoryTracking}
-              onChange={(e) => setFInventoryTracking(e.target.checked)}
+              onChange={(e) => void toggleInventoryTracking(e.target.checked)}
               className="mt-0.5 h-4 w-4 shrink-0"
             />
             <span>
@@ -332,12 +460,110 @@ export function AdminSettingsClient({
               </span>
             </span>
           </label>
+
+          {checkingReadiness ? (
+            <p className="mt-3 text-[12px] text-zinc-500">Checking your current stock counts…</p>
+          ) : null}
+
+          {/* The catalog is not populated and enforcement is about to be armed.
+              This is the case that empties the storefront, so it blocks the
+              save until it is explicitly acknowledged. */}
+          {enforcementRisky && readiness ? (
+            <div className="mt-3 rounded-xl border border-rose-300/40 bg-rose-300/10 p-4 text-[13px] text-rose-50">
+              <p className="font-semibold">
+                {readiness.totalLines === 0
+                  ? "There is no inventory to enforce."
+                  : "Your inventory is empty — this will pull products off the storefront."}
+              </p>
+
+              {readiness.totalLines === 0 ? (
+                <p className="mt-2 text-rose-100/90">
+                  No sellable product lines were found, so turning this on can only block sales. Add products first.
+                </p>
+              ) : (
+                <>
+                  <p className="mt-2 text-rose-100/90">
+                    <strong>{readiness.zeroQuantityLines} of {readiness.totalLines}</strong> product lines are still at
+                    zero{readiness.stockedLines > 0 ? `, and only ${readiness.stockedLines} ${readiness.stockedLines === 1 ? "has" : "have"} a real count` : " — none has a real count"}.
+                    The moment you save this, every one of them stops being purchasable.
+                  </p>
+                  {readiness.blockedLines > 0 ? (
+                    <p className="mt-2 text-rose-100/90">
+                      <strong>{readiness.blockedLines}</strong> {readiness.blockedLines === 1 ? "line is" : "lines are"} marked
+                      &quot;Out of Stock&quot; and would disappear immediately
+                      {readiness.sampleBlockedNames.length > 0 ? (
+                        <>
+                          {" "}— including {readiness.sampleBlockedNames.join(", ")}
+                          {readiness.blockedLines > readiness.sampleBlockedNames.length ? ", and others" : ""}
+                        </>
+                      ) : null}
+                      .
+                    </p>
+                  ) : null}
+                  <p className="mt-2 text-rose-100/90">
+                    Enter your real counts in <a href="/admin/inventory" className="underline underline-offset-2">Inventory</a> first,
+                    then come back and switch this on.
+                  </p>
+                </>
+              )}
+
+              <label className="mt-3 flex items-start gap-2 rounded-lg border border-rose-200/30 bg-rose-200/10 p-3 font-medium text-rose-50">
+                <input
+                  type="checkbox"
+                  checked={enforcementConfirmed}
+                  onChange={(e) => setConfirmedSignature(e.target.checked && readiness ? riskSignature(readiness) : null)}
+                  className="mt-0.5 h-4 w-4 shrink-0"
+                />
+                <span>
+                  I understand this takes those products off sale immediately, and I want to enforce inventory anyway.
+                </span>
+              </label>
+
+              <p className="mt-2 text-[11px] text-rose-100/70">
+                Counts read from the database{readiness.checkedAt ? ` at ${new Date(readiness.checkedAt).toLocaleTimeString()}` : ""} and
+                re-checked when you save.
+              </p>
+            </div>
+          ) : null}
+
+          {/* Enforcement is safe to arm, but some lines are genuinely sold out.
+              Worth stating plainly; not worth blocking on. */}
+          {isArmingEnforcement && readiness && !readiness.isEffectivelyEmpty && readiness.blockedLines > 0 ? (
+            <p className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
+              {readiness.blockedLines} of {readiness.totalLines} lines are marked &quot;Out of Stock&quot; and will stop
+              being purchasable when you save. The other {readiness.totalLines - readiness.blockedLines} are unaffected.
+            </p>
+          ) : null}
+
+          {isArmingEnforcement && readiness && !readiness.isEffectivelyEmpty && readiness.blockedLines === 0 ? (
+            <p className="mt-3 rounded-xl border border-emerald-300/30 bg-emerald-300/10 px-3 py-2 text-[13px] text-emerald-100">
+              All {readiness.totalLines} product lines have a real count and none is out of stock. Nothing will disappear
+              from the storefront when you save.
+            </p>
+          ) : null}
         </div>
       </div>
 
-      <div className="sticky bottom-4 flex items-center gap-3 rounded-2xl border border-white/10 bg-zinc-900/90 p-4 backdrop-blur">
+      {/* Packages and the ship-from address are both inputs to every Shippo
+          rate request, so they live next to the fulfillment settings above
+          rather than on a screen of their own. */}
+      <AdminShippingPackagesClient initialPackages={packages} canManage={canManage} />
+
+      <AdminShippingOriginClient
+        initialOrigin={shippingOrigin}
+        initialReturn={shippingReturnAddress}
+        initialUsesSeparateReturn={usesSeparateReturnAddress}
+        initialOriginMissing={shippingOriginMissing}
+      />
+
+      <div className="sticky bottom-4 flex flex-wrap items-center gap-3 rounded-2xl border border-white/10 bg-zinc-900/90 p-4 backdrop-blur">
         <button type="button" disabled={saving} onClick={save} className="vl-btn-primary px-5 py-2.5 text-sm disabled:opacity-50">{saving ? "Saving…" : "Save settings"}</button>
         {message ? <span className="text-sm text-zinc-300">{message}</span> : null}
+        {!message && enforcementRisky && !enforcementConfirmed ? (
+          <span className="text-sm text-rose-200">
+            Saving is blocked until you confirm the inventory warning above, or untick enforcement.
+          </span>
+        ) : null}
       </div>
     </div>
   );
