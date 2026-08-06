@@ -354,10 +354,11 @@ live DB is confirmed, drop the compatibility view/rename the base table.
 | `payment_settings` | `admin_audit_logs` sections `payment_methods` / `payment_processor` |
 | `payment_transactions` | `orders` + `payment_events` |
 | `refunds` | `orders.refund_amount` + `admin_audit_logs` |
-| `payout_records` | `payouts` / `partner_payouts` (ambassadors); `fulfillment_payouts` (3PL) |
-| `tracking_numbers` / `shipping_updates` | `order_shipments` + `fulfillment_orders`/`fulfillment_events` |
-| `inventory_sync` / `api_logs` | `fulfillment_events` |
-| `3PL_payouts` | `fulfillment_payouts` |
+| `payout_records` | `payouts` / `partner_payouts` (ambassadors) |
+| `tracking_numbers` / `shipping_updates` | `orders` (Shippo columns) + `order_shipments` + `order_status_history` |
+| `inventory_sync` / `api_logs` | inventory lives on `products`/`product_doses` (no external sync); Shippo webhook receipts are in `shippo_webhook_events` |
+| `3PL_payouts` | n/a — self-fulfilled; postage is `orders.postage_cost_cents` |
+| `shipping_boxes` / `packages` | `shipping_package_presets` |
 | `referral_codes` | `ambassadors.referral_code` (+ `referrals`) |
 | `commission_payouts` | `partner_payouts` / `payouts` |
 | `referral_clicks` | `partner_clicks` |
@@ -397,19 +398,34 @@ Apply these SQL files in order (each is idempotent):
 8. `admin-rbac-refunds.sql`
 9. `abandoned-cart-recovery.sql`
 10. **`manual-payments.sql`** (new — manual payments, order number, tax, proofs)
-11. **`fulfillment-3pl.sql`** (new — 3PL orders/events/payouts)
-12. Supabase advisor fixes (`supabase-*-advisor-*.sql`)
-13. `orders-state-phone.sql` (shipping state + phone captured at checkout)
-14. `inventory-enforce-positive-stock.sql` (reservations on any positive stock)
-15. **`dynamic-sales-tax.sql`** (new — per-order tax rate + destination state
+11. Supabase advisor fixes (`supabase-*-advisor-*.sql`)
+12. `orders-state-phone.sql` (shipping state + phone captured at checkout)
+13. `inventory-enforce-positive-stock.sql` (reservations on any positive stock)
+14. **`dynamic-sales-tax.sql`** (new — per-order tax rate + destination state
     for the address-based sales-tax system; tax is collected only for
     admin-configured nexus states at destination-state rates)
-16. **`coupon-private-flag.sql`** (new — private/unlisted coupons: valid at
+15. **`coupon-private-flag.sql`** (new — private/unlisted coupons: valid at
     checkout, never advertised on the storefront)
-17. **`replacement-orders.sql`** (new — links a $0 replacement shipment to the
+16. **`replacement-orders.sql`** (new — links a $0 replacement shipment to the
     original order + records the damaged/lost/stolen reason)
-18. **`express-checkout.sql`** (new — Apple Pay express lane: intents +
+17. **`express-checkout.sql`** (new — Apple Pay express lane: intents +
     shipping quotes, `orders.checkout_channel`, and a re-assertion of the
     settlement backstops it depends on). Must be run **before** deploying the
     code that reads it, and it ends with a verification query that must return
     all `t`.
+18. **`self-fulfillment-shippo.sql`** (new — self-fulfillment via Shippo: unit
+    shipping weights, `shipping_package_presets` (+ seeded default mailer), the
+    `orders` label/postage columns including the exactly-once
+    `label_purchase_claimed_at` claim, `shippo_webhook_events`, and
+    `order_status_history`). Must be run **before** deploying the code that
+    reads it — deployed first, the label purchase would run without its claim
+    column, which is exactly the case that buys two labels. Ends with a
+    verification query that must return all `t`.
+
+The former `fulfillment-3pl.sql` (3PL orders/events/payouts) is **retired** and
+is no longer in `src/lib/sql/`. Its tables (`fulfillment_orders`,
+`fulfillment_events`, `fulfillment_payouts`) may still exist in a database
+migrated before the switch to self-fulfillment; nothing reads or writes them.
+They are left in place deliberately — dropping them would destroy the historical
+record of orders that were shipped under the old arrangement. Drop them only
+after exporting that history.
