@@ -154,17 +154,6 @@ export function AdminOrderActions({
         <button type="button" disabled={saving} onClick={() => runAction("update_status", undefined, { carrier, estimatedDelivery: estimatedDelivery || undefined })} className="vl-btn-primary px-4 py-2 text-xs disabled:opacity-60">Save status</button>
         <button type="button" disabled={saving} onClick={() => runAction("cancel", "Cancel this order?")} className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60">Cancel</button>
         <button type="button" disabled={saving} onClick={() => runAction("resend_confirmation")} className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60">Resend confirmation</button>
-        {/* A 3PL rejection used to strand a paid order permanently — the payment
-            webhook never fires twice, so nothing shipped and there was no way to
-            try again. Safe to press repeatedly. */}
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => runAction("retry_fulfillment", "Re-send this paid order to the 3PL?")}
-          className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60"
-        >
-          Retry fulfillment
-        </button>
         <button type="button" onClick={() => window.open(`/api/admin/orders/${orderId}/packing-slip`, "_blank", "noopener,noreferrer")} className="vl-btn-secondary px-4 py-2 text-xs">Print packing slip</button>
       </div>
 

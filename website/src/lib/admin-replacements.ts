@@ -10,7 +10,6 @@ import "server-only";
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { PAID_ORDER_STATUSES } from "@/lib/ledger";
-import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
 import { decrementInventoryForOrder } from "@/lib/inventory-fulfillment";
 
 export type ReplacementReason = "damaged" | "lost" | "stolen" | "other";
@@ -177,14 +176,9 @@ export async function createReplacementOrder(input: {
     /* non-fatal */
   }
 
-  // Queue/transmit to the 3PL through the existing pipeline (no-op when the
-  // 3PL integration isn't configured — the order still appears in the
-  // fulfillment queue for manual handling).
-  try {
-    await transmitOrderToFulfillment(orderId);
-  } catch {
-    /* non-fatal — the order remains in the fulfillment queue */
-  }
+  // The replacement order lands in the admin fulfillment queue and is shipped
+  // in-house. A replacement carries the customer's address like any other
+  // order, so nothing about it may be transmitted to an outside provider.
 
   return {
     orderId,

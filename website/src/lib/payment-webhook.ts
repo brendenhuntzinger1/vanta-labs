@@ -15,7 +15,6 @@ import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
 import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
-import { transmitOrderToFulfillment } from "@/lib/fulfillment/service";
 import { activatePaidMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 import {
   isMembershipEvent,
@@ -1091,9 +1090,8 @@ export async function finalizeManualPayment(
         (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
       );
     }
-    // Auto-transmit the paid + verified order to the 3PL (best-effort; never
-    // blocks approval).
-    await transmitOrderToFulfillment(orderId);
+    // Fulfillment is in-house: the approved order surfaces in the admin
+    // fulfillment queue. Nothing is transmitted to an outside provider.
   }
 
   return { orderId, alreadyPaid: false, status: "paid" };
@@ -1554,12 +1552,9 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         }
       }
 
-      // Auto-transmit the newly-paid order to the 3PL (best-effort).
-      try {
-        await transmitOrderToFulfillment(orderId);
-      } catch (transmitError) {
-        console.error("Unable to transmit order to fulfillment", orderId, transmitError);
-      }
+      // Fulfillment is in-house: a paid order is picked up from the admin
+      // fulfillment queue, not transmitted anywhere. Nothing outbound belongs
+      // here — an order's shipping data must never leave Vanta Labs.
     }
   }
 
