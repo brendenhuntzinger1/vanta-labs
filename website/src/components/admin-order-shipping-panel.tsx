@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { fulfillmentStatusLabel, normalizeLegacyStatus, type FulfillmentStatus } from "@/lib/order-pipeline";
@@ -496,6 +496,25 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
       setSelectedRateId(usable[0].id);
       setNotice({ tone: "info", text: `${usable.length} service${usable.length === 1 ? "" : "s"} available.` });
     });
+
+  // Quote automatically when the page opens, so the carrier choices are already
+  // on screen instead of behind a click. Fetching a rate costs nothing and buys
+  // nothing — only "Buy label" spends money, and that stays deliberate.
+  //
+  // Keyed on the order, and guarded by a ref rather than by `rates === null`:
+  // a quote that legitimately returns zero usable rates leaves `rates` empty,
+  // and re-running on that condition would retry forever against a parcel that
+  // cannot be quoted.
+  const autoQuotedFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!canQuote) return;
+    if (autoQuotedFor.current === orderId) return;
+    autoQuotedFor.current = orderId;
+    void getRates();
+    // getRates is recreated every render; depending on it would re-fire the
+    // effect continuously. The ref above is what actually enforces once-only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canQuote, orderId]);
 
   const buyLabel = () =>
     run("buy", async () => {
