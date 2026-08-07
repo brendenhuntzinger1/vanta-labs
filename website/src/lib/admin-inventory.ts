@@ -36,6 +36,8 @@ export interface InventoryLine {
   sku: string | null;
   category: string;
   inventoryQuantity: number;
+  /** Units ordered from a supplier but NOT yet on the shelf. Never sellable. */
+  incomingQuantity: number;
   lowStockThreshold: number;
   isLowStock: boolean;
   isOutOfStock: boolean;
@@ -89,6 +91,7 @@ function toLine(input: {
   sku: string | null;
   category: string;
   inventoryQuantity: number;
+  incomingQuantity?: number;
   lowStockThreshold: number;
   stockStatus: string;
   shippingWeightOz: number | null;
@@ -112,6 +115,7 @@ function toLine(input: {
     key: input.doseId ? `dose:${input.doseId}` : `product:${input.productId}`,
     ...input,
     inventoryQuantity,
+    incomingQuantity: Math.max(0, Math.round(Number(input.incomingQuantity ?? 0))),
     lowStockThreshold,
     isOutOfStock: inventoryQuantity <= 0,
     isLowStock: inventoryQuantity > 0 && inventoryQuantity <= lowStockThreshold,
@@ -129,7 +133,7 @@ export async function getInventoryRows(): Promise<InventoryLine[]> {
   // next to a dead "GLP-1 — 5 mg = 0".
   const { data: products, error: productError } = await supabaseAdmin
     .from("products")
-    .select("id, slug, name, category, inventory_quantity, low_stock_threshold, stock_status, shipping_weight_oz")
+    .select("id, slug, name, category, inventory_quantity, incoming_quantity, low_stock_threshold, stock_status, shipping_weight_oz")
     .eq("is_archived", false)
     .order("name", { ascending: true });
 
@@ -142,7 +146,7 @@ export async function getInventoryRows(): Promise<InventoryLine[]> {
   const { data: doses, error: doseError } = productIds.length > 0
     ? await supabaseAdmin
         .from("product_doses")
-        .select("id, product_id, label, sku, inventory_quantity, low_stock_threshold, stock_status, shipping_weight_oz")
+        .select("id, product_id, label, sku, inventory_quantity, incoming_quantity, low_stock_threshold, stock_status, shipping_weight_oz")
         .in("product_id", productIds)
         .order("position", { ascending: true })
     : { data: [], error: null };
@@ -175,6 +179,7 @@ export async function getInventoryRows(): Promise<InventoryLine[]> {
         sku: null,
         category: String(product.category ?? ""),
         inventoryQuantity: Number(product.inventory_quantity ?? 0),
+        incomingQuantity: Number(product.incoming_quantity ?? 0),
         lowStockThreshold: Number(product.low_stock_threshold ?? 5),
         stockStatus: String(product.stock_status ?? "In Stock"),
         shippingWeightOz: productWeight,
@@ -193,6 +198,7 @@ export async function getInventoryRows(): Promise<InventoryLine[]> {
         sku: dose.sku ? String(dose.sku) : null,
         category: String(product.category ?? ""),
         inventoryQuantity: Number(dose.inventory_quantity ?? 0),
+        incomingQuantity: Number(dose.incoming_quantity ?? 0),
         lowStockThreshold: Number(dose.low_stock_threshold ?? 5),
         stockStatus: String(dose.stock_status ?? "In Stock"),
         shippingWeightOz: toStoredWeight(dose.shipping_weight_oz),
