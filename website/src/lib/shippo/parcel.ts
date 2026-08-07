@@ -25,14 +25,22 @@ import type { ShippoParcel } from "@/lib/shippo/types";
  * inserted after — a discrepancy that only shows up as postage that quietly
  * does not match the catalog.
  *
- * 0.5 oz is a 2ml glass vial with its immediate packaging (~10-15g). Note this
- * is the ONE fallback that does NOT err heavy, and deliberately so: USPS Ground
- * Advantage prices in weight tiers, and this value is MULTIPLIED by quantity.
- * Padding it pushes multi-vial orders across a tier boundary and overcharges
- * every single shipment. Per-parcel padding belongs on the package preset's
- * tare, which is added once — not here, where it compounds.
+ * 0.18 oz is the owner's figure for a 3ml peptide vial: 5 g, rounded UP from
+ * 0.1764 so the declared weight never lands under the real one.
+ *
+ * NOT VERIFIED ON A SCALE. An empty 3ml glass vial with stopper and crimp is
+ * commonly 8-12 g, so this may run light by roughly half. It is left as given
+ * because at this magnitude even a five-vial order plus mailer stays inside
+ * USPS Ground Advantage's first weight tier, where the price is identical
+ * either way. Replace it with a measured value once stock arrives; the error
+ * only starts costing money on larger orders.
+ *
+ * This is the ONE fallback that does not err heavy, deliberately: it is
+ * MULTIPLIED by quantity, so padding it pushes multi-vial orders across a tier
+ * boundary and overcharges every shipment. Per-parcel padding belongs on the
+ * package preset's tare, which is added once — not here, where it compounds.
  */
-export const DEFAULT_UNIT_WEIGHT_OZ = 0.5;
+export const DEFAULT_UNIT_WEIGHT_OZ = 0.18;
 
 /**
  * Shippo rejects a parcel weighing zero or less with a validation error, which

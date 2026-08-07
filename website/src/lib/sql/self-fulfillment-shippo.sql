@@ -30,17 +30,18 @@
 -- 1. Packed weight per unit
 --
 -- Shippo prices a parcel, not a cart, so every sellable line needs a weight in
--- ounces. The default of 0.5 oz is a typical single vial — it exists so an
+-- ounces. The default of 0.18 oz is a typical single vial — it exists so an
 -- under-configured catalog still rates and ships instead of erroring at the
 -- counter; the owner corrects it per product in Admin -> Products.
 --
 -- A dose row inherits the parent product's weight when its own is NULL (a
 -- 5 mg and a 10 mg vial usually weigh the same), which is why this column is
 -- deliberately nullable with NO default: NULL means "inherit", and a default
--- would silently pin every variant to 0.5 and hide the parent's real value.
+-- would silently pin every variant to 0.18 and hide the parent's real value.
 -- The resolution order lives in src/lib/shippo/parcel.ts.
 --
--- 0.5 oz is a single 2ml glass peptide vial with its immediate packaging —
+-- 0.18 oz is a 3ml peptide vial at 5g, the owner's figure, rounded up from
+-- 0.1764 so the declaration never lands under the real weight. Not yet weighed.
 -- roughly 10-15g. It is a STARTING POINT to be replaced by a real scale
 -- reading, not an estimate to rely on. Erring high is not the safe direction:
 -- USPS Ground Advantage prices in weight tiers, so phantom ounces multiplied
@@ -53,7 +54,7 @@
 -- added once per parcel, so it must never be baked into a per-unit weight.
 -- ---------------------------------------------------------------------------
 alter table if exists public.products
-  add column if not exists shipping_weight_oz numeric default 0.5;
+  add column if not exists shipping_weight_oz numeric default 0.18;
 
 alter table if exists public.product_doses
   add column if not exists shipping_weight_oz numeric;

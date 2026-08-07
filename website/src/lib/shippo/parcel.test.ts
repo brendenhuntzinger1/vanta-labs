@@ -85,8 +85,12 @@ describe("computeParcelWeightOz", () => {
   });
 
   it("uses the default unit weight for items with no declared weight", () => {
+    // Rounded to hundredths, not compared against the raw arithmetic: the
+    // function rounds deliberately, and 1.5 + 0.18 * 4 evaluates to
+    // 2.2199999999999998 in IEEE-754. Asserting the unrounded expression would
+    // make this test fail for a value that is in fact correct.
     expect(computeParcelWeightOz({ preset: MAILER, items: [{ quantity: 4 }] })).toBe(
-      1.5 + DEFAULT_UNIT_WEIGHT_OZ * 4,
+      Math.round((1.5 + DEFAULT_UNIT_WEIGHT_OZ * 4) * 100) / 100,
     );
   });
 
