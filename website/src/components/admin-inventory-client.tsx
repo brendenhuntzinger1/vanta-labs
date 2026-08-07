@@ -2,6 +2,12 @@
 
 import { useMemo, useState } from "react";
 import type { InventoryLine } from "@/lib/admin-inventory";
+import {
+  InventoryHistory,
+  InventorySummary,
+  QuickAdjust,
+  ReceiveDrawer,
+} from "@/components/admin-inventory-controls";
 import { lineWeightOz } from "@/lib/shippo/parcel";
 
 type StatusFilter = "all" | "low" | "out" | "unweighed";
@@ -135,6 +141,32 @@ export function AdminInventoryClient({
       return next;
     });
     setMessage(`Filled ${targets.length} row${targets.length === 1 ? "" : "s"} with ${raw} oz — review, then Save changes.`);
+  };
+
+  // Transfer everything marked incoming on one line into available stock. The
+  // server returns the refreshed rows, so the table shows the real post-write
+  // state rather than an optimistic guess that a concurrent sale could contradict.
+  const receiveIncoming = async (row: InventoryLine) => {
+    setBusyKey(row.key);
+    setMessage(null);
+    try {
+      const res = await fetch("/api/admin/inventory/operations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "receive_incoming", productId: row.productId, doseId: row.doseId }),
+      });
+      const json = (await res.json()) as { success?: boolean; error?: string; rows?: InventoryLine[]; quantityAfter?: number };
+      if (!res.ok || !json.success) {
+        setMessage(json.error ?? "Could not receive that shipment.");
+        return;
+      }
+      if (json.rows) setRows(json.rows);
+      setMessage(`${lineName(row)} received — now ${json.quantityAfter} units.`);
+    } catch {
+      setMessage("Could not reach the server.");
+    } finally {
+      setBusyKey(null);
+    }
   };
 
   const dirtyKeys = useMemo(
@@ -317,6 +349,23 @@ export function AdminInventoryClient({
         </p>
       </div>
 
+      <div className="mt-4">
+        <InventorySummary rows={rows} />
+      </div>
+
+      <div className="mt-4">
+        <ReceiveDrawer
+          rows={rows}
+          onDone={(next, text) => {
+            // The server returns the refreshed rows, so the table reflects the
+            // real post-write state rather than an optimistic guess that could
+            // disagree with a sale landing at the same moment.
+            if (next) setRows(next);
+            setMessage(text);
+          }}
+        />
+      </div>
+
       <div className="mt-4 flex flex-wrap items-center gap-3">
         <input
           type="text"
@@ -466,7 +515,8 @@ export function AdminInventoryClient({
             <tr>
               <th className="pb-2 pr-4">Product</th>
               <th className="pb-2 pr-4">SKU</th>
-              <th className="pb-2 pr-4">Quantity</th>
+              <th className="pb-2 pr-4">Available</th>
+              <th className="pb-2 pr-4">Incoming</th>
               <th className="pb-2 pr-4">Low-stock threshold</th>
               <th className="pb-2 pr-4">Ship weight (oz/unit)</th>
               <th className="pb-2 pr-4">Status</th>
@@ -493,6 +543,24 @@ export function AdminInventoryClient({
                         className="vl-input w-20 px-2 py-1 text-sm"
                       />
                     ) : row.inventoryQuantity}
+                  </td>
+                  <td className="py-3 pr-4">
+                    {row.incomingQuantity > 0 ? (
+                      <div className="flex items-center gap-2">
+                        <span className="tabular-nums text-cyan-200">{row.incomingQuantity}</span>
+                        {canManage ? (
+                          <button
+                            type="button"
+                            onClick={() => void receiveIncoming(row)}
+                            className="vl-btn-secondary px-2 py-1 text-[11px]"
+                          >
+                            Receive
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : (
+                      <span className="text-zinc-600">—</span>
+                    )}
                   </td>
                   <td className="py-3 pr-4">
                     {canManage ? (
@@ -523,6 +591,14 @@ export function AdminInventoryClient({
                   </td>
                   {canManage ? (
                     <td className="py-3 pr-4">
+                      <div className="flex flex-col gap-2">
+                      <QuickAdjust
+                        row={row}
+                        onDone={(next, text) => {
+                          if (next) setRows(next);
+                          setMessage(text);
+                        }}
+                      />
                       <button
                         type="button"
                         onClick={() => saveLine(row)}
@@ -531,6 +607,7 @@ export function AdminInventoryClient({
                       >
                         Save
                       </button>
+                      </div>
                     </td>
                   ) : null}
                 </tr>
@@ -538,12 +615,14 @@ export function AdminInventoryClient({
             })}
             {filteredRows.length === 0 ? (
               <tr>
-                <td colSpan={canManage ? 7 : 6} className="py-6 text-center text-sm text-zinc-500">No inventory lines match.</td>
+                <td colSpan={canManage ? 8 : 7} className="py-6 text-center text-sm text-zinc-500">No inventory lines match.</td>
               </tr>
             ) : null}
           </tbody>
         </table>
       </div>
+
+      <InventoryHistory />
     </section>
   );
 }
