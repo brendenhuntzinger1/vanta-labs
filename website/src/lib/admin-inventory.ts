@@ -307,6 +307,10 @@ export interface InventoryLineAdjustment {
    * and on a product means "fall back to the catalog default".
    */
   shippingWeightOz?: number | null;
+  /** Who made the change, for the ledger. */
+  actor?: string | null;
+  /** Free-text explanation, shown in the inventory history. */
+  reason?: string | null;
 }
 
 /**
@@ -350,6 +354,9 @@ export async function adjustInventoryLine(input: InventoryLineAdjustment) {
   // Track a 0 → back-in-stock transition so we can notify waitlisted shoppers.
   let restockedTo = 0;
   let wasOutOfStock = false;
+  // Captured for the ledger: an audit row with no "before" cannot answer the
+  // question it exists for.
+  let quantityBefore: number | null = null;
 
   if (input.quantity !== undefined) {
     const q = Number(input.quantity);
@@ -370,6 +377,7 @@ export async function adjustInventoryLine(input: InventoryLineAdjustment) {
       .eq("id", matchValue)
       .maybeSingle();
 
+    quantityBefore = current?.inventory_quantity == null ? null : Number(current.inventory_quantity);
     const currentStatus = String(current?.stock_status ?? "In Stock");
     wasOutOfStock = currentStatus === "Out of Stock" || Number(current?.inventory_quantity ?? 0) <= 0;
     if (currentStatus === "In Stock" || currentStatus === "Out of Stock") {
@@ -400,6 +408,24 @@ export async function adjustInventoryLine(input: InventoryLineAdjustment) {
 
   if (error) {
     throw error;
+  }
+
+  // Append to the ledger. Best-effort: the stock has already moved, so throwing
+  // here would fail an operation that succeeded and turn a missing audit row
+  // into a misleading error.
+  if (input.quantity !== undefined) {
+    const after = Math.max(0, Math.round(Number(input.quantity)));
+    const { recordInventoryTransaction } = await import("@/lib/inventory-ledger");
+    await recordInventoryTransaction({
+      productId: input.productId,
+      doseId: input.doseId ?? null,
+      type: "manual_set",
+      delta: quantityBefore === null ? after : after - quantityBefore,
+      quantityBefore,
+      quantityAfter: after,
+      reason: input.reason ?? null,
+      actor: input.actor ?? null,
+    });
   }
 
   // Fire back-in-stock notifications on a genuine 0 → in-stock transition.

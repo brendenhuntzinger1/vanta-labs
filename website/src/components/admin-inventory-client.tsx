@@ -331,6 +331,18 @@ export function AdminInventoryClient({
           {inventoryTrackingActive ? <option value="out">Out of stock</option> : null}
           <option value="unweighed">Not weighed yet</option>
         </select>
+        <a
+          href="/api/admin/inventory/export"
+          className="vl-btn-secondary whitespace-nowrap px-3 py-2 text-sm"
+        >
+          Export CSV
+        </a>
+        <a
+          href="/api/admin/inventory/export?type=history"
+          className="vl-btn-secondary whitespace-nowrap px-3 py-2 text-sm"
+        >
+          Export history
+        </a>
         {canManage ? (
           <div className="flex items-center gap-2">
             <input

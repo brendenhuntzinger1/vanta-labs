@@ -41,6 +41,8 @@ export async function GET(request: Request) {
 }
 
 interface InventoryPatchBody {
+  /** Optional operator note, recorded in the inventory ledger. */
+  reason?: string;
   productId?: string;
   doseId?: string | null;
   quantity?: number;
@@ -82,6 +84,11 @@ export async function PATCH(request: Request) {
       doseId: body.doseId ?? null,
       quantity: body.quantity,
       lowStockThreshold: body.lowStockThreshold,
+      // Attribution comes from the verified session, never the request body —
+      // a client-supplied actor would let the ledger be signed with someone
+      // else's name, which is worse than having no attribution at all.
+      actor: session.username,
+      reason: typeof body.reason === "string" ? body.reason : null,
       ...(touchesWeight ? { shippingWeightOz } : {}),
     });
 
