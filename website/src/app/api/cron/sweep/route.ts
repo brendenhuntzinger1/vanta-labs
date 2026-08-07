@@ -6,6 +6,7 @@ import { autoApproveEligibleCommissions } from "@/lib/partner-portal";
 import { expireStaleReservations } from "@/lib/inventory-reservation";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
 import { expireStaleExpressIntents, reconcileVeyraPendingPayments } from "@/lib/express-reconcile";
+import { sweepUnsyncedOrders } from "@/lib/shippo/order-sync";
 import { recordSystemAlert } from "@/lib/monitoring";
 
 export const dynamic = "force-dynamic";
@@ -32,7 +33,7 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const [membershipResult, cartRecoveryResult, storeCreditResult, commissionApprovalResult, reservationExpiryResult, emailRetryResult, paymentReconcileResult, expressIntentResult] = await Promise.allSettled([
+  const [membershipResult, cartRecoveryResult, storeCreditResult, commissionApprovalResult, reservationExpiryResult, emailRetryResult, paymentReconcileResult, expressIntentResult, shippoSyncResult] = await Promise.allSettled([
     runMembershipBillingSweep(),
     runAbandonedCartSweep(),
     grantMonthlyStoreCreditSweep(),
@@ -47,6 +48,11 @@ export async function GET(request: Request) {
     // thing standing between a charged card and an order that reads unpaid
     // forever, so a failure here is genuinely critical.
     reconcileVeyraPendingPayments(),
+    // Push paid orders into Shippo. Deliberately NOT done in the payment
+    // webhook: a Shippo call can take 15s and delayed the webhook response past
+    // the provider's timeout, leaving shoppers on "Processing…" for an order
+    // that was already paid.
+    sweepUnsyncedOrders(),
     // Hygiene: retire wallet sessions that were armed and never used.
     expireStaleExpressIntents(),
   ]);
@@ -85,5 +91,6 @@ export async function GET(request: Request) {
     emailRetry: emailRetryResult.status === "fulfilled" ? emailRetryResult.value : { error: String(emailRetryResult.reason) },
     paymentReconcile: paymentReconcileResult.status === "fulfilled" ? paymentReconcileResult.value : { error: String(paymentReconcileResult.reason) },
     expressIntentsExpired: expressIntentResult.status === "fulfilled" ? expressIntentResult.value : { error: String(expressIntentResult.reason) },
+    shippoSync: shippoSyncResult.status === "fulfilled" ? shippoSyncResult.value : { error: String(shippoSyncResult.reason) },
   });
 }

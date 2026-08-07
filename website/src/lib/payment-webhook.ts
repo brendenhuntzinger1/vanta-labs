@@ -15,7 +15,6 @@ import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
 import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
-import { syncOrderToShippo } from "@/lib/shippo/order-sync";
 import { activatePaidMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 import {
   isMembershipEvent,
@@ -1091,14 +1090,9 @@ export async function finalizeManualPayment(
         (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
       );
     }
-    // Same push as the card path above — a record in Shippo's Orders tab, not
-    // a postage purchase. Guarded by the atomic order claim above, so an
-    // approval retry cannot create a second Shippo order.
-    try {
-      await syncOrderToShippo(orderId);
-    } catch (syncError) {
-      console.error("Unable to sync order to Shippo", orderId, syncError);
-    }
+    // Not pushed to Shippo here either — see the note in the card path. An
+    // admin waiting on an approval click deserves the same protection from a
+    // slow third party as a shopper waiting on checkout.
   }
 
   return { orderId, alreadyPaid: false, status: "paid" };
@@ -1559,21 +1553,18 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         }
       }
 
-      // Push the paid order into Shippo's Orders tab so the owner can buy its
-      // label there without retyping the address, items or weight.
+      // The Shippo push is DELIBERATELY NOT DONE HERE.
       //
-      // This creates a RECORD, not a purchase: no postage is bought and no
-      // money moves, which is what makes it safe to do automatically. Buying
-      // the label stays a deliberate human action in Shippo.
+      // It used to be, and it broke checkout. A Shippo request can take up to
+      // SHIPPO_REQUEST_TIMEOUT_MS (15s); awaiting it inside this handler pushed
+      // the webhook response past the payment provider's own timeout, so the
+      // provider never received its 200 and the shopper sat on "Processing…"
+      // forever — on an order that had in fact been paid, and whose
+      // confirmation email had already been sent from a few lines above.
       //
-      // Best-effort and non-blocking, like every other side-effect here. A
-      // Shippo outage must never strand a paid order: the sync records its own
-      // error state and the admin exposes a retry.
-      try {
-        await syncOrderToShippo(orderId);
-      } catch (syncError) {
-        console.error("Unable to sync order to Shippo", orderId, syncError);
-      }
+      // Nothing that talks to a third party belongs on the critical path of a
+      // payment webhook. The push happens instead from the cron sweep and from
+      // the admin order screen, both of which can afford to wait.
     }
   }
 

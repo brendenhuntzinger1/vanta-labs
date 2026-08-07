@@ -375,3 +375,48 @@ export async function applyTransactionCreated(
 
   return { matched: true, orderId: order.order_id };
 }
+
+/**
+ * Push any paid order that has not reached Shippo yet.
+ *
+ * This is where the automatic push lives, having been removed from the payment
+ * webhook: a Shippo call can take up to 15 seconds, and awaiting that inside a
+ * payment webhook delayed the response past the provider's timeout — the
+ * shopper watched "Processing…" forever on an order that had actually been
+ * paid. Nothing that talks to a third party belongs on that path.
+ *
+ * A sweep is the right home for it. It can afford to wait, it retries by
+ * simply running again, and one slow order cannot hold up the others.
+ *
+ * Bounded per run so a large backlog cannot make the sweep itself time out —
+ * the remainder is picked up on the next pass.
+ */
+export async function sweepUnsyncedOrders(limit = 20): Promise<{ attempted: number; synced: number; failed: number }> {
+  if (!isShippoConfigured()) return { attempted: 0, synced: 0, failed: 0 };
+
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .select("order_id")
+    .eq("payment_status", "paid")
+    .neq("order_type", "membership")
+    .is("shippo_order_id", null)
+    .order("paid_at", { ascending: true, nullsFirst: false })
+    .limit(Math.min(100, Math.max(1, limit)));
+
+  if (error || !data?.length) return { attempted: 0, synced: 0, failed: 0 };
+
+  let synced = 0;
+  let failed = 0;
+  // Sequential, not parallel: twenty concurrent Shippo calls is a good way to
+  // be rate-limited, and there is no deadline here worth racing.
+  for (const row of data) {
+    try {
+      const result = await syncOrderToShippo(String(row.order_id));
+      if (result.ok) synced += 1;
+      else failed += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { attempted: data.length, synced, failed };
+}
