@@ -6,6 +6,7 @@ import { recordActualShippingCost } from "@/lib/admin-profit";
 import { createShipmentWithRates, createShippoOrder } from "@/lib/shippo/client";
 import { isShippoConfigured } from "@/lib/shippo/config";
 import { buildOrderParcel, toCountryCode } from "@/lib/shippo/service";
+import { DEFAULT_UNIT_WEIGHT_OZ } from "@/lib/shippo/parcel";
 import type { ShippoAddress, ShippoOrderLineItem, ShippoTransactionCreated } from "@/lib/shippo/types";
 
 // ---------------------------------------------------------------------------
@@ -282,9 +283,34 @@ export async function syncOrderToShippo(orderId: string): Promise<SyncOutcome> {
     console.error("Shippo order created but the shipment failed", orderId, shipment.message);
   }
 
+  // Record the parcel AS SENT.
+  //
+  // The inputs (product weights, the preset table) are all editable, so without
+  // this the moment a weight is corrected there is no way to answer "what did we
+  // actually declare on THAT shipment?" — which is the question that matters
+  // when a carrier bills an adjustment or a parcel is refused.
+  //
+  // Weight is stored in parts, not just the total: a total alone cannot
+  // distinguish "the vials were heavier than recorded" from "the mailer tare was
+  // wrong", and those have different fixes.
+  const merchandiseOz = parcel.lines.reduce((total, line) => total + line.lineWeightOz, 0);
+  const packagingOz = parcel.preset?.emptyWeightOz ?? 0;
+  // An estimate is a weight nobody has put on a scale. Worth flagging, because
+  // a postage figure derived from a guess should not be trusted as a margin.
+  const estimated = parcel.lines.some((line) => line.unitWeightOz === DEFAULT_UNIT_WEIGHT_OZ);
+
   await supabaseAdmin
     .from("orders")
     .update({
+      parcel_preset_id: parcel.preset?.id ?? null,
+      parcel_preset_name: parcel.preset?.name ?? null,
+      parcel_length_in: parcel.preset?.lengthIn ?? null,
+      parcel_width_in: parcel.preset?.widthIn ?? null,
+      parcel_height_in: parcel.preset?.heightIn ?? null,
+      parcel_merchandise_oz: Math.round(merchandiseOz * 100) / 100,
+      parcel_packaging_oz: packagingOz,
+      parcel_declared_oz: parcel.weightOz,
+      parcel_weight_estimated: estimated,
       shippo_order_id: created.data.object_id,
       ...(shipmentId ? { shippo_shipment_id: shipmentId } : {}),
       shippo_sync_status: shipmentId ? "synced" : "error",
