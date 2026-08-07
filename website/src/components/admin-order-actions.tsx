@@ -112,7 +112,7 @@ export function AdminOrderActions({
     const confirmLabel = parsedAmount ? money(parsedAmount) : `the remaining ${money(remaining)}`;
     void runAction(
       "refund",
-      `Refund ${confirmLabel} for this order? This updates the store's records immediately; a live payment processor must be connected for money to actually move.`,
+      `Record a refund of ${confirmLabel} for this order?\n\nNO MONEY WILL BE SENT. This updates Vanta's records only — you must issue the actual refund in your payment processor.`,
       parsedAmount ? { refundAmount: parsedAmount } : {},
     );
   };
@@ -164,9 +164,13 @@ export function AdminOrderActions({
         <p className="mt-2 text-sm text-zinc-300">
           Paid {money(amountPaid)} • Refunded {money(refundAmount)} • Remaining refundable {money(remaining)}
         </p>
-        <p className="mt-1 text-xs text-zinc-500">
-          Updates this order&apos;s records immediately. No real payment processor is connected yet, so no money actually
-          moves until one is — issue the refund through your processor directly as well.
+        {/* This was grey 12px helper text -- the least prominent styling on the
+            page, carrying the most consequential fact on it. Someone skimming
+            reads "Refund", clicks, and believes the customer has their money. */}
+        <p className="mt-2 rounded-lg border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
+          <strong>This does not send money.</strong> There is no refund integration with the payment processor, so this
+          only records the refund in Vanta. Issue the actual refund in your processor, then tell the customer — they are
+          not emailed by this action.
         </p>
         {canRefund ? (
           remaining > 0 ? (

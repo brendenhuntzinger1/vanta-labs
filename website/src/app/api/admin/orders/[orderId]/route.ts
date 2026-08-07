@@ -8,7 +8,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
 import { deliveryConfirmationTemplate, orderConfirmationTemplate, refundConfirmationTemplate, replacementOrderTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { createReplacementOrder } from "@/lib/admin-replacements";
-import { getPaymentProvider } from "@/lib/payment-provider";
+import { providerSettlesRefunds, getPaymentProvider } from "@/lib/payment-provider";
 import { updateCommissionOnRefund } from "@/lib/payment-webhook";
 import { restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
 import { restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
@@ -273,18 +273,21 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       const newRefundTotal = roundMoney(alreadyRefunded + requestedAmount);
       const isFullRefund = newRefundTotal >= amountPaid;
 
-      // PaymentProvider.refundPayment() is a stub until a real payment
-      // processor is connected - it does not move real money. The database
-      // is updated regardless so the store's own records stay accurate; the
-      // actual refund must currently be issued through the processor
-      // directly until that integration exists.
+      // NO MONEY MOVES HERE. LivePaymentProvider.refundPayment() is a no-op
+      // stub -- the processor has no refund integration. This call is kept so
+      // the seam exists for when one is added, but it must never be mistaken
+      // for a settlement: everything below records the refund in Vanta's own
+      // books, and the money itself has to be sent from the processor by hand.
+      let providerRefunded = false;
       try {
         const provider = getPaymentProvider();
         if (order.payment_id) {
           await provider.refundPayment(String(order.payment_id));
+          providerRefunded = providerSettlesRefunds();
         }
       } catch {
-        // Provider refund is best-effort until a real processor is wired up.
+        // Best-effort. A failure changes nothing today, because success does
+        // not move money either.
       }
 
       const { error } = await supabaseAdmin
@@ -362,10 +365,17 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         }
       }
 
-      // Tell the customer their refund was processed. Best-effort — a mail
-      // failure must never roll back a completed refund (it's queued/retried by
-      // the email layer). Reports THIS event's amount and full/partial nature.
-      if (order.customer_email) {
+      // The customer is told only when money has ACTUALLY been sent.
+      //
+      // This email says "Your refund has been processed". Sending it while the
+      // processor integration is a stub tells a customer to expect money that
+      // is not coming: they wait, nothing arrives, and the next thing that
+      // happens is a chargeback -- which costs more than the refund and is
+      // reported against the merchant account.
+      //
+      // Vanta's own records are still updated above, because the owner needs
+      // them; announcing it is a separate act, and it waits for the money.
+      if (order.customer_email && providerRefunded) {
         const refundEmail = refundConfirmationTemplate({
           customerName: String(order.customer_name ?? ""),
           orderId: String(order.order_number ?? orderId),
@@ -386,6 +396,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
             newRefundTotal,
             isFullRefund,
             note: body.note ?? null,
+            // Whether money actually left. False today for every refund.
+            providerRefunded,
             performedAt: now,
             performedBy: session.username,
             ipAddress,
@@ -397,7 +409,19 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         throw auditError;
       }
 
-      return NextResponse.json({ success: true, refundAmount: newRefundTotal, isFullRefund });
+      // The admin is told, in the response, exactly what did and did not happen.
+      // "Refunded" on a screen with no money moved is how a customer ends up
+      // waiting for a payment nobody sent.
+      return NextResponse.json({
+        success: true,
+        refundAmount: newRefundTotal,
+        isFullRefund,
+        providerRefunded,
+        customerNotified: providerRefunded,
+        message: providerRefunded
+          ? "Refund issued and the customer has been emailed."
+          : "Recorded in Vanta only — NO money has been sent. Issue this refund in your payment processor, then tell the customer.",
+      });
     }
 
     // One-click replacement shipment (damaged / lost / stolen — the Shipping

@@ -330,6 +330,21 @@ export function isCheckoutOpen(): boolean {
   return process.env.CHECKOUT_ENABLED === "true";
 }
 
+/**
+ * Does the configured processor actually SETTLE a refund when refundPayment()
+ * is called?
+ *
+ * Today: no. Both providers' refundPayment() are no-ops -- there is no refund
+ * integration with the processor. The function exists so the one question that
+ * matters ("did money move?") has a single answer in the codebase instead of
+ * being inferred from a comment, and so switching it on later is one edit.
+ *
+ * Callers must NOT tell a customer they have been refunded while this is false.
+ */
+export function providerSettlesRefunds(): boolean {
+  return false;
+}
+
 export function getPaymentProvider(providerName = process.env.PAYMENT_PROVIDER): PaymentProvider {
   if (resolvePaymentProviderName(providerName) === "mock") {
     return new MockPaymentProvider();
