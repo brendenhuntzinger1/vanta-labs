@@ -20,6 +20,8 @@ export interface CustomerInput {
   email: string;
   fullName: string;
   address: string;
+  /** Apartment / suite / unit. Optional — most addresses genuinely have none. */
+  address2?: string;
   city: string;
   postalCode: string;
   country: string;

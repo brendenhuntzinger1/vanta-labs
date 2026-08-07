@@ -11,21 +11,25 @@ import { ozToGrams } from "@/lib/shippo/parcel";
 //
 // One screen, one order, in the order the work actually happens:
 //
-//   Mark packed -> Get rates -> pick a service -> Buy label -> Print -> (Void)
+//   Check the parcel -> buy the label IN SHIPPO -> pack -> drop off
 //
 // Two things drive every decision in here.
 //
-// MONEY. "Buy label" is the only control on this page that spends money, and it
-// spends it at a carrier where a duplicate is a real postage charge for a parcel
-// that will never ship. The server's atomic claim is what actually guarantees
-// exactly-once (purchaseLabelForOrder in src/lib/shippo/service.ts) — this
-// component's job is to never *invite* the mistake: the button needs a second,
-// explicit confirmation that names the carrier, the service and the price; it is
-// disabled while a request is in flight; it disappears entirely once a label
-// exists; and a synchronous ref lock means two clicks landing in the same React
-// tick cannot both reach fetch(). A response that says "postage was charged but
-// something after that failed" locks purchasing for the rest of the page life
-// rather than offering a retry that would buy a second label.
+// MONEY. This page cannot spend any. Postage is bought in Shippo's dashboard
+// and nowhere else, and the purchase endpoint was deleted rather than hidden:
+// two systems able to buy a label for one parcel is two real charges, and the
+// second is not refundable by clicking undo. The exactly-once claim in this
+// codebase serializes callers of THIS app and knows nothing about a purchase
+// made by hand in Shippo's UI, so the only real guarantee is that exactly one
+// system can buy.
+//
+// What still crosses a carrier is Void, which refunds a label bought in Shippo.
+// It asks for an explicit confirmation, is disabled while in flight, and is
+// guarded by a synchronous ref lock so two clicks in one React tick cannot both
+// reach fetch().
+//
+// The label comes back on its own: the transaction_created webhook records the
+// real postage, tracking, carrier and service against the order.
 //
 // PHONES. The owner packs parcels standing at a bench with a phone in one hand.
 // Everything is a single column below `sm`, every control clears 44px, nothing
@@ -37,6 +41,7 @@ import { ozToGrams } from "@/lib/shippo/parcel";
 
 export interface ShippingPanelAddress {
   street1: string | null;
+  street2: string | null;
   city: string | null;
   state: string | null;
   zip: string | null;
@@ -397,6 +402,7 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
   const addressLines = [
     customerName,
     address.street1,
+    address.street2,
     [address.city, address.state].filter(Boolean).join(", ") + (address.zip ? ` ${address.zip}` : ""),
     address.country,
   ]

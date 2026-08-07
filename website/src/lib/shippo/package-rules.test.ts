@@ -25,6 +25,16 @@ function preset(name: string, overrides: Partial<PackagePresetRecord> = {}): Pac
 
 const PRESETS = [preset("Small Bubble Mailer"), preset("Medium Bubble Mailer"), preset("Shipping Box")];
 
+// A representative rule set, written out here rather than borrowed from
+// DEFAULT_PACKAGE_RULES. The defaults are empty on purpose (see the module),
+// and a test that reaches for them to get sample data goes green for the wrong
+// reason the moment that changes.
+const SAMPLE_RULES: PackageRule[] = [
+  { minUnits: 1, maxUnits: 4, presetName: "Small Bubble Mailer" },
+  { minUnits: 5, maxUnits: 10, presetName: "Medium Bubble Mailer" },
+  { minUnits: 11, maxUnits: null, presetName: "Shipping Box" },
+];
+
 describe("ruleMatches", () => {
   it("includes both bounds", () => {
     const rule: PackageRule = { minUnits: 5, maxUnits: 10, presetName: "Medium Bubble Mailer" };
@@ -50,7 +60,7 @@ describe("selectPresetForUnits", () => {
     [11, "Shipping Box"],
     [50, "Shipping Box"],
   ])("puts %i units in the %s", (units, expected) => {
-    expect(selectPresetForUnits(units, DEFAULT_PACKAGE_RULES, PRESETS)?.name).toBe(expected);
+    expect(selectPresetForUnits(units, SAMPLE_RULES, PRESETS)?.name).toBe(expected);
   });
 
   it("returns null rather than guessing when nothing matches", () => {
@@ -61,8 +71,8 @@ describe("selectPresetForUnits", () => {
   });
 
   it("ignores a zero or nonsense unit count", () => {
-    expect(selectPresetForUnits(0, DEFAULT_PACKAGE_RULES, PRESETS)).toBeNull();
-    expect(selectPresetForUnits(Number.NaN, DEFAULT_PACKAGE_RULES, PRESETS)).toBeNull();
+    expect(selectPresetForUnits(0, SAMPLE_RULES, PRESETS)).toBeNull();
+    expect(selectPresetForUnits(Number.NaN, SAMPLE_RULES, PRESETS)).toBeNull();
   });
 
   // A retired mailer must not be selected, or labels get bought against a box
@@ -87,14 +97,14 @@ describe("selectPresetForUnits", () => {
   });
 
   it("applies the narrowest matching rule regardless of input order", () => {
-    const shuffled = [...DEFAULT_PACKAGE_RULES].reverse();
+    const shuffled = [...SAMPLE_RULES].reverse();
     expect(selectPresetForUnits(3, shuffled, PRESETS)?.name).toBe("Small Bubble Mailer");
   });
 });
 
 describe("sortRules", () => {
   it("orders ascending without mutating the input", () => {
-    const input = [...DEFAULT_PACKAGE_RULES].reverse();
+    const input = [...SAMPLE_RULES].reverse();
     const snapshot = JSON.stringify(input);
     expect(sortRules(input).map((r) => r.minUnits)).toEqual([1, 5, 11]);
     expect(JSON.stringify(input)).toBe(snapshot);
@@ -105,8 +115,8 @@ describe("sortRules", () => {
 // they are worth surfacing in the admin: a gap silently uses the account
 // default, and an overlap makes the result depend on sort order, not intent.
 describe("validatePackageRules", () => {
-  it("accepts the shipped defaults", () => {
-    expect(validatePackageRules(DEFAULT_PACKAGE_RULES)).toEqual([]);
+  it("accepts a complete, well-formed rule set", () => {
+    expect(validatePackageRules(SAMPLE_RULES)).toEqual([]);
   });
 
   it("reports a gap between two rules", () => {
@@ -145,5 +155,44 @@ describe("validatePackageRules", () => {
 
   it("says so when there are no rules at all", () => {
     expect(validatePackageRules([]).join(" ")).toContain("at least one rule");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The bug these two guard against: rules that name a box nobody owns. They
+// match nothing, every order silently falls through to the account default,
+// and the admin shows a tidy list of rules that are doing nothing at all.
+// ---------------------------------------------------------------------------
+describe("rules naming a package that does not exist", () => {
+  it("ships no default rules, rather than rules that cannot fire", () => {
+    expect(DEFAULT_PACKAGE_RULES).toEqual([]);
+  });
+
+  it("is reported when the preset list is supplied", () => {
+    const rules: PackageRule[] = [{ minUnits: 1, maxUnits: null, presetName: "Purple Mailer" }];
+    const problems = validatePackageRules(rules, PRESETS);
+
+    expect(problems.some((p) => p.includes("Purple Mailer"))).toBe(true);
+  });
+
+  it("stays quiet for a rule whose package really exists", () => {
+    const rules: PackageRule[] = [{ minUnits: 1, maxUnits: null, presetName: "Shipping Box" }];
+
+    expect(validatePackageRules(rules, PRESETS)).toEqual([]);
+  });
+
+  // Case and padding are display detail, not identity -- an owner who renamed a
+  // box "shipping box" has not broken their rules.
+  it("matches the package name case-insensitively", () => {
+    const rules: PackageRule[] = [{ minUnits: 1, maxUnits: null, presetName: "  shipping BOX " }];
+
+    expect(validatePackageRules(rules, PRESETS)).toEqual([]);
+  });
+
+  it("counts a retired package as missing", () => {
+    const retired = [preset("Shipping Box", { isActive: false })];
+    const rules: PackageRule[] = [{ minUnits: 1, maxUnits: null, presetName: "Shipping Box" }];
+
+    expect(validatePackageRules(rules, retired).length).toBeGreaterThan(0);
   });
 });

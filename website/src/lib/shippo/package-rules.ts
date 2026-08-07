@@ -28,15 +28,19 @@ export interface PackageRule {
 }
 
 /**
- * Shipped defaults, matching the mailers most small operations start with.
- * Every value is editable in admin; these only apply until the owner sets their
- * own.
+ * NO shipped defaults, deliberately.
+ *
+ * This used to name three plausible mailers -- "Small Bubble Mailer" and
+ * friends -- which matched nothing, because a rule is resolved against the
+ * preset names the owner actually created and nobody's boxes are called that.
+ * The admin listed three rules, none of which could ever fire, and every order
+ * quietly used the account default anyway. A rule that cannot match is worse
+ * than no rule: it reads as configuration that is working.
+ *
+ * Empty is the honest state for a store that has not written a rule yet. It
+ * behaves identically -- the account default preset is used -- but it says so.
  */
-export const DEFAULT_PACKAGE_RULES: PackageRule[] = [
-  { minUnits: 1, maxUnits: 4, presetName: "Small Bubble Mailer" },
-  { minUnits: 5, maxUnits: 10, presetName: "Medium Bubble Mailer" },
-  { minUnits: 11, maxUnits: null, presetName: "Shipping Box" },
-];
+export const DEFAULT_PACKAGE_RULES: PackageRule[] = [];
 
 function parseRule(raw: unknown): PackageRule | null {
   if (!raw || typeof raw !== "object") return null;
@@ -110,13 +114,33 @@ export function selectPresetForUnits(
  * than errors: a gap silently falls through to the account default, and an
  * overlap makes the chosen box depend on sort order rather than intent.
  */
-export function validatePackageRules(rules: PackageRule[]): string[] {
+export function validatePackageRules(
+  rules: PackageRule[],
+  presets: PackagePresetRecord[] = [],
+): string[] {
   const problems: string[] = [];
   const sorted = sortRules(rules);
 
   if (sorted.length === 0) {
     problems.push("Add at least one rule, or every order falls back to the default package.");
     return problems;
+  }
+
+  // The failure that started all this: a rule naming a box that does not exist
+  // matches nothing and falls through to the default, with no error anywhere.
+  // Checked only when the caller supplies the preset list, so a rule set can
+  // still be validated for shape alone.
+  if (presets.length > 0) {
+    const known = new Set(
+      presets.filter((p) => p.isActive !== false).map((p) => p.name.trim().toLowerCase()),
+    );
+    for (const rule of sorted) {
+      if (!known.has(rule.presetName.trim().toLowerCase())) {
+        problems.push(
+          `No active package is named "${rule.presetName}", so this rule never applies and those orders use the default package.`,
+        );
+      }
+    }
   }
   if (sorted[0].minUnits !== 1) {
     problems.push(`Orders of ${sorted[0].minUnits - 1} unit(s) or fewer match no rule. Start the first rule at 1.`);

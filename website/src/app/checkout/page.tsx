@@ -47,6 +47,7 @@ type CheckoutForm = {
   email: string;
   phone: string;
   address: string;
+  address2: string;
   city: string;
   state: string;
   postalCode: string;
@@ -309,6 +310,7 @@ export default function CheckoutPage() {
     email: "",
     phone: "",
     address: "",
+    address2: "",
     city: "",
     state: "",
     postalCode: "",
@@ -562,6 +564,7 @@ export default function CheckoutPage() {
           email: form.email.trim(),
           fullName: form.fullName.trim(),
           address: form.address.trim(),
+          address2: form.address2.trim(),
           city: form.city.trim(),
           state: form.state.trim(),
           postalCode: form.postalCode.trim(),
@@ -844,8 +847,20 @@ export default function CheckoutPage() {
                   value={form.address}
                   onChange={(v) => handleFieldChange("address", v)}
                   error={formErrors.address}
-                  autoComplete="shipping street-address"
+                  autoComplete="shipping address-line1"
                   className="sm:col-span-2"
+                />
+                {/* Its own field, not a hint on the line above. An apartment
+                    typed into the street line still ships -- the carrier
+                    attempts delivery, finds no unit, and the parcel comes back
+                    a week later as a return, a refund and a re-ship. */}
+                <TextField
+                  label="Apartment, suite, unit (optional)"
+                  value={form.address2}
+                  onChange={(v) => handleFieldChange("address2", v)}
+                  autoComplete="shipping address-line2"
+                  className="sm:col-span-2"
+                  maxLength={120}
                 />
                 <TextField
                   label="City"

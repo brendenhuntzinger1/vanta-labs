@@ -39,6 +39,7 @@ interface OrderRow {
   customer_email: string | null;
   phone: string | null;
   shipping_address: string | null;
+  shipping_address_2: string | null;
   city: string | null;
   state: string | null;
   postal_code: string | null;
@@ -55,7 +56,7 @@ interface OrderRow {
 }
 
 const ORDER_COLUMNS =
-  "order_id, order_number, customer_name, customer_email, phone, shipping_address, city, state, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, currency, paid_at, payment_status, order_type, shippo_order_id";
+  "order_id, order_number, customer_name, customer_email, phone, shipping_address, shipping_address_2, city, state, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, currency, paid_at, payment_status, order_type, shippo_order_id";
 
 function money(value: number | null | undefined): string {
   return (Math.round((Number(value) || 0) * 100) / 100).toFixed(2);
@@ -86,6 +87,9 @@ function destinationAddress(order: OrderRow): ShippoAddress {
   return {
     name: order.customer_name ?? "",
     street1: order.shipping_address ?? "",
+    // Omitted rather than sent blank when there is no unit: Shippo treats an
+    // empty string as a validation failure, not as "no second line".
+    street2: order.shipping_address_2?.trim() || undefined,
     city: order.city ?? "",
     state: order.state ?? "",
     zip: order.postal_code ?? "",

@@ -137,6 +137,7 @@ const ORDER_COLUMNS = [
   "customer_name",
   "customer_email",
   "shipping_address",
+  "shipping_address_2",
   "city",
   "state",
   "postal_code",
@@ -162,13 +163,14 @@ const ORDER_COLUMNS = [
   "delivered_at",
 ].join(", ");
 
-interface OrderShippingRow {
+export interface OrderShippingRow {
   order_id: string;
   order_number: string | null;
   order_type: string | null;
   customer_name: string | null;
   customer_email: string | null;
   shipping_address: string | null;
+  shipping_address_2: string | null;
   city: string | null;
   state: string | null;
   postal_code: string | null;
@@ -286,7 +288,7 @@ function toShippoAddress(address: ShippingAddress): ShippoAddress {
  * (notifyCustomer below) and only from us. The phone IS sent, because UPS and
  * FedEx refuse a shipment without one.
  */
-function orderDestinationAddress(order: OrderShippingRow): ShippoAddress {
+export function orderDestinationAddress(order: OrderShippingRow): ShippoAddress {
   const country = toCountryCode(order.country);
   const rawState = String(order.state ?? "").trim();
   // "Texas" and "tx" both have to become "TX" — checkout offers a code list,
@@ -296,6 +298,9 @@ function orderDestinationAddress(order: OrderShippingRow): ShippoAddress {
   return {
     name: text(order.customer_name) ?? "",
     street1: text(order.shipping_address) ?? "",
+    // Omitted when blank -- Shippo rejects an empty street2 rather than
+    // treating it as absent.
+    ...(text(order.shipping_address_2) ? { street2: String(order.shipping_address_2).trim() } : {}),
     city: text(order.city) ?? "",
     state,
     zip: text(order.postal_code) ?? "",

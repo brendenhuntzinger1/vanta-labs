@@ -875,6 +875,10 @@ export function buildOrderRow(input: OrderRowInput): OrderRowDraft {
     customer_email: input.customer.email,
     customer_name: input.customer.fullName,
     shipping_address: input.customer.address,
+    // Stored separately rather than concatenated into the street line: Shippo
+    // wants street2 as its own field, and a joined "123 Main St, Apt 4B" is not
+    // reliably splittable back out afterwards.
+    shipping_address_2: input.customer.address2?.trim() || null,
     city: input.customer.city,
     postal_code: input.customer.postalCode,
     country: input.customer.country,

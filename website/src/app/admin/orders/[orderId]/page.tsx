@@ -201,6 +201,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
             customerPhone={data.phone ? String(data.phone) : null}
             address={{
               street1: data.shipping_address ? String(data.shipping_address) : null,
+              street2: data.shipping_address_2 ? String(data.shipping_address_2) : null,
               city: data.city ? String(data.city) : null,
               state: data.state ? String(data.state) : null,
               zip: data.postal_code ? String(data.postal_code) : null,

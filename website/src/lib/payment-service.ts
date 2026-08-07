@@ -337,6 +337,7 @@ export function sanitizeCustomerInput(customer: CustomerInput) {
  email: sanitizeText(customer.email).toLowerCase(),
  fullName: sanitizeText(customer.fullName),
  address: sanitizeText(customer.address),
+ address2: sanitizeText(customer.address2 ?? ""),
  city: sanitizeText(customer.city),
  state: sanitizeText(customer.state ?? ""),
  postalCode: sanitizeText(customer.postalCode),
