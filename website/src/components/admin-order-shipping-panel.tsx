@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { fulfillmentStatusLabel, normalizeLegacyStatus, type FulfillmentStatus } from "@/lib/order-pipeline";
@@ -294,23 +294,20 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
   // Parcel settings, editable until a label exists.
   const [presetId, setPresetId] = useState(parcel.preset?.id ?? "");
   const [weightInput, setWeightInput] = useState(parcel.overrideOz == null ? "" : String(parcel.overrideOz));
-  const [savedPresetId, setSavedPresetId] = useState(parcel.preset?.id ?? "");
-  const [savedOverrideOz, setSavedOverrideOz] = useState<number | null>(parcel.overrideOz);
+  const [savedPresetId] = useState(parcel.preset?.id ?? "");
+  const [savedOverrideOz] = useState<number | null>(parcel.overrideOz);
 
-  const [rates, setRates] = useState<RateOption[] | null>(null);
-  const [quoted, setQuoted] = useState<{ weightOz: number; packageName: string | null } | null>(null);
-  const [selectedRateId, setSelectedRateId] = useState("");
 
-  const [pending, setPending] = useState<null | "packed" | "rates" | "buy" | "void">(null);
+  const [pending, setPending] = useState<null | "packed" | "sync" | "void">(null);
   const [confirming, setConfirming] = useState<null | "buy" | "void">(null);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [parcelWarning, setParcelWarning] = useState<string | null>(null);
+  const [parcelWarning] = useState<string | null>(null);
   /**
    * Set only by a response that says postage was charged but the follow-up
    * failed. It is deliberately sticky for the life of the page: the one thing
    * that must not happen next is another purchase.
    */
-  const [chargedWarning, setChargedWarning] = useState<string | null>(null);
+  const [chargedWarning] = useState<string | null>(null);
 
   // Re-sync from the server after router.refresh(). The key changes only when
   // the underlying row changed, so this never clobbers state the admin is
@@ -339,25 +336,13 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
   const inFlight = useRef(false);
 
   const run = useCallback(
-    async (kind: "packed" | "rates" | "buy" | "void", work: () => Promise<void>) => {
+    async (kind: "packed" | "sync" | "void", work: () => Promise<void>) => {
       if (inFlight.current) return;
       inFlight.current = true;
       setPending(kind);
       try {
         await work();
       } catch {
-        if (kind === "buy") {
-          // A dropped connection is NOT proof that nothing happened — the
-          // request may have reached Shippo and bought a label before the socket
-          // died. The outcome is unknown, and the only safe response to an
-          // unknown purchase is to stop offering another one.
-          setChargedWarning(
-            "The connection dropped while buying this label, so it is not known whether postage was charged. Reload the page: if no label appears, check the Shippo dashboard for this order before buying another.",
-          );
-          router.refresh();
-        } else {
-          setNotice({ tone: "error", text: "Network error — nothing was saved. Try again." });
-        }
       } finally {
         inFlight.current = false;
         setPending(null);
@@ -388,7 +373,6 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
   const parcelDirty =
     presetId !== savedPresetId || parseWeightInput(weightInput).value !== savedOverrideOz;
 
-  const canQuote = canFulfill && shippoReady && !hasLabel && !parcel.error && missingAddress.length === 0 && !isTerminal;
 
   const addressLines = [
     customerName,
@@ -401,6 +385,24 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
   const addressBlock = addressLines.join("\n");
 
   // ------------------------------------------------------------- actions ---
+
+  const retrySync = () =>
+    run("sync", async () => {
+      setNotice(null);
+      const res = await fetch(`/api/admin/orders/${orderId}/shipping/sync`, { method: "POST" });
+      const json = (await res.json().catch(() => null)) as
+        | { success?: boolean; error?: string; alreadySynced?: boolean }
+        | null;
+      if (!res.ok || !json?.success) {
+        setNotice({ tone: "error", text: json?.error ?? "Could not reach Shippo." });
+        return;
+      }
+      setNotice({
+        tone: "success",
+        text: json.alreadySynced ? "Already in Shippo." : "Sent to Shippo — open it to buy the label.",
+      });
+      router.refresh();
+    });
 
   const markPacked = () =>
     run("packed", async () => {
@@ -427,104 +429,6 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
       router.refresh();
     });
 
-  const getRates = () =>
-    run("rates", async () => {
-      setNotice(null);
-      setParcelWarning(null);
-      const parsed = parseWeightInput(weightInput);
-      if (!parsed.ok) {
-        setNotice({ tone: "error", text: "The weight override must be a positive number of ounces, or blank." });
-        return;
-      }
-
-      const res = await fetch(`/api/admin/orders/${orderId}/shipping/rates`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // The parcel the admin is looking at. Quoting buys nothing, so this is
-        // free to re-run after any change here.
-        body: JSON.stringify({
-          packagePresetId: presetId || null,
-          weightOverrideOz: parsed.value,
-        }),
-      });
-      const json = (await res.json().catch(() => null)) as
-        | {
-            success?: boolean;
-            error?: string;
-            code?: string;
-            rates?: RateOption[];
-            parcel?: { weightOz?: number };
-            package?: { id?: string; name?: string } | null;
-          }
-        | null;
-
-      if (!res.ok || !json?.success) {
-        setRates(null);
-        setQuoted(null);
-        setNotice({ tone: "error", text: json?.error ?? "Could not get shipping rates." });
-        return;
-      }
-
-      const usable = (json.rates ?? []).filter((rate) => Number.isFinite(rate.amountCents));
-      if (usable.length === 0) {
-        setRates(null);
-        setQuoted(null);
-        setNotice({ tone: "error", text: "Shippo returned no purchasable rates for this parcel." });
-        return;
-      }
-
-      const appliedWeight = Number(json.parcel?.weightOz);
-      const appliedPresetId = json.package?.id ?? null;
-      const appliedPresetName = json.package?.name ?? null;
-
-      // Trust the quote, not the form. The rates below were priced for whatever
-      // parcel the SERVER used, and that is what a purchase will be charged for —
-      // so if the boxes on screen did not make it into the quote, say so loudly
-      // rather than letting the owner believe they re-weighed the parcel.
-      const applied = wasParcelApplied({
-        requestedPresetId: presetId,
-        savedPresetId,
-        requestedOverrideOz: parsed.value,
-        savedOverrideOz,
-        appliedWeight,
-        appliedPresetId,
-      });
-      if (parcelDirty && !applied) {
-        setParcelWarning(
-          `Your parcel changes were not applied. These rates were priced for ${ounces(appliedWeight)} in ` +
-            `${appliedPresetName ?? "the default package"} — the settings already stored on this order.`,
-        );
-      } else if (parcelDirty) {
-        setSavedPresetId(appliedPresetId ?? presetId);
-        setSavedOverrideOz(parsed.value);
-      }
-
-      setRates(usable);
-      setQuoted({ weightOz: appliedWeight, packageName: appliedPresetName });
-      // Cheapest first, from the server. Pre-selecting it saves a tap; it still
-      // takes two deliberate clicks to spend anything.
-      setSelectedRateId(usable[0].id);
-      setNotice({ tone: "info", text: `${usable.length} service${usable.length === 1 ? "" : "s"} available.` });
-    });
-
-  // Quote automatically when the page opens, so the carrier choices are already
-  // on screen instead of behind a click. Fetching a rate costs nothing and buys
-  // nothing — only "Buy label" spends money, and that stays deliberate.
-  //
-  // Keyed on the order, and guarded by a ref rather than by `rates === null`:
-  // a quote that legitimately returns zero usable rates leaves `rates` empty,
-  // and re-running on that condition would retry forever against a parcel that
-  // cannot be quoted.
-  const autoQuotedFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!canQuote) return;
-    if (autoQuotedFor.current === orderId) return;
-    autoQuotedFor.current = orderId;
-    void getRates();
-    // getRates is recreated every render; depending on it would re-fire the
-    // effect continuously. The ref above is what actually enforces once-only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canQuote, orderId]);
 
   const voidLabel = () =>
     run("void", async () => {
@@ -541,9 +445,6 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
       }
 
       setLabel(null);
-      setRates(null);
-      setSelectedRateId("");
-      setQuoted(null);
       setStatus("packed");
       setNotice({
         tone: "success",
@@ -729,14 +630,6 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
               ? `${parcel.preset.name} · ${parcel.preset.lengthIn} × ${parcel.preset.widthIn} × ${parcel.preset.heightIn} in · ${parcel.preset.emptyWeightOz} oz empty`
               : "Default package"}
           </Row>
-          {quoted ? (
-            <Row label="Quoted as">
-              <span className="tabular-nums">
-                {ounces(quoted.weightOz)}
-                {quoted.packageName ? ` · ${quoted.packageName}` : ""}
-              </span>
-            </Row>
-          ) : null}
         </dl>
 
         {hasLabel ? (
@@ -813,6 +706,15 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
           >
             2 · Buy label in Shippo →
           </a>
+
+          <button
+            type="button"
+            onClick={retrySync}
+            disabled={pending !== null || hasLabel}
+            className="vl-btn-secondary w-full px-5 text-sm disabled:opacity-40 sm:w-auto"
+          >
+            {pending === "sync" ? "Sending…" : shippoOrderId ? "Re-check Shippo" : "Retry Shippo sync"}
+          </button>
         </div>
 
         {/* --- where the label is actually bought --- */}
@@ -989,31 +891,4 @@ function parseWeightInput(raw: string): { ok: boolean; value: number | null } {
   return { ok: true, value: parsed };
 }
 
-/**
- * Did the quote actually use the parcel the admin asked for?
- *
- * The rates response echoes the parcel the SERVER priced. Comparing it against
- * the form is the only way to tell the owner truthfully whether re-weighing the
- * parcel changed the price they are about to pay.
- */
-function wasParcelApplied(input: {
-  requestedPresetId: string;
-  savedPresetId: string;
-  requestedOverrideOz: number | null;
-  savedOverrideOz: number | null;
-  appliedWeight: number;
-  appliedPresetId: string | null;
-}): boolean {
-  if (input.requestedPresetId) {
-    if (input.requestedPresetId !== input.appliedPresetId) return false;
-  } else if (input.savedPresetId && input.appliedPresetId === input.savedPresetId) {
-    // The admin cleared the explicit package, but the quote still used it.
-    return false;
-  }
-  if (!Number.isFinite(input.appliedWeight)) return false;
-  if (input.requestedOverrideOz != null) return approxEq(input.appliedWeight, input.requestedOverrideOz);
-  // The override was cleared: the quote must no longer be using the stored one.
-  if (input.savedOverrideOz != null) return !approxEq(input.appliedWeight, input.savedOverrideOz);
-  return true;
-}
 

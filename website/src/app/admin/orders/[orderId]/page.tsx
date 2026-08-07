@@ -221,6 +221,9 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
               error: parcelResult && !parcelResult.ok ? parcelResult.message : null,
             }}
             packages={presetOptions}
+            shippoOrderId={data.shippo_order_id ? String(data.shippo_order_id) : null}
+            shippoSyncStatus={data.shippo_sync_status ? String(data.shippo_sync_status) : null}
+            shippoSyncError={data.shippo_sync_error ? String(data.shippo_sync_error) : null}
             label={shippingLabel}
             labelVoidedAt={labelVoidedAt}
             // The claim is held but no label landed: another request is mid-flight,

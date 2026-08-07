@@ -18,7 +18,8 @@ import {
 } from "@/lib/order-pipeline";
 import { createShipmentWithRates, voidLabel, type ShippoFailure } from "@/lib/shippo/client";
 import { buildParcel, computeParcelWeightOz, lineWeightOz, type ParcelLine } from "@/lib/shippo/parcel";
-import { getDefaultPackagePreset, getPackagePresetById, type PackagePresetRecord } from "@/lib/shippo/packages";
+import { getDefaultPackagePreset, getPackagePresetById, listPackagePresets, type PackagePresetRecord } from "@/lib/shippo/packages";
+import { getPackageRules, selectPresetForUnits } from "@/lib/shippo/package-rules";
 import { getShippingAddresses, type ShippingAddress } from "@/lib/shipping-origin";
 import {
   SHIPPO_TRACK_UPDATED_EVENT,
@@ -325,11 +326,40 @@ export async function getPackagePresetForOrder(orderId: string): Promise<Package
   return resolvePresetForOrder(order.data);
 }
 
-async function resolvePresetForOrder(order: OrderShippingRow): Promise<PackagePresetRecord | null> {
+/**
+ * Which box this order ships in.
+ *
+ * Precedence, most specific first:
+ *   1. the package chosen ON THE ORDER -- a packer looking at the actual items
+ *      is a better judge than any rule
+ *   2. the unit-count rule (1-4 small, 5-10 medium, 11+ box, all editable)
+ *   3. the account default
+ *
+ * Falling through to the default when a rule does not match is deliberate and
+ * visible: the admin shows which package was chosen, so a 20-vial order about
+ * to go in a small mailer is obvious before the label is bought.
+ */
+async function resolvePresetForOrder(
+  order: OrderShippingRow,
+  unitCount?: number,
+): Promise<PackagePresetRecord | null> {
   if (order.package_preset_id) {
     const named = await getPackagePresetById(order.package_preset_id);
     if (named) return named;
   }
+
+  if (typeof unitCount === "number" && unitCount > 0) {
+    try {
+      const [rules, presets] = await Promise.all([getPackageRules(), listPackagePresets()]);
+      const byRule = selectPresetForUnits(unitCount, rules, presets);
+      if (byRule) return byRule;
+    } catch (error) {
+      // A rule lookup failure must not block the shipment; the default still
+      // produces a shippable parcel.
+      console.error("Package rule lookup failed for order", order.order_id, error);
+    }
+  }
+
   return getDefaultPackagePreset();
 }
 
@@ -454,8 +484,15 @@ async function buildParcelForOrder(order: OrderShippingRow): Promise<ServiceResu
     return fail("db_error", "Could not load the items on this order.");
   }
 
+  // Unit count first: the packaging rule keys off how many units are in the
+  // box, so the preset cannot be resolved until the items are known.
+  const unitCount = ((items ?? []) as OrderItemRow[]).reduce(
+    (total, item) => total + Math.max(0, Math.trunc(Number(item.quantity ?? 0))),
+    0,
+  );
+
   const [preset, weights] = await Promise.all([
-    resolvePresetForOrder(order),
+    resolvePresetForOrder(order, unitCount),
     loadItemWeights((items ?? []) as OrderItemRow[]),
   ]);
 
