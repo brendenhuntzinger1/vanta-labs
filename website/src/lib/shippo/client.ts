@@ -436,128 +436,16 @@ function settledCentsFromTransaction(rate: ShippoTransaction["rate"]): number | 
   return cents !== null && cents > 0 ? cents : null;
 }
 
-/**
- * Buy the label for a quoted rate. THIS SPENDS MONEY.
- *
- * Shippo has no idempotency key, so this function is not idempotent and cannot
- * be — exactly-once is enforced upstream by the `label_purchase_claimed_at`
- * claim on the order. What this function guarantees instead is an honest answer
- * about what happened, via `safeToRetry` and `transactionId`, so the claim
- * holder can tell "nothing was bought, release the claim" from "something exists
- * at Shippo, do not buy again".
- *
- * The cost is parsed BEFORE the purchase on purpose: a rate whose amount we
- * cannot read can never be recorded, and refusing it up front means we never
- * hold a printed label with an unknowable cost.
- */
-export async function purchaseLabel(input: PurchaseLabelInput): Promise<ShippoResult<PurchasedLabel>> {
-  const rateId = asNonEmptyString(input?.rate?.object_id);
-  if (!rateId) {
-    return {
-      ok: false,
-      kind: "rejected",
-      message: "No Shippo rate was selected for this label.",
-      safeToRetry: true,
-    };
-  }
+// purchaseLabel REMOVED — this application cannot buy postage.
+//
+// POST /transactions/ is the Shippo call that spends money. It is deleted
+// rather than merely left uncalled: an unused function is one import away from
+// being used again, and the guarantee the owner asked for is that Shippo's
+// dashboard is the ONLY place a label can be bought.
+//
+// What remains here is read-only or refunding: quoting a shipment, creating an
+// order record, reading a transaction back, and refunding one.
 
-  const quotedCents = parseAmountToCents(input.rate?.amount);
-  if (quotedCents === null || quotedCents <= 0) {
-    return {
-      ok: false,
-      kind: "missing_cost",
-      message: "That rate has no usable price, so the postage cost could not be recorded. Re-quote the shipment.",
-      // Nothing was sent to Shippo — this check runs before the purchase.
-      safeToRetry: true,
-    };
-  }
-
-  const result = await shippoRequest<ShippoTransaction>({
-    method: "POST",
-    path: "/transactions/",
-    body: {
-      rate: rateId,
-      label_file_type: input.labelFileType ?? "PDF_4x6",
-      async: false,
-      // Shippo caps metadata at 100 characters and rejects the whole purchase
-      // when it is longer.
-      ...(input.metadata ? { metadata: input.metadata.slice(0, 100) } : {}),
-    },
-  });
-  if (!result.ok) return result;
-
-  const transaction = result.data;
-  const transactionId = asNonEmptyString(transaction?.object_id) ?? undefined;
-  const detail = describeMessages(transaction?.messages);
-
-  if (transaction?.status === "ERROR") {
-    return {
-      ok: false,
-      kind: "purchase_failed",
-      message: "Shippo could not buy this label.",
-      detail,
-      transactionId,
-      // Shippo states outright that no postage was bought, so a retry is safe.
-      safeToRetry: true,
-    };
-  }
-
-  if (transaction?.status === "QUEUED" || transaction?.status === "WAITING") {
-    return {
-      ok: false,
-      kind: "purchase_pending",
-      message: "Shippo is still processing this label. Check again in a moment before trying anything else.",
-      detail,
-      transactionId,
-      // A label may still print for this transaction — buying again would pay twice.
-      safeToRetry: false,
-    };
-  }
-
-  if (transaction?.status !== "SUCCESS") {
-    return {
-      ok: false,
-      kind: "invalid_response",
-      message: "Shippo returned an unexpected status for this label purchase.",
-      detail: detail ?? `status=${String(transaction?.status ?? "")}`,
-      transactionId,
-      safeToRetry: false,
-    };
-  }
-
-  const trackingNumber = asNonEmptyString(transaction.tracking_number);
-  const labelUrl = asNonEmptyString(transaction.label_url);
-  if (!transactionId || !trackingNumber || !labelUrl) {
-    return {
-      ok: false,
-      kind: "invalid_response",
-      message: "Shippo reported the label as purchased but did not return a label and tracking number.",
-      detail,
-      transactionId,
-      // The postage was almost certainly charged: void it rather than re-buying.
-      safeToRetry: false,
-    };
-  }
-
-  return {
-    ok: true,
-    data: {
-      transactionId,
-      rateId,
-      trackingNumber,
-      labelUrl,
-      trackingUrlProvider: asNonEmptyString(transaction.tracking_url_provider),
-      carrier: asNonEmptyString(input.rate.provider),
-      service: asNonEmptyString(input.rate.servicelevel?.name),
-      serviceToken: asNonEmptyString(input.rate.servicelevel?.token),
-      // Prefer what Shippo says it charged; fall back to the quote we validated
-      // before buying. Both are the same rate, so they only differ if Shippo
-      // repriced — in which case its own number is the one that hits the bill.
-      postageCostCents: settledCentsFromTransaction(transaction.rate) ?? quotedCents,
-      raw: transaction,
-    },
-  };
-}
 
 // ------------------------------------------------------------------ void ----
 

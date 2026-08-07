@@ -108,6 +108,11 @@ export interface AdminOrderShippingPanelProps {
   packedAt: string | null;
   shippedAt: string | null;
   deliveredAt: string | null;
+  /** Shippo's id for this order, once the push succeeded. */
+  shippoOrderId?: string | null;
+  /** pending | synced | error — drives the retry affordance. */
+  shippoSyncStatus?: string | null;
+  shippoSyncError?: string | null;
   shippo: { configured: boolean; mode: "test" | "live"; label: string };
 }
 
@@ -265,7 +270,18 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
     shippedAt,
     deliveredAt,
     shippo,
+    shippoOrderId = null,
+    shippoSyncStatus = null,
+    shippoSyncError = null,
   } = props;
+
+  // A deep link straight to this order in Shippo. Falls back to the Orders list
+  // when the push has not landed yet, so the button is never a dead end.
+  const syncStatus = shippoSyncStatus;
+  const syncError = shippoSyncError;
+  const shippoOrderUrl = shippoOrderId
+    ? `https://apps.goshippo.com/orders/${encodeURIComponent(shippoOrderId)}`
+    : null;
 
   const router = useRouter();
 
@@ -295,7 +311,6 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
    * that must not happen next is another purchase.
    */
   const [chargedWarning, setChargedWarning] = useState<string | null>(null);
-  const [purchaseLocked, setPurchaseLocked] = useState(false);
 
   // Re-sync from the server after router.refresh(). The key changes only when
   // the underlying row changed, so this never clobbers state the admin is
@@ -313,9 +328,7 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
     setSyncedKey(serverKey);
     setLabel(props.label);
     setStatus(props.fulfillmentStatus);
-    setPackedAt(props.packedAt);
-    if (!chargedWarning) setPurchaseLocked(false);
-  }
+    setPackedAt(props.packedAt);  }
 
   /**
    * Synchronous lock. `pending` drives the disabled attributes, but state
@@ -338,7 +351,6 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
           // request may have reached Shippo and bought a label before the socket
           // died. The outcome is unknown, and the only safe response to an
           // unknown purchase is to stop offering another one.
-          setPurchaseLocked(true);
           setChargedWarning(
             "The connection dropped while buying this label, so it is not known whether postage was charged. Reload the page: if no label appears, check the Shippo dashboard for this order before buying another.",
           );
@@ -377,8 +389,6 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
     presetId !== savedPresetId || parseWeightInput(weightInput).value !== savedOverrideOz;
 
   const canQuote = canFulfill && shippoReady && !hasLabel && !parcel.error && missingAddress.length === 0 && !isTerminal;
-  const selectedRate = rates?.find((rate) => rate.id === selectedRateId) ?? null;
-  const canBuy = canQuote && !purchaseLocked && !purchaseClaimStuck && selectedRate !== null;
 
   const addressLines = [
     customerName,
@@ -516,75 +526,6 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [canQuote, orderId]);
 
-  const buyLabel = () =>
-    run("buy", async () => {
-      // Re-checked inside the lock: by the time this runs the label may already
-      // exist, and nothing below is worth a second charge.
-      if (hasLabel || purchaseLocked || !selectedRate) return;
-      setNotice(null);
-      setConfirming(null);
-
-      const res = await fetch(`/api/admin/orders/${orderId}/shipping/label`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rateId: selectedRate.id }),
-      });
-      const json = (await res.json().catch(() => null)) as
-        | { success?: boolean; error?: string; code?: string; label?: (ShippingPanelLabel & { reused?: boolean }) | null }
-        | null;
-
-      // A label in the body means one EXISTS — on success, and on the two
-      // failures that happen after the money is already spent.
-      if (json?.label) {
-        setLabel(toPanelLabel(json.label));
-      }
-
-      if (res.ok && json?.success && json.label) {
-        setRates(null);
-        setSelectedRateId("");
-        setStatus("label_purchased");
-        setNotice(
-          json.label.reused
-            ? { tone: "info", text: "This order already had a label — nothing was bought twice." }
-            : {
-                tone: "success",
-                text: `Label purchased: ${[json.label.carrier, json.label.service].filter(Boolean).join(" ")} for ${costLabel(json.label.postageCostCents)}.`,
-              },
-        );
-        router.refresh();
-        return;
-      }
-
-      if (json?.label) {
-        // Postage was charged. Never offer a retry from here.
-        setPurchaseLocked(true);
-        setChargedWarning(
-          `${json.error ?? "The purchase failed after the label was bought."} The postage WAS charged — print the label below and check this order in the Shippo dashboard. Do not buy another.`,
-        );
-        router.refresh();
-        return;
-      }
-
-      if (json?.code === "purchase_in_progress") {
-        // Someone (or some retry) is mid-purchase. Nothing was bought twice, and
-        // sending this again cannot help — so stop offering it and refresh.
-        setPurchaseLocked(true);
-        setNotice({ tone: "warn", text: json.error ?? "A label purchase for this order is already in progress." });
-        router.refresh();
-        return;
-      }
-
-      if (json?.code === "rate_expired") {
-        setRates(null);
-        setSelectedRateId("");
-        setQuoted(null);
-        setNotice({ tone: "warn", text: json.error ?? "That quote expired. Get rates again and pick a service." });
-        return;
-      }
-
-      setNotice({ tone: "error", text: json?.error ?? "The label purchase failed. Nothing was bought." });
-    });
-
   const voidLabel = () =>
     run("void", async () => {
       setNotice(null);
@@ -603,7 +544,6 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
       setRates(null);
       setSelectedRateId("");
       setQuoted(null);
-      setPurchaseLocked(false);
       setStatus("packed");
       setNotice({
         tone: "success",
@@ -865,115 +805,44 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
             {pending === "packed" ? "Saving…" : alreadyPacked ? "✓ Packed" : "1 · Mark packed"}
           </button>
 
-          <button
-            type="button"
-            onClick={getRates}
-            disabled={!canQuote || pending !== null}
-            className="vl-btn-secondary w-full px-5 text-sm disabled:opacity-40 sm:w-auto"
+          <a
+            href={shippoOrderUrl ?? "https://apps.goshippo.com/orders"}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="vl-btn-primary w-full px-5 py-2.5 text-center text-sm sm:w-auto"
           >
-            {pending === "rates" ? "Quoting…" : rates ? "Refresh rates" : "2 · Get rates"}
-          </button>
+            2 · Buy label in Shippo →
+          </a>
         </div>
 
-        {/* --- rate picker --- */}
-        {rates && !hasLabel ? (
-          <div className="mt-4">
-            <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">3 · Choose a service</p>
-            <div className="mt-2 grid gap-2">
-              {rates.map((rate) => {
-                const selected = rate.id === selectedRateId;
-                return (
-                  <label
-                    key={rate.id}
-                    className={`flex min-h-[56px] cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition ${
-                      selected ? "border-cyan-300/50 bg-cyan-300/10" : "border-white/10 bg-white/[0.02] hover:border-white/25"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name={`vl-rate-${orderId}`}
-                      value={rate.id}
-                      checked={selected}
-                      onChange={() => setSelectedRateId(rate.id)}
-                      disabled={pending !== null}
-                      className="h-5 w-5 shrink-0 accent-cyan-300"
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold text-white">
-                        {rate.carrier} · {rate.service || rate.serviceToken}
-                      </span>
-                      <span className="block text-[11px] text-zinc-500">
-                        {rate.estimatedDays != null
-                          ? `≈ ${rate.estimatedDays} day${rate.estimatedDays === 1 ? "" : "s"}`
-                          : rate.durationTerms || "Delivery estimate unavailable"}
-                      </span>
-                    </span>
-                    <span className="shrink-0 tabular-nums text-sm font-semibold text-white">
-                      {costLabel(rate.amountCents)}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
-        {/* --- buy --- */}
+        {/* --- where the label is actually bought --- */}
         {!hasLabel ? (
-          <div className="mt-4">
-            {confirming === "buy" && selectedRate ? (
-              // Deliberate step two. Nothing is spent until this Confirm is
-              // pressed, and it names exactly what is being bought.
-              <div className="rounded-xl border border-white/25 bg-white/[0.05] p-3.5">
-                <p className="text-sm text-zinc-100">
-                  Buy <strong>{selectedRate.carrier} {selectedRate.service || selectedRate.serviceToken}</strong> for{" "}
-                  <strong className="tabular-nums">{costLabel(selectedRate.amountCents)}</strong>?
-                </p>
-                <p className="mt-1 text-[12px] text-zinc-400">
-                  {shippo.mode === "live"
-                    ? "This charges your Shippo account for real postage. It can be voided afterwards, but the refund is not instant."
-                    : "Shippo is in test mode — no real postage will be charged."}
-                </p>
-                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={buyLabel}
-                    disabled={!canBuy || pending !== null}
-                    className="vl-btn-primary w-full px-5 text-sm disabled:opacity-40 sm:w-auto"
-                  >
-                    {pending === "buy" ? "Buying…" : "Confirm purchase"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirming(null)}
-                    disabled={pending !== null}
-                    className="vl-btn-secondary w-full px-5 text-sm disabled:opacity-40 sm:w-auto"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setConfirming("buy")}
-                disabled={!canBuy || pending !== null}
-                className="vl-btn-primary w-full px-5 text-sm disabled:opacity-40 sm:w-auto"
-              >
-                4 · Buy label
-              </button>
-            )}
-
-            {!selectedRate && canQuote ? (
-              <p className="mt-2 text-[11px] text-zinc-500">Get rates and pick a service to enable the purchase.</p>
+          <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3">
+            <p className="text-[13px] text-zinc-300">
+              Postage is purchased in Shippo, not here. This order is pushed to Shippo with the
+              address, items and the {ounces(parcel.weightOz)} parcel weight already filled in — open
+              it, check the details, and buy the label there.
+            </p>
+            <p className="mt-2 text-[12px] text-zinc-500">
+              The exact postage cost and tracking number come back automatically and appear on this
+              page. Nothing on this screen can buy postage.
+            </p>
+            {syncStatus === "error" ? (
+              <p className="mt-2 rounded-lg border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-[12px] text-rose-100">
+                This order has not reached Shippo{syncError ? `: ${syncError}` : "."} Use{" "}
+                <strong>Retry Shippo sync</strong> below — it will not appear in Shippo until this
+                succeeds.
+              </p>
             ) : null}
-            {purchaseLocked ? (
-              <p className="mt-2 text-[11px] text-amber-300/90">
-                Purchasing is locked on this screen to stop a second charge. Reload the page once the order settles.
+            {!shippoOrderId && syncStatus !== "error" ? (
+              <p className="mt-2 text-[12px] text-amber-300/90">
+                Not yet synced to Shippo. It appears within a few seconds of payment; if it does not,
+                retry the sync below.
               </p>
             ) : null}
           </div>
         ) : null}
+
 
         {/* --- print / void --- */}
         {hasLabel && label ? (
@@ -1148,15 +1017,3 @@ function wasParcelApplied(input: {
   return true;
 }
 
-function toPanelLabel(label: ShippingPanelLabel & { reused?: boolean }): ShippingPanelLabel {
-  return {
-    transactionId: label.transactionId,
-    carrier: label.carrier ?? null,
-    service: label.service ?? null,
-    trackingNumber: label.trackingNumber ?? null,
-    trackingUrl: label.trackingUrl ?? null,
-    postageCostCents:
-      label.postageCostCents == null || !Number.isFinite(label.postageCostCents) ? null : label.postageCostCents,
-    purchasedAt: label.purchasedAt ?? null,
-  };
-}

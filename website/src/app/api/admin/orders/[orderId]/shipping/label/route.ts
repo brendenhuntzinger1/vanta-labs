@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { purchaseLabelForOrder, voidLabelForOrder, type OrderLabel } from "@/lib/shippo/service";
+import { voidLabelForOrder } from "@/lib/shippo/service";
 import { httpStatusForShippoError } from "../error-status";
 
 // ---------------------------------------------------------------------------
@@ -39,132 +39,27 @@ function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
 }
 
-/**
- * Record the spend.
- *
- * Called for a genuine purchase AND for a failure that still produced a label,
- * because the audit log answers "what did this order cost us and who did it",
- * and a charge that only exists inside an error response is exactly the one
- * someone will need to find later. A reused label is not logged: it bought
- * nothing, and logging it would make one purchase look like several.
- */
-async function auditLabelPurchase(input: {
-  orderId: string;
-  label: OrderLabel;
-  username: string;
-  request: Request;
-  outcome: "purchased" | "purchased_not_saved" | "purchased_cost_unknown";
-}) {
-  const { error } = await supabaseAdmin.from("admin_audit_logs").insert({
-    action: "order_label_purchase",
-    target_table: "orders",
-    target_id: input.orderId,
-    metadata: {
-      outcome: input.outcome,
-      shippoTransactionId: input.label.transactionId,
-      shippoRateId: input.label.rateId,
-      carrier: input.label.carrier,
-      service: input.label.service,
-      trackingNumber: input.label.trackingNumber,
-      // Null when Shippo returned no usable amount. Never 0 — a 0 here would
-      // read as "this label was free" in the audit trail.
-      postageCostCents: input.label.postageCostCents,
-      performedAt: input.label.purchasedAt ?? new Date().toISOString(),
-      performedBy: input.username,
-      ipAddress: getRequestIpAddress(input.request),
-      userAgent: getRequestUserAgent(input.request),
-    },
-  });
-  if (error) {
-    // The postage is already bought. Failing the request over a missing audit
-    // row would invite a second purchase, which is far worse than a gap here.
-    console.error("Unable to audit label purchase for order", input.orderId, error);
-  }
-}
 
-export async function POST(request: Request, context: { params: Promise<{ orderId: string }> }) {
-  const session = await verifyAdminSessionFromRequest(request);
-  if (!session) {
-    return unauthorizedResponse();
-  }
+// PURCHASE REMOVED, DELIBERATELY.
+//
+// Labels are bought in Shippo's dashboard and nowhere else. This endpoint used
+// to buy postage, and leaving it in place would mean two independent systems
+// could each buy a label for the same order.
+//
+// The exactly-once claim in this codebase serializes callers of THIS app; it
+// knows nothing about a purchase made by hand in Shippo's UI. Two systems, two
+// labels, one parcel, and the second charge is not refundable by clicking
+// undo. The only safe way to guarantee one label per order is for exactly one
+// system to be able to buy one.
+//
+// Deleting the route rather than hiding the button matters: a hidden button
+// still leaves a reachable endpoint that a stale tab, a bookmarked request or
+// a retried fetch can hit.
+//
+// The label still arrives here — via the transaction_created webhook in
+// src/lib/shippo/order-sync.ts, which records the real postage cost, tracking
+// and carrier against the order.
 
-  const { orderId } = await context.params;
-
-  let rateId = "";
-  try {
-    const raw = await request.text();
-    if (raw.trim()) {
-      const body = JSON.parse(raw) as { rateId?: unknown; rate?: { object_id?: unknown } | null };
-      // Accept either the id on its own or the whole rate object posted back
-      // from the rates response — both are unambiguous, and rejecting the
-      // second would be pedantry that costs an admin a failed purchase.
-      rateId =
-        (typeof body.rateId === "string" ? body.rateId.trim() : "") ||
-        (typeof body.rate?.object_id === "string" ? body.rate.object_id.trim() : "");
-    }
-  } catch {
-    return NextResponse.json({ success: false, error: "Invalid request body." }, { status: 400 });
-  }
-
-  if (!rateId) {
-    return NextResponse.json(
-      { success: false, error: "Choose a shipping service before buying a label." },
-      { status: 400 },
-    );
-  }
-
-  let result;
-  try {
-    result = await purchaseLabelForOrder(orderId, rateId, session.username);
-  } catch (error) {
-    // purchaseLabelForOrder returns typed failures and holds its claim on an
-    // unknown outcome. Anything thrown from it is unexpected, so the answer must
-    // not read as "safe to try again".
-    console.error("Unexpected failure buying a shipping label for order", orderId, error);
-    return NextResponse.json(
-      {
-        success: false,
-        error: "The label purchase failed unexpectedly. Check the Shippo dashboard for this order before retrying.",
-      },
-      { status: 500 },
-    );
-  }
-
-  if (!result.ok) {
-    // Postage may still have been charged — audit it and hand the label back.
-    if (result.label) {
-      await auditLabelPurchase({
-        orderId,
-        label: result.label,
-        username: session.username,
-        request,
-        outcome: result.code === "cost_unrecorded" ? "purchased_cost_unknown" : "purchased_not_saved",
-      });
-    }
-    return NextResponse.json(
-      {
-        success: false,
-        error: result.message,
-        code: result.code,
-        detail: result.detail ?? null,
-        label: result.label ?? null,
-      },
-      { status: httpStatusForShippoError(result.code) },
-    );
-  }
-
-  if (!result.data.reused) {
-    await auditLabelPurchase({
-      orderId,
-      label: result.data,
-      username: session.username,
-      request,
-      outcome: "purchased",
-    });
-  }
-
-  return NextResponse.json({ success: true, label: result.data });
-}
 
 export async function DELETE(request: Request, context: { params: Promise<{ orderId: string }> }) {
   const session = await verifyAdminSessionFromRequest(request);

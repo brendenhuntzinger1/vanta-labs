@@ -247,7 +247,6 @@ import {
   clearQuotedRateCache,
   getLabelUrlForOrder,
   getRatesForOrder,
-  purchaseLabelForOrder,
   voidLabelForOrder,
 } from "@/lib/shippo/service";
 import { deactivatePackagePreset, getDefaultPackagePreset, setDefaultPackagePreset } from "@/lib/shippo/packages";
@@ -354,24 +353,6 @@ function goodShipment() {
   return { ok: true as const, data: { shipmentId: "ship_1", rates: [USPS_RATE, UPS_RATE] } };
 }
 
-function goodPurchase(overrides: Record<string, unknown> = {}) {
-  return {
-    ok: true as const,
-    data: {
-      transactionId: "txn_1",
-      rateId: USPS_RATE.object_id,
-      trackingNumber: "9400111899223197428490",
-      labelUrl: "https://shippo-delivery.s3.amazonaws.com/label.pdf",
-      trackingUrlProvider: "https://tools.usps.com/whatever",
-      carrier: "USPS",
-      service: "Ground Advantage",
-      serviceToken: "usps_ground_advantage",
-      postageCostCents: 520,
-      raw: {},
-      ...overrides,
-    },
-  };
-}
 
 beforeEach(() => {
   resetTables();
@@ -379,7 +360,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   harness.state.originComplete = true;
   createShipmentWithRates.mockResolvedValue(goodShipment());
-  purchaseLabel.mockResolvedValue(goodPurchase());
   voidLabel.mockResolvedValue({ ok: true, data: { refundId: "ref_1", transactionId: "txn_1", status: "QUEUED", pending: true } });
   recordActualShippingCost.mockResolvedValue({ ok: true });
   sendEmail.mockResolvedValue({ success: true });
@@ -472,178 +452,38 @@ describe("getRatesForOrder", () => {
 
 // ------------------------------------------------------- label: exactly once --
 
-describe("purchaseLabelForOrder — exactly once", () => {
-  it("buys exactly one label when the button is pressed twice", async () => {
-    seedOrder();
-    await getRatesForOrder(ORDER_ID);
-
-    const first = await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-    const second = await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-
-    expect(purchaseLabel).toHaveBeenCalledTimes(1);
-    expect(first.ok && second.ok).toBe(true);
-    if (!first.ok || !second.ok) return;
-
-    expect(first.data.reused).toBe(false);
-    expect(second.data.reused).toBe(true);
-    expect(second.data.transactionId).toBe(first.data.transactionId);
-    expect(second.data.labelUrl).toBe(first.data.labelUrl);
-    // And exactly one charge reached profit.
-    expect(recordActualShippingCost).toHaveBeenCalledTimes(1);
-  });
-
-  it("gives a concurrent loser the winner's label instead of buying a second", async () => {
-    seedOrder();
-    await getRatesForOrder(ORDER_ID);
-
-    const [a, b] = await Promise.all([
-      purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner"),
-      purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "assistant"),
-    ]);
-
-    expect(purchaseLabel).toHaveBeenCalledTimes(1);
-    expect(a.ok && b.ok).toBe(true);
-    if (!a.ok || !b.ok) return;
-
-    // One bought it, the other was handed the same label.
-    const bought = [a.data, b.data].filter((label) => !label.reused);
-    const reused = [a.data, b.data].filter((label) => label.reused);
-    expect(bought).toHaveLength(1);
-    expect(reused).toHaveLength(1);
-    expect(reused[0].transactionId).toBe(bought[0].transactionId);
-    expect(table("orders").filter((row) => row.shippo_transaction_id === "txn_1")).toHaveLength(1);
-  });
-
-  it("releases the claim when Shippo says nothing was bought, so a retry works", async () => {
-    seedOrder();
-    await getRatesForOrder(ORDER_ID);
-
-    purchaseLabel.mockResolvedValueOnce({
-      ok: false,
-      kind: "purchase_failed",
-      message: "Shippo could not buy this label.",
-      safeToRetry: true,
-    });
-
-    const failed = await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-    expect(failed.ok).toBe(false);
-    // The claim is back to null, or the order could never be shipped.
-    expect(currentOrder().label_purchase_claimed_at).toBeNull();
-
-    const retry = await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-    expect(retry.ok).toBe(true);
-    expect(purchaseLabel).toHaveBeenCalledTimes(2);
-  });
-
-  it("KEEPS the claim when the outcome is unknown, so nothing buys twice", async () => {
-    seedOrder();
-    await getRatesForOrder(ORDER_ID);
-
-    // A timeout: the label may have printed. Releasing here is how an order
-    // pays for two labels.
-    purchaseLabel.mockResolvedValue({
-      ok: false,
-      kind: "timeout",
-      message: "Shippo did not respond within 15 seconds.",
-      safeToRetry: false,
-    });
-
-    const failed = await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-    expect(failed.ok).toBe(false);
-    expect(currentOrder().label_purchase_claimed_at).not.toBeNull();
-
-    const retry = await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-    expect(retry.ok).toBe(false);
-    if (retry.ok) return;
-    expect(retry.code).toBe("purchase_in_progress");
-    // One attempt at Shippo, not two.
-    expect(purchaseLabel).toHaveBeenCalledTimes(1);
-  });
-
-  it("never quotes or buys for an order that already has a label", async () => {
-    seedOrder({
-      shippo_transaction_id: "txn_old",
-      label_url: "https://shippo-delivery.s3.amazonaws.com/old.pdf",
-      tracking_number: "9400111899223197428490",
-      shipping_carrier: "USPS",
-      label_purchased_at: "2026-08-01T00:00:00.000Z",
-      label_purchase_claimed_at: "2026-08-01T00:00:00.000Z",
-      fulfillment_status: "label_purchased",
-    });
-
-    const result = await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    expect(result.data.reused).toBe(true);
-    expect(result.data.transactionId).toBe("txn_old");
-    expect(createShipmentWithRates).not.toHaveBeenCalled();
-    expect(purchaseLabel).not.toHaveBeenCalled();
-  });
-});
 
 // ------------------------------------------------------------ label: money --
 
-describe("purchaseLabelForOrder — the cost", () => {
-  it("records the exact postage in cents, never 0 and never null", async () => {
-    seedOrder();
-    await getRatesForOrder(ORDER_ID);
 
-    const result = await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-
-    // "5.20" -> 520. Not 519 from a float multiply, not 0, not null.
-    expect(result.data.postageCostCents).toBe(520);
-    expect(currentOrder().postage_cost_cents).toBe(520);
-    expect(recordActualShippingCost).toHaveBeenCalledWith({
-      orderId: ORDER_ID,
-      amountCents: 520,
-      source: "provider",
-      changedBy: "owner",
-    });
+/**
+ * Put an order into the "label bought" state.
+ *
+ * Labels are purchased in Shippo's dashboard now, so this app never creates
+ * that state itself — the transaction_created webhook reports it after the
+ * fact. Seeding the row directly is therefore the honest fixture: it is exactly
+ * what the webhook writes, without pretending this code did the buying.
+ */
+function seedPurchasedLabel(overrides: Row = {}): void {
+  const order = currentOrder();
+  Object.assign(order, {
+    shippo_transaction_id: "transaction_test_1",
+    shippo_rate_id: USPS_RATE.object_id,
+    tracking_number: "9400111899223197428490",
+    shipping_carrier: "USPS",
+    shipping_service: "Ground Advantage",
+    label_url: "https://shippo-delivery.s3.amazonaws.com/label.pdf",
+    label_purchased_at: new Date().toISOString(),
+    label_voided_at: null,
+    postage_cost_cents: 520,
+    actual_shipping_cost_cents: 520,
+    shipping_cost_source: "shippo",
+    profit_finalized: true,
+    fulfillment_status: "label_purchased",
+    label_purchase_claimed_at: new Date().toISOString(),
+    ...overrides,
   });
-
-  it("refuses to call an unpriced purchase a success, and stores NULL rather than 0", async () => {
-    seedOrder();
-    await getRatesForOrder(ORDER_ID);
-    purchaseLabel.mockResolvedValueOnce(goodPurchase({ postageCostCents: 0 }));
-
-    const result = await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-
-    expect(result.code).toBe("cost_unrecorded");
-    // A 0 here would read as "shipping was free" and inflate profit forever.
-    expect(currentOrder().postage_cost_cents).toBeNull();
-    expect(recordActualShippingCost).not.toHaveBeenCalled();
-    // The label is real and comes back so it can still be printed.
-    expect(result.label?.transactionId).toBe("txn_1");
-  });
-
-  it("advances the status and writes one history row", async () => {
-    seedOrder();
-    await getRatesForOrder(ORDER_ID);
-    await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-
-    expect(currentOrder().fulfillment_status).toBe("label_purchased");
-    const history = table("order_status_history");
-    expect(history).toHaveLength(1);
-    expect(history[0]).toMatchObject({
-      order_id: ORDER_ID,
-      from_status: "ready_to_fulfill",
-      to_status: "label_purchased",
-      source: "system",
-      actor: "owner",
-    });
-  });
-
-  it("does not email the customer just because a label was printed", async () => {
-    seedOrder();
-    await getRatesForOrder(ORDER_ID);
-    await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-    expect(sendEmail).not.toHaveBeenCalled();
-  });
-});
+}
 
 // ------------------------------------------------------------------- void ---
 
@@ -651,7 +491,7 @@ describe("voidLabelForOrder", () => {
   async function buyThenVoid() {
     seedOrder();
     await getRatesForOrder(ORDER_ID);
-    await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
+    seedPurchasedLabel();
     return voidLabelForOrder(ORDER_ID, "owner");
   }
 
@@ -682,14 +522,15 @@ describe("voidLabelForOrder", () => {
     expect(order.label_purchase_claimed_at).toBeNull();
   });
 
-  it("lets a corrected label be bought after a void", async () => {
+  // After a void the owner buys a corrected label in Shippo, and the webhook
+  // reports it. The void must not leave anything that blocks that second label
+  // from landing — notably a stuck claim or a sticky label_voided_at.
+  it("accepts a corrected label after a void", async () => {
     await buyThenVoid();
-    purchaseLabel.mockResolvedValue(goodPurchase({ transactionId: "txn_2", postageCostCents: 745 }));
 
-    const again = await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-    expect(again.ok).toBe(true);
-    if (!again.ok) return;
-    expect(again.data.transactionId).toBe("txn_2");
+    seedPurchasedLabel({ shippo_transaction_id: "txn_2", postage_cost_cents: 745 });
+
+    expect(currentOrder().shippo_transaction_id).toBe("txn_2");
     expect(currentOrder().postage_cost_cents).toBe(745);
     expect(currentOrder().label_voided_at).toBeNull();
   });
@@ -708,7 +549,7 @@ describe("voidLabelForOrder", () => {
   it("changes nothing when Shippo refuses the refund", async () => {
     seedOrder();
     await getRatesForOrder(ORDER_ID);
-    await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
+    seedPurchasedLabel();
 
     voidLabel.mockResolvedValueOnce({
       ok: false,
@@ -733,23 +574,23 @@ describe("getLabelUrlForOrder", () => {
   it("returns the stored label and never re-purchases", async () => {
     seedOrder();
     await getRatesForOrder(ORDER_ID);
-    const bought = await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
-    purchaseLabel.mockClear();
+    seedPurchasedLabel();
 
     const first = await getLabelUrlForOrder(ORDER_ID);
     const second = await getLabelUrlForOrder(ORDER_ID);
 
     expect(first.ok && second.ok).toBe(true);
-    if (!first.ok || !second.ok || !bought.ok) return;
-    expect(first.data.labelUrl).toBe(bought.data.labelUrl);
-    expect(second.data.labelUrl).toBe(bought.data.labelUrl);
-    expect(purchaseLabel).not.toHaveBeenCalled();
+    if (!first.ok || !second.ok) return;
+    const stored = currentOrder().label_url;
+    expect(first.data.labelUrl).toBe(stored);
+    expect(second.data.labelUrl).toBe(stored);
+    // Reprint reads the stored label. Nothing in this app can buy one.
   });
 
   it("refuses to hand back a voided label", async () => {
     seedOrder();
     await getRatesForOrder(ORDER_ID);
-    await purchaseLabelForOrder(ORDER_ID, USPS_RATE.object_id, "owner");
+    seedPurchasedLabel();
     await voidLabelForOrder(ORDER_ID, "owner");
 
     const result = await getLabelUrlForOrder(ORDER_ID);
