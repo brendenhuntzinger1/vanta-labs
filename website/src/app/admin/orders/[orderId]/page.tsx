@@ -260,8 +260,6 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
 
         {profit ? (
           <AdminOrderProfitPanel
-            orderId={String(data.order_id)}
-            canEdit={canSeeProfit}
             profit={{
               grossRevenue: profit.grossRevenue,
               merchandiseRevenue: profit.merchandiseRevenue,

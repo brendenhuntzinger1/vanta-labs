@@ -53,50 +53,15 @@ function ExpenseRow({ label, amount, muted }: { label: string; amount: number; m
 }
 
 export function AdminOrderProfitPanel({
-  orderId,
   profit,
   audit,
-  canEdit,
 }: {
-  orderId: string;
   profit: OrderProfitView;
   audit: ShippingCostAuditView[];
-  canEdit: boolean;
 }) {
-  const router = useRouter();
-  const [amount, setAmount] = useState(profit.shippingCostIsEstimate ? "" : profit.shippingCost.toFixed(2));
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
   const estimated = profit.profitStatus === "estimated";
 
-  async function saveShippingCost(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    const value = Number(amount);
-    if (!Number.isFinite(value) || value < 0) {
-      setError("Enter a valid shipping cost.");
-      return;
-    }
-    setSaving(true);
-    try {
-      const res = await fetch(`/api/admin/orders/${orderId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "set_shipping_cost", shippingCostAmount: value }),
-      });
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || !json.success) {
-        setError(json.error ?? "Unable to save shipping cost.");
-        return;
-      }
-      router.refresh();
-    } catch {
-      setError("Network error — try again.");
-    } finally {
-      setSaving(false);
-    }
-  }
+
 
   return (
     <details open className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-4 sm:p-5">
@@ -183,27 +148,13 @@ export function AdminOrderProfitPanel({
         </p>
       ) : null}
 
-      {canEdit ? (
-        <form onSubmit={saveShippingCost} className="mt-4 flex flex-wrap items-end gap-2 border-t border-white/10 pt-4">
-          <label className="text-xs text-zinc-400">
-            {profit.shippingCostIsEstimate ? "Enter exact shipping-label cost" : "Correct shipping-label cost"}
-            <div className="mt-1 flex items-center gap-1">
-              <span className="text-zinc-500">$</span>
-              <input
-                value={amount}
-                onChange={(e) => setAmount(e.target.value)}
-                inputMode="decimal"
-                placeholder="7.25"
-                className="vl-input w-28 px-3 py-2 text-sm"
-              />
-            </div>
-          </label>
-          <button type="submit" disabled={saving} className="vl-btn-primary px-4 py-2 text-xs disabled:opacity-60">
-            {saving ? "Saving…" : "Save exact cost"}
-          </button>
-          {error ? <span className="text-[11px] text-rose-300">{error}</span> : null}
-        </form>
-      ) : null}
+      {/* The manual "enter exact shipping cost" form was removed deliberately.
+          It turned a number the system already receives -- Shippo reports the
+          settled postage on the transaction_created webhook -- into daily
+          bookkeeping, and a typed figure silently outranks a measured one.
+          Postage now has exactly one source. If a cost is genuinely missing,
+          the reconciliation sweep re-fetches it from Shippo rather than asking
+          a human to remember what a label cost. */}
 
       {audit.length > 0 ? (
         <details className="mt-4 border-t border-white/10 pt-3">
