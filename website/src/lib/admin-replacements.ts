@@ -131,6 +131,10 @@ export async function createReplacementOrder(input: {
     ...baseOrderRow,
     state: original.state ?? null,
     phone: original.phone ?? null,
+    // The apartment line. Missing here meant every replacement shipped to the
+    // building and not the unit -- a redelivery on a parcel already sent to
+    // apologise for a delivery that went wrong.
+    shipping_address_2: original.shipping_address_2 ?? null,
     replacement_of: original.order_id,
     replacement_reason: input.reason + (input.note ? ` — ${String(input.note).slice(0, 300)}` : ""),
   };
@@ -143,7 +147,14 @@ export async function createReplacementOrder(input: {
       || message.includes("schema cache")
       || message.includes("could not find");
     if (looksLikeMissingColumn) {
-      insertError = (await supabaseAdmin.from("orders").insert(baseOrderRow)).error;
+      // baseOrderRow has no state and no phone, and carriers reject a US
+      // shipment without a state. Retry with them re-attached rather than
+      // falling all the way back to a row that cannot ship.
+      const { replacement_of: _a, replacement_reason: _b, shipping_address_2: _c, ...retryRow } = fullOrderRow;
+      insertError = (await supabaseAdmin.from("orders").insert(retryRow)).error;
+      if (insertError) {
+        insertError = (await supabaseAdmin.from("orders").insert(baseOrderRow)).error;
+      }
     }
   }
   if (insertError) {

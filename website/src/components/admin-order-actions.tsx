@@ -160,7 +160,11 @@ export function AdminOrderActions({
       {message ? <p className="mt-3 text-sm text-zinc-300">{message}</p> : null}
 
       <div className="mt-6 border-t border-white/10 pt-4">
-        <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Refund</p>
+        <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Record a refund</p>
+        <p className="mt-1 text-xs text-zinc-500">
+          Replacements are the standard remedy. Use this only when a refund is unavoidable — a dispute, or a
+          customer who will not accept a reship.
+        </p>
         <p className="mt-2 text-sm text-zinc-300">
           Paid {money(amountPaid)} • Refunded {money(refundAmount)} • Remaining refundable {money(remaining)}
         </p>
@@ -199,7 +203,7 @@ export function AdminOrderActions({
         <div className="mt-6 border-t border-white/10 pt-4">
           <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Replacement</p>
           <p className="mt-2 text-sm text-zinc-300">
-            Item damaged, lost, or stolen in transit? Send a free replacement — the customer is never charged, the
+            The store&apos;s standard remedy. Item damaged, lost, stolen, or wrong? Send a free replacement — the customer is never charged, the
             reship goes straight to fulfillment, and the claim is logged.
           </p>
           {!replaceOpen ? (

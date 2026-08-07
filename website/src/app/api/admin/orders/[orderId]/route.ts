@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds, canViewProfit } from "@/lib/admin-roles";
 import { recordActualShippingCost } from "@/lib/admin-profit";
@@ -8,6 +8,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
 import { deliveryConfirmationTemplate, orderConfirmationTemplate, refundConfirmationTemplate, replacementOrderTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { createReplacementOrder } from "@/lib/admin-replacements";
+import { syncOrderToShippo } from "@/lib/shippo/order-sync";
 import { providerSettlesRefunds, getPaymentProvider } from "@/lib/payment-provider";
 import { updateCommissionOnRefund } from "@/lib/payment-webhook";
 import { restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
@@ -448,6 +449,24 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
               .filter((item) => item.itemId)
           : null,
       });
+
+      // Push the replacement to Shippo now rather than leaving it to the
+      // half-hourly sweep. A replacement is already a late parcel -- it exists
+      // because the first one failed -- and the sweep would collect it
+      // eventually, which is the wrong speed for the one order the customer is
+      // actively waiting on. Same after() pattern as the payment webhook, so a
+      // slow Shippo cannot delay this response.
+      try {
+        after(async () => {
+          try {
+            await syncOrderToShippo(replacement.orderId);
+          } catch (syncError) {
+            console.error("Unable to sync replacement to Shippo", replacement.orderId, syncError);
+          }
+        });
+      } catch {
+        // No request scope. The sweep still picks it up.
+      }
 
       const { error: auditError } = await supabaseAdmin
         .from("admin_audit_logs")
