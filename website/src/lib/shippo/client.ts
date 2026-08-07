@@ -335,6 +335,17 @@ export interface CreateShipmentInput {
    * fallback live in src/lib/shipping-origin.ts.
    */
   addressReturn?: ShippoAddress;
+  /**
+   * The Shippo ORDER this shipment belongs to.
+   *
+   * This is the field that makes the parcel visible when the owner opens the
+   * order in Shippo's dashboard. A Shippo Order carries line items and
+   * addresses but NO parcel; the parcel lives on a Shipment. Without this
+   * link, Shippo builds its own empty Shipment when the order is opened and
+   * asks for dimensions and weight by hand — which is the whole problem this
+   * integration exists to avoid.
+   */
+  order?: string;
 }
 
 export interface ShipmentWithRates {
@@ -361,6 +372,7 @@ export async function createShipmentWithRates(
       address_from: input.addressFrom,
       address_to: input.addressTo,
       ...(input.addressReturn ? { address_return: input.addressReturn } : {}),
+      ...(input.order ? { order: input.order } : {}),
       parcels: [input.parcel],
       async: false,
     },

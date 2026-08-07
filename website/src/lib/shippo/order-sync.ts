@@ -3,7 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getShippingAddresses } from "@/lib/shipping-origin";
 import { recordActualShippingCost } from "@/lib/admin-profit";
-import { createShippoOrder } from "@/lib/shippo/client";
+import { createShipmentWithRates, createShippoOrder } from "@/lib/shippo/client";
 import { isShippoConfigured } from "@/lib/shippo/config";
 import { buildOrderParcel, toCountryCode } from "@/lib/shippo/service";
 import type { ShippoAddress, ShippoOrderLineItem, ShippoTransactionCreated } from "@/lib/shippo/types";
@@ -59,6 +59,27 @@ const ORDER_COLUMNS =
 
 function money(value: number | null | undefined): string {
   return (Math.round((Number(value) || 0) * 100) / 100).toFixed(2);
+}
+
+
+/** ShippingAddress -> the shape Shippo wants. Empty optionals are omitted
+ *  rather than sent blank, which Shippo treats as a validation failure. */
+function toShippoAddress(a: {
+  name: string; company: string; street1: string; street2: string;
+  city: string; state: string; zip: string; country: string; phone: string; email: string;
+}): ShippoAddress {
+  return {
+    name: a.name,
+    company: a.company || undefined,
+    street1: a.street1,
+    street2: a.street2 || undefined,
+    city: a.city,
+    state: a.state,
+    zip: a.zip,
+    country: a.country || "US",
+    phone: a.phone || undefined,
+    email: a.email || undefined,
+  };
 }
 
 function destinationAddress(order: OrderRow): ShippoAddress {
@@ -235,12 +256,43 @@ export async function syncOrderToShippo(orderId: string): Promise<SyncOutcome> {
     return { ok: false, reason: created.message, retryable: false };
   }
 
+  // THE PARCEL. A Shippo Order carries line items and addresses but no parcel,
+  // so an order alone opens in Shippo's dashboard with empty Length / Width /
+  // Height / Weight and no rates — the operator retypes the box by hand, which
+  // is precisely what this integration exists to prevent.
+  //
+  // Creating a Shipment bound to that order attaches the parcel we already
+  // computed. Quoting is free and buys nothing, so this is safe to do
+  // automatically.
+  //
+  // Best-effort: the order itself is already in Shippo and useful. If the
+  // shipment fails, the operator can still buy a label after entering the box,
+  // which is worse but not broken — so a failure here is recorded, not fatal.
+  let shipmentId: string | null = null;
+  const shipment = await createShipmentWithRates({
+    addressFrom: toShippoAddress(addresses.origin),
+    addressTo: destinationAddress(order),
+    addressReturn: toShippoAddress(addresses.returnAddress),
+    parcel: parcel.parcel,
+    order: created.data.object_id,
+  });
+  if (shipment.ok) {
+    shipmentId = shipment.data.shipmentId;
+  } else {
+    console.error("Shippo order created but the shipment failed", orderId, shipment.message);
+  }
+
   await supabaseAdmin
     .from("orders")
     .update({
       shippo_order_id: created.data.object_id,
-      shippo_sync_status: "synced",
-      shippo_sync_error: null,
+      ...(shipmentId ? { shippo_shipment_id: shipmentId } : {}),
+      shippo_sync_status: shipmentId ? "synced" : "error",
+      // Named precisely: the order DID reach Shippo. Saying "sync failed" would
+      // send the operator hunting for a missing order that is sitting there.
+      shippo_sync_error: shipmentId
+        ? null
+        : `Order reached Shippo but the parcel did not: ${shipment.ok ? "" : shipment.message}`.slice(0, 500),
       shippo_synced_at: new Date().toISOString(),
     })
     .eq("order_id", orderId);

@@ -35,6 +35,20 @@ const PRESET_COLUMNS =
 /** Longest name the admin picker renders without truncating awkwardly. */
 const MAX_PRESET_NAME_LENGTH = 80;
 
+/**
+ * Carriers reject a parcel dimension below roughly half an inch, and Shippo
+ * refuses it outright with "Invalid height" before any rate is quoted.
+ *
+ * This exists because a real preset was saved at 0.2in high — the flat,
+ * unpacked thickness of an empty mailer. An empty mailer is not what ships;
+ * two vials inside it is, and that is nearer an inch. Accepting the flat
+ * measurement produced an order that reached Shippo and then could not be
+ * quoted, which is a worse failure than refusing the value here.
+ */
+const MIN_DIMENSION_IN = 0.5;
+/** Longest side any common carrier accepts without freight handling. */
+const MAX_DIMENSION_IN = 108;
+
 export interface PackagePresetRecord {
   id: string;
   name: string;
@@ -126,6 +140,15 @@ function validatePresetFields(input: PackagePresetInput): PackagePresetResult<Va
     const value = Number(raw);
     if (!Number.isFinite(value) || value <= 0) {
       return fail(`${label} must be a positive number of inches.`);
+    }
+    if (value < MIN_DIMENSION_IN) {
+      return fail(
+        `${label} of ${value}in is below the ${MIN_DIMENSION_IN}in carriers accept — Shippo will refuse to quote it. ` +
+          `Measure the package with the order inside it, not flat and empty.`,
+      );
+    }
+    if (value > MAX_DIMENSION_IN) {
+      return fail(`${label} of ${value}in is larger than carriers accept without freight handling.`);
     }
     parsed[column] = value;
   }
