@@ -1101,7 +1101,7 @@ export default function CheckoutPage() {
               <div className="overflow-hidden rounded-xl border border-white/[0.06]">
                 <div className="flex items-center justify-between bg-white/[0.02] px-4 py-2.5">
                   <span className="text-[11px] text-white/40">Confirm to continue</span>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums ${allAcknowledged ? "bg-emerald-400/12 text-emerald-300" : "bg-[color:var(--accent-gold)]/12 text-[color:var(--accent-gold)]"}`}>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold tabular-nums ${allAcknowledged ? "bg-[color:var(--accent-gold)]/20 text-[color:var(--accent-gold-strong)]" : "bg-white/[0.06] text-white/50"}`}>
                     {acknowledgedCount} of {REQUIRED_CONFIRMATIONS.length}
                   </span>
                 </div>
@@ -1113,7 +1113,7 @@ export default function CheckoutPage() {
                           type="checkbox"
                           checked={acknowledgements[item.key]}
                           onChange={(event) => handleAcknowledgementChange(item.key, event.target.checked)}
-                          className="h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-emerald-500"
+                          className="h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-[color:var(--accent-gold)]"
                         />
                         <span className="flex-1 text-sm text-white/85">{item.short}</span>
                         <button
@@ -1134,7 +1134,7 @@ export default function CheckoutPage() {
               </div>
 
               <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-white/60">
-                <input type="checkbox" checked={marketingOptIn} onChange={(e) => { haptic(); setMarketingTouched(true); setMarketingChoice(e.target.checked); }} className="mt-0.5 h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-emerald-500" />
+                <input type="checkbox" checked={marketingOptIn} onChange={(e) => { haptic(); setMarketingTouched(true); setMarketingChoice(e.target.checked); }} className="mt-0.5 h-[1.15rem] w-[1.15rem] flex-shrink-0 accent-[color:var(--accent-gold)]" />
                 <span className="text-xs leading-relaxed">Email me exclusive offers, coupons &amp; restock alerts. <span className="text-white/30">Optional — unsubscribe anytime.</span></span>
               </label>
 

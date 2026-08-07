@@ -97,7 +97,7 @@ export function AccountAddressesClient({ initialAddresses }: { initialAddresses:
             </div>
             <div className="flex flex-col items-end gap-2">
               {address.isDefault ? (
-                <span className="rounded-full bg-emerald-400/15 px-2 py-1 text-xs text-emerald-300">Default</span>
+                <span className="rounded-full bg-[color:var(--accent-gold)]/15 px-2 py-1 text-xs text-[color:var(--accent-gold)]">Default</span>
               ) : (
                 <button
                   type="button"

@@ -33,7 +33,11 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  const [membershipResult, cartRecoveryResult, storeCreditResult, commissionApprovalResult, reservationExpiryResult, emailRetryResult, paymentReconcileResult, expressIntentResult, shippoSyncResult] = await Promise.allSettled([
+  // Destructured names must line up with the array below POSITIONALLY -- there
+  // is nothing keying one to the other, so a job inserted in the middle silently
+  // shifts every result after it onto the wrong name. That had already happened
+  // to the last two.
+  const [membershipResult, cartRecoveryResult, storeCreditResult, commissionApprovalResult, reservationExpiryResult, emailRetryResult, paymentReconcileResult, shippoSyncResult, expressIntentResult] = await Promise.allSettled([
     runMembershipBillingSweep(),
     runAbandonedCartSweep(),
     grantMonthlyStoreCreditSweep(),
@@ -70,6 +74,10 @@ export async function GET(request: Request) {
     ["email_retry", emailRetryResult],
     ["payment_reconcile", paymentReconcileResult],
     ["express_intent_expiry", expressIntentResult],
+    // Was missing entirely, so a failed push to Shippo raised no alert at all --
+    // on the one job whose silent failure leaves a paid order with nowhere to
+    // ship from.
+    ["shippo_sync", shippoSyncResult],
   ];
   const failed = jobs.filter(([, r]) => r.status === "rejected");
   if (failed.length > 0) {
