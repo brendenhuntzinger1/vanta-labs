@@ -13,10 +13,88 @@ export const DEFAULT_RESERVATION_MINUTES = 15;
 // abandoned ones, and an admin reject/cancel releases them immediately.
 export const MANUAL_RESERVATION_MINUTES = 60 * 24; // 24h
 
+export interface UnavailableLine {
+  slug: string;
+  variantId: string | null;
+  /** Units the customer asked for. */
+  quantity: number;
+  /**
+   * Units actually sellable right now, or null when it could not be read.
+   *
+   * Read AFTER the hold failed, so it is advisory rather than authoritative —
+   * another checkout may take the last one a moment later. It exists so the
+   * customer is told "only 2 left" instead of a bare "sold out", which is the
+   * difference between adjusting the cart and abandoning it.
+   */
+  available: number | null;
+  /** Product name, so the message can say WHICH item is short. */
+  name: string | null;
+}
+
 export interface ReserveResult {
   ok: boolean;
-  unavailable: Array<{ slug: string; variantId: string | null; quantity: number }>;
+  unavailable: UnavailableLine[];
   degraded: boolean;
+}
+
+/**
+ * How many units of a line are sellable, for the customer-facing message only.
+ *
+ * Never used to decide whether a sale may proceed — that decision belongs to
+ * the atomic UPDATE inside reserve_inventory(), which checks availability and
+ * takes the hold in one row-locked statement. A read like this one is a
+ * check-then-act race by construction and must never gate a purchase.
+ */
+async function readAvailable(
+  slug: string,
+  variantId: string | null,
+): Promise<{ available: number | null; name: string | null }> {
+  try {
+    if (variantId) {
+      const { data } = await supabaseAdmin
+        .from("product_doses")
+        .select("inventory_quantity, reserved_quantity, label")
+        .eq("id", variantId)
+        .maybeSingle<{ inventory_quantity: number | null; reserved_quantity: number | null; label: string | null }>();
+      if (!data) return { available: null, name: null };
+      return {
+        available: Math.max(0, Number(data.inventory_quantity ?? 0) - Number(data.reserved_quantity ?? 0)),
+        name: data.label ?? null,
+      };
+    }
+    const { data } = await supabaseAdmin
+      .from("products")
+      .select("inventory_quantity, reserved_quantity, name")
+      .eq("slug", slug)
+      .maybeSingle<{ inventory_quantity: number | null; reserved_quantity: number | null; name: string | null }>();
+    if (!data) return { available: null, name: null };
+    return {
+      available: Math.max(0, Number(data.inventory_quantity ?? 0) - Number(data.reserved_quantity ?? 0)),
+      name: data.name ?? null,
+    };
+  } catch {
+    // A failed lookup degrades the message, never the outcome.
+    return { available: null, name: null };
+  }
+}
+
+/**
+ * One sentence telling the customer exactly what is short and by how much.
+ *
+ * "Sorry, something sold out" makes the customer guess which line and by how
+ * much; naming the item and the number turns an abandoned cart into an edit.
+ */
+export function describeUnavailable(lines: UnavailableLine[]): string {
+  if (lines.length === 0) {
+    return "Sorry — an item in your cart just sold out. Please adjust your cart and try again.";
+  }
+  const parts = lines.map((line) => {
+    const name = line.name ?? "An item in your cart";
+    if (line.available === null) return `${name} is no longer available`;
+    if (line.available === 0) return `${name} just sold out`;
+    return `${name}: only ${line.available} left (you asked for ${line.quantity})`;
+  });
+  return `${parts.join(". ")}. Please adjust your cart and try again.`;
 }
 
 // Hold every line of an order, all-or-nothing. Idempotent per order (a refresh
@@ -52,7 +130,8 @@ export async function reserveInventoryForOrder(
       // A strict `false` means a tracked item lacked available stock. Anything
       // else (true, or null from an environment without the RPC) allows the line.
       if (data === false) {
-        unavailable.push(a);
+        const detail = await readAvailable(a.slug, a.variantId);
+        unavailable.push({ ...a, available: detail.available, name: detail.name });
       }
     } catch {
       return { ok: true, unavailable: [], degraded: true };

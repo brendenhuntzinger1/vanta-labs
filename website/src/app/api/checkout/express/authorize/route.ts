@@ -3,6 +3,7 @@ import {
   DEFAULT_RESERVATION_MINUTES,
   releaseInventoryForOrder,
   reserveInventoryForOrder,
+  describeUnavailable,
 } from "@/lib/inventory-reservation";
 import {
   VEYRA_FALLBACK_SHIPPING_METHOD_ID,
@@ -309,9 +310,9 @@ export async function POST(request: Request) {
   );
   if (!reservation.ok) {
     await cancelOrder(claimed.order_id);
-    const message = reservation.unavailable.length === 1
-      ? "Sorry — an item in your cart just sold out. No charge was made."
-      : "Sorry — some items in your cart just sold out. No charge was made.";
+    // Same detail as the standard checkout, plus the reassurance that matters
+    // most in a wallet sheet: no money moved.
+    const message = `${describeUnavailable(reservation.unavailable)} No charge was made.`;
     await finish(sessionId, { ok: false, outcome: "refused", message }, "failed");
     return refuse(message);
   }

@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
-import { reserveInventoryForOrder, DEFAULT_RESERVATION_MINUTES, MANUAL_RESERVATION_MINUTES } from "@/lib/inventory-reservation";
+import { reserveInventoryForOrder, describeUnavailable, DEFAULT_RESERVATION_MINUTES, MANUAL_RESERVATION_MINUTES } from "@/lib/inventory-reservation";
 import { getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import {
   buildOrderRow,
@@ -264,11 +264,10 @@ export async function createCheckoutSession(
      .from("orders")
      .update({ payment_status: "canceled", updated_at: new Date().toISOString() })
      .eq("order_id", orderId);
-   throw new Error(
-     reservation.unavailable.length === 1
-       ? "Sorry — an item in your cart just sold out. Please adjust your cart and try again."
-       : "Sorry — some items in your cart just sold out. Please adjust your cart and try again.",
-   );
+   // Name the item and the number left. "Something sold out" makes the customer
+   // guess which line and by how much, which is how a fixable cart becomes an
+   // abandoned one.
+   throw new Error(describeUnavailable(reservation.unavailable));
  }
 
  // Manual methods (settled off-platform) have no hosted processor session: the
