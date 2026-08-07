@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { fulfillmentStatusLabel, normalizeLegacyStatus, type FulfillmentStatus } from "@/lib/order-pipeline";
@@ -313,30 +313,26 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
   // Server truth, mirrored into state so an action can update the screen
   // immediately without waiting for a refresh to land.
   const [label, setLabel] = useState<ShippingPanelLabel | null>(props.label);
-  const [rates, setRates] = useState<RateOption[] | null>(null);
-  const [quoted, setQuoted] = useState<{ weightOz: number; packageName: string | null } | null>(null);
-  const [selectedRateId, setSelectedRateId] = useState("");
-  const [purchaseLocked, setPurchaseLocked] = useState(false);
   const [status, setStatus] = useState(props.fulfillmentStatus);
   const [packedAt, setPackedAt] = useState(props.packedAt);
 
   // Parcel settings, editable until a label exists.
   const [presetId, setPresetId] = useState(parcel.preset?.id ?? "");
   const [weightInput, setWeightInput] = useState(parcel.overrideOz == null ? "" : String(parcel.overrideOz));
-  const [savedPresetId, setSavedPresetId] = useState(parcel.preset?.id ?? "");
-  const [savedOverrideOz, setSavedOverrideOz] = useState<number | null>(parcel.overrideOz);
+  const [savedPresetId] = useState(parcel.preset?.id ?? "");
+  const [savedOverrideOz] = useState<number | null>(parcel.overrideOz);
 
 
-  const [pending, setPending] = useState<null | "packed" | "sync" | "rates" | "buy" | "void">(null);
+  const [pending, setPending] = useState<null | "packed" | "sync" | "void">(null);
   const [confirming, setConfirming] = useState<null | "buy" | "void">(null);
   const [notice, setNotice] = useState<Notice | null>(null);
-  const [parcelWarning, setParcelWarning] = useState<string | null>(null);
+  const [parcelWarning] = useState<string | null>(null);
   /**
    * Set only by a response that says postage was charged but the follow-up
    * failed. It is deliberately sticky for the life of the page: the one thing
    * that must not happen next is another purchase.
    */
-  const [chargedWarning, setChargedWarning] = useState<string | null>(null);
+  const [chargedWarning] = useState<string | null>(null);
 
   // Re-sync from the server after router.refresh(). The key changes only when
   // the underlying row changed, so this never clobbers state the admin is
@@ -365,7 +361,7 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
   const inFlight = useRef(false);
 
   const run = useCallback(
-    async (kind: "packed" | "sync" | "rates" | "buy" | "void", work: () => Promise<void>) => {
+    async (kind: "packed" | "sync" | "void", work: () => Promise<void>) => {
       if (inFlight.current) return;
       inFlight.current = true;
       setPending(kind);
@@ -399,10 +395,6 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
     !address.zip?.trim() ? "ZIP" : null,
   ].filter((value): value is string => value !== null);
 
-  const canQuote = canFulfill && shippoReady && !hasLabel && !parcel.error && missingAddress.length === 0 && !isTerminal;
-  const selectedRate = rates?.find((rate) => rate.id === selectedRateId) ?? null;
-  const canBuy = canQuote && !purchaseLocked && !purchaseClaimStuck && selectedRate !== null;
-
   const parcelDirty =
     presetId !== savedPresetId || parseWeightInput(weightInput).value !== savedOverrideOz;
 
@@ -419,174 +411,6 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
   const addressBlock = addressLines.join("\n");
 
   // ------------------------------------------------------------- actions ---
-
-  const getRates = () =>
-    run("rates", async () => {
-      setNotice(null);
-      setParcelWarning(null);
-      const parsed = parseWeightInput(weightInput);
-      if (!parsed.ok) {
-        setNotice({ tone: "error", text: "The weight override must be a positive number of ounces, or blank." });
-        return;
-      }
-
-      const res = await fetch(`/api/admin/orders/${orderId}/shipping/rates`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        // The parcel the admin is looking at. Quoting buys nothing, so this is
-        // free to re-run after any change here.
-        body: JSON.stringify({
-          packagePresetId: presetId || null,
-          weightOverrideOz: parsed.value,
-        }),
-      });
-      const json = (await res.json().catch(() => null)) as
-        | {
-            success?: boolean;
-            error?: string;
-            code?: string;
-            rates?: RateOption[];
-            parcel?: { weightOz?: number };
-            package?: { id?: string; name?: string } | null;
-          }
-        | null;
-
-      if (!res.ok || !json?.success) {
-        setRates(null);
-        setQuoted(null);
-        setNotice({ tone: "error", text: json?.error ?? "Could not get shipping rates." });
-        return;
-      }
-
-      const usable = (json.rates ?? []).filter((rate) => Number.isFinite(rate.amountCents));
-      if (usable.length === 0) {
-        setRates(null);
-        setQuoted(null);
-        setNotice({ tone: "error", text: "Shippo returned no purchasable rates for this parcel." });
-        return;
-      }
-
-      const appliedWeight = Number(json.parcel?.weightOz);
-      const appliedPresetId = json.package?.id ?? null;
-      const appliedPresetName = json.package?.name ?? null;
-
-      // Trust the quote, not the form. The rates below were priced for whatever
-      // parcel the SERVER used, and that is what a purchase will be charged for —
-      // so if the boxes on screen did not make it into the quote, say so loudly
-      // rather than letting the owner believe they re-weighed the parcel.
-      const applied = wasParcelApplied({
-        requestedPresetId: presetId,
-        savedPresetId,
-        requestedOverrideOz: parsed.value,
-        savedOverrideOz,
-        appliedWeight,
-        appliedPresetId,
-      });
-      if (parcelDirty && !applied) {
-        setParcelWarning(
-          `Your parcel changes were not applied. These rates were priced for ${ounces(appliedWeight)} in ` +
-            `${appliedPresetName ?? "the default package"} — the settings already stored on this order.`,
-        );
-      } else if (parcelDirty) {
-        setSavedPresetId(appliedPresetId ?? presetId);
-        setSavedOverrideOz(parsed.value);
-      }
-
-      setRates(usable);
-      setQuoted({ weightOz: appliedWeight, packageName: appliedPresetName });
-      // Cheapest first, from the server. Pre-selecting it saves a tap; it still
-      // takes two deliberate clicks to spend anything.
-      setSelectedRateId(usable[0].id);
-      setNotice({ tone: "info", text: `${usable.length} service${usable.length === 1 ? "" : "s"} available.` });
-    });
-
-  // Quote automatically when the page opens, so the carrier choices are already
-  // on screen instead of behind a click. Fetching a rate costs nothing and buys
-  // nothing — only "Buy label" spends money, and that stays deliberate.
-  //
-  // Keyed on the order, and guarded by a ref rather than by `rates === null`:
-  // a quote that legitimately returns zero usable rates leaves `rates` empty,
-  // and re-running on that condition would retry forever against a parcel that
-  // cannot be quoted.
-  const autoQuotedFor = useRef<string | null>(null);
-  useEffect(() => {
-    if (!canQuote) return;
-    if (autoQuotedFor.current === orderId) return;
-    autoQuotedFor.current = orderId;
-    void getRates();
-    // getRates is recreated every render; depending on it would re-fire the
-    // effect continuously. The ref above is what actually enforces once-only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [canQuote, orderId]);
-
-  const buyLabel = () =>
-    run("buy", async () => {
-      // Re-checked inside the lock: by the time this runs the label may already
-      // exist, and nothing below is worth a second charge.
-      if (hasLabel || purchaseLocked || !selectedRate) return;
-      setNotice(null);
-      setConfirming(null);
-
-      const res = await fetch(`/api/admin/orders/${orderId}/shipping/label`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ rateId: selectedRate.id }),
-      });
-      const json = (await res.json().catch(() => null)) as
-        | { success?: boolean; error?: string; code?: string; label?: (ShippingPanelLabel & { reused?: boolean }) | null }
-        | null;
-
-      // A label in the body means one EXISTS — on success, and on the two
-      // failures that happen after the money is already spent.
-      if (json?.label) {
-        setLabel(toPanelLabel(json.label));
-      }
-
-      if (res.ok && json?.success && json.label) {
-        setRates(null);
-        setSelectedRateId("");
-        setStatus("label_purchased");
-        setNotice(
-          json.label.reused
-            ? { tone: "info", text: "This order already had a label — nothing was bought twice." }
-            : {
-                tone: "success",
-                text: `Label purchased: ${[json.label.carrier, json.label.service].filter(Boolean).join(" ")} for ${costLabel(json.label.postageCostCents)}.`,
-              },
-        );
-        router.refresh();
-        return;
-      }
-
-      if (json?.label) {
-        // Postage was charged. Never offer a retry from here.
-        setPurchaseLocked(true);
-        setChargedWarning(
-          `${json.error ?? "The purchase failed after the label was bought."} The postage WAS charged — print the label below and check this order in the Shippo dashboard. Do not buy another.`,
-        );
-        router.refresh();
-        return;
-      }
-
-      if (json?.code === "purchase_in_progress") {
-        // Someone (or some retry) is mid-purchase. Nothing was bought twice, and
-        // sending this again cannot help — so stop offering it and refresh.
-        setPurchaseLocked(true);
-        setNotice({ tone: "warn", text: json.error ?? "A label purchase for this order is already in progress." });
-        router.refresh();
-        return;
-      }
-
-      if (json?.code === "rate_expired") {
-        setRates(null);
-        setSelectedRateId("");
-        setQuoted(null);
-        setNotice({ tone: "warn", text: json.error ?? "That quote expired. Get rates again and pick a service." });
-        return;
-      }
-
-      setNotice({ tone: "error", text: json?.error ?? "The label purchase failed. Nothing was bought." });
-    });
 
   const retrySync = () =>
     run("sync", async () => {
@@ -914,14 +738,14 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
             {pending === "packed" ? "Saving…" : alreadyPacked ? "✓ Packed" : "1 · Mark packed"}
           </button>
 
-          <button
-            type="button"
-            onClick={getRates}
-            disabled={!canQuote || pending !== null}
-            className="vl-btn-secondary w-full px-5 text-sm disabled:opacity-40 sm:w-auto"
+          <a
+            href={shippoOrderUrl ?? "https://apps.goshippo.com/orders"}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="vl-btn-primary w-full px-5 py-2.5 text-center text-sm sm:w-auto"
           >
-            {pending === "rates" ? "Quoting…" : rates ? "Refresh rates" : "2 · Get rates"}
-          </button>
+            2 · Buy label in Shippo →
+          </a>
 
           <button
             type="button"
@@ -932,106 +756,6 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
             {pending === "sync" ? "Sending…" : shippoOrderId ? "Re-check Shippo" : "Retry Shippo sync"}
           </button>
         </div>
-
-        {/* --- rate picker --- */}
-        {rates && !hasLabel ? (
-          <div className="mt-4">
-            <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">3 · Choose a service</p>
-            <div className="mt-2 grid gap-2">
-              {rates.map((rate) => {
-                const selected = rate.id === selectedRateId;
-                return (
-                  <label
-                    key={rate.id}
-                    className={`flex min-h-[56px] cursor-pointer items-center gap-3 rounded-xl border px-3 py-2.5 transition ${
-                      selected ? "border-cyan-300/50 bg-cyan-300/10" : "border-white/10 bg-white/[0.02] hover:border-white/25"
-                    }`}
-                  >
-                    <input
-                      type="radio"
-                      name={`vl-rate-${orderId}`}
-                      value={rate.id}
-                      checked={selected}
-                      onChange={() => setSelectedRateId(rate.id)}
-                      disabled={pending !== null}
-                      className="h-5 w-5 shrink-0 accent-cyan-300"
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-semibold text-white">
-                        {rate.carrier} · {rate.service || rate.serviceToken}
-                      </span>
-                      <span className="block text-[11px] text-zinc-500">
-                        {rate.estimatedDays != null
-                          ? `≈ ${rate.estimatedDays} day${rate.estimatedDays === 1 ? "" : "s"}`
-                          : rate.durationTerms || "Delivery estimate unavailable"}
-                      </span>
-                    </span>
-                    <span className="shrink-0 tabular-nums text-sm font-semibold text-white">
-                      {costLabel(rate.amountCents)}
-                    </span>
-                  </label>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
-        {/* --- buy --- */}
-        {!hasLabel ? (
-          <div className="mt-4">
-            {confirming === "buy" && selectedRate ? (
-              // Deliberate step two. Nothing is spent until this Confirm is
-              // pressed, and it names exactly what is being bought.
-              <div className="rounded-xl border border-white/25 bg-white/[0.05] p-3.5">
-                <p className="text-sm text-zinc-100">
-                  Buy <strong>{selectedRate.carrier} {selectedRate.service || selectedRate.serviceToken}</strong> for{" "}
-                  <strong className="tabular-nums">{costLabel(selectedRate.amountCents)}</strong>?
-                </p>
-                <p className="mt-1 text-[12px] text-zinc-400">
-                  {shippo.mode === "live"
-                    ? "This charges your Shippo account for real postage. It can be voided afterwards, but the refund is not instant."
-                    : "Shippo is in test mode — no real postage will be charged."}
-                </p>
-                <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                  <button
-                    type="button"
-                    onClick={buyLabel}
-                    disabled={!canBuy || pending !== null}
-                    className="vl-btn-primary w-full px-5 text-sm disabled:opacity-40 sm:w-auto"
-                  >
-                    {pending === "buy" ? "Buying…" : "Confirm purchase"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirming(null)}
-                    disabled={pending !== null}
-                    className="vl-btn-secondary w-full px-5 text-sm disabled:opacity-40 sm:w-auto"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => setConfirming("buy")}
-                disabled={!canBuy || pending !== null}
-                className="vl-btn-primary w-full px-5 text-sm disabled:opacity-40 sm:w-auto"
-              >
-                4 · Buy label
-              </button>
-            )}
-
-            {!selectedRate && canQuote ? (
-              <p className="mt-2 text-[11px] text-zinc-500">Get rates and pick a service to enable the purchase.</p>
-            ) : null}
-            {purchaseLocked ? (
-              <p className="mt-2 text-[11px] text-amber-300/90">
-                Purchasing is locked on this screen to stop a second charge. Reload the page once the order settles.
-              </p>
-            ) : null}
-          </div>
-        ) : null}
 
         {/* --- where the label is actually bought --- */}
         {!hasLabel ? (
@@ -1207,43 +931,4 @@ function parseWeightInput(raw: string): { ok: boolean; value: number | null } {
   return { ok: true, value: parsed };
 }
 
-/**
- * Did the quote actually use the parcel the admin asked for?
- *
- * The rates response echoes the parcel the SERVER priced. Comparing it against
- * the form is the only way to tell the owner truthfully whether re-weighing the
- * parcel changed the price they are about to pay.
- */
-function wasParcelApplied(input: {
-  requestedPresetId: string;
-  savedPresetId: string;
-  requestedOverrideOz: number | null;
-  savedOverrideOz: number | null;
-  appliedWeight: number;
-  appliedPresetId: string | null;
-}): boolean {
-  if (input.requestedPresetId) {
-    if (input.requestedPresetId !== input.appliedPresetId) return false;
-  } else if (input.savedPresetId && input.appliedPresetId === input.savedPresetId) {
-    // The admin cleared the explicit package, but the quote still used it.
-    return false;
-  }
-  if (!Number.isFinite(input.appliedWeight)) return false;
-  if (input.requestedOverrideOz != null) return approxEq(input.appliedWeight, input.requestedOverrideOz);
-  // The override was cleared: the quote must no longer be using the stored one.
-  if (input.savedOverrideOz != null) return !approxEq(input.appliedWeight, input.savedOverrideOz);
-  return true;
-}
 
-function toPanelLabel(label: ShippingPanelLabel & { reused?: boolean }): ShippingPanelLabel {
-  return {
-    transactionId: label.transactionId,
-    carrier: label.carrier ?? null,
-    service: label.service ?? null,
-    trackingNumber: label.trackingNumber ?? null,
-    trackingUrl: label.trackingUrl ?? null,
-    postageCostCents:
-      label.postageCostCents == null || !Number.isFinite(label.postageCostCents) ? null : label.postageCostCents,
-    purchasedAt: label.purchasedAt ?? null,
-  };
-}
