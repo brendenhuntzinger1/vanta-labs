@@ -1,8 +1,5 @@
-"use client";
-
-import { useState } from "react";
-import { useRouter } from "next/navigation";
-
+// Server component: with the manual cost form gone there is nothing
+// interactive left here, so none of this needs to ship to the browser.
 export interface OrderProfitView {
   grossRevenue: number;
   merchandiseRevenue: number;
@@ -43,6 +40,15 @@ function centsMoney(c: number | null): string {
   return c == null ? "—" : money(c / 100);
 }
 
+function Line({ label, amount }: { label: string; amount: number }) {
+  return (
+    <div className="flex justify-between">
+      <dt className="text-zinc-300">{label}</dt>
+      <dd className="tabular-nums text-zinc-100">{money(amount)}</dd>
+    </div>
+  );
+}
+
 function ExpenseRow({ label, amount, muted }: { label: string; amount: number; muted?: boolean }) {
   return (
     <div className="flex justify-between">
@@ -66,7 +72,7 @@ export function AdminOrderProfitPanel({
   return (
     <details open className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-4 sm:p-5">
       <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
-        <span className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-300">Profit Breakdown</span>
+        <span className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-300">Order profit</span>
         <span className="flex items-center gap-2">
           <span className={`tabular-nums text-base font-semibold ${profit.profit >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{money(profit.profit)}</span>
           <span
@@ -74,64 +80,38 @@ export function AdminOrderProfitPanel({
               estimated ? "bg-amber-400/15 text-amber-300" : "bg-emerald-400/15 text-emerald-300"
             }`}
           >
-            {estimated ? "Estimated" : "Finalized"}
+            {estimated ? "Estimated" : "Final"}
           </span>
         </span>
       </summary>
 
+      {/* Flat, in reading order: what came in, what went out, what is left.
+          The old layout nested revenue sub-rows under a gross total and put
+          shipping profit inside the expense block, which meant working out
+          whether an order made money required following an indent. */}
       <dl className="mt-4 space-y-1.5 text-sm">
-        <div className="flex justify-between">
-          <dt className="text-zinc-300 font-medium">Gross revenue{profit.taxCountedAsProfit ? " (incl. tax)" : " (ex-tax)"}</dt>
-          <dd className="text-zinc-100 tabular-nums font-medium">{money(profit.grossRevenue)}</dd>
-        </div>
-        <div className="flex justify-between pl-3">
-          <dt className="text-zinc-500">Merchandise</dt>
-          <dd className="text-zinc-400 tabular-nums">{money(profit.merchandiseRevenue)}</dd>
-        </div>
-        <div className="flex justify-between pl-3">
-          <dt className="text-zinc-500">Shipping charged</dt>
-          <dd className="text-zinc-400 tabular-nums">{money(profit.shippingCharged)}</dd>
-        </div>
+        <Line label="Merchandise revenue" amount={profit.merchandiseRevenue} />
+        {profit.shippingCharged > 0 ? <Line label="Shipping collected" amount={profit.shippingCharged} /> : null}
         {profit.additionalRevenue > 0 ? (
-          <div className="flex justify-between pl-3">
-            <dt className="text-zinc-500">Shipping protection &amp; fees</dt>
-            <dd className="text-zinc-400 tabular-nums">{money(profit.additionalRevenue)}</dd>
-          </div>
-        ) : null}
-        {profit.taxCountedAsProfit && profit.taxCollected > 0 ? (
-          <div className="flex justify-between pl-3">
-            <dt className="text-zinc-500">Sales tax (counted as profit)</dt>
-            <dd className="text-zinc-400 tabular-nums">{money(profit.taxCollected)}</dd>
-          </div>
+          <Line label="Shipping protection & fees" amount={profit.additionalRevenue} />
         ) : null}
 
         <div className="!mt-3 border-t border-white/10 pt-2" />
 
-        <ExpenseRow label="Product cost (COGS)" amount={profit.cogs} />
+        <ExpenseRow label="Product cost" amount={profit.cogs} />
+        {/* Postage is the one expense that is genuinely unknown before the label
+            is bought. Saying "Pending label purchase" is honest; showing an
+            estimate as though it were the charge is what makes a margin look
+            better than it is. */}
         <div className="flex justify-between">
-          <dt className="text-zinc-400">
-            − Shipping cost
-            <span className="text-zinc-500">
-              {" "}
-              ({profit.shippingCostIsEstimate ? "estimated" : profit.shippingCostSource ?? "exact"})
-            </span>
-          </dt>
-          <dd className="text-rose-300 tabular-nums">{money(-profit.shippingCost)}</dd>
+          <dt className="text-zinc-400">− Actual shipping</dt>
+          <dd className={`tabular-nums ${profit.shippingCostIsEstimate ? "text-amber-300" : "text-rose-300"}`}>
+            {profit.shippingCostIsEstimate ? "Pending label purchase" : money(-profit.shippingCost)}
+          </dd>
         </div>
-        <div className="flex justify-between pl-3">
-          <dt className="text-zinc-500">Shipping profit / loss</dt>
-          <dd className={`tabular-nums ${profit.shippingProfit >= 0 ? "text-emerald-300/80" : "text-rose-300/80"}`}>{money(profit.shippingProfit)}</dd>
-        </div>
-        <ExpenseRow label="Payment processor fee" amount={profit.processingFee} />
+        <ExpenseRow label="Payment processing" amount={profit.processingFee} />
         {profit.commission > 0 ? <ExpenseRow label="Ambassador commission" amount={profit.commission} /> : null}
         {profit.refund > 0 ? <ExpenseRow label="Refunds" amount={profit.refund} /> : null}
-
-        {!profit.taxCountedAsProfit && profit.taxCollected > 0 ? (
-          <div className="flex justify-between pt-1">
-            <dt className="text-zinc-500">Sales tax collected (remitted — not profit)</dt>
-            <dd className="text-zinc-500 tabular-nums">{money(profit.taxCollected)}</dd>
-          </div>
-        ) : null}
 
         <div className="!mt-2 flex justify-between border-t border-white/10 pt-2 text-base font-semibold">
           <dt className={profit.profit >= 0 ? "text-emerald-300" : "text-rose-300"}>Net profit</dt>
@@ -139,6 +119,25 @@ export function AdminOrderProfitPanel({
             {money(profit.profit)} <span className="text-xs font-normal text-zinc-500">({profit.marginPercent.toFixed(1)}%)</span>
           </dd>
         </div>
+
+        {/* Shipping margin, stated once, where it can be read at a glance. */}
+        {profit.shippingCharged > 0 && !profit.shippingCostIsEstimate ? (
+          <div className="!mt-3 flex justify-between border-t border-white/5 pt-2">
+            <dt className="text-zinc-500">Shipping margin</dt>
+            <dd className={`tabular-nums ${profit.shippingProfit >= 0 ? "text-emerald-300/80" : "text-rose-300/80"}`}>
+              {money(profit.shippingProfit)}
+            </dd>
+          </div>
+        ) : null}
+
+        {/* Below the total, deliberately. Sales tax is money held for a state,
+            not revenue, and anything above the Net profit line reads as ours. */}
+        {profit.taxCollected > 0 ? (
+          <div className="flex justify-between">
+            <dt className="text-zinc-500">Sales tax collected (remitted — not profit)</dt>
+            <dd className="text-zinc-500 tabular-nums">{money(profit.taxCollected)}</dd>
+          </div>
+        ) : null}
       </dl>
 
       {estimated ? (

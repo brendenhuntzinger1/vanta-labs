@@ -5,15 +5,10 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { AdminOrderActions } from "@/components/admin-order-actions";
 import { AdminOrderTimeline } from "@/components/admin-order-timeline";
 import { AdminOrderProfitPanel } from "@/components/admin-order-profit-panel";
-import {
-  AdminOrderShippingPanel,
-  type ShippingPanelItem,
-  type ShippingPanelPreset,
-} from "@/components/admin-order-shipping-panel";
+import { AdminOrderFulfillmentCard } from "@/components/admin-order-fulfillment-card";
 import { getOrderProfit, getShippingCostAudit } from "@/lib/admin-profit";
 import { parseOrderItemRef } from "@/lib/inventory-fulfillment";
 import { getShippoStatus } from "@/lib/shippo/config";
-import { listPackagePresets } from "@/lib/shippo/packages";
 import { buildOrderParcel } from "@/lib/shippo/service";
 import { buildCarrierTrackingUrl } from "@/lib/tracking-url";
 
@@ -27,25 +22,6 @@ function money(n: number): string {
 /** Payment states that are allowed to ship. Everything else keeps the workstation read-only. */
 const SHIPPABLE_PAYMENT_STATES = new Set(["paid", "partially_refunded"]);
 
-function presetView(preset: {
-  id: string;
-  name: string;
-  lengthIn: number;
-  widthIn: number;
-  heightIn: number;
-  emptyWeightOz: number;
-  isDefault?: boolean;
-}): ShippingPanelPreset {
-  return {
-    id: preset.id,
-    name: preset.name,
-    lengthIn: preset.lengthIn,
-    widthIn: preset.widthIn,
-    heightIn: preset.heightIn,
-    emptyWeightOz: preset.emptyWeightOz,
-    isDefault: preset.isDefault,
-  };
-}
 
 export default async function AdminOrderDetailPage({ params }: { params: Promise<{ orderId: string }> }) {
   const { orderId } = await params;
@@ -100,12 +76,10 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
   const isPhysicalOrder = String(data.order_type ?? "product") !== "membership";
   const shippoStatus = getShippoStatus();
 
-  const [parcelResult, packagePresets] = isPhysicalOrder
-    ? await Promise.all([
-        buildOrderParcel(orderId).catch(() => null),
-        listPackagePresets().catch(() => []),
-      ])
-    : [null, []];
+  // The parcel is still computed -- it is what tells the card whether a SKU is
+  // missing a weight -- but the package PRESET LIST is not fetched any more.
+  // Choosing a box happens in Shippo, so a picker here had nothing to feed.
+  const parcelResult = isPhysicalOrder ? await buildOrderParcel(orderId).catch(() => null) : null;
   const parcelData = parcelResult?.ok ? parcelResult.data : null;
 
   const rawOrderItems = (data.order_items ?? []) as Array<{
@@ -138,24 +112,6 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
     }
   }
 
-  const shippingItems: ShippingPanelItem[] = parcelData
-    ? parcelData.lines.map((line, index) => ({
-        key: `${line.productId}-${index}`,
-        name: line.name,
-        sku: skuBySlug.get(parseOrderItemRef(line.productId).slug) ?? null,
-        quantity: line.quantity,
-        unitWeightOz: line.unitWeightOz,
-        lineWeightOz: line.lineWeightOz,
-      }))
-    : rawOrderItems.map((item, index) => ({
-        key: `${String(item.id)}-${index}`,
-        name: String(item.product_name ?? item.product_id ?? "Item"),
-        sku: skuBySlug.get(parseOrderItemRef(String(item.product_id ?? "")).slug) ?? null,
-        quantity: Math.max(1, Number(item.quantity ?? 1)),
-        unitWeightOz: null,
-        lineWeightOz: null,
-      }));
-
   // A voided label is not a label: it can never be reprinted or reused, so the
   // panel is shown none.
   const labelVoidedAt = data.label_voided_at ? String(data.label_voided_at) : null;
@@ -179,65 +135,82 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
         }
       : null;
 
-  const presetOptions = packagePresets.map(presetView);
-  // An order can point at a preset that has since been deactivated; keep it in
-  // the picker so the select does not silently jump to something else.
-  if (parcelData?.preset && !presetOptions.some((preset) => preset.id === parcelData.preset?.id)) {
-    presetOptions.unshift(presetView(parcelData.preset));
-  }
-
   return (
     <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
       <div className="vl-panel mx-auto max-w-5xl rounded-2xl p-4 sm:p-8">
-        <h1 className="break-all text-2xl font-semibold sm:text-3xl">{data.order_id}</h1>
-        <p className="mt-2 text-sm text-zinc-400">Customer: {data.customer_email}</p>
+        <h1 className="break-all text-2xl font-semibold sm:text-3xl">
+          {String(data.order_number ?? data.order_id)}
+        </h1>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span className="inline-flex items-center rounded-full border border-white/15 bg-white/[0.05] px-2.5 py-1 text-[11px] font-bold uppercase tracking-wide text-zinc-200">
+            {String(data.payment_status ?? "pending_payment").replace(/_/g, " ")}
+          </span>
+          <span className="text-xs text-zinc-500">{data.order_id}</span>
+        </div>
+
+        {/* Customer and address live on the page now. They used to sit inside
+            the fulfillment panel, which meant reading an address required
+            loading the whole shipping workstation. */}
+        <section className="mt-6 grid gap-4 sm:grid-cols-2">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+            <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">Customer</p>
+            <p className="mt-2 text-sm text-zinc-100">{String(data.customer_name ?? "—")}</p>
+            <p className="mt-1 break-all text-xs text-zinc-400">{String(data.customer_email ?? "—")}</p>
+            {data.phone ? <p className="mt-0.5 text-xs text-zinc-400">{String(data.phone)}</p> : null}
+          </div>
+          <div className="rounded-2xl border border-white/10 bg-white/[0.02] p-4">
+            <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">Shipping address</p>
+            <p className="mt-2 whitespace-pre-line break-words text-sm text-zinc-100">
+              {[
+                data.shipping_address,
+                data.shipping_address_2,
+                [data.city, data.state].filter(Boolean).join(", ") + (data.postal_code ? ` ${data.postal_code}` : ""),
+                data.country,
+              ]
+                .map((line) => String(line ?? "").trim())
+                .filter((line) => line.length > 0)
+                .join("\n") || "No address on file"}
+            </p>
+          </div>
+        </section>
+
+        {/* Items: what is in the box, and nothing else. Weights and SKUs moved
+            out with the packing workstation -- they belong in Shippo. */}
+        <section className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-4 sm:p-5">
+          <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-300">Items</h2>
+          <ul className="mt-3 divide-y divide-white/5">
+            {rawOrderItems.map((item, index) => (
+              <li key={`${String(item.id)}-${index}`} className="flex items-center justify-between gap-3 py-2 text-sm">
+                <span className="text-zinc-100">{String(item.product_name ?? item.product_id ?? "Item")}</span>
+                <span className="tabular-nums text-zinc-400">x{Math.max(1, Number(item.quantity ?? 1))}</span>
+              </li>
+            ))}
+            {rawOrderItems.length === 0 ? <li className="py-2 text-sm text-zinc-500">No items recorded.</li> : null}
+          </ul>
+        </section>
 
         {isPhysicalOrder ? (
-          <AdminOrderShippingPanel
+          <AdminOrderFulfillmentCard
             orderId={String(data.order_id)}
-            orderNumber={String(data.order_number ?? data.order_id)}
-            customerName={data.customer_name ? String(data.customer_name) : null}
-            customerEmail={data.customer_email ? String(data.customer_email) : null}
-            customerPhone={data.phone ? String(data.phone) : null}
-            address={{
-              street1: data.shipping_address ? String(data.shipping_address) : null,
-              street2: data.shipping_address_2 ? String(data.shipping_address_2) : null,
-              city: data.city ? String(data.city) : null,
-              state: data.state ? String(data.state) : null,
-              zip: data.postal_code ? String(data.postal_code) : null,
-              country: data.country ? String(data.country) : null,
-            }}
-            items={shippingItems}
-            orderTotal={Number(data.amount_paid ?? 0)}
-            shippingCharged={Number(data.shipping_amount ?? 0)}
-            paymentStatus={String(data.payment_status ?? "pending_payment")}
             fulfillmentStatus={String(data.fulfillment_status ?? "pending")}
-            canFulfill={SHIPPABLE_PAYMENT_STATES.has(String(data.payment_status ?? "").toLowerCase())}
-            parcel={{
-              weightOz: parcelData ? parcelData.weightOz : null,
-              merchandiseOz: parcelData ? parcelData.merchandiseOz : null,
-              packagingOz: parcelData ? parcelData.packagingOz : null,
-              weightReviewRequired: parcelData ? parcelData.weightReviewRequired : false,
-              overridden: parcelData?.overridden ?? false,
-              overrideOz:
-                data.parcel_weight_oz_override == null ? null : Number(data.parcel_weight_oz_override),
-              preset: parcelData?.preset ? presetView(parcelData.preset) : null,
-              error: parcelResult && !parcelResult.ok ? parcelResult.message : null,
-            }}
-            packages={presetOptions}
             shippoOrderId={data.shippo_order_id ? String(data.shippo_order_id) : null}
             shippoSyncStatus={data.shippo_sync_status ? String(data.shippo_sync_status) : null}
             shippoSyncError={data.shippo_sync_error ? String(data.shippo_sync_error) : null}
-            label={shippingLabel}
-            labelVoidedAt={labelVoidedAt}
-            // The claim is held but no label landed: another request is mid-flight,
-            // or one died after taking the claim. Either way, do not buy again.
-            purchaseClaimStuck={Boolean(data.label_purchase_claimed_at) && !shippoTransactionId}
-            paidAt={data.paid_at ? String(data.paid_at) : null}
-            packedAt={data.packed_at ? String(data.packed_at) : null}
-            shippedAt={data.shipped_at ? String(data.shipped_at) : null}
-            deliveredAt={data.delivered_at ? String(data.delivered_at) : null}
-            shippo={{ configured: shippoStatus.configured, mode: shippoStatus.mode, label: shippoStatus.label }}
+            label={
+              shippingLabel
+                ? {
+                    carrier: shippingLabel.carrier,
+                    service: shippingLabel.service,
+                    trackingNumber: shippingLabel.trackingNumber,
+                    trackingUrl: shippingLabel.trackingUrl,
+                    postageCostCents: shippingLabel.postageCostCents,
+                    purchasedAt: shippingLabel.purchasedAt,
+                  }
+                : null
+            }
+            canFulfill={SHIPPABLE_PAYMENT_STATES.has(String(data.payment_status ?? "").toLowerCase())}
+            weightReviewRequired={parcelData ? parcelData.weightReviewRequired : false}
+            shippoConfigured={shippoStatus.configured}
           />
         ) : null}
 
@@ -312,9 +285,6 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
 
         <AdminOrderTimeline entries={auditRows ?? []} />
 
-        <pre className="mt-6 overflow-x-auto rounded-xl bg-zinc-950 p-3 text-xs text-zinc-300 sm:p-4 sm:text-sm">
-{JSON.stringify(data, null, 2)}
-        </pre>
       </div>
     </div>
   );

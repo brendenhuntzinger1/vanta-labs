@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { FulfillmentRow } from "@/lib/admin-fulfillment";
 import { methodLabel } from "@/components/admin-payments-client";
-import { FulfillmentStatusPill } from "@/components/admin-order-shipping-panel";
+import { FulfillmentStatusPill } from "@/components/fulfillment-status-pill";
 import { fulfillmentStatusLabel, normalizeLegacyStatus } from "@/lib/order-pipeline";
 
 // ---------------------------------------------------------------------------
