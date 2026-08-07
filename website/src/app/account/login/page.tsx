@@ -46,7 +46,7 @@ export default async function AccountLoginPage({
           />
           <div className="relative">
             <p className="text-sm font-semibold uppercase tracking-[0.32em] text-white">Vanta Labs</p>
-            <p className="mt-1 text-[11px] uppercase tracking-[0.28em] text-emerald-300/80">Research Peptides</p>
+            <p className="mt-1 text-[11px] uppercase tracking-[0.28em] text-[color:var(--accent-gold)]/80">Research Peptides</p>
           </div>
           <div className="relative max-w-md">
             <h2 className="vl2-serif text-4xl leading-[1.1] text-white">Research-grade purity, verified in every batch.</h2>
@@ -62,7 +62,7 @@ export default async function AccountLoginPage({
                 "Sign in with email or a texted code",
               ].map((point) => (
                 <li key={point} className="flex items-center gap-3 text-sm text-white/75">
-                  <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-emerald-400/30 bg-emerald-400/10 text-emerald-300">
+                  <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[color:var(--accent-gold)]/30 bg-[var(--accent-gold-soft)] text-[color:var(--accent-gold)]">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5"><path d="m5 12 4 4 10-10" /></svg>
                   </span>
                   {point}

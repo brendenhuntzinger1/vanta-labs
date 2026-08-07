@@ -403,14 +403,14 @@ export function AccountAuthForm() {
             <button
               type="button"
               onClick={() => { setLoginMethod("email"); setOtpSent(false); resetTransientState(); }}
-              className={`rounded-full px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.14em] transition ${loginMethod === "email" ? "bg-emerald-500 text-[#04120c]" : "text-zinc-400 hover:text-zinc-200"}`}
+              className={`rounded-full px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.14em] transition ${loginMethod === "email" ? "bg-[var(--accent-gold-bright)] text-[#0a0a0a]" : "text-zinc-400 hover:text-zinc-200"}`}
             >
               Email
             </button>
             <button
               type="button"
               onClick={() => { setLoginMethod("phone"); resetTransientState(); }}
-              className={`rounded-full px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.14em] transition ${loginMethod === "phone" ? "bg-emerald-500 text-[#04120c]" : "text-zinc-400 hover:text-zinc-200"}`}
+              className={`rounded-full px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.14em] transition ${loginMethod === "phone" ? "bg-[var(--accent-gold-bright)] text-[#0a0a0a]" : "text-zinc-400 hover:text-zinc-200"}`}
             >
               Phone
             </button>
@@ -499,21 +499,21 @@ export function AccountAuthForm() {
 
       {mode === "signup" ? (
         <div className="mt-4 space-y-3">
-          <label className="flex items-start gap-3 rounded-xl border border-emerald-300/30 bg-emerald-400/[0.06] px-4 py-3 text-sm text-zinc-200">
+          <label className="flex items-start gap-3 rounded-xl border border-[var(--accent-gold)]/30 bg-[var(--accent-gold-soft)] px-4 py-3 text-sm text-zinc-200">
             <input
               type="checkbox"
               checked={ageConfirmed}
               onChange={(event) => setAgeConfirmed(event.target.checked)}
-              className="mt-0.5 h-5 w-5 shrink-0 accent-emerald-500"
+              className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--accent-gold-bright)]"
             />
             <span>I confirm that I am at least 21 years old.</span>
           </label>
-          <label className="flex items-start gap-3 rounded-xl border border-emerald-300/30 bg-emerald-400/[0.06] px-4 py-3 text-sm text-zinc-200">
+          <label className="flex items-start gap-3 rounded-xl border border-[var(--accent-gold)]/30 bg-[var(--accent-gold-soft)] px-4 py-3 text-sm text-zinc-200">
             <input
               type="checkbox"
               checked={researchUseAgreed}
               onChange={(event) => setResearchUseAgreed(event.target.checked)}
-              className="mt-0.5 h-5 w-5 shrink-0 accent-emerald-500"
+              className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--accent-gold-bright)]"
             />
             <span>I agree and understand that the products on this site are intended strictly for laboratory research use only, and not for human or animal consumption.</span>
           </label>
@@ -525,7 +525,7 @@ export function AccountAuthForm() {
           type="checkbox"
           checked={rememberMe}
           onChange={(event) => setRememberMe(event.target.checked)}
-          className="h-5 w-5 shrink-0 accent-emerald-500"
+          className="h-5 w-5 shrink-0 accent-[var(--accent-gold-bright)]"
         />
         Keep me signed in on this device
       </label>
@@ -538,13 +538,13 @@ export function AccountAuthForm() {
         />
       ) : null}
 
-      {message ? <p className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{message}</p> : null}
+      {message ? <p className="mt-4 rounded-lg border border-[var(--accent-gold)]/30 bg-[var(--accent-gold-soft)] px-3 py-2 text-sm text-[var(--accent-gold-strong)]">{message}</p> : null}
       {error ? <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p> : null}
 
       <button
         type="submit"
         disabled={loading || sendBlockedByCooldown || (mode === "signup" && (!ageConfirmed || !researchUseAgreed))}
-        className="vl-focus-ring mt-6 inline-flex w-full items-center justify-center rounded-full bg-emerald-500 px-6 py-3 text-sm font-bold text-[#04120c] shadow-[0_8px_24px_-8px_rgba(16,185,129,0.6)] transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+        className="vl2-btn-primary vl-focus-ring mt-6 w-full px-6 py-3"
       >
         {loading ? "Please wait…" : primaryLabel}
       </button>

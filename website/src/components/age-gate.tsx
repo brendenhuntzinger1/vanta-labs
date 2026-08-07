@@ -150,7 +150,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
             {["Batch Tested", "COA Documented", "Encrypted Checkout"].map((point) => (
               <span key={point} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[0.62rem] font-medium uppercase tracking-[0.14em] text-white/55">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 text-emerald-300/80" aria-hidden="true"><path d="m5 12 4 4 10-10" /></svg>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 text-[color:var(--accent-gold)]/80" aria-hidden="true"><path d="m5 12 4 4 10-10" /></svg>
                 {point}
               </span>
             ))}
@@ -160,7 +160,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
 
           <p className="text-lg font-medium text-white sm:text-xl">Are you 21 years of age or older?</p>
 
-          <label className="group mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-left text-sm text-white/70 transition-colors duration-200 hover:border-white/20 has-[:checked]:border-emerald-400/30 has-[:checked]:bg-emerald-400/[0.04]">
+          <label className="group mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-left text-sm text-white/70 transition-colors duration-200 hover:border-white/20 has-[:checked]:border-[color:var(--accent-gold)]/40 has-[:checked]:bg-[var(--accent-gold-soft)]">
             <input
               type="checkbox"
               checked={agreed}
@@ -170,7 +170,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
                   setShowPrompt(false);
                 }
               }}
-              className="mt-0.5 h-5 w-5 shrink-0 rounded accent-emerald-400"
+              className="mt-0.5 h-5 w-5 shrink-0 rounded accent-[var(--accent-gold-bright)]"
             />
             <span>I confirm that I am at least 21 years of age and understand that Vanta Labs products are intended only for lawful laboratory research purposes.</span>
           </label>

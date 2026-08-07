@@ -119,7 +119,13 @@ export default async function HomePage() {
         <HeroVideo className="vl2-hero-video" src="/videos/vanta-labs-hero.mp4" />
         <div className="vl2-hero-scrim" aria-hidden="true" />
 
-        <div className="vl2-hero-content mx-auto w-full max-w-[1440px] px-4 sm:px-6 pb-12 pt-28 sm:pb-20 sm:pt-40 lg:px-12 lg:pb-28">
+        {/* The content block is bottom-anchored over a full-height video, so
+            bottom padding is what sets how high it rides. Kept low on larger
+            screens deliberately: the vial is the centre of the shot and the
+            CTA cluster was sitting across it. Mobile keeps its original
+            padding -- there the block is nearly full-width and dropping it
+            further would crowd the scroll cue. */}
+        <div className="vl2-hero-content mx-auto w-full max-w-[1440px] px-4 sm:px-6 pb-12 pt-28 sm:pb-12 sm:pt-40 lg:px-12 lg:pb-14">
           <div className="vl2-fade-in">
             {control.promoBuy3Get1Enabled ? (
               <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-amber-200/40 bg-amber-200/[0.12] px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-amber-200 backdrop-blur">
