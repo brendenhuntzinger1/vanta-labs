@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { isInventoryTrackingActive } from "@/lib/inventory-settings";
 import type { CoaRecord, Product, ProductDose, ProductImage } from "@/lib/catalog-types";
 import { parseProductFaq } from "@/lib/product-faq";
+import { sanitizeCoaUrl } from "@/lib/coa-url";
 
 // The catalog changes rarely but the storefront (home / PDP / list) is
 // force-dynamic and re-queried it on EVERY request — the top launch-scale risk.
@@ -124,7 +125,7 @@ async function fetchProductRelations(productIds: string[]) {
       inventoryQuantity: parseNumber(row.inventory_quantity, 0),
       stockStatus: resolveStockStatus(String(row.stock_status ?? "In Stock"), inventoryActive) as ProductDose["stockStatus"],
       batchNumber: row.batch_number ? String(row.batch_number) : undefined,
-      coaUrl: row.coa_url ? String(row.coa_url) : undefined,
+      coaUrl: sanitizeCoaUrl(row.coa_url) || undefined,
       imageUrl: row.image_url ? String(row.image_url) : undefined,
       purityResult: row.purity_result ? String(row.purity_result) : undefined,
       isDefault: parseBoolean(row.is_default, false),
@@ -163,7 +164,7 @@ function mapProductRow(
   );
   const effectiveImage = defaultDose?.imageUrl ?? primaryImage?.imageUrl ?? String(row.image_url ?? "/images/vantalabs.png");
   const effectiveBatchNumber = defaultDose?.batchNumber ?? String(row.batch_number ?? "");
-  const effectiveCoaUrl = defaultDose?.coaUrl ?? String(row.coa_url ?? "");
+  const effectiveCoaUrl = defaultDose?.coaUrl ?? sanitizeCoaUrl(row.coa_url);
   const effectivePurity = defaultDose?.purityResult ?? (row.purity_result ? String(row.purity_result) : undefined);
 
   return {
@@ -377,6 +378,6 @@ export async function getCoaRecords() {
     purityResult: String(row.purity_result ?? "Pending"),
     testingDate: String(row.testing_date ?? ""),
     labName: String(row.lab_name ?? ""),
-    coaUrl: String(row.coa_url ?? ""),
+    coaUrl: sanitizeCoaUrl(row.coa_url),
   })) satisfies CoaRecord[];
 }
