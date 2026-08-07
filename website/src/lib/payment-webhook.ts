@@ -15,6 +15,8 @@ import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
 import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
+import { after } from "next/server";
+import { syncOrderToShippo } from "@/lib/shippo/order-sync";
 import { activatePaidMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 import {
   isMembershipEvent,
@@ -1090,12 +1092,39 @@ export async function finalizeManualPayment(
         (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
       );
     }
-    // Not pushed to Shippo here either — see the note in the card path. An
-    // admin waiting on an approval click deserves the same protection from a
-    // slow third party as a shopper waiting on checkout.
+    // Same deferred push as the card path. An admin waiting on an approval
+    // click deserves the same protection from a slow third party as a shopper
+    // waiting on checkout.
+    scheduleShippoSync(orderId);
   }
 
   return { orderId, alreadyPaid: false, status: "paid" };
+}
+
+/**
+ * Push a paid order to Shippo once the response has been sent.
+ *
+ * after() throws if called outside a request scope, and processPaymentWebhook
+ * is reachable from places that have none — the reconciliation sweep, a script,
+ * a test. An uncaught throw there would fail the whole webhook over a
+ * side-effect, which is precisely the failure mode this deferral exists to
+ * prevent, so the throw is swallowed and the 30-minute sweep picks the order up
+ * instead.
+ */
+function scheduleShippoSync(orderId: string): void {
+  const run = async () => {
+    try {
+      await syncOrderToShippo(orderId);
+    } catch (syncError) {
+      console.error("Unable to sync order to Shippo", orderId, syncError);
+    }
+  };
+  try {
+    after(run);
+  } catch {
+    // No request scope. The sweep will handle it; never let this reach the
+    // caller, who is in the middle of confirming a payment.
+  }
 }
 
 export async function processPaymentWebhook(payload: string, signature: string, secret: string, eventId: string) {
@@ -1553,18 +1582,24 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         }
       }
 
-      // The Shippo push is DELIBERATELY NOT DONE HERE.
+      // Push the paid order into Shippo — AFTER the response is sent.
       //
-      // It used to be, and it broke checkout. A Shippo request can take up to
-      // SHIPPO_REQUEST_TIMEOUT_MS (15s); awaiting it inside this handler pushed
-      // the webhook response past the payment provider's own timeout, so the
-      // provider never received its 200 and the shopper sat on "Processing…"
-      // forever — on an order that had in fact been paid, and whose
-      // confirmation email had already been sent from a few lines above.
+      // This was originally awaited inline and broke checkout: a Shippo request
+      // can take up to SHIPPO_REQUEST_TIMEOUT_MS (15s), which pushed the webhook
+      // response past the payment provider's own timeout. The provider never got
+      // its 200, so the shopper sat on "Processing…" for an order that had in
+      // fact been paid — and whose confirmation email had already gone out a few
+      // lines above.
       //
-      // Nothing that talks to a third party belongs on the critical path of a
-      // payment webhook. The push happens instead from the cron sweep and from
-      // the admin order screen, both of which can afford to wait.
+      // after() is the fix rather than simply deleting the call: the work still
+      // runs immediately, so the order reaches Shippo within seconds of payment,
+      // but it runs AFTER the response is flushed and therefore cannot delay it.
+      // Deleting it entirely would have left the 30-minute cron as the only
+      // route, which is not "automatic" by any useful definition.
+      //
+      // The 30-minute sweep remains as the safety net for the case where this
+      // callback dies with the process.
+      scheduleShippoSync(orderId);
     }
   }
 
