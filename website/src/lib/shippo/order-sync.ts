@@ -6,7 +6,6 @@ import { recordActualShippingCost } from "@/lib/admin-profit";
 import { createShipmentWithRates, createShippoOrder } from "@/lib/shippo/client";
 import { isShippoConfigured } from "@/lib/shippo/config";
 import { buildOrderParcel, toCountryCode } from "@/lib/shippo/service";
-import { DEFAULT_UNIT_WEIGHT_OZ } from "@/lib/shippo/parcel";
 import type { ShippoAddress, ShippoOrderLineItem, ShippoTransactionCreated } from "@/lib/shippo/types";
 
 // ---------------------------------------------------------------------------
@@ -293,11 +292,19 @@ export async function syncOrderToShippo(orderId: string): Promise<SyncOutcome> {
   // Weight is stored in parts, not just the total: a total alone cannot
   // distinguish "the vials were heavier than recorded" from "the mailer tare was
   // wrong", and those have different fixes.
-  const merchandiseOz = parcel.lines.reduce((total, line) => total + line.lineWeightOz, 0);
-  const packagingOz = parcel.preset?.emptyWeightOz ?? 0;
+  const merchandiseOz = parcel.merchandiseOz;
+  const packagingOz = parcel.packagingOz;
   // An estimate is a weight nobody has put on a scale. Worth flagging, because
   // a postage figure derived from a guess should not be trusted as a margin.
-  const estimated = parcel.lines.some((line) => line.unitWeightOz === DEFAULT_UNIT_WEIGHT_OZ);
+  //
+  // Judged on PROVENANCE -- did the SKU have a weight on file? -- and never by
+  // comparing the unit weight to the catalogue default. The default is 0.36 oz
+  // precisely because that is a real 3ml vial, so a correctly weighed peptide
+  // and an unweighed one produce the identical number: the value carries no
+  // information about where it came from. Comparing it fails in both
+  // directions, flagging every ordinary peptide order as a guess while missing
+  // a heavy SKU that was never weighed.
+  const estimated = parcel.weightReviewRequired;
 
   await supabaseAdmin
     .from("orders")
