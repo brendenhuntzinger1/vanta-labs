@@ -174,17 +174,30 @@ export async function syncOrderToShippo(orderId: string): Promise<SyncOutcome> {
     return { ok: false, reason: "Membership orders are not shipped.", retryable: false };
   }
 
+  // These two checks run BEFORE anything is claimed or sent, and both used to
+  // return without writing a word. So a store with, say, no ship-from ZIP would
+  // have every push fail silently every thirty minutes, forever, while the order
+  // showed a blank sync status and a blank error -- indistinguishable from an
+  // order nothing had tried yet. The failure that repeats is the one that most
+  // needs a reason attached.
+  const recordBlocked = async (reason: string) => {
+    await supabaseAdmin
+      .from("orders")
+      .update({ shippo_sync_status: "blocked", shippo_sync_error: reason.slice(0, 500) })
+      .eq("order_id", orderId)
+      .is("shippo_order_id", null);
+  };
+
   const addresses = await getShippingAddresses();
   if (!addresses.canRequestRates) {
-    return {
-      ok: false,
-      reason: `Ship-from address incomplete: ${addresses.originValidation.missing.join(", ")}.`,
-      retryable: true,
-    };
+    const reason = `Ship-from address incomplete: ${addresses.originValidation.missing.join(", ")}. Set it in admin → Settings.`;
+    await recordBlocked(reason);
+    return { ok: false, reason, retryable: true };
   }
 
   const parcelResult = await buildOrderParcel(orderId);
   if (!parcelResult.ok) {
+    await recordBlocked(parcelResult.message);
     return { ok: false, reason: parcelResult.message, retryable: true };
   }
   const parcel = parcelResult.data;
