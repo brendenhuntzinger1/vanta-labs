@@ -68,7 +68,12 @@ function shippoOrderUrl(shippoOrderId: string | null): string {
 }
 
 /** The five words that describe where the parcel is. */
-function headline(status: FulfillmentStatus | null, hasLabel: boolean, synced: boolean): string {
+function headline(
+  status: FulfillmentStatus | null,
+  hasLabel: boolean,
+  synced: boolean,
+  failed: boolean,
+): string {
   switch (status) {
     case "delivered":
       return "Delivered";
@@ -87,7 +92,12 @@ function headline(status: FulfillmentStatus | null, hasLabel: boolean, synced: b
       return "Refunded";
     default:
       if (hasLabel) return "Label purchased";
-      return synced ? "Awaiting label" : "Syncing to Shippo…";
+      if (synced) return "Awaiting label";
+      // Before this branch existed the pill read "Syncing to Shippo…" while the
+      // body of the same card said the sync had failed. A status badge that
+      // contradicts the error beneath it is worse than no badge: the reassuring
+      // one is the one people believe.
+      return failed ? "Sync failed" : "Syncing to Shippo…";
   }
 }
 
@@ -143,7 +153,7 @@ export function AdminOrderFulfillmentCard({
     }
   }
 
-  const title = headline(status, hasLabel, synced);
+  const title = headline(status, hasLabel, synced, failed);
   const tone = status === "delivered" || hasLabel ? "ok" : failed ? "bad" : "wait";
 
   return (
