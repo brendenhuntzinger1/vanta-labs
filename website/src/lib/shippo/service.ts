@@ -372,6 +372,19 @@ export interface OrderParcel {
   lines: OrderParcelLine[];
   /** True when orders.parcel_weight_oz_override replaced the computed total. */
   overridden: boolean;
+  /** Merchandise only — sum(unit weight x quantity), excluding the box. */
+  merchandiseOz: number;
+  /** The box's tare, counted ONCE per parcel and never per line. */
+  packagingOz: number;
+  /**
+   * At least one line fell back to the catalog default instead of a weight
+   * stored against that SKU.
+   *
+   * Surfaced rather than silently accepted: the total is then a guess, and a
+   * guess that buys real postage should be visible before the label is bought,
+   * not discovered when a carrier bills an adjustment.
+   */
+  weightReviewRequired: boolean;
 }
 
 export interface OrderParcelLine {
@@ -380,6 +393,8 @@ export interface OrderParcelLine {
   quantity: number;
   unitWeightOz: number;
   lineWeightOz: number;
+  /** False when this line used the catalog default instead of a stored weight. */
+  hasStoredWeight: boolean;
 }
 
 interface OrderItemRow {
@@ -455,6 +470,10 @@ async function loadItemWeights(items: OrderItemRow[]): Promise<{ lines: ParcelLi
       quantity,
       unitWeightOz: unit,
       lineWeightOz: Math.round(unit * quantity * 100) / 100,
+      // A weight stored against the SKU (or inherited from its parent product)
+      // is a real figure. Neither present means the line fell back to the
+      // catalog default, which makes the parcel total a guess.
+      hasStoredWeight: line.doseWeightOz !== null || line.productWeightOz !== null,
     });
   }
 
@@ -511,6 +530,12 @@ async function buildParcelForOrder(order: OrderShippingRow): Promise<ServiceResu
 
   const overrideValue = Number(order.parcel_weight_oz_override);
 
+  // Broken out so the admin can see WHICH half a surprising total came from.
+  // A single number cannot distinguish "the vials are heavier than recorded"
+  // from "the mailer tare is wrong", and those have different fixes.
+  const merchandiseOz =
+    Math.round(weights.detail.reduce((total, line) => total + line.lineWeightOz, 0) * 100) / 100;
+
   return {
     ok: true,
     data: {
@@ -519,6 +544,10 @@ async function buildParcelForOrder(order: OrderShippingRow): Promise<ServiceResu
       preset,
       lines: weights.detail,
       overridden: Number.isFinite(overrideValue) && overrideValue > 0,
+      merchandiseOz,
+      packagingOz: preset?.emptyWeightOz ?? 0,
+      // Any line without a weight of its own makes the whole total an estimate.
+      weightReviewRequired: weights.detail.some((line) => !line.hasStoredWeight),
     },
   };
 }

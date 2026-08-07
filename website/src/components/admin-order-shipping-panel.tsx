@@ -4,6 +4,7 @@ import { useCallback, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { fulfillmentStatusLabel, normalizeLegacyStatus, type FulfillmentStatus } from "@/lib/order-pipeline";
+import { ozToGrams } from "@/lib/shippo/parcel";
 
 // ---------------------------------------------------------------------------
 // The fulfillment workstation.
@@ -80,6 +81,12 @@ export interface ShippingPanelParcel {
   overridden: boolean;
   overrideOz: number | null;
   preset: ShippingPanelPreset | null;
+  /** Merchandise only, excluding the box. */
+  merchandiseOz: number | null;
+  /** The box's tare, counted once per parcel. */
+  packagingOz: number | null;
+  /** A line used the catalog default rather than a weight stored on the SKU. */
+  weightReviewRequired: boolean;
   /** Set when the parcel could not be built at all (bad data, DB failure). */
   error: string | null;
 }
@@ -152,6 +159,19 @@ function dollars(value: number): string {
 function costLabel(cents: number | null | undefined): string {
   if (cents == null || !Number.isFinite(cents)) return "Pending";
   return USD.format(cents / 100);
+}
+
+/**
+ * Grams first, ounces second.
+ *
+ * The owner weighs and thinks in grams; Shippo is billed in ounces. Showing
+ * both means the number on the scale can be compared to the number on the
+ * screen without anyone doing arithmetic in their head.
+ */
+function weightPair(value: number | null | undefined): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  const oz = Math.round(value * 100) / 100;
+  return `${ozToGrams(oz)} g · ${oz} oz`;
 }
 
 function ounces(value: number | null | undefined): string {
@@ -519,6 +539,14 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
         </p>
       ) : null}
 
+      {parcel.weightReviewRequired && !parcel.overridden ? (
+        <p className="mt-4 rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
+          <strong>Weight review required.</strong> At least one item has no weight stored against its SKU, so
+          this parcel used the catalog default. Set the real weight in Admin → Inventory, or enter an
+          order-level override below, before buying the label.
+        </p>
+      ) : null}
+
       {parcel.error ? (
         <p className="mt-4 rounded-xl border border-rose-300/30 bg-rose-300/10 px-3 py-2 text-[13px] text-rose-100">
           {parcel.error}
@@ -622,8 +650,14 @@ export function AdminOrderShippingPanel(props: AdminOrderShippingPanelProps) {
         </div>
 
         <dl className="mt-1 divide-y divide-white/5">
-          <Row label="Declared weight">
-            <span className="tabular-nums">{ounces(parcel.weightOz)}</span>
+          <Row label="Product weight">
+            <span className="tabular-nums">{weightPair(parcel.merchandiseOz)}</span>
+          </Row>
+          <Row label="Packaging weight">
+            <span className="tabular-nums">{weightPair(parcel.packagingOz)}</span>
+          </Row>
+          <Row label="Total shipping weight">
+            <span className="font-semibold tabular-nums text-zinc-100">{weightPair(parcel.weightOz)}</span>
           </Row>
           <Row label="Package">
             {parcel.preset

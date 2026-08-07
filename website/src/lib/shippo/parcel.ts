@@ -25,22 +25,46 @@ import type { ShippoParcel } from "@/lib/shippo/types";
  * inserted after — a discrepancy that only shows up as postage that quietly
  * does not match the catalog.
  *
- * 0.18 oz is the owner's figure for a 3ml peptide vial: 5 g, rounded UP from
- * 0.1764 so the declared weight never lands under the real one.
+ * 0.36 oz is a 3ml peptide vial at 10 g -- gramsToOz(10), rounded up.
  *
- * NOT VERIFIED ON A SCALE. An empty 3ml glass vial with stopper and crimp is
- * commonly 8-12 g, so this may run light by roughly half. It is left as given
- * because at this magnitude even a five-vial order plus mailer stays inside
- * USPS Ground Advantage's first weight tier, where the price is identical
- * either way. Replace it with a measured value once stock arrives; the error
- * only starts costing money on larger orders.
+ * NOT YET WEIGHED. 10 g is a plausible figure for a 3ml glass vial with
+ * stopper and crimp (commonly 8-12 g empty; the peptide itself is milligrams),
+ * but it is an estimate until one is put on a scale. Bacteriostatic water is
+ * heavier and carries its own per-SKU value -- it is NOT covered by this
+ * fallback.
  *
  * This is the ONE fallback that does not err heavy, deliberately: it is
  * MULTIPLIED by quantity, so padding it pushes multi-vial orders across a tier
  * boundary and overcharges every shipment. Per-parcel padding belongs on the
  * package preset's tare, which is added once — not here, where it compounds.
  */
-export const DEFAULT_UNIT_WEIGHT_OZ = 0.18;
+export const DEFAULT_UNIT_WEIGHT_OZ = 0.36;
+
+/**
+ * Grams per ounce. Exact, not the 28.35 approximation — these values are
+ * multiplied by quantity, so a rounding error compounds across a large order.
+ */
+export const GRAMS_PER_OZ = 28.349523125;
+
+/**
+ * Grams -> ounces, rounded UP to hundredths.
+ *
+ * Up, not nearest: a declared weight below the real one is what earns a carrier
+ * adjustment, and the fraction of a cent that over-declaring costs is not worth
+ * the exposure.
+ */
+export function gramsToOz(grams: number): number {
+  const value = Number(grams);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.ceil((value / GRAMS_PER_OZ) * 100) / 100;
+}
+
+/** Ounces -> grams, for display. The owner thinks and weighs in grams. */
+export function ozToGrams(oz: number): number {
+  const value = Number(oz);
+  if (!Number.isFinite(value) || value <= 0) return 0;
+  return Math.round(value * GRAMS_PER_OZ);
+}
 
 /**
  * Shippo rejects a parcel weighing zero or less with a validation error, which

@@ -214,6 +214,9 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
             canFulfill={SHIPPABLE_PAYMENT_STATES.has(String(data.payment_status ?? "").toLowerCase())}
             parcel={{
               weightOz: parcelData ? parcelData.weightOz : null,
+              merchandiseOz: parcelData ? parcelData.merchandiseOz : null,
+              packagingOz: parcelData ? parcelData.packagingOz : null,
+              weightReviewRequired: parcelData ? parcelData.weightReviewRequired : false,
               overridden: parcelData?.overridden ?? false,
               overrideOz:
                 data.parcel_weight_oz_override == null ? null : Number(data.parcel_weight_oz_override),
