@@ -480,6 +480,134 @@ export async function applyTransactionCreated(
  * Bounded per run so a large backlog cannot make the sweep itself time out —
  * the remainder is picked up on the next pass.
  */
+/**
+ * Attach the parcel to an order that already reached Shippo without one.
+ *
+ * A Shippo Order and its Shipment are created in two calls, and only the first
+ * is fatal if it fails. So an order can land in the Orders tab with no parcel --
+ * blank dimensions, blank weight, no rates -- and every automatic path then
+ * skips it forever, because all three key off shippo_order_id being NULL:
+ * syncOrderToShippo short-circuits, the sweep filters it out, and the admin
+ * retry button reports "already synced". The one state that needs repair was
+ * the one state nothing retried.
+ *
+ * Creating a Shipment costs nothing, so this is safe to run automatically. It
+ * binds to the EXISTING Shippo order rather than making a second one.
+ */
+export async function backfillOrderShipment(orderId: string): Promise<SyncOutcome> {
+  if (!isShippoConfigured()) {
+    return { ok: false, reason: "Shippo is not configured.", retryable: true };
+  }
+
+  const { data: order, error } = await supabaseAdmin
+    .from("orders")
+    .select(`${ORDER_COLUMNS}, shippo_shipment_id`)
+    .eq("order_id", orderId)
+    .maybeSingle<OrderRow & { shippo_shipment_id: string | null }>();
+
+  if (error || !order) return { ok: false, reason: "Order not found.", retryable: false };
+  if (!order.shippo_order_id) {
+    return { ok: false, reason: "This order has not reached Shippo yet.", retryable: false };
+  }
+  if (order.shippo_shipment_id) {
+    return { ok: true, shippoOrderId: order.shippo_order_id, created: false };
+  }
+
+  const addresses = await getShippingAddresses();
+  if (!addresses.canRequestRates) {
+    return {
+      ok: false,
+      reason: `Ship-from address incomplete: ${addresses.originValidation.missing.join(", ")}.`,
+      retryable: true,
+    };
+  }
+
+  const parcelResult = await buildOrderParcel(orderId);
+  if (!parcelResult.ok) return { ok: false, reason: parcelResult.message, retryable: true };
+  const parcel = parcelResult.data;
+
+  const shipment = await createShipmentWithRates({
+    addressFrom: toShippoAddress(addresses.origin),
+    addressTo: destinationAddress(order),
+    addressReturn: toShippoAddress(addresses.returnAddress),
+    parcel: parcel.parcel,
+    order: order.shippo_order_id,
+  });
+
+  if (!shipment.ok) {
+    await supabaseAdmin
+      .from("orders")
+      .update({
+        shippo_sync_status: "error",
+        shippo_sync_error: `Order is in Shippo but the parcel is not: ${shipment.message}`.slice(0, 500),
+      })
+      .eq("order_id", orderId);
+    return { ok: false, reason: shipment.message, retryable: true };
+  }
+
+  // Guarded on the column still being empty. Two concurrent repairs (the sweep
+  // and the admin button) would each create a Shipment; the first write wins and
+  // the loser's is left unreferenced in Shippo. That costs nothing and is far
+  // better than a lock that can strand the row permanently if a run dies.
+  await supabaseAdmin
+    .from("orders")
+    .update({
+      parcel_preset_id: parcel.preset?.id ?? null,
+      parcel_preset_name: parcel.preset?.name ?? null,
+      parcel_length_in: parcel.preset?.lengthIn ?? null,
+      parcel_width_in: parcel.preset?.widthIn ?? null,
+      parcel_height_in: parcel.preset?.heightIn ?? null,
+      parcel_merchandise_oz: Math.round(parcel.merchandiseOz * 100) / 100,
+      parcel_packaging_oz: parcel.packagingOz,
+      parcel_declared_oz: parcel.weightOz,
+      parcel_weight_estimated: parcel.weightReviewRequired,
+      shippo_shipment_id: shipment.data.shipmentId,
+      shippo_sync_status: "synced",
+      shippo_sync_error: null,
+      shippo_synced_at: new Date().toISOString(),
+    })
+    .eq("order_id", orderId)
+    .is("shippo_shipment_id", null);
+
+  return { ok: true, shippoOrderId: order.shippo_order_id, created: true };
+}
+
+/**
+ * Repair every order sitting in Shippo without a parcel.
+ *
+ * Skips anything already labelled: once postage is bought the parcel is settled,
+ * and adding a shipment afterwards would only clutter the account.
+ */
+export async function sweepMissingShipments(limit = 20): Promise<{ attempted: number; repaired: number; failed: number }> {
+  if (!isShippoConfigured()) return { attempted: 0, repaired: 0, failed: 0 };
+
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .select("order_id")
+    .eq("payment_status", "paid")
+    .neq("order_type", "membership")
+    .not("shippo_order_id", "is", null)
+    .is("shippo_shipment_id", null)
+    .is("shippo_transaction_id", null)
+    .order("paid_at", { ascending: true, nullsFirst: false })
+    .limit(Math.min(100, Math.max(1, limit)));
+
+  if (error || !data?.length) return { attempted: 0, repaired: 0, failed: 0 };
+
+  let repaired = 0;
+  let failed = 0;
+  for (const row of data) {
+    try {
+      const result = await backfillOrderShipment(String(row.order_id));
+      if (result.ok) repaired += 1;
+      else failed += 1;
+    } catch {
+      failed += 1;
+    }
+  }
+  return { attempted: data.length, repaired, failed };
+}
+
 export async function sweepUnsyncedOrders(limit = 20): Promise<{ attempted: number; synced: number; failed: number }> {
   if (!isShippoConfigured()) return { attempted: 0, synced: 0, failed: 0 };
 

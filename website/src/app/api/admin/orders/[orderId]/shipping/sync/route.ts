@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { syncOrderToShippo } from "@/lib/shippo/order-sync";
+import { backfillOrderShipment, syncOrderToShippo } from "@/lib/shippo/order-sync";
 
 export const dynamic = "force-dynamic";
 
@@ -51,13 +51,25 @@ export async function POST(request: Request, context: { params: Promise<{ orderI
     return NextResponse.json({ success: false, error: "Order not found." }, { status: 404 });
   }
 
-  // Already there. Report it rather than pushing a second time.
+  // Already there -- but "there" has two meanings. An order can reach Shippo
+  // with no parcel attached (the Order and its Shipment are separate calls, and
+  // only the first is fatal), which shows up as blank dimensions and weight with
+  // no rates. Reporting that as "already synced" is what left those orders
+  // unrepairable: this was the only human-driven retry and it declined to act on
+  // the one state that needed it.
   if (order.shippo_order_id) {
-    return NextResponse.json({
-      success: true,
-      alreadySynced: true,
-      shippoOrderId: order.shippo_order_id,
-    });
+    const repair = await backfillOrderShipment(orderId);
+    return NextResponse.json(
+      repair.ok
+        ? {
+            success: true,
+            alreadySynced: !repair.created,
+            parcelAttached: repair.created,
+            shippoOrderId: order.shippo_order_id,
+          }
+        : { success: false, error: repair.reason, retryable: repair.retryable },
+      { status: repair.ok ? 200 : 502 },
+    );
   }
 
   if (order.shippo_sync_claimed_at) {

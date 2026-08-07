@@ -6,7 +6,7 @@ import { autoApproveEligibleCommissions } from "@/lib/partner-portal";
 import { expireStaleReservations } from "@/lib/inventory-reservation";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
 import { expireStaleExpressIntents, reconcileVeyraPendingPayments } from "@/lib/express-reconcile";
-import { sweepUnsyncedOrders } from "@/lib/shippo/order-sync";
+import { sweepMissingShipments, sweepUnsyncedOrders } from "@/lib/shippo/order-sync";
 import { recordSystemAlert } from "@/lib/monitoring";
 
 export const dynamic = "force-dynamic";
@@ -37,7 +37,7 @@ export async function GET(request: Request) {
   // is nothing keying one to the other, so a job inserted in the middle silently
   // shifts every result after it onto the wrong name. That had already happened
   // to the last two.
-  const [membershipResult, cartRecoveryResult, storeCreditResult, commissionApprovalResult, reservationExpiryResult, emailRetryResult, paymentReconcileResult, shippoSyncResult, expressIntentResult] = await Promise.allSettled([
+  const [membershipResult, cartRecoveryResult, storeCreditResult, commissionApprovalResult, reservationExpiryResult, emailRetryResult, paymentReconcileResult, shippoSyncResult, expressIntentResult, shipmentRepairResult] = await Promise.allSettled([
     runMembershipBillingSweep(),
     runAbandonedCartSweep(),
     grantMonthlyStoreCreditSweep(),
@@ -59,6 +59,9 @@ export async function GET(request: Request) {
     sweepUnsyncedOrders(),
     // Hygiene: retire wallet sessions that were armed and never used.
     expireStaleExpressIntents(),
+    // Repair orders that reached Shippo without their parcel. Nothing else
+    // retries these -- every other path keys off shippo_order_id being NULL.
+    sweepMissingShipments(),
   ]);
 
   // Surface any failed job as a durable, operator-visible alert (critical =
@@ -78,6 +81,7 @@ export async function GET(request: Request) {
     // on the one job whose silent failure leaves a paid order with nowhere to
     // ship from.
     ["shippo_sync", shippoSyncResult],
+    ["shipment_repair", shipmentRepairResult],
   ];
   const failed = jobs.filter(([, r]) => r.status === "rejected");
   if (failed.length > 0) {
@@ -100,5 +104,6 @@ export async function GET(request: Request) {
     paymentReconcile: paymentReconcileResult.status === "fulfilled" ? paymentReconcileResult.value : { error: String(paymentReconcileResult.reason) },
     expressIntentsExpired: expressIntentResult.status === "fulfilled" ? expressIntentResult.value : { error: String(expressIntentResult.reason) },
     shippoSync: shippoSyncResult.status === "fulfilled" ? shippoSyncResult.value : { error: String(shippoSyncResult.reason) },
+    shipmentRepair: shipmentRepairResult.status === "fulfilled" ? shipmentRepairResult.value : { error: String(shipmentRepairResult.reason) },
   });
 }

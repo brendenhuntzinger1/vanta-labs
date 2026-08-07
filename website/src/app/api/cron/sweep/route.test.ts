@@ -22,6 +22,7 @@ const emails = sentinel("emails");
 const paymentReconcile = sentinel("paymentReconcile");
 const expressIntents = sentinel("expressIntents");
 const shippoSync = sentinel("shippoSync");
+const shipmentRepair = sentinel("shipmentRepair");
 interface SystemAlert {
   type: string;
   severity: string;
@@ -42,7 +43,10 @@ vi.mock("@/lib/express-reconcile", () => ({
   reconcileVeyraPendingPayments: () => paymentReconcile(),
   expireStaleExpressIntents: () => expressIntents(),
 }));
-vi.mock("@/lib/shippo/order-sync", () => ({ sweepUnsyncedOrders: () => shippoSync() }));
+vi.mock("@/lib/shippo/order-sync", () => ({
+  sweepUnsyncedOrders: () => shippoSync(),
+  sweepMissingShipments: () => shipmentRepair(),
+}));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: (alert: SystemAlert) => recordSystemAlert(alert) }));
 
 const SECRET = "test-cron-secret";
@@ -72,12 +76,13 @@ describe("the scheduled sweep", () => {
     // The two that were crossed.
     expect(body.shippoSync).toEqual({ job: "shippoSync" });
     expect(body.expressIntentsExpired).toEqual({ job: "expressIntents" });
+    expect(body.shipmentRepair).toEqual({ job: "shipmentRepair" });
   });
 
   it("runs every job exactly once", async () => {
     await callSweep();
 
-    for (const job of [membership, storeCredit, cartRecovery, commissions, reservations, emails, paymentReconcile, expressIntents, shippoSync]) {
+    for (const job of [membership, storeCredit, cartRecovery, commissions, reservations, emails, paymentReconcile, expressIntents, shippoSync, shipmentRepair]) {
       expect(job).toHaveBeenCalledTimes(1);
     }
   });
