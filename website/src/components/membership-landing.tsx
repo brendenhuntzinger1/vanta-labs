@@ -211,7 +211,7 @@ function SavingsCalculator({ tiers }: { tiers: MembershipTier[] }) {
   );
 }
 
-export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: MembershipTier[]; isSignedInCustomer: boolean }) {
+export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = false }: { tiers: MembershipTier[]; isSignedInCustomer: boolean; loadFailed?: boolean }) {
   const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
   // Per-tier benefit-list disclosure, mobile only (see the toggle below).
   const [expandedBenefits, setExpandedBenefits] = useState<Record<string, boolean>>({});
@@ -249,10 +249,16 @@ export function MembershipLanding({ tiers, isSignedInCustomer }: { tiers: Member
           <ScrollReveal delayMs={80}>
             <div className="mt-12 border border-white/10 bg-white/[0.02] p-10 text-center">
               <p className="vl2-eyebrow">Membership</p>
-              <h2 className="vl2-serif mt-3 text-2xl text-white sm:text-3xl">Membership plans are coming soon.</h2>
+              {/* Two different problems. Saying "coming soon" when the plans
+                  exist but could not be loaded tells the visitor the store is
+                  unfinished, and tells the owner nothing. */}
+              <h2 className="vl2-serif mt-3 text-2xl text-white sm:text-3xl">
+                {loadFailed ? "Membership is briefly unavailable." : "Membership plans are coming soon."}
+              </h2>
               <p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-white/55">
-                We&apos;re putting the finishing touches on our membership tiers. Check back shortly — in the meantime,
-                every registered customer already earns reward points on every order.
+                {loadFailed
+                  ? "We could not load the membership plans just now. Please try again in a moment — your account and reward points are unaffected."
+                  : "We’re putting the finishing touches on our membership tiers. Check back shortly — in the meantime, every registered customer already earns reward points on every order."}
               </p>
               <Link
                 href={isSignedInCustomer ? "/account" : "/account/login"}

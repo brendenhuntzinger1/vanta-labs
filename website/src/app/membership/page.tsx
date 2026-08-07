@@ -13,8 +13,18 @@ export const metadata: Metadata = {
 };
 
 export default async function MembershipPage() {
-  const [tiers, user] = await Promise.all([
-    getActiveMembershipTiers().catch(() => []),
+  // "No tiers configured" and "the tier query failed" are different problems
+  // with opposite fixes, and swallowing the error into [] made them render
+  // identically as "coming soon" -- so an outage on the membership page looked
+  // like a deliberate pre-launch state, indefinitely, with nothing logged.
+  const [tierResult, user] = await Promise.all([
+    getActiveMembershipTiers().then(
+      (data) => ({ ok: true as const, data }),
+      (error: unknown) => {
+        console.error("Unable to load membership tiers", error);
+        return { ok: false as const, data: [] };
+      },
+    ),
     getAuthenticatedUser(),
   ]);
 
@@ -23,7 +33,11 @@ export default async function MembershipPage() {
   return (
     <div className="vl2-galaxy min-h-screen text-white">
       <SiteHeaderV2 />
-      <MembershipLanding tiers={tiers} isSignedInCustomer={isSignedInCustomer} />
+      <MembershipLanding
+        tiers={tierResult.data}
+        isSignedInCustomer={isSignedInCustomer}
+        loadFailed={!tierResult.ok}
+      />
     </div>
   );
 }
