@@ -576,6 +576,115 @@ export async function getTransaction(transactionId: string): Promise<ShippoResul
  * a record, not a purchase. That is why this is safe to call automatically on
  * payment while label purchase stays a deliberate human action.
  */
+export async function purchaseLabel(input: PurchaseLabelInput): Promise<ShippoResult<PurchasedLabel>> {
+  const rateId = asNonEmptyString(input?.rate?.object_id);
+  if (!rateId) {
+    return {
+      ok: false,
+      kind: "rejected",
+      message: "No Shippo rate was selected for this label.",
+      safeToRetry: true,
+    };
+  }
+
+  const quotedCents = parseAmountToCents(input.rate?.amount);
+  if (quotedCents === null || quotedCents <= 0) {
+    return {
+      ok: false,
+      kind: "missing_cost",
+      message: "That rate has no usable price, so the postage cost could not be recorded. Re-quote the shipment.",
+      // Nothing was sent to Shippo — this check runs before the purchase.
+      safeToRetry: true,
+    };
+  }
+
+  const result = await shippoRequest<ShippoTransaction>({
+    method: "POST",
+    path: "/transactions/",
+    body: {
+      rate: rateId,
+      label_file_type: input.labelFileType ?? "PDF_4x6",
+      async: false,
+      // Shippo caps metadata at 100 characters and rejects the whole purchase
+      // when it is longer.
+      ...(input.metadata ? { metadata: input.metadata.slice(0, 100) } : {}),
+    },
+  });
+  if (!result.ok) return result;
+
+  const transaction = result.data;
+  const transactionId = asNonEmptyString(transaction?.object_id) ?? undefined;
+  const detail = describeMessages(transaction?.messages);
+
+  if (transaction?.status === "ERROR") {
+    return {
+      ok: false,
+      kind: "purchase_failed",
+      message: "Shippo could not buy this label.",
+      detail,
+      transactionId,
+      // Shippo states outright that no postage was bought, so a retry is safe.
+      safeToRetry: true,
+    };
+  }
+
+  if (transaction?.status === "QUEUED" || transaction?.status === "WAITING") {
+    return {
+      ok: false,
+      kind: "purchase_pending",
+      message: "Shippo is still processing this label. Check again in a moment before trying anything else.",
+      detail,
+      transactionId,
+      // A label may still print for this transaction — buying again would pay twice.
+      safeToRetry: false,
+    };
+  }
+
+  if (transaction?.status !== "SUCCESS") {
+    return {
+      ok: false,
+      kind: "invalid_response",
+      message: "Shippo returned an unexpected status for this label purchase.",
+      detail: detail ?? `status=${String(transaction?.status ?? "")}`,
+      transactionId,
+      safeToRetry: false,
+    };
+  }
+
+  const trackingNumber = asNonEmptyString(transaction.tracking_number);
+  const labelUrl = asNonEmptyString(transaction.label_url);
+  if (!transactionId || !trackingNumber || !labelUrl) {
+    return {
+      ok: false,
+      kind: "invalid_response",
+      message: "Shippo reported the label as purchased but did not return a label and tracking number.",
+      detail,
+      transactionId,
+      // The postage was almost certainly charged: void it rather than re-buying.
+      safeToRetry: false,
+    };
+  }
+
+  return {
+    ok: true,
+    data: {
+      transactionId,
+      rateId,
+      trackingNumber,
+      labelUrl,
+      trackingUrlProvider: asNonEmptyString(transaction.tracking_url_provider),
+      carrier: asNonEmptyString(input.rate.provider),
+      service: asNonEmptyString(input.rate.servicelevel?.name),
+      serviceToken: asNonEmptyString(input.rate.servicelevel?.token),
+      // Prefer what Shippo says it charged; fall back to the quote we validated
+      // before buying. Both are the same rate, so they only differ if Shippo
+      // repriced — in which case its own number is the one that hits the bill.
+      postageCostCents: settledCentsFromTransaction(transaction.rate) ?? quotedCents,
+      raw: transaction,
+    },
+  };
+}
+
 export async function createShippoOrder(input: ShippoOrderInput): Promise<ShippoResult<ShippoOrder>> {
   const result = await shippoRequest<ShippoOrder>({
     method: "POST",
