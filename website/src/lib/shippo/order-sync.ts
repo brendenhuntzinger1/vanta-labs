@@ -535,6 +535,38 @@ export async function backfillOrderShipment(orderId: string): Promise<SyncOutcom
   });
 
   if (!shipment.ok) {
+    // 404 means the stored Shippo order does not exist ON THIS ACCOUNT. The
+    // usual cause is a credential change: Shippo's test and live environments
+    // hold entirely separate objects, so swapping a test token for a live one
+    // orphans every id written before the swap. The order is real, it is simply
+    // in an environment these credentials cannot see -- and it will never
+    // appear in the live dashboard.
+    //
+    // Forgetting the id is what lets the ordinary push run again and put the
+    // order into the account that is actually connected now. Safe from
+    // duplicates precisely BECAUSE Shippo answered 404: there is nothing here
+    // to duplicate. Any other error leaves the id alone, since an order that
+    // might exist must never be pushed twice.
+    if (shipment.status === 404) {
+      await supabaseAdmin
+        .from("orders")
+        .update({
+          shippo_order_id: null,
+          shippo_shipment_id: null,
+          shippo_sync_claimed_at: null,
+          shippo_sync_status: "error",
+          shippo_sync_error:
+            "The stored Shippo order does not exist on the connected account (usually a test/live credential change). It has been queued to be pushed again.",
+        })
+        .eq("order_id", orderId)
+        .eq("shippo_order_id", order.shippo_order_id);
+      return {
+        ok: false,
+        reason: "Stored Shippo order not found on this account; queued for a fresh push.",
+        retryable: true,
+      };
+    }
+
     await supabaseAdmin
       .from("orders")
       .update({
