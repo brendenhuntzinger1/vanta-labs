@@ -17,6 +17,7 @@ import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRes
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
 import { after } from "next/server";
 import { syncOrderToShippo } from "@/lib/shippo/order-sync";
+import { resolveAmbassadorCustomerDiscount } from "@/lib/quote-order";
 import { activatePaidMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 import {
   isMembershipEvent,
@@ -604,7 +605,7 @@ async function ensureCommissionRecord(input: {
       city: input.city,
       postalCode: input.postalCode,
     }),
-    supabaseAdmin.from("ambassadors").select("status").eq("id", input.ambassadorId).maybeSingle(),
+    supabaseAdmin.from("ambassadors").select("status, customer_discount_percent").eq("id", input.ambassadorId).maybeSingle(),
   ]);
 
   // Fall back to the admin's default commission rate (Control Center) when the
@@ -621,6 +622,20 @@ async function ensureCommissionRecord(input: {
   // uses the pre-discount subtotal (what checkout gated on) so a qualifying cart
   // is never silently zeroed by its own referral discount.
   const ambassadorApproved = String(ambassadorRow.data?.status ?? "") === "approved";
+
+  // Snapshot the discount rate this code was giving customers WHEN THE ORDER WAS
+  // PLACED. commission_percent is already frozen per row for the same reason:
+  // raise an ambassador's rate next month and every historical commission would
+  // otherwise appear to have been earned at the new number, and the recorded
+  // discount would stop explaining the recorded total.
+  //
+  // Resolved with the same rule checkout uses -- override first, program default
+  // when unset -- so the stored figure matches what the shopper actually got
+  // rather than what the ambassador happens to be set to now.
+  const customerDiscountPercent = resolveAmbassadorCustomerDiscount(
+    ambassadorRow.data?.customer_discount_percent,
+    referralProgram.discountPercent,
+  );
   let ineligibleReason: string | null = null;
   if (!referralProgram.enabled) {
     ineligibleReason = "Referral program is disabled.";
@@ -651,6 +666,7 @@ async function ensureCommissionRecord(input: {
     ambassador_id: input.ambassadorId,
     referral_code: input.referralCode,
     commission_percent: commissionPercent,
+    customer_discount_percent: customerDiscountPercent,
     commission_amount: commissionAmount,
     amount_paid: commissionableSubtotal,
     payment_id: null,
@@ -688,6 +704,7 @@ async function ensureCommissionRecord(input: {
         partner_id: input.ambassadorId,
         referral_code: input.referralCode,
         commission_percent: commissionPercent,
+        customer_discount_percent: customerDiscountPercent,
         commission_amount: commissionAmount,
         status: "pending",
         tier_name: effectiveCommission.tierName,
@@ -720,6 +737,7 @@ async function ensureCommissionRecord(input: {
       partner_id: input.ambassadorId,
       referral_code: input.referralCode,
       commission_percent: commissionPercent,
+      customer_discount_percent: customerDiscountPercent,
       commission_amount: commissionAmount,
       status: "pending",
       tier_name: effectiveCommission.tierName,
