@@ -316,6 +316,52 @@ export function ProductDetailClient({
               </div>
             </div>
 
+            {/* BATCH + COA, IN THE OPEN.
+                This lived behind a "COA & Quality" tab, which is the one thing
+                a research buyer scans for before anything else. It only renders
+                where there is real data -- no strip at all beats a strip that
+                says "Pending" three times. */}
+            {(selectedCoaUrl || selectedBatchNumber || (selectedPurity && selectedPurity !== "Pending")) ? (
+              <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-3 rounded-[14px] border border-white/[0.06] bg-white/[0.02] px-5 py-4">
+                {selectedPurity && selectedPurity !== "Pending" ? (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-white/35">Purity</p>
+                    <p className="mt-1 text-[0.9375rem] font-semibold text-white">{selectedPurity}</p>
+                  </div>
+                ) : null}
+                {selectedBatchNumber ? (
+                  <div>
+                    <p className="text-[10px] uppercase tracking-[0.2em] text-white/35">Batch</p>
+                    <p className="mt-1 font-mono text-[0.8125rem] text-white/85">{selectedBatchNumber}</p>
+                  </div>
+                ) : null}
+                {selectedCoaUrl ? (
+                  <a
+                    href={selectedCoaUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="vl-article-link vl-focus-ring ml-auto rounded-[8px]"
+                  >
+                    View COA
+                    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                      <path d="M14 4h6v6M20 4l-8.5 8.5M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+                    </svg>
+                  </a>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setActiveTab("coa")}
+                    className="vl-article-link vl-focus-ring ml-auto rounded-[8px]"
+                  >
+                    Batch results
+                    <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                      <path d="M5 12h14M13 6l6 6-6 6" />
+                    </svg>
+                  </button>
+                )}
+              </div>
+            ) : null}
+
             {galleryItems.length > 1 && (
               <div className="mt-4 grid grid-cols-5 gap-2 sm:grid-cols-7">
                 {galleryItems.map((item) => (

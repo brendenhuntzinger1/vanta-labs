@@ -9,12 +9,14 @@ import type { Product } from "@/lib/catalog-types";
 
 type SortKey = "default" | "price-asc" | "price-desc" | "name-asc" | "purity";
 
-const SORT_OPTIONS: Array<{ value: SortKey; label: string }> = [
-  { value: "default", label: "Best Sellers First" },
-  { value: "price-asc", label: "Price: Low to High" },
-  { value: "price-desc", label: "Price: High to Low" },
-  { value: "name-asc", label: "Name: A to Z" },
-  { value: "purity", label: "Purity: Highest" },
+// shortLabel is for the phone, where the select shares a row with the Filters
+// button -- "Best Sellers First" truncated to "Best Sellers Firs" there.
+const SORT_OPTIONS: Array<{ value: SortKey; label: string; shortLabel: string }> = [
+  { value: "default", label: "Best Sellers First", shortLabel: "Best Sellers" },
+  { value: "price-asc", label: "Price: Low to High", shortLabel: "Price ↑" },
+  { value: "price-desc", label: "Price: High to Low", shortLabel: "Price ↓" },
+  { value: "name-asc", label: "Name: A to Z", shortLabel: "Name A–Z" },
+  { value: "purity", label: "Purity: Highest", shortLabel: "Purity" },
 ];
 
 function parsePrice(price: string) {
@@ -27,6 +29,7 @@ function parsePurity(purity?: string) {
 
 function ProductsPageContent() {
   const searchParams = useSearchParams();
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
   const [sort, setSort] = useState<SortKey>("default");
   const [searchQuery, setSearchQuery] = useState(() => searchParams.get("search") ?? "");
@@ -159,6 +162,21 @@ function ProductsPageContent() {
     return result;
   }, [products, searchQuery, selectedCategory, stockFilter, bestSellersOnly, sort]);
 
+  // One number drives the mobile Filters badge and whether the desktop chip
+  // rail renders at all, so the two can never disagree about "is anything on".
+  const activeFilterCount =
+    (selectedCategory !== "All" ? 1 : 0) +
+    (searchQuery.trim() ? 1 : 0) +
+    (stockFilter ? 1 : 0) +
+    (bestSellersOnly ? 1 : 0);
+
+  const clearAllFilters = () => {
+    setSelectedCategory("All");
+    setSearchQuery("");
+    setStockFilter(false);
+    setBestSellersOnly(false);
+  };
+
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
@@ -174,140 +192,187 @@ function ProductsPageContent() {
 
         <CouponPromoBanner />
 
-        <section className="mt-10 rounded-2xl border border-white/12 bg-[#0b0b0b]/95 p-3 backdrop-blur-xl sm:p-4">
-          <div className="grid grid-cols-2 gap-2 sm:gap-3 lg:grid-cols-[1fr_auto_auto]">
-            <input
-              type="search"
-              aria-label="Search products"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Search compounds, categories, or notes"
-              className="col-span-2 rounded-xl border border-white/15 bg-black/40 px-4 py-2.5 text-sm text-white placeholder:text-white/35 outline-none transition focus:border-white/50 focus:bg-black/60 sm:py-3 lg:col-span-1"
-            />
+        {/* ONE BAR.
+            This was a search field, a category dropdown, a duplicate row of
+            category chips, a Best Sellers toggle, an In Stock toggle and a
+            chip rail -- six controls competing before a single product was
+            visible. Desktop now gets a single horizontal row; the phone gets a
+            search field and one Filters button that carries a count. */}
+        <section className="mt-10">
+          <div className="flex flex-col gap-2.5 rounded-2xl border border-white/[0.07] bg-white/[0.02] p-2.5 backdrop-blur-xl sm:flex-row sm:items-center sm:gap-2 sm:p-2">
+            <label className="relative flex-1">
+              <span className="sr-only">Search products</span>
+              <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" className="pointer-events-none absolute left-3.5 top-1/2 h-[17px] w-[17px] -translate-y-1/2 text-white/30">
+                <circle cx="11" cy="11" r="7" /><path d="m20 20-3.6-3.6" />
+              </svg>
+              <input
+                type="search"
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Search compounds"
+                className="h-11 w-full rounded-xl border border-white/[0.07] bg-black/25 pl-10 pr-3 text-[16px] text-white placeholder:text-white/30 outline-none transition-colors duration-200 focus:border-[color:var(--accent-gold)]/45 focus:bg-black/40 sm:text-sm"
+              />
+            </label>
 
-            <select
-              value={selectedCategory}
-              aria-label="Filter by category"
-              onChange={(event) => setSelectedCategory(event.target.value)}
-              className="rounded-xl border border-white/15 bg-black/40 px-3 py-2.5 text-sm text-white outline-none transition focus:border-white/50 sm:py-3 lg:w-56"
-            >
-              {categories.map((category) => (
-                <option key={category} value={category}>
-                  {category}
-                </option>
-              ))}
-            </select>
-
-            <select value={sort} aria-label="Sort products" onChange={(event) => setSort(event.target.value as SortKey)} className="rounded-xl border border-white/15 bg-black/40 px-3 py-2.5 text-sm text-white outline-none transition focus:border-white/50 sm:py-3 lg:w-52">
-              {SORT_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Category quick-chips duplicate the dropdown above, so they're
-              hidden on phones to keep the filter bar short and let products
-              show sooner; they return at sm+ where there's room. */}
-          <div className="mt-2 flex flex-wrap items-center gap-2 sm:mt-3">
-            {categories.slice(0, 6).map((category) => (
-              <button
-                key={category}
-                onClick={() => setSelectedCategory(category)}
-                type="button"
-                className={`hidden items-center rounded-full border px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] transition-all duration-200 sm:inline-flex ${
-                  selectedCategory === category
-                    ? "border-[color:var(--accent-gold)]/40 bg-gradient-to-b from-[color:var(--accent-gold)]/20 to-[color:var(--accent-gold)]/[0.04] text-white shadow-[0_0_0_1px_rgba(212,175,55,0.25),0_8px_22px_-10px_rgba(212,175,55,0.5)]"
-                    : "border-white/10 bg-white/[0.03] text-white/60 hover:-translate-y-px hover:border-white/25 hover:bg-white/[0.07] hover:text-white"
-                }`}
+            {/* Desktop controls */}
+            <div className="hidden items-center gap-2 sm:flex">
+              <select
+                value={selectedCategory}
+                aria-label="Filter by category"
+                onChange={(event) => setSelectedCategory(event.target.value)}
+                className="vl-filter-select h-11 rounded-xl border border-white/[0.07] bg-black/25 pl-3.5 pr-9 text-sm text-white outline-none transition-colors duration-200 focus:border-[color:var(--accent-gold)]/45"
               >
-                {category}
-              </button>
-            ))}
-            {hasBestSellers ? (
-              <button
-                type="button"
-                onClick={() => setBestSellersOnly((prev) => !prev)}
-                className={`w-full rounded-full border px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] transition-all duration-200 sm:w-auto ${
-                  bestSellersOnly
-                    ? "border-[color:var(--accent-gold)]/50 bg-gradient-to-b from-[color:var(--accent-gold)]/20 to-[color:var(--accent-gold)]/[0.04] text-[color:var(--accent-gold)] shadow-[0_0_0_1px_rgba(212,175,55,0.25),0_8px_22px_-10px_rgba(212,175,55,0.5)]"
-                    : "border-white/10 bg-white/[0.03] text-white/50 hover:-translate-y-px hover:border-[color:var(--accent-gold)]/30 hover:text-[color:var(--accent-gold)]"
-                }`}
-              >
-                {bestSellersOnly ? "★ Best Sellers" : "☆ Best Sellers"}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => setStockFilter((prev) => !prev)}
-              className={`w-full rounded-full border px-4 py-2 text-xs font-medium uppercase tracking-[0.14em] transition-all duration-200 sm:ml-auto sm:w-auto ${
-                stockFilter
-                  ? "border-[color:var(--accent-gold)]/50 bg-gradient-to-b from-[color:var(--accent-gold)]/20 to-[color:var(--accent-gold)]/[0.04] text-white shadow-[0_0_0_1px_rgba(212,175,55,0.25),0_8px_22px_-10px_rgba(212,175,55,0.5)]"
-                  : "border-white/10 bg-white/[0.03] text-white/50 hover:-translate-y-px hover:border-[color:var(--accent-gold)]/30 hover:text-white"
-              }`}
-            >
-              {stockFilter ? "✓ In Stock Only" : "In Stock Only"}
-            </button>
-          </div>
+                {categories.map((category) => (
+                  <option key={category} value={category}>{category}</option>
+                ))}
+              </select>
 
-          {(selectedCategory !== "All" || searchQuery.trim() || stockFilter || bestSellersOnly) && (
-            <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-white/10 pt-3">
-              <span className="text-[10px] uppercase tracking-[0.18em] text-white/35">Active:</span>
-              {bestSellersOnly && (
-                <span className="flex items-center gap-1.5 border border-[color:var(--accent-gold)]/30 px-2.5 py-1 text-xs text-[color:var(--accent-gold)]">
+              <select
+                value={sort}
+                aria-label="Sort products"
+                onChange={(event) => setSort(event.target.value as SortKey)}
+                className="vl-filter-select h-11 rounded-xl border border-white/[0.07] bg-black/25 pl-3.5 pr-9 text-sm text-white outline-none transition-colors duration-200 focus:border-[color:var(--accent-gold)]/45"
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+
+              {hasBestSellers ? (
+                <button
+                  type="button"
+                  aria-pressed={bestSellersOnly}
+                  onClick={() => setBestSellersOnly((prev) => !prev)}
+                  className={`vl-filter-toggle h-11 ${bestSellersOnly ? "is-on" : ""}`}
+                >
                   Best Sellers
-                  <button type="button" aria-label="Clear best sellers filter" onClick={() => setBestSellersOnly(false)} className="-mr-1 inline-flex h-6 w-6 items-center justify-center text-[color:var(--accent-gold)]/70 hover:text-[color:var(--accent-gold)]">×</button>
-                </span>
-              )}
-              {selectedCategory !== "All" && (
-                <span className="flex items-center gap-1.5 border border-white/15 px-2.5 py-1 text-xs text-white/75">
-                  {selectedCategory}
-                  <button type="button" aria-label="Clear category filter" onClick={() => setSelectedCategory("All")} className="-mr-1 inline-flex h-6 w-6 items-center justify-center text-white/45 hover:text-white">×</button>
-                </span>
-              )}
-              {searchQuery.trim() && (
-                <span className="flex items-center gap-1.5 border border-white/15 px-2.5 py-1 text-xs text-white/75">
-                  &ldquo;{searchQuery}&rdquo;
-                  <button type="button" aria-label="Clear search" onClick={() => setSearchQuery("")} className="-mr-1 inline-flex h-6 w-6 items-center justify-center text-white/45 hover:text-white">×</button>
-                </span>
-              )}
-              {stockFilter && (
-                <span className="flex items-center gap-1.5 border border-[color:var(--accent-gold)]/25 px-2.5 py-1 text-xs text-[color:var(--accent-gold)]">
-                  In Stock
-                  <button type="button" aria-label="Clear in-stock filter" onClick={() => setStockFilter(false)} className="-mr-1 inline-flex h-6 w-6 items-center justify-center text-[color:var(--accent-gold)]/70 hover:text-[color:var(--accent-gold)]">×</button>
-                </span>
-              )}
+                </button>
+              ) : null}
+
               <button
                 type="button"
-                onClick={() => { setSelectedCategory("All"); setSearchQuery(""); setStockFilter(false); setBestSellersOnly(false); }}
-                className="text-[10px] uppercase tracking-[0.18em] text-white/70 transition hover:text-white"
+                aria-pressed={stockFilter}
+                onClick={() => setStockFilter((prev) => !prev)}
+                className={`vl-filter-toggle h-11 ${stockFilter ? "is-on" : ""}`}
               >
+                In Stock
+              </button>
+            </div>
+
+            {/* Mobile controls — sort stays inline because it is the one
+                control people reach for constantly; everything else collapses. */}
+            <div className="grid grid-cols-2 gap-2 sm:hidden">
+              <button
+                type="button"
+                onClick={() => setFiltersOpen(true)}
+                aria-expanded={filtersOpen}
+                className="vl-filter-toggle h-11 justify-center gap-2"
+              >
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" className="h-4 w-4">
+                  <path d="M3 6h18M6 12h12M10 18h4" />
+                </svg>
+                Filters
+                {activeFilterCount > 0 ? (
+                  <span className="ml-0.5 inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-[color:var(--accent-gold)]/20 px-1.5 text-[11px] font-semibold text-[color:var(--accent-gold)]">
+                    {activeFilterCount}
+                  </span>
+                ) : null}
+              </button>
+              <select
+                value={sort}
+                aria-label="Sort products"
+                onChange={(event) => setSort(event.target.value as SortKey)}
+                className="vl-filter-select h-11 w-full rounded-xl border border-white/[0.07] bg-black/25 pl-3.5 pr-9 text-[16px] text-white outline-none"
+              >
+                {SORT_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.shortLabel}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Active filters, desktop only. On a phone the count on the Filters
+              button already says this, and a chip rail would push the products
+              below the fold again. */}
+          {activeFilterCount > 0 ? (
+            <div className="mt-3 hidden flex-wrap items-center gap-2 sm:flex">
+              {bestSellersOnly ? (
+                <button type="button" onClick={() => setBestSellersOnly(false)} className="vl-filter-chip">Best Sellers<span aria-hidden="true">×</span></button>
+              ) : null}
+              {selectedCategory !== "All" ? (
+                <button type="button" onClick={() => setSelectedCategory("All")} className="vl-filter-chip">{selectedCategory}<span aria-hidden="true">×</span></button>
+              ) : null}
+              {searchQuery.trim() ? (
+                <button type="button" onClick={() => setSearchQuery("")} className="vl-filter-chip">&ldquo;{searchQuery}&rdquo;<span aria-hidden="true">×</span></button>
+              ) : null}
+              {stockFilter ? (
+                <button type="button" onClick={() => setStockFilter(false)} className="vl-filter-chip">In Stock<span aria-hidden="true">×</span></button>
+              ) : null}
+              <button type="button" onClick={clearAllFilters} className="ml-1 text-[11px] uppercase tracking-[0.16em] text-white/40 transition-colors hover:text-white">
                 Clear all
               </button>
             </div>
-          )}
+          ) : null}
         </section>
+
+        {/* Mobile filter drawer */}
+        {filtersOpen ? (
+          <div className="fixed inset-0 z-[70] sm:hidden">
+            <button
+              type="button"
+              aria-label="Close filters"
+              onClick={() => setFiltersOpen(false)}
+              className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+            />
+            <div className="vl-filter-sheet absolute inset-x-0 bottom-0 rounded-t-[22px] p-5 pb-[calc(1.5rem+env(safe-area-inset-bottom))]">
+              <div className="mx-auto mb-5 h-1 w-10 rounded-full bg-white/15" />
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-semibold text-white">Filters</h2>
+                <button type="button" onClick={clearAllFilters} className="text-[11px] uppercase tracking-[0.16em] text-white/40 transition-colors hover:text-white">
+                  Clear all
+                </button>
+              </div>
+
+              <p className="mt-5 text-[11px] uppercase tracking-[0.18em] text-white/35">Category</p>
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                {categories.map((category) => (
+                  <button
+                    key={category}
+                    type="button"
+                    onClick={() => setSelectedCategory(category)}
+                    className={`vl-filter-toggle h-10 ${selectedCategory === category ? "is-on" : ""}`}
+                  >
+                    {category}
+                  </button>
+                ))}
+              </div>
+
+              <p className="mt-6 text-[11px] uppercase tracking-[0.18em] text-white/35">Show</p>
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                {hasBestSellers ? (
+                  <button type="button" aria-pressed={bestSellersOnly} onClick={() => setBestSellersOnly((prev) => !prev)} className={`vl-filter-toggle h-10 ${bestSellersOnly ? "is-on" : ""}`}>
+                    Best Sellers
+                  </button>
+                ) : null}
+                <button type="button" aria-pressed={stockFilter} onClick={() => setStockFilter((prev) => !prev)} className={`vl-filter-toggle h-10 ${stockFilter ? "is-on" : ""}`}>
+                  In Stock
+                </button>
+              </div>
+
+              <button type="button" onClick={() => setFiltersOpen(false)} className="vl2-btn-primary vl-focus-ring mt-7 w-full px-6 py-3.5 text-sm">
+                Show {visibleProducts.length} product{visibleProducts.length === 1 ? "" : "s"}
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         <section className="mt-8">
           <div className="mb-5 flex items-center justify-between">
             <p className="text-sm text-white/45">
               {isLoading ? "Loading catalog…" : `${visibleProducts.length} product${visibleProducts.length === 1 ? "" : "s"}`}
             </p>
-            {(selectedCategory !== "All" || searchQuery || stockFilter || bestSellersOnly) && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedCategory("All");
-                  setSearchQuery("");
-                  setStockFilter(false);
-                  setBestSellersOnly(false);
-                }}
-                className="text-xs uppercase tracking-[0.18em] text-white/55 transition hover:text-white"
-              >
-                Clear Filters
-              </button>
-            )}
+            {/* Clearing lives with the active-filter chips above and, on a
+                phone, inside the drawer. A third copy here was noise. */}
           </div>
 
           {isLoading ? (
@@ -346,12 +411,7 @@ function ProductsPageContent() {
               </p>
               <button
                 type="button"
-                onClick={() => {
-                  setSelectedCategory("All");
-                  setSearchQuery("");
-                  setStockFilter(false);
-                  setBestSellersOnly(false);
-                }}
+                onClick={clearAllFilters}
                 className="vl2-btn-secondary vl-focus-ring mt-6 px-5 py-2.5 text-sm"
               >
                 Reset Filters

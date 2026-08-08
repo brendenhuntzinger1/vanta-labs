@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
-import { SiteHeader } from "@/components/site-header";
+import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { AccountAuthForm } from "@/components/account-auth-form";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
@@ -32,7 +32,7 @@ export default async function AccountLoginPage({
 
   return (
     <div className="vl-auth-shell relative min-h-screen overflow-hidden text-white">
-      <SiteHeader />
+      <SiteHeaderV2 />
 
       <main className="relative mx-auto grid w-full max-w-6xl grid-cols-1 items-stretch lg:grid-cols-[1.05fr_1fr]">
         {/* Brand panel — desktop only. Gives the page somewhere to breathe so
