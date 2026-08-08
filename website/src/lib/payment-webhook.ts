@@ -17,7 +17,7 @@ import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRes
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
 import { after } from "next/server";
 import { syncOrderToShippo } from "@/lib/shippo/order-sync";
-import { resolveAmbassadorCustomerDiscount } from "@/lib/quote-order";
+import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { activatePaidMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 import {
   isMembershipEvent,

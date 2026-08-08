@@ -54,10 +54,21 @@ describe("every section belongs to exactly one tab", () => {
 });
 
 describe("each tab shows what its name promises", () => {
+  // The six headline figures, named as the owner asked for them. Labels are
+  // part of the contract here -- "Commission Owed" answers a question that
+  // "Balance Owed" only hinted at.
   it("puts the program-wide numbers on Overview", () => {
     const overview = groupFor("overview");
-    expect(overview).toContain("Lifetime Sales");
-    expect(overview).toContain("Balance Owed");
+    for (const kpi of [
+      "Active Ambassadors",
+      "Pending Applications",
+      "Ambassador Sales",
+      "Ambassador Orders",
+      "Commission Owed",
+      "Commission Paid",
+    ]) {
+      expect(overview).toContain(kpi);
+    }
     // ...and none of the editors, which is the whole point of the split.
     expect(overview).not.toContain("Commission Tiers");
   });

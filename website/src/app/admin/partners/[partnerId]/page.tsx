@@ -6,7 +6,7 @@ import { getAdminPartnerRows, getPartnerSummary } from "@/lib/partner-portal";
 import { getAmbassadorRefundedOrderCount, getPayoutHistory } from "@/lib/admin-ambassadors";
 import { getSiteUrl } from "@/lib/env";
 import { getReferralProgramConfig } from "@/lib/admin-control";
-import { resolveAmbassadorCustomerDiscount } from "@/lib/quote-order";
+import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import AdminAmbassadorRatesCard from "@/components/admin-ambassador-rates-card";
 
 function currency(value: number) {

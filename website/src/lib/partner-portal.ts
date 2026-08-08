@@ -14,7 +14,7 @@ import {
 } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
 import { DEFAULT_REFERRAL_DISCOUNT_PERCENT, getBusinessSettings, getReferralProgramConfig } from "@/lib/admin-control";
-import { resolveAmbassadorCustomerDiscount } from "@/lib/quote-order";
+import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { getAmbassadorProgramSettings, getAmbassadorMarketingResources, type AmbassadorMarketingResource } from "@/lib/ambassador-settings";
 
 function formatSupabaseError(error: unknown) {

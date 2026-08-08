@@ -478,60 +478,59 @@ export function AdminPartnersClient({
       </nav>
 
       {tab === "overview" ? (<>
+      {/* The six numbers an owner actually opens this page for. Everything
+          secondary moved to the row beneath, so the headline stays readable. */}
       <section>
-        <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Ambassadors</h2>
-        <div className="mt-3 grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
+        <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Ambassador Program</h2>
+        <div className="mt-3 grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
           <div className="vl-panel rounded-2xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Total</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{totalAmbassadors}</p>
-          </div>
-          <div className="vl-panel rounded-2xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Approved</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{approvedCount}</p>
-          </div>
-          <div className="vl-panel rounded-2xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Active (selling)</p>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Active Ambassadors</p>
             <p className="mt-2 text-2xl font-semibold text-emerald-300">{activeCount}</p>
+            <p className="mt-1 text-[11px] text-zinc-500">{approvedCount} approved</p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Pending</p>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Pending Applications</p>
             <p className="mt-2 text-2xl font-semibold text-amber-300">{pendingCount}</p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Disabled</p>
-            <p className="mt-2 text-2xl font-semibold text-zinc-400">{disabledCount}</p>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Ambassador Sales</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{currency(liveSales)}</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Ambassador Orders</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{totalOrders}</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Commission Owed</p>
+            <p className="mt-2 text-2xl font-semibold text-cyan-300">{currency(balanceOwed)}</p>
+            <p className="mt-1 text-[11px] text-zinc-500">{currency(approvedForPayoutCommissions)} ready · {currency(pendingCommissions)} holding</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Commission Paid</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{currency(paidCommissions)}</p>
           </div>
         </div>
       </section>
 
       <section>
-        <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Sales &amp; Commissions</h2>
-        <div className="mt-3 grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
-          <div className="vl-panel rounded-2xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Lifetime Sales</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{currency(liveSales)}</p>
-          </div>
+        <div className="grid gap-3 grid-cols-2 sm:grid-cols-4">
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Avg Order Value</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{currency(programAov)}</p>
+            <p className="mt-2 text-xl font-semibold text-white">{currency(programAov)}</p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Conversion Rate</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{programConversionRate.toFixed(1)}%</p>
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Conversion</p>
+            <p className="mt-2 text-xl font-semibold text-white">{programConversionRate.toFixed(1)}%</p>
             <p className="mt-1 text-[11px] text-zinc-500">{totalOrders} orders / {totalClicks} clicks</p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Balance Owed</p>
-            <p className="mt-2 text-2xl font-semibold text-cyan-300">{currency(balanceOwed)}</p>
-            <p className="mt-1 text-[11px] text-zinc-500">{currency(approvedForPayoutCommissions)} ready · {currency(pendingCommissions)} holding</p>
-          </div>
-          <div className="vl-panel rounded-2xl p-4">
-            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Paid Commissions</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{currency(paidCommissions)}</p>
-          </div>
-          <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Reversed</p>
-            <p className="mt-2 text-2xl font-semibold text-zinc-400">{currency(reversedCommissions)}</p>
+            <p className="mt-2 text-xl font-semibold text-zinc-400">{currency(reversedCommissions)}</p>
+          </div>
+          <div className="vl-panel rounded-2xl p-4">
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Disabled</p>
+            <p className="mt-2 text-xl font-semibold text-zinc-400">{disabledCount}</p>
+            <p className="mt-1 text-[11px] text-zinc-500">{totalAmbassadors} total</p>
           </div>
         </div>
       </section>

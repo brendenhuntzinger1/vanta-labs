@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveAmbassadorCustomerDiscount } from "@/lib/quote-order";
+import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 
 // ---------------------------------------------------------------------------
 // TWO NUMBERS, TWO OWNERS.

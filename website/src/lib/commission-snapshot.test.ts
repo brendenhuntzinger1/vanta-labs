@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { resolveAmbassadorCustomerDiscount } from "@/lib/quote-order";
+import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 
 // ---------------------------------------------------------------------------
 // THE RATE THAT APPLIED, NOT THE RATE THAT APPLIES.

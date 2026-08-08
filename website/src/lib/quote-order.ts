@@ -4,6 +4,7 @@
 // build error.
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { calculateDiscountAmount } from "@/lib/referral-service";
+import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { validateCoupon } from "@/lib/coupons";
 import { getMembershipPerks, getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/lib/membership";
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
@@ -224,45 +225,6 @@ function calculateBuy3Get1Discount(lineItems: Array<{ product: ServerProduct; qu
 
   expandedPrices.sort((a, b) => a - b);
   return roundMoney(expandedPrices.slice(0, freeItemCount).reduce((sum, price) => sum + price, 0));
-}
-
-/**
- * Resolve a referral code to its ambassador, their customer discount and their
- * commission rate.
- *
- * The two rates are INDEPENDENT and always have been in intent -- but the
- * customer discount did not exist per ambassador, so one global number served
- * every code. It does now: `programDefaultDiscountPercent` is the fallback, not
- * the rule.
- *
- * NULL inherits rather than meaning zero. An owner who clears the field means
- * "use the program default"; reading it as 0% would silently strip the discount
- * from that ambassador's customers, and the code would keep working, so nobody
- * would notice until the ambassador asked why their audience stopped converting.
- */
-/**
- * The discount an ambassador's code gives the customer.
- *
- * Per-ambassador override first, program default when unset. Pure and exported
- * so the rule can be tested without a database -- it decides real money on
- * every referred order.
- *
- * NULL inherits, it does not mean zero. An owner clearing the field means "use
- * the program default"; reading it as 0% would silently strip the discount from
- * that ambassador's customers while the code kept working, so nobody would
- * notice until the ambassador asked why their audience stopped converting.
- *
- * Out-of-range values fall back rather than clamp. A stored 150 is corrupt, not
- * a request for 99% off, and inheriting is the answer that cannot zero an order.
- */
-export function resolveAmbassadorCustomerDiscount(
-  override: unknown,
-  programDefaultPercent: number,
-): number {
-  if (override == null) return programDefaultPercent;
-  const value = Number(override);
-  if (!Number.isFinite(value) || value < 0 || value >= 100) return programDefaultPercent;
-  return value;
 }
 
 async function validateReferralCode(
