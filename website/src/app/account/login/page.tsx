@@ -31,55 +31,69 @@ export default async function AccountLoginPage({
   }
 
   return (
-    <div className="min-h-screen bg-[#08090c] text-white">
+    <div className="vl-auth-shell relative min-h-screen overflow-hidden text-white">
       <SiteHeader />
-      <div className="mx-auto grid min-h-[calc(100vh-72px)] w-full max-w-6xl grid-cols-1 items-stretch gap-0 lg:grid-cols-2">
-        {/* Brand / story panel — gives the page depth and context. */}
-        <div className="relative hidden overflow-hidden border-r border-white/5 lg:flex lg:flex-col lg:justify-between lg:p-12">
+
+      <main className="relative mx-auto grid w-full max-w-6xl grid-cols-1 items-stretch lg:grid-cols-[1.05fr_1fr]">
+        {/* Brand panel — desktop only. Gives the page somewhere to breathe so
+            the card is a considered composition rather than a stretched form. */}
+        <section className="relative hidden overflow-hidden border-r border-white/[0.05] lg:flex lg:flex-col lg:justify-between lg:px-12 lg:py-16">
           <div
             aria-hidden="true"
-            className="pointer-events-none absolute inset-0 bg-[radial-gradient(900px_600px_at_15%_0%,rgba(16,185,129,0.16),transparent_60%),radial-gradient(700px_500px_at_100%_100%,rgba(56,189,248,0.10),transparent_55%)]"
-          />
-          <div
-            aria-hidden="true"
-            className="pointer-events-none absolute inset-0 opacity-[0.04] [background-image:linear-gradient(rgba(255,255,255,0.6)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.6)_1px,transparent_1px)] [background-size:44px_44px]"
+            className="pointer-events-none absolute inset-0 opacity-[0.025] [background-image:linear-gradient(rgba(255,255,255,0.6)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.6)_1px,transparent_1px)] [background-size:52px_52px]"
           />
           <div className="relative">
-            <p className="text-sm font-semibold uppercase tracking-[0.32em] text-white">Vanta Labs</p>
-            <p className="mt-1 text-[11px] uppercase tracking-[0.28em] text-[color:var(--accent-gold)]/80">Research Peptides</p>
+            <p className="text-[0.8125rem] font-semibold uppercase tracking-[0.34em] text-white">Vanta Labs</p>
+            <p className="mt-1.5 text-[10px] uppercase tracking-[0.3em] text-[color:var(--accent-gold)]/75">Research Peptides</p>
           </div>
+
           <div className="relative max-w-md">
-            <h2 className="vl2-serif text-4xl leading-[1.1] text-white">Research-grade purity, verified in every batch.</h2>
-            <p className="mt-4 text-sm leading-7 text-white/60">
+            <h2 className="vl2-serif text-[2.75rem] leading-[1.08] tracking-[-0.015em] text-white">
+              Research-grade purity, verified in every batch.
+            </h2>
+            <p className="mt-5 text-[0.9375rem] leading-7 text-white/50">
               Sign in to track orders, save addresses, and check out faster — with a Certificate of Analysis behind every vial.
             </p>
-            <ul className="mt-8 space-y-3">
+            <ul className="mt-9 space-y-3.5">
               {[
                 "Third-party tested — COA on every batch",
                 "≥99% purity, verified by HPLC",
                 "Discreet, tracked U.S. shipping",
                 "Damaged or incorrect orders made right",
-                "Sign in with email or a texted code",
               ].map((point) => (
-                <li key={point} className="flex items-center gap-3 text-sm text-white/75">
-                  <span className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[color:var(--accent-gold)]/30 bg-[var(--accent-gold-soft)] text-[color:var(--accent-gold)]">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5"><path d="m5 12 4 4 10-10" /></svg>
+                <li key={point} className="flex items-center gap-3 text-[0.875rem] text-white/65">
+                  <span className="inline-flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full border border-[color:var(--accent-gold)]/25 bg-[var(--accent-gold-soft)] text-[color:var(--accent-gold)]">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3"><path d="m5 12 4 4 10-10" /></svg>
                   </span>
                   {point}
                 </li>
               ))}
             </ul>
           </div>
-          <p className="relative text-[11px] uppercase tracking-[0.18em] text-white/60">For laboratory research use only</p>
-        </div>
 
-        {/* Form panel */}
-        <div className="flex items-center justify-center px-4 py-14 sm:px-6 lg:px-10">
-          <Suspense fallback={null}>
-            <AccountAuthForm />
-          </Suspense>
-        </div>
-      </div>
+          <p className="relative text-[10px] uppercase tracking-[0.2em] text-white/35">For laboratory research use only</p>
+        </section>
+
+        {/* Form panel. px-4 keeps a 16px gutter on the narrowest phone, and the
+            safe-area padding stops the links colliding with the home indicator.
+            The generous mobile bottom padding is deliberate: the global cookie
+            banner is fixed to the bottom of the viewport and, on a 375px
+            screen, sits directly over the Sign In button. Without room to
+            scroll, the primary action is unreachable until the banner is
+            dismissed. This gives the card somewhere to move. */}
+        <section className="flex items-center justify-center px-4 pb-[calc(15rem+env(safe-area-inset-bottom))] pt-10 sm:px-6 sm:pt-14 lg:px-12 lg:pb-[calc(4rem+env(safe-area-inset-bottom))]">
+          <div className="w-full max-w-[26rem]">
+            <Suspense fallback={null}>
+              <AccountAuthForm />
+            </Suspense>
+
+            {/* Mobile-only trust line. The desktop panel already says this. */}
+            <p className="mt-6 text-center text-[11px] uppercase tracking-[0.2em] text-white/25 lg:hidden">
+              For laboratory research use only
+            </p>
+          </div>
+        </section>
+      </main>
     </div>
   );
 }

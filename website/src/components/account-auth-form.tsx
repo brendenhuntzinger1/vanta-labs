@@ -69,6 +69,9 @@ export function AccountAuthForm() {
   const [ageConfirmed, setAgeConfirmed] = useState(false);
   const [researchUseAgreed, setResearchUseAgreed] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
+  // Purely presentational: toggles the password field between text and
+  // password. Never touches what is submitted.
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [completingVerification, setCompletingVerification] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -374,24 +377,33 @@ export function AccountAuthForm() {
       : "Sign In";
 
   return (
-    <form onSubmit={handleSubmit} className="vl-panel mx-auto w-full max-w-md rounded-[1.75rem] p-6 sm:p-8">
-      <p className="text-[11px] uppercase tracking-[0.35em] text-zinc-300">My Account</p>
-      <h1 className="mt-3 text-3xl font-semibold text-white">{mode === "signup" ? "Create your account" : "Sign In"}</h1>
-      <p className="mt-2 text-sm text-zinc-400">
-        {mode === "signup"
-          ? "Track orders, save addresses, and check out faster."
-          : "Access your order history, saved addresses, and wishlist."}
-      </p>
+    <form
+      onSubmit={handleSubmit}
+      className="vl-auth-card vl-fade-up mx-auto w-full max-w-[26rem] rounded-[22px] p-6 sm:p-8"
+    >
+      <header>
+        <p className="text-[11px] font-medium uppercase tracking-[0.28em] text-[color:var(--accent-gold)]">
+          {mode === "signup" ? "Join Vanta Labs" : "Welcome back"}
+        </p>
+        <h1 className="mt-3 text-[1.75rem] font-semibold leading-[1.15] tracking-[-0.01em] text-white sm:text-[2rem]">
+          {mode === "signup" ? "Create your account" : "Sign in to Vanta Labs"}
+        </h1>
+        <p className="mt-3 text-[0.9375rem] leading-6 text-white/55">
+          {mode === "signup"
+            ? "Track orders, save addresses, and check out faster."
+            : "Access your orders, membership, rewards, saved addresses, and account details."}
+        </p>
+      </header>
 
-      <div className="mt-5 space-y-4">
+      <div className="mt-7 space-y-4">
         {mode === "signup" ? (
-          <label className="block text-sm text-zinc-400">
-            <span className="mb-2 block">Full name</span>
+          <label className="block">
+            <span className="mb-2 block text-[0.8125rem] font-medium text-white/70">Full name</span>
             <input
               type="text"
               value={fullName}
               onChange={(event) => setFullName(event.target.value)}
-              className="vl-input w-full px-4 py-3"
+              className="vl-auth-field w-full px-4"
               autoComplete="name"
               required
             />
@@ -399,18 +411,18 @@ export function AccountAuthForm() {
         ) : null}
 
         {PHONE_LOGIN_ENABLED && mode === "login" ? (
-          <div className="grid grid-cols-2 gap-1 rounded-full border border-white/10 bg-black/40 p-1">
+          <div className="grid grid-cols-2 gap-1 rounded-[14px] border border-white/10 bg-black/40 p-1">
             <button
               type="button"
               onClick={() => { setLoginMethod("email"); setOtpSent(false); resetTransientState(); }}
-              className={`rounded-full px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.14em] transition ${loginMethod === "email" ? "bg-[var(--accent-gold-bright)] text-[#0a0a0a]" : "text-zinc-400 hover:text-zinc-200"}`}
+              className={`rounded-[11px] px-3 py-2.5 text-[0.8125rem] font-medium transition-colors duration-200 ${loginMethod === "email" ? "bg-white/[0.10] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.10)]" : "text-white/45 hover:text-white/75"}`}
             >
               Email
             </button>
             <button
               type="button"
               onClick={() => { setLoginMethod("phone"); resetTransientState(); }}
-              className={`rounded-full px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.14em] transition ${loginMethod === "phone" ? "bg-[var(--accent-gold-bright)] text-[#0a0a0a]" : "text-zinc-400 hover:text-zinc-200"}`}
+              className={`rounded-[11px] px-3 py-2.5 text-[0.8125rem] font-medium transition-colors duration-200 ${loginMethod === "phone" ? "bg-white/[0.10] text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.10)]" : "text-white/45 hover:text-white/75"}`}
             >
               Phone
             </button>
@@ -419,74 +431,99 @@ export function AccountAuthForm() {
 
         {(mode === "signup" || loginMethod === "email") ? (
           <>
-            <label className="block text-sm text-zinc-400">
-              <span className="mb-2 block">Email</span>
-              <input
-                type="email"
-                value={email}
-                onChange={(event) => setEmail(event.target.value)}
-                className="vl-input w-full px-4 py-3"
-                autoComplete="email"
-                required
-              />
+            <label className="block">
+              <span className="mb-2 block text-[0.8125rem] font-medium text-white/70">Email</span>
+              <span className="relative block">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-white/35">
+                  <rect x="2.5" y="4.5" width="19" height="15" rx="2.5" />
+                  <path d="m3 6.5 9 6 9-6" />
+                </svg>
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(event) => setEmail(event.target.value)}
+                  className="vl-auth-field w-full pl-11 pr-4"
+                  autoComplete="email"
+                  required
+                />
+              </span>
             </label>
 
-            <label className="block text-sm text-zinc-400">
-              <span className="mb-2 block">Password</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(event) => setPassword(event.target.value)}
-                className="vl-input w-full px-4 py-3"
-                autoComplete={mode === "signup" ? "new-password" : "current-password"}
-                minLength={8}
-                required
-              />
+            <label className="block">
+              <span className="mb-2 block text-[0.8125rem] font-medium text-white/70">Password</span>
+              <span className="relative block">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="pointer-events-none absolute left-4 top-1/2 h-[18px] w-[18px] -translate-y-1/2 text-white/35">
+                  <rect x="4" y="10.5" width="16" height="10" rx="2.5" />
+                  <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+                </svg>
+                <input
+                  type={showPassword ? "text" : "password"}
+                  value={password}
+                  onChange={(event) => setPassword(event.target.value)}
+                  className="vl-auth-field w-full pl-11 pr-12"
+                  autoComplete={mode === "signup" ? "new-password" : "current-password"}
+                  minLength={8}
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((current) => !current)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  aria-pressed={showPassword}
+                  className="vl-focus-ring absolute right-1.5 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-[10px] text-white/40 transition-colors duration-200 hover:text-white/80"
+                >
+                  <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-[18px] w-[18px]">
+                    <path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12Z" />
+                    <circle cx="12" cy="12" r="3" />
+                    {showPassword ? <path d="m4 20 16-16" /> : null}
+                  </svg>
+                </button>
+              </span>
             </label>
           </>
         ) : null}
 
         {mode === "login" && loginMethod === "phone" ? (
           <>
-            <label className="block text-sm text-zinc-400">
-              <span className="mb-2 block">Phone number</span>
+            <label className="block">
+              <span className="mb-2 block text-[0.8125rem] font-medium text-white/70">Phone number</span>
               <input
                 type="tel"
                 value={phone}
                 onChange={(event) => { setPhone(event.target.value); setOtpSent(false); }}
                 placeholder="+1 813 555 0000"
-                className="vl-input w-full px-4 py-3"
+                className="vl-auth-field w-full px-4"
                 autoComplete="tel"
                 required
               />
             </label>
             {otpSent ? (
-              <label className="block text-sm text-zinc-400">
-                <span className="mb-2 block">Text-message code</span>
+              <label className="block">
+                <span className="mb-2 block text-[0.8125rem] font-medium text-white/70">Text-message code</span>
                 <input
                   type="text"
                   inputMode="numeric"
                   value={otpCode}
                   onChange={(event) => setOtpCode(event.target.value)}
                   placeholder="6-digit code"
-                  className="vl-input w-full px-4 py-3 tracking-[0.4em]"
+                  className="vl-auth-field w-full px-4 tracking-[0.4em]"
                   autoComplete="one-time-code"
                   required
                 />
               </label>
             ) : (
-              <p className="text-xs leading-5 text-zinc-500">No password needed — we&apos;ll text you a 6-digit code to sign in.</p>
+              <p className="text-[0.8125rem] leading-5 text-white/45">No password needed — we&apos;ll text you a 6-digit code to sign in.</p>
             )}
           </>
         ) : null}
 
         {mode === "signup" ? (
-          <label className="block text-sm text-zinc-400">
-            <span className="mb-2 block">Business Type</span>
+          <label className="block">
+            <span className="mb-2 block text-[0.8125rem] font-medium text-white/70">Business type</span>
             <select
               value={businessType}
               onChange={(event) => setBusinessType(event.target.value)}
-              className="vl-input w-full px-4 py-3"
+              className="vl-auth-field w-full px-4"
               required
             >
               {BUSINESS_TYPES.map((type) => (
@@ -498,34 +535,34 @@ export function AccountAuthForm() {
       </div>
 
       {mode === "signup" ? (
-        <div className="mt-4 space-y-3">
-          <label className="flex items-start gap-3 rounded-xl border border-[var(--accent-gold)]/30 bg-[var(--accent-gold-soft)] px-4 py-3 text-sm text-zinc-200">
+        <div className="mt-5 space-y-2.5">
+          <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3.5 text-[0.875rem] leading-6 text-white/75 transition-colors duration-200 hover:border-white/[0.12]">
             <input
               type="checkbox"
               checked={ageConfirmed}
               onChange={(event) => setAgeConfirmed(event.target.checked)}
-              className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--accent-gold-bright)]"
+              className="vl-auth-check mt-0.5"
             />
             <span>I confirm that I am at least 21 years old.</span>
           </label>
-          <label className="flex items-start gap-3 rounded-xl border border-[var(--accent-gold)]/30 bg-[var(--accent-gold-soft)] px-4 py-3 text-sm text-zinc-200">
+          <label className="flex cursor-pointer items-start gap-3 rounded-[14px] border border-white/[0.07] bg-white/[0.02] px-4 py-3.5 text-[0.875rem] leading-6 text-white/75 transition-colors duration-200 hover:border-white/[0.12]">
             <input
               type="checkbox"
               checked={researchUseAgreed}
               onChange={(event) => setResearchUseAgreed(event.target.checked)}
-              className="mt-0.5 h-5 w-5 shrink-0 accent-[var(--accent-gold-bright)]"
+              className="vl-auth-check mt-0.5"
             />
             <span>I agree and understand that the products on this site are intended strictly for laboratory research use only, and not for human or animal consumption.</span>
           </label>
         </div>
       ) : null}
 
-      <label className="mt-4 flex min-h-[44px] cursor-pointer items-center gap-3 text-sm text-zinc-300">
+      <label className="mt-5 flex min-h-[44px] cursor-pointer select-none items-center gap-3 text-[0.875rem] text-white/70 transition-colors duration-200 hover:text-white/90">
         <input
           type="checkbox"
           checked={rememberMe}
           onChange={(event) => setRememberMe(event.target.checked)}
-          className="h-5 w-5 shrink-0 accent-[var(--accent-gold-bright)]"
+          className="vl-auth-check"
         />
         Keep me signed in on this device
       </label>
@@ -538,32 +575,44 @@ export function AccountAuthForm() {
         />
       ) : null}
 
-      {message ? <p className="mt-4 rounded-lg border border-[var(--accent-gold)]/30 bg-[var(--accent-gold-soft)] px-3 py-2 text-sm text-[var(--accent-gold-strong)]">{message}</p> : null}
-      {error ? <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p> : null}
+      {message ? (
+        <p role="status" className="mt-5 rounded-[12px] border border-[color:var(--accent-gold)]/25 bg-[var(--accent-gold-soft)] px-4 py-3 text-[0.875rem] leading-6 text-[color:var(--accent-gold-strong)]">{message}</p>
+      ) : null}
+      {error ? (
+        <p role="alert" className="mt-5 rounded-[12px] border border-rose-400/25 bg-rose-500/[0.08] px-4 py-3 text-[0.875rem] leading-6 text-rose-200">{error}</p>
+      ) : null}
 
       <button
         type="submit"
         disabled={loading || sendBlockedByCooldown || (mode === "signup" && (!ageConfirmed || !researchUseAgreed))}
-        className="vl2-btn-primary vl-focus-ring mt-6 w-full px-6 py-3"
+        className="vl-auth-submit vl-focus-ring mt-6 w-full"
       >
         {loading ? "Please wait…" : primaryLabel}
       </button>
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-2 text-xs text-zinc-500">
-        <button
-          type="button"
-          onClick={() => {
-            setMode((current) => (current === "signup" ? "login" : "signup"));
-            resetTransientState();
-          }}
-          className="vl-focus-ring text-zinc-300 underline-offset-4 hover:underline"
-        >
-          {mode === "signup" ? "Already have an account? Sign in" : "New here? Create an account"}
-        </button>
+      <div className="mt-7 space-y-4 border-t border-white/[0.06] pt-6 text-center">
+        <p className="text-[0.875rem] text-white/45">
+          {mode === "signup" ? "Already have an account?" : "New to Vanta Labs?"}{" "}
+          <button
+            type="button"
+            onClick={() => {
+              setMode((current) => (current === "signup" ? "login" : "signup"));
+              resetTransientState();
+            }}
+            className="vl-focus-ring rounded-[6px] font-medium text-white/85 underline underline-offset-4 decoration-white/25 transition-colors duration-200 hover:text-white hover:decoration-white/60"
+          >
+            {mode === "signup" ? "Sign in" : "Create an account"}
+          </button>
+        </p>
         {mode === "login" && loginMethod === "email" ? (
-          <Link href="/account/forgot-password" className="vl-focus-ring text-zinc-300 underline-offset-4 hover:underline">
-            Forgot password?
-          </Link>
+          <p>
+            <Link
+              href="/account/forgot-password"
+              className="vl-focus-ring inline-flex min-h-[36px] items-center rounded-[6px] px-1 text-[0.875rem] text-white/45 underline-offset-4 transition-colors duration-200 hover:text-white/80 hover:underline"
+            >
+              Forgot your password?
+            </Link>
+          </p>
         ) : null}
       </div>
     </form>
