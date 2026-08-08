@@ -20,10 +20,14 @@ describe("P2-5 mock-in-production guard", () => {
     expect(resolvePaymentProviderName("mock")).toBe("mock");
   });
 
-  it("allows mock in production ONLY with the explicit opt-in", () => {
+  // WAS: "allows mock in production ONLY with the explicit opt-in".
+  // Inverted deliberately. /api/checkout/mock-pay marks orders paid, decrements
+  // inventory and accrues commission without money; gating that on a single env
+  // var made the failure mode silent and total. Production is unconditional now.
+  it("refuses mock in production even with the old opt-in set", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("ALLOW_MOCK_PAYMENTS", "true");
-    expect(resolvePaymentProviderName("mock")).toBe("mock");
+    expect(() => resolvePaymentProviderName("mock")).toThrow(/forbidden in production/i);
   });
 
   it("defaults to live when unset (a missing config never runs mock)", () => {

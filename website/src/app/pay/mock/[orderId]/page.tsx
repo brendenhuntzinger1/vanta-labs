@@ -13,7 +13,9 @@ export const dynamic = "force-dynamic";
 // fake payment. Returns 404 in any non-mock environment so it can never be
 // reached in production.
 export default async function MockCheckoutPage({ params }: { params: Promise<{ orderId: string }> }) {
-  if (!isMockPaymentMode()) {
+  // Same unconditional production refusal as the route it posts to, so the
+  // simulated checkout cannot render even if provider resolution changes.
+  if (process.env.NODE_ENV === "production" || !isMockPaymentMode()) {
     notFound();
   }
 

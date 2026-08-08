@@ -296,14 +296,19 @@ export class MockPaymentProvider implements PaymentProvider {
 export function resolvePaymentProviderName(providerName = process.env.PAYMENT_PROVIDER): PaymentProviderName {
   const normalized = (providerName ?? "").trim().toLowerCase();
   if (normalized === "mock" || normalized === "test") {
-    // HARD STOP: the simulated gateway must never run in production. If it does,
-    // any unauthenticated caller can mark orders paid via /api/checkout/mock-pay.
-    // Fail loudly at the first payment operation rather than silently accepting
-    // fake payments. The only escape hatch is an explicit non-prod opt-in.
-    if (process.env.NODE_ENV === "production" && process.env.ALLOW_MOCK_PAYMENTS !== "true") {
+    // HARD STOP, WITH NO ESCAPE HATCH. The simulated gateway must never run in
+    // production: if it does, any unauthenticated caller can mark orders paid
+    // via /api/checkout/mock-pay.
+    //
+    // This used to allow ALLOW_MOCK_PAYMENTS=true to re-open it. That made one
+    // mistyped Vercel variable the only thing standing between the store and a
+    // free-order endpoint -- a control whose failure mode is silent and total.
+    // Production is now unconditional: there is no variable that turns fake
+    // payments back on, so the misconfiguration is unreachable rather than
+    // merely discouraged.
+    if (process.env.NODE_ENV === "production") {
       throw new Error(
-        "PAYMENT_PROVIDER=mock/test is forbidden in production. Set PAYMENT_PROVIDER=live. " +
-        "(ALLOW_MOCK_PAYMENTS=true may be set ONLY in a non-production environment.)",
+        "PAYMENT_PROVIDER=mock/test is forbidden in production. Set PAYMENT_PROVIDER=live.",
       );
     }
     return "mock";

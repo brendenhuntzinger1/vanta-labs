@@ -19,6 +19,15 @@ export const dynamic = "force-dynamic";
 // commission, points). It is inert unless the store is explicitly running the
 // mock gateway (PAYMENT_PROVIDER=mock), so it can never touch production orders.
 export async function POST(request: Request) {
+  // Defence in depth. isMockPaymentMode() already throws in production, but
+  // that is a decision made three modules away; this endpoint marks orders paid
+  // without money, so it refuses on its own terms too. Anything that ever
+  // caused provider resolution to return "mock" here would still find a dead
+  // route.
+  if (process.env.NODE_ENV === "production") {
+    return NextResponse.json({ success: false, error: "Not found" }, { status: 404 });
+  }
+
   if (!isMockPaymentMode()) {
     return NextResponse.json(
       { success: false, error: "Mock payments are not enabled." },

@@ -113,14 +113,13 @@ export function getBillingProvider(providerName = process.env.BILLING_PROVIDER ?
       // succeeded billing event at the full tier price, and a welcome email,
       // having paid nothing.
       //
-      // resolvePaymentProviderName in payment-provider.ts has guarded the
-      // one-time order lane this way for a while; the recurring lane was left
-      // open. Same escape hatch, so a non-prod environment opts in explicitly.
-      if (process.env.NODE_ENV === "production" && process.env.ALLOW_MOCK_PAYMENTS !== "true") {
+      // Unconditional in production, matching resolvePaymentProviderName. The
+      // ALLOW_MOCK_PAYMENTS opt-in is gone from both lanes: a single env var
+      // should not be able to hand out memberships for free.
+      if (process.env.NODE_ENV === "production") {
         throw new Error(
           "BILLING_PROVIDER=mock/test is forbidden in production — it would activate memberships without charging. " +
-          "Unset it (defaults to noop) or connect a real recurring provider. " +
-          "(ALLOW_MOCK_PAYMENTS=true may be set ONLY in a non-production environment.)",
+          "Unset it (defaults to noop) or connect a real recurring provider.",
         );
       }
       return new MockBillingProvider();

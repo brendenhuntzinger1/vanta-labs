@@ -38,10 +38,16 @@ describe("getBillingProvider production guard", () => {
     expect(getBillingProvider("mock")).toBeInstanceOf(MockBillingProvider);
   });
 
-  it("honours the explicit non-prod opt-in escape hatch", () => {
+  // WAS: "honours the explicit non-prod opt-in escape hatch".
+  // The escape hatch is gone. ALLOW_MOCK_PAYMENTS=true in production used to
+  // return a MockBillingProvider, which hands out memberships without charging
+  // -- one mistyped Vercel variable away from free subscriptions. Production
+  // now refuses unconditionally, so the old expectation is inverted rather than
+  // removed: this asserts the hatch stays shut.
+  it("refuses in production even with the old opt-in variable set", () => {
     setNodeEnv("production");
     vi.stubEnv("ALLOW_MOCK_PAYMENTS", "true");
-    expect(getBillingProvider("mock")).toBeInstanceOf(MockBillingProvider);
+    expect(() => getBillingProvider("mock")).toThrow(/forbidden in production/i);
   });
 
   it("defaults to the noop provider, which never reports a charge as succeeded", async () => {

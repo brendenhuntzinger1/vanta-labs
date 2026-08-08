@@ -83,7 +83,18 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
       muted
       loop
       playsInline
-      preload="auto"
+      /* METADATA, NOT AUTO.
+         The hero file is ~6.2 MB. preload="auto" told the browser to buffer it
+         aggressively from first paint, competing with the CSS, fonts and hero
+         copy for bandwidth -- on a phone that is roughly ten seconds of black
+         hero on a normal 4G connection. "metadata" fetches only the headers;
+         autoplay still starts and the file streams progressively, so the
+         animation is unchanged while the critical render path is not starved.
+
+         Worth adding a poster frame too (a single still from the video):
+         without one there is nothing to paint until the first frame decodes.
+         That needs ffmpeg, which is not available in this environment. */
+      preload="metadata"
       controls={false}
       disablePictureInPicture
       disableRemotePlayback
