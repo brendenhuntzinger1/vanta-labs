@@ -186,17 +186,28 @@ describe("refunding Elijah's $16.00", () => {
 describe("the rate Elijah is actually paid", () => {
   const commission = readFileSync(join(process.cwd(), "src/lib/ambassador-commission.ts"), "utf8");
 
-  // The trap in this configuration. commission_percent_locked is false for
-  // Elijah, and tiers[0] is assigned BEFORE the loop -- so with any active tier
-  // he is paid the lowest tier's rate at zero monthly sales, not his 10%.
-  it("an unlocked ambassador is paid the tier rate when any tier is active", () => {
-    expect(commission).toContain("if (ambassador?.commission_percent_locked) {");
-    expect(commission).toContain("let matched = tiers[0];");
+  // FIXED. `matched` was seeded with tiers[0] before the qualification loop, so
+  // an ambassador who earned nothing was still paid the lowest tier -- with any
+  // active tier present, the rate typed in the admin was never used. A tier
+  // whose threshold is 5 monthly sales was applied to someone with zero.
+  it("a tier must actually be earned before it applies", () => {
+    expect(commission).toContain("let matched: (typeof tiers)[number] | null = null;");
+    expect(commission).not.toContain("let matched = tiers[0];");
   });
 
-  it("his own rate is used only when locked, or when no tier is active", () => {
+  it("falls back to the ambassador's configured rate when no tier is earned", () => {
+    expect(commission).toContain("if (!matched) {\n    return { percent: ambassadorPercent, tierName: null };\n  }");
+  });
+
+  // The qualification itself is unchanged: a tier with a threshold of 0 still
+  // applies to everyone, which is the owner's choice to make.
+  it("still assigns a tier the ambassador does qualify for", () => {
+    expect(commission).toContain("if (monthlySales >= tier.minMonthlySales) {\n      matched = tier;");
+  });
+
+  it("an explicitly locked rate skips tiers entirely", () => {
+    expect(commission).toContain("if (ambassador?.commission_percent_locked) {");
     expect(commission).toContain("if (tiers.length === 0) {");
-    expect(commission).toContain("return { percent: ambassadorPercent, tierName: null };");
   });
 });
 

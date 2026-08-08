@@ -153,11 +153,27 @@ export async function getEffectiveCommissionPercent(input: {
 
   const monthlySales = await getQualifyingMonthlySalesCount(input.ambassadorId);
 
-  let matched = tiers[0];
+  // A TIER MUST BE EARNED.
+  //
+  // `matched` used to be seeded with tiers[0] BEFORE this loop, so an
+  // ambassador who qualified for nothing was still paid the lowest tier. With
+  // any active tier present, the rate the owner typed in the admin was
+  // therefore never used -- a tier whose threshold is 5 monthly sales applied
+  // to someone with zero, silently replacing an agreed rate.
+  //
+  // Starting from null and only assigning on a genuine qualification keeps the
+  // tier design intact (a tier with a threshold of 0 still applies to
+  // everyone, which is the owner's choice) while making the configured rate
+  // the floor rather than something a tier can quietly undercut.
+  let matched: (typeof tiers)[number] | null = null;
   for (const tier of tiers) {
     if (monthlySales >= tier.minMonthlySales) {
       matched = tier;
     }
+  }
+
+  if (!matched) {
+    return { percent: ambassadorPercent, tierName: null };
   }
 
   return { percent: matched.commissionPercent, tierName: matched.name };
