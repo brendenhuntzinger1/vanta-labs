@@ -5,6 +5,9 @@ import { canManageRefunds } from "@/lib/admin-roles";
 import { getAdminPartnerRows, getPartnerSummary } from "@/lib/partner-portal";
 import { getAmbassadorRefundedOrderCount, getPayoutHistory } from "@/lib/admin-ambassadors";
 import { getSiteUrl } from "@/lib/env";
+import { getReferralProgramConfig } from "@/lib/admin-control";
+import { resolveAmbassadorCustomerDiscount } from "@/lib/quote-order";
+import AdminAmbassadorRatesCard from "@/components/admin-ambassador-rates-card";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -45,10 +48,11 @@ export default async function AdminAmbassadorProfilePage({ params }: { params: P
   const { partnerId } = await params;
   const siteUrl = getSiteUrl();
 
-  const [rows, payoutHistory, refundedOrders] = await Promise.all([
+  const [rows, payoutHistory, refundedOrders, referralProgram] = await Promise.all([
     getAdminPartnerRows({ status: "all" }).catch(() => []),
     getPayoutHistory(200).catch(() => []),
     getAmbassadorRefundedOrderCount(partnerId).catch(() => 0),
+    getReferralProgramConfig(),
   ]);
 
   const row = rows.find((r) => r.id === partnerId);
@@ -64,6 +68,9 @@ export default async function AdminAmbassadorProfilePage({ params }: { params: P
   const monthlySeries = summary?.monthlyRevenueSeries ?? [];
   const maxMonthly = monthlySeries.reduce((max, point) => Math.max(max, point.value), 0);
   const statusBadge = STATUS_STYLES[row.status] ?? "border-zinc-500/40 text-zinc-300";
+  // Resolved with the same rule checkout uses, so the header states what a
+  // shopper would actually be charged rather than what the column contains.
+  const effectiveDiscountPercent = resolveAmbassadorCustomerDiscount(row.customerDiscountPercent, referralProgram.discountPercent);
 
   return (
     <div className="vl-page-shell min-h-screen bg-[radial-gradient(circle_at_top_right,rgba(59,130,246,0.1),transparent_52%),linear-gradient(145deg,#04060f_0%,#0b1324_50%,#060911_100%)] px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -97,14 +104,24 @@ export default async function AdminAmbassadorProfilePage({ params }: { params: P
             </div>
           </div>
           <p className="mt-3 text-xs text-zinc-500">
-            Commission rate:{" "}
-            {row.commissionPercentLocked
-              ? <span className="text-amber-300">{row.commissionPercent}% (manual — auto tiers off)</span>
-              : <span className="text-emerald-300">Auto performance tiers active</span>}
+            Customers save <span className="text-cyan-300">{effectiveDiscountPercent}%</span>
+            {row.customerDiscountPercent == null ? " (program default)" : " (override)"}
+            {" · "}
+            {row.name} earns <span className="text-cyan-300">{row.commissionPercent}%</span>
+            {row.commissionPercentLocked ? " (manual)" : " (auto tiers)"}
             {" · "}Manage status, code, and payouts from{" "}
             <Link href="/admin/partners" className="text-cyan-300 hover:text-cyan-200">Partner Operations</Link>.
           </p>
         </section>
+
+        <AdminAmbassadorRatesCard
+          partnerId={row.id}
+          status={row.status}
+          commissionPercent={row.commissionPercent}
+          commissionPercentLocked={row.commissionPercentLocked}
+          customerDiscountPercent={row.customerDiscountPercent}
+          programDefaultDiscountPercent={referralProgram.discountPercent}
+        />
 
         <section className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-6">
           <div className="vl-panel rounded-2xl p-4">

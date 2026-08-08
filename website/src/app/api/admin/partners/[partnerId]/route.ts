@@ -34,6 +34,17 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
       const commissionPercentLocked = typeof body?.commissionPercentLocked === "boolean" ? body.commissionPercentLocked : undefined;
       const referralCode = typeof body?.referralCode === "string" ? body.referralCode : undefined;
 
+      // Three states, deliberately. An absent key leaves the discount alone; an
+      // explicit null (or "") clears the override so the ambassador follows the
+      // program default again. Treating a cleared field as 0% would silently
+      // strip the discount while the code kept working.
+      let customerDiscountPercent: number | null | undefined;
+      if (body?.customerDiscountPercent === null || body?.customerDiscountPercent === "") {
+        customerDiscountPercent = null;
+      } else if (body?.customerDiscountPercent !== undefined) {
+        customerDiscountPercent = Number(body.customerDiscountPercent);
+      }
+
       if (!["approved", "disabled", "pending", "rejected", "info_requested"].includes(status)) {
         return NextResponse.json({ success: false, error: "Invalid status" }, { status: 400 });
       }
@@ -44,12 +55,25 @@ export async function PATCH(request: Request, context: { params: Promise<{ partn
         return NextResponse.json({ success: false, error: "Commission percent must be between 0 and 100." }, { status: 400 });
       }
 
+      // 100 is excluded, unlike commission: a 100% discount is a free order, and
+      // the database check constraint refuses it anyway.
+      if (
+        typeof customerDiscountPercent === "number" &&
+        (!Number.isFinite(customerDiscountPercent) || customerDiscountPercent < 0 || customerDiscountPercent >= 100)
+      ) {
+        return NextResponse.json(
+          { success: false, error: "Customer discount must be 0 or more and less than 100." },
+          { status: 400 },
+        );
+      }
+
       await updatePartnerStatus({
         partnerId,
         status,
         actorUserId: undefined,
         commissionPercent,
         commissionPercentLocked,
+        customerDiscountPercent,
         referralCode,
         actorUsername: session.username,
         ipAddress,

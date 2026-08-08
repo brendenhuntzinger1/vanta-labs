@@ -89,6 +89,9 @@ export interface AdminPartnerRow {
   status: string;
   commissionPercent: number;
   commissionPercentLocked: boolean;
+  // What this ambassador's CUSTOMERS save. null means "inherit the program
+  // default" -- it is not 0%, and it must never be derived from the commission.
+  customerDiscountPercent: number | null;
   totalRevenue: number;
   totalOrders: number;
   totalCommissions: number;
@@ -1072,6 +1075,7 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
       status: partner.status,
       commissionPercent: Number(partner.commission_percent ?? 15),
       commissionPercentLocked: Boolean(partner.commission_percent_locked),
+      customerDiscountPercent: partner.customer_discount_percent != null ? Number(partner.customer_discount_percent) : null,
       totalRevenue: roundMoney(order.totalRevenue),
       totalOrders: order.totalOrders,
       totalCommissions: roundMoney(commission.total),
@@ -1306,6 +1310,12 @@ export async function updatePartnerStatus(input: {
   actorUserId?: string;
   commissionPercent?: number;
   commissionPercentLocked?: boolean;
+  // Tri-state, and the three states mean different things:
+  //   undefined -> leave the ambassador's discount exactly as it is
+  //   null      -> clear the override, so they follow the program default again
+  //   number    -> this ambassador's own rate
+  // Collapsing null into undefined would make an emptied field un-clearable.
+  customerDiscountPercent?: number | null;
   referralCode?: string;
   actorUsername?: string;
   ipAddress?: string | null;
@@ -1377,6 +1387,13 @@ export async function updatePartnerStatus(input: {
     updatePayload.commission_percent_locked = input.commissionPercentLocked ?? true;
   } else if (typeof input.commissionPercentLocked === "boolean") {
     updatePayload.commission_percent_locked = input.commissionPercentLocked;
+  }
+
+  // Written in its own branch, never inside the commission branch above: the
+  // owner asked for two rates that cannot move each other, and the only way to
+  // guarantee that is for neither write to be reachable from the other.
+  if (input.customerDiscountPercent !== undefined) {
+    updatePayload.customer_discount_percent = input.customerDiscountPercent;
   }
 
   if (normalizedReferralCode) {
@@ -1455,6 +1472,7 @@ export async function updatePartnerStatus(input: {
     metadata: {
       status: input.status,
       commissionPercent: input.commissionPercent ?? null,
+      customerDiscountPercent: input.customerDiscountPercent === undefined ? "unchanged" : input.customerDiscountPercent,
       referralCode: finalReferralCode,
       actorUsername: input.actorUsername ?? null,
       ipAddress: input.ipAddress ?? null,
