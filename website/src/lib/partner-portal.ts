@@ -1339,7 +1339,7 @@ export async function updatePartnerStatus(input: {
 }) {
   const { data: existingPartner, error: partnerLookupError } = await supabaseAdmin
     .from("partners")
-    .select("id, name, email, referral_code, commission_percent")
+    .select("id, name, email, referral_code, commission_percent, status")
     .eq("id", input.partnerId)
     .maybeSingle();
 
@@ -1348,6 +1348,12 @@ export async function updatePartnerStatus(input: {
   if (!existingPartner) {
     throw new Error("Partner not found");
   }
+
+  // Whether this call is an actual status TRANSITION or merely a rate edit that
+  // has to carry the current status along to preserve it. Every status side
+  // effect below is gated on it: without that, adjusting a commission re-sent
+  // the approval email and rewrote the date an ambassador was disabled.
+  const statusChanged = String(existingPartner.status ?? "") !== input.status;
 
   const normalizedReferralCode = input.referralCode
     ?.trim()
@@ -1387,11 +1393,10 @@ export async function updatePartnerStatus(input: {
     updatePayload.disabled_at = null;
   }
 
-  if (input.status === "disabled") {
-    updatePayload.disabled_at = new Date().toISOString();
-  }
-
-  if (input.status === "rejected") {
+  // Only stamp the disable date when they are actually BEING disabled. Editing
+  // a disabled ambassador's commission used to reset this to today, erasing the
+  // record of when the disable happened.
+  if (statusChanged && (input.status === "disabled" || input.status === "rejected")) {
     updatePayload.disabled_at = new Date().toISOString();
   }
 
@@ -1431,7 +1436,10 @@ export async function updatePartnerStatus(input: {
   // update itself or the audit log entry below — isolated in its own
   // try/catch so a failed send (or an unconfigured provider) can't leave
   // the admin action half-finished or skip the audit trail.
-  if ((input.status === "approved" || input.status === "rejected") && existingPartner.email) {
+  // Gated on a real transition (see statusChanged above): an approved
+  // ambassador used to receive a fresh "your application was approved" email
+  // every time the owner adjusted their rates.
+  if (statusChanged && (input.status === "approved" || input.status === "rejected") && existingPartner.email) {
     try {
       const queueRowId = await enqueueNotification(
         input.status === "approved" ? "partner_application_approved" : "partner_application_rejected",

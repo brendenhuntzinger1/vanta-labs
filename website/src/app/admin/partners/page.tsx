@@ -1,6 +1,11 @@
 import { redirect } from "next/navigation";
 import { AdminPartnersClient } from "@/components/admin-partners-client";
 import { getReferralProgramConfig } from "@/lib/admin-control";
+import {
+  DEFAULT_COMMISSION_HOLD_DAYS,
+  DEFAULT_MINIMUM_PAYOUT_THRESHOLD,
+  DEFAULT_MINIMUM_QUALIFYING_ORDER,
+} from "@/lib/referral-config";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canManageRefunds } from "@/lib/admin-roles";
 import { getAdminOperationsSummary, getAdminPartnerRows, getPayoutQueue } from "@/lib/partner-portal";
@@ -44,10 +49,15 @@ export default async function AdminPartnersPage() {
       pendingNotifications: 0,
     })),
     listCommissionTierRules().catch(() => []),
+    // Fall back to the REAL defaults, never to zero. A transient read error
+    // used to render "minimum qualifying order: 0" as though it were policy --
+    // and with an explicit Save button on the field, an owner could persist
+    // that zero and destroy their $100 minimum from a blip.
     getAmbassadorProgramSettings().catch(() => ({
-      minimumQualifyingOrder: 0,
-      minimumPayoutThreshold: 0,
-      commissionHoldDays: 0,
+      minimumQualifyingOrder: DEFAULT_MINIMUM_QUALIFYING_ORDER,
+      minimumPayoutThreshold: DEFAULT_MINIMUM_PAYOUT_THRESHOLD,
+      commissionHoldDays: DEFAULT_COMMISSION_HOLD_DAYS,
+      stored: { minimumQualifyingOrder: false, minimumPayoutThreshold: false, commissionHoldDays: false },
     })),
     getFraudReviewRows().catch(() => []),
     getPayoutHistory().catch(() => []),

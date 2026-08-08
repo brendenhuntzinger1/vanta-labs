@@ -732,7 +732,9 @@ export function AdminPartnersClient({
         </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
           {PROGRAM_SETTING_FIELDS.map((field) => {
-            const isStored = settings.stored?.[field.prop] ?? true;
+            // Unknown provenance reads as Default, never as Saved. Claiming a value is
+            // stored when it is not is the exact lie this chip exists to prevent.
+            const isStored = settings.stored?.[field.prop] ?? false;
             const draft = settingDrafts[field.key] ?? String(settings[field.prop]);
             return (
               <div key={field.key} className="text-sm text-zinc-300">
