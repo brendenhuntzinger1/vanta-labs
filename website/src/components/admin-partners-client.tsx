@@ -10,6 +10,21 @@ function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 }
 
+// The admin surface, grouped by the question being asked rather than by which
+// table the data came from. Every section already existed; they were simply all
+// stacked on one scroll, so finding the payout history meant passing the
+// commission tier editor.
+const TABS = [
+  { key: "overview", label: "Overview" },
+  { key: "ambassadors", label: "Ambassadors" },
+  { key: "applications", label: "Applications" },
+  { key: "payouts", label: "Payouts" },
+  { key: "program", label: "Program" },
+  { key: "analytics", label: "Analytics" },
+] as const;
+
+type TabKey = (typeof TABS)[number]["key"];
+
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
@@ -54,6 +69,7 @@ export function AdminPartnersClient({
   const [newTierName, setNewTierName] = useState("");
   const [newTierMinSales, setNewTierMinSales] = useState("0");
   const [newTierPercent, setNewTierPercent] = useState("10");
+  const [tab, setTab] = useState<TabKey>("overview");
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -432,6 +448,36 @@ export function AdminPartnersClient({
 
   return (
     <div className="space-y-6">
+      {/* One page, six views. The sections themselves are unchanged -- what
+          changed is that an owner opening this page is no longer handed all of
+          them at once. Filters and roster state persist across tabs, so
+          switching never silently drops a search. */}
+      <nav className="flex flex-wrap gap-2 border-b border-zinc-800/70 pb-3">
+        {TABS.map((entry) => (
+          <button
+            key={entry.key}
+            type="button"
+            onClick={() => {
+              setTab(entry.key);
+              // Applications IS the roster narrowed to applicants. Moving the
+              // real filter (rather than hiding rows behind the tab) keeps the
+              // dropdown honest about what is on screen.
+              if (entry.key === "applications") setStatus("pending");
+              if (entry.key === "ambassadors") setStatus("all");
+            }}
+            className={`vl-focus-ring rounded-lg px-3 py-2 text-xs font-semibold uppercase tracking-[0.16em] ${
+              tab === entry.key ? "bg-zinc-100 text-zinc-950" : "border border-zinc-800 text-zinc-400 hover:text-zinc-200"
+            }`}
+          >
+            {entry.label}
+            {entry.key === "applications" && pendingCount > 0 ? (
+              <span className="ml-2 rounded-full bg-amber-400/20 px-2 py-0.5 text-amber-200">{pendingCount}</span>
+            ) : null}
+          </button>
+        ))}
+      </nav>
+
+      {tab === "overview" ? (<>
       <section>
         <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Ambassadors</h2>
         <div className="mt-3 grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
@@ -489,7 +535,9 @@ export function AdminPartnersClient({
           </div>
         </div>
       </section>
+      </>) : null}
 
+      {tab === "analytics" ? (<>
       <section className="vl-panel rounded-2xl p-4 sm:p-5">
         <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Top Performers</h2>
         {topPerformers.length === 0 ? (
@@ -567,7 +615,9 @@ export function AdminPartnersClient({
           </div>
         )}
       </section>
+      </>) : null}
 
+      {tab === "program" ? (<>
       <section className="vl-panel rounded-2xl p-4 sm:p-5">
         <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Commission Tiers</h2>
         <p className="mt-1 text-xs text-zinc-500">
@@ -718,7 +768,9 @@ export function AdminPartnersClient({
           <button type="button" disabled={loading} onClick={addMarketingResource} className="vl-btn-secondary px-4 py-2 text-sm disabled:opacity-50">Add Resource</button>
         </div>
       </section>
+      </>) : null}
 
+      {tab === "ambassadors" || tab === "applications" ? (<>
       <section className="vl-panel rounded-2xl p-4 sm:p-5">
         <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Invite Partner</h2>
         <form className="mt-4 grid gap-3 sm:grid-cols-4" onSubmit={handleInvite}>
@@ -943,7 +995,9 @@ export function AdminPartnersClient({
           </table>
         </div>
       </section>
+      </>) : null}
 
+      {tab === "payouts" ? (<>
       <section className="vl-panel rounded-2xl p-4 sm:p-5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Payout History</h2>
@@ -1016,6 +1070,7 @@ export function AdminPartnersClient({
           </div>
         )}
       </section>
+      </>) : null}
     </div>
   );
 }
