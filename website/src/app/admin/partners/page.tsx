@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { AdminPartnersClient } from "@/components/admin-partners-client";
+import { getReferralProgramConfig } from "@/lib/admin-control";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canManageRefunds } from "@/lib/admin-roles";
 import { getAdminOperationsSummary, getAdminPartnerRows, getPayoutQueue } from "@/lib/partner-portal";
@@ -29,7 +30,7 @@ export default async function AdminPartnersPage() {
     );
   }
 
-  const [rows, operations, tiers, ambassadorSettings, fraudRows, payoutHistory, marketingResources] = await Promise.all([
+  const [rows, operations, tiers, ambassadorSettings, fraudRows, payoutHistory, marketingResources, referralProgram] = await Promise.all([
     getAdminPartnerRows({ status: "all" }).catch(() => []),
     getAdminOperationsSummary().catch(() => ({
       liveSalesToday: 0,
@@ -51,6 +52,7 @@ export default async function AdminPartnersPage() {
     getFraudReviewRows().catch(() => []),
     getPayoutHistory().catch(() => []),
     getAmbassadorMarketingResources().catch(() => []),
+    getReferralProgramConfig(),
   ]);
 
   const payoutQueue = await getPayoutQueue().catch(() => ({ rows: [], readyCount: 0, totalOwed: 0, minimumPayoutThreshold: 0 }));
@@ -164,6 +166,7 @@ export default async function AdminPartnersPage() {
           initialFraudRows={fraudRows}
           initialPayoutHistory={payoutHistory}
           initialMarketingResources={marketingResources}
+          programDefaultDiscountPercent={referralProgram.discountPercent}
         />
       </div>
     </div>

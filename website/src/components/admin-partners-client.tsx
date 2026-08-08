@@ -21,6 +21,7 @@ export function AdminPartnersClient({
   initialFraudRows,
   initialPayoutHistory,
   initialMarketingResources,
+  programDefaultDiscountPercent,
 }: {
   initialRows: AdminPartnerRow[];
   initialTiers: CommissionTierRule[];
@@ -28,6 +29,9 @@ export function AdminPartnersClient({
   initialFraudRows: FraudReviewRow[];
   initialPayoutHistory: PayoutHistoryRow[];
   initialMarketingResources: AmbassadorMarketingResource[];
+  // Shown for every ambassador who has no override of their own, so the roster
+  // states the rate customers actually get rather than a blank cell.
+  programDefaultDiscountPercent: number;
 }) {
   const [rows, setRows] = useState(initialRows);
   const [tiers, setTiers] = useState(initialTiers);
@@ -797,6 +801,7 @@ export function AdminPartnersClient({
               <tr className="text-left text-zinc-500">
                 <th className="px-2 py-2">Partner</th>
                 <th className="px-2 py-2">Status</th>
+                <th className="px-2 py-2">Rates</th>
                 <th className="px-2 py-2">Revenue</th>
                 <th className="px-2 py-2">Orders</th>
                 <th className="px-2 py-2">Commission</th>
@@ -809,7 +814,7 @@ export function AdminPartnersClient({
             <tbody>
               {filteredRows.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-2 py-6 text-center text-sm text-zinc-500">
+                  <td colSpan={10} className="px-2 py-6 text-center text-sm text-zinc-500">
                     No ambassadors match these filters.
                   </td>
                 </tr>
@@ -825,6 +830,19 @@ export function AdminPartnersClient({
                     <p className="mt-1 font-mono text-xs text-cyan-300/80">/r/{row.referralCode}</p>
                   </td>
                   <td className="px-2 py-2">{row.status}</td>
+                  <td className="px-2 py-2 whitespace-nowrap">
+                    <p className="text-xs text-zinc-400">
+                      Customer{" "}
+                      <span className="font-semibold text-cyan-200">
+                        {row.customerDiscountPercent ?? programDefaultDiscountPercent}%
+                      </span>
+                      {row.customerDiscountPercent == null ? <span className="text-zinc-600"> (default)</span> : null}
+                    </p>
+                    <p className="text-xs text-zinc-400">
+                      Earns{" "}
+                      <span className="font-semibold text-emerald-200">{row.commissionPercent}%</span>
+                    </p>
+                  </td>
                   <td className="px-2 py-2">{currency(row.totalRevenue)}</td>
                   <td className="px-2 py-2">{row.totalOrders}</td>
                   <td className="px-2 py-2">
