@@ -73,7 +73,7 @@ export function ProductCard({
             </span>
           ) : null}
           {soldOut ? (
-            <span className="absolute right-3 top-3 z-10 rounded-full border border-white/20 bg-black/75 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-white/80 shadow-sm backdrop-blur-md">
+            <span className="absolute right-3 top-3 z-10 rounded-full border border-white/[0.09] bg-black/60 px-2.5 py-1 text-[10px] font-medium uppercase tracking-[0.14em] text-white/45 backdrop-blur-md">
               Out of Stock
             </span>
           ) : null}
@@ -101,7 +101,7 @@ export function ProductCard({
             <p className="vl2-eyebrow text-[10px] text-white/45">{product.category}</p>
           </div>
 
-          <h3 className="mt-1.5 line-clamp-2 text-sm font-medium leading-snug text-white sm:mt-2 sm:text-lg">{product.name}</h3>
+          <h3 className="mt-1.5 line-clamp-2 text-[0.9375rem] font-medium leading-snug tracking-[-0.005em] text-white sm:mt-2 sm:text-xl">{product.name}</h3>
 
           <div className="mt-2 flex items-baseline gap-x-2 sm:mt-3">
             <p className="text-lg font-semibold tracking-tight text-white sm:text-2xl">{product.salePrice ?? product.price}</p>
