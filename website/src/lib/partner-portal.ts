@@ -1375,19 +1375,38 @@ export async function updatePartnerStatus(input: {
     }
   }
 
+  // Status is written ONLY when it actually changes.
+  //
+  // A rate edit has to send the ambassador's current status along to preserve
+  // it, which meant every discount save re-wrote status onto both tables. The
+  // ambassadors mirror carries a stricter check constraint than partners --
+  // "info_requested" is in the app's vocabulary but not in that constraint --
+  // so saving a rate for such an ambassador failed with 23514.
+  //
+  // Worse than the error: the two updates run concurrently, so partners had
+  // already accepted the new rate when the ambassadors write was rejected.
+  // Checkout reads ambassadors, so the admin could show a discount the
+  // storefront would never apply. Not writing an unchanged status removes the
+  // whole class of failure -- a rates-only save now touches only the rate.
   const updatePayload: Record<string, unknown> = {
-    status: input.status,
     updated_at: new Date().toISOString(),
   };
 
-  if (input.status === "approved") {
-    const { data: existingPartner } = await supabaseAdmin
+  if (statusChanged) {
+    updatePayload.status = input.status;
+  }
+
+  // Same rule for the approval timestamps: only on a real transition into
+  // approved. A rate edit on an already-approved ambassador used to re-clear
+  // disabled_at on every save.
+  if (statusChanged && input.status === "approved") {
+    const { data: approvalRow } = await supabaseAdmin
       .from("partners")
       .select("status, approved_at")
       .eq("id", input.partnerId)
       .maybeSingle();
 
-    if (existingPartner?.status !== "approved" || !existingPartner?.approved_at) {
+    if (approvalRow?.status !== "approved" || !approvalRow?.approved_at) {
       updatePayload.approved_at = new Date().toISOString();
     }
     updatePayload.disabled_at = null;

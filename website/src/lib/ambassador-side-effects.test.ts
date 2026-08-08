@@ -81,6 +81,45 @@ describe("a rate edit does not re-send the approval email", () => {
 // believing they are confirming their policy, and persists a $0 minimum --
 // every referred order qualifies for commission from then on.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// A RATE EDIT MUST NOT WRITE STATUS.
+//
+// Found in production: saving a discount for an ambassador whose status was
+// "info_requested" failed with Postgres 23514. The ambassadors mirror carries a
+// stricter check constraint than partners, and "info_requested" is in the app's
+// vocabulary but not in that constraint.
+//
+// The error was the visible half. The dangerous half is that both tables are
+// updated CONCURRENTLY: partners had already accepted the new rate when the
+// ambassadors write was rejected. Checkout reads ambassadors, so the admin
+// could show a discount the storefront would never apply -- money drift with a
+// red banner that looks like a mere UI complaint.
+// ---------------------------------------------------------------------------
+describe("a rate edit writes only the rate", () => {
+  it("omits status from the payload unless it changed", () => {
+    expect(portal).toContain("const updatePayload: Record<string, unknown> = {\n    updated_at: new Date().toISOString(),\n  };");
+    expect(portal).toContain("if (statusChanged) {\n    updatePayload.status = input.status;\n  }");
+  });
+
+  // The old payload always carried status, which is what reached the
+  // constraint on every save.
+  it("no longer hardcodes status into the payload", () => {
+    expect(portal).not.toContain("const updatePayload: Record<string, unknown> = {\n    status: input.status,");
+  });
+
+  // Approval timestamps are status side effects and follow the same rule.
+  it("only touches approval timestamps on a real transition", () => {
+    expect(portal).toContain('if (statusChanged && input.status === "approved") {');
+  });
+
+  // Both tables still receive the write, so the mirror cannot silently drift
+  // when a rate genuinely changes.
+  it("still mirrors the rate to both tables", () => {
+    expect(portal).toContain('supabaseAdmin.from("partners").update(updatePayload)');
+    expect(portal).toContain('supabaseAdmin.from("ambassadors").update(updatePayload)');
+  });
+});
+
 describe("a settings read failure falls back to policy, not to zero", () => {
   it("uses the real defaults rather than 0", () => {
     expect(adminPage).toContain("minimumQualifyingOrder: DEFAULT_MINIMUM_QUALIFYING_ORDER");
