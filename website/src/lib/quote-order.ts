@@ -398,11 +398,14 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
 
     // Oversell guard. This ONLY fires when a real, positive stock count is on
     // record for the item being purchased (a specific dose's count if a variant
-    // was chosen, otherwise the product-level count). When the count is 0 or
-    // absent - i.e. inventory isn't tracked numerically, or the 3PL is the
-    // source of truth - we fall back entirely to the stockStatus checks above
-    // and change nothing. That keeps an untracked catalog fully purchasable
-    // while still blocking an order for more units than actually exist.
+    // was chosen, otherwise the product-level count).
+    //
+    // A count of 0 is handled UPSTREAM, in resolveStockStatus: with tracking on
+    // it resolves to "Out of Stock" and the check above has already rejected
+    // the line. That matters because the storefront and checkout then agree --
+    // a shopper never adds something labelled In Stock only to be refused at
+    // the last step. With tracking off, 0 still means "not tracked" and the
+    // catalogue stays fully purchasable, exactly as before.
     const trackedInventory = selectedDose
       ? selectedDose.inventoryQuantity
       : catalogProduct?.inventoryQuantity;

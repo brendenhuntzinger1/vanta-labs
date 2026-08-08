@@ -24,10 +24,29 @@ const PRODUCT_SELECT_COLUMNS =
 // whole catalog stays purchasable and nothing shows "Out of Stock" /
 // "Unavailable". Vanta Labs is now the sole source of truth for availability —
 // this used to be answered by whether a 3PL integration was connected.
-function resolveStockStatus(rawStatus: string, inventoryActive: boolean): Product["stockStatus"] {
+function resolveStockStatus(
+  rawStatus: string,
+  inventoryActive: boolean,
+  quantity?: number,
+): Product["stockStatus"] {
   if (!inventoryActive) {
     return "In Stock";
   }
+
+  // ZERO MEANS ZERO once tracking is on.
+  //
+  // The old rule treated a 0 count as "not tracked numerically" and deferred
+  // entirely to the stored stock_status. That was right when a 3PL owned the
+  // stock and our counts were decorative. Self-fulfilling, it is backwards: a
+  // shelf with nothing on it read as In Stock, and the catalogue would sell
+  // unlimited units of something that does not exist.
+  //
+  // Only applies with tracking ON, so switching tracking off restores the old
+  // behaviour exactly and nothing here can strand an untracked catalogue.
+  if (typeof quantity === "number" && Number.isFinite(quantity) && quantity <= 0) {
+    return "Out of Stock";
+  }
+
   return (rawStatus || "In Stock") as Product["stockStatus"];
 }
 
@@ -123,7 +142,11 @@ async function fetchProductRelations(productIds: string[]) {
       compareAtPrice: compareAtCents > 0 ? formatPriceFromCents(compareAtCents) : undefined,
       salePrice: salePriceCents > 0 ? formatPriceFromCents(salePriceCents) : undefined,
       inventoryQuantity: parseNumber(row.inventory_quantity, 0),
-      stockStatus: resolveStockStatus(String(row.stock_status ?? "In Stock"), inventoryActive) as ProductDose["stockStatus"],
+      stockStatus: resolveStockStatus(
+        String(row.stock_status ?? "In Stock"),
+        inventoryActive,
+        parseNumber(row.inventory_quantity, 0),
+      ) as ProductDose["stockStatus"],
       batchNumber: row.batch_number ? String(row.batch_number) : undefined,
       coaUrl: sanitizeCoaUrl(row.coa_url) || undefined,
       imageUrl: row.image_url ? String(row.image_url) : undefined,
@@ -158,9 +181,13 @@ function mapProductRow(
   // Availability has exactly one source of truth: Vanta Labs. Until tracking is on
   // (inventoryActive === false) everything is In Stock; the doses were already
   // resolved the same way in fetchProductRelations.
+  // The dose's own status already carries the zero-quantity rule from
+  // fetchProductRelations, so pass the quantity that actually backs this
+  // product -- the default dose's count when there is one, else the product's.
   const stockStatus = resolveStockStatus(
     String(defaultDose?.stockStatus ?? row.stock_status ?? "In Stock"),
     inventoryActive,
+    defaultInventoryQuantity,
   );
   const effectiveImage = defaultDose?.imageUrl ?? primaryImage?.imageUrl ?? String(row.image_url ?? "/images/vantalabs.png");
   const effectiveBatchNumber = defaultDose?.batchNumber ?? String(row.batch_number ?? "");
