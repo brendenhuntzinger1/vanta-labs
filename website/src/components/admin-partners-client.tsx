@@ -25,6 +25,29 @@ const TABS = [
 
 type TabKey = (typeof TABS)[number]["key"];
 
+// The three program settings, described once. Each carries the control-table
+// key it persists under and the resolved-settings property it reads back from.
+const PROGRAM_SETTING_FIELDS = [
+  {
+    key: "minimum_qualifying_order",
+    prop: "minimumQualifyingOrder",
+    label: "Minimum qualifying order",
+    help: "Referral codes require at least this PRE-discount merchandise subtotal to earn commission.",
+  },
+  {
+    key: "minimum_payout_threshold",
+    prop: "minimumPayoutThreshold",
+    label: "Minimum payout threshold",
+    help: "Payouts below this amount require an explicit override.",
+  },
+  {
+    key: "commission_hold_days",
+    prop: "commissionHoldDays",
+    label: "Commission hold period (days)",
+    help: "Waiting period before a paid, non-refunded order's commission is eligible for payout.",
+  },
+] as const;
+
 function formatDate(value: string) {
   return new Date(value).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 }
@@ -70,6 +93,12 @@ export function AdminPartnersClient({
   const [newTierMinSales, setNewTierMinSales] = useState("0");
   const [newTierPercent, setNewTierPercent] = useState("10");
   const [tab, setTab] = useState<TabKey>("overview");
+  // Drafts are held separately from the resolved settings so the Save button
+  // always sends what is on screen. The previous onBlur guard compared the typed
+  // value against the DISPLAYED one and skipped the request when they matched --
+  // which made a fallback value impossible to persist, because the fallback is
+  // exactly what the box already showed.
+  const [settingDrafts, setSettingDrafts] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -697,40 +726,46 @@ export function AdminPartnersClient({
 
       <section className="vl-panel rounded-2xl p-4 sm:p-5">
         <h2 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-300">Ambassador Program Settings</h2>
+        <p className="mt-1 text-xs text-zinc-500">
+          A field marked <span className="text-amber-300">Default</span> is showing a built-in value that is NOT stored. Press Save to
+          make it your recorded policy — otherwise a future change to the built-in default would move it silently.
+        </p>
         <div className="mt-4 grid gap-4 sm:grid-cols-3">
-          <label className="text-sm text-zinc-300">
-            <span className="mb-2 block text-xs uppercase tracking-[0.18em] text-zinc-500">Minimum qualifying order</span>
-            <input
-              type="number"
-              min={0}
-              defaultValue={settings.minimumQualifyingOrder}
-              onBlur={(event) => Number(event.target.value) !== settings.minimumQualifyingOrder && updateSetting("minimum_qualifying_order", Number(event.target.value))}
-              className="vl-input w-full px-3 py-2 text-sm"
-            />
-            <span className="mt-1 block text-xs text-zinc-500">Referral codes require at least this merchandise subtotal.</span>
-          </label>
-          <label className="text-sm text-zinc-300">
-            <span className="mb-2 block text-xs uppercase tracking-[0.18em] text-zinc-500">Minimum payout threshold</span>
-            <input
-              type="number"
-              min={0}
-              defaultValue={settings.minimumPayoutThreshold}
-              onBlur={(event) => Number(event.target.value) !== settings.minimumPayoutThreshold && updateSetting("minimum_payout_threshold", Number(event.target.value))}
-              className="vl-input w-full px-3 py-2 text-sm"
-            />
-            <span className="mt-1 block text-xs text-zinc-500">Payouts below this amount require an explicit override.</span>
-          </label>
-          <label className="text-sm text-zinc-300">
-            <span className="mb-2 block text-xs uppercase tracking-[0.18em] text-zinc-500">Commission hold period (days)</span>
-            <input
-              type="number"
-              min={0}
-              defaultValue={settings.commissionHoldDays}
-              onBlur={(event) => Number(event.target.value) !== settings.commissionHoldDays && updateSetting("commission_hold_days", Number(event.target.value))}
-              className="vl-input w-full px-3 py-2 text-sm"
-            />
-            <span className="mt-1 block text-xs text-zinc-500">Waiting period before a paid, non-refunded order&apos;s commission is eligible for payout.</span>
-          </label>
+          {PROGRAM_SETTING_FIELDS.map((field) => {
+            const isStored = settings.stored?.[field.prop] ?? true;
+            const draft = settingDrafts[field.key] ?? String(settings[field.prop]);
+            return (
+              <div key={field.key} className="text-sm text-zinc-300">
+                <div className="mb-2 flex flex-wrap items-center gap-2">
+                  <span className="text-xs uppercase tracking-[0.18em] text-zinc-500">{field.label}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] ${
+                    isStored ? "bg-emerald-400/15 text-emerald-200" : "bg-amber-400/15 text-amber-200"
+                  }`}>
+                    {isStored ? "Saved" : "Default"}
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    value={draft}
+                    onChange={(event) => setSettingDrafts((prev) => ({ ...prev, [field.key]: event.target.value }))}
+                    className="vl-input w-full px-3 py-2 text-sm"
+                    aria-label={field.label}
+                  />
+                  <button
+                    type="button"
+                    disabled={loading || draft.trim() === ""}
+                    onClick={() => updateSetting(field.key, Number(draft))}
+                    className="vl-focus-ring flex-shrink-0 rounded-lg border border-zinc-700 px-3 py-2 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-100 disabled:opacity-50"
+                  >
+                    Save
+                  </button>
+                </div>
+                <span className="mt-1 block text-xs text-zinc-500">{field.help}</span>
+              </div>
+            );
+          })}
         </div>
       </section>
 
