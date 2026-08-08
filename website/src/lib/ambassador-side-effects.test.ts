@@ -115,8 +115,70 @@ describe("a rate edit writes only the rate", () => {
   // Both tables still receive the write, so the mirror cannot silently drift
   // when a rate genuinely changes.
   it("still mirrors the rate to both tables", () => {
-    expect(portal).toContain('supabaseAdmin.from("partners").update(updatePayload)');
-    expect(portal).toContain('supabaseAdmin.from("ambassadors").update(updatePayload)');
+    expect(portal).toContain('.from("partners")\n    .update(updatePayload)');
+    expect(portal).toContain('.from("ambassadors")\n    .update(updatePayload)');
+  });
+
+  // Order matters. Concurrent writes let a rejected one land AFTER the other
+  // had committed, which is how partners took 20% while ambassadors kept the
+  // old rate. ambassadors is what checkout reads, so it must commit first: if
+  // it fails, nothing is written anywhere.
+  it("writes the money table before the display mirror", () => {
+    const ambassadorsWrite = portal.indexOf('.from("ambassadors")\n    .update(updatePayload)');
+    const partnersWrite = portal.indexOf('.from("partners")\n    .update(updatePayload)');
+    expect(ambassadorsWrite).toBeGreaterThan(-1);
+    expect(partnersWrite).toBeGreaterThan(ambassadorsWrite);
+  });
+
+  it("no longer fires the two writes concurrently", () => {
+    expect(portal).not.toContain("await Promise.all([\n    supabaseAdmin.from(\"partners\").update(updatePayload)");
+  });
+
+  // The failure of the authoritative write must stop the mirror from running.
+  it("asserts on the ambassadors write before touching partners", () => {
+    const assertAmbassadors = portal.indexOf('assertNoSupabaseError("ambassadors.update(authoritative rates)"');
+    const partnersWrite = portal.indexOf('.from("partners")\n    .update(updatePayload)');
+    expect(assertAmbassadors).toBeGreaterThan(-1);
+    expect(assertAmbassadors).toBeLessThan(partnersWrite);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DISPLAY MUST READ THE TABLE THAT CHARGES THE CUSTOMER.
+//
+// The deeper cause of the production drift was not the failed write -- it was
+// that money and display read different tables. Checkout and the payment
+// webhook read `ambassadors`; the admin roster and the ambassador dashboard
+// read `partners`. So the two could disagree and nothing in the system noticed.
+//
+// Every rate shown to a human now comes from `ambassadors`, which means a drift
+// can no longer display a rate that is not the one charged.
+// ---------------------------------------------------------------------------
+describe("rates are displayed from the authoritative table", () => {
+  it("reads the rate columns from ambassadors", () => {
+    expect(portal).toContain("async function fetchAuthoritativeRates(");
+    expect(portal).toContain('.from("ambassadors")\n    .select("id, customer_discount_percent, commission_percent, commission_percent_locked")');
+  });
+
+  it("the admin roster prefers the authoritative rate", () => {
+    expect(portal).toContain("const authoritativeRates = await fetchAuthoritativeRates(");
+    expect(portal).toContain("liveRates?.commissionPercent ?? Number(partner.commission_percent ?? 15)");
+  });
+
+  it("the ambassador's own dashboard prefers it too", () => {
+    expect(portal).toContain("liveRates ? liveRates.customerDiscountPercent : partner.customer_discount_percent");
+  });
+
+  // A NULL override on the authoritative row means "inherit the program
+  // default" and must not silently fall through to a stale partners value.
+  it("does not fall back to partners when the authoritative row exists", () => {
+    expect(portal).toContain("liveRates\n          ? liveRates.customerDiscountPercent");
+  });
+
+  // Losing the ambassadors read should degrade to the old behaviour, not blank
+  // the admin.
+  it("falls back to partners only when the lookup itself failed", () => {
+    expect(portal).toContain("if (error) return rates;");
   });
 });
 

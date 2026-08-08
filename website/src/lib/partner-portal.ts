@@ -938,8 +938,11 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   // failure to read the program config must not blank the dashboard, so the
   // resolver's own fallback path (an unusable override) is the worst case.
   const referralProgram = await getReferralProgramConfig().catch(() => null);
+  // Read the rate from the table checkout reads, so an ambassador is never
+  // shown a discount their own code would not give.
+  const liveRates = (await fetchAuthoritativeRates([String(partner.id)])).get(String(partner.id));
   const customerDiscountPercent = resolveAmbassadorCustomerDiscount(
-    partner.customer_discount_percent,
+    liveRates ? liveRates.customerDiscountPercent : partner.customer_discount_percent,
     referralProgram?.discountPercent ?? DEFAULT_REFERRAL_DISCOUNT_PERCENT,
   );
 
@@ -948,7 +951,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     partnerName: partner.name,
     referralCode: partner.referral_code,
     referralLink: `${siteUrl.replace(/\/$/, "")}/r/${partner.referral_code}`,
-    commissionPercent: Number(partner.commission_percent ?? 15),
+    commissionPercent: liveRates?.commissionPercent ?? Number(partner.commission_percent ?? 15),
     customerDiscountPercent,
     totalEarnings,
     pendingCommissions,
@@ -977,6 +980,45 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
       createdAt: String(row.created_at),
     })),
   };
+}
+
+/**
+ * The rates that ACTUALLY decide money, read from the table that decides it.
+ *
+ * An ambassador exists as two rows sharing one id. Checkout (quote-order) and
+ * the payment webhook read `ambassadors`; the admin roster and the ambassador's
+ * own dashboard used to read `partners`. So the number the owner saw and the
+ * number the shopper was charged came from different places, and a partial
+ * write could leave them disagreeing -- confirmed in production, where the
+ * admin showed a 20% discount that checkout would never have applied.
+ *
+ * Every display now reads the money side. The two tables can still drift, but
+ * a drift can no longer show the owner a rate that is not the one charged: at
+ * worst `partners` holds a stale copy nothing reads for pricing.
+ */
+async function fetchAuthoritativeRates(
+  partnerIds: string[],
+): Promise<Map<string, { customerDiscountPercent: number | null; commissionPercent: number | null; commissionPercentLocked: boolean }>> {
+  const rates = new Map<string, { customerDiscountPercent: number | null; commissionPercent: number | null; commissionPercentLocked: boolean }>();
+  if (partnerIds.length === 0) return rates;
+
+  const { data, error } = await supabaseAdmin
+    .from("ambassadors")
+    .select("id, customer_discount_percent, commission_percent, commission_percent_locked")
+    .in("id", partnerIds);
+
+  // A failure here must not blank the admin: the caller falls back to the
+  // partners copy, which is the previous behaviour rather than a regression.
+  if (error) return rates;
+
+  for (const row of data ?? []) {
+    rates.set(String(row.id), {
+      customerDiscountPercent: row.customer_discount_percent != null ? Number(row.customer_discount_percent) : null,
+      commissionPercent: row.commission_percent != null ? Number(row.commission_percent) : null,
+      commissionPercentLocked: Boolean(row.commission_percent_locked),
+    });
+  }
+  return rates;
 }
 
 export async function getAdminPartnerRows(input?: { search?: string; status?: string; payoutStatus?: string }): Promise<AdminPartnerRow[]> {
@@ -1077,7 +1119,10 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
     }
   }
 
+  const authoritativeRates = await fetchAuthoritativeRates((partners ?? []).map((p) => String(p.id)));
+
   const mappedRows = (partners ?? []).map((partner) => {
+    const liveRates = authoritativeRates.get(String(partner.id));
     const commission = commissionByPartner.get(partner.id) ?? { total: 0, pending: 0, approvedForPayout: 0, paid: 0, reversed: 0 };
     const order = ordersByPartner.get(partner.id) ?? { totalRevenue: 0, totalOrders: 0 };
     const clicks = clickCounts.get(partner.id) ?? 0;
@@ -1089,9 +1134,12 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
       email: partner.email,
       referralCode: partner.referral_code,
       status: partner.status,
-      commissionPercent: Number(partner.commission_percent ?? 15),
-      commissionPercentLocked: Boolean(partner.commission_percent_locked),
-      customerDiscountPercent: partner.customer_discount_percent != null ? Number(partner.customer_discount_percent) : null,
+      commissionPercent: liveRates?.commissionPercent ?? Number(partner.commission_percent ?? 15),
+      commissionPercentLocked: liveRates?.commissionPercentLocked ?? Boolean(partner.commission_percent_locked),
+      customerDiscountPercent:
+        liveRates
+          ? liveRates.customerDiscountPercent
+          : partner.customer_discount_percent != null ? Number(partner.customer_discount_percent) : null,
       totalRevenue: roundMoney(order.totalRevenue),
       totalOrders: order.totalOrders,
       totalCommissions: roundMoney(commission.total),
@@ -1440,13 +1488,28 @@ export async function updatePartnerStatus(input: {
     updatePayload.referral_code = normalizedReferralCode;
   }
 
-  const [{ error: partnerUpdateError }, { error: ambassadorUpdateError }] = await Promise.all([
-    supabaseAdmin.from("partners").update(updatePayload).eq("id", input.partnerId),
-    supabaseAdmin.from("ambassadors").update(updatePayload).eq("id", input.partnerId),
-  ]);
+  // SEQUENTIAL, AND THE MONEY SIDE FIRST.
+  //
+  // These ran concurrently, so a rejected write on one table arrived after the
+  // other had already committed -- the exact shape of the production drift:
+  // partners took a 20% discount, ambassadors rejected the payload, and the
+  // storefront kept charging the old rate while the admin showed the new one.
+  //
+  // ambassadors is what checkout reads, so it goes first. If it fails, nothing
+  // is written anywhere and the owner sees an honest error. If the partners
+  // mirror then fails, the rate that governs money is already correct and only
+  // a display copy is stale -- the safe direction to fail in.
+  const { error: ambassadorUpdateError } = await supabaseAdmin
+    .from("ambassadors")
+    .update(updatePayload)
+    .eq("id", input.partnerId);
+  assertNoSupabaseError("ambassadors.update(authoritative rates)", ambassadorUpdateError);
 
-  assertNoSupabaseError("partners.update(status)", partnerUpdateError);
-  assertNoSupabaseError("ambassadors.update(status mirror)", ambassadorUpdateError);
+  const { error: partnerUpdateError } = await supabaseAdmin
+    .from("partners")
+    .update(updatePayload)
+    .eq("id", input.partnerId);
+  assertNoSupabaseError("partners.update(mirror)", partnerUpdateError);
 
   const finalReferralCode = normalizedReferralCode ?? existingPartner.referral_code;
   const referralCodeChanged = Boolean(normalizedReferralCode) && normalizedReferralCode !== existingPartner.referral_code;
