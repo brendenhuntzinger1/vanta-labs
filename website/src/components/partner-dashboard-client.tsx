@@ -144,7 +144,9 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
           </div>
           <h1 className="vl2-serif mt-2 text-3xl text-white sm:text-4xl">Welcome back, {liveSummary.partnerName}.</h1>
           <p className="mt-2 text-sm text-zinc-400">
-            {liveSummary.commissionPercent}% commission · you also get <span className="text-emerald-300">15% off your own orders</span> while approved.
+            Your code gives customers <span className="text-cyan-300">{liveSummary.customerDiscountPercent}% off</span> ·
+            you earn <span className="text-amber-200">{liveSummary.commissionPercent}% commission</span> · you also get{" "}
+            <span className="text-emerald-300">15% off your own orders</span> while approved.
           </p>
         </div>
       </section>

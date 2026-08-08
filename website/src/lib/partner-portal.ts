@@ -13,7 +13,8 @@ import {
   referralCodeAssignedTemplate,
 } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
-import { getBusinessSettings, getReferralProgramConfig } from "@/lib/admin-control";
+import { DEFAULT_REFERRAL_DISCOUNT_PERCENT, getBusinessSettings, getReferralProgramConfig } from "@/lib/admin-control";
+import { resolveAmbassadorCustomerDiscount } from "@/lib/quote-order";
 import { getAmbassadorProgramSettings, getAmbassadorMarketingResources, type AmbassadorMarketingResource } from "@/lib/ambassador-settings";
 
 function formatSupabaseError(error: unknown) {
@@ -50,6 +51,10 @@ export interface PartnerSummary {
   referralCode: string;
   referralLink: string;
   commissionPercent: number;
+  // The discount an ambassador's OWN audience receives. Resolved, not raw: an
+  // ambassador with no override sees the program default, because that is what
+  // their code actually gives -- not a blank.
+  customerDiscountPercent: number;
   totalEarnings: number;
   pendingCommissions: number;
   pendingOnlyCommissions: number;
@@ -819,7 +824,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   const [{ data: partner, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }, { data: payoutRows, error: payoutError }] = await Promise.all([
     supabaseAdmin
       .from("partners")
-      .select("id, name, referral_code, commission_percent, status, payout_method, payout_handle")
+      .select("id, name, referral_code, commission_percent, customer_discount_percent, status, payout_method, payout_handle")
       .eq("id", partnerId)
       .single(),
     supabaseAdmin
@@ -928,12 +933,23 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
 
   const marketingResources = await getAmbassadorMarketingResources().catch(() => []);
 
+  // Resolved with the same rule checkout uses, so the dashboard tells the
+  // ambassador what their code gives rather than what their row stores. A
+  // failure to read the program config must not blank the dashboard, so the
+  // resolver's own fallback path (an unusable override) is the worst case.
+  const referralProgram = await getReferralProgramConfig().catch(() => null);
+  const customerDiscountPercent = resolveAmbassadorCustomerDiscount(
+    partner.customer_discount_percent,
+    referralProgram?.discountPercent ?? DEFAULT_REFERRAL_DISCOUNT_PERCENT,
+  );
+
   return {
     partnerId: partner.id,
     partnerName: partner.name,
     referralCode: partner.referral_code,
     referralLink: `${siteUrl.replace(/\/$/, "")}/r/${partner.referral_code}`,
     commissionPercent: Number(partner.commission_percent ?? 15),
+    customerDiscountPercent,
     totalEarnings,
     pendingCommissions,
     pendingOnlyCommissions,
