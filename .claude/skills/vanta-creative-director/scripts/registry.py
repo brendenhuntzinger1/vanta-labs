@@ -27,13 +27,21 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from pathlib import Path
 
-REGISTRY_PATH = Path(__file__).resolve().parent.parent / "creative-history.json"
+# Overridable so an eval, a dry run or a scratch experiment can point at its own
+# ledger. Without this every test run writes into the real creative history, and
+# a future session then reads fixture concepts as angles that were genuinely
+# proposed — which is the exact confusion this file exists to prevent.
+REGISTRY_PATH = Path(
+    os.environ.get("VANTA_CREATIVE_REGISTRY")
+    or Path(__file__).resolve().parent.parent / "creative-history.json"
+)
 
 VALID_STATUS = {"draft", "testing", "winner", "scaling", "fatiguing", "retired", "ineligible"}
 
