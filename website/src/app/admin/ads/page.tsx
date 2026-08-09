@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getAdsDashboard, type CreativeRow } from "@/lib/ads/dashboard-data";
 import { AdsSectionTabs } from "@/components/ads-section-tabs";
 import { AdsTrackingHealth } from "@/components/ads-tracking-health";
+import { AdsCampaignsPanel } from "@/components/ads-campaigns-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -194,11 +195,8 @@ export default async function AdsDashboardPage() {
 
   const campaigns = (
     <>
-      <Panel title="Campaigns" subtitle="live TikTok campaigns, once the Ads Management API is authorised">
-        <Empty>
-          Not connected. Reading campaigns needs an Ads Management authorisation, which is a different credential from
-          the Events API token that reports conversions. Tracking Health names the single step that grants it.
-        </Empty>
+      <Panel title="Campaigns" subtitle="spend, CPM, CTR, CPC and CPA, read from TikTok — never modelled">
+        <AdsCampaignsPanel />
       </Panel>
 
       <Panel title="Experiments" subtitle="one variable at a time, or it teaches nothing">

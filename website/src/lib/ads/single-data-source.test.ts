@@ -49,9 +49,18 @@ describe("exactly one TikTok data source", () => {
     ]);
   });
 
-  it("sends server events to exactly one endpoint", () => {
-    const senders = files.filter((path) => read(path).includes("business-api.tiktok.com"));
+  it("reports conversions from exactly one module", () => {
+    // The Events API and the Ads Management API share a host but are different
+    // services: one writes conversions in, the other reads spend out. What must
+    // stay singular is the thing that can create a conversion.
+    const senders = files.filter((path) => read(path).includes("/event/track/"));
     expect(senders.map((p) => p.replace(SRC, "src"))).toEqual(["src/lib/ads/tiktok-events-api.ts"]);
+  });
+
+  it("keeps ad management in one module, and it cannot report conversions", () => {
+    const managers = files.filter((path) => read(path).includes("/report/integrated/get/") && !read(path).includes("SimulationTikTokClient"));
+    expect(managers.map((p) => p.replace(SRC, "src"))).toEqual(["src/lib/ads/tiktok-ads-api.ts"]);
+    expect(read(`${SRC}/lib/ads/tiktok-ads-api.ts`)).not.toContain("/event/track/");
   });
 });
 
