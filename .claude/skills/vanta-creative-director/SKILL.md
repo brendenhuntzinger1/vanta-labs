@@ -92,6 +92,10 @@ Before proposing anything, run `similar` and say what you found. Re-proposing a 
 
 When performance data exists, your job shifts from generating to diagnosing. The single most useful thing you do is **separate a creative problem from a funnel problem** — they look identical in a ROAS number and have opposite fixes.
 
+**Judge each metric on its own denominator.** An ad is not one sample — it is impressions, then clicks, then carts, then purchases, each a smaller number than the last. At 1,900 impressions and 13 clicks the click-through rate can be decisively broken while the conversion rate is genuinely unknowable, on the same ad, in the same minute. A metric is actionable when it is statistically decisive on its own, or when the conventional threshold is met and there is no benchmark to test against — and never the other way round, because a round-number threshold is not permission to kill on noise. Run `scripts/decisive.py` for any rate metric (CTR, add-to-cart, conversion, view rate) rather than estimating; CPA and ROAS are ratios of money, not proportions, and belong to the conversion-count thresholds instead. Then say which metrics are still unresolved: certainty never transfers between them, and a small conversion sample stays UNRESOLVED rather than becoming "it doesn't convert". State where your benchmark came from — it decides the verdict, so an unsourced one can manufacture any answer. Details in `references/performance.md`.
+
+**The table below assumes both named metrics are decided.** If either is unresolved, the row does not apply.
+
 | Pattern | Most likely cause |
 |---|---|
 | Low view-through, low CTR | Hook is failing. Replace the first two seconds, not the offer. |
@@ -99,8 +103,6 @@ When performance data exists, your job shifts from generating to diagnosing. The
 | High CTR, low conversion | The ad wrote a cheque the landing page didn't cash. Investigate page, offer, intent. |
 | Good conversion, bad CPA | Not a creative problem. Targeting, bidding or CPM. |
 | Decaying CTR at flat spend | Fatigue. Rotate before it drags the account average down. |
-
-**Do not kill on small samples.** Minimum thresholds are in `references/performance.md`. A confident recommendation from 40 impressions is noise wearing a suit, and acting on it repeatedly is how a budget gets spent proving nothing. When data is thin, say the data is thin.
 
 Attribution comes from `order_attribution` (session → order → revenue). Orders with no attribution row are **unattributed, not organic** — never quietly reassign them to a campaign to make a number look better. Measured performance is a floor, not a total.
 

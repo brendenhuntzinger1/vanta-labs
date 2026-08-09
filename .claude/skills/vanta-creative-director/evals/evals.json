@@ -19,8 +19,54 @@
       "id": 2,
       "name": "performance-diagnosis",
       "prompt": "one of our ads has spent $890 over 9 days. 41,000 impressions, 2.1% CTR, 860 clicks, 31 add to carts, 3 purchases, $420 revenue. another one spent $95 in 2 days, 1,900 impressions, 0.7% CTR, 13 clicks, 0 purchases. what do i do with these two?",
-      "expected_output": "Diagnoses the first as a funnel/landing-page problem (healthy CTR, collapse between click and purchase) rather than a creative problem. Refuses to make a confident call on the second because it is under the minimum data threshold. Gives concrete next actions. Does not claim authority to pause or change budgets.",
-      "files": []
+      "expected_output": "Diagnoses ad 1 as a funnel/landing-page problem (healthy CTR, collapse between click and purchase) rather than a creative problem. On ad 2, judges each metric on its own denominator: concludes the hook/CTR is decisively weak at 1,900 impressions while stating that conversion rate is unresolved at 13 clicks, and never lets certainty on one metric imply certainty on the other. Quantifies the uncertainty. Gives concrete next actions. Does not claim authority to pause or change budgets.",
+      "files": [],
+      "assertions": [
+        {
+          "id": "funnel-not-creative",
+          "text": "Diagnoses ad 1 as a funnel/landing-page/offer problem rather than a creative problem"
+        },
+        {
+          "id": "ctr-is-healthy",
+          "text": "Explicitly recognises ad 1's 2.1% CTR as healthy, so the hook and creative are working"
+        },
+        {
+          "id": "identifies-drop-point",
+          "text": "Locates the collapse specifically between click/add-to-cart and purchase (860 clicks to 31 ATC to 3 purchases)"
+        },
+        {
+          "id": "per-metric-separation",
+          "text": "Treats ad 2's click-through rate and its conversion rate as two separate questions with two different denominators, rather than issuing one verdict for the whole ad"
+        },
+        {
+          "id": "ctr-decisive-ad2",
+          "text": "Concludes ad 2's hook/CTR is decisively weak on the evidence available, rather than refusing to judge it solely because a round-number impression floor was not reached"
+        },
+        {
+          "id": "cvr-unresolved-ad2",
+          "text": "States explicitly that ad 2's conversion rate is unresolved/unknowable at 13 clicks and never describes ad 2 as converting badly"
+        },
+        {
+          "id": "no-extrapolation",
+          "text": "Never extrapolates certainty from one metric to another - a decided CTR is not presented as evidence about conversion, CPA or ROAS, and vice versa"
+        },
+        {
+          "id": "quantifies-uncertainty",
+          "text": "Backs the ad 2 judgement with actual quantities (a confidence interval, a significance test, or an explicit statement of how much more data would settle the open metric) rather than an unsupported assertion"
+        },
+        {
+          "id": "correct-arithmetic",
+          "text": "Any ROAS/CPA/conversion figures it states are arithmetically correct (ROAS ~0.47, CPA ~$297)"
+        },
+        {
+          "id": "recommends-not-acts",
+          "text": "Frames everything as a recommendation for a human to execute, never as an action it will take"
+        },
+        {
+          "id": "concrete-next-actions",
+          "text": "Gives specific next steps rather than generic advice"
+        }
+      ]
     }
   ]
 }
