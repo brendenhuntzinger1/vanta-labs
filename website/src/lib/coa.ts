@@ -19,6 +19,7 @@ import {
   type CoaLibrarySnapshot,
   type PublicCoaDocument,
 } from "@/lib/coa-types";
+import { resolveProductImage } from "@/lib/product-image";
 
 // DELIBERATELY UNCACHED.
 //
@@ -164,7 +165,7 @@ export async function getCoaLibrarySnapshot(): Promise<CoaLibrarySnapshot> {
       name: product.name,
       category: product.category,
       strength: defaultDose?.label?.trim() || null,
-      imageUrl: product.image || "/images/vantalabs.png",
+      imageUrl: resolveProductImage(product.image),
       documents,
     });
   }

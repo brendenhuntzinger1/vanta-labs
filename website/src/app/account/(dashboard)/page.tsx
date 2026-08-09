@@ -24,6 +24,7 @@ import { AccountRecentlyViewed } from "@/components/account-recently-viewed";
 import { FREE_SHIPPING_THRESHOLD } from "@/lib/shipping";
 import { displayOrderReference } from "@/lib/order-reference";
 import { formatDisplayDate } from "@/lib/format-date";
+import { resolveProductImage } from "@/lib/product-image";
 
 function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -68,7 +69,7 @@ function ProductMiniCard({ product }: { product: Product }) {
     >
       <div className="relative aspect-square overflow-hidden rounded-lg bg-white/5">
         <Image
-          src={product.image || "/images/vantalabs.png"}
+          src={resolveProductImage(product.image)}
           alt={product.name}
           fill
           sizes="176px"

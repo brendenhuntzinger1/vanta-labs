@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { ProductDetailClient } from "@/components/product-detail-client";
+import { TikTokViewContent } from "@/components/tiktok-view-content";
 import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/catalog";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getPublishedCoaDocumentsForProduct } from "@/lib/coa";
@@ -102,6 +103,10 @@ export default async function ProductDetailPage({
         type="application/ld+json"
         dangerouslySetInnerHTML={{ __html: JSON.stringify(productLd).replace(/</g, "\\u003c") }}
       />
+      {/* Measurement only. Rendered alongside the product UI rather than inside
+          it, so the shopping component stays untouched. `priceNumber` is the
+          same server-resolved figure the structured data uses. */}
+      <TikTokViewContent slug={product.slug} name={product.name} price={priceNumber} />
       <ProductDetailClient
         product={product}
         relatedProducts={relatedProducts}

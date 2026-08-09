@@ -3,6 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { useMemo, useSyncExternalStore } from "react";
+import { resolveProductImage } from "@/lib/product-image";
 
 type RecentlyViewedItem = { slug: string; name: string; price: string; image: string };
 
@@ -62,7 +63,7 @@ export function AccountRecentlyViewed() {
           >
             <div className="relative aspect-square overflow-hidden rounded-lg bg-white/5">
               <Image
-                src={item.image || "/images/vantalabs.png"}
+                src={resolveProductImage(item.image)}
                 alt={item.name}
                 fill
                 sizes="144px"
