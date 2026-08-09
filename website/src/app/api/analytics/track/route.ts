@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getRequestIpAddress } from "@/lib/admin-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { createOptionalColumnInserter } from "@/lib/analytics-column-fallback";
+
+const insertAnalyticsEvent = createOptionalColumnInserter(async (row) =>
+  supabaseAdmin.from("website_analytics_events").insert(row),
+);
 
 const ALLOWED_EVENTS = new Set([
   "session_start",
@@ -101,9 +106,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: false, error: "Too many requests" }, { status: 429 });
     }
 
-    const { error } = await supabaseAdmin
-      .from("website_analytics_events")
-      .insert({
+    // The three creative-attribution columns ship with a migration. Until that
+    // migration is applied they do not exist, and including them would make
+    // PostgREST reject the entire insert — switching off first-party analytics
+    // that has worked for months. See analytics-column-fallback.ts.
+    const error = await insertAnalyticsEvent(
+      {
         event_type: eventType,
         page_path: pagePath,
         page_url: normalizeText(body.pageUrl, 1200),
@@ -118,12 +126,15 @@ export async function POST(request: Request) {
         utm_source: normalizeText(body.utmSource, 120),
         utm_medium: normalizeText(body.utmMedium, 120),
         utm_campaign: normalizeText(body.utmCampaign, 180),
+        event_payload: normalizePayload(body.payload),
+        created_at: new Date().toISOString(),
+      },
+      {
         utm_content: normalizeText(body.utmContent, 180),
         utm_term: normalizeText(body.utmTerm, 180),
         ttclid: normalizeText(body.ttclid, 260),
-        event_payload: normalizePayload(body.payload),
-        created_at: new Date().toISOString(),
-      });
+      },
+    );
 
     if (error) {
       throw error;
