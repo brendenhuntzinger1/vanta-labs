@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 import { browserFiredStore, emitEvent, mapAnalyticsDetail, type AnalyticsDetail, type Emitter } from "@/lib/ads/tiktok-events";
 import { LISTENER_FLAG } from "@/lib/ads/tracking-health-browser";
+import { relayToServer } from "@/lib/ads/relay-client";
 
 /**
  * AddToCart and InitiateCheckout, forwarded to the TikTok pixel.
@@ -33,7 +34,31 @@ export function TikTokCommerceEvents() {
     const handler = (event: Event) => {
       // If the pixel has not loaded, consent was declined or not yet given.
       if (!window.ttq) return;
-      emitEvent(mapAnalyticsDetail((event as CustomEvent<AnalyticsDetail>).detail), emit, store);
+      const detail = (event as CustomEvent<AnalyticsDetail>).detail;
+      const mapped = mapAnalyticsDetail(detail);
+      if (!mapped) return;
+
+      emitEvent(mapped, emit, store);
+
+      // The same event, reported again from the server under the same id, so
+      // TikTok counts one. Lines carry slugs and quantities only — the server
+      // re-resolves prices from the catalogue rather than believing the page.
+      const lines =
+        mapped.name === "AddToCart"
+          ? [{ slug: String(detail?.productSlug ?? ""), quantity: Number(detail?.quantity ?? 1) }]
+          : (detail?.items ?? []).map((item) => ({
+              slug: String(item.slug ?? ""),
+              quantity: Number(item.quantity ?? 1),
+            }));
+
+      if (mapped.name === "AddToCart" || mapped.name === "InitiateCheckout") {
+        relayToServer({
+          event: mapped.name,
+          eventId: mapped.eventId,
+          lines: lines.filter((line) => line.slug),
+          claimedTotal: mapped.properties.value,
+        });
+      }
     };
 
     window.addEventListener("vanta:analytics", handler);

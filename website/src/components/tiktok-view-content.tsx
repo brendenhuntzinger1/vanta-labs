@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { browserFiredStore, buildViewContent, emitEvent, type Emitter } from "@/lib/ads/tiktok-events";
 import { whenPixelReady } from "@/lib/ads/pixel-ready";
+import { relayToServer } from "@/lib/ads/relay-client";
 
 /**
  * ViewContent for a product page.
@@ -35,6 +36,9 @@ export function TikTokViewContent({ slug, name, price }: { slug: string; name?: 
       lastReported.current = slug;
       const emit: Emitter = (eventName, properties, options) => {
         window.ttq?.track(eventName, properties, options);
+        // Same event id, so TikTok collapses the two legs into one event. The
+        // server leg is what survives an ad blocker eating the pixel.
+        relayToServer({ event: "ViewContent", eventId: options.event_id, lines: [{ slug, quantity: 1 }] });
       };
       emitEvent(buildViewContent({ slug, name, price }), emit, browserFiredStore());
     });
