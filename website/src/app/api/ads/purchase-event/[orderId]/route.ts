@@ -78,8 +78,29 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   // request originates here. It does NOT fire for a customer who never opens
   // the confirmation page — closing that gap needs a reconciliation job over
   // paid orders, which needs the ads schema applied.
+  //
+  // Idempotency beyond TikTok's own window: TikTok collapses identical
+  // (event_source_id, event, event_id) for 48 hours, but a confirmation link
+  // re-opened on day three would land as a brand-new conversion. A one-row
+  // ledger keyed on the order makes the send permanent.
+  //
+  // If the ledger table does not exist yet the send still proceeds — an
+  // occasional duplicate that TikTok itself collapses is a far better failure
+  // than silently never reporting real revenue.
+  let alreadySent = false;
+  try {
+    const { data: sent } = await supabaseAdmin
+      .from("ad_purchase_events_sent")
+      .select("order_id")
+      .eq("order_id", String(order.order_id))
+      .maybeSingle();
+    alreadySent = Boolean(sent);
+  } catch {
+    /* table not applied yet — fall through and send */
+  }
+
   let serverDelivery: string | null = null;
-  if (event && credentialStatus().configured) {
+  if (event && !alreadySent && credentialStatus().configured) {
     const attribution = await getOrderAttribution(String(order.order_id)).catch(() => null);
     const outcome = await sendServerEvents([
       {
@@ -104,6 +125,23 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
       },
     ]);
     serverDelivery = describeResult(outcome);
+
+    // Recorded whatever the outcome, so a hard TikTok rejection is not retried
+    // on every page refresh. `delivered` distinguishes the two for later repair.
+    try {
+      await supabaseAdmin.from("ad_purchase_events_sent").upsert(
+        {
+          order_id: String(order.order_id),
+          event_id: event.eventId,
+          platform: "tiktok",
+          delivered: outcome.delivered,
+          tiktok_code: outcome.tiktokCode,
+        },
+        { onConflict: "order_id" },
+      );
+    } catch {
+      /* ledger unavailable; TikTok's own 48h dedup still applies */
+    }
     // Diagnostics only. No token, no customer data — describeResult is built
     // from a fixed field set precisely so this line cannot leak either.
     console.info(`[ads] order ${String(order.order_id)} — ${serverDelivery}`);
