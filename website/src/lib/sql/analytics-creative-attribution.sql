@@ -24,18 +24,15 @@ alter table public.website_analytics_events
   add column if not exists utm_term    text,
   add column if not exists ttclid      text;
 
--- utm_content is the creative id. Every per-creative funnel query filters or
--- groups by it, over a date range, so it is indexed with created_at.
-create index if not exists website_analytics_events_utm_content_idx
-  on public.website_analytics_events (utm_content, created_at desc)
-  where utm_content is not null;
-
--- ttclid joins a session to a TikTok click when the campaign tags are missing
--- or stripped. Partial for the same reason: the overwhelming majority of rows
--- are organic and would only bloat the index.
-create index if not exists website_analytics_events_ttclid_idx
-  on public.website_analytics_events (ttclid)
-  where ttclid is not null;
+-- Indexes are NOT created here. A plain CREATE INDEX takes a lock that blocks
+-- INSERTs on this table for the duration of the build, and this table receives
+-- a row on every page view of a live store. The columns above are added
+-- metadata-only (nullable, no default) so this file is instant and safe to run
+-- during traffic; the indexes live in
+-- `analytics-creative-attribution-indexes.sql` and are built CONCURRENTLY,
+-- which cannot run inside a transaction block and therefore must be run on its
+-- own. The columns work without the indexes — queries are just slower until
+-- they exist.
 
 comment on column public.website_analytics_events.utm_content is
   'Creative identifier from the ad landing URL. Matches ad_creatives.utm_content and order_attribution.first_utm_content/last_utm_content. The join key for per-creative funnel analysis.';
