@@ -4,6 +4,7 @@ import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { Product, ProductBadge, ProductDose, ProductFaqItem, ProductImage } from "@/lib/catalog-types";
 import { parseProductFaq } from "@/lib/product-faq";
+import { resolveProductImage } from "@/lib/product-image";
 
 export type AdminProductStatusFilter = "all" | "published" | "draft" | "archived" | "disabled";
 
@@ -132,7 +133,7 @@ function mapAdminProductRow(
 
   const displayPrice = defaultDose?.salePrice ?? defaultDose?.price ?? toCurrencyString(salePriceCents > 0 ? salePriceCents : basePriceCents);
   const inventoryQuantity = defaultDose?.inventoryQuantity ?? parseNumber(row.inventory_quantity, 0);
-  const effectiveImage = defaultDose?.imageUrl ?? primaryImage?.imageUrl ?? String(row.image_url ?? "/images/vantalabs.png");
+  const effectiveImage = resolveProductImage(defaultDose?.imageUrl ?? primaryImage?.imageUrl ?? row.image_url);
   const effectiveBatch = defaultDose?.batchNumber ?? String(row.batch_number ?? "");
   const effectiveCoa = defaultDose?.coaUrl ?? String(row.coa_url ?? "");
   const effectivePurity = defaultDose?.purityResult ?? (row.purity_result ? String(row.purity_result) : undefined);

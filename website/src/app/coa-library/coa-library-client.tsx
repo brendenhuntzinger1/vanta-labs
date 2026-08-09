@@ -7,18 +7,17 @@ import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { CoaTestingDisclosure } from "@/components/coa-testing-disclosure";
 import { coaSearchHaystack, formatCoaTestDate, matchesCoaSearch } from "@/lib/coa-format";
 import type { CoaLibraryProduct, CoaLibrarySnapshot, PublicCoaDocument } from "@/lib/coa-types";
+import { PLACEHOLDER_IMAGE_PATHS } from "@/lib/product-image";
 
 const SEARCH_PLACEHOLDER = "Search product, compound, batch, or lot number";
 
 /**
- * `/images/vantalabs.png` is the catalog-wide fallback for a product with no
- * photo — and it is a 1672x941 SCREENSHOT of a product page, half of which is a
- * white panel. Rendered into a card it is the white rectangle that wrecks the
- * dark treatment, and it isn't product photography in the first place. Treated
- * as "no image" here so the card falls through to its own lit empty state.
- * The catalog fallback itself is left alone — other pages depend on it.
+ * A placeholder is not product photography, so a card carrying one falls
+ * through to its own lit empty state rather than rendering a picture of
+ * nothing. The list is shared with the rest of the app — see
+ * `@/lib/product-image`, which also keeps the retired screenshot recognised so
+ * a product row still storing that path resolves rather than 404s.
  */
-const PLACEHOLDER_IMAGE_PATHS = ["/images/vantalabs.png"];
 
 function isRealProductPhoto(url: string | null | undefined): boolean {
   const value = String(url ?? "").trim();

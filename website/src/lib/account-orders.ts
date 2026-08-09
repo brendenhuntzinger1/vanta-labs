@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { resolveCarrier } from "@/lib/tracking-url";
+import { resolveProductImage } from "@/lib/product-image";
 
 /**
  * Customer-facing order detail for the account dashboard. Widens the narrow
@@ -118,7 +119,7 @@ async function resolveItems(rows: OrderRow[]): Promise<Map<string, AccountOrderI
         quantity: Number(item.quantity ?? 0),
         unitPrice: Number(item.unit_price ?? 0),
         lineTotal: Number(item.line_total ?? 0),
-        image: dose?.imageUrl ?? product?.image ?? "/images/vantalabs.png",
+        image: resolveProductImage(dose?.imageUrl ?? product?.image),
       };
     });
     result.set(row.order_id, items);

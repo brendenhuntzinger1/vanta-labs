@@ -199,14 +199,19 @@ function ProductsPageContent() {
               page not aligned to the headline and the chips below. */}
           <span aria-hidden="true" className="vl-catalog-rule relative mt-6 block h-px w-14" />
 
+          {/* The previous copy here advertised an "8-Step Verification Process"
+              that is documented nowhere in this codebase or anywhere else, and
+              a matching "8-Step Verified" chip. An unverifiable process name is
+              worse than no claim: it is the first thing a reviewer or a careful
+              customer will ask to see, and there is nothing to show them.
+              Removed rather than replaced — do not invent a substitute. */}
           <p className="relative mt-5 max-w-2xl text-[0.9375rem] leading-7 text-white/60 sm:text-base sm:leading-8">
-            Every batch undergoes our{" "}
-            <span className="vl-catalog-emphasis">8-Step Verification Process</span>, including extensive
-            third-party testing and batch-specific Certificates of Analysis.
+            Research materials, documented per batch. Where a Certificate of Analysis has been
+            published for a lot, it is available in the COA Library.
           </p>
 
           <div className="relative mt-6 flex flex-wrap items-center gap-2.5">
-            {["8-Step Verified", "Third-Party Tested", "Batch-Specific COA"].map((claim) => (
+            {["Research Use Only"].map((claim) => (
               <span key={claim} className="vl-catalog-chip">
                 <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3">
                   <path d="m5 12 4 4 10-10" />

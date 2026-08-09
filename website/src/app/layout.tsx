@@ -10,7 +10,7 @@ import { SiteAnalyticsTracker } from "@/components/site-analytics-tracker";
 import { SiteFooter } from "@/components/site-footer";
 import { CookieConsent } from "@/components/cookie-consent";
 import { WelcomeOffer } from "@/components/welcome-offer";
-import { Analytics } from "@vercel/analytics/next";
+import { ConsentedAnalytics } from "@/components/consented-analytics";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -65,13 +65,13 @@ export const metadata: Metadata = {
     title: "Vanta Labs | Premium Research Peptides",
     description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
     url: siteUrl,
-    images: [{ url: "/images/vantalabs.png", width: 1200, height: 630, alt: "Vanta Labs — Premium Research Peptides" }],
+    images: [{ url: "/images/og-vanta-labs.png", width: 1200, height: 630, alt: "Vanta Labs" }],
   },
   twitter: {
     card: "summary_large_image",
     title: "Vanta Labs | Premium Research Peptides",
     description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
-    images: ["/images/vantalabs.png"],
+    images: ["/images/og-vanta-labs.png"],
   },
   // Only the real production deployment is indexable. Vercel preview/staging
   // deployments (VERCEL_ENV = "preview") and local dev must never be crawled —
@@ -104,7 +104,7 @@ export default function RootLayout({
                 "@type": "Organization",
                 name: "Vanta Labs",
                 url: siteUrl,
-                logo: `${siteUrl}/images/vantalabs.png`,
+                logo: `${siteUrl}/images/vanta-logo.png`,
                 description: "Premium research peptides — third-party tested, made in the USA.",
               },
               {
@@ -136,7 +136,7 @@ export default function RootLayout({
             <CookieConsent />
           </AgeGate>
         </CartProvider>
-        <Analytics />
+        <ConsentedAnalytics />
       </body>
     </html>
   );

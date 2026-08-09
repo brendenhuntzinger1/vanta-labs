@@ -6,6 +6,7 @@ import { isInventoryTrackingActive } from "@/lib/inventory-settings";
 import type { Product, ProductDose, ProductImage } from "@/lib/catalog-types";
 import { parseProductFaq } from "@/lib/product-faq";
 import { sanitizeCoaUrl } from "@/lib/coa-url";
+import { resolveProductImage } from "@/lib/product-image";
 
 // The catalog changes rarely but the storefront (home / PDP / list) is
 // force-dynamic and re-queried it on EVERY request — the top launch-scale risk.
@@ -189,7 +190,7 @@ function mapProductRow(
     inventoryActive,
     defaultInventoryQuantity,
   );
-  const effectiveImage = defaultDose?.imageUrl ?? primaryImage?.imageUrl ?? String(row.image_url ?? "/images/vantalabs.png");
+  const effectiveImage = resolveProductImage(defaultDose?.imageUrl ?? primaryImage?.imageUrl ?? row.image_url);
   const effectiveBatchNumber = defaultDose?.batchNumber ?? String(row.batch_number ?? "");
   const effectiveCoaUrl = defaultDose?.coaUrl ?? sanitizeCoaUrl(row.coa_url);
   const effectivePurity = defaultDose?.purityResult ?? (row.purity_result ? String(row.purity_result) : undefined);

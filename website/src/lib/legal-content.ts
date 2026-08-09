@@ -55,13 +55,22 @@ Questions can be sent to ${email}.`,
     body: `This policy explains what information we collect, how we use it, and the choices you have.
 
 ## Information we collect
-Information you provide at checkout and when contacting us (name, email, shipping address, order details), and limited technical data such as device and usage analytics.
+Information you provide at checkout and when contacting us (name, email, shipping address, order details), and limited technical data such as device type, pages viewed, and referring website.
+
+If you accept analytics (see below), we also generate a random visitor and session identifier stored in your browser, and record any campaign parameters present in the link you arrived through (for example utm_source, utm_medium, utm_campaign, or a click identifier appended by an advertising platform). These are used to understand which marketing efforts lead to orders. They are not linked to your name or email except through an order you actually place.
 
 ## How we use it
-To process and fulfill orders, verify payments, provide support, send transactional messages, prevent fraud, and comply with legal obligations. We do not sell your personal information.
+To process and fulfill orders, verify payments, provide support, send transactional messages, prevent fraud, measure how the site and our marketing perform, and comply with legal obligations. We do not sell your personal information.
+
+## Analytics and advertising technologies
+Analytics is off until you accept it. If you decline, no analytics identifiers are created and no analytics events are sent.
+
+When you accept, two things run: our own first-party analytics, which records page views and store events to our own database, and Vercel Analytics, a privacy-focused measurement service provided by our hosting provider.
+
+**We do not currently run any third-party advertising pixel or conversion-tracking tag.** There is no Meta pixel, no TikTok pixel, no Google Ads tag and no equivalent technology on this site today, and no advertising platform receives data about your visit. If that changes, this policy and our Cookie Policy will be updated to name the platform, the data shared, and the purpose, before any such technology is enabled.
 
 ## Sharing
-Only with service providers that help us operate (payment, email, hosting, fulfillment) as needed, or as required by law.
+Only with service providers that help us operate — payment processing, email delivery, hosting, analytics and shipping — as needed to run the store, or as required by law.
 
 ## Data retention & security
 We retain order records as required for accounting and legal purposes and use reasonable safeguards to protect your information.
@@ -138,10 +147,14 @@ Email ${email} with your order number and reason. Approved refunds are issued to
     body: `This site uses cookies and similar technologies to operate the store and improve your experience.
 
 ## What we use
-Essential cookies (cart, checkout, login sessions), and privacy-friendly analytics to understand site usage.
+**Essential** — cart contents, checkout state, login sessions, and your age confirmation. These are always on; the store cannot work without them.
+
+**Analytics — only if you accept.** A random visitor and session identifier stored in your browser, any campaign parameters from the link you arrived through, and Vercel Analytics, our hosting provider's privacy-focused measurement service. Nothing in this category is created or sent unless you choose Accept on the cookie banner.
+
+**Advertising and targeting — none.** We do not currently set advertising or targeting cookies, and no advertising platform receives data about your visit. If we add measurement for advertising in future, this policy will name the platform and what is shared before it is switched on.
 
 ## Your choices
-You can control cookies through your browser settings. Disabling essential cookies may break checkout or login.
+Choosing Decline on the banner stops all non-essential storage; nothing in the analytics category is created. Your choice is remembered in your browser. To change it, clear this site's data in your browser and the banner will appear again on your next visit. You can also control cookies through your browser settings, though disabling essential cookies may break checkout or login.
 
 ## Contact
 Questions about this policy can be sent to ${email}.`,
