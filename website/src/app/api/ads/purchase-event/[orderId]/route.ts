@@ -54,11 +54,35 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     unit_price?: number | null;
   }>;
 
+  // Orders store the product's database id; every other event in the funnel
+  // identifies a product by its catalogue slug. Sending the id here would give
+  // the purchase a content id that matches nothing that preceded it, so TikTok
+  // would see products that are viewed and never bought alongside products that
+  // are bought and never viewed.
+  //
+  // Looked up separately rather than joined into the order query above: that
+  // query is the one that decides whether a conversion is reported at all, and
+  // it is working. A failure here degrades to the product id, which is still a
+  // real, non-empty identifier — never to a product name, which is not an id.
+  const slugByProductId = new Map<string, string>();
+  const productIds = [...new Set(items.map((item) => item.product_id).filter((id): id is string => Boolean(id)))];
+  if (productIds.length > 0) {
+    try {
+      const { data: products } = await supabaseAdmin.from("products").select("id, slug").in("id", productIds);
+      for (const row of (products ?? []) as { id?: string; slug?: string }[]) {
+        if (row.id && row.slug) slugByProductId.set(row.id, row.slug);
+      }
+    } catch {
+      /* fall through to the product id */
+    }
+  }
+
   const event = buildPurchase({
     orderId: String(order.order_id),
     isPaid,
     amountPaid: Number(order.amount_paid ?? 0),
     items: items.map((item) => ({
+      slug: item.product_id ? slugByProductId.get(item.product_id) ?? null : null,
       productId: item.product_id ?? null,
       productName: item.product_name ?? null,
       quantity: item.quantity ?? null,

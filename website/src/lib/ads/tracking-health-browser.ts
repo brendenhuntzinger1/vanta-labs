@@ -65,12 +65,36 @@ function memoryStore(): FiredStore {
  * Run one event through the production path with the outgoing call captured.
  * Returns the event TikTok *would* have received, or null if the path is dead.
  */
-function capture(event: TikTokEvent | null): { name: string; eventId: string } | null {
-  let captured: { name: string; eventId: string } | null = null;
-  emitEvent(event, (name, _properties, options) => {
-    captured = { name, eventId: options.event_id };
+type Captured = { name: string; eventId: string; contentIds: string[]; currency: unknown; value: unknown };
+
+function capture(event: TikTokEvent | null): Captured | null {
+  let captured: Captured | null = null;
+  emitEvent(event, (name, properties, options) => {
+    const contents = (properties.contents ?? []) as { content_id?: string }[];
+    captured = {
+      name,
+      eventId: options.event_id,
+      contentIds: contents.map((entry) => String(entry.content_id ?? "")),
+      currency: properties.currency,
+      value: properties.value,
+    };
   }, memoryStore());
   return captured;
+}
+
+/**
+ * A probe passes only if the event is the right one AND it is fully formed.
+ *
+ * Checking the name alone is what let "Content ID is missing" ship green: the
+ * event fired, it was the correct event, and it identified nothing. Every
+ * commerce event must carry at least one non-empty content id, a currency and
+ * a positive value, or the ad platform cannot attribute it to a product.
+ */
+function wellFormed(captured: Captured | null, expected: string): boolean {
+  if (!captured || captured.name !== expected) return false;
+  if (captured.contentIds.length === 0) return false;
+  if (captured.contentIds.some((id) => !id.trim())) return false;
+  return captured.currency === "USD" && typeof captured.value === "number" && captured.value > 0;
 }
 
 export function runFunnelProbes(): BrowserHealthInput["probes"] {
@@ -79,8 +103,17 @@ export function runFunnelProbes(): BrowserHealthInput["probes"] {
   const SLUG = "__vanta_health_probe__";
 
   const viewContent = capture(buildViewContent({ slug: SLUG, name: "Health probe", price: 1 }));
-  const addToCart = capture(mapAnalyticsDetail({ eventType: "add_to_cart", productSlug: SLUG, quantity: 1, price: 1 }));
-  const checkout = capture(mapAnalyticsDetail({ eventType: "begin_checkout", itemCount: 1, total: 1 }));
+  const addToCart = capture(
+    mapAnalyticsDetail({ eventType: "add_to_cart", productSlug: SLUG, productName: "Health probe", quantity: 1, price: 1 }),
+  );
+  const checkout = capture(
+    mapAnalyticsDetail({
+      eventType: "begin_checkout",
+      itemCount: 1,
+      total: 1,
+      items: [{ slug: SLUG, name: "Health probe", quantity: 1, price: 1 }],
+    }),
+  );
 
   // The mapping being right is necessary but not sufficient: for a cart action
   // to reach TikTok the listener also has to be attached. Requiring both is
@@ -88,9 +121,9 @@ export function runFunnelProbes(): BrowserHealthInput["probes"] {
   const listenerMounted = Boolean((window as unknown as Record<string, unknown>)[LISTENER_FLAG]);
 
   return {
-    viewContent: viewContent?.name === "ViewContent" && viewContent.eventId === `vc-${SLUG}`,
-    addToCart: listenerMounted && addToCart?.name === "AddToCart",
-    initiateCheckout: listenerMounted && checkout?.name === "InitiateCheckout",
+    viewContent: wellFormed(viewContent, "ViewContent") && viewContent?.eventId === `vc-${SLUG}`,
+    addToCart: listenerMounted && wellFormed(addToCart, "AddToCart"),
+    initiateCheckout: listenerMounted && wellFormed(checkout, "InitiateCheckout"),
   };
 }
 

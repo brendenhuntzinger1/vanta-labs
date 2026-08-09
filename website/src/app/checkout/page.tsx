@@ -446,6 +446,18 @@ export default function CheckoutPage() {
           itemCount: items.length,
           total,
           subtotal,
+          // Measurement only — the lines are read from the cart and nothing
+          // downstream of this dispatch touches checkout. Without them the ad
+          // platform receives a checkout with a value and no product, which is
+          // the "Content ID is missing" warning and leaves the checkout stage
+          // of every product's funnel blank.
+          items: items.map((item) => ({
+            slug: item.slug,
+            name: item.name,
+            variantLabel: item.doseLabel ?? null,
+            quantity: item.quantity,
+            price: item.price,
+          })),
         },
       }),
     );

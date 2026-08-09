@@ -833,6 +833,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
             eventType: "add_to_cart",
             productSlug: product.slug,
             variantId: options?.variantId ?? null,
+            // Descriptive only. Measurement reads these to label the product in
+            // ad reporting; nothing in the cart depends on them.
+            productName: product.name,
+            variantLabel: options?.doseLabel ?? null,
             quantity,
             price: (options?.priceOverride ?? Number(product.price.replace(/[^0-9.]/g, ""))) || 0,
           },

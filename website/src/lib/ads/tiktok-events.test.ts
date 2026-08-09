@@ -7,6 +7,7 @@ import {
   buildViewContent,
   emitEvent,
   mapAnalyticsDetail,
+  resolveContentId,
   money,
   type FiredStore,
 } from "./tiktok-events";
@@ -45,11 +46,17 @@ describe("AddToCart", () => {
     expect(event.properties.contents?.[0]).toMatchObject({ content_id: "bpc-157-5mg", quantity: 3, price: 42.99 });
   });
 
-  it("distinguishes variants of the same product", () => {
+  it("treats variants as one catalogue item but two distinct actions", () => {
+    // The content id deliberately does not carry the variant: doses of one
+    // product are the same catalogue item, and splitting them would stop the
+    // adds joining the views and purchases of that product. The event id still
+    // separates them, so a second dose is not mistaken for a duplicate.
     const a = buildAddToCart({ slug: "bpc-157", variantId: "5mg", quantity: 1, price: 42.99 })!;
     const b = buildAddToCart({ slug: "bpc-157", variantId: "10mg", quantity: 1, price: 69.99 })!;
-    expect(a.properties.contents?.[0].content_id).toBe("bpc-157::5mg");
-    expect(b.properties.contents?.[0].content_id).toBe("bpc-157::10mg");
+    expect(a.properties.contents?.[0].content_id).toBe("bpc-157");
+    expect(b.properties.contents?.[0].content_id).toBe("bpc-157");
+    expect(a.eventId).toBe("atc-bpc-157::5mg");
+    expect(b.eventId).toBe("atc-bpc-157::10mg");
   });
 
   it("is not deduped — adding the same item twice is two real adds", () => {
@@ -235,5 +242,161 @@ describe("mapping the store's analytics broadcast", () => {
 
   it("refuses a checkout with no value rather than reporting a zero", () => {
     expect(mapAnalyticsDetail({ eventType: "begin_checkout", itemCount: 1, total: 0 })).toBeNull();
+  });
+});
+
+describe("content identification", () => {
+  const line = { slug: "bpc-157", name: "BPC-157", variantLabel: "10mg", quantity: 1, price: 42.99 };
+
+  it("sends contents with a content_id on InitiateCheckout", () => {
+    // The regression: TikTok flagged "Content ID is missing in your events"
+    // because checkout reported a value and no product at all.
+    const event = buildInitiateCheckout({ itemCount: 1, total: 49.99, items: [line] });
+    expect(event?.properties.contents?.[0].content_id).toBe("bpc-157");
+    expect(event?.properties.contents?.[0].content_type).toBe("product");
+  });
+
+  it("keeps the checkout's own total rather than recomputing it from the lines", () => {
+    // The total includes shipping, tax and discounts. Summing the lines would
+    // report a different number from the one being charged.
+    const event = buildInitiateCheckout({ itemCount: 2, total: 105.5, items: [line, { ...line, slug: "tb-500" }] });
+    expect(event?.properties.value).toBe(105.5);
+  });
+
+  it("drops content_type along with contents when nothing is identifiable", () => {
+    // Observed in Events Manager: a payload with a bare top-level content_type
+    // and no contents is rendered by TikTok as
+    // contents: [{"content_type":"product","currency":"USD"}] — they synthesise
+    // an entry from the top-level field, and it has no id. So omitting contents
+    // is not enough on its own to clear "Content ID is missing".
+    const event = buildInitiateCheckout({ itemCount: 1, total: 20, items: [{ name: "Mystery", quantity: 1 }] });
+    expect(event?.properties.contents).toBeUndefined();
+    expect(event?.properties.content_type).toBeUndefined();
+    // Still a real checkout worth reporting — the value is authoritative.
+    expect(event?.properties.value).toBe(20);
+    expect(event?.properties.currency).toBe("USD");
+  });
+
+  it("does the same for a purchase whose lines cannot be identified", () => {
+    const event = buildPurchase({
+      orderId: "ord-x",
+      isPaid: true,
+      amountPaid: 30,
+      items: [{ productName: "Name Only", quantity: 1, unitPrice: 30 }],
+    });
+    expect(event?.properties.contents).toBeUndefined();
+    expect(event?.properties.content_type).toBeUndefined();
+    expect(event?.properties.value).toBe(30);
+  });
+
+  it("drops only the unidentifiable line, keeping the rest", () => {
+    const event = buildInitiateCheckout({ itemCount: 2, total: 60, items: [line, { name: "Mystery" }] });
+    expect(event?.properties.contents).toHaveLength(1);
+  });
+
+  it("uses one identifier for the same product across the whole funnel", () => {
+    // TikTok joins a funnel on content_id. A slug on the view and a database
+    // id on the purchase describes one product as two.
+    const view = buildViewContent({ slug: "bpc-157", name: "BPC-157", price: 42.99 });
+    const add = buildAddToCart({ slug: "bpc-157", variantId: "dose-10mg", quantity: 1, price: 42.99 });
+    const checkout = buildInitiateCheckout({ itemCount: 1, total: 42.99, items: [line] });
+    const purchase = buildPurchase({
+      orderId: "ord-1",
+      isPaid: true,
+      amountPaid: 42.99,
+      items: [{ slug: "bpc-157", productId: "3f9c0b7e-uuid", productName: "BPC-157 (10mg)", quantity: 1, unitPrice: 42.99 }],
+    });
+
+    const ids = [view, add, checkout, purchase].map((e) => e?.properties.contents?.[0].content_id);
+    expect(ids).toEqual(["bpc-157", "bpc-157", "bpc-157", "bpc-157"]);
+  });
+
+  it("does not fold the variant into the id, but keeps events distinguishable", () => {
+    const tenMg = buildAddToCart({ slug: "bpc-157", variantId: "dose-10", quantity: 1, price: 40 });
+    const fiveMg = buildAddToCart({ slug: "bpc-157", variantId: "dose-5", quantity: 1, price: 25 });
+    expect(tenMg?.properties.contents?.[0].content_id).toBe(fiveMg?.properties.contents?.[0].content_id);
+    // Same catalogue item, two genuine actions — the event ids must differ or
+    // the second add looks like a duplicate of the first.
+    expect(tenMg?.eventId).not.toBe(fiveMg?.eventId);
+  });
+
+  it("carries the dose as a name, where it is descriptive rather than structural", () => {
+    const event = buildAddToCart({ slug: "bpc-157", name: "BPC-157", variantLabel: "10mg", quantity: 1, price: 40 });
+    expect(event?.properties.contents?.[0].content_name).toBe("BPC-157 (10mg)");
+  });
+
+  it("falls back to the product id, never to the product name", () => {
+    // A name is not an identifier: it is not stable, and it stops matching the
+    // day someone renames a product.
+    const event = buildPurchase({
+      orderId: "ord-2",
+      isPaid: true,
+      amountPaid: 10,
+      items: [{ productId: "uuid-only", productName: "Some Product", quantity: 1, unitPrice: 10 }],
+    });
+    expect(event?.properties.contents?.[0].content_id).toBe("uuid-only");
+
+    const nameOnly = buildPurchase({
+      orderId: "ord-3",
+      isPaid: true,
+      amountPaid: 10,
+      items: [{ productName: "Name Only", quantity: 1, unitPrice: 10 }],
+    });
+    expect(nameOnly?.properties.contents).toBeUndefined();
+    // Still a conversion — the money is real even when the line is not identifiable.
+    expect(nameOnly?.properties.value).toBe(10);
+  });
+
+  it("resolves an id from a slug, then an id, then nothing", () => {
+    expect(resolveContentId({ slug: "a", productId: "b" })).toBe("a");
+    expect(resolveContentId({ slug: "  ", productId: "b" })).toBe("b");
+    expect(resolveContentId({ slug: null, productId: null })).toBeNull();
+    expect(resolveContentId({ slug: "  padded  " })).toBe("padded");
+  });
+});
+
+describe("payload audit — every field TikTok checks", () => {
+  const events = () => [
+    buildViewContent({ slug: "bpc-157", name: "BPC-157", price: 42.99 }),
+    buildAddToCart({ slug: "bpc-157", name: "BPC-157", variantLabel: "10mg", quantity: 2, price: 42.99 }),
+    buildInitiateCheckout({
+      itemCount: 1,
+      total: 85.98,
+      items: [{ slug: "bpc-157", name: "BPC-157", quantity: 2, price: 42.99 }],
+    }),
+    buildPurchase({
+      orderId: "ord-9",
+      isPaid: true,
+      amountPaid: 85.98,
+      items: [{ slug: "bpc-157", productId: "uuid", productName: "BPC-157", quantity: 2, unitPrice: 42.99 }],
+    }),
+  ];
+
+  it("populates content_id, content_type, currency, value and event_id on all four", () => {
+    for (const event of events()) {
+      expect(event).not.toBeNull();
+      expect(event!.properties.contents?.length).toBeGreaterThan(0);
+      for (const content of event!.properties.contents!) {
+        expect(content.content_id).toBeTruthy();
+        expect(content.content_id.trim()).toBe(content.content_id);
+        expect(content.content_type).toBe("product");
+      }
+      expect(event!.properties.currency).toBe("USD");
+      expect(event!.properties.value).toBeGreaterThan(0);
+      expect(event!.eventId).toBeTruthy();
+    }
+  });
+
+  it("gives each event a distinct, non-random id that survives a repeat", () => {
+    const first = events().map((e) => e!.eventId);
+    const second = events().map((e) => e!.eventId);
+    expect(first).toEqual(second);
+    expect(new Set(first).size).toBe(first.length);
+  });
+
+  it("never sends a value that is not a rounded number of cents", () => {
+    for (const event of events()) {
+      expect(event!.properties.value).toBe(Math.round(event!.properties.value! * 100) / 100);
+    }
   });
 });
