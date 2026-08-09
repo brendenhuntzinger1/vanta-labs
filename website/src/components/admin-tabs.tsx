@@ -55,6 +55,11 @@ const tabs: AdminTab[] = [
     match: (pathname) => pathname.startsWith("/admin/fulfillment"),
   },
   {
+    label: "Advertising",
+    href: "/admin/ads",
+    match: (pathname) => pathname.startsWith("/admin/ads"),
+  },
+  {
     label: "Revenue",
     href: "/admin/revenue",
     match: (pathname) => pathname.startsWith("/admin/revenue"),

@@ -76,7 +76,7 @@ export function zFor(alpha: number): number {
   const c = [-0.00778489400243029, -0.322396458041136, -2.40075827716184, -2.54973253934373, 4.37466414146497, 2.93816398269878];
   const d = [0.00778469570904146, 0.32246712907004, 2.445134137143, 3.75440866190742];
   const pl = 0.02425;
-  let q: number, r: number;
+  let q: number;
   if (p < pl) {
     q = Math.sqrt(-2 * Math.log(p));
     return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
@@ -86,7 +86,7 @@ export function zFor(alpha: number): number {
     return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) / ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
   }
   q = p - 0.5;
-  r = q * q;
+  const r = q * q;
   return ((((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q) /
     (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
 }

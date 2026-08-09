@@ -6,6 +6,7 @@ import {
   buildInitiateCheckout,
   buildViewContent,
   emitEvent,
+  mapAnalyticsDetail,
   money,
   type FiredStore,
 } from "./tiktok-events";
@@ -205,5 +206,34 @@ describe("emitEvent", () => {
     const emit = vi.fn();
     emitEvent(buildViewContent({ slug: "x", price: 1 }), emit, memoryStore());
     expect(emit).toHaveBeenCalledWith("ViewContent", expect.any(Object), { event_id: "vc-x" });
+  });
+});
+
+describe("mapping the store's analytics broadcast", () => {
+  it("turns an add to cart into AddToCart with the cart's own numbers", () => {
+    const event = mapAnalyticsDetail({ eventType: "add_to_cart", productSlug: "bpc-157", quantity: 2, price: 42.99 });
+    expect(event?.name).toBe("AddToCart");
+    expect(event?.properties.value).toBe(85.98);
+    expect(event?.eventId).toBe("atc-bpc-157");
+  });
+
+  it("turns starting checkout into InitiateCheckout", () => {
+    const event = mapAnalyticsDetail({ eventType: "begin_checkout", itemCount: 3, total: 129.5 });
+    expect(event?.name).toBe("InitiateCheckout");
+    expect(event?.properties.value).toBe(129.5);
+  });
+
+  it("ignores the other traffic on the shared bus", () => {
+    // The bus carries more than the ad funnel needs. Forwarding page views or
+    // cart removals would teach the optimiser from noise.
+    for (const eventType of ["page_view", "session_start", "remove_from_cart", "purchase"]) {
+      expect(mapAnalyticsDetail({ eventType })).toBeNull();
+    }
+    expect(mapAnalyticsDetail(null)).toBeNull();
+    expect(mapAnalyticsDetail({})).toBeNull();
+  });
+
+  it("refuses a checkout with no value rather than reporting a zero", () => {
+    expect(mapAnalyticsDetail({ eventType: "begin_checkout", itemCount: 1, total: 0 })).toBeNull();
   });
 });

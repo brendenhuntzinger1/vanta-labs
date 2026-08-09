@@ -1,13 +1,8 @@
 "use client";
 
 import { useEffect } from "react";
-import {
-  browserFiredStore,
-  buildAddToCart,
-  buildInitiateCheckout,
-  emitEvent,
-  type Emitter,
-} from "@/lib/ads/tiktok-events";
+import { browserFiredStore, emitEvent, mapAnalyticsDetail, type AnalyticsDetail, type Emitter } from "@/lib/ads/tiktok-events";
+import { LISTENER_FLAG } from "@/lib/ads/tracking-health-browser";
 
 /**
  * AddToCart and InitiateCheckout, forwarded to the TikTok pixel.
@@ -22,18 +17,12 @@ import {
  * Nothing is sent unless `window.ttq` exists, and it only exists after the
  * visitor accepted cookies. Consent is therefore enforced by absence rather
  * than by a second check that could drift out of step with the first.
+ *
+ * The mount flag is for the admin health board. Whether this listener is
+ * actually attached in the deployed bundle is the difference between a funnel
+ * that reports and one that does not, and the only alternative way to check it
+ * is to fire a fake event onto a bus that three other components also read.
  */
-
-type AnalyticsDetail = {
-  eventType?: string;
-  productSlug?: string;
-  variantId?: string | null;
-  quantity?: number;
-  price?: number;
-  itemCount?: number;
-  total?: number;
-};
-
 export function TikTokCommerceEvents() {
   useEffect(() => {
     const store = browserFiredStore();
@@ -44,37 +33,15 @@ export function TikTokCommerceEvents() {
     const handler = (event: Event) => {
       // If the pixel has not loaded, consent was declined or not yet given.
       if (!window.ttq) return;
-      const detail = (event as CustomEvent<AnalyticsDetail>).detail;
-      if (!detail?.eventType) return;
-
-      if (detail.eventType === "add_to_cart") {
-        emitEvent(
-          buildAddToCart({
-            slug: String(detail.productSlug ?? ""),
-            variantId: detail.variantId ?? null,
-            quantity: Number(detail.quantity ?? 1),
-            price: Number(detail.price ?? 0),
-          }),
-          emit,
-          store,
-        );
-        return;
-      }
-
-      if (detail.eventType === "begin_checkout") {
-        emitEvent(
-          buildInitiateCheckout({
-            itemCount: Number(detail.itemCount ?? 0),
-            total: Number(detail.total ?? 0),
-          }),
-          emit,
-          store,
-        );
-      }
+      emitEvent(mapAnalyticsDetail((event as CustomEvent<AnalyticsDetail>).detail), emit, store);
     };
 
     window.addEventListener("vanta:analytics", handler);
-    return () => window.removeEventListener("vanta:analytics", handler);
+    (window as unknown as Record<string, unknown>)[LISTENER_FLAG] = true;
+    return () => {
+      window.removeEventListener("vanta:analytics", handler);
+      delete (window as unknown as Record<string, unknown>)[LISTENER_FLAG];
+    };
   }, []);
 
   return null;

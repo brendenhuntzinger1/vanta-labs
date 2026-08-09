@@ -172,6 +172,51 @@ export function buildPurchase(order: PaidOrder): TikTokEvent | null {
   };
 }
 
+/**
+ * The store's own analytics broadcast, translated into a TikTok event.
+ *
+ * Extracted from the React listener so the exact mapping production runs can
+ * be exercised by a test and by the admin health board, without dispatching
+ * anything onto the shared `vanta:analytics` bus — which several unrelated
+ * components (first-party analytics, the upsell prompt) also listen to, and
+ * which a diagnostic has no business firing.
+ *
+ * Unknown event types return null rather than guessing: the bus carries more
+ * kinds of event than the ad funnel needs, and forwarding all of them would
+ * teach TikTok's optimiser from noise.
+ */
+export type AnalyticsDetail = {
+  eventType?: string;
+  productSlug?: string;
+  variantId?: string | null;
+  quantity?: number;
+  price?: number;
+  itemCount?: number;
+  total?: number;
+};
+
+export function mapAnalyticsDetail(detail: AnalyticsDetail | null | undefined): TikTokEvent | null {
+  if (!detail?.eventType) return null;
+
+  if (detail.eventType === "add_to_cart") {
+    return buildAddToCart({
+      slug: String(detail.productSlug ?? ""),
+      variantId: detail.variantId ?? null,
+      quantity: Number(detail.quantity ?? 1),
+      price: Number(detail.price ?? 0),
+    });
+  }
+
+  if (detail.eventType === "begin_checkout") {
+    return buildInitiateCheckout({
+      itemCount: Number(detail.itemCount ?? 0),
+      total: Number(detail.total ?? 0),
+    });
+  }
+
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Idempotency
 // ---------------------------------------------------------------------------

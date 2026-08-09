@@ -3,6 +3,7 @@
 import Script from "next/script";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { PAGEVIEW_COUNTER } from "@/lib/ads/tracking-health-browser";
 
 /**
  * TikTok Pixel.
@@ -38,6 +39,20 @@ declare global {
       track: (event: string, params?: Record<string, unknown>, options?: { event_id: string }) => void;
     };
   }
+}
+
+/**
+ * A page-view tally the admin health board can read.
+ *
+ * Page views are the one funnel event with no observable trace: the snippet
+ * fires `page()` into the vendor queue, the SDK drains it, and nothing is left
+ * to inspect afterwards. Counting them here is what lets the board say "the
+ * pixel reported N page views in this session" instead of "the code that would
+ * report them exists".
+ */
+function countPageView(): void {
+  const w = window as unknown as Record<string, unknown>;
+  w[PAGEVIEW_COUNTER] = Number(w[PAGEVIEW_COUNTER] ?? 0) + 1;
 }
 
 function hasAccepted(): boolean {
@@ -79,6 +94,7 @@ export function TikTokPixel() {
       return;
     }
     window.ttq?.page();
+    countPageView();
   }, [accepted, pathname, searchParams]);
 
   if (!accepted) return null;
@@ -93,6 +109,7 @@ var e=ttq._i[t]||[],n=0;n<ttq.methods.length;n++)ttq.setAndDefer(e,ttq.methods[n
 
   ttq.load('${PIXEL_ID}');
   ttq.page();
+  w.${PAGEVIEW_COUNTER} = (w.${PAGEVIEW_COUNTER} || 0) + 1;
 }(window, document, 'ttq');
       `}
     </Script>

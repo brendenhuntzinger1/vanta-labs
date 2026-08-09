@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { getAdsDashboard, type CreativeRow } from "@/lib/ads/dashboard-data";
+import { AdsSectionTabs } from "@/components/ads-section-tabs";
+import { AdsTrackingHealth } from "@/components/ads-tracking-health";
 
 export const dynamic = "force-dynamic";
 
@@ -94,30 +96,23 @@ export default async function AdsDashboardPage() {
   const spendLocked = `TikTok is not connected — ${d.tiktok.missing.length} credential(s) missing and eligibility unconfirmed.`;
   const modeLabel = d.guardrails.frozen ? "FROZEN" : d.guardrails.mode.replace("_", " ").toUpperCase();
 
-  return (
-    <main className="mx-auto max-w-7xl space-y-5 px-4 py-8 sm:px-6 lg:px-8">
-      <header className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl text-white">Advertising</h1>
-          <p className="mt-1 text-xs text-white/40">
-            Mode <span className="font-mono text-[color:var(--accent-gold)]">{modeLabel}</span> · nothing on this page can spend money yet
-          </p>
-        </div>
-        <LockedButton label="EMERGENCY STOP" reason="No live campaigns exist. This freezes every action the moment one does." />
-      </header>
+  const schemaBanner = !d.schemaReady ? (
+    <div className="rounded-2xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] p-5 text-sm text-white/75">
+      <p className="font-medium text-white">The ad schema has not been applied.</p>
+      <p className="mt-2 text-xs leading-6 text-white/60">
+        <code className="font-mono text-white/80">src/lib/sql/ads-system.sql</code> and{" "}
+        <code className="font-mono text-white/80">src/lib/sql/analytics-creative-attribution.sql</code> create the 13 ad
+        tables and the three per-creative attribution columns. Until they are applied every panel below is empty because
+        there is nothing to read — not because performance is zero. Nothing else depends on them: the pixel, the Events
+        API and first-party analytics all work without them.
+      </p>
+      {d.schemaError ? <p className="mt-2 font-mono text-[11px] text-red-300">{d.schemaError}</p> : null}
+    </div>
+  ) : null;
 
-      {!d.schemaReady ? (
-        <div className="rounded-2xl border border-[color:var(--accent-gold)]/25 bg-[color:var(--accent-gold)]/[0.05] p-5 text-sm text-white/75">
-          <p className="font-medium text-white">The ad schema has not been applied.</p>
-          <p className="mt-2 text-xs leading-6 text-white/60">
-            Run <code className="font-mono text-white/80">src/lib/sql/ads-system.sql</code> and{" "}
-            <code className="font-mono text-white/80">src/lib/sql/analytics-creative-attribution.sql</code> to create the
-            13 ad tables and the three per-creative attribution columns. Until then every panel below is empty because
-            there is nothing to read — not because performance is zero.
-          </p>
-          {d.schemaError ? <p className="mt-2 font-mono text-[11px] text-red-300">{d.schemaError}</p> : null}
-        </div>
-      ) : null}
+  const overview = (
+    <>
+      {schemaBanner}
 
       <Panel title="Today" subtitle={d.schemaReady ? "UTC day, site-attributed revenue net of refunds" : "no data source yet"}>
         <dl className="grid grid-cols-2 gap-3 sm:grid-cols-5">
@@ -134,17 +129,115 @@ export default async function AdsDashboardPage() {
             </div>
           ))}
         </dl>
+        <p className="mt-3 text-[11px] leading-5 text-white/30">
+          Every figure here is read from recorded data. Nothing on this page is modelled, estimated or filled in — an
+          empty panel means no data, never a guess.
+        </p>
       </Panel>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Panel title="Winning creatives" subtitle="ranked by ROAS among creatives that actually spent">
-          <CreativeTable rows={d.winners} empty="No creative has spent anything yet." />
+      <div className="grid gap-5 lg:grid-cols-3">
+        <Panel title="Fatigue alerts" subtitle="decline against a creative's own peak, tested">
+          <Empty>Needs at least a week of daily data per creative.</Empty>
         </Panel>
-        <Panel title="Losing creatives" subtitle="the money being wasted right now">
-          <CreativeTable rows={d.losers} empty="Nothing running, so nothing wasting." />
+        <Panel title="Anomaly alerts" subtitle="today against its own trailing distribution">
+          <Empty>Needs a 7-day baseline before it will say anything.</Empty>
+        </Panel>
+        <Panel title="Data health" subtitle="how much to trust the numbers above">
+          <ul className="space-y-2 text-xs">
+            {[
+              ["TikTok reporting", "never ingested — awaiting TikTok connection"],
+              ["Site analytics", d.schemaReady ? "live" : "schema not applied"],
+              ["Higgsfield", "disconnected — no access confirmed"],
+            ].map(([label, state]) => (
+              <li key={label} className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
+                <span className="text-white/70">{label}</span>
+                <span className="font-mono text-[10px] text-[color:var(--accent-gold)]/70">{state}</span>
+              </li>
+            ))}
+          </ul>
         </Panel>
       </div>
 
+      <Panel title="TikTok connection" subtitle="what is still required before anything can publish">
+        <div className="grid gap-4 text-xs sm:grid-cols-2">
+          <div>
+            <p className="mb-2 text-white/50">Missing credentials</p>
+            <ul className="space-y-1 font-mono text-[11px] text-white/60">
+              {d.tiktok.missing.length === 0 ? <li className="text-white/35">none</li> : d.tiktok.missing.map((m) => <li key={m}>{m}</li>)}
+            </ul>
+          </div>
+          <div>
+            <p className="mb-2 text-white/50">Blocked on (not solvable by config)</p>
+            <ul className="space-y-1 text-[11px] leading-5 text-white/60">
+              {d.tiktok.blockedOn.map((b) => <li key={b}>· {b}</li>)}
+            </ul>
+          </div>
+        </div>
+        <p className="mt-4 text-[11px] text-white/35">
+          Everything else runs in simulation. See <Link href="/admin" className="underline underline-offset-2">admin home</Link>.
+        </p>
+      </Panel>
+    </>
+  );
+
+  const campaigns = (
+    <>
+      <Panel title="Campaigns" subtitle="live TikTok campaigns, once the Ads Management API is authorised">
+        <Empty>
+          Not connected. Reading campaigns needs an Ads Management authorisation, which is a different credential from
+          the Events API token that reports conversions. Tracking Health names the single step that grants it.
+        </Empty>
+      </Panel>
+
+      <Panel title="Experiments" subtitle="one variable at a time, or it teaches nothing">
+        {d.experiments.length === 0 ? (
+          <Empty>No experiments running.</Empty>
+        ) : (
+          <ul className="space-y-2 text-xs">
+            {d.experiments.map((e) => (
+              <li key={e.experimentId} className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
+                <div>
+                  <span className="text-white/85">{e.name}</span>
+                  <span className="ml-2 text-white/40">axis: {e.axis}</span>
+                </div>
+                <span className="font-mono text-white/45">
+                  {e.status} · look {e.looksTaken}/{e.plannedLooks}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Panel>
+
+      <Panel title="Controls and guardrails" subtitle="deny by default; ceilings start low and are raised deliberately">
+        <dl className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+          {[
+            ["Mode", modeLabel],
+            ["Daily account ceiling", money(d.guardrails.dailyAccountCeiling)],
+            ["Campaign ceiling", money(d.guardrails.campaignDailyCeiling)],
+            ["Max budget step", `${(d.guardrails.maxBudgetIncreasePct * 100).toFixed(0)}% / ${money(d.guardrails.maxBudgetIncreaseAbsolute)}`],
+            ["Min conversions to scale", String(d.guardrails.minConversionsToScale)],
+            ["Min days to scale", String(d.guardrails.minDaysToScale)],
+            ["Min impressions to kill", String(d.guardrails.minImpressionsToKill)],
+            ["Auto-approved", d.guardrails.autoApprovedActions.length ? d.guardrails.autoApprovedActions.join(", ") : "none"],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
+              <dt className="text-[10px] uppercase tracking-[0.14em] text-white/35">{label}</dt>
+              <dd className="mt-1 text-white/80">{value}</dd>
+            </div>
+          ))}
+        </dl>
+        <div className="mt-4 flex flex-wrap gap-3">
+          <LockedButton label="Pause" reason={spendLocked} />
+          <LockedButton label="Scale" reason={`${spendLocked} Scaling also needs ${d.guardrails.minConversionsToScale} conversions and ${d.guardrails.minDaysToScale} stable days.`} />
+          <LockedButton label="Enable autonomous mode" reason="Requires real campaign history to validate the decision engine first." />
+        </div>
+      </Panel>
+    </>
+  );
+
+  const creatives = (
+    <>
       <Panel
         title="Generated ads awaiting approval"
         subtitle="every asset is human-reviewed before it can reach an ad account"
@@ -173,53 +266,6 @@ export default async function AdsDashboardPage() {
           </ul>
         )}
       </Panel>
-
-      <div className="grid gap-5 lg:grid-cols-2">
-        <Panel title="AI recommendations" subtitle="every one is a recommendation; none execute">
-          {d.recommendations.length === 0 ? (
-            <Empty>No recommendations. The decision engine needs performance data before it will say anything.</Empty>
-          ) : (
-            <ul className="space-y-3">
-              {d.recommendations.slice(0, 8).map((r) => (
-                <li key={r.decisionId} className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="rounded-full bg-[color:var(--accent-gold)]/15 px-2 py-0.5 font-mono text-[10px] text-[color:var(--accent-gold)]">
-                      {r.action}
-                    </span>
-                    <span className="font-mono text-white/70">{r.creativeId}</span>
-                  </div>
-                  <p className="mt-2 text-xs leading-6 text-white/60">{r.rationale}</p>
-                  {r.unresolvedMetrics.length > 0 ? (
-                    <p className="mt-1 text-[10px] uppercase tracking-[0.12em] text-white/30">
-                      unresolved: {r.unresolvedMetrics.join(", ")}
-                    </p>
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-
-        <Panel title="Experiments" subtitle="one variable at a time, or it teaches nothing">
-          {d.experiments.length === 0 ? (
-            <Empty>No experiments running.</Empty>
-          ) : (
-            <ul className="space-y-2 text-xs">
-              {d.experiments.map((e) => (
-                <li key={e.experimentId} className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
-                  <div>
-                    <span className="text-white/85">{e.name}</span>
-                    <span className="ml-2 text-white/40">axis: {e.axis}</span>
-                  </div>
-                  <span className="font-mono text-white/45">
-                    {e.status} · look {e.looksTaken}/{e.plannedLooks}
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Panel>
-      </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Panel title="Creative library" subtitle={`${d.creatives.length} creative(s) with performance history`}>
@@ -252,30 +298,25 @@ export default async function AdsDashboardPage() {
         </Panel>
       </div>
 
-      <Panel title="Controls and guardrails" subtitle="deny by default; ceilings start low and are raised deliberately">
-        <dl className="grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
-          {[
-            ["Mode", modeLabel],
-            ["Daily account ceiling", money(d.guardrails.dailyAccountCeiling)],
-            ["Campaign ceiling", money(d.guardrails.campaignDailyCeiling)],
-            ["Max budget step", `${(d.guardrails.maxBudgetIncreasePct * 100).toFixed(0)}% / ${money(d.guardrails.maxBudgetIncreaseAbsolute)}`],
-            ["Min conversions to scale", String(d.guardrails.minConversionsToScale)],
-            ["Min days to scale", String(d.guardrails.minDaysToScale)],
-            ["Min impressions to kill", String(d.guardrails.minImpressionsToKill)],
-            ["Auto-approved", d.guardrails.autoApprovedActions.length ? d.guardrails.autoApprovedActions.join(", ") : "none"],
-          ].map(([label, value]) => (
-            <div key={label} className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
-              <dt className="text-[10px] uppercase tracking-[0.14em] text-white/35">{label}</dt>
-              <dd className="mt-1 text-white/80">{value}</dd>
-            </div>
-          ))}
-        </dl>
-        <div className="mt-4 flex flex-wrap gap-3">
-          <LockedButton label="Pause" reason={spendLocked} />
-          <LockedButton label="Scale" reason={`${spendLocked} Scaling also needs ${d.guardrails.minConversionsToScale} conversions and ${d.guardrails.minDaysToScale} stable days.`} />
-          <LockedButton label="Enable autonomous mode" reason="Requires real campaign history to validate the decision engine first." />
-        </div>
+      <Panel title="Creative generation" subtitle="briefs balance exploiting known winners against exploring untested territory">
+        <Empty>
+          No briefs yet. The generator needs evidence before it can exploit anything, and until then every brief
+          would be exploration. Higgsfield is disconnected, so nothing can be rendered regardless.
+        </Empty>
       </Panel>
+    </>
+  );
+
+  const performance = (
+    <>
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Panel title="Winning creatives" subtitle="ranked by ROAS among creatives that actually spent">
+          <CreativeTable rows={d.winners} empty="No creative has spent anything yet." />
+        </Panel>
+        <Panel title="Losing creatives" subtitle="the money being wasted right now">
+          <CreativeTable rows={d.losers} empty="Nothing running, so nothing wasting." />
+        </Panel>
+      </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Panel title="Winning patterns" subtitle="attributes associated with better performance — not proven causes">
@@ -289,40 +330,6 @@ export default async function AdsDashboardPage() {
         </Panel>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-3">
-        <Panel title="Fatigue alerts" subtitle="decline against a creative's own peak, tested">
-          <Empty>Needs at least a week of daily data per creative.</Empty>
-        </Panel>
-        <Panel title="Anomaly alerts" subtitle="today against its own trailing distribution">
-          <Empty>Needs a 7-day baseline before it will say anything.</Empty>
-        </Panel>
-        <Panel title="Data health" subtitle="how much to trust the numbers above">
-          <ul className="space-y-2 text-xs">
-            {[
-              ["TikTok reporting", "never ingested — awaiting TikTok connection"],
-              ["Site analytics", d.schemaReady ? "live" : "schema not applied"],
-              ["Higgsfield", "disconnected — no access confirmed"],
-            ].map(([label, state]) => (
-              <li key={label} className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
-                <span className="text-white/70">{label}</span>
-                <span className="font-mono text-[10px] text-[color:var(--accent-gold)]/70">{state}</span>
-              </li>
-            ))}
-          </ul>
-        </Panel>
-      </div>
-
-      <Panel title="Creative generation" subtitle="briefs balance exploiting known winners against exploring untested territory">
-        <Empty>
-          No briefs yet. The generator needs evidence before it can exploit anything, and until then every brief
-          would be exploration. Higgsfield is disconnected, so nothing can be rendered regardless.
-        </Empty>
-      </Panel>
-
-      <Panel title="System activity" subtitle="every recommendation, approval and action, append-only">
-        <Empty>No activity yet. Nothing in this system has taken an action.</Empty>
-      </Panel>
-
       <Panel title="Attribution" subtitle="platform-reported and first-party, kept apart on purpose">
         <p className="text-xs leading-6 text-white/50">
           TikTok will report more conversions than we can prove, and both figures will be defensible — it counts
@@ -332,26 +339,73 @@ export default async function AdsDashboardPage() {
         </p>
         <p className="mt-3 text-xs text-white/35">Awaiting TikTok connection — no platform figures to compare yet.</p>
       </Panel>
+    </>
+  );
 
-      <Panel title="TikTok connection" subtitle="what is still required before anything can publish">
-        <div className="grid gap-4 text-xs sm:grid-cols-2">
-          <div>
-            <p className="mb-2 text-white/50">Missing credentials</p>
-            <ul className="space-y-1 font-mono text-[11px] text-white/60">
-              {d.tiktok.missing.length === 0 ? <li className="text-white/35">none</li> : d.tiktok.missing.map((m) => <li key={m}>{m}</li>)}
-            </ul>
-          </div>
-          <div>
-            <p className="mb-2 text-white/50">Blocked on (not solvable by config)</p>
-            <ul className="space-y-1 text-[11px] leading-5 text-white/60">
-              {d.tiktok.blockedOn.map((b) => <li key={b}>· {b}</li>)}
-            </ul>
-          </div>
-        </div>
-        <p className="mt-4 text-[11px] text-white/35">
-          Everything else runs in simulation. See <Link href="/admin" className="underline underline-offset-2">admin home</Link>.
-        </p>
+  const recommendations = (
+    <>
+      <Panel title="AI recommendations" subtitle="every one is a recommendation; none execute">
+        {d.recommendations.length === 0 ? (
+          <Empty>No recommendations. The decision engine needs performance data before it will say anything.</Empty>
+        ) : (
+          <ul className="space-y-3">
+            {d.recommendations.slice(0, 8).map((r) => (
+              <li key={r.decisionId} className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-3">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="rounded-full bg-[color:var(--accent-gold)]/15 px-2 py-0.5 font-mono text-[10px] text-[color:var(--accent-gold)]">
+                    {r.action}
+                  </span>
+                  <span className="font-mono text-white/70">{r.creativeId}</span>
+                </div>
+                <p className="mt-2 text-xs leading-6 text-white/60">{r.rationale}</p>
+                {r.unresolvedMetrics.length > 0 ? (
+                  <p className="mt-1 text-[10px] uppercase tracking-[0.12em] text-white/30">
+                    unresolved: {r.unresolvedMetrics.join(", ")}
+                  </p>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        )}
       </Panel>
+
+      <Panel title="System activity" subtitle="every recommendation, approval and action, append-only">
+        <Empty>No activity yet. Nothing in this system has taken an action.</Empty>
+      </Panel>
+    </>
+  );
+
+  const trackingHealth = (
+    <Panel
+      title="Tracking health"
+      subtitle="checks that were run, not claims about the code — each row says who established it"
+    >
+      <AdsTrackingHealth />
+    </Panel>
+  );
+
+  return (
+    <main className="mx-auto max-w-7xl space-y-5 px-4 py-8 sm:px-6 lg:px-8">
+      <header className="flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl text-white">Advertising</h1>
+          <p className="mt-1 text-xs text-white/40">
+            Mode <span className="font-mono text-[color:var(--accent-gold)]">{modeLabel}</span> · nothing on this page can spend money yet
+          </p>
+        </div>
+        <LockedButton label="EMERGENCY STOP" reason="No live campaigns exist. This freezes every action the moment one does." />
+      </header>
+
+      <AdsSectionTabs
+        sections={[
+          { id: "overview", label: "Overview", content: overview },
+          { id: "campaigns", label: "Campaigns", content: campaigns },
+          { id: "creatives", label: "Creatives", content: creatives },
+          { id: "performance", label: "Performance", content: performance },
+          { id: "recommendations", label: "Recommendations", content: recommendations },
+          { id: "tracking", label: "Tracking Health", content: trackingHealth },
+        ]}
+      />
     </main>
   );
 }

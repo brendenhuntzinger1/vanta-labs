@@ -9,7 +9,7 @@ import {
   reviewGate,
   type RenderJob,
 } from "./media-provider";
-import type { ReferenceCreative, VantaCreative } from "./types";
+import type { VantaCreative } from "./types";
 
 const NOW = "2026-08-09T12:00:00Z";
 

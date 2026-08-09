@@ -22,7 +22,7 @@
  * can actually be read afterwards.
  */
 
-import type { Axis, CreativeClassification } from "./taxonomy";
+import type { Axis } from "./taxonomy";
 import { AXES } from "./taxonomy";
 import type { AttributeBelief, LineageNode } from "./learning";
 import { reviewConcept, type ComplianceVerdict } from "./compliance";
