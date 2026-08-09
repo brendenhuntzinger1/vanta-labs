@@ -8,6 +8,7 @@ import {
   isApplePlatform,
   isRegisteredApplePayHost,
 } from "@/lib/express-checkout";
+import { readAttributionForCheckout } from "@/lib/attribution-client";
 
 // -------------------------------------------------------------------------
 // Native Apple Pay express checkout for the mini-cart.
@@ -575,6 +576,7 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
           body: JSON.stringify({
             session_id: sessionId,
             basis_theory_token_intent_id: tokenId,
+            attribution: readAttributionForCheckout(),
             selected_shipping_method_id: lockedRef.current.methodId,
             wallet_contact: {
               // Billing contact is the cardholder of record; shipping is the

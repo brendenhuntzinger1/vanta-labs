@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { recordOrderAttribution } from "@/lib/order-attribution";
 import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-service";
 import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
 import { detectRoleFromUser } from "@/lib/auth-role";
@@ -117,6 +118,12 @@ export async function POST(request: Request) {
     if (body.marketingOptIn && customer.email) {
       void recordMarketingOptIn(customer.email, "checkout");
     }
+
+    // Link the order to the campaign that produced it. Runs only after the
+    // order exists, writes to its own table, and cannot throw — see
+    // lib/order-attribution.ts. Nothing about the order, its totals or its
+    // payment depends on the outcome.
+    await recordOrderAttribution({ orderId: result.orderId, raw: body.attribution });
 
     return NextResponse.json({
       success: true,

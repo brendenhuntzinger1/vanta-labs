@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
+import { captureAttribution } from "@/lib/attribution-client";
 
 const SESSION_KEY = "vl_analytics_session_id";
 const VISITOR_KEY = "vl_analytics_visitor_id";
@@ -95,6 +96,18 @@ export function SiteAnalyticsTracker() {
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       },
     };
+
+    // Capture the campaign that produced this visit while the query string is
+    // still readable — by checkout it is long gone. Sits inside the consent
+    // gate above with the rest of analytics, and writes nothing on its own for
+    // an organic visit.
+    captureAttribution({
+      search: window.location.search,
+      pathname,
+      referrer: document.referrer || null,
+      visitorId,
+      sessionId,
+    });
 
     if (!window.sessionStorage.getItem(SESSION_STARTED_KEY)) {
       sendTrackEvent({ ...basePayload, eventType: "session_start" });

@@ -25,6 +25,8 @@ import {
   type MembershipEventData,
 } from "@/lib/membership-webhook";
 import { recordSystemAlert } from "@/lib/monitoring";
+import { getOrderAttribution } from "@/lib/order-attribution";
+import { toAnalyticsAttribution } from "@/lib/attribution";
 
 /**
  * The billing cycle to activate for a paid membership order.
@@ -209,26 +211,44 @@ async function logCommerceAnalyticsEvent(input: {
   ambassadorId?: string;
 }) {
   try {
+    // Stamp the campaign this order came from onto the purchase event.
+    //
+    // These fields were hard-coded null, which meant a purchase row could never
+    // be grouped by campaign the way every page_view already can — the funnel
+    // ended one step before the only step that pays for itself. Reading the
+    // link here (rather than recomputing anything) keeps the rule intact:
+    // analytics observes commerce. `getOrderAttribution` never throws and
+    // returns null for an organic order, so the fields simply stay null and no
+    // sale is invented for an ad that had nothing to do with it.
+    const attribution = await getOrderAttribution(input.orderId);
+    const attributed = toAnalyticsAttribution(attribution);
+
     await supabaseAdmin.from("website_analytics_events").insert({
       event_type: input.eventType,
       page_path: "/checkout",
       page_url: null,
       referrer: null,
       session_id: `order:${input.orderId}`,
-      visitor_id: null,
+      visitor_id: attributed.visitor_id,
       user_agent: null,
       ip_address: null,
       country: null,
       city: null,
       device_type: null,
-      utm_source: null,
-      utm_medium: null,
-      utm_campaign: null,
+      utm_source: attributed.utm_source,
+      utm_medium: attributed.utm_medium,
+      utm_campaign: attributed.utm_campaign,
       event_payload: {
         orderId: input.orderId,
         amountPaid: input.amountPaid,
         referralCode: input.referralCode ?? null,
         ambassadorId: input.ambassadorId ?? null,
+        // The browsing session that produced this order. `session_id` above
+        // keeps its existing `order:<id>` convention so nothing reading that
+        // column changes meaning; the real session travels here.
+        attributionSessionId: attribution?.sessionId ?? null,
+        attributionFirstSource: attribution?.first?.utmSource ?? null,
+        attributionTtclid: attribution?.last?.ttclid ?? null,
       },
       created_at: new Date().toISOString(),
     });

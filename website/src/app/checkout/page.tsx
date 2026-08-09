@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
+import { readAttributionForCheckout } from "@/lib/attribution-client";
 import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
 import { resolveSalesTax } from "@/lib/sales-tax";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
@@ -586,6 +587,10 @@ export default function CheckoutPage() {
             },
         referralCode: referralCode ?? undefined,
         couponCode: couponCode ?? undefined,
+        // How this visit was acquired, captured on arrival. Null for organic
+        // and for anyone who declined cookies; the server re-validates it and
+        // stores nothing it cannot evidence.
+        attribution: readAttributionForCheckout(),
         pointsToRedeem: pointsToRedeem > 0 ? pointsToRedeem : undefined,
         shippingProtection: shippingProtectionEnabled,
         marketingOptIn,

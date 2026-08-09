@@ -23,6 +23,7 @@ import { isCheckoutOpen } from "@/lib/payment-provider";
 import { buildOrderRow, insertOrderItems, insertOrderRow, quoteOrder } from "@/lib/quote-order";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { CustomerInput } from "@/lib/payment-types";
+import { recordOrderAttribution } from "@/lib/order-attribution";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -61,6 +62,8 @@ interface AuthorizeBody {
   basis_theory_token_intent_id?: string;
   selected_shipping_method_id?: string;
   wallet_contact?: WalletContact;
+  /** Campaign evidence captured on arrival; re-validated server-side. */
+  attribution?: unknown;
 }
 
 interface AuthorizeResult {
@@ -308,6 +311,10 @@ export async function POST(request: Request) {
     orderItemsPayload.map((item) => ({ productId: item.product_id, quantity: item.quantity })),
     { expiresInMinutes: DEFAULT_RESERVATION_MINUTES },
   );
+  // Order is committed and past every guard that could still cancel it, so
+  // this is the first safe point to link it to its campaign. Cannot throw.
+  await recordOrderAttribution({ orderId: claimed.order_id, raw: body.attribution });
+
   if (!reservation.ok) {
     await cancelOrder(claimed.order_id);
     // Same detail as the standard checkout, plus the reassurance that matters
