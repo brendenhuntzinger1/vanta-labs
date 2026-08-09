@@ -26,8 +26,8 @@ it wrong in a way that costs money:
   * Statistical decisiveness is not importance. A real 0.05-point CTR gap on a
     million impressions is DECISIVE_BUT_IMMATERIAL, not a reason to rotate.
   * Repeated looks and multiple metrics inflate false positives badly — testing
-    daily for two weeks turns a nominal 5% error rate into ~23%. Declare them
-    with --looks / --tests-run and alpha is corrected.
+    daily for two weeks turns a nominal 5% error rate into roughly 20-25%.
+    Declare them with --looks / --tests-run and alpha is corrected.
 
 The reported verdict is the Wilson score test, cross-checked against the exact
 binomial. Both are printed so a disagreement is visible rather than hidden.
@@ -100,6 +100,10 @@ DEFAULT_MIN_EFFECT = 0.20
 # it the interval is arithmetic, not evidence.
 MIN_EXPECTED_EVENTS = 5
 MIN_OBSERVED_FOR_BETTER = 5
+# A head-to-head has no benchmark to derive an expected count from, so the
+# floor sits on the arms themselves.
+MIN_ARM_TRIALS = 30
+MAX_MULTIPLICITY = 10_000
 TRIAL_SEARCH_CEILING = 5_000_000
 
 
@@ -137,6 +141,29 @@ def exact_two_sided_p(successes: int, trials: int, p0: float) -> float:
     return min(1.0, total)
 
 
+def fisher_exact_two_sided(a: int, b: int, c: int, d: int) -> float:
+    """Two-tailed Fisher exact for a 2x2 table [[a,b],[c,d]].
+
+    The head-to-head path needs this for the same reason the benchmark path
+    needs the exact binomial: at small counts a normal approximation and an
+    interval will both happily call a 2-of-2 versus 0-of-2 comparison decisive,
+    and Fisher will not.
+    """
+    n, r1 = a + b + c + d, a + b
+    c1, c2 = a + c, b + d
+    if n == 0 or r1 == 0 or c1 == 0 or c2 == 0:
+        return 1.0
+
+    def logp(x: int) -> float:
+        return _log_choose(c1, x) + _log_choose(c2, r1 - x) - _log_choose(n, r1)
+
+    lo, hi = max(0, r1 - c2), min(r1, c1)
+    observed = logp(a)
+    tol = 1e-9
+    return min(1.0, sum(math.exp(lp) for x in range(lo, hi + 1)
+                        if (lp := logp(x)) <= observed + tol))
+
+
 def wilson_interval(successes: int, trials: int, z: float) -> tuple[float, float]:
     """Wilson score interval — behaves correctly at 0 successes, unlike Wald.
 
@@ -153,70 +180,30 @@ def wilson_interval(successes: int, trials: int, z: float) -> tuple[float, float
     return (max(0.0, centre - half), min(1.0, centre + half))
 
 
-def trials_to_decide(assumed_rate: float, benchmark: float, z: float) -> int | None:
-    """Smallest n at which THIS tool would call it, if the rate holds.
+def verdict_for(successes: int, trials: int, benchmark: float, alpha: float,
+                 min_effect: float, check_exact: bool = True) -> tuple[str, list[str], dict]:
+    """The single gate stack. Used by one_sample AND by the projection.
 
-    Answers the operator's real question — "how much longer?" — in the same
-    currency as the verdict, rather than via a power formula whose assumptions
-    are invisible in the output. Returns None when the assumed rate is too
-    close to the benchmark for any realistic sample to separate them, which is
-    itself the useful answer: stop waiting, there is nothing here.
+    They diverged in the first version, which let the projection promise an
+    amount of data that would not actually resolve anything — including the
+    absurd case of reporting "0 more trials needed" next to UNRESOLVED.
     """
-    if abs(assumed_rate - benchmark) < 1e-9:
-        return None
-
-    def decided(n: int) -> bool:
-        succ = round(assumed_rate * n)
-        if n * benchmark < MIN_EXPECTED_EVENTS:
-            return False
-        if assumed_rate > benchmark and succ < MIN_OBSERVED_FOR_BETTER:
-            return False
-        low, high = wilson_interval(succ, n, z)
-        return high < benchmark or low > benchmark
-
-    n = 8
-    while n <= TRIAL_SEARCH_CEILING:
-        if decided(n):
-            lo, hi = n // 2, n
-            while lo < hi:
-                mid = (lo + hi) // 2
-                if decided(mid):
-                    hi = mid
-                else:
-                    lo = mid + 1
-            return lo
-        n *= 2
-    return None
-
-
-def _materiality(observed: float, benchmark: float, min_effect: float) -> tuple[bool, float]:
-    if benchmark <= 0:
-        return True, float("inf")
-    relative = abs(observed - benchmark) / benchmark
-    return relative >= min_effect, relative
-
-
-def one_sample(metric: str, successes: int, trials: int, benchmark: float,
-               benchmark_source: str, alpha: float, min_effect: float,
-               looks: int, tests_run: int) -> dict:
     z = z_for(alpha)
     observed = successes / trials
     low, high = wilson_interval(successes, trials, z)
-    p_value = exact_two_sided_p(successes, trials, benchmark)
     expected_under_null = trials * benchmark
     material, relative_gap = _materiality(observed, benchmark, min_effect)
 
-    # Each gate names itself, so an UNRESOLVED result explains which specific
-    # thing is missing rather than reading as a shrug.
     blocked: list[str] = []
     if expected_under_null < MIN_EXPECTED_EVENTS:
         blocked.append(
-            f"underpowered: only {expected_under_null:.1f} events expected under the "
+            f"underpowered: only {expected_under_null:.2f} events expected under the "
             f"{benchmark:.2%} benchmark; need at least {MIN_EXPECTED_EVENTS}"
         )
     if not (high < benchmark or low > benchmark):
         blocked.append("the confidence interval still contains the benchmark")
-    if p_value >= alpha:
+    p_value = exact_two_sided_p(successes, trials, benchmark) if check_exact else None
+    if p_value is not None and p_value >= alpha:
         blocked.append(f"exact binomial p = {p_value:.4f}, not below alpha = {alpha:.4f}")
     if observed > benchmark and successes < MIN_OBSERVED_FOR_BETTER:
         blocked.append(
@@ -234,6 +221,84 @@ def one_sample(metric: str, successes: int, trials: int, benchmark: float,
     else:
         verdict, direction = "DECISIVE_BETTER", "above"
 
+    return verdict, blocked, {
+        "observed": observed, "low": low, "high": high, "p_value": p_value,
+        "direction": direction, "relative_gap": relative_gap,
+    }
+
+
+def _is_actionable(verdict: str) -> bool:
+    return verdict.startswith("DECISIVE") and verdict != "DECISIVE_BUT_IMMATERIAL"
+
+
+def trials_to_decide(assumed_rate: float, benchmark: float, alpha: float,
+                     min_effect: float) -> int | None:
+    """How many trials until THIS tool would call it, if the rate holds.
+
+    Runs the same gate stack the verdict uses, so it cannot promise an amount
+    of data that would still come back UNRESOLVED. Returns None when the gap is
+    too small to be worth resolving at any sample size — which is itself the
+    useful answer: stop waiting, there is nothing here to find.
+    """
+    material, _ = _materiality(assumed_rate, benchmark, min_effect)
+    if not material:
+        return None
+
+    def cheap(n: int) -> bool:
+        v, _, _ = verdict_for(round(assumed_rate * n), n, benchmark, alpha,
+                              min_effect, check_exact=False)
+        return _is_actionable(v)
+
+    n = 8
+    while n <= TRIAL_SEARCH_CEILING and not cheap(n):
+        n *= 2
+    if n > TRIAL_SEARCH_CEILING:
+        return None
+
+    lo, hi = max(1, n // 2), n
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if cheap(mid):
+            hi = mid
+        else:
+            lo = mid + 1
+    n = lo
+
+    # round() on the numerator makes the gate non-monotone in n, so bisection
+    # can land above the true minimum. Walk back down to it.
+    steps = 0
+    while n > 1 and steps < 5000 and cheap(n - 1):
+        n -= 1
+        steps += 1
+
+    # The cheap gate skips the exact binomial for speed; confirm the answer
+    # against the full stack so the projection and the verdict agree.
+    for _ in range(25):
+        if n > 100_000:
+            return n  # exact and score tests coincide long before this scale
+        v, _, _ = verdict_for(round(assumed_rate * n), n, benchmark, alpha, min_effect)
+        if _is_actionable(v):
+            return n
+        n = max(n + 1, int(n * 1.02))
+        if n > TRIAL_SEARCH_CEILING:
+            return None
+    return None
+
+
+def _materiality(observed: float, benchmark: float, min_effect: float) -> tuple[bool, float]:
+    if benchmark <= 0:
+        return True, float("inf")
+    relative = abs(observed - benchmark) / benchmark
+    return relative >= min_effect, relative
+
+
+def one_sample(metric: str, successes: int, trials: int, benchmark: float,
+               benchmark_source: str, alpha: float, min_effect: float,
+               looks: int, tests_run: int) -> dict:
+    verdict, blocked, d = verdict_for(successes, trials, benchmark, alpha, min_effect)
+    observed, low, high = d["observed"], d["low"], d["high"]
+    p_value, direction, relative_gap = d["p_value"], d["direction"], d["relative_gap"]
+
     out = {
         "metric": metric,
         "successes": successes,
@@ -242,7 +307,7 @@ def one_sample(metric: str, successes: int, trials: int, benchmark: float,
         "benchmark": benchmark,
         "benchmark_source": benchmark_source,
         "confidence_interval": [round(low, 5), round(high, 5)],
-        "confidence_level": round(1 - alpha, 4),
+        "confidence_level": float(f"{1 - alpha:.6g}"),
         "exact_two_sided_p": round(p_value, 6),
         "verdict": verdict,
         "verdict_basis": (
@@ -256,7 +321,7 @@ def one_sample(metric: str, successes: int, trials: int, benchmark: float,
         "minimum_material_gap": min_effect,
         "reads": (
             f"{metric} is {observed:.2%} on {trials:,} trials; the true rate is "
-            f"{1 - alpha:.0%} likely to be between {low:.2%} and {high:.2%}, which is "
+            f"{(1 - alpha) * 100:.4g}% likely to be between {low:.2%} and {high:.2%}, which is "
             f"{direction} the {benchmark:.2%} benchmark ({benchmark_source})."
         ),
         "does_not_tell_you": BLIND_SPOTS.get(
@@ -274,13 +339,13 @@ def one_sample(metric: str, successes: int, trials: int, benchmark: float,
         out["multiplicity_note"] = (
             "Single-look, single-test 95% rule. If this ad has already been checked on "
             "earlier data, re-run with --looks N — repeated peeking at accumulating data "
-            "turns a nominal 5% error rate into roughly 23% over two weeks of daily checks."
+            "turns a nominal 5% error rate into roughly 20-25% over two weeks of daily checks."
         )
 
     if verdict == "UNRESOLVED":
         out["unresolved_because"] = blocked
         assumed = observed if successes > 0 else 0.0
-        need = trials_to_decide(assumed, benchmark, z)
+        need = trials_to_decide(assumed, benchmark, alpha, min_effect)
         out["assumed_true_rate_for_projection"] = round(assumed, 5)
         if need is None:
             out["trials_needed_at_assumed_rate"] = None
@@ -291,7 +356,8 @@ def one_sample(metric: str, successes: int, trials: int, benchmark: float,
             )
         else:
             out["trials_needed_at_assumed_rate"] = need
-            out["additional_trials_needed"] = max(0, need - trials)
+            # Never 0 while the verdict is UNRESOLVED — that pair is self-contradictory.
+            out["additional_trials_needed"] = max(1, need - trials)
             out["projection_note"] = (
                 f"Projection assumes the true rate really is {assumed:.2%}. It is an estimate "
                 "from the data in hand, not a measured fact — if the rate drifts, so does this."
@@ -342,12 +408,33 @@ def two_sample(metric: str, a: tuple[int, int], b: tuple[int, int],
     zstat = diff / se if se else 0.0
     p_value = math.erfc(abs(zstat) / math.sqrt(2))
 
-    separated = d_low > 0 or d_high < 0
-    baseline = max(p_b, 1e-12)
-    relative_gap = abs(diff) / baseline
+    fisher_p = fisher_exact_two_sided(a_succ, a_n - a_succ, b_succ, b_n - b_succ)
+
+    # Same gate stack as the benchmark path, for the same reason: an interval on
+    # its own calls 2-of-2 versus 0-of-2 a decisive win. The arms need enough
+    # events for the question to be answerable, and Fisher has to agree.
+    blocked: list[str] = []
+    if min(a_n, b_n) < MIN_ARM_TRIALS:
+        blocked.append(
+            f"each arm needs at least {MIN_ARM_TRIALS} trials; smallest here is {min(a_n, b_n)}"
+        )
+    if max(a_succ, b_succ) < MIN_OBSERVED_FOR_BETTER:
+        blocked.append(
+            f"the better arm has only {max(a_succ, b_succ)} events; at least "
+            f"{MIN_OBSERVED_FOR_BETTER} are needed"
+        )
+    if not (d_low > 0 or d_high < 0):
+        blocked.append("the interval on the difference still contains zero")
+    if fisher_p >= alpha:
+        blocked.append(f"Fisher exact p = {fisher_p:.4f}, not below alpha = {alpha:.4f}")
+
+    # Baseline is order-invariant on purpose: dividing by the B arm alone made
+    # the verdict flip depending on which creative you happened to pass first.
+    baseline = max(p_a, p_b)
+    relative_gap = abs(diff) / baseline if baseline > 0 else 0.0
     material = relative_gap >= min_effect
 
-    if not separated:
+    if blocked:
         verdict = "UNRESOLVED"
     elif not material:
         verdict = "DECISIVE_BUT_IMMATERIAL"
@@ -362,14 +449,16 @@ def two_sample(metric: str, a: tuple[int, int], b: tuple[int, int],
               "confidence_interval": [round(b_low, 5), round(b_high, 5)]},
         "difference_a_minus_b": round(diff, 5),
         "difference_confidence_interval": [round(d_low, 5), round(d_high, 5)],
-        "confidence_level": round(1 - alpha, 4),
+        "confidence_level": float(f"{1 - alpha:.6g}"),
         "two_proportion_z": round(zstat, 3),
         "two_proportion_p": round(p_value, 6),
+        "fisher_exact_p": round(fisher_p, 6),
         "verdict": verdict,
         "verdict_basis": (
             "Newcombe confidence interval for the DIFFERENCE excluding zero. Per-arm "
             "intervals are shown for context only — overlapping per-arm intervals do NOT "
-            "imply the difference is null, and are not used in this verdict."
+            "imply the difference is null, and are not used in this verdict. Confirmed by a "
+            "two-tailed Fisher exact below alpha, with minimum arm sizes enforced."
         ),
         "alpha_used": round(alpha, 5),
         "looks": looks,
@@ -377,13 +466,16 @@ def two_sample(metric: str, a: tuple[int, int], b: tuple[int, int],
         "relative_gap": round(relative_gap, 4),
         "reads": (
             f"A is {p_a:.2%} [{a_low:.2%}–{a_high:.2%}], B is {p_b:.2%} [{b_low:.2%}–{b_high:.2%}]. "
-            f"The difference is {diff:+.2%}, 95% interval [{d_low:+.2%}, {d_high:+.2%}]"
-            + ("." if separated else ", which still contains zero — not settled.")
+            f"The difference is {diff:+.2%}, {(1 - alpha) * 100:.4g}% interval "
+            f"[{d_low:+.2%}, {d_high:+.2%}]"
+            + ("." if not blocked else " — not settled: " + "; ".join(blocked) + ".")
         ),
         "does_not_tell_you": BLIND_SPOTS.get(
             metric, ["anything about any other metric — power is per denominator"]
         ),
     }
+    if blocked:
+        out["unresolved_because"] = blocked
     if verdict == "DECISIVE_BUT_IMMATERIAL":
         out["recommendation"] = (
             f"The difference is real but only {relative_gap:.1%} relative, under the "
@@ -438,12 +530,23 @@ def main() -> None:
         sys.exit("--successes must be between 0 and --trials.")
     if args.looks < 1 or args.tests_run < 1:
         sys.exit("--looks and --tests-run must be at least 1.")
+    if args.looks * args.tests_run > MAX_MULTIPLICITY:
+        sys.exit(
+            f"--looks x --tests-run is {args.looks * args.tests_run}, above {MAX_MULTIPLICITY}. "
+            "Past this the correction is meaningless and the arithmetic underflows — if you "
+            "really have run that many tests, nothing here is decidable."
+        )
     if not 0 <= args.min_effect < 10:
         sys.exit("--min-effect is a relative fraction, e.g. 0.20 for 20%.")
 
     alpha = BASE_ALPHA / (args.looks * args.tests_run)
 
     if args.vs:
+        if args.benchmark is not None:
+            sys.exit(
+                "--vs and --benchmark ask different questions (is A different from B, versus "
+                "is A different from a fixed rate). Run them separately."
+            )
         vs_succ, vs_trials = args.vs
         if vs_trials <= 0:
             sys.exit("--vs trials must be positive; a comparison arm with no denominator is not an arm.")

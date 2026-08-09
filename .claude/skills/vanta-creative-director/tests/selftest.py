@@ -225,6 +225,96 @@ def test_head_to_head() -> None:
           trivial["verdict"] == "DECISIVE_BUT_IMMATERIAL", f"got {trivial['verdict']}")
 
 
+def test_head_to_head_small_samples() -> None:
+    """Regression: --vs had none of the guards the benchmark path enforced."""
+    print("\nHead-to-head enforces the same gates as the benchmark path")
+
+    for label, args in [
+        ("2 of 2 vs 0 of 2", ["--metric", "ctr", "--successes", "2", "--trials", "2", "--vs", "0", "2"]),
+        ("5 of 10 vs 10 of 50 (Fisher p=0.10)", ["--metric", "ctr", "--successes", "5", "--trials", "10", "--vs", "10", "50"]),
+        ("4 of 20 vs 10 of 20 (Fisher p=0.096)", ["--metric", "ctr", "--successes", "4", "--trials", "20", "--vs", "10", "20"]),
+        ("1 of 1 vs 0 of 1000", ["--metric", "ctr", "--successes", "1", "--trials", "1", "--vs", "0", "1000"]),
+    ]:
+        r = run_decisive(*args)
+        check(f"{label} is UNRESOLVED", r["verdict"] == "UNRESOLVED", f"got {r['verdict']}")
+        if r["verdict"] == "UNRESOLVED":
+            check(f"  ... and says why", bool(r.get("unresolved_because")))
+
+    print("  ... sweeping --vs for DECISIVE verdicts Fisher would refuse")
+    violations = []
+    for a_n in (10, 20, 30, 50, 100):
+        for b_n in (10, 30, 50, 200):
+            for a_s in range(0, a_n + 1, max(1, a_n // 6)):
+                for b_s in range(0, b_n + 1, max(1, b_n // 6)):
+                    r = run_decisive("--metric", "ctr", "--successes", str(a_s),
+                                     "--trials", str(a_n), "--vs", str(b_s), str(b_n))
+                    if r["verdict"].startswith("DECISIVE") and r["fisher_exact_p"] >= r["alpha_used"]:
+                        violations.append(f"{a_s}/{a_n} vs {b_s}/{b_n} fisher={r['fisher_exact_p']}")
+    check("No DECISIVE head-to-head has Fisher p >= alpha",
+          not violations, f"{len(violations)} violations, e.g. {violations[:3]}")
+
+    print("  ... checking argument order does not change the verdict")
+    asym = []
+    for a_s, a_n, b_s, b_n in [(145, 2000, 181, 2000), (100, 1000, 130, 1000),
+                               (200, 5000, 260, 5000), (50, 500, 75, 500)]:
+        fwd = run_decisive("--metric", "ctr", "--successes", str(a_s), "--trials", str(a_n),
+                           "--vs", str(b_s), str(b_n))
+        rev = run_decisive("--metric", "ctr", "--successes", str(b_s), "--trials", str(b_n),
+                           "--vs", str(a_s), str(a_n))
+        if fwd["verdict"] != rev["verdict"] or fwd["relative_gap"] != rev["relative_gap"]:
+            asym.append(f"{a_s}/{a_n} vs {b_s}/{b_n}: {fwd['verdict']}/{fwd['relative_gap']} != {rev['verdict']}/{rev['relative_gap']}")
+    check("Swapping A and B leaves the verdict and the gap unchanged",
+          not asym, "; ".join(asym))
+
+
+def test_projection_is_honest() -> None:
+    """Regression: the projection promised data that did not resolve anything."""
+    print("\nThe projection uses the same gate stack as the verdict")
+
+    bad = []
+    for succ, trials, bm in [(15, 500, 0.021), (5, 1000, 0.021), (0, 13, 0.05),
+                             (1, 200, 0.021), (30, 500, 0.05)]:
+        r = run_decisive("--metric", "ctr", "--successes", str(succ), "--trials", str(trials),
+                         "--benchmark", str(bm), SRC, ACCOUNT)
+        if r["verdict"] != "UNRESOLVED":
+            continue
+        need = r.get("trials_needed_at_assumed_rate")
+        check(f"{succ}/{trials} vs {bm}: never promises 0 more trials",
+              r.get("additional_trials_needed", 1) >= 1, str(r.get("additional_trials_needed")))
+        if need is None:
+            continue
+        rate = r["assumed_true_rate_for_projection"]
+        after = run_decisive("--metric", "ctr", "--successes", str(round(rate * need)),
+                             "--trials", str(need), "--benchmark", str(bm), SRC, ACCOUNT)
+        if not after["verdict"].startswith("DECISIVE") or after["verdict"] == "DECISIVE_BUT_IMMATERIAL":
+            bad.append(f"{succ}/{trials}@{bm} -> promised n={need} still {after['verdict']}")
+    check("Collecting the projected sample actually produces a decisive verdict",
+          not bad, "; ".join(bad))
+
+    immaterial = run_decisive("--metric", "ctr", "--successes", "210", "--trials", "10000",
+                              "--benchmark", "0.02", SRC, ACCOUNT)
+    check("A sub-material gap is not given a 'keep spending' number",
+          immaterial["trials_needed_at_assumed_rate"] is None
+          and "will not settle" in immaterial["projection_note"],
+          str(immaterial.get("trials_needed_at_assumed_rate")))
+
+
+def test_reported_confidence_is_truthful() -> None:
+    print("\nThe stated confidence level matches the alpha actually used")
+    for looks in (1, 14, 60):
+        r = run_decisive("--metric", "ctr", "--successes", "13", "--trials", "1900",
+                         "--benchmark", "0.021", "--looks", str(looks), SRC, ACCOUNT)
+        check(f"--looks {looks}: reads never claims 100% confidence",
+              "100% likely" not in r["reads"], r["reads"][:90])
+        check(f"--looks {looks}: confidence_level equals 1 - alpha",
+              abs(r["confidence_level"] - (1 - r["alpha_used"])) < 1e-4,
+              f"{r['confidence_level']} vs {1 - r['alpha_used']}")
+    h = run_decisive("--metric", "ctr", "--successes", "100", "--trials", "1000",
+                     "--vs", "130", "1000", "--looks", "14")
+    check("Head-to-head reads does not hardcode 95%",
+          "95% interval" not in h["reads"], h["reads"][-80:])
+
+
 def test_still_refuses_noise() -> None:
     """The original protection must survive the new flexibility."""
     print("\nSmall samples are still refused")
@@ -267,6 +357,8 @@ def test_input_guards() -> None:
         ("rejects ROAS as not a proportion", ["--metric", "roas", "--successes", "420", "--trials", "890", "--benchmark", "0.99", SRC, ACCOUNT]),
         ("rejects CPA as not a proportion", ["--metric", "cpa", "--successes", "3", "--trials", "890", "--benchmark", "0.1", SRC, ACCOUNT]),
         ("rejects an unknown metric label", ["--metric", "vibes", "--successes", "3", "--trials", "10", "--benchmark", "0.1", SRC, ACCOUNT]),
+        ("rejects an absurd multiplicity", ["--metric", "ctr", "--successes", "13", "--trials", "1900", "--benchmark", "0.021", "--looks", "1000000000000000", SRC, ACCOUNT]),
+        ("refuses --vs together with --benchmark", ["--metric", "ctr", "--successes", "100", "--trials", "1000", "--vs", "130", "1000", "--benchmark", "0.021", SRC, ACCOUNT]),
         ("rejects looks below 1", ["--metric", "ctr", "--successes", "1", "--trials", "10", "--benchmark", "0.1", "--looks", "0", SRC, ACCOUNT]),
     ]
     for label, args in cases:
@@ -348,6 +440,9 @@ def main() -> int:
     test_materiality()
     test_multiplicity()
     test_head_to_head()
+    test_head_to_head_small_samples()
+    test_projection_is_honest()
+    test_reported_confidence_is_truthful()
     test_still_refuses_noise()
     test_input_guards()
     test_registry_isolation()
