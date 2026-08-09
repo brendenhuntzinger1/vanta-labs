@@ -120,6 +120,18 @@ describe("compliance gate — softer signals", () => {
     expect(verdict.status).toBe("PASS");
   });
 
+  it("does not treat ordinary laboratory language as a lab attribution", () => {
+    // Regression: the rule used /i, so the capital-letter requirement did
+    // nothing and "dark matte laboratory field" tripped a substantiation block.
+    const verdict = reviewConcept({ ...clean, visualDirection: "dark matte laboratory field, lit from behind" });
+    expect(verdict.status).toBe("PASS");
+  });
+
+  it("still catches an actual named-lab attribution", () => {
+    const verdict = reviewConcept({ ...clean, caption: "analysed by Janoshik", claimsUsed: [] });
+    expect(verdict.findings.some((f) => f.ruleId === "substantiation/lab")).toBe(true);
+  });
+
   it("treats a vial size as a specification, not a dose", () => {
     expect(reviewConcept({ ...clean, onScreenText: ["5mg vial"] }).status).toBe("PASS");
   });

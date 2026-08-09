@@ -199,7 +199,12 @@ const RULES: Rule[] = [
 const SUBSTANTIATION_PATTERNS: { id: string; pattern: RegExp; kind: string }[] = [
   { id: "purity", pattern: /\b\d{1,3}(?:\.\d+)?\s?%\s?(?:purity|pure|hplc)?/i, kind: "a purity figure" },
   { id: "batch", pattern: /\b(?:batch|lot)\s?(?:number|no\.?|#)?\s?[A-Z0-9][A-Z0-9-]{3,}/i, kind: "a batch or lot number" },
-  { id: "lab", pattern: /\b(?:tested by|analysed by|analyzed by|laboratory)\s+[A-Z][A-Za-z]+/i, kind: "a laboratory name" },
+  // Deliberately case-SENSITIVE and verb-anchored. With /i the capital-letter
+  // requirement did nothing and the bare word "laboratory" matched ordinary
+  // visual direction like "dark matte laboratory field" — a brand that sells
+  // laboratory materials says the word constantly. What actually needs a source
+  // is an attribution to a named lab.
+  { id: "lab", pattern: /\b(?:tested|analysed|analyzed|certified|assayed|verified)\s+by\s+[A-Z][A-Za-z]+/, kind: "a laboratory name" },
   { id: "third-party", pattern: /\bthird[- ]party tested\b/i, kind: "a third-party testing claim" },
 ];
 

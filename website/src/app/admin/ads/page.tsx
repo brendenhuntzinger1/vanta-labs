@@ -277,6 +277,62 @@ export default async function AdsDashboardPage() {
         </div>
       </Panel>
 
+      <div className="grid gap-5 lg:grid-cols-2">
+        <Panel title="Winning patterns" subtitle="attributes associated with better performance — not proven causes">
+          <Empty>
+            No patterns yet. Attributes become patterns once several independent comparisons point the same way;
+            one comparison is an anecdote.
+          </Empty>
+        </Panel>
+        <Panel title="Losing patterns" subtitle="kept permanently — a failed angle is the evidence that stops it being refunded">
+          <Empty>Nothing retired yet. Losing creatives stay here forever rather than being deleted.</Empty>
+        </Panel>
+      </div>
+
+      <div className="grid gap-5 lg:grid-cols-3">
+        <Panel title="Fatigue alerts" subtitle="decline against a creative's own peak, tested">
+          <Empty>Needs at least a week of daily data per creative.</Empty>
+        </Panel>
+        <Panel title="Anomaly alerts" subtitle="today against its own trailing distribution">
+          <Empty>Needs a 7-day baseline before it will say anything.</Empty>
+        </Panel>
+        <Panel title="Data health" subtitle="how much to trust the numbers above">
+          <ul className="space-y-2 text-xs">
+            {[
+              ["TikTok reporting", "never ingested — awaiting TikTok connection"],
+              ["Site analytics", d.schemaReady ? "live" : "schema not applied"],
+              ["Higgsfield", "disconnected — no access confirmed"],
+            ].map(([label, state]) => (
+              <li key={label} className="flex items-center justify-between rounded-xl border border-white/[0.06] bg-white/[0.02] px-3 py-2.5">
+                <span className="text-white/70">{label}</span>
+                <span className="font-mono text-[10px] text-[color:var(--accent-gold)]/70">{state}</span>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      </div>
+
+      <Panel title="Creative generation" subtitle="briefs balance exploiting known winners against exploring untested territory">
+        <Empty>
+          No briefs yet. The generator needs evidence before it can exploit anything, and until then every brief
+          would be exploration. Higgsfield is disconnected, so nothing can be rendered regardless.
+        </Empty>
+      </Panel>
+
+      <Panel title="System activity" subtitle="every recommendation, approval and action, append-only">
+        <Empty>No activity yet. Nothing in this system has taken an action.</Empty>
+      </Panel>
+
+      <Panel title="Attribution" subtitle="platform-reported and first-party, kept apart on purpose">
+        <p className="text-xs leading-6 text-white/50">
+          TikTok will report more conversions than we can prove, and both figures will be defensible — it counts
+          view-through and cross-device using signals we cannot see, while we count only what our consent-gated
+          attribution observed end to end. Averaging them would produce a number with no definition, so both are
+          stored and the gap is tracked. Our figure is a floor.
+        </p>
+        <p className="mt-3 text-xs text-white/35">Awaiting TikTok connection — no platform figures to compare yet.</p>
+      </Panel>
+
       <Panel title="TikTok connection" subtitle="what is still required before anything can publish">
         <div className="grid gap-4 text-xs sm:grid-cols-2">
           <div>
