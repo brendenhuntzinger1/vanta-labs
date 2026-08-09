@@ -310,7 +310,15 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
             Stacked vertically on mobile — the old horizontal carousel showed
             one plan at a time, so plans 2-4 were invisible until you happened
             to swipe, and you could never compare two side by side. */}
-        <div className="mt-8 grid grid-cols-1 gap-4 pt-4 sm:grid-cols-2 lg:grid-cols-4">
+        {/* The grid was fixed at 4 columns, so a 3-tier program sat left-aligned
+            with an empty fourth slot. Column count now follows the number of
+            tiers and the track is centred, so three tiers land in the middle of
+            the screen and four still fill the row. */}
+        <div
+          className={`mx-auto mt-8 grid grid-cols-1 justify-center gap-4 pt-4 sm:grid-cols-2 ${
+            paidTiers.length === 3 ? "lg:max-w-5xl lg:grid-cols-3" : "lg:grid-cols-4"
+          }`}
+        >
           {paidTiers.map((tier, index) => {
             const price = billingCycle === "monthly" ? tier.monthlyPriceCents : tier.annualPriceCents;
             const isFeatured = tier.slug === "pro";
@@ -328,7 +336,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
                   className={`vl2-product-card group relative flex h-full flex-col p-6 sm:p-7 ${isFeatured || isBestValue ? "vl-tier-glow vl-tier-glow-featured" : "vl-tier-glow"}`}
                 >
                   {isFeatured ? (
-                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap border border-[color:var(--accent-gold)]/40 bg-[#0a0a0a] px-4 py-1 text-[9px] font-medium uppercase tracking-[0.3em] text-[color:var(--accent-gold)] shadow-[0_0_18px_-6px_rgba(212,175,55,0.6)]">
+                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap border border-[color:var(--accent-gold)]/40 bg-[#0a0a0a] px-4 py-1 text-[9px] font-medium uppercase tracking-[0.3em] text-[color:var(--accent-gold)] shadow-[0_0_10px_-6px_rgba(199,174,94,0.55)]">
                       Most Popular
                     </span>
                   ) : isBestValue ? (

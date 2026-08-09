@@ -260,7 +260,7 @@ textarea {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
-  box-shadow: 0 14px 32px rgba(255, 255, 255, 0.14);
+  box-shadow: 0 10px 26px -14px rgba(0, 0, 0, 0.85);
 }
 
 .vl-btn-primary {
@@ -270,12 +270,12 @@ textarea {
 
 .vl-btn-primary:hover {
   transform: translateY(-1px);
-  box-shadow: 0 16px 34px rgba(255, 255, 255, 0.2);
+  box-shadow: 0 14px 30px -14px rgba(0, 0, 0, 0.9);
 }
 
 .vl-btn-primary:active {
   transform: translateY(0) scale(0.985);
-  box-shadow: 0 8px 20px rgba(255, 255, 255, 0.12);
+  box-shadow: 0 6px 16px -10px rgba(0, 0, 0, 0.85);
 }
 
 .vl-btn-secondary {
@@ -571,7 +571,7 @@ textarea.vl-input { min-height: 6rem; }
 }
 
 .vl-card:hover {
-  box-shadow: 0 0 28px var(--vl-glow, rgba(255, 255, 255, 0.2)), 0 8px 24px rgba(0, 0, 0, 0.48);
+  box-shadow: 0 0 16px -10px var(--vl-glow, rgba(255, 255, 255, 0.28)), 0 10px 26px -14px rgba(0, 0, 0, 0.6);
   transform: translateY(-3px);
 }
 
@@ -1257,12 +1257,13 @@ textarea.vl-input { min-height: 6rem; }
 .vl2-product-card:hover {
   /* 3px, not 6. A big jump reads as a web template; a small one reads as the
      card lifting off glass. The border warms rather than turning gold. */
+  /* The vial photography is white on black -- it already supplies the
+     contrast. A halo around the card competes with it. */
   transform: translateY(-3px);
-  border-color: rgba(199, 174, 94, 0.26);
+  border-color: rgba(199, 174, 94, 0.22);
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.05) inset,
-    0 26px 54px -26px rgba(0, 0, 0, 0.78),
-    0 0 0 1px rgba(199, 174, 94, 0.07);
+    0 24px 48px -30px rgba(0, 0, 0, 0.85);
 }
 
 /* The vial photography is the strongest asset on the page. A slow, small scale
@@ -1940,12 +1941,15 @@ textarea {
    soft outer halo, so the cards read as glowing objects on the near-black
    page. Featured tiers get a stronger halo and a slow breathe. Purely
    box-shadow/opacity — no layout work, no repaint of the card contents. */
+/* GLOW IS A STATE, NOT A DECORATION.
+   At rest a tier card is a thin metallic hairline over depth: the gold reads
+   as a drawn edge rather than as light leaking into the background. The bloom
+   is kept for hover, where it means something. */
 .vl-tier-glow {
-  border-color: rgba(212, 175, 55, 0.26) !important;
+  border-color: rgba(199, 174, 94, 0.30) !important;
   box-shadow:
-    0 0 0 1px rgba(212, 175, 55, 0.10),
-    0 0 26px -8px rgba(212, 175, 55, 0.26),
-    0 24px 48px -28px rgba(0, 0, 0, 0.85);
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    0 20px 44px -30px rgba(0, 0, 0, 0.9);
   transition:
     border-color var(--duration-fast) ease,
     box-shadow var(--duration-fast) ease,
@@ -1953,45 +1957,36 @@ textarea {
 }
 
 .vl-tier-glow:hover {
-  border-color: rgba(212, 175, 55, 0.55) !important;
+  border-color: rgba(199, 174, 94, 0.55) !important;
   box-shadow:
-    0 0 0 1px rgba(212, 175, 55, 0.20),
-    0 0 44px -8px rgba(212, 175, 55, 0.44),
-    0 28px 56px -28px rgba(0, 0, 0, 0.9);
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 0 22px -14px rgba(199, 174, 94, 0.55),
+    0 26px 52px -30px rgba(0, 0, 0, 0.92);
   transform: translateY(-2px);
 }
 
+/* The featured tier is distinguished by a BRIGHTER HAIRLINE, not by more
+   light. The breathing animation is gone: a card that pulses forever is the
+   opposite of controlled, and it was the single loudest thing on the page. */
 .vl-tier-glow-featured {
-  border-color: rgba(212, 175, 55, 0.52) !important;
+  border-color: rgba(199, 174, 94, 0.58) !important;
   box-shadow:
-    0 0 0 1px rgba(212, 175, 55, 0.20),
-    0 0 48px -8px rgba(212, 175, 55, 0.42),
-    0 28px 56px -28px rgba(0, 0, 0, 0.9);
-  animation: vl-tier-breathe 4.5s ease-in-out infinite;
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 0 18px -14px rgba(199, 174, 94, 0.5),
+    0 24px 50px -30px rgba(0, 0, 0, 0.92);
 }
 
 .vl-tier-glow-featured:hover {
-  border-color: rgba(212, 175, 55, 0.75) !important;
+  border-color: rgba(199, 174, 94, 0.78) !important;
   box-shadow:
-    0 0 0 1px rgba(212, 175, 55, 0.3),
-    0 0 64px -8px rgba(212, 175, 55, 0.6),
-    0 30px 60px -28px rgba(0, 0, 0, 0.92);
+    inset 0 1px 0 rgba(255, 255, 255, 0.08),
+    0 0 24px -14px rgba(199, 174, 94, 0.65),
+    0 28px 56px -30px rgba(0, 0, 0, 0.94);
 }
 
-@keyframes vl-tier-breathe {
-  0%, 100% {
-    box-shadow:
-      0 0 0 1px rgba(212, 175, 55, 0.20),
-      0 0 44px -10px rgba(212, 175, 55, 0.36),
-      0 28px 56px -28px rgba(0, 0, 0, 0.9);
-  }
-  50% {
-    box-shadow:
-      0 0 0 1px rgba(212, 175, 55, 0.28),
-      0 0 58px -8px rgba(212, 175, 55, 0.52),
-      0 28px 56px -28px rgba(0, 0, 0, 0.9);
-  }
-}
+/* vl-tier-breathe removed: the featured tier pulsed forever, which read as
+   an advert rather than as a premium surface. Distinction now comes from a
+   brighter hairline. */
 
 @media (prefers-reduced-motion: reduce) {
   .vl-tier-glow,
@@ -2317,9 +2312,10 @@ select.vl-auth-field {
   inset: -6rem -10rem -4rem -8rem;
   pointer-events: none;
   z-index: 0;
+  /* Roughly a third of the previous strength: enough to lift the block off
+     flat black, not enough to read as a lit patch behind the type. */
   background:
-    radial-gradient(46% 52% at 22% 42%, rgba(199, 174, 94, 0.13), transparent 70%),
-    radial-gradient(38% 44% at 8% 20%, rgba(255, 255, 255, 0.045), transparent 68%);
+    radial-gradient(44% 50% at 20% 40%, rgba(199, 174, 94, 0.045), transparent 72%);
 }
 
 .vl-catalog-title {
@@ -2331,10 +2327,10 @@ select.vl-auth-field {
   color: transparent;
   /* The glow itself. Two stacked shadows: a tight white lift for legibility,
      and a wide champagne bloom that only registers peripherally. */
-  filter:
-    drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5))
-    drop-shadow(0 0 26px rgba(199, 174, 94, 0.22))
-    drop-shadow(0 0 60px rgba(199, 174, 94, 0.10));
+  /* One tight shadow for legibility. The wide champagne bloom is gone -- it
+     softened the letterforms, which is the opposite of what a serif this size
+     needs. Crispness reads as expensive; haze does not. */
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
 }
 
 .vl-catalog-rule {
@@ -2354,24 +2350,22 @@ select.vl-auth-field {
   gap: 0.4rem;
   padding: 0.4rem 0.8rem;
   border-radius: 999px;
-  border: 1px solid rgba(199, 174, 94, 0.22);
-  background: linear-gradient(180deg, rgba(199, 174, 94, 0.10), rgba(199, 174, 94, 0.03));
-  color: #ddd2ba;
+  border: 1px solid rgba(199, 174, 94, 0.34);
+  background: rgba(199, 174, 94, 0.035);
+  color: #d6cab1;
   font-size: 0.6875rem;
   font-weight: 500;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   white-space: nowrap;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
   transition: border-color 240ms ease, color 240ms ease, box-shadow 240ms ease;
 }
 
+/* Glow only on hover, and even then tight. */
 .vl-catalog-chip:hover {
-  border-color: rgba(199, 174, 94, 0.42);
+  border-color: rgba(199, 174, 94, 0.6);
   color: #f0e8d6;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.07),
-    0 0 22px -8px rgba(199, 174, 94, 0.5);
+  box-shadow: 0 0 14px -8px rgba(199, 174, 94, 0.7);
 }
 
 /* Safari on iOS renders a background-clipped gradient with a drop-shadow
