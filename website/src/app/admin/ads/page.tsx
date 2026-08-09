@@ -161,10 +161,22 @@ export default async function AdsDashboardPage() {
       <Panel title="TikTok connection" subtitle="what is still required before anything can publish">
         <div className="grid gap-4 text-xs sm:grid-cols-2">
           <div>
-            <p className="mb-2 text-white/50">Missing credentials</p>
+            <p className="mb-2 text-white/50">Needed to read campaign data</p>
             <ul className="space-y-1 font-mono text-[11px] text-white/60">
               {d.tiktok.missing.length === 0 ? <li className="text-white/35">none</li> : d.tiktok.missing.map((m) => <li key={m}>{m}</li>)}
             </ul>
+            {d.tiktok.oneTimeSetup.length > 0 ? (
+              <>
+                <p className="mb-2 mt-4 text-white/50">Used once, to obtain that token</p>
+                <ul className="space-y-1 font-mono text-[11px] text-white/40">
+                  {d.tiktok.oneTimeSetup.map((m) => <li key={m}>{m}</li>)}
+                </ul>
+              </>
+            ) : null}
+            <p className="mt-3 text-[11px] leading-5 text-white/35">
+              None of these are required to run ads. The pixel reports conversions on its own — these only let this
+              dashboard read spend and performance back out of TikTok.
+            </p>
           </div>
           <div>
             <p className="mb-2 text-white/50">Blocked on (not solvable by config)</p>

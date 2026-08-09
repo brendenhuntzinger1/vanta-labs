@@ -180,18 +180,32 @@ export class SimulationTikTokClient implements TikTokAdsClient {
  */
 export type ReadinessReport = {
   ready: boolean;
+  /** Needed every time the system reads or changes anything on TikTok. */
   missing: string[];
+  /**
+   * Needed only to obtain the access token, once. Listing these alongside the
+   * runtime credentials made the setup look twice as large as it is: the app id
+   * and secret are used in a single authorisation exchange and never again, so
+   * they belong in a different column from the two values the system actually
+   * runs on.
+   */
+  oneTimeSetup: string[];
   blockedOn: string[];
 };
 
 export function assessTikTokReadiness(env: Record<string, string | undefined>): ReadinessReport {
   const missing: string[] = [];
-  for (const key of ["TIKTOK_ADS_ACCESS_TOKEN", "TIKTOK_ADVERTISER_ID", "TIKTOK_APP_ID", "TIKTOK_APP_SECRET"]) {
+  for (const key of ["TIKTOK_ADS_ACCESS_TOKEN", "TIKTOK_ADVERTISER_ID"]) {
     if (!env[key]?.trim()) missing.push(key);
+  }
+  const oneTimeSetup: string[] = [];
+  for (const key of ["TIKTOK_APP_ID", "TIKTOK_APP_SECRET"]) {
+    if (!env[key]?.trim()) oneTimeSetup.push(key);
   }
   return {
     ready: false,
     missing,
+    oneTimeSetup,
     // These are not environment variables and cannot be satisfied by config.
     // Listing them here keeps the honest blockers next to the technical ones.
     blockedOn: [

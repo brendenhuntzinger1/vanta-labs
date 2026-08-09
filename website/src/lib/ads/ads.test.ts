@@ -388,6 +388,21 @@ describe("tiktok client — simulation only", () => {
     expect(report.missing).toContain("TIKTOK_ADS_ACCESS_TOKEN");
     expect(report.blockedOn.join(" ")).toContain("eligibility");
   });
+
+  it("separates what it runs on from what is used once to get a token", () => {
+    // Listing all four as runtime requirements made the remaining setup look
+    // twice as large as it is.
+    const report = assessTikTokReadiness({});
+    expect(report.missing).toEqual(["TIKTOK_ADS_ACCESS_TOKEN", "TIKTOK_ADVERTISER_ID"]);
+    expect(report.oneTimeSetup).toEqual(["TIKTOK_APP_ID", "TIKTOK_APP_SECRET"]);
+  });
+
+  it("stops asking for a credential once it is set", () => {
+    const report = assessTikTokReadiness({ TIKTOK_ADVERTISER_ID: "7672065135046426641" });
+    expect(report.missing).toEqual(["TIKTOK_ADS_ACCESS_TOKEN"]);
+    // Still not ready: eligibility and approval are not environment variables.
+    expect(report.ready).toBe(false);
+  });
 });
 
 function snapshot(overrides: Partial<PerformanceSnapshot> = {}): PerformanceSnapshot {
