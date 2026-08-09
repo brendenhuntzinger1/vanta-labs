@@ -248,7 +248,7 @@ export function buildPurchase(order: PaidOrder): TikTokEvent | null {
   // stable, it is not what the other three events send, and using it would
   // produce a content id that silently stops matching the day a product is
   // renamed. A line with no slug and no product id is dropped instead.
-  const contents = usableContents(
+  const resolved = usableContents(
     order.items.map((item) => {
       const contentId = resolveContentId(item);
       if (!contentId) return null;
@@ -262,12 +262,26 @@ export function buildPurchase(order: PaidOrder): TikTokEvent | null {
     }),
   );
 
+  // A Purchase always carries a content id, even when no line resolved.
+  //
+  // TikTok raises a Critical "Content ID is missing" diagnostic against any
+  // Purchase with an empty content id, and that costs delivery quality — their
+  // own figure is an 8% CPA difference. The alternative, dropping the event,
+  // costs the whole conversion. So an unresolvable order falls back to
+  // identifying itself: a real thing that was really bought, named so that it
+  // is obviously an order rather than a catalogue product. It should never
+  // happen — every line resolves to a slug or a product id — and if it appears
+  // in reporting it is legible as the anomaly it is.
+  const contents: TikTokContent[] =
+    resolved.length > 0
+      ? resolved
+      : [{ content_id: `order-${order.orderId}`, content_type: "product", content_name: "Order (line items unresolved)", quantity: 1, price: value }];
+
   return {
     name: "Purchase",
     properties: {
-      // Paired with `contents` for the reason above: a lone top-level
-      // `content_type` is turned into an id-less content entry by TikTok.
-      ...(contents.length > 0 ? { content_type: "product" as const, contents } : {}),
+      content_type: "product",
+      contents,
       value,
       currency: CURRENCY,
     },
@@ -380,6 +394,26 @@ export function browserFiredStore(): FiredStore {
 }
 
 export type Emitter = (name: string, properties: Record<string, unknown>, options: { event_id: string }) => void;
+
+/**
+ * Does this event identify what it is about?
+ *
+ * TikTok raises a Critical diagnostic against any ViewContent, AddToCart,
+ * InitiateCheckout or Purchase whose `content_id` is empty or whitespace, and
+ * degrades delivery for it. Every builder above already guarantees one, so this
+ * is the belt to their braces: a future change that reintroduces a blank id
+ * fails a test here rather than being discovered in Events Manager days later.
+ *
+ * Deliberately checks the shape TikTok checks — at least one content entry, and
+ * every entry carrying a non-whitespace id — rather than trusting that the
+ * builder that produced it did the right thing.
+ */
+export function hasUsableContentIds(event: TikTokEvent | null): boolean {
+  if (!event) return false;
+  const contents = event.properties.contents;
+  if (!contents || contents.length === 0) return false;
+  return contents.every((entry) => typeof entry.content_id === "string" && entry.content_id.trim().length > 0);
+}
 
 /**
  * Send an event, honouring its dedupe key.

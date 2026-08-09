@@ -8,6 +8,7 @@ import {
   emitEvent,
   mapAnalyticsDetail,
   resolveContentId,
+  hasUsableContentIds,
   money,
   type FiredStore,
 } from "./tiktok-events";
@@ -127,10 +128,14 @@ describe("Purchase — must represent real paid revenue", () => {
     expect(buildPurchase({ ...paid, orderId: "" })).toBeNull();
   });
 
-  it("still reports revenue when line items are missing", () => {
+  it("still reports revenue when line items are missing, and still identifies itself", () => {
+    // Previously this sent no contents at all, which earns a Critical
+    // "Content ID is missing" diagnostic from TikTok and degrades delivery.
+    // The conversion is the thing worth protecting, so it keeps the value and
+    // falls back to naming the order.
     const event = buildPurchase({ ...paid, items: [] })!;
     expect(event.properties.value).toBe(128.97);
-    expect(event.properties).not.toHaveProperty("contents");
+    expect(event.properties.contents?.[0].content_id).toBe("order-ord-123");
   });
 
   it("uses an event id derived from the order so a server event collapses into it", () => {
@@ -277,15 +282,19 @@ describe("content identification", () => {
     expect(event?.properties.currency).toBe("USD");
   });
 
-  it("does the same for a purchase whose lines cannot be identified", () => {
+  it("keeps a purchase identifiable rather than dropping its contents", () => {
+    // InitiateCheckout may go out with no contents — it is not a conversion and
+    // TikTok does not require one. Purchase is different: a blank id there is a
+    // Critical diagnostic against the event that matters most, so it always
+    // carries one.
     const event = buildPurchase({
       orderId: "ord-x",
       isPaid: true,
       amountPaid: 30,
       items: [{ productName: "Name Only", quantity: 1, unitPrice: 30 }],
     });
-    expect(event?.properties.contents).toBeUndefined();
-    expect(event?.properties.content_type).toBeUndefined();
+    expect(event?.properties.content_type).toBe("product");
+    expect(event?.properties.contents?.[0].content_id).toBe("order-ord-x");
     expect(event?.properties.value).toBe(30);
   });
 
@@ -342,7 +351,9 @@ describe("content identification", () => {
       amountPaid: 10,
       items: [{ productName: "Name Only", quantity: 1, unitPrice: 10 }],
     });
-    expect(nameOnly?.properties.contents).toBeUndefined();
+    // The name is still not used as the id — the order identifies itself instead.
+    expect(nameOnly?.properties.contents?.[0].content_id).toBe("order-ord-3");
+    expect(nameOnly?.properties.contents?.[0].content_id).not.toContain("Name Only");
     // Still a conversion — the money is real even when the line is not identifiable.
     expect(nameOnly?.properties.value).toBe(10);
   });
@@ -398,5 +409,68 @@ describe("payload audit — every field TikTok checks", () => {
     for (const event of events()) {
       expect(event!.properties.value).toBe(Math.round(event!.properties.value! * 100) / 100);
     }
+  });
+});
+
+describe("no commerce event may leave without identifying its product", () => {
+  // TikTok raises a Critical "Content ID is missing" diagnostic against any of
+  // these with a blank id, and degrades delivery for it. Every builder must
+  // satisfy the same shape TikTok checks.
+  const everyBuilder = () => [
+    buildViewContent({ slug: "b12", name: "B12", price: 49.99 }),
+    buildAddToCart({ slug: "b12", name: "B12", quantity: 1, price: 49.99 }),
+    buildInitiateCheckout({ itemCount: 1, total: 68.49, items: [{ slug: "b12", name: "B12", quantity: 1, price: 49.99 }] }),
+    buildPurchase({
+      orderId: "VL-1",
+      isPaid: true,
+      amountPaid: 68.49,
+      items: [{ slug: "b12", productId: "uuid", productName: "B12", quantity: 1, unitPrice: 49.99 }],
+    }),
+  ];
+
+  it("every builder produces at least one non-blank content id", () => {
+    for (const event of everyBuilder()) {
+      expect(hasUsableContentIds(event), `${event?.name} has no usable content id`).toBe(true);
+    }
+  });
+
+  it("a purchase whose lines cannot be resolved still identifies itself", () => {
+    // Dropping the event would lose the conversion; sending it blank would earn
+    // a Critical diagnostic. It falls back to naming the order, which is a real
+    // thing that was really bought and is legible as an anomaly in reporting.
+    const event = buildPurchase({
+      orderId: "VL-99",
+      isPaid: true,
+      amountPaid: 30,
+      items: [{ productName: "Name Only", quantity: 1, unitPrice: 30 }],
+    });
+    expect(hasUsableContentIds(event)).toBe(true);
+    expect(event?.properties.contents?.[0].content_id).toBe("order-VL-99");
+    expect(event?.properties.contents?.[0].content_name).toMatch(/unresolved/i);
+    expect(event?.properties.value).toBe(30);
+  });
+
+  it("a purchase with no line items at all still reports the conversion", () => {
+    const event = buildPurchase({ orderId: "VL-100", isPaid: true, amountPaid: 12.5, items: [] });
+    expect(hasUsableContentIds(event)).toBe(true);
+    expect(event?.properties.value).toBe(12.5);
+  });
+
+  it("rejects a whitespace-only id, which TikTok treats as missing", () => {
+    expect(
+      hasUsableContentIds({
+        name: "ViewContent",
+        properties: { contents: [{ content_id: "   ", content_type: "product" }] },
+        eventId: "x",
+        dedupeKey: null,
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects an event with no contents at all", () => {
+    expect(
+      hasUsableContentIds({ name: "ViewContent", properties: { value: 1, currency: "USD" }, eventId: "x", dedupeKey: null }),
+    ).toBe(false);
+    expect(hasUsableContentIds(null)).toBe(false);
   });
 });
