@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { observeBrowser } from "@/lib/ads/tracking-health-browser";
+import { observeBrowser, setConsentForThisBrowser } from "@/lib/ads/tracking-health-browser";
 import {
   buildHealthReport,
   nextAction,
@@ -169,6 +169,40 @@ export function AdsTrackingHealth() {
         {checks.map((check) => (
           <Row key={check.id} check={check} />
         ))}
+      </div>
+
+      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+        <p className="text-[10px] uppercase tracking-[0.14em] text-white/35">
+          Cookie choice in this browser — <span className="font-mono text-white/70">{browser.consent}</span>
+        </p>
+        <p className="mt-1 text-xs leading-6 text-white/45">
+          The pixel does not load until this says <span className="font-mono text-white/70">accepted</span>, and the
+          banner only appears while no choice is stored — so a Decline made once is invisible and never asked again.
+          These write the same value the banner writes, for this browser only.
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => {
+              setConsentForThisBrowser("accepted");
+              // The pixel needs a fresh load to inject its script.
+              window.location.reload();
+            }}
+            className="rounded-lg border border-emerald-400/40 bg-emerald-400/10 px-4 py-2 text-xs text-emerald-300 transition hover:bg-emerald-400/20"
+          >
+            Accept in this browser and reload
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setConsentForThisBrowser(null);
+              window.location.reload();
+            }}
+            className="rounded-lg border border-white/10 px-4 py-2 text-xs text-white/55 transition hover:border-white/25 hover:text-white"
+          >
+            Clear choice (show the banner again)
+          </button>
+        </div>
       </div>
 
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">

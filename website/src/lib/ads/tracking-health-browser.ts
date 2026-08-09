@@ -94,6 +94,29 @@ export function runFunnelProbes(): BrowserHealthInput["probes"] {
   };
 }
 
+/**
+ * Record a cookie choice for this browser, exactly as the banner does.
+ *
+ * The banner only renders when no choice is stored, so a Decline — or a stale
+ * Accept from before the pixel existed — is invisible and unreachable
+ * afterwards. Diagnosing that used to mean opening DevTools and editing
+ * localStorage by hand, which is not a reasonable thing to ask of anyone.
+ *
+ * This is the same key, the same value and the same event the banner writes;
+ * it is the owner making the choice in their own browser, not consent being
+ * granted on anyone else's behalf. Passing null clears the choice, which makes
+ * the banner appear again on the next page.
+ */
+export function setConsentForThisBrowser(choice: "accepted" | "declined" | null): void {
+  try {
+    if (choice === null) window.localStorage.removeItem(CONSENT_KEY);
+    else window.localStorage.setItem(CONSENT_KEY, choice);
+  } catch {
+    return;
+  }
+  window.dispatchEvent(new Event("vanta:cookie-consent"));
+}
+
 export function observeBrowser(): BrowserHealthInput {
   const pageViews = Number((window as unknown as Record<string, unknown>)[PAGEVIEW_COUNTER] ?? 0);
   return {
