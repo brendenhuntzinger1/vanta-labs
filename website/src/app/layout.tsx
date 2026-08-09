@@ -11,6 +11,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { CookieConsent } from "@/components/cookie-consent";
 import { WelcomeOffer } from "@/components/welcome-offer";
 import { ConsentedAnalytics } from "@/components/consented-analytics";
+import { TikTokPixel } from "@/components/tiktok-pixel";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -137,6 +138,9 @@ export default function RootLayout({
           </AgeGate>
         </CartProvider>
         <ConsentedAnalytics />
+        <Suspense fallback={null}>
+          <TikTokPixel />
+        </Suspense>
       </body>
     </html>
   );
