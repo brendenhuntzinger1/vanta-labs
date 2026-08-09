@@ -35,8 +35,18 @@ export function TikTokPurchaseEvent({
 
   const attempt = useCallback(async () => {
     if (settled.current || !orderId) return;
-    // No pixel means consent was declined or not yet given.
-    if (!window.ttq) return;
+    // Gate on consent itself, not on whether the SDK loaded.
+    //
+    // Checking `window.ttq` conflated the two: an ad blocker that stops
+    // analytics.tiktok.com leaves consent granted but ttq absent, and the
+    // server-side event — the whole reason the Events API exists — would never
+    // be requested. The inline stub defines ttq before the remote script
+    // loads, so this also stays correct when the SDK is merely slow.
+    try {
+      if (window.localStorage.getItem("vl_cookie_consent") !== "accepted") return;
+    } catch {
+      return;
+    }
 
     try {
       const response = await fetch(`/api/ads/purchase-event/${encodeURIComponent(orderId)}`, { cache: "no-store" });
@@ -45,6 +55,8 @@ export function TikTokPurchaseEvent({
       if (!body?.event) return; // not paid — nothing to report, and that is correct
 
       settled.current = true;
+      // The browser leg is best-effort: if the SDK was blocked, ttq?.track is
+      // a no-op and the server leg above already reported the conversion.
       // Identify before tracking, so the conversion carries the match keys.
       // Only ever digests, and only on a confirmed paid order — the one moment
       // this customer's identity is both known and relevant.
