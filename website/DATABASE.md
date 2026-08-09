@@ -29,7 +29,7 @@ and how data flows from checkout to payouts and analytics.
 
 ```
 Customer browses                 products, product_doses, product_images, coupons
-        │                        (COA links: products.coa_url → COA Library)
+        │                        (COA Library: coa_records + `coa-documents` bucket)
         ▼
 Adds to cart (localStorage)      abandoned_carts (+ abandoned_cart_emails recovery)
         │
@@ -84,9 +84,16 @@ Payouts & analytics              commissions/partner_payouts (ambassadors),
 | `product_doses` | Dose/size **variants** of a product (e.g. 5mg/10mg): label, sku, price/sale price, per-variant `stock_status`, `inventory_quantity`, `shipping_weight_oz`, default flag. FK → `products`. |
 | `product_images` | Gallery images for a product (url, alt, sort). FK → `products`. |
 | `inventory_items` | Legacy/standalone inventory table — **not used by app code** today (real stock lives on `products`/`product_doses`). Candidate for removal (Appendix B). |
+| `coa_records` | One Certificate of Analysis per **production batch**: `batch_number`, `lot_number`, `lab_name`, `test_date`, `purity`, `identity_result`, `status` (`draft`/`published`/`archived`), and either a `file_path` in the private `coa-documents` bucket or an `external_url`. FK → `products` (and optionally `product_doses`). Managed in Admin → COA Library; migration `src/lib/sql/coa-library.sql`. |
 
-- **COAs** are not a separate table: each product carries `coa_url`; the COA
-  Library reads them via `getCoaRecords()` (`src/lib/catalog.ts`).
+- **COAs** are batch-level rows in `coa_records`, read by `src/lib/coa.ts` for
+  the public library and `src/lib/admin-coa.ts` for the admin console. Documents
+  live in the **private** `coa-documents` storage bucket and are only ever
+  reached through `/api/coa/{id}/file`, which re-checks that the record is
+  `published` and its product still live before minting a 1-hour signed URL.
+  `products.coa_url` / `product_doses.coa_url` remain in place for the product
+  page's own COA link, and existing values were backfilled into `coa_records`
+  as `external_url` records by the migration.
 - **`shipping_weight_oz`** is the packaged weight of ONE unit in ounces, used to
   build the Shippo parcel (Section 5). On `products` it defaults to `0.5`; on
   `product_doses` it is nullable and `NULL` means **inherit the parent
@@ -346,7 +353,7 @@ live DB is confirmed, drop the compatibility view/rename the base table.
 | `product_variants` | `product_doses` |
 | `categories` | `products.category` column (introduce a table only if you need category metadata) |
 | `inventory` | columns on `products`/`product_doses` (drop unused `inventory_items`) |
-| `certificates_of_analysis` | `products.coa_url` (promote to a table if you need multiple COAs per product) |
+| `certificates_of_analysis` | `coa_records` (batch-level, many per product) |
 | `order_status_history` | `order_status_history` (now a real table — Sections 2 & 5) |
 | `carts` | browser `localStorage` + `abandoned_carts` |
 | `customer_profiles` / `customer_accounts` | `auth.users` + `customer_preferences` |

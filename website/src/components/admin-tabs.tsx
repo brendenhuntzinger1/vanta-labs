@@ -35,6 +35,11 @@ const tabs: AdminTab[] = [
     match: (pathname) => pathname.startsWith("/admin/products"),
   },
   {
+    label: "COA Library",
+    href: "/admin/coa",
+    match: (pathname) => pathname.startsWith("/admin/coa"),
+  },
+  {
     label: "Orders",
     href: "/admin/orders",
     match: (pathname) => pathname.startsWith("/admin/orders"),

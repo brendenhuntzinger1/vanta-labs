@@ -3,7 +3,7 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isInventoryTrackingActive } from "@/lib/inventory-settings";
-import type { CoaRecord, Product, ProductDose, ProductImage } from "@/lib/catalog-types";
+import type { Product, ProductDose, ProductImage } from "@/lib/catalog-types";
 import { parseProductFaq } from "@/lib/product-faq";
 import { sanitizeCoaUrl } from "@/lib/coa-url";
 
@@ -382,29 +382,3 @@ export const getCatalogProductsByCategory = unstable_cache(
   ["catalog-products-by-category"],
   { tags: [CATALOG_CACHE_TAG], revalidate: CATALOG_CACHE_TTL },
 );
-
-export async function getCoaRecords() {
-  const { data, error } = await supabaseAdmin
-    .from("products")
-    .select("slug, name, category, batch_number, purity_result, testing_date, lab_name, coa_url")
-    .eq("is_active", true)
-    .eq("is_enabled", true)
-    .eq("is_published", true)
-    .eq("is_archived", false)
-    .order("testing_date", { ascending: false });
-
-  if (error) {
-    throw error;
-  }
-
-  return (data ?? []).map((row) => ({
-    slug: String(row.slug),
-    productName: String(row.name),
-    category: String(row.category ?? "Research Peptides"),
-    batchNumber: String(row.batch_number ?? ""),
-    purityResult: String(row.purity_result ?? "Pending"),
-    testingDate: String(row.testing_date ?? ""),
-    labName: String(row.lab_name ?? ""),
-    coaUrl: sanitizeCoaUrl(row.coa_url),
-  })) satisfies CoaRecord[];
-}

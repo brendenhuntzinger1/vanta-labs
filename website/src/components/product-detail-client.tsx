@@ -20,6 +20,8 @@ import { FREE_SHIPPING_THRESHOLD } from "@/lib/shipping";
 import { RecentlyViewed } from "@/components/recently-viewed";
 import { BacWaterAccessoryBlock, FrequentlyBoughtTogether } from "@/components/bac-water-upsell";
 import { CoaLibraryNotice } from "@/components/coa-library-notice";
+import { formatCoaTestDate } from "@/lib/coa-format";
+import type { PublicCoaDocument } from "@/lib/coa-types";
 import Image from "next/image";
 
 function parseDose(slug: string) {
@@ -149,12 +151,14 @@ export function ProductDetailClient({
   promoBuy3Get1Enabled = false,
   bundleConfig = DEFAULT_BUNDLE_CONFIG,
   bacWater = null,
+  coaDocuments = [],
 }: {
   product: Product;
   relatedProducts?: Product[];
   promoBuy3Get1Enabled?: boolean;
   bundleConfig?: BundleConfig;
   bacWater?: Product | null;
+  coaDocuments?: PublicCoaDocument[];
 }) {
   const { addToCart, membershipTiers, memberDiscountPercent } = useCart();
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
@@ -448,7 +452,11 @@ export function ProductDetailClient({
 
                 {activeTab === "coa" && (
                   <div className="vl2-lab-panel p-5">
-                    <CoaLibraryNotice className="mb-5" />
+                    {/* The notice explains that batch-specific COAs are still
+                        being prepared. Once this product HAS published batch
+                        records, that is no longer true of it — showing both
+                        would have the page contradict itself. */}
+                    {coaDocuments.length === 0 ? <CoaLibraryNotice className="mb-5" /> : null}
                     {/* Only describe a downloadable COA when one actually
                         exists. This paragraph used to render unconditionally —
                         "Every product lot is linked to a third-party
@@ -483,6 +491,54 @@ export function ProductDetailClient({
                         <span>↗</span> Download COA PDF
                       </a>
                     )}
+
+                    {/* Per-batch documentation from Admin → COA Library. One
+                        product accumulates one of these per production run, so
+                        the newest sits first and the rest stay reachable. */}
+                    {coaDocuments.length > 0 ? (
+                      <div className="mt-6 border-t border-white/[0.08] pt-5">
+                        <p className="text-[10px] uppercase tracking-[0.2em] text-white/45">
+                          Published batch records
+                        </p>
+                        <ul className="mt-3 space-y-2">
+                          {coaDocuments.map((doc) => (
+                            <li
+                              key={doc.id}
+                              className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border border-white/[0.08] px-4 py-3"
+                            >
+                              <div className="min-w-0">
+                                <p className="font-mono text-[13px] text-white">{doc.batchNumber}</p>
+                                <p className="mt-0.5 text-xs text-white/45">
+                                  {[doc.strength, doc.purity, formatCoaTestDate(doc.testDate), doc.labName]
+                                    .filter(Boolean)
+                                    .join(" · ") || "Certificate of Analysis"}
+                                </p>
+                              </div>
+                              <a
+                                href={`/api/coa/${doc.id}/file`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="vl-article-link vl-focus-ring rounded-[8px]"
+                              >
+                                View COA
+                                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                                  <path d="M14 4h6v6M20 4l-8.5 8.5M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+                                </svg>
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                        <Link
+                          href="/coa-library"
+                          className="vl-article-link vl-focus-ring mt-4 inline-flex rounded-[8px]"
+                        >
+                          Browse the full COA library
+                          <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" className="h-4 w-4">
+                            <path d="M5 12h14M13 6l6 6-6 6" />
+                          </svg>
+                        </Link>
+                      </div>
+                    ) : null}
                   </div>
                 )}
               </div>

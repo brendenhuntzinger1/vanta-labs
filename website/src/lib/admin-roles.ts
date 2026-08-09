@@ -37,6 +37,14 @@ export function canManageProducts(role: AdminRole) {
   return role === "manager" || role === "super_admin";
 }
 
+// A COA is the store's public evidence that a batch was tested. Publishing one
+// makes a quality claim under the company's name, and deleting one removes the
+// documentation behind a claim already made — the same weight as editing the
+// products those COAs describe, so it sits at the same manager+ bar.
+export function canManageCoa(role: AdminRole) {
+  return role === "manager" || role === "super_admin";
+}
+
 export function canViewAuditLog(role: AdminRole) {
   return role === "manager" || role === "super_admin";
 }

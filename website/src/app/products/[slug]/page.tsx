@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ProductDetailClient } from "@/components/product-detail-client";
 import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/catalog";
 import { getHomepageControlConfig } from "@/lib/admin-control";
+import { getPublishedCoaDocumentsForProduct } from "@/lib/coa";
 import { BAC_WATER_SLUG, isBacWater } from "@/lib/bac-water";
 
 export const dynamic = "force-dynamic";
@@ -54,6 +55,10 @@ export default async function ProductDetailPage({
   }
 
   const relatedProducts = await getCatalogProductsByCategory(product.category, product.slug, 4).catch(() => []);
+  // Batch COAs published in Admin → COA Library. The product's own `coa_url`
+  // still drives the buy-panel link; this adds the per-batch history underneath
+  // it so a shopper checking a specific lot doesn't have to leave the page.
+  const coaDocuments = await getPublishedCoaDocumentsForProduct(product.id ?? "");
   const { promoBuy3Get1Enabled, bundleConfig } = await getHomepageControlConfig();
   // BAC Water cross-sell (accessory block + Frequently Bought Together).
   // Null on the BAC Water page itself, or until the product exists in the DB.
@@ -103,6 +108,7 @@ export default async function ProductDetailPage({
         promoBuy3Get1Enabled={Boolean(promoBuy3Get1Enabled)}
         bundleConfig={bundleConfig}
         bacWater={bacWater}
+        coaDocuments={coaDocuments}
       />
     </>
   );

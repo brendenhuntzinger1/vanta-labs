@@ -85,13 +85,6 @@ export type Product = {
   seoDescription?: string;
 };
 
-export type CoaRecord = {
-  slug: string;
-  productName: string;
-  category: string;
-  batchNumber: string;
-  purityResult: string;
-  testingDate: string;
-  labName: string;
-  coaUrl: string;
-};
+// COA records used to live here as a flattened product row. They are now their
+// own batch-level entity — see `@/lib/coa-types`, backed by the `coa_records`
+// table — because one product accumulates a COA per production batch.
