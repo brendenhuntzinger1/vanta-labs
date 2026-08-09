@@ -91,6 +91,14 @@ export function SiteAnalyticsTracker() {
       utmSource: params.get("utm_source"),
       utmMedium: params.get("utm_medium"),
       utmCampaign: params.get("utm_campaign"),
+      // utm_content carries the creative id and utm_term the ad group, so the
+      // funnel above the purchase event can be segmented per creative rather
+      // than only per campaign. ttclid is the click id TikTok appends; capture
+      // it here as well as at order time so a session that never converts is
+      // still attributable to the ad that produced it.
+      utmContent: params.get("utm_content"),
+      utmTerm: params.get("utm_term"),
+      ttclid: params.get("ttclid"),
       payload: {
         viewport: `${window.innerWidth}x${window.innerHeight}`,
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,

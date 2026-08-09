@@ -68,6 +68,9 @@ export async function POST(request: Request) {
       utmSource?: string;
       utmMedium?: string;
       utmCampaign?: string;
+      utmContent?: string;
+      utmTerm?: string;
+      ttclid?: string;
       payload?: Record<string, unknown>;
     };
 
@@ -115,6 +118,9 @@ export async function POST(request: Request) {
         utm_source: normalizeText(body.utmSource, 120),
         utm_medium: normalizeText(body.utmMedium, 120),
         utm_campaign: normalizeText(body.utmCampaign, 180),
+        utm_content: normalizeText(body.utmContent, 180),
+        utm_term: normalizeText(body.utmTerm, 180),
+        ttclid: normalizeText(body.ttclid, 260),
         event_payload: normalizePayload(body.payload),
         created_at: new Date().toISOString(),
       });
