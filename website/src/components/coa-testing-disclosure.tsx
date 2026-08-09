@@ -29,7 +29,10 @@ export function CoaTestingDisclosure({ hasPublishedRecords }: { hasPublishedReco
   return (
     <section
       aria-labelledby="about-our-testing"
-      className="border-t border-white/[0.06] bg-[#0c0c0c]"
+      // Transparent, not its own panel: the page's lighting continues through
+      // this section so it reads as the end of one room rather than a fourth
+      // stacked box.
+      className="relative"
     >
       <div className="mx-auto max-w-[1180px] px-5 py-16 sm:px-6 sm:py-20 lg:px-10">
         <div className="max-w-2xl">

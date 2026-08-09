@@ -2389,3 +2389,461 @@ select.vl-auth-field {
     filter: drop-shadow(0 0 26px rgba(199, 174, 94, 0.22));
   }
 }
+
+/* ==========================================================================
+   COA LIBRARY — one lighting system for /coa-library.
+   Scoped with a "vl-coa-" prefix so this page can carry a deeper, more
+   atmospheric treatment than the rest of the storefront without touching a
+   single existing class.
+
+   THE RULE: there is ONE light source model on this page — a cool key light
+   from top-centre (the laboratory), a warm Vanta fill low and off-centre, and
+   a floor falloff. Every glow below is that model applied to a component, not
+   a decoration bolted onto it. Nothing gets an outline of light; things are
+   lit BY something.
+
+   Colour economy, three roles, no exceptions:
+     cool white   light itself — atmosphere, key light, focus states
+     champagne    the brand action — CTA, selected filter, hover warmth
+     sage         verification status ONLY — never used for anything else
+   ========================================================================== */
+
+.vl-coa-page {
+  position: relative;
+  isolation: isolate;
+  /* A touch deeper than --background so glass panels read as lit surfaces
+     sitting IN the room rather than tinted rectangles drawn ON it. */
+  background: #070707;
+  color: var(--foreground);
+}
+
+/* The room. Fixed, so the lighting stays put while content scrolls through it. */
+.vl-coa-page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  pointer-events: none;
+  background:
+    radial-gradient(120% 68% at 50% -14%, rgba(184, 206, 236, 0.10), transparent 62%),
+    radial-gradient(78% 48% at 10% 10%, rgba(199, 174, 94, 0.05), transparent 66%),
+    radial-gradient(100% 55% at 50% 112%, rgba(0, 0, 0, 0.72), transparent 62%),
+    #070707;
+}
+
+/* Instrument grid, masked to the top of the page so it reads as depth behind
+   the hero and disappears before it can compete with the archive. No blur
+   filter — a masked gradient is already soft and costs nothing to composite. */
+.vl-coa-page::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.55;
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.026) 1px, transparent 1px);
+  background-size: 76px 76px;
+  -webkit-mask-image: radial-gradient(74% 46% at 50% 4%, #000 8%, transparent 76%);
+  mask-image: radial-gradient(74% 46% at 50% 4%, #000 8%, transparent 76%);
+}
+
+/* Pool of light the headline sits in. */
+.vl-coa-aurora {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(44% 38% at 50% 42%, rgba(214, 228, 248, 0.13), transparent 72%),
+    radial-gradient(64% 46% at 50% 58%, rgba(199, 174, 94, 0.04), transparent 76%);
+}
+
+/* Section seams: light thins out at the edges instead of a ruled line running
+   wall to wall, so sections flow rather than stack. */
+.vl-coa-seam {
+  height: 1px;
+  border: 0;
+  margin: 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.085) 24%,
+    rgba(255, 255, 255, 0.085) 76%,
+    transparent
+  );
+}
+
+/* ——— Product photography ————————————————————————————————————————————
+   The vial is lit from behind and its rectangle is masked away, so a photo
+   with any background at all resolves into a floating object rather than a
+   pasted-on tile. This is what kills the white rectangles. */
+.vl-coa-vial {
+  /* The photo FILLS its well (object-cover), so this vignette fades the well's
+     own edges rather than trying to guess where a letterboxed photo's border
+     falls. That is what removes the pasted-on rectangle: there is no inner
+     edge left to see, only the photograph dissolving into the card. */
+  -webkit-mask-image: radial-gradient(76% 68% at 50% 45%, #000 46%, rgba(0, 0, 0, 0.5) 74%, transparent 98%);
+  mask-image: radial-gradient(76% 68% at 50% 45%, #000 46%, rgba(0, 0, 0, 0.5) 74%, transparent 98%);
+}
+
+.vl-coa-media {
+  position: relative;
+  overflow: hidden;
+  background:
+    radial-gradient(58% 54% at 50% 42%, rgba(158, 178, 208, 0.11), transparent 72%),
+    linear-gradient(180deg, #0d0d0e 0%, #0a0a0b 62%, #080809 100%);
+}
+
+/* Contact shadow — the vial stands on something. Blur is cheap here because
+   the element is a few pixels tall. */
+.vl-coa-media-shadow {
+  position: absolute;
+  left: 28%;
+  right: 28%;
+  bottom: 15%;
+  height: 12px;
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0.55), transparent 72%);
+  filter: blur(6px);
+  pointer-events: none;
+}
+
+/* Where the light lands on the floor of the well. */
+.vl-coa-media::after {
+  content: "";
+  position: absolute;
+  left: 14%;
+  right: 14%;
+  bottom: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.06), transparent);
+  pointer-events: none;
+}
+
+/* ——— Card ————————————————————————————————————————————————————————— */
+.vl-coa-card {
+  position: relative;
+  border-radius: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.068);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.052) 0%, rgba(255, 255, 255, 0.016) 44%, rgba(255, 255, 255, 0.006) 100%),
+    rgba(13, 13, 14, 0.7);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.065),
+    0 18px 40px -30px rgba(0, 0, 0, 0.95);
+  transition:
+    transform 300ms var(--ease-out-premium),
+    border-color 300ms ease,
+    box-shadow 300ms ease;
+}
+
+/* The hover glow lives on a pseudo-element so it can fade rather than pop,
+   and so only the hovered card is ever lit. */
+.vl-coa-card::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 300ms ease;
+  background: radial-gradient(120% 74% at 50% 0%, rgba(199, 174, 94, 0.10), transparent 64%);
+}
+
+.vl-coa-card:hover {
+  transform: translateY(-4px);
+  border-color: rgba(199, 174, 94, 0.26);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 30px 58px -32px rgba(0, 0, 0, 0.98),
+    0 0 44px -20px rgba(199, 174, 94, 0.34);
+}
+
+.vl-coa-card:hover::before { opacity: 1; }
+
+.vl-coa-card:hover .vl-coa-vial { transform: scale(1.045); }
+
+.vl-coa-vial {
+  transition: transform 560ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Pending records are real records, not errors — they read quieter, never
+   broken. No champagne on hover: nothing here is verified, so nothing here
+   gets the brand's approval colour. */
+.vl-coa-card[data-pending="true"] {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03) 0%, rgba(255, 255, 255, 0.01) 50%, rgba(255, 255, 255, 0.004) 100%),
+    rgba(11, 11, 12, 0.62);
+}
+
+.vl-coa-card[data-pending="true"]::before {
+  background: radial-gradient(120% 74% at 50% 0%, rgba(200, 214, 236, 0.055), transparent 64%);
+}
+
+.vl-coa-card[data-pending="true"]:hover {
+  border-color: rgba(255, 255, 255, 0.17);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 28px 54px -32px rgba(0, 0, 0, 0.98);
+}
+
+.vl-coa-card[data-pending="true"] .vl-coa-media {
+  background:
+    radial-gradient(58% 54% at 50% 42%, rgba(158, 178, 208, 0.055), transparent 72%),
+    linear-gradient(180deg, #0b0b0c 0%, #09090a 62%, #080809 100%);
+}
+
+.vl-coa-card[data-pending="true"] .vl-coa-vial { opacity: 0.5; filter: saturate(0.6); }
+
+/* ——— Search ————————————————————————————————————————————————————————— */
+.vl-coa-search {
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.033);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 16px 36px -30px rgba(0, 0, 0, 0.95);
+  backdrop-filter: blur(14px) saturate(120%);
+  -webkit-backdrop-filter: blur(14px) saturate(120%);
+  transition: border-color 240ms ease, background-color 240ms ease, box-shadow 240ms ease;
+}
+
+.vl-coa-search:focus-within {
+  border-color: rgba(199, 174, 94, 0.42);
+  background: rgba(255, 255, 255, 0.055);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 0 0 1px rgba(199, 174, 94, 0.13),
+    0 0 34px -14px rgba(199, 174, 94, 0.42);
+}
+
+/* ——— Filter pills ——————————————————————————————————————————————————— */
+.vl-coa-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.022);
+  color: rgba(255, 255, 255, 0.55);
+  white-space: nowrap;
+  transition:
+    color 200ms ease,
+    border-color 200ms ease,
+    background-color 200ms ease,
+    box-shadow 200ms ease,
+    transform 200ms var(--ease-out-premium);
+}
+
+.vl-coa-pill:hover {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.05);
+  transform: translateY(-1px);
+  box-shadow: 0 0 22px -14px rgba(224, 234, 250, 0.7);
+}
+
+/* Selected: champagne, not gold leaf. Dark text on a light chip is the highest
+   contrast this palette can produce, which is what "selected" should be. */
+.vl-coa-pill[data-active="true"] {
+  color: #0c0b09;
+  border-color: rgba(232, 220, 190, 0.6);
+  background: linear-gradient(180deg, #efe7d2 0%, #dccdaa 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.5),
+    0 0 26px -12px rgba(199, 174, 94, 0.72);
+  transform: none;
+}
+
+.vl-coa-pill[data-active="true"]:hover {
+  color: #0c0b09;
+  background: linear-gradient(180deg, #f4eddc 0%, #e2d4b4 100%);
+}
+
+/* Secondary (category) row. Champagne is the page's "this is the active view"
+   signal and there can only be one of those, so a selected category reads as
+   lit white rather than a second cream chip competing with the status filter. */
+.vl-coa-pill[data-tone="quiet"][data-active="true"] {
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.28);
+  background: rgba(255, 255, 255, 0.08);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+.vl-coa-pill[data-tone="quiet"][data-active="true"]:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.11);
+}
+
+/* ——— Status badges ——————————————————————————————————————————————————
+   Sage is reserved for verification and used nowhere else on the page, so the
+   badge never competes with the champagne CTA for the same meaning. */
+.vl-coa-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.vl-coa-badge[data-verified="true"] {
+  border-color: rgba(158, 201, 176, 0.34);
+  background: rgba(158, 201, 176, 0.1);
+  color: #b7d9c6;
+  box-shadow: 0 0 20px -12px rgba(158, 201, 176, 0.75);
+}
+
+.vl-coa-badge[data-verified="false"] {
+  border-color: rgba(255, 255, 255, 0.11);
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(255, 255, 255, 0.44);
+}
+
+/* ——— Card CTA — the strongest thing on the card ——————————————————————— */
+.vl-coa-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 2.875rem;
+  border-radius: 13px;
+  border: 1px solid rgba(226, 214, 190, 0.28);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.028));
+  color: #f6f2e8;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 10px 24px -20px rgba(0, 0, 0, 0.95);
+  transition: border-color 260ms ease, background-color 260ms ease, box-shadow 260ms ease, color 260ms ease;
+  touch-action: manipulation;
+}
+
+.vl-coa-card:hover .vl-coa-cta,
+.vl-coa-cta:hover {
+  border-color: rgba(199, 174, 94, 0.6);
+  background: linear-gradient(180deg, rgba(199, 174, 94, 0.17), rgba(199, 174, 94, 0.055));
+  color: #fdf8ec;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 0 28px -12px rgba(199, 174, 94, 0.62);
+}
+
+.vl-coa-cta:active { transform: translateY(1px) scale(0.99); }
+
+/* Quiet CTA for pending rows — same geometry, none of the pull. */
+.vl-coa-cta[data-quiet="true"],
+.vl-coa-card[data-pending="true"]:hover .vl-coa-cta[data-quiet="true"] {
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.028);
+  color: rgba(255, 255, 255, 0.7);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.vl-coa-cta[data-quiet="true"]:hover {
+  border-color: rgba(255, 255, 255, 0.26);
+  background: rgba(255, 255, 255, 0.055);
+  color: #fff;
+}
+
+/* ——— Viewer ————————————————————————————————————————————————————————— */
+.vl-coa-scrim {
+  background: rgba(4, 4, 5, 0.82);
+  backdrop-filter: blur(10px) saturate(115%);
+  -webkit-backdrop-filter: blur(10px) saturate(115%);
+  animation: vl-coa-fade 200ms ease both;
+}
+
+.vl-coa-modal {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012) 40%, rgba(255, 255, 255, 0.004)),
+    rgba(11, 11, 12, 0.94);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.09),
+    0 40px 90px -40px rgba(0, 0, 0, 1);
+  animation: vl-coa-rise 260ms var(--ease-out-premium) both;
+}
+
+/* NOTE: this class (and .vl-coa-cta / .vl-coa-pill / .vl-coa-badge) declares
+   `display`, and this file is appended AFTER Tailwind's utilities — so at equal
+   specificity it beats `hidden`, `sm:flex` and friends. Toggle visibility on a
+   wrapper element, never by putting a Tailwind display utility on these. */
+.vl-coa-tool {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(255, 255, 255, 0.78);
+  transition: border-color 200ms ease, background-color 200ms ease, color 200ms ease;
+}
+
+.vl-coa-tool:hover:not(:disabled) {
+  border-color: rgba(199, 174, 94, 0.42);
+  background: rgba(255, 255, 255, 0.07);
+  color: #fff;
+}
+
+.vl-coa-tool:disabled { opacity: 0.35; cursor: not-allowed; }
+
+/* The document itself sits on white — it is a printed lab report — but framed
+   so the white never touches the dark page directly. */
+.vl-coa-doc-frame {
+  border-radius: 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  /* Paper white, not screen white — a #fff slab against this page is a hole in
+     it, and it is the first thing you see if a document is slow to paint. */
+  background: #f5f4f1;
+  box-shadow:
+    0 0 0 1px rgba(0, 0, 0, 0.6),
+    0 24px 60px -34px rgba(0, 0, 0, 1);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+@keyframes vl-coa-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes vl-coa-rise {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+
+/* Touch devices: no hover-lift that can stick after a tap. */
+@media (hover: none) {
+  .vl-coa-card:hover { transform: none; }
+  .vl-coa-card:hover .vl-coa-vial { transform: none; }
+  .vl-coa-pill:hover { transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-coa-card,
+  .vl-coa-vial,
+  .vl-coa-pill,
+  .vl-coa-cta,
+  .vl-coa-search,
+  .vl-coa-tool {
+    transition-duration: 1ms;
+  }
+  .vl-coa-card:hover,
+  .vl-coa-card:hover .vl-coa-vial,
+  .vl-coa-pill:hover {
+    transform: none;
+  }
+  .vl-coa-scrim,
+  .vl-coa-modal {
+    animation: none;
+  }
+}
