@@ -71,6 +71,99 @@ type TestEventResponse = {
   transportError?: string | null;
 };
 
+type OrderInspection = {
+  orderId?: string;
+  paymentStatus?: string | null;
+  isPaid?: boolean;
+  amountPaid?: number;
+  wouldReport?: boolean;
+  alreadySent?: boolean;
+  eventsApiConfigured?: boolean;
+  reason?: string | null;
+  error?: string;
+  event?: { name: string; eventId: string; properties: Record<string, unknown> } | null;
+};
+
+/**
+ * Read back the Purchase a real order produces — without producing it.
+ *
+ * Testing a purchase honestly means paying for one, and having done that you
+ * should be able to see the resulting event rather than infer it from the
+ * absence of an error. This shows the exact payload: whether the order counts
+ * as paid, the value, the content ids, and the event id the server and browser
+ * both send. It sends nothing, so checking cannot create a conversion.
+ */
+function OrderInspector() {
+  const [orderId, setOrderId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<OrderInspection | null>(null);
+
+  async function inspect() {
+    setBusy(true);
+    setResult(null);
+    try {
+      const response = await fetch(`/api/ads/purchase-event/${encodeURIComponent(orderId.trim())}?inspect=1`, {
+        cache: "no-store",
+      });
+      setResult((await response.json()) as OrderInspection);
+    } catch (error) {
+      setResult({ error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
+      <p className="text-[10px] uppercase tracking-[0.14em] text-white/35">Inspect an order&rsquo;s Purchase event</p>
+      <p className="mt-1 text-xs leading-6 text-white/45">
+        Shows exactly what a real order reports, and sends nothing. Purchase fires only when the order&rsquo;s own
+        payment status is paid, so this is the way to confirm the most important event without creating a conversion.
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <input
+          value={orderId}
+          onChange={(event) => setOrderId(event.target.value)}
+          placeholder="Order ID"
+          aria-label="Order ID"
+          className="min-w-[12rem] flex-1 rounded-lg border border-white/10 bg-black/40 px-3 py-2 font-mono text-xs text-white placeholder:text-white/25"
+        />
+        <button
+          type="button"
+          onClick={() => void inspect()}
+          disabled={busy || !orderId.trim()}
+          className="rounded-lg border border-white/15 px-4 py-2 text-xs text-white/70 transition hover:border-white/30 hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {busy ? "Reading…" : "Inspect"}
+        </button>
+      </div>
+      {result ? (
+        <div className="mt-3 rounded-lg border border-white/[0.08] bg-black/30 p-3 text-xs">
+          {result.error ? (
+            <p className="font-mono text-red-300">{result.error}</p>
+          ) : (
+            <>
+              <p className={`font-mono ${result.wouldReport ? "text-emerald-300" : "text-[color:var(--accent-gold)]"}`}>
+                {result.wouldReport ? "REPORTS A CONVERSION" : "REPORTS NOTHING"}
+              </p>
+              <p className="mt-1 font-mono text-[11px] text-white/50">
+                payment_status {String(result.paymentStatus)} · amount_paid {String(result.amountPaid)} ·
+                {result.alreadySent ? " already sent" : " not yet recorded"}
+              </p>
+              {result.reason ? <p className="mt-1 text-white/55">{result.reason}</p> : null}
+              {result.event ? (
+                <pre className="mt-2 overflow-x-auto rounded bg-black/40 p-2 font-mono text-[10px] leading-5 text-white/60">
+{JSON.stringify({ event: result.event.name, event_id: result.event.eventId, ...result.event.properties }, null, 2)}
+                </pre>
+              ) : null}
+            </>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function AdsTrackingHealth() {
   const [server, setServer] = useState<ServerHealthInput | null>(null);
   const [browser, setBrowser] = useState(UNTESTED_BROWSER);
@@ -170,6 +263,8 @@ export function AdsTrackingHealth() {
           <Row key={check.id} check={check} />
         ))}
       </div>
+
+      <OrderInspector />
 
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
         <p className="text-[10px] uppercase tracking-[0.14em] text-white/35">

@@ -246,15 +246,25 @@ export function buildHealthReport(server: ServerHealthInput, browser: BrowserHea
 
   const ledger = server.purchaseLedger;
   checks.push(
-    !ledger || !ledger.available
+    !ledger
       ? {
           id: "purchase-server",
           label: "Purchase server event",
           tier: "TIKTOK",
           status: "NOT_TESTED",
-          detail:
-            "No server Purchase has been recorded yet. The send path is covered by tests, but no real paid order has exercised it.",
+          detail: "Not checked in this run.",
         }
+      : !ledger.available
+        ? {
+            id: "purchase-server",
+            label: "Purchase server event",
+            tier: "TIKTOK",
+            status: "NOT_TESTED",
+            detail:
+              "There is no local record to read: the ad_purchase_events_sent ledger table has not been created, so nothing writes a row when a Purchase is sent. Sending still works — the ledger only guards against a re-opened confirmation link reporting twice after TikTok's own 48-hour window closes.",
+            action:
+              "Events Manager → your pixel → Activities is the authority for this row. A real Purchase appears there twice, once per connection method, collapsed into one conversion.",
+          }
       : ledger.delivered > 0
         ? {
             id: "purchase-server",

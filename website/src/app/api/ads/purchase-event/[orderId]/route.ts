@@ -3,7 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { buildPurchase } from "@/lib/ads/tiktok-events";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { credentialStatus, describeResult, sendServerEvents } from "@/lib/ads/tiktok-events-api";
-import { getRequestIpAddress } from "@/lib/admin-auth";
+import { getRequestIpAddress, verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 
 /**
  * The authoritative source for a Purchase event.
@@ -26,6 +26,15 @@ import { getRequestIpAddress } from "@/lib/admin-auth";
  */
 export async function GET(request: Request, context: { params: Promise<{ orderId: string }> }) {
   const { orderId } = await context.params;
+
+  // `?inspect=1` answers "what would this order report?" without reporting it.
+  //
+  // It exists because the honest way to test a Purchase is to place a real
+  // paid order, and after paying for that test you should be able to read the
+  // resulting event — its value, its content ids, its event id — rather than
+  // infer it. Sending on inspection would defeat the point twice over: a
+  // duplicate conversion, and a check that changes what it measures.
+  const inspect = new URL(request.url).searchParams.get("inspect") === "1";
 
   // A measurement endpoint must never fail loudly on a customer's confirmation
   // page. If the lookup cannot be made, the honest answer is "no event" — the
@@ -121,6 +130,34 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     alreadySent = Boolean(sent);
   } catch {
     /* table not applied yet — fall through and send */
+  }
+
+  if (inspect) {
+    // Admin-gated: it returns the customer's order value and line items, which
+    // the anonymous bearer-token path above deliberately keeps to the single
+    // order in the URL. Checked here rather than at the top so an unauthorised
+    // caller with a valid order id gets the normal behaviour, not a 401.
+    const session = await verifyAdminSessionFromCookie();
+    if (!session) return NextResponse.json({ error: "admin session required" }, { status: 401 });
+    return NextResponse.json(
+      {
+        orderId: String(order.order_id),
+        paymentStatus: order.payment_status ?? null,
+        isPaid,
+        amountPaid: Number(order.amount_paid ?? 0),
+        wouldReport: Boolean(event),
+        alreadySent,
+        eventsApiConfigured: credentialStatus().configured,
+        event: event ? { name: event.name, eventId: event.eventId, properties: event.properties } : null,
+        // The reason an unpaid order reports nothing, stated rather than implied.
+        reason: event
+          ? null
+          : isPaid
+            ? "Paid, but no positive amount settled — a zero-value purchase is not reported."
+            : `payment_status is "${String(order.payment_status ?? "unknown")}", so this is not a conversion.`,
+      },
+      { status: 200, headers: { "cache-control": "no-store" } },
+    );
   }
 
   let serverDelivery: string | null = null;
