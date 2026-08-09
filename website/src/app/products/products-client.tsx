@@ -182,13 +182,40 @@ function ProductsPageContent() {
       <SiteHeaderV2 />
 
       <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-14 pt-24 sm:pb-20 sm:pt-32 lg:px-12">
-        <div className="max-w-2xl">
-          <p className="vl2-eyebrow">Vanta Labs Catalog</p>
-          <h1 className="vl2-serif mt-3 text-4xl text-white sm:text-5xl">Research storefront</h1>
-          <p className="mt-4 text-sm leading-7 text-white/60 sm:text-base">
-            Documented compounds with transparent purity records, mapped lot metadata, and streamlined fulfillment.
+        {/* The catalogue header carries the quality claim, so it gets the one
+            piece of real emphasis on this page. The glow is a wide, very low
+            opacity champagne radial behind the type -- it reads as light on a
+            dark surface rather than as a coloured block, which is what keeps it
+            expensive next to the vial photography below. */}
+        <header className="vl-catalog-header relative max-w-3xl">
+          <p className="vl2-eyebrow relative">Vanta Labs Catalog</p>
+
+          <h1 className="vl2-serif vl-catalog-title relative mt-3 text-[2.5rem] leading-[1.05] tracking-[-0.015em] sm:text-[3.5rem]">
+            Premium Research Peptides
+          </h1>
+
+          {/* The rule sits ABOVE the copy rather than beside it. As a hanging
+              element it indented the paragraph, making it the only thing on the
+              page not aligned to the headline and the chips below. */}
+          <span aria-hidden="true" className="vl-catalog-rule relative mt-6 block h-px w-14" />
+
+          <p className="relative mt-5 max-w-2xl text-[0.9375rem] leading-7 text-white/60 sm:text-base sm:leading-8">
+            Every batch undergoes our{" "}
+            <span className="vl-catalog-emphasis">8-Step Verification Process</span>, including extensive
+            third-party testing and batch-specific Certificates of Analysis.
           </p>
-        </div>
+
+          <div className="relative mt-6 flex flex-wrap items-center gap-2.5">
+            {["8-Step Verified", "Third-Party Tested", "Batch-Specific COA"].map((claim) => (
+              <span key={claim} className="vl-catalog-chip">
+                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3">
+                  <path d="m5 12 4 4 10-10" />
+                </svg>
+                {claim}
+              </span>
+            ))}
+          </div>
+        </header>
 
         <CouponPromoBanner />
 

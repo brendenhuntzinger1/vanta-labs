@@ -2300,3 +2300,87 @@ select.vl-auth-field {
   .vl-article-card, .vl-article-card:hover { transition: none; transform: none; }
   .vl-article-card:hover .vl-article-link { gap: 0.5rem; }
 }
+
+/* ---------------------------------------------------------------------------
+   CATALOG HEADER
+   The one place on the products page that gets real emphasis. Everything below
+   it is product photography, so the glow has to read as light falling on a
+   dark surface rather than as a coloured panel -- a wide, very low opacity
+   champagne radial, not a fill.
+   --------------------------------------------------------------------------- */
+
+.vl-catalog-header::before {
+  content: "";
+  position: absolute;
+  /* Extends well past the text so the falloff is invisible at the edges. A
+     tight glow looks like a highlighter; a wide one looks like lighting. */
+  inset: -6rem -10rem -4rem -8rem;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(46% 52% at 22% 42%, rgba(199, 174, 94, 0.13), transparent 70%),
+    radial-gradient(38% 44% at 8% 20%, rgba(255, 255, 255, 0.045), transparent 68%);
+}
+
+.vl-catalog-title {
+  /* Ivory falling to a faint warm grey, so the type has depth without being
+     "gold text" -- champagne stays an accent even here. */
+  background: linear-gradient(168deg, #ffffff 0%, #f4f1ea 46%, #cfc7b6 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  /* The glow itself. Two stacked shadows: a tight white lift for legibility,
+     and a wide champagne bloom that only registers peripherally. */
+  filter:
+    drop-shadow(0 1px 1px rgba(0, 0, 0, 0.5))
+    drop-shadow(0 0 26px rgba(199, 174, 94, 0.22))
+    drop-shadow(0 0 60px rgba(199, 174, 94, 0.10));
+}
+
+.vl-catalog-rule {
+  background: linear-gradient(90deg, var(--accent-gold), rgba(199, 174, 94, 0));
+}
+
+.vl-catalog-emphasis {
+  color: #e2d6be;
+  font-weight: 500;
+  /* A hairline under the claim rather than a highlight behind it. */
+  box-shadow: inset 0 -1px 0 rgba(199, 174, 94, 0.35);
+}
+
+.vl-catalog-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid rgba(199, 174, 94, 0.22);
+  background: linear-gradient(180deg, rgba(199, 174, 94, 0.10), rgba(199, 174, 94, 0.03));
+  color: #ddd2ba;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  transition: border-color 240ms ease, color 240ms ease, box-shadow 240ms ease;
+}
+
+.vl-catalog-chip:hover {
+  border-color: rgba(199, 174, 94, 0.42);
+  color: #f0e8d6;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 0 22px -8px rgba(199, 174, 94, 0.5);
+}
+
+/* Safari on iOS renders a background-clipped gradient with a drop-shadow
+   filter as a solid block often enough to be worth avoiding entirely: fall
+   back to plain ivory, which loses the bloom and keeps the page readable. */
+@supports not ((-webkit-background-clip: text) or (background-clip: text)) {
+  .vl-catalog-title {
+    background: none;
+    color: #f7f5f0;
+    filter: drop-shadow(0 0 26px rgba(199, 174, 94, 0.22));
+  }
+}
