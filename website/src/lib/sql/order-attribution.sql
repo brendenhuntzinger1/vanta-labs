@@ -19,10 +19,12 @@
 -- ---------------------------------------------------------------------------
 
 create table if not exists public.order_attribution (
-  -- Same key the rest of the schema joins on (orders.order_id is `text unique`,
-  -- and order_items already references it this way). ON DELETE CASCADE so a
-  -- removed order never strands a telemetry row.
-  order_id text primary key references public.orders(order_id) on delete cascade,
+  -- Same key the rest of the schema joins on. The foreign key is added
+  -- separately below rather than inline: it depends on orders.order_id carrying
+  -- a unique constraint, and if this database's `orders` differs at all from
+  -- the repo's schema an inline reference would take the whole migration down
+  -- with it. Better to always get the table and find out about the constraint.
+  order_id text primary key,
 
   -- Who the analytics pipeline thought this was. These are the join keys back
   -- into website_analytics_events, which is what turns a purchase into the end
@@ -66,6 +68,29 @@ create table if not exists public.order_attribution (
 
 -- Reporting reads: "every paid order from utm_source=tiktok last month",
 -- "every order carrying a ttclid", "this visitor's order history".
+-- Referential integrity, added defensively.
+--
+-- ON DELETE CASCADE so a removed order never strands a telemetry row. If this
+-- cannot be created — orders.order_id lacking a unique index, a permissions
+-- difference, a schema that drifted from the repo — the migration reports it and
+-- carries on rather than failing. Attribution still works without the FK; it just
+-- won't auto-clean on order deletion, which is a housekeeping matter, not a
+-- correctness one.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'order_attribution_order_id_fkey'
+  ) then
+    begin
+      alter table public.order_attribution
+        add constraint order_attribution_order_id_fkey
+        foreign key (order_id) references public.orders(order_id) on delete cascade;
+    exception when others then
+      raise notice 'order_attribution: foreign key to orders(order_id) not added (%). Table is usable; add it manually once orders.order_id has a unique index.', sqlerrm;
+    end;
+  end if;
+end $$;
+
 create index if not exists order_attribution_last_source_idx on public.order_attribution (last_utm_source);
 create index if not exists order_attribution_first_source_idx on public.order_attribution (first_utm_source);
 create index if not exists order_attribution_visitor_idx on public.order_attribution (visitor_id);
