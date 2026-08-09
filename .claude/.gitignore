@@ -1,0 +1,8 @@
+# Eval scratch from skill development — transient run outputs, regenerated on
+# demand and often mid-write while subagents are running. The skill itself is
+# tracked; its test artefacts are not.
+skills/*-workspace/
+
+# Python bytecode from the bundled scripts.
+**/__pycache__/
+*.pyc
