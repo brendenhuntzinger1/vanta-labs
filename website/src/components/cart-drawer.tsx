@@ -292,7 +292,7 @@ export function CartDrawer() {
                       <div className="min-w-0">
                         <p className="text-sm font-semibold text-white">Free shipping unlocked</p>
                         <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
-                          <div className="h-full rounded-full" style={{ width: "100%", background: "linear-gradient(90deg, rgba(242,201,76,0.6), var(--accent-gold))" }} />
+                          <div className="h-full rounded-full" style={{ width: "100%", background: "linear-gradient(90deg, rgba(199, 174, 94,0.6), var(--accent-gold))" }} />
                         </div>
                       </div>
                     </div>
@@ -308,7 +308,7 @@ export function CartDrawer() {
                       <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
                         <div
                           className="h-full rounded-full transition-[width] duration-500 ease-out"
-                          style={{ width: `${shippingProgress.progressPercentage}%`, background: "linear-gradient(90deg, rgba(242,201,76,0.55), var(--accent-gold))" }}
+                          style={{ width: `${shippingProgress.progressPercentage}%`, background: "linear-gradient(90deg, rgba(199, 174, 94,0.55), var(--accent-gold))" }}
                         />
                       </div>
                     </>
@@ -569,7 +569,7 @@ export function CartDrawer() {
               {showExpressSlot ? (
                 <div
                   ref={confirmRef}
-                  className={`rounded-2xl border bg-white/[0.02] transition-all duration-300 ${highlightConfirm && !allAcknowledged ? "border-[color:var(--accent-gold)]/60 shadow-[0_0_0_3px_rgba(242,201,76,0.18)]" : allAcknowledged ? "border-white/[0.06]" : "border-[color:var(--accent-gold)]/25"}`}
+                  className={`rounded-2xl border bg-white/[0.02] transition-all duration-300 ${highlightConfirm && !allAcknowledged ? "border-[color:var(--accent-gold)]/60 shadow-[0_0_0_3px_rgba(199,174,94,0.18)]" : allAcknowledged ? "border-white/[0.06]" : "border-[color:var(--accent-gold)]/25"}`}
                 >
                   <div className="flex items-center justify-between px-4 pt-3.5 pb-1">
                     <p className="text-[10px] uppercase tracking-[0.24em] text-zinc-500">Required to purchase</p>

@@ -353,7 +353,7 @@ function MobileNav({
             onClick={() => setSheetOpen(false)}
             className="absolute inset-0 h-full w-full bg-black/60 backdrop-blur-sm"
           />
-          <div className="vl-sheet-in absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-white/10 bg-[#101014] p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-[0_-20px_60px_rgba(0,0,0,0.6)]">
+          <div className="vl-sheet-in absolute inset-x-0 bottom-0 rounded-t-3xl border-t border-white/10 bg-[#0f0f0f] p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-[0_-20px_60px_rgba(0,0,0,0.6)]">
             <div className="mx-auto mb-3 h-1.5 w-10 rounded-full bg-white/20" />
             <div className="mb-3 flex items-center gap-3 rounded-2xl bg-white/[0.03] p-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-gradient-to-br from-white/15 to-white/[0.03] text-sm font-semibold text-white">

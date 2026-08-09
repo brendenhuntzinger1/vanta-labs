@@ -5,6 +5,9 @@
      One palette for the whole storefront: near-black page, #141414 cards,
      hairline borders. Everything (product, collection, cart, checkout) reads
      as a single brand. */
+  /* Every dark value is pure-neutral (R=G=B). Three blues (#0a0a0a, #0f0f0f,
+     #181818) used to sit alongside fourteen neutrals, which is why the page
+     temperature shifted between the homepage, the catalogue and sign-in. */
   --background: #0a0a0a;
   --surface-0: #0f0f0f;
   --surface-1: #141414;      /* the canonical card colour */
@@ -33,11 +36,19 @@
      borders, labels and savings text, while the brighter gold is reserved for
      primary CTAs — the one thing that should out-shine everything else.
      Roughly: 90% charcoal, 8% champagne, 2% bright gold. */
-  --accent-gold: #c7ae5e;                 /* champagne — accents, borders, labels */
+  /* ONE VANTA GOLD.
+     #c7ae5e is the brand accent -- metallic champagne at 53% saturation. The
+     store previously carried nine golds from 16% to 74% saturation, and the
+     brassy end (#d4af37, #f2c94c, #e0bd4d) is what read as yellow rather than
+     as metal.
+     --accent-gold-bright is KEPT as an alias rather than deleted: several
+     components reference it, and pointing it at the champagne family makes
+     every one of them consistent without a risky sweep through call sites. */
+  --accent-gold: #c7ae5e;                 /* THE accent */
   --accent-gold-soft: rgba(199, 174, 94, 0.10);
-  --accent-gold-strong: #d8c07a;          /* champagne hover */
-  --accent-gold-bright: #d4af37;          /* primary CTA only */
-  --accent-gold-bright-hover: #e0bd4d;
+  --accent-gold-strong: #d8c07a;          /* hover only */
+  --accent-gold-bright: #c7ae5e;          /* alias -> --accent-gold */
+  --accent-gold-bright-hover: #d8c07a;    /* alias -> --accent-gold-strong */
 
   --accent: #f4f4f4;
   --accent-strong: #ffffff;
@@ -48,7 +59,7 @@
   --danger: #f09ca8;
   --danger-soft: rgba(240, 156, 168, 0.14);
   --warning: #d4af37;
-  --warning-soft: rgba(212, 175, 55, 0.14);
+  --warning-soft: rgba(199, 174, 94, 0.14);
   --info: #8ec5ff;
   --info-soft: rgba(142, 197, 255, 0.14);
 
@@ -63,7 +74,7 @@
   --shadow-sm: 0 6px 16px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 16px 34px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 28px 60px rgba(0, 0, 0, 0.58);
-  --shadow-glow: 0 0 32px rgba(212, 175, 55, 0.16);
+  --shadow-glow: 0 0 32px rgba(199, 174, 94, 0.16);
 
   /* Motion */
   --ease-out-premium: cubic-bezier(0.16, 1, 0.3, 1);
@@ -90,7 +101,7 @@ body {
   margin: 0;
   /* Layered ambient glows give the page depth and life instead of flat black. */
   background:
-    radial-gradient(1200px 820px at 12% -8%, rgba(212, 175, 55, 0.06), transparent 58%),
+    radial-gradient(1200px 820px at 12% -8%, rgba(199, 174, 94, 0.06), transparent 58%),
         var(--background);
   background-attachment: fixed;
   color: var(--foreground);
@@ -119,7 +130,7 @@ button {
 }
 
 ::selection {
-  background: rgba(212, 175, 55, 0.35);
+  background: rgba(199, 174, 94, 0.35);
   color: #111;
 }
 
@@ -157,7 +168,7 @@ textarea {
   z-index: -1;
   background:
     radial-gradient(32% 24% at 15% 22%, rgba(255, 255, 255, 0.06), transparent 72%),
-    radial-gradient(26% 20% at 84% 18%, rgba(212, 175, 55, 0.09), transparent 70%),
+    radial-gradient(26% 20% at 84% 18%, rgba(199, 174, 94, 0.09), transparent 70%),
     radial-gradient(28% 22% at 72% 84%, rgba(255, 255, 255, 0.04), transparent 72%);
   animation: vl-noir-drift 26s ease-in-out infinite alternate;
 }
@@ -172,7 +183,7 @@ textarea {
   font-size: 0.69rem;
   letter-spacing: 0.32em;
   text-transform: uppercase;
-  color: rgba(212, 175, 55, 0.88);
+  color: rgba(199, 174, 94, 0.88);
   font-weight: 700;
 }
 
@@ -369,7 +380,7 @@ textarea.vl-input { min-height: 6rem; }
   border: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 2rem;
   background:
-    radial-gradient(120% 110% at 88% 8%, rgba(212, 175, 55, 0.14), transparent 60%),
+    radial-gradient(120% 110% at 88% 8%, rgba(199, 174, 94, 0.14), transparent 60%),
     linear-gradient(140deg, rgba(8, 8, 8, 0.7), rgba(20, 20, 20, 0.48));
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.15),
@@ -1041,7 +1052,7 @@ textarea.vl-input { min-height: 6rem; }
   position: relative;
   aspect-ratio: 1 / 1;
   overflow: hidden;
-  background: radial-gradient(circle at 40% 15%, rgba(212, 175, 55, 0.08), transparent 62%);
+  background: radial-gradient(circle at 40% 15%, rgba(199, 174, 94, 0.08), transparent 62%);
 }
 
 .vl-product-card-media img {
@@ -1533,7 +1544,7 @@ textarea.vl-input { min-height: 6rem; }
   left: 4%;
   width: 320px;
   height: 320px;
-  background: rgba(212, 175, 55, 0.05);
+  background: rgba(199, 174, 94, 0.05);
   animation: vl2-lab-orb-a-float 22s ease-in-out infinite;
 }
 
@@ -1680,7 +1691,7 @@ textarea.vl-input { min-height: 6rem; }
   background: linear-gradient(
     105deg,
     transparent 42%,
-    rgba(212, 175, 55, 0.16) 50%,
+    rgba(199, 174, 94, 0.16) 50%,
     transparent 58%
   );
   background-size: 260% 100%;
@@ -2016,7 +2027,7 @@ textarea {
   background:
     radial-gradient(120vmax 80vmax at 50% -20%, rgba(199, 174, 94, 0.055), transparent 62%),
     radial-gradient(90vmax 70vmax at 12% 108%, rgba(255, 255, 255, 0.032), transparent 60%),
-    #08090c;
+    #0a0a0a;
 }
 
 /* A barely-there grain. Without it the large flat areas band visibly on OLED

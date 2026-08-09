@@ -134,7 +134,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
     <div className="space-y-5">
       {/* Hero */}
       <section className="vl-fade-up vl-panel relative overflow-hidden rounded-2xl p-5 sm:p-7">
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(242,201,76,0.10),transparent_55%)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(199,174,94,0.10),transparent_55%)]" />
         <div className="relative">
           <div className="flex flex-wrap items-center gap-2">
             <p className="text-[11px] uppercase tracking-[0.24em] text-zinc-500">Ambassador Portal</p>
