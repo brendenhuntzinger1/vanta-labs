@@ -12,6 +12,7 @@ import { CookieConsent } from "@/components/cookie-consent";
 import { WelcomeOffer } from "@/components/welcome-offer";
 import { ConsentedAnalytics } from "@/components/consented-analytics";
 import { TikTokPixel } from "@/components/tiktok-pixel";
+import { TikTokCommerceEvents } from "@/components/tiktok-commerce-events";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -141,6 +142,7 @@ export default function RootLayout({
         <Suspense fallback={null}>
           <TikTokPixel />
         </Suspense>
+        <TikTokCommerceEvents />
       </body>
     </html>
   );

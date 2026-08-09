@@ -49,6 +49,9 @@ export function OrderConfirmationStatus({
         const json = (await res.json()) as { isPaid?: boolean };
         if (active && json?.isPaid) {
           setPaid(true);
+          // Announce it so measurement can react without polling this order
+          // a second time. No payment logic depends on this event.
+          window.dispatchEvent(new CustomEvent("vanta:order-paid", { detail: { orderId } }));
           return;
         }
       } catch {

@@ -9,6 +9,8 @@ import { getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-metho
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ClearCartOnMount } from "@/components/clear-cart-on-mount";
 import { OrderConfirmationStatus } from "@/components/order-confirmation-status";
+import { TikTokPurchaseEvent } from "@/components/tiktok-purchase-event";
+import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
 import { displayOrderReference } from "@/lib/order-reference";
 import { buildOrderSummaryLines } from "@/lib/order-summary-breakdown";
 
@@ -86,6 +88,10 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <ClearCartOnMount />
+      <TikTokPurchaseEvent
+        orderId={String(order.order_id)}
+        advancedMatching={buildAdvancedMatching({ email: order.customer_email ? String(order.customer_email) : null })}
+      />
       <SiteHeaderV2 />
       {/* pt clears the fixed header and no more. This was pt-28/32, which left a
           screen-height gap above the confirmation on a phone — the first thing a

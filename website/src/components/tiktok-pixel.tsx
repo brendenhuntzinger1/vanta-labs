@@ -26,7 +26,17 @@ const CONSENT_EVENT = "vanta:cookie-consent";
 
 declare global {
   interface Window {
-    ttq?: { page: () => void; track: (event: string, params?: Record<string, unknown>) => void };
+    ttq?: {
+      page: () => void;
+      /** Advanced Matching. Values must already be SHA-256 digests. */
+      identify: (payload: { email?: string; phone_number?: string; external_id?: string }) => void;
+      /**
+       * The third argument carries `event_id`, which is how TikTok collapses a
+       * browser event and a server-side Events API event describing the same
+       * conversion. Without it a purchase reported by both would count twice.
+       */
+      track: (event: string, params?: Record<string, unknown>, options?: { event_id: string }) => void;
+    };
   }
 }
 

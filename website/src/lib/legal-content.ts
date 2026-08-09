@@ -67,7 +67,11 @@ Analytics is off until you accept it. If you decline, no analytics identifiers a
 
 When you accept, three things run: our own first-party analytics, which records page views and store events to our own database; Vercel Analytics, a privacy-focused measurement service provided by our hosting provider; and the TikTok Pixel.
 
-**The TikTok Pixel.** We advertise on TikTok, and the pixel is how we measure whether those adverts work. If you accept cookies, it loads on our pages and sends TikTok your page views along with the technical data any web request carries — IP address, browser and device type, referring page — and an identifier TikTok stores in your browser. TikTok uses this to report advert performance to us and, in line with its own privacy policy, for its own purposes including advert targeting. We do not send TikTok your name, email address or order contents.
+**The TikTok Pixel.** We advertise on TikTok, and the pixel is how we measure whether those adverts work. If you accept cookies, it loads on our pages and sends TikTok your page views along with the technical data any web request carries — IP address, browser and device type, referring page — and an identifier TikTok stores in your browser. TikTok uses this to report advert performance to us and, in line with its own privacy policy, for its own purposes including advert targeting.
+
+It also reports shopping actions: which product pages you view, when you add an item to the cart, when you begin checkout, and when an order is paid. For those events it receives the product identifier, quantity, price, the order value and the currency. It does not receive your name, your address, or the contents of any message you send us.
+
+**One identifier, on one page.** When an order is confirmed as paid, we send TikTok a one-way SHA-256 hash of the email address used for that order. The hash is generated on our server, so your actual address is never handed to code running in your browser and never reaches TikTok. Its purpose is to let TikTok match the purchase to the advert that led to it. A hash cannot be reversed back into an email address, though anyone already holding the same address could confirm a match — so treat it as pseudonymous rather than anonymous. This happens only on a paid order, and only if you accepted cookies. You can ask us to stop it at any time using the contact details above.
 
 If you decline cookies, the pixel is never loaded at all. No request is made to TikTok, no identifier is set, and TikTok receives nothing about your visit.
 
