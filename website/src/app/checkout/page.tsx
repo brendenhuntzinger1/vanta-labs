@@ -636,20 +636,36 @@ export default function CheckoutPage() {
         }
       }
 
-      // Card: continue to the secure processor flow when one is connected.
-      // Otherwise (test mode / no live processor) treat the order as placed:
-      // clear the cart and send the shopper to the confirmation page so they
-      // always get a proper thank-you + order number instead of a dead end.
-      // The submit latch is deliberately LEFT ENGAGED on both navigation paths:
-      // the page unloads on redirect, so re-enabling the button here would only
-      // open a duplicate-order window while the redirect is still in flight.
-      idempotencyKeyRef.current = null;
-      if (result.hostedCheckoutUrl) {
-        window.location.assign(result.hostedCheckoutUrl);
-      } else {
-        clearCart();
-        window.location.assign(`/order-confirmation/${result.orderId}`);
+      // A card order with no payment session is a FAILURE, not a sale.
+      //
+      // This previously fell through to "treat the order as placed": clear the
+      // cart and show the confirmation page. That is how a shopper reached
+      // "Thank you for your order" without ever seeing a card form — the order
+      // row exists, nothing was charged, and the cart that would have let them
+      // try again was emptied. Several server paths can return an empty url on
+      // a card order (a failed session re-creation on the idempotent-retry
+      // path, a duplicate insert), and every one of them meant a silent
+      // unpaid "purchase".
+      //
+      // The order row and its inventory hold are already written at this point
+      // and are keyed to the idempotency key, so keeping that key lets a retry
+      // resume the same order instead of creating a second one.
+      if (!result.hostedCheckoutUrl) {
+        setCheckoutState("idle");
+        setCheckoutMessage(
+          "We couldn't reach the payment provider, so your card was not charged and your order is not placed. " +
+            "Your cart is intact — please try again in a moment.",
+        );
+        setIsSubmitting(false);
+        submitLatchRef.current = false;
+        return;
       }
+
+      // The submit latch is deliberately LEFT ENGAGED here: the page unloads on
+      // redirect, so re-enabling the button would only open a duplicate-order
+      // window while the redirect is still in flight.
+      idempotencyKeyRef.current = null;
+      window.location.assign(result.hostedCheckoutUrl);
     } catch (error) {
       // Only an ERROR reopens the button for a retry (which reuses the same
       // idempotency key, so a server-committed-but-lost order won't duplicate).

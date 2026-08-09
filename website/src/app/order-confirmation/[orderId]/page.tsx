@@ -9,6 +9,7 @@ import { getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-metho
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ClearCartOnMount } from "@/components/clear-cart-on-mount";
 import { OrderConfirmationStatus } from "@/components/order-confirmation-status";
+import { OrderTotalRow } from "@/components/order-total-row";
 import { TikTokPurchaseEvent } from "@/components/tiktok-purchase-event";
 import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
 import { displayOrderReference } from "@/lib/order-reference";
@@ -142,10 +143,13 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
             ))}
           </div>
 
-          <div className="mt-2 flex items-baseline justify-between gap-4 border-t border-white/10 pt-4">
-            <span className="text-base font-semibold text-white">Total paid</span>
-            <span className="text-lg font-semibold tabular-nums text-white">{money(total)}</span>
-          </div>
+          {/* "Total paid" is a claim about money having changed hands, and it
+              must only be made when the backend says it has. `amount_paid` is
+              written at order creation with the full total, so on a pending
+              order this row asserted a payment that had not happened — directly
+              beneath a spinner reading "Confirming your payment…". The figure is
+              the same either way; what it is called is not. */}
+          <OrderTotalRow amount={money(total)} initialPaid={isPaid} />
         </section>
 
         {/* Full-width, stacked, thumb-sized. The PRIMARY action is tracking the
