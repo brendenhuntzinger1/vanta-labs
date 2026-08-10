@@ -6,6 +6,7 @@ import { AdminOrderActions } from "@/components/admin-order-actions";
 import { AdminOrderTimeline } from "@/components/admin-order-timeline";
 import { AdminOrderProfitPanel } from "@/components/admin-order-profit-panel";
 import { AdminOrderFulfillmentCard } from "@/components/admin-order-fulfillment-card";
+import { AdminOrderCommunications } from "@/components/admin-order-communications";
 import { getOrderProfit, getShippingCostAudit } from "@/lib/admin-profit";
 import { parseOrderItemRef } from "@/lib/inventory-fulfillment";
 import { getShippoStatus } from "@/lib/shippo/config";
@@ -213,6 +214,8 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
             shippoConfigured={shippoStatus.configured}
           />
         ) : null}
+
+        <AdminOrderCommunications orderId={String(data.order_id)} />
 
         <AdminOrderActions
           orderId={String(data.order_id)}
