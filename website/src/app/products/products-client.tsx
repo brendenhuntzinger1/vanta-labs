@@ -190,7 +190,11 @@ function ProductsPageContent() {
         <header className="vl-catalog-header relative max-w-3xl">
           <p className="vl2-eyebrow relative">Vanta Labs Catalog</p>
 
-          <h1 className="vl2-serif vl-catalog-title relative mt-3 text-[2.5rem] leading-[1.05] tracking-[-0.015em] sm:text-[3.5rem]">
+          {/* Sans display, matching the wordmark directly above it. The
+              Cormorant serif read as editorial on a page whose job is to sell
+              laboratory supply; its own tracking is set in .vl2-display, so the
+              override here is dropped rather than fighting it. */}
+          <h1 className="vl2-display vl-catalog-title relative mt-3 text-[2.5rem] leading-[1.02] sm:text-[3.5rem]">
             Premium Research Peptides
           </h1>
 
