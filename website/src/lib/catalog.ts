@@ -76,6 +76,46 @@ function buildProductMaps(rows: Array<Record<string, unknown>>) {
   return { productIds };
 }
 
+/**
+ * Units currently held by in-flight checkouts.
+ *
+ * Read separately from the catalogue queries on purpose. Those queries decide
+ * whether the storefront renders at all, and they work today; adding a column
+ * to them would mean a missing migration takes the shop down. A failure here
+ * degrades to "nothing reserved", which is exactly the behaviour that shipped
+ * before this existed.
+ */
+async function fetchReservedQuantities(productIds: string[]): Promise<{
+  byProductId: Map<string, number>;
+  byDoseId: Map<string, number>;
+}> {
+  const byProductId = new Map<string, number>();
+  const byDoseId = new Map<string, number>();
+  if (productIds.length === 0) return { byProductId, byDoseId };
+
+  try {
+    const [products, doses] = await Promise.all([
+      supabaseAdmin.from("products").select("id, reserved_quantity").in("id", productIds),
+      supabaseAdmin.from("product_doses").select("id, reserved_quantity").in("product_id", productIds),
+    ]);
+    for (const row of (products.data ?? []) as { id?: string; reserved_quantity?: number | null }[]) {
+      if (row.id) byProductId.set(row.id, Math.max(0, Number(row.reserved_quantity ?? 0)));
+    }
+    for (const row of (doses.data ?? []) as { id?: string; reserved_quantity?: number | null }[]) {
+      if (row.id) byDoseId.set(row.id, Math.max(0, Number(row.reserved_quantity ?? 0)));
+    }
+  } catch {
+    /* column or table absent — treat as nothing reserved */
+  }
+
+  return { byProductId, byDoseId };
+}
+
+/** What a shopper can actually buy right now: on hand, less what is held. */
+function sellable(onHand: number, reserved: number): number {
+  return Math.max(0, onHand - reserved);
+}
+
 async function fetchProductRelations(productIds: string[]) {
   const inventoryActive = await isInventoryActive();
   if (productIds.length === 0) {
@@ -83,8 +123,11 @@ async function fetchProductRelations(productIds: string[]) {
       imagesByProductId: new Map<string, ProductImage[]>(),
       dosesByProductId: new Map<string, ProductDose[]>(),
       inventoryActive,
+      reservedByProductId: new Map<string, number>(),
     };
   }
+
+  const reserved = await fetchReservedQuantities(productIds);
 
   const [{ data: imageRows, error: imageError }, { data: doseRows, error: doseError }] = await Promise.all([
     supabaseAdmin
@@ -143,10 +186,13 @@ async function fetchProductRelations(productIds: string[]) {
       compareAtPrice: compareAtCents > 0 ? formatPriceFromCents(compareAtCents) : undefined,
       salePrice: salePriceCents > 0 ? formatPriceFromCents(salePriceCents) : undefined,
       inventoryQuantity: parseNumber(row.inventory_quantity, 0),
+      // Availability, not stock on hand. A unit held by someone mid-checkout is
+      // not sellable, and showing it as In Stock sends a second shopper all the
+      // way to checkout before telling them it is gone.
       stockStatus: resolveStockStatus(
         String(row.stock_status ?? "In Stock"),
         inventoryActive,
-        parseNumber(row.inventory_quantity, 0),
+        sellable(parseNumber(row.inventory_quantity, 0), reserved.byDoseId.get(String(row.id)) ?? 0),
       ) as ProductDose["stockStatus"],
       batchNumber: row.batch_number ? String(row.batch_number) : undefined,
       coaUrl: sanitizeCoaUrl(row.coa_url) || undefined,
@@ -160,7 +206,7 @@ async function fetchProductRelations(productIds: string[]) {
     dosesByProductId.set(productId, current);
   }
 
-  return { imagesByProductId, dosesByProductId, inventoryActive };
+  return { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId: reserved.byProductId };
 }
 
 function mapProductRow(
@@ -168,6 +214,8 @@ function mapProductRow(
   images: ProductImage[],
   doses: ProductDose[],
   inventoryActive = false,
+  /** Units held by in-flight checkouts for this product. */
+  reservedQuantity = 0,
 ): Product {
   const primaryImage = images.find((image) => image.isPrimary) ?? images[0];
   const defaultDose = doses.find((dose) => dose.isDefault) ?? doses[0];
@@ -185,10 +233,12 @@ function mapProductRow(
   // The dose's own status already carries the zero-quantity rule from
   // fetchProductRelations, so pass the quantity that actually backs this
   // product -- the default dose's count when there is one, else the product's.
+  // A dose's own status already accounts for its reservations; a product
+  // without doses needs its own subtraction here.
   const stockStatus = resolveStockStatus(
     String(defaultDose?.stockStatus ?? row.stock_status ?? "In Stock"),
     inventoryActive,
-    defaultInventoryQuantity,
+    defaultDose ? defaultInventoryQuantity : sellable(defaultInventoryQuantity, reservedQuantity),
   );
   const effectiveImage = resolveProductImage(defaultDose?.imageUrl ?? primaryImage?.imageUrl ?? row.image_url);
   const effectiveBatchNumber = defaultDose?.batchNumber ?? String(row.batch_number ?? "");
@@ -258,7 +308,7 @@ export const getCatalogProducts = unstable_cache(
   async () => {
     const productRows = await fetchPublicProductRows();
     const { productIds } = buildProductMaps(productRows);
-    const { imagesByProductId, dosesByProductId, inventoryActive } = await fetchProductRelations(productIds);
+    const { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId } = await fetchProductRelations(productIds);
 
     return productRows.map((row) => {
       const productId = String(row.id);
@@ -267,6 +317,7 @@ export const getCatalogProducts = unstable_cache(
         imagesByProductId.get(productId) ?? [],
         dosesByProductId.get(productId) ?? [],
         inventoryActive,
+        reservedByProductId.get(productId) ?? 0,
       );
     });
   },
@@ -295,12 +346,13 @@ export const getCatalogProductBySlug = unstable_cache(
   }
 
   const productId = String(data.id);
-  const { imagesByProductId, dosesByProductId, inventoryActive } = await fetchProductRelations([productId]);
+  const { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId } = await fetchProductRelations([productId]);
   return mapProductRow(
     data as Record<string, unknown>,
     imagesByProductId.get(productId) ?? [],
     dosesByProductId.get(productId) ?? [],
     inventoryActive,
+    reservedByProductId.get(productId) ?? 0,
   );
   },
   ["catalog-product-by-slug"],
@@ -327,7 +379,7 @@ export async function getCatalogProductsBySlugs(slugs: string[]) {
 
   const rows = (data ?? []) as Array<Record<string, unknown>>;
   const { productIds } = buildProductMaps(rows);
-  const { imagesByProductId, dosesByProductId, inventoryActive } = await fetchProductRelations(productIds);
+  const { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId } = await fetchProductRelations(productIds);
 
   const bySlug = new Map(rows.map((row) => {
     const productId = String(row.id);
@@ -338,6 +390,7 @@ export async function getCatalogProductsBySlugs(slugs: string[]) {
         imagesByProductId.get(productId) ?? [],
         dosesByProductId.get(productId) ?? [],
         inventoryActive,
+        reservedByProductId.get(productId) ?? 0,
       ),
     ];
   }));
@@ -368,7 +421,7 @@ export const getCatalogProductsByCategory = unstable_cache(
   ).slice(0, limit);
 
   const { productIds } = buildProductMaps(rows);
-  const { imagesByProductId, dosesByProductId, inventoryActive } = await fetchProductRelations(productIds);
+  const { imagesByProductId, dosesByProductId, inventoryActive, reservedByProductId } = await fetchProductRelations(productIds);
 
   return rows.map((row) => {
     const productId = String(row.id);
@@ -377,6 +430,7 @@ export const getCatalogProductsByCategory = unstable_cache(
       imagesByProductId.get(productId) ?? [],
       dosesByProductId.get(productId) ?? [],
       inventoryActive,
+      reservedByProductId.get(productId) ?? 0,
     );
   });
   },

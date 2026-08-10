@@ -87,13 +87,26 @@ describe("the real implementation matches", () => {
   });
 
   // Both call sites must pass a count, or the products page and the PDP would
-  // disagree with each other about the same item.
-  it("passes the count at the dose call site", () => {
-    expect(catalog).toContain("parseNumber(row.inventory_quantity, 0),\n      ) as ProductDose[\"stockStatus\"]");
+  // disagree with each other about the same item. The count is now AVAILABILITY
+  // — stock on hand less what in-flight checkouts hold — because a unit someone
+  // else is buying is not one this shopper can have.
+  it("passes availability, not raw stock, at the dose call site", () => {
+    expect(catalog).toContain('sellable(parseNumber(row.inventory_quantity, 0), reserved.byDoseId.get(String(row.id)) ?? 0),');
   });
 
-  it("passes the count at the product call site", () => {
-    expect(catalog).toContain("    defaultInventoryQuantity,\n  );");
+  it("passes availability at the product call site when there is no dose", () => {
+    expect(catalog).toContain("defaultDose ? defaultInventoryQuantity : sellable(defaultInventoryQuantity, reservedQuantity)");
+  });
+
+  it("subtracts reservations rather than clamping them away", () => {
+    expect(catalog).toContain("Math.max(0, onHand - reserved)");
+  });
+
+  it("degrades to nothing-reserved rather than taking the shop down", () => {
+    // The reserved lookup is deliberately separate from the catalogue queries:
+    // those decide whether the storefront renders at all.
+    const fn = catalog.slice(catalog.indexOf("async function fetchReservedQuantities"));
+    expect(fn.slice(0, fn.indexOf("}\n\n"))).toContain("catch");
   });
 
   // Storefront and checkout must agree: a shopper should never add something
