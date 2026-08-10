@@ -70,8 +70,11 @@ describe("exactly one Snapchat data source", () => {
     expect(loaders.map(relative)).toEqual(["src/components/snap-pixel.tsx"]);
   });
 
-  it("loads the Snap SDK from exactly one place", () => {
-    const loaders = files.filter((path) => read(path).includes("sc-static.net"));
+  it("injects the Snap SDK from exactly one place", () => {
+    // Keyed on the full script URL rather than the hostname: the health board
+    // reads the DOM looking for that script, which is inspecting the loader,
+    // not being a second one.
+    const loaders = files.filter((path) => read(path).includes("https://sc-static.net/scevent.min.js"));
     expect(loaders.map(relative)).toEqual(["src/components/snap-pixel.tsx"]);
   });
 

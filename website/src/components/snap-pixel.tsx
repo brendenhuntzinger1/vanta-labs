@@ -3,6 +3,7 @@
 import Script from "next/script";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { countSnapPageView } from "@/lib/ads/snap-health-browser";
 
 /**
  * Snap Pixel — installed globally, behind the same consent gate as everything
@@ -33,7 +34,7 @@ import { useEffect, useRef, useState } from "react";
  * digest produced on the server. See snap-events.ts.
  */
 
-const SNAP_PIXEL_ID = process.env.NEXT_PUBLIC_SNAP_PIXEL_ID ?? "b6e3f2b8-0d0a-4d4e-b547-24b5a20d2a6e";
+export const SNAP_PIXEL_ID = process.env.NEXT_PUBLIC_SNAP_PIXEL_ID ?? "b6e3f2b8-0d0a-4d4e-b547-24b5a20d2a6e";
 const STORAGE_KEY = "vl_cookie_consent";
 const CONSENT_EVENT = "vanta:cookie-consent";
 
@@ -79,9 +80,15 @@ export function SnapPixel() {
     if (!accepted) return;
     if (!initialPageSent.current) {
       initialPageSent.current = true;
+      // The snippet's own PAGE_VIEW, tallied here rather than in the snippet so
+      // the loader stays byte-identical to Snapchat's — the admin board has no
+      // other way to know a page view happened, since the call goes into the
+      // vendor queue and leaves nothing behind to inspect.
+      countSnapPageView();
       return;
     }
     window.snaptr?.("track", "PAGE_VIEW");
+    countSnapPageView();
   }, [accepted, pathname, searchParams]);
 
   if (!accepted) return null;

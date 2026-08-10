@@ -2,6 +2,7 @@ import Link from "next/link";
 import { getAdsDashboard, type CreativeRow } from "@/lib/ads/dashboard-data";
 import { AdsSectionTabs } from "@/components/ads-section-tabs";
 import { AdsTrackingHealth } from "@/components/ads-tracking-health";
+import { SnapTrackingHealth } from "@/components/snap-tracking-health";
 import { AdsCampaignsPanel } from "@/components/ads-campaigns-panel";
 
 export const dynamic = "force-dynamic";
@@ -386,12 +387,21 @@ export default async function AdsDashboardPage() {
   );
 
   const trackingHealth = (
-    <Panel
-      title="Tracking health"
-      subtitle="checks that were run, not claims about the code — each row says who established it"
-    >
-      <AdsTrackingHealth />
-    </Panel>
+    <>
+      <Panel
+        title="TikTok tracking health"
+        subtitle="checks that were run, not claims about the code — each row says who established it"
+      >
+        <AdsTrackingHealth />
+      </Panel>
+
+      <Panel
+        title="Snapchat tracking health"
+        subtitle="the check Snapchat's own installation detector cannot perform, because it is never served the pixel"
+      >
+        <SnapTrackingHealth />
+      </Panel>
+    </>
   );
 
   return (
