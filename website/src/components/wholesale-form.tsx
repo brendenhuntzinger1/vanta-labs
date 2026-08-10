@@ -26,8 +26,10 @@ const VOLUMES = [
 
 type Status = { kind: "idle" | "sending" } | { kind: "sent" } | { kind: "error"; message: string };
 
+// Modest radius on purpose. At 12px and full width these read as pills rather
+// than fields, which is the look a commercial enquiry form should avoid.
 const field =
-  "w-full rounded-xl border border-white/[0.10] bg-[#0f0f0f] px-4 py-3 text-sm text-white " +
+  "w-full rounded-lg border border-white/[0.10] bg-[#0f0f0f] px-4 py-3 text-sm text-white " +
   "placeholder:text-white/25 transition outline-none " +
   "focus:border-[color:var(--accent-gold)]/50 focus:ring-2 focus:ring-[color:var(--accent-gold)]/20";
 
