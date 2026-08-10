@@ -648,3 +648,52 @@ Two things to settle before this posts:
 No campaign has been launched, no budget set, no ad submitted. These ten are drafts
 in the registry. A human decides what gets shot, what gets submitted, and what gets
 spend.
+
+---
+
+# vl-cin-001 — the delivered asset (10 Aug 2026)
+
+**Hosted:** `https://d2ol7oe51mr4n9.cloudfront.net/user_3Gk8cSOsrkRs5xygUVUBmthVnCJ/1f4a2d5c-f738-4c52-a71b-84812a095075.mp4`
+**8.5s · 9:16 · 720x1280 · silent · text burned in**
+
+The four talking-head renders are retired at operator request — this is the
+only live asset. `vl-ugc-001/002/005` stay in the registry as `draft` so their
+angles are not re-proposed as new.
+
+## Cut
+
+| Out | Source | What |
+|---|---|---|
+| 0.0–0.5 | 3.0–4.0 @2x | Fast approach — vial already reading in frame one |
+| 0.5–6.0 | 4.0–9.5 | Plinth reveal, macro label sweep |
+| 6.0–7.2 | 9.5–10.7 | Extreme macro on the fine print |
+| 7.2–8.4 | 12.5–14.3 @1.5x | Pull back; final frame matches the first, so it loops |
+
+The original render spent 4.0s on the corridor before the vial read, and held
+2.5s of a frozen macro. Both are cut. Done as an edit, not a re-render, so it
+cost no credits.
+
+## Burned text
+
+- `PREMIUM RESEARCH PEPTIDES` — white, 0.25–3.5s
+- `USE CODE VANTA` / `20% OFF` — white over champagne `#c7ae5e`, 3.7–9.0s
+- `FOR RESEARCH USE ONLY. NOT FOR HUMAN CONSUMPTION.` — muted grey, persistent
+
+Soft gradient scrim top and bottom so text stays legible over the bright macro
+frames. All text sits inside the TikTok safe areas: clear of the top 12%, the
+bottom 20% and the right 15% action rail.
+
+Verified programmatically per element (frames sampled, pixels counted): headline
+8855 white px at t=1.5s; 4867 champagne px and 3227 white px at t=5.5s; RUO strip
+present; first and last frames match in mean luminance, confirming the loop.
+
+## Live before this posts
+
+1. **The `VANTA` coupon must exist and be enabled at 20%.** It is not seeded in
+   this repo. Because the code and the discount are now *burned into the video*,
+   changing either one means a re-edit — unlike caption text. If the promotion is
+   likely to move, run the code as a TikTok coupon sticker instead and re-export
+   this cut without the burned block.
+2. **"Premium" is positioning, not a substantiated claim.** It carries no testing,
+   purity or outcome assertion, which is why it is usable where "leading" was not.
+   No purity figure, no COA claim and no health claim appears anywhere in the asset.
