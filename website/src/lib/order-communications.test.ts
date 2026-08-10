@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { deriveOrderCommunications, needsAttention, type OrderCommunicationInput } from "./order-communications";
+import {
+  deriveOrderCommunications,
+  hasUnknowns,
+  needsAttention,
+  type OrderCommunicationInput,
+} from "./order-communications";
 
 const base: OrderCommunicationInput = {
   orderNumber: "VL-1042",
@@ -154,5 +159,107 @@ describe("retrying an email cannot touch business logic", () => {
     const fn = queue.slice(queue.indexOf("export async function retryPendingEmailsForOrder"));
     // Only last_error/updated_at/status are written back — never attempts.
     expect(fn).not.toMatch(/attempts:\s*attempts/);
+  });
+});
+
+describe("an unreadable queue is a monitoring gap, not a clean bill of health", () => {
+  const paid = { ...base, paymentStatus: "paid", shippedAt: "2026-08-08T10:00:00Z", deliveredAt: "2026-08-09T10:00:00Z" };
+
+  // 1. Missing pending_emails table → CANNOT DETERMINE
+  it("reports CANNOT DETERMINE when the table cannot be read", () => {
+    const rows = deriveOrderCommunications({ ...paid, pendingEmails: null });
+    expect(rows.map((r) => r.state)).toEqual(["cannot_determine", "cannot_determine", "cannot_determine"]);
+  });
+
+  // 2. Query error → CANNOT DETERMINE (same signal, same answer)
+  it("makes no distinction between a missing table and a failed query", () => {
+    // Both reach the derivation as null, because both mean the same thing:
+    // the answer is unknown. Anything else would need the caller to classify
+    // database errors, which is not its job.
+    expect(deriveOrderCommunications({ ...paid, pendingEmails: null })[0].state).toBe("cannot_determine");
+  });
+
+  // 3. Successful query, nothing found → NO FAILURE RECORDED
+  it("reports NO FAILURE RECORDED when the query succeeded and found nothing", () => {
+    const rows = deriveOrderCommunications({ ...paid, pendingEmails: [] });
+    expect(rows.map((r) => r.state)).toEqual([
+      "no_failure_recorded",
+      "no_failure_recorded",
+      "no_failure_recorded",
+    ]);
+  });
+
+  // 4. A real failure still reads as FAILED
+  it("still reports a genuine failure as FAILED", () => {
+    const rows = deriveOrderCommunications({
+      ...paid,
+      pendingEmails: [failure("Order Confirmed - VL-1042", "failed", 5)],
+    });
+    expect(rows.find((r) => r.key === "confirmation")!.state).toBe("failed");
+  });
+
+  // 5. Retry states still display correctly
+  it("still distinguishes retrying from recovered", () => {
+    const retrying = deriveOrderCommunications({
+      ...paid,
+      pendingEmails: [failure("Shipping Update - VL-1042", "pending", 2)],
+    });
+    expect(retrying.find((r) => r.key === "shipping")!.state).toBe("retrying");
+
+    const recovered = deriveOrderCommunications({
+      ...paid,
+      pendingEmails: [failure("Delivered — order VL-1042", "sent", 2)],
+    });
+    expect(recovered.find((r) => r.key === "delivery")!.state).toBe("recovered");
+  });
+
+  it("keeps NOT DUE trustworthy even when the queue is unreadable", () => {
+    // Whether an email is due comes from the order row, which was read
+    // successfully. Downgrading that to unknown would throw away a fact we have.
+    const rows = deriveOrderCommunications({ ...base, pendingEmails: null });
+    expect(rows.map((r) => r.state)).toEqual(["not_due", "not_due", "not_due"]);
+  });
+
+  it("never offers a retry for something it cannot see", () => {
+    const rows = deriveOrderCommunications({ ...paid, pendingEmails: null });
+    expect(rows.every((r) => r.retryable === false)).toBe(true);
+  });
+
+  it("does not raise a customer-impact alarm for a monitoring gap", () => {
+    // needsAttention means "a customer is missing an email". Unknown is not
+    // that, and folding them together would either cry wolf on every unreadable
+    // query or hide a real failure among them.
+    const rows = deriveOrderCommunications({ ...paid, pendingEmails: null });
+    expect(needsAttention(rows)).toBe(false);
+    expect(hasUnknowns(rows)).toBe(true);
+  });
+
+  it("says plainly that the data is unavailable, and claims nothing about the email", () => {
+    const detail = deriveOrderCommunications({ ...paid, pendingEmails: null })[0].detail;
+    expect(detail).toMatch(/Email status data unavailable/i);
+    // It must not borrow the reassuring language of the clean state...
+    expect(detail).not.toMatch(/\bno failure\b/i);
+    // ...and it must explicitly disclaim, rather than merely omit, a verdict.
+    // The word "sent" appears inside that disclaimer, which is the point —
+    // matching on the word alone cannot tell a denial from a claim, so the
+    // assertion is on the denial being present.
+    expect(detail).toMatch(/says nothing about whether the email was sent/i);
+  });
+});
+
+describe("the route distinguishes a failed read from an empty one", () => {
+  const route = readFileSync(
+    join(process.cwd(), "src/app/api/admin/orders/[orderId]/communications/route.ts"),
+    "utf8",
+  );
+
+  it("starts from null, so an unread queue can never look empty", () => {
+    expect(route).toContain("| null = null;");
+  });
+
+  it("checks Supabase's error object rather than relying on a throw", () => {
+    // supabase-js reports a missing table through `error`, not an exception, so
+    // a try/catch alone would silently produce an empty array.
+    expect(route).toContain("if (!error) pendingEmails =");
   });
 });

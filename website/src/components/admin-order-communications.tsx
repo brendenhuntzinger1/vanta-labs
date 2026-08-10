@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { CommunicationRow, CommunicationState } from "@/lib/order-communications";
+import { hasUnknowns, type CommunicationRow, type CommunicationState } from "@/lib/order-communications";
 
 /**
  * What the customer has been told about this order.
@@ -31,6 +31,9 @@ const TONE: Record<CommunicationState, string> = {
   recovered: "border-emerald-300/30 bg-emerald-300/[0.07] text-emerald-200",
   no_failure_recorded: "border-white/10 bg-white/[0.03] text-zinc-300",
   not_due: "border-white/10 bg-white/[0.02] text-zinc-500",
+  // Neither green nor red: this is a monitoring gap, and colouring it as
+  // either would answer a question the panel cannot answer.
+  cannot_determine: "border-sky-300/30 bg-sky-300/[0.07] text-sky-200",
 };
 
 const STATE_LABEL: Record<CommunicationState, string> = {
@@ -39,6 +42,7 @@ const STATE_LABEL: Record<CommunicationState, string> = {
   recovered: "SENT ON RETRY",
   no_failure_recorded: "NO FAILURE RECORDED",
   not_due: "NOT DUE",
+  cannot_determine: "CANNOT DETERMINE",
 };
 
 function when(value: string | null | undefined): string {
@@ -92,6 +96,7 @@ export function AdminOrderCommunications({ orderId }: { orderId: string }) {
   if (!data?.rows) return null;
 
   const retryable = data.rows.some((row) => row.retryable);
+  const unknown = hasUnknowns(data.rows);
 
   return (
     <section className="vl-panel rounded-2xl p-5">
@@ -128,6 +133,13 @@ export function AdminOrderCommunications({ orderId }: { orderId: string }) {
           </div>
         ))}
       </dl>
+
+      {unknown ? (
+        <p className="mt-3 rounded-lg border border-sky-300/30 bg-sky-300/[0.06] px-3 py-2 text-[11px] leading-5 text-sky-100">
+          Email status data unavailable. This is a monitoring gap, not an email failure — it is not evidence that
+          anything did or did not reach the customer.
+        </p>
+      ) : null}
 
       <ul className="mt-3 space-y-2">
         {data.rows.map((row) => (

@@ -27,19 +27,26 @@ async function loadCommunications(order: Record<string, unknown>) {
     order.order_id as string | null,
   );
 
-  // A missing pending_emails table is a legitimate state: it only exists to
-  // record failures, so its absence reads as "no failures recorded" rather than
-  // an error on an admin page.
-  let pendingEmails: { id: string; subject: string; status: string; attempts?: number | null; last_error?: string | null; updated_at?: string | null }[] = [];
+  // NULL means the read did not succeed; an empty array means it did and found
+  // nothing. Those are different answers and the panel must not conflate them —
+  // an unreadable queue rendered as "no failure recorded" would show a clean
+  // bill of health at exactly the moment the system had gone blind.
+  //
+  // supabase-js reports a missing table through `error` rather than by
+  // throwing, so the error object is checked explicitly. The catch covers the
+  // transport failing outright.
+  let pendingEmails:
+    | { id: string; subject: string; status: string; attempts?: number | null; last_error?: string | null; updated_at?: string | null }[]
+    | null = null;
   try {
-    const { data } = await supabaseAdmin
+    const { data, error } = await supabaseAdmin
       .from("pending_emails")
       .select("id, subject, status, attempts, last_error, updated_at")
       .ilike("subject", `%${orderNumber}%`)
       .limit(20);
-    pendingEmails = (data ?? []) as typeof pendingEmails;
+    if (!error) pendingEmails = (data ?? []) as NonNullable<typeof pendingEmails>;
   } catch {
-    /* not migrated — treated as no recorded failures */
+    /* leave null — unreadable, which the panel reports as CANNOT DETERMINE */
   }
 
   return {

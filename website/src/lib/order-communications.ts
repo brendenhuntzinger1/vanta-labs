@@ -25,7 +25,16 @@ export type CommunicationState =
   /** Failed and is still being retried automatically. */
   | "retrying"
   /** Retries exhausted. The customer did not get this. */
-  | "failed";
+  | "failed"
+  /**
+   * The failure queue could not be read, so nothing can be said either way.
+   *
+   * An availability problem, not an email problem. Collapsing it into
+   * "no failure recorded" would turn a broken query into a clean bill of
+   * health, which is the most dangerous direction for this panel to be wrong
+   * in — the owner would see green precisely when the system had gone blind.
+   */
+  | "cannot_determine";
 
 export type CommunicationRow = {
   key: "confirmation" | "shipping" | "delivery";
@@ -56,7 +65,15 @@ export type OrderCommunicationInput = {
   fulfillmentStatus: string | null;
   shippedAt: string | null;
   deliveredAt: string | null;
-  pendingEmails: PendingEmailRow[];
+  /**
+   * Rows read from `pending_emails`, or NULL when the read did not succeed.
+   *
+   * Nullable rather than a separate `available` flag on purpose: an empty array
+   * and an unreadable table are genuinely different answers, and a single value
+   * that can only express one of them at a time cannot drift out of step with
+   * itself.
+   */
+  pendingEmails: PendingEmailRow[] | null;
 };
 
 /**
@@ -85,7 +102,7 @@ const IN_CARRIER_NETWORK = new Set(["shipped", "in_transit", "out_for_delivery",
 function matchingRow(input: OrderCommunicationInput, key: CommunicationRow["key"]): PendingEmailRow | null {
   const prefix = SUBJECT_PREFIX[key].toLowerCase();
   const orderNumber = input.orderNumber.toLowerCase();
-  const matches = input.pendingEmails.filter((row) => {
+  const matches = (input.pendingEmails ?? []).filter((row) => {
     const subject = String(row.subject ?? "").toLowerCase();
     return subject.includes(orderNumber) && subject.startsWith(prefix);
   });
@@ -111,12 +128,30 @@ const NOT_DUE_DETAIL: Record<CommunicationRow["key"], string> = {
 };
 
 export function deriveOrderCommunications(input: OrderCommunicationInput): CommunicationRow[] {
+  // Whether an email is DUE comes from the order row, which was read
+  // successfully to get here. That judgement stays reliable even when the
+  // failure queue is unreadable, so a not-due row is still reported as not due
+  // rather than being downgraded to unknown.
+  const queueReadable = input.pendingEmails !== null;
+
   return (["confirmation", "shipping", "delivery"] as const).map((key) => {
     const due = isDue(input, key);
     const row = matchingRow(input, key);
 
     if (!due && !row) {
       return { key, label: LABEL[key], state: "not_due", detail: NOT_DUE_DETAIL[key], retryable: false };
+    }
+
+    if (!queueReadable) {
+      return {
+        key,
+        label: LABEL[key],
+        state: "cannot_determine",
+        detail: "Email status data unavailable — this says nothing about whether the email was sent.",
+        // Nothing is known to be queued, so offering a retry would imply a
+        // certainty this row explicitly does not have.
+        retryable: false,
+      };
     }
 
     if (!row) {
@@ -166,7 +201,18 @@ export function deriveOrderCommunications(input: OrderCommunicationInput): Commu
   });
 }
 
-/** True when anything about this order's communications needs an owner's attention. */
+/**
+ * True when a customer is known to be missing an email.
+ *
+ * `cannot_determine` deliberately does not count: it is a monitoring gap, not a
+ * customer-facing failure, and folding the two together would either cry wolf
+ * about every unreadable query or hide a real one among them.
+ */
 export function needsAttention(rows: CommunicationRow[]): boolean {
   return rows.some((row) => row.state === "failed" || row.state === "retrying");
+}
+
+/** True when the panel could not read the data it needs to answer. */
+export function hasUnknowns(rows: CommunicationRow[]): boolean {
+  return rows.some((row) => row.state === "cannot_determine");
 }
