@@ -3,6 +3,7 @@ import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getSystemStatus, type StatusLevel } from "@/lib/system-status";
 import { getRecentSystemAlerts } from "@/lib/monitoring";
 import { CheckoutPreflight } from "@/components/checkout-preflight";
+import { InventoryReservationCheck } from "@/components/inventory-reservation-check";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +36,8 @@ export default async function AdminStatusPage() {
           Live view of every integration. No secrets are shown. Refresh to re-check.
         </p>
 
-        <div className="mt-6">
+        <div className="mt-6 space-y-6">
+          <InventoryReservationCheck />
           <CheckoutPreflight />
         </div>
 
