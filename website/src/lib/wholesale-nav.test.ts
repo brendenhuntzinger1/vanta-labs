@@ -121,3 +121,49 @@ describe("the product image frame follows the photograph", () => {
     expect(product).toContain('sizes="(max-width: 640px) 340px, (max-width: 1024px) 420px, 42vw"');
   });
 });
+
+describe("the redesigned page is composed, not assembled from cards", () => {
+  const stack = read("src/components/wholesale-vial-stack.tsx");
+
+  it("uses real catalogue photography rather than a decorative rectangle", () => {
+    expect(page).toContain("getCatalogProducts()");
+    expect(page).toContain("WholesaleVialStack");
+  });
+
+  it("refuses to stack placeholders as if they were product shots", () => {
+    // Three grey placeholders would be worse than the empty panel this
+    // replaced, so the composition is withheld and type stands in.
+    expect(stack).toContain("PLACEHOLDER_IMAGE_PATHS.includes(src)");
+    expect(page).toContain("heroImages.length > 0");
+  });
+
+  it("never repeats the same photograph within one composition", () => {
+    expect(stack).toContain("seen.has(src)");
+  });
+
+  it("builds depth from scale and opacity, preserving every aspect ratio", () => {
+    expect(stack).toContain("object-contain");
+    expect(stack).not.toContain("object-cover");
+    expect(stack).toMatch(/opacity-45|opacity-35/);
+  });
+
+  it("gives decorative layers empty alt text and names only the foreground", () => {
+    expect(stack).toContain('alt=""');
+    expect(stack).toContain("alt={front.alt}");
+  });
+
+  it("has one accent treatment for calls to action, not a new one per section", () => {
+    expect(page).toContain("const PRIMARY_CTA");
+    expect(page).toContain("const SECONDARY_CTA");
+  });
+
+  it("does not wrap every section in its own bordered panel", () => {
+    // The old version put all five sections inside vl2-lab-panel, which is what
+    // made it read as a template. Only the form sits on a surface now.
+    expect(page.match(/vl2-lab-panel/g) ?? []).toHaveLength(0);
+  });
+
+  it("keeps the anchor target offset clear of the fixed header", () => {
+    expect(page).toContain("scroll-mt-24");
+  });
+});
