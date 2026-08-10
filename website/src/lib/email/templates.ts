@@ -1161,3 +1161,53 @@ export function contactFormAutoReplyTemplate(input: {
     ]),
   };
 }
+
+// Sent to the business when a wholesale enquiry is submitted. Every value the
+// visitor supplied is escaped before it reaches the HTML body — this is an
+// email an owner opens, and an unescaped message field is a script-injection
+// vector aimed straight at them.
+export function wholesaleInquiryNotificationTemplate(input: {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone?: string;
+  organization?: string;
+  volume?: string;
+  products?: string;
+  message: string;
+}): EmailTemplate {
+  const lines = [
+    `Name: ${input.firstName} ${input.lastName}`,
+    `Email: ${input.email}`,
+    input.phone ? `Phone: ${input.phone}` : null,
+    input.organization ? `Organisation: ${input.organization}` : null,
+    input.volume ? `Estimated volume: ${input.volume}` : null,
+    input.products ? `Products of interest: ${input.products}` : null,
+    "",
+    input.message,
+  ].filter((line): line is string => line !== null);
+
+  return {
+    // Named so it is unmistakable in an inbox and filterable away from orders.
+    subject: `WHOLESALE INQUIRY — ${input.firstName} ${input.lastName}`,
+    html: lines.map((line) => (line ? `<p>${escapeHtml(line)}</p>` : "<br />")).join(""),
+    text: lines.join("\n"),
+  };
+}
+
+// Confirms receipt to the person who enquired. Deliberately promises nothing
+// about timing: no response-time commitment is configured anywhere in this
+// system, and inventing one here would be a promise the business never made.
+export function wholesaleInquiryAutoReplyTemplate(input: { firstName: string }): EmailTemplate {
+  const greeting = input.firstName ? `Hi ${input.firstName},` : "Hello,";
+  const body = [
+    greeting,
+    "Thanks for contacting Vanta Labs. We've received your wholesale inquiry and will review the information you submitted.",
+    "— Vanta Labs",
+  ];
+  return {
+    subject: "Wholesale Request Received — Vanta Labs",
+    html: body.map((line) => `<p>${escapeHtml(line)}</p>`).join(""),
+    text: body.join("\n\n"),
+  };
+}

@@ -1,0 +1,123 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it } from "vitest";
+
+const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
+
+const header = read("src/components/site-header-v2.tsx");
+const footer = read("src/components/site-footer.tsx");
+const sitemap = read("src/app/sitemap.ts");
+const route = read("src/app/api/wholesale/route.ts");
+const form = read("src/components/wholesale-form.tsx");
+const page = read("src/app/wholesale/page.tsx");
+const product = read("src/components/product-detail-client.tsx");
+
+describe("Wholesale replaces Research in customer navigation", () => {
+  it("the header links to /wholesale and no longer promotes /research", () => {
+    expect(header).toContain('href: "/wholesale", label: "Wholesale"');
+    expect(header).not.toContain('href: "/research"');
+  });
+
+  it("the footer links to /wholesale and no longer promotes /research", () => {
+    expect(footer).toContain('{ label: "Wholesale", href: "/wholesale" }');
+    expect(footer).not.toContain('href: "/research" }');
+  });
+
+  it("keeps the research routes indexed rather than deleting indexed content", () => {
+    // The library is database-backed and has been public. Removing it from the
+    // nav is what was asked; removing the URLs would strand inbound links and
+    // discard SEO value, which is a different decision.
+    expect(sitemap).toContain('"/wholesale"');
+    expect(sitemap).toContain('"/research"');
+  });
+
+  it("leaves the term 'research' alone where the brand legitimately uses it", () => {
+    // A blanket find-and-replace would have renamed the disclaimer, the support
+    // domain and the company's own description of itself.
+    expect(footer).toContain("Research Disclaimer");
+    expect(footer).toContain("vantalabsresearch.com");
+  });
+});
+
+describe("the wholesale form is protected like the contact form, not less", () => {
+  it("keeps the same honeypot, timing gate, rate limit and length caps", () => {
+    expect(route).toContain("honeypot");
+    expect(route).toContain("SUBMISSION_WINDOW_MS");
+    expect(route).toContain("checkRateLimit");
+    expect(route).toContain("MAX_MESSAGE_LENGTH");
+    expect(route).toContain("EMAIL_PATTERN.test(email)");
+  });
+
+  it("uses a honeypot name that a real organisation field cannot trip", () => {
+    // The contact form traps on `company`. Reusing that here — where companies
+    // legitimately type their name — would reject every genuine submission.
+    expect(route).toContain("body.website");
+    expect(route).not.toMatch(/const honeypot = parseString\(body\.organization\)/);
+    expect(form).toContain('name="website"');
+    expect(form).toContain('name="organization"');
+  });
+
+  it("hides the honeypot from assistive technology as well as from sight", () => {
+    expect(form).toContain('aria-hidden="true"');
+    expect(form).toContain("tabIndex={-1}");
+  });
+
+  it("sends to the configured support inbox, never a hard-coded address", () => {
+    expect(route).toContain("getBusinessSettings()");
+    expect(route).not.toMatch(/to:\s*"[^"]*@/);
+  });
+
+  it("reports a delivery failure instead of showing a false success", () => {
+    expect(route).toContain('error: result.error ?? "Email delivery is not configured."');
+  });
+
+  it("marks the subject unmistakably so it filters away from order mail", () => {
+    expect(read("src/lib/email/templates.ts")).toContain("WHOLESALE INQUIRY —");
+  });
+
+  it("escapes every submitted value before it reaches an HTML email", () => {
+    const templates = read("src/lib/email/templates.ts");
+    const start = templates.indexOf("export function wholesaleInquiryNotificationTemplate");
+    // Bounded by the next top-level declaration rather than the first closing
+    // brace, which belongs to the parameter type.
+    const next = templates.indexOf("export function", start + 1);
+    expect(templates.slice(start, next === -1 ? undefined : next)).toContain("escapeHtml(line)");
+  });
+});
+
+describe("the page promises nothing the business has not configured", () => {
+  it("publishes no minimums, payment terms or dispatch guarantees", () => {
+    // None of these exist anywhere in config, so stating them would invent a
+    // commitment on the company's behalf.
+    expect(page).not.toMatch(/net\s*30/i);
+    expect(page).not.toMatch(/\b\d+\s*(hour|hr)s?\b/i);
+    expect(page).not.toMatch(/unit minimum/i);
+    expect(page).not.toMatch(/same[- ]day/i);
+    expect(page).not.toMatch(/\d+%\s*(off|discount|purity)/i);
+  });
+
+  it("keeps the research-use-only framing", () => {
+    expect(page).toMatch(/research use only/i);
+  });
+});
+
+describe("the product image frame follows the photograph", () => {
+  it("uses a fixed portrait ratio instead of an oversized min-height box", () => {
+    expect(product).toContain('aspect-[4/5]');
+    expect(product).not.toContain("min-h-[460px]");
+  });
+
+  it("caps the frame width and centres it, so a tall vial is not lost in a wide panel", () => {
+    expect(product).toContain("mx-auto w-full max-w-[340px]");
+    expect(product).toContain("sm:max-w-[420px]");
+  });
+
+  it("never stretches or crops the product", () => {
+    expect(product).toContain("object-contain");
+    expect(product).not.toMatch(/className="object-cover"[\s\S]{0,80}priority/);
+  });
+
+  it("declares sizes matching the capped frame, so phones do not fetch a full-width asset", () => {
+    expect(product).toContain('sizes="(max-width: 640px) 340px, (max-width: 1024px) 420px, 42vw"');
+  });
+});

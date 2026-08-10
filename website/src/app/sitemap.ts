@@ -12,7 +12,7 @@ function siteUrl() {
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = siteUrl();
 
-  const staticRoutes = ["", "/products", "/coa-library", "/membership", "/ambassador", "/partner", "/contact", "/research"].map((path) => ({
+  const staticRoutes = ["", "/products", "/coa-library", "/membership", "/ambassador", "/partner", "/contact", "/wholesale", "/research"].map((path) => ({
     url: `${base}${path}`,
     changeFrequency: "weekly" as const,
     priority: path === "" ? 1 : 0.7,

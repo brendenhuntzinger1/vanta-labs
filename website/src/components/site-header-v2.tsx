@@ -8,7 +8,7 @@ import { useCart } from "@/components/cart-context";
 const NAV_LINKS = [
   { href: "/products", label: "Products" },
   { href: "/membership", label: "Membership" },
-  { href: "/research", label: "Research" },
+  { href: "/wholesale", label: "Wholesale" },
   { href: "/partner", label: "Partner Program" },
   { href: "/contact", label: "Contact us" },
   // COA Library sits last and intentionally understated — a quiet reference

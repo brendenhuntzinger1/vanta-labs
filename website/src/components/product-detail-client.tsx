@@ -298,22 +298,32 @@ export function ProductDetailClient({
           </div>
         ) : null}
 
-        <section className="mt-6 grid min-w-0 gap-6 lg:grid-cols-[1.05fr_0.95fr] lg:items-start lg:gap-10">
+        <section className="mt-6 grid min-w-0 gap-6 lg:grid-cols-[0.9fr_1.1fr] lg:items-start lg:gap-10">
           {/* Block A — product image. Mobile order 1; desktop top-left. */}
           <div className="order-1 min-w-0 lg:col-start-1 lg:row-start-1">
-            <div className="vl2-lab-panel overflow-hidden">
-              <div className="relative min-h-[260px] bg-[#141414] sm:min-h-[460px]">
+            {/* The frame follows the photograph, not the grid.
+                It used to be a min-height box as wide as its column, so a tall
+                narrow vial floated in the middle of a wide landscape panel with
+                empty charcoal either side — the product looked small and the
+                page unfinished. A portrait ratio matched to the photography,
+                capped in width and centred, means the vial fills its frame at
+                every breakpoint without being stretched or cropped: the image
+                is still object-contain, and no asset changed.
+                On a phone the cap also stops a full-bleed square pushing the
+                price and Add to Cart below the fold. */}
+            <div className="vl2-lab-panel mx-auto w-full max-w-[340px] overflow-hidden sm:max-w-[420px] lg:max-w-none">
+              <div className="relative aspect-[4/5] bg-[#141414]">
                 {hasRealImage ? (
                   <Image
                     src={imageToDisplay as string}
                     alt={product.name}
                     fill
-                    sizes="(max-width: 1024px) 100vw, 55vw"
+                    sizes="(max-width: 640px) 340px, (max-width: 1024px) 420px, 42vw"
                     className="object-contain"
                     priority
                   />
                 ) : (
-                  <div className="flex h-full min-h-[260px] items-center justify-center">
+                  <div className="flex h-full items-center justify-center">
                     <div className="border border-white/[0.08] px-4 py-1.5 text-xs uppercase tracking-[0.2em] text-white/45">Image pending</div>
                   </div>
                 )}
