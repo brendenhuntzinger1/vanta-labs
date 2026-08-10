@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getSystemStatus, type StatusLevel } from "@/lib/system-status";
 import { getRecentSystemAlerts } from "@/lib/monitoring";
+import { CheckoutPreflight } from "@/components/checkout-preflight";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,10 @@ export default async function AdminStatusPage() {
         <p className="mt-1 text-sm text-zinc-400">
           Live view of every integration. No secrets are shown. Refresh to re-check.
         </p>
+
+        <div className="mt-6">
+          <CheckoutPreflight />
+        </div>
 
         <div className={`mt-6 rounded-2xl border p-5 ${readyForOrders ? "border-emerald-400/30 bg-emerald-400/[0.06]" : "border-amber-400/30 bg-amber-400/[0.06]"}`}>
           <p className="text-sm font-semibold text-white">
