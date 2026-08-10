@@ -19,12 +19,18 @@ import { useEffect, useRef, useState } from "react";
  * no-track path. Gating it here means the SDK is never fetched for someone who
  * declined — no request to sc-static.net, no cookie, nothing to revoke.
  *
- * ON THE EMAIL PLACEHOLDER: the snippet Snapchat generates contains
- * `'user_email': '__INSERT_USER_EMAIL__'`. That literal must never ship — it
- * would send the placeholder string to Snap on every page load. Init carries no
- * email at all here. The root layout does not know who the visitor is, and
- * handing a third party a raw address on every page view to find out is a much
- * larger step than this site takes anywhere else.
+ * The loader below is Snapchat's own snippet, unmodified, down to its
+ * whitespace — so it can be diffed against whatever the Snap console currently
+ * generates without having to read past reformatting.
+ *
+ * ON THE EMPTY INIT OPTIONS: Snapchat's console will hand you this same snippet
+ * with `{'user_email': '__INSERT_USER_EMAIL__'}` in that position. `{}` is the
+ * deliberate choice, not an oversight. Left as the placeholder it sends that
+ * literal string to Snap as the visitor's identity on every page load; filled
+ * in, it sends a raw address to a third party on every page view. The root
+ * layout does not know who the visitor is in any case. Identity is attached at
+ * exactly one point — a confirmed paid order — and only ever as a SHA-256
+ * digest produced on the server. See snap-events.ts.
  */
 
 const SNAP_PIXEL_ID = process.env.NEXT_PUBLIC_SNAP_PIXEL_ID ?? "b6e3f2b8-0d0a-4d4e-b547-24b5a20d2a6e";
@@ -89,7 +95,7 @@ a.queue=[];var s='script';r=t.createElement(s);r.async=!0;
 r.src=n;var u=t.getElementsByTagName(s)[0];
 u.parentNode.insertBefore(r,u);})(window,document,
 'https://sc-static.net/scevent.min.js');
-snaptr('init', '${SNAP_PIXEL_ID}');
+snaptr('init', '${SNAP_PIXEL_ID}', {});
 snaptr('track', 'PAGE_VIEW');
       `}
     </Script>

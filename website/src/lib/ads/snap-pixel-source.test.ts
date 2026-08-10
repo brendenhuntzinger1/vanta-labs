@@ -110,13 +110,12 @@ describe("no customer email is ever handed to Snap", () => {
     expect(snippet).not.toContain("user_email");
   });
 
-  it("initialises with the pixel id and nothing else", () => {
-    const snippet = injectedSnippet();
-    const init = snippet.match(/snaptr\(\s*['"]init['"][^\n]*/)?.[0] ?? "";
-    expect(init).toBeTruthy();
-    expect(init).toContain("SNAP_PIXEL_ID");
-    expect(init).not.toContain("@");
-    expect(init).not.toMatch(/email/i);
+  it("initialises with the pixel id and an empty options object", () => {
+    // Asserting the object is *empty* rather than merely email-free is what
+    // makes this durable: it also rejects a phone number, an external id, or
+    // anything else a future paste drops into that position.
+    const init = injectedSnippet().match(/snaptr\(\s*['"]init['"][^\n]*/)?.[0] ?? "";
+    expect(init).toBe("snaptr('init', '${SNAP_PIXEL_ID}', {});");
   });
 
   it("passes no email to snaptr from anywhere in the codebase", () => {
