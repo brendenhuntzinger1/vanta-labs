@@ -3,6 +3,7 @@
 import { useEffect, useRef } from "react";
 import { browserFiredStore, buildViewContent, emitEvent, type Emitter } from "@/lib/ads/tiktok-events";
 import { whenPixelReady } from "@/lib/ads/pixel-ready";
+import { buildSnapViewContent, emitSnapEvent } from "@/lib/ads/snap-events";
 import { relayToServer } from "@/lib/ads/relay-client";
 
 /**
@@ -41,6 +42,15 @@ export function TikTokViewContent({ slug, name, price }: { slug: string; name?: 
         relayToServer({ event: "ViewContent", eventId: options.event_id, lines: [{ slug, quantity: 1 }] });
       };
       emitEvent(buildViewContent({ slug, name, price }), emit, browserFiredStore());
+
+      // Snapchat, from the same data and the same gate. Emitted here rather
+      // than from a parallel component so the two platforms cannot drift on
+      // when a product view counts.
+      emitSnapEvent(
+        buildSnapViewContent({ slug, price }),
+        (eventName, properties) => window.snaptr?.("track", eventName, properties),
+        browserFiredStore(),
+      );
     });
   }, [slug, name, price]);
 

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { buildPurchase } from "@/lib/ads/tiktok-events";
+import { buildSnapPurchase } from "@/lib/ads/snap-events";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { credentialStatus, describeResult, sendServerEvents } from "@/lib/ads/tiktok-events-api";
 import { getRequestIpAddress, verifyAdminSessionFromCookie } from "@/lib/admin-auth";
@@ -86,7 +87,10 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     }
   }
 
-  const event = buildPurchase({
+  // Both platforms are built from ONE paid order, read once. There is exactly
+  // one place on this page that decides a purchase happened, and adding a
+  // second ad network must not add a second opinion about it.
+  const paidOrder = {
     orderId: String(order.order_id),
     isPaid,
     amountPaid: Number(order.amount_paid ?? 0),
@@ -97,7 +101,9 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
       quantity: item.quantity ?? null,
       unitPrice: item.unit_price ?? null,
     })),
-  });
+  };
+  const event = buildPurchase(paidOrder);
+  const snapPurchase = buildSnapPurchase(paidOrder);
 
   // Server-side Purchase, sent with the SAME event_id the browser uses so
   // TikTok collapses the pair into one conversion. It is gated on exactly the
@@ -149,6 +155,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
         alreadySent,
         eventsApiConfigured: credentialStatus().configured,
         event: event ? { name: event.name, eventId: event.eventId, properties: event.properties } : null,
+        snapPurchase,
         // The reason an unpaid order reports nothing, stated rather than implied.
         reason: event
           ? null
@@ -209,7 +216,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   }
 
   return NextResponse.json(
-    { found: true, isPaid, event },
+    { found: true, isPaid, event, snapPurchase },
     { headers: { "cache-control": "no-store" } },
   );
 }

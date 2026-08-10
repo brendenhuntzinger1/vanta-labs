@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { browserFiredStore, emitEvent, mapAnalyticsDetail, type AnalyticsDetail, type Emitter } from "@/lib/ads/tiktok-events";
 import { LISTENER_FLAG } from "@/lib/ads/tracking-health-browser";
 import { relayToServer } from "@/lib/ads/relay-client";
+import { buildSnapAddToCart, buildSnapCheckout, emitSnapEvent } from "@/lib/ads/snap-events";
 
 /**
  * AddToCart and InitiateCheckout, forwarded to the TikTok pixel.
@@ -50,6 +51,29 @@ export function TikTokCommerceEvents() {
               slug: String(item.slug ?? ""),
               quantity: Number(item.quantity ?? 1),
             }));
+
+      // Snapchat, from the same broadcast. Gated on snaptr's presence for the
+      // same reason ttq is: the pixel only exists after consent.
+      if (window.snaptr) {
+        const snapEmit = (eventName: "VIEW_CONTENT" | "ADD_CART" | "START_CHECKOUT" | "PURCHASE" | "PAGE_VIEW", properties: Record<string, unknown>) =>
+          window.snaptr?.("track", eventName, properties);
+        emitSnapEvent(
+          mapped.name === "AddToCart"
+            ? buildSnapAddToCart({
+                slug: String(detail?.productSlug ?? ""),
+                variantId: detail?.variantId ?? null,
+                quantity: Number(detail?.quantity ?? 1),
+                price: Number(detail?.price ?? 0),
+              })
+            : buildSnapCheckout({
+                itemCount: Number(detail?.itemCount ?? 0),
+                total: Number(detail?.total ?? 0),
+                items: detail?.items ?? [],
+              }),
+          snapEmit,
+          store,
+        );
+      }
 
       if (mapped.name === "AddToCart" || mapped.name === "InitiateCheckout") {
         relayToServer({

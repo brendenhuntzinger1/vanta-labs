@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef } from "react";
 import { browserFiredStore, emitEvent, type TikTokEvent } from "@/lib/ads/tiktok-events";
+import { emitSnapEvent, type SnapEvent } from "@/lib/ads/snap-events";
 
 /**
  * Purchase — the only event that represents money.
@@ -51,7 +52,10 @@ export function TikTokPurchaseEvent({
     try {
       const response = await fetch(`/api/ads/purchase-event/${encodeURIComponent(orderId)}`, { cache: "no-store" });
       if (!response.ok) return;
-      const body = (await response.json()) as { event?: TikTokEvent | null };
+      const body = (await response.json()) as {
+        event?: TikTokEvent | null;
+        snapPurchase?: SnapEvent | null;
+      };
       if (!body?.event) return; // not paid — nothing to report, and that is correct
 
       settled.current = true;
@@ -66,6 +70,17 @@ export function TikTokPurchaseEvent({
         (name, properties, options) => window.ttq?.track(name, properties, options),
         browserFiredStore(),
       );
+
+      // Snapchat, from the SAME server-confirmed paid order. Built from the
+      // response rather than re-deciding anything: there is exactly one paid
+      // gate on this page and both platforms sit behind it.
+      if (body.snapPurchase) {
+        emitSnapEvent(
+          body.snapPurchase,
+          (eventName, properties) => window.snaptr?.("track", eventName, properties),
+          browserFiredStore(),
+        );
+      }
     } catch {
       // A failed check must never invent a conversion. Staying silent loses at
       // most one browser-side event; the server-side Events API is the durable

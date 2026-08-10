@@ -65,7 +65,7 @@ To process and fulfill orders, verify payments, provide support, send transactio
 ## Analytics and advertising technologies
 Analytics is off until you accept it. If you decline, no analytics identifiers are created and no analytics events are sent.
 
-When you accept, three things run: our own first-party analytics, which records page views and store events to our own database; Vercel Analytics, a privacy-focused measurement service provided by our hosting provider; and the TikTok Pixel.
+When you accept, four things run: our own first-party analytics, which records page views and store events to our own database; Vercel Analytics, a privacy-focused measurement service provided by our hosting provider; the TikTok Pixel; and the Snap Pixel.
 
 **The TikTok Pixel.** We advertise on TikTok, and the pixel is how we measure whether those adverts work. If you accept cookies, it loads on our pages and sends TikTok your page views along with the technical data any web request carries — IP address, browser and device type, referring page — and an identifier TikTok stores in your browser. TikTok uses this to report advert performance to us and, in line with its own privacy policy, for its own purposes including advert targeting.
 
@@ -73,7 +73,11 @@ It also reports shopping actions: which product pages you view, when you add an 
 
 **One identifier, on one page.** When an order is confirmed as paid, we send TikTok a one-way SHA-256 hash of the email address used for that order. The hash is generated on our server, so your actual address is never handed to code running in your browser and never reaches TikTok. Its purpose is to let TikTok match the purchase to the advert that led to it. A hash cannot be reversed back into an email address, though anyone already holding the same address could confirm a match — so treat it as pseudonymous rather than anonymous. This happens only on a paid order, and only if you accepted cookies. You can ask us to stop it at any time using the contact details above.
 
-If you decline cookies, the pixel is never loaded at all. No request is made to TikTok, no identifier is set, and TikTok receives nothing about your visit.
+**The Snap Pixel.** We also advertise on Snapchat, and this pixel does the same job for those adverts. It loads only if you accept cookies, and it sends Snap the same shape of information: your page views, the technical data any web request carries, an identifier Snap stores in your browser, and the same shopping actions — product viewed, added to cart, checkout begun, order paid — with the product identifier, quantity, price, order value and currency. Snap uses this to report advert performance to us and, in line with its own privacy policy, for its own purposes including advert targeting.
+
+Unlike TikTok, Snap is sent no identifier derived from your email address at all — not your address, and not a hash of it. The pixel is initialised with our advertising account's public identifier and nothing about you.
+
+If you decline cookies, neither pixel is loaded at all. No request is made to TikTok or Snap, no identifier is set, and neither platform receives anything about your visit.
 
 We do not run a Meta pixel, a Google Ads tag or any equivalent technology. If we add one, this policy and our Cookie Policy will be updated to name the platform, the data shared and the purpose before it is switched on.
 
@@ -159,7 +163,7 @@ Email ${email} with your order number and reason. Approved refunds are issued to
 
 **Analytics — only if you accept.** A random visitor and session identifier stored in your browser, any campaign parameters from the link you arrived through, and Vercel Analytics, our hosting provider's privacy-focused measurement service. Nothing in this category is created or sent unless you choose Accept on the cookie banner.
 
-**Advertising — only if you accept.** The TikTok Pixel, which measures whether our TikTok adverts lead to visits and orders. It sets an identifier in your browser and sends TikTok your page views together with the technical data any web request carries. Declining means the pixel is never loaded, so no request reaches TikTok and no identifier is set. We do not run a Meta pixel, a Google Ads tag or any equivalent.
+**Advertising — only if you accept.** Two pixels, which measure whether our adverts lead to visits and orders: the TikTok Pixel and the Snap Pixel. Each sets an identifier in your browser and sends its platform your page views together with the technical data any web request carries. Declining means neither is ever loaded, so no request reaches TikTok or Snap and no identifier is set. We do not run a Meta pixel, a Google Ads tag or any equivalent.
 
 ## Your choices
 Choosing Decline on the banner stops all non-essential storage; nothing in the analytics category is created. Your choice is remembered in your browser. To change it, clear this site's data in your browser and the banner will appear again on your next visit. You can also control cookies through your browser settings, though disabling essential cookies may break checkout or login.
