@@ -734,7 +734,11 @@ describe("applyTrackingUpdate — out of order", () => {
 });
 
 describe("applyTrackingUpdate — customer email", () => {
-  it("emails once per genuine transition and never for a repeat of the same state", async () => {
+  it("sends exactly two emails across a whole delivery, however many scans arrive", async () => {
+    // The regression: every status earned its own email, so an ordinary
+    // delivery sent four — shipped, in transit, out for delivery, delivered.
+    // The webhook dedupe cannot catch that; they are four genuinely different
+    // scans. The customer just experiences it as spam.
     await orderWithLabel();
 
     await applyTrackingUpdate(trackingEvent("TRANSIT", "2026-08-02T10:00:00Z"));
@@ -748,11 +752,13 @@ describe("applyTrackingUpdate — customer email", () => {
     expect(repeat.data.reason).toBe("unchanged");
     expect(sendEmail).toHaveBeenCalledTimes(1);
 
+    // A real status change, but the parcel was already in the carrier's hands.
+    // The customer has been told; telling them again says nothing new.
     await applyTrackingUpdate(trackingEvent("OUT_FOR_DELIVERY", "2026-08-03T08:00:00Z"));
-    expect(sendEmail).toHaveBeenCalledTimes(2);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
 
     await applyTrackingUpdate(trackingEvent("DELIVERED", "2026-08-03T15:00:00Z"));
-    expect(sendEmail).toHaveBeenCalledTimes(3);
+    expect(sendEmail).toHaveBeenCalledTimes(2);
   });
 
   it("links Track Package to the carrier's own page, not a provider's site", async () => {

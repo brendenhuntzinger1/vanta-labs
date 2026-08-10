@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
+import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { deliveryConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { resolveCarrier } from "@/lib/tracking-url";
@@ -1247,34 +1248,82 @@ async function findOrderForTracking(
 }
 
 /**
- * The statuses worth an email.
+ * Statuses that all mean the same thing to a customer: the carrier has it.
  *
  * `label_purchased` is deliberately absent: a printed label is not a shipped
  * parcel, and "your order is on its way" while it still sits on the packing
  * bench is the message customers write in about. The first email goes out when
  * the carrier has actually scanned it.
  */
-const EMAILED_STATUSES = new Set<FulfillmentStatus>(["shipped", "in_transit", "out_for_delivery", "delivered"]);
+const IN_CARRIER_NETWORK = new Set<FulfillmentStatus>(["shipped", "in_transit", "out_for_delivery"]);
+
+export type ShippingNotification = "shipped" | "delivered";
+
+/**
+ * Which email, if any, a transition earns.
+ *
+ * Keyed on the MOVE, not the destination. Every status above used to earn its
+ * own email, so an ordinary delivery sent four — "shipped", then "in transit",
+ * then "out for delivery", then "delivered". The webhook dedupe cannot catch
+ * that: those are four genuinely different scans, each legitimately processed
+ * once. The customer just experiences it as spam.
+ *
+ * Entering the carrier network is one event no matter how many scans describe
+ * it, so the shipping email fires on the transition INTO that set and never
+ * again while the parcel moves through it. Delivery is its own, separate,
+ * single message.
+ *
+ * A parcel that goes straight from label to delivered gets only the delivery
+ * email, which is correct — being told it shipped after it arrived helps
+ * nobody.
+ */
+export function notificationFor(
+  from: FulfillmentStatus | string | null,
+  to: FulfillmentStatus,
+): ShippingNotification | null {
+  if (to === "delivered") return "delivered";
+  const wasInNetwork = IN_CARRIER_NETWORK.has(String(from ?? "") as FulfillmentStatus);
+  if (IN_CARRIER_NETWORK.has(to) && !wasInNetwork) return "shipped";
+  return null;
+}
+
+/**
+ * A send that failed is queued, not lost.
+ *
+ * The order confirmation has always done this; the shipping and delivery
+ * notices did not, so a transient provider outage silently cost the customer
+ * their tracking email for good — the status had already advanced, so no later
+ * scan would produce another one. Logging alone is not a retry.
+ */
+async function queueForRetry(
+  to: string,
+  template: { subject: string; html: string; text: string },
+  error?: string,
+): Promise<void> {
+  console.error("Shipping notification not sent; queued for retry", to, error);
+  await enqueueFailedEmail({ to, subject: template.subject, html: template.html, text: template.text }, error);
+}
 
 async function notifyCustomer(
   order: OrderShippingRow,
+  from: FulfillmentStatus | string | null,
   next: FulfillmentStatus,
   trackingNumber: string | null,
 ): Promise<boolean> {
   const to = text(order.customer_email);
-  if (!to || !EMAILED_STATUSES.has(next)) return false;
+  const kind = notificationFor(from, next);
+  if (!to || !kind) return false;
 
   const displayOrderId = text(order.order_number) ?? order.order_id;
 
   try {
-    if (next === "delivered") {
-      await sendEmail({
-        to,
-        ...deliveryConfirmationTemplate({
-          customerName: text(order.customer_name) ?? "",
-          orderId: displayOrderId,
-        }),
+    if (kind === "delivered") {
+      const template = deliveryConfirmationTemplate({
+        customerName: text(order.customer_name) ?? "",
+        orderId: displayOrderId,
       });
+      const result = await sendEmail({ to, ...template });
+      if (!result.success) await queueForRetry(to, template, result.error);
       return true;
     }
 
@@ -1283,17 +1332,16 @@ async function notifyCustomer(
     // and never echoing a carrier name we did not recognise. An unrecognised
     // carrier keeps the customer on Vanta Labs with no carrier named at all.
     const resolved = resolveCarrier(order.shipping_carrier, trackingNumber);
-    await sendEmail({
-      to,
-      ...shippingUpdateTemplate({
-        customerName: text(order.customer_name) ?? "",
-        orderId: displayOrderId,
-        status: FULFILLMENT_STATUS_LABELS[next],
-        carrier: resolved?.name,
-        trackingNumber: trackingNumber ?? undefined,
-        trackingUrl: resolved?.trackingUrl ?? `${getSiteUrl()}/account/orders`,
-      }),
+    const template = shippingUpdateTemplate({
+      customerName: text(order.customer_name) ?? "",
+      orderId: displayOrderId,
+      status: FULFILLMENT_STATUS_LABELS[next],
+      carrier: resolved?.name,
+      trackingNumber: trackingNumber ?? undefined,
+      trackingUrl: resolved?.trackingUrl ?? `${getSiteUrl()}/account/orders`,
     });
+    const result = await sendEmail({ to, ...template });
+    if (!result.success) await queueForRetry(to, template, result.error);
     return true;
   } catch (error) {
     // The status change already persisted; a failed notification must not undo
@@ -1440,7 +1488,7 @@ export async function applyTrackingUpdate(payload: ShippoWebhookPayload): Promis
     status: transition.next,
   });
 
-  const emailed = await notifyCustomer(order, transition.next, effectiveTracking);
+  const emailed = await notifyCustomer(order, transition.from, transition.next, effectiveTracking);
 
   await markEventProcessed(eventKey);
 
