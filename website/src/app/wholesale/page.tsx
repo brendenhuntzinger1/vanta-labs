@@ -5,6 +5,9 @@ import { SiteFooter } from "@/components/site-footer";
 import { WholesaleForm } from "@/components/wholesale-form";
 import { WholesaleVialStack, selectStackImages } from "@/components/wholesale-vial-stack";
 import { getCatalogProducts } from "@/lib/catalog";
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import Image from "next/image";
 
 /**
  * Wholesale — an enquiry page, not a price sheet.
@@ -23,6 +26,18 @@ import { getCatalogProducts } from "@/lib/catalog";
  * only the form sits on a panel, because a form is the one thing that genuinely
  * benefits from a surface.
  */
+
+/**
+ * The bulk photograph, used when it has been added.
+ *
+ * Checked on disk rather than assumed: a missing file would render as a broken
+ * image on the page a wholesale buyer lands on. Present, it becomes the whole
+ * visual language of the page and the composed vial stack is dropped entirely.
+ * Absent, the stack stands in, and if the catalogue has no photography either,
+ * type stands in for that. Three tiers, no broken frame at any of them.
+ */
+const BULK_IMAGE = "/images/wholesale-bulk.png";
+const hasBulkImage = existsSync(join(process.cwd(), "public", "images", "wholesale-bulk.png"));
 
 export const metadata: Metadata = {
   title: "Wholesale",
@@ -88,7 +103,28 @@ export default async function WholesalePage() {
               </p>
             </div>
 
-            {heroImages.length > 0 ? (
+            {hasBulkImage ? (
+              /* The photograph is the focal point. A portrait frame on a square
+                 source trims a little top and bottom, which is fine for an
+                 atmospheric brand shot and is not what the product pages do to
+                 product photography. */
+              <div className="relative mx-auto aspect-[4/5] w-full max-w-[420px] overflow-hidden rounded-2xl border border-white/[0.07] sm:max-w-[480px] lg:max-w-[540px]">
+                <Image
+                  src={BULK_IMAGE}
+                  alt="Vanta Labs research vials packed for bulk supply"
+                  fill
+                  sizes="(max-width: 640px) 420px, (max-width: 1024px) 480px, 540px"
+                  className="object-cover"
+                  priority
+                />
+                {/* Seats the photograph into the page rather than letting it sit
+                    on top as a bright rectangle. */}
+                <div
+                  aria-hidden="true"
+                  className="pointer-events-none absolute inset-0 bg-gradient-to-t from-[#0b0b0b] via-transparent to-transparent"
+                />
+              </div>
+            ) : heroImages.length > 0 ? (
               <WholesaleVialStack images={heroImages} priority />
             ) : (
               /* Not a blank rectangle: a typographic mark that stands on its
@@ -137,13 +173,31 @@ export default async function WholesalePage() {
             section announces itself before it shows itself. */}
         <section className="mt-24 border-y border-white/[0.06] bg-[#0e0e0e] py-20 sm:mt-32 sm:py-28">
           <div className="mx-auto grid max-w-[1280px] items-center gap-12 px-4 sm:px-6 lg:grid-cols-2 lg:gap-20 lg:px-12">
-            {bulkImages.length > 0 ? (
+            {hasBulkImage ? (
+              <div className="order-2 lg:order-1">
+                {/* A wider crop of the same shot, so the two sections read as
+                    one shoot rather than one image used twice. */}
+                <div className="relative aspect-[16/11] w-full overflow-hidden rounded-2xl border border-white/[0.07]">
+                  <Image
+                    src={BULK_IMAGE}
+                    alt=""
+                    fill
+                    sizes="(max-width: 1024px) 100vw, 560px"
+                    className="object-cover object-center"
+                  />
+                  <div
+                    aria-hidden="true"
+                    className="pointer-events-none absolute inset-0 bg-gradient-to-tr from-[#0e0e0e] via-transparent to-transparent"
+                  />
+                </div>
+              </div>
+            ) : bulkImages.length > 0 ? (
               <div className="order-2 lg:order-1">
                 <WholesaleVialStack images={bulkImages} />
               </div>
             ) : null}
 
-            <div className={bulkImages.length > 0 ? "order-1 lg:order-2" : ""}>
+            <div className={hasBulkImage || bulkImages.length > 0 ? "order-1 lg:order-2" : ""}>
               <p className="vl2-eyebrow text-white/35">Bulk orders</p>
               <h2 className="vl2-display mt-4 max-w-md text-[28px] leading-tight text-white sm:text-[40px]">
                 Built around your volume

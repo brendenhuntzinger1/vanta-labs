@@ -167,3 +167,30 @@ describe("the redesigned page is composed, not assembled from cards", () => {
     expect(page).toContain("scroll-mt-24");
   });
 });
+
+describe("the bulk photograph degrades rather than breaking", () => {
+  it("checks the file is on disk instead of assuming it", () => {
+    // A missing file would render as a broken image on the page a wholesale
+    // buyer lands on, which is worse than any fallback.
+    expect(page).toContain('existsSync(join(process.cwd(), "public", "images", "wholesale-bulk.png"))');
+  });
+
+  it("falls back through the composed stack to type, in that order", () => {
+    expect(page).toContain("hasBulkImage ? (");
+    expect(page).toContain(") : heroImages.length > 0 ? (");
+  });
+
+  it("drops the separate-vial composition entirely once the photograph exists", () => {
+    // The composition was the thing that read as "separate vials"; when a real
+    // bulk shot is present it should not appear alongside it.
+    const hero = page.slice(page.indexOf("hasBulkImage ? ("), page.indexOf("BENEFITS ─"));
+    expect(hero.indexOf("<Image")).toBeLessThan(hero.indexOf("WholesaleVialStack"));
+  });
+
+  it("describes the photograph for screen readers once, not twice", () => {
+    // Same asset in two sections: the hero names it, the second frame is
+    // decorative and stays silent.
+    expect(page).toContain('alt="Vanta Labs research vials packed for bulk supply"');
+    expect(page).toContain('alt=""');
+  });
+});
