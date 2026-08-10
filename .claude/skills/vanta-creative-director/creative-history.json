@@ -1,4 +1,225 @@
 {
   "version": 1,
-  "concepts": []
+  "concepts": [
+    {
+      "concept_id": "vl-ugc-001",
+      "archetype": "ugc_talking_head",
+      "hook": "I bought this specifically to see whether the label matched the listing.",
+      "eligibility": "needs_verification",
+      "platform": "tiktok",
+      "landing_page": "/products/ghk-cu",
+      "length_seconds": 15,
+      "hypothesis": "Verification-framed unboxing beats excitement-framed unboxing.",
+      "status": "draft",
+      "brief": "creative/2026-08-ugc-launch/README.md",
+      "notes": "No purity figure, no published-COA claim, no price: COA library has no published batch reports yet and prices are unverified. Lot VL25001 is render artwork, never presented as a readable batch report.",
+      "registered_at": "2026-08-10T22:57:51.267412+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-10T22:57:51.270117+00:00",
+          "note": "registered"
+        }
+      ]
+    },
+    {
+      "concept_id": "vl-ugc-002",
+      "archetype": "ugc_talking_head",
+      "hook": "How do you actually know what's in the vial you just bought?",
+      "eligibility": "needs_verification",
+      "platform": "tiktok",
+      "landing_page": "/products/ghk-cu",
+      "length_seconds": 15,
+      "hypothesis": "Hook-only variant of 001: question hook vs statement hook.",
+      "status": "draft",
+      "brief": "creative/2026-08-ugc-launch/README.md",
+      "notes": "No purity figure, no published-COA claim, no price: COA library has no published batch reports yet and prices are unverified. Lot VL25001 is render artwork, never presented as a readable batch report.",
+      "registered_at": "2026-08-10T22:57:51.563394+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-10T22:57:51.563613+00:00",
+          "note": "registered"
+        }
+      ]
+    },
+    {
+      "concept_id": "vl-ugc-003",
+      "archetype": "ugc_talking_head",
+      "hook": "Four things should be printed on a research vial. Most of what I get sent has two.",
+      "eligibility": "needs_verification",
+      "platform": "tiktok",
+      "landing_page": "/products/glp-1",
+      "length_seconds": 22,
+      "hypothesis": "Label-literacy checklist earns attention with zero claim surface.",
+      "status": "draft",
+      "brief": "creative/2026-08-ugc-launch/README.md",
+      "notes": "No purity figure, no published-COA claim, no price: COA library has no published batch reports yet and prices are unverified. Lot VL25001 is render artwork, never presented as a readable batch report.",
+      "registered_at": "2026-08-10T22:57:51.612641+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-10T22:57:51.612668+00:00",
+          "note": "registered"
+        }
+      ]
+    },
+    {
+      "concept_id": "vl-ugc-004",
+      "archetype": "ugc_talking_head",
+      "hook": "Four things should be printed on a research vial (product-first open).",
+      "eligibility": "needs_verification",
+      "platform": "tiktok",
+      "landing_page": "/products/glp-1",
+      "length_seconds": 22,
+      "hypothesis": "Opening-frame variant of 003: product macro open vs face open.",
+      "status": "draft",
+      "brief": "creative/2026-08-ugc-launch/README.md",
+      "notes": "No purity figure, no published-COA claim, no price: COA library has no published batch reports yet and prices are unverified. Lot VL25001 is render artwork, never presented as a readable batch report.",
+      "registered_at": "2026-08-10T22:57:51.658456+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-10T22:57:51.658483+00:00",
+          "note": "registered"
+        }
+      ]
+    },
+    {
+      "concept_id": "vl-ugc-005",
+      "archetype": "curiosity_hook",
+      "hook": "I asked them for the testing documentation before I ordered. They sent it.",
+      "eligibility": "needs_verification",
+      "platform": "tiktok",
+      "landing_page": "/coa-library",
+      "length_seconds": 9,
+      "hypothesis": "9s cut of the documentation angle wins cold traffic.",
+      "status": "draft",
+      "brief": "creative/2026-08-ugc-launch/README.md",
+      "notes": "No purity figure, no published-COA claim, no price: COA library has no published batch reports yet and prices are unverified. Lot VL25001 is render artwork, never presented as a readable batch report.",
+      "registered_at": "2026-08-10T22:57:51.709836+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-10T22:57:51.709864+00:00",
+          "note": "registered"
+        }
+      ]
+    },
+    {
+      "concept_id": "vl-ugc-006",
+      "archetype": "curiosity_hook",
+      "hook": "I asked them for the testing documentation before I ordered — the long version.",
+      "eligibility": "needs_verification",
+      "platform": "tiktok",
+      "landing_page": "/coa-library",
+      "length_seconds": 30,
+      "hypothesis": "Length variant of 005: 30s converts better on warm traffic.",
+      "status": "draft",
+      "brief": "creative/2026-08-ugc-launch/README.md",
+      "notes": "No purity figure, no published-COA claim, no price: COA library has no published batch reports yet and prices are unverified. Lot VL25001 is render artwork, never presented as a readable batch report.",
+      "registered_at": "2026-08-10T22:57:51.756299+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-10T22:57:51.756327+00:00",
+          "note": "registered"
+        }
+      ]
+    },
+    {
+      "concept_id": "vl-ugc-007",
+      "archetype": "problem_solution",
+      "hook": "This showed up in a padded envelope in August. That's the part I actually care about.",
+      "eligibility": "needs_verification",
+      "platform": "tiktok",
+      "landing_page": "/products/glp-1",
+      "length_seconds": 18,
+      "hypothesis": "Cold-chain/handling angle: real frustration, no claim surface.",
+      "status": "draft",
+      "brief": "creative/2026-08-ugc-launch/README.md",
+      "notes": "No purity figure, no published-COA claim, no price: COA library has no published batch reports yet and prices are unverified. Lot VL25001 is render artwork, never presented as a readable batch report.",
+      "registered_at": "2026-08-10T22:57:51.805514+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-10T22:57:51.805543+00:00",
+          "note": "registered"
+        }
+      ]
+    },
+    {
+      "concept_id": "vl-ugc-008",
+      "archetype": "problem_solution",
+      "hook": "This showed up in a padded envelope in August — documentation CTA.",
+      "eligibility": "needs_verification",
+      "platform": "tiktok",
+      "landing_page": "/coa-library",
+      "length_seconds": 18,
+      "hypothesis": "CTA+landing variant of 007: documentation-led vs catalogue-led.",
+      "status": "draft",
+      "brief": "creative/2026-08-ugc-launch/README.md",
+      "notes": "No purity figure, no published-COA claim, no price: COA library has no published batch reports yet and prices are unverified. Lot VL25001 is render artwork, never presented as a readable batch report.",
+      "registered_at": "2026-08-10T22:57:51.852059+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-10T22:57:51.852086+00:00",
+          "note": "registered"
+        }
+      ]
+    },
+    {
+      "concept_id": "vl-ugc-009",
+      "archetype": "comparison_generic",
+      "hook": "Nobody makes a video about this one. Which is exactly why I'm making one.",
+      "eligibility": "needs_verification",
+      "platform": "tiktok",
+      "landing_page": "/products",
+      "length_seconds": 15,
+      "hypothesis": "Catalogue-completeness via the least glamorous SKU reads as credibility.",
+      "status": "draft",
+      "brief": "creative/2026-08-ugc-launch/README.md",
+      "notes": "No purity figure, no published-COA claim, no price: COA library has no published batch reports yet and prices are unverified. Lot VL25001 is render artwork, never presented as a readable batch report.",
+      "registered_at": "2026-08-10T22:57:51.898665+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-10T22:57:51.898725+00:00",
+          "note": "registered"
+        }
+      ]
+    },
+    {
+      "concept_id": "vl-ugc-010",
+      "archetype": "ugc_talking_head",
+      "hook": "Three questions I ask a site before I order. Most fail on the second one.",
+      "eligibility": "needs_verification",
+      "platform": "tiktok",
+      "landing_page": "/products/glp-1",
+      "length_seconds": 28,
+      "hypothesis": "Transferable checklist earns saves and positions Vanta as the survivor.",
+      "status": "draft",
+      "brief": "creative/2026-08-ugc-launch/README.md",
+      "notes": "No purity figure, no published-COA claim, no price: COA library has no published batch reports yet and prices are unverified. Lot VL25001 is render artwork, never presented as a readable batch report.",
+      "registered_at": "2026-08-10T22:57:51.947133+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-10T22:57:51.947164+00:00",
+          "note": "registered"
+        }
+      ]
+    }
+  ]
 }
