@@ -75,7 +75,9 @@ It also reports shopping actions: which product pages you view, when you add an 
 
 **The Snap Pixel.** We also advertise on Snapchat, and this pixel does the same job for those adverts. It loads only if you accept cookies, and it sends Snap the same shape of information: your page views, the technical data any web request carries, an identifier Snap stores in your browser, and the same shopping actions — product viewed, added to cart, checkout begun, order paid — with the product identifier, quantity, price, order value and currency. Snap uses this to report advert performance to us and, in line with its own privacy policy, for its own purposes including advert targeting.
 
-Unlike TikTok, Snap is sent no identifier derived from your email address at all — not your address, and not a hash of it. The pixel is initialised with our advertising account's public identifier and nothing about you.
+Snap is treated exactly as TikTok is on the point that matters most: your raw email address and phone number are never sent. On a paid order — and only then — Snap receives a one-way SHA-256 hash of each, generated on our server, so the actual values are never handed to code running in your browser and never reach Snap. Snapchat's own setup instructions offer a field for the plain address; we do not use it, and our code refuses to send anything that is not already a hash. Everything in the paragraph above about what a hash is and is not applies here in the same way.
+
+We do not send Snap your age or your location. The pixel is initialised with our advertising account's public identifier and nothing about you.
 
 If you decline cookies, neither pixel is loaded at all. No request is made to TikTok or Snap, no identifier is set, and neither platform receives anything about your visit.
 

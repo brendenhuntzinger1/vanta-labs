@@ -106,7 +106,7 @@ export default async function ProductDetailPage({
       {/* Measurement only. Rendered alongside the product UI rather than inside
           it, so the shopping component stays untouched. `priceNumber` is the
           same server-resolved figure the structured data uses. */}
-      <TikTokViewContent slug={product.slug} name={product.name} price={priceNumber} />
+      <TikTokViewContent slug={product.slug} name={product.name} price={priceNumber} category={product.category} />
       <ProductDetailClient
         product={product}
         relatedProducts={relatedProducts}

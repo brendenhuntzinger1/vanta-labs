@@ -317,6 +317,8 @@ export type AnalyticsDetail = {
   eventType?: string;
   productSlug?: string;
   productName?: string | null;
+  /** Read only by Snap, which reports a category per event. */
+  productCategory?: string | null;
   variantId?: string | null;
   variantLabel?: string | null;
   quantity?: number;

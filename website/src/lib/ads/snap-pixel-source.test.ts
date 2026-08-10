@@ -127,6 +127,26 @@ describe("no customer email is ever handed to Snap", () => {
     }
   });
 
+  it("never builds Snap's raw-identity fields anywhere, only the hashed ones", () => {
+    // Snapchat's parameter reference offers both forms side by side. The raw
+    // ones are the trap: they work, they look correct, and they quietly hand a
+    // third party a customer's address and phone number on every event.
+    for (const path of files) {
+      const source = executableSource(path);
+      expect(source, `${relative(path)} constructs a raw user_email`).not.toMatch(/["']?user_email["']?\s*:/);
+      expect(source, `${relative(path)} constructs a raw user_phone_number`).not.toMatch(/["']?user_phone_number["']?\s*:/);
+    }
+  });
+
+  it("refuses anything that is not a digest, rather than trusting its callers", () => {
+    // The guarantee is structural, not a convention: even a caller that hands
+    // the builder a raw address gets nothing sent. Asserted here as well as in
+    // the unit tests so the guard cannot be deleted as redundant.
+    const source = read(join(SRC, "lib", "ads", "snap-events.ts"));
+    expect(source).toMatch(/\/\^\[0-9a-f\]\{64\}\$\//);
+    expect(source).toContain("hashedOnly");
+  });
+
   it("does not read the customer's address in the purchase component", () => {
     // The one page where the site does know who the visitor is. The browser leg
     // reports the money; identity stays server-side, where TikTok's Events API
@@ -190,8 +210,10 @@ describe("the Snap pixel is gated on consent, exactly like the TikTok pixel", ()
     const legal = read(join(SRC, "lib", "legal-content.ts"));
     expect(legal).toMatch(/Snap Pixel/);
     expect(legal).toMatch(/neither pixel is loaded at all/);
-    // And the one thing that distinguishes it from the TikTok integration.
-    expect(legal).toMatch(/Snap is sent no identifier derived from your email/);
+    // The identity claim has to match what the code actually sends: a digest
+    // on a paid order, never a raw address.
+    expect(legal).toMatch(/raw email address and phone number are never sent/);
+    expect(legal).toMatch(/SHA-256 hash/);
   });
 });
 

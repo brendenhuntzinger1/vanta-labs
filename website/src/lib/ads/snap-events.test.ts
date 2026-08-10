@@ -5,6 +5,7 @@ import {
   buildSnapPurchase,
   buildSnapViewContent,
   emitSnapEvent,
+  hashedOnly,
   SNAP_CURRENCY,
 } from "./snap-events";
 import {
@@ -182,6 +183,123 @@ describe("PURCHASE — must represent real paid revenue", () => {
     const emit = vi.fn();
     expect(emitSnapEvent(snap, emit, store)).toBe(true);
     expect(store.has(tiktok.dedupeKey!)).toBe(false);
+  });
+});
+
+describe("item_category", () => {
+  it("labels a product view with its catalogue category", () => {
+    const event = buildSnapViewContent({ slug: "bpc-157", price: 42.99, category: "Research Peptides" })!;
+    expect(event.properties.item_category).toBe("Research Peptides");
+  });
+
+  it("labels an add to cart from the same catalogue field", () => {
+    const event = buildSnapAddToCart({ slug: "bpc-157", quantity: 1, price: 42.99, category: "Research Peptides" })!;
+    expect(event.properties.item_category).toBe("Research Peptides");
+  });
+
+  it("is omitted rather than guessed when a cart spans categories", () => {
+    // Snap takes one category per event. With two, any choice misdescribes the
+    // other, and a wrong label is worse for reporting than a missing one.
+    const mixed = buildSnapCheckout({
+      itemCount: 2,
+      total: 90,
+      items: [{ slug: "bpc-157", category: "Research Peptides" }, { slug: "bac-water", category: "Supplies" }],
+    })!;
+    expect(mixed.properties).not.toHaveProperty("item_category");
+
+    const uniform = buildSnapCheckout({
+      itemCount: 2,
+      total: 90,
+      items: [{ slug: "bpc-157", category: "Research Peptides" }, { slug: "tb-500", category: "Research Peptides" }],
+    })!;
+    expect(uniform.properties.item_category).toBe("Research Peptides");
+  });
+
+  it("is omitted entirely when nothing supplies one", () => {
+    expect(buildSnapViewContent({ slug: "bpc-157" })!.properties).not.toHaveProperty("item_category");
+    expect(buildSnapCheckout({ itemCount: 1, total: 10 })!.properties).not.toHaveProperty("item_category");
+    expect(
+      buildSnapAddToCart({ slug: "x", quantity: 1, price: 1, category: "   " })!.properties,
+    ).not.toHaveProperty("item_category");
+  });
+});
+
+describe("success and payment_info_available", () => {
+  const paid = { orderId: "ord-1", isPaid: true, amountPaid: 50, items: [{ slug: "b12", quantity: 1, unitPrice: 50 }] };
+
+  it("reports success only on an order that actually settled", () => {
+    expect(buildSnapPurchase(paid)!.properties.success).toBe(1);
+  });
+
+  it("has no way to report a failed purchase, because it never builds one", () => {
+    // success: 0 would mean "a purchase happened and failed". Every such order
+    // yields a null event instead, so the field is 1 or the event is absent.
+    for (const variant of [{ ...paid, isPaid: false }, { ...paid, amountPaid: 0 }]) {
+      expect(buildSnapPurchase(variant)).toBeNull();
+    }
+  });
+
+  it("tells Snap no payment credential is on file at checkout", () => {
+    // True of this store by design: the card is entered on the payment
+    // provider's hosted page after this event, and nothing is ever saved.
+    expect(buildSnapCheckout({ itemCount: 1, total: 20 })!.properties.payment_info_available).toBe(0);
+  });
+});
+
+describe("identity — hashed or not at all", () => {
+  const paid = { orderId: "ord-1", isPaid: true, amountPaid: 50, items: [{ slug: "b12", quantity: 1, unitPrice: 50 }] };
+  const digest = "a".repeat(64);
+  const phoneDigest = "b".repeat(64);
+
+  it("carries the digests when the server supplies them", () => {
+    const event = buildSnapPurchase(paid, { identity: { hashedEmail: digest, hashedPhone: phoneDigest } })!;
+    expect(event.properties.user_hashed_email).toBe(digest);
+    expect(event.properties.user_hashed_phone_number).toBe(phoneDigest);
+  });
+
+  it("drops a raw email address instead of sending it", () => {
+    // The exact mistake Snapchat's own template invites: 'user_email':
+    // 'INSERT_USER_EMAIL'. Pasted with a real value it leaks a customer
+    // address to a third party on every event, silently.
+    const event = buildSnapPurchase(paid, { identity: { hashedEmail: "customer@example.com" } })!;
+    expect(event.properties).not.toHaveProperty("user_hashed_email");
+    expect(JSON.stringify(event.properties)).not.toContain("@");
+  });
+
+  it("drops a raw phone number instead of sending it", () => {
+    const event = buildSnapPurchase(paid, { identity: { hashedPhone: "+1 (555) 010-9999" } })!;
+    expect(event.properties).not.toHaveProperty("user_hashed_phone_number");
+  });
+
+  it("sends no identity fields at all when there is nothing to send", () => {
+    for (const identity of [undefined, null, {}, { hashedEmail: null, hashedPhone: null }, { hashedEmail: "" }]) {
+      const properties = buildSnapPurchase(paid, { identity })!.properties;
+      expect(properties).not.toHaveProperty("user_hashed_email");
+      expect(properties).not.toHaveProperty("user_hashed_phone_number");
+    }
+  });
+
+  it("never carries an identity on an event that precedes a paid order", () => {
+    // View, add and checkout have no identity parameter at all — there is no
+    // argument to pass one through, so no future call site can add one by
+    // accident. The customer is known on exactly one page.
+    const events = [
+      buildSnapViewContent({ slug: "b12", price: 50 })!,
+      buildSnapAddToCart({ slug: "b12", quantity: 1, price: 50 })!,
+      buildSnapCheckout({ itemCount: 1, total: 50 })!,
+    ];
+    for (const event of events) {
+      expect(Object.keys(event.properties).filter((key) => key.startsWith("user_"))).toEqual([]);
+    }
+  });
+
+  it("accepts a SHA-256 digest and nothing that merely looks like one", () => {
+    expect(hashedOnly(digest)).toBe(digest);
+    expect(hashedOnly(digest.toUpperCase())).toBe(digest);
+    expect(hashedOnly(`  ${digest}  `)).toBe(digest);
+    for (const bad of ["a".repeat(63), "a".repeat(65), "g".repeat(64), "customer@example.com", "", null, undefined]) {
+      expect(hashedOnly(bad), String(bad)).toBeUndefined();
+    }
   });
 });
 

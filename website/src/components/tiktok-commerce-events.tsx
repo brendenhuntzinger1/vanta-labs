@@ -64,10 +64,15 @@ export function TikTokCommerceEvents() {
                 variantId: detail?.variantId ?? null,
                 quantity: Number(detail?.quantity ?? 1),
                 price: Number(detail?.price ?? 0),
+                category: detail?.productCategory ?? null,
               })
             : buildSnapCheckout({
                 itemCount: Number(detail?.itemCount ?? 0),
                 total: Number(detail?.total ?? 0),
+                // The cart's persisted lines carry no category — adding one
+                // would mean migrating every shopper's stored cart, which is
+                // not a trade worth making for one optional reporting field.
+                // Snap omits it rather than receiving a guess.
                 items: detail?.items ?? [],
               }),
           snapEmit,

@@ -26,7 +26,18 @@ import { relayToServer } from "@/lib/ads/relay-client";
  * StrictMode double-mount produce one event instead of several, while a genuine
  * navigation to a different product still reports.
  */
-export function TikTokViewContent({ slug, name, price }: { slug: string; name?: string; price?: number }) {
+export function TikTokViewContent({
+  slug,
+  name,
+  price,
+  /** Snap reports a category alongside the item; TikTok does not use one. */
+  category,
+}: {
+  slug: string;
+  name?: string;
+  price?: number;
+  category?: string | null;
+}) {
   const lastReported = useRef<string | null>(null);
 
   useEffect(() => {
@@ -47,12 +58,12 @@ export function TikTokViewContent({ slug, name, price }: { slug: string; name?: 
       // than from a parallel component so the two platforms cannot drift on
       // when a product view counts.
       emitSnapEvent(
-        buildSnapViewContent({ slug, price }),
+        buildSnapViewContent({ slug, price, category }),
         (eventName, properties) => window.snaptr?.("track", eventName, properties),
         browserFiredStore(),
       );
     });
-  }, [slug, name, price]);
+  }, [slug, name, price, category]);
 
   return null;
 }

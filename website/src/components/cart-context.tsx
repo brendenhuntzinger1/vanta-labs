@@ -836,6 +836,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
             // Descriptive only. Measurement reads these to label the product in
             // ad reporting; nothing in the cart depends on them.
             productName: product.name,
+            productCategory: product.category,
             variantLabel: options?.doseLabel ?? null,
             quantity,
             price: (options?.priceOverride ?? Number(product.price.replace(/[^0-9.]/g, ""))) || 0,

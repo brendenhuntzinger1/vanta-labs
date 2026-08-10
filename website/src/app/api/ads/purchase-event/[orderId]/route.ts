@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { buildPurchase } from "@/lib/ads/tiktok-events";
 import { buildSnapPurchase } from "@/lib/ads/snap-events";
+import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { credentialStatus, describeResult, sendServerEvents } from "@/lib/ads/tiktok-events-api";
 import { getRequestIpAddress, verifyAdminSessionFromCookie } from "@/lib/admin-auth";
@@ -75,12 +76,14 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   // it is working. A failure here degrades to the product id, which is still a
   // real, non-empty identifier — never to a product name, which is not an id.
   const slugByProductId = new Map<string, string>();
+  const categoryByProductId = new Map<string, string>();
   const productIds = [...new Set(items.map((item) => item.product_id).filter((id): id is string => Boolean(id)))];
   if (productIds.length > 0) {
     try {
-      const { data: products } = await supabaseAdmin.from("products").select("id, slug").in("id", productIds);
-      for (const row of (products ?? []) as { id?: string; slug?: string }[]) {
+      const { data: products } = await supabaseAdmin.from("products").select("id, slug, category").in("id", productIds);
+      for (const row of (products ?? []) as { id?: string; slug?: string; category?: string }[]) {
         if (row.id && row.slug) slugByProductId.set(row.id, row.slug);
+        if (row.id && row.category) categoryByProductId.set(row.id, row.category);
       }
     } catch {
       /* fall through to the product id */
@@ -103,7 +106,35 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     })),
   };
   const event = buildPurchase(paidOrder);
-  const snapPurchase = buildSnapPurchase(paidOrder);
+
+  // The customer's phone lives behind a migration that other code already
+  // tolerates being absent, so it is read on its own. Folding it into the query
+  // above would mean an unapplied column could stop a conversion being reported
+  // at all — a much worse outcome than a slightly weaker identity match.
+  let orderPhone: string | null = null;
+  try {
+    const { data: contact } = await supabaseAdmin
+      .from("orders")
+      .select("phone")
+      .eq("order_id", orderId)
+      .maybeSingle();
+    orderPhone = (contact as { phone?: string | null } | null)?.phone ?? null;
+  } catch {
+    /* column not applied — the email digest alone is still a match */
+  }
+
+  // Hashed here, on the server, exactly as TikTok's Advanced Matching already
+  // is. Snap's own template offers a raw `user_email` field; this never uses
+  // it, and buildSnapPurchase drops anything that is not a SHA-256 digest, so
+  // the raw address cannot reach Snap even by mistake.
+  const identity = buildAdvancedMatching({
+    email: order.customer_email ? String(order.customer_email) : null,
+    phone: orderPhone,
+  });
+  const snapPurchase = buildSnapPurchase(paidOrder, {
+    categories: items.map((item) => (item.product_id ? categoryByProductId.get(item.product_id) ?? null : null)),
+    identity: { hashedEmail: identity?.email ?? null, hashedPhone: identity?.phone_number ?? null },
+  });
 
   // Server-side Purchase, sent with the SAME event_id the browser uses so
   // TikTok collapses the pair into one conversion. It is gated on exactly the
