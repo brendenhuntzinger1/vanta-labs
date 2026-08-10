@@ -12,16 +12,28 @@ Products in scope, from the three label renders supplied:
 
 ## Read this before shooting anything
 
-**1. Eligibility gate — unresolved, and it gates paid spend.**
-No written category ruling has been obtained for the Vanta Labs domain on any ad
-platform. Research peptides sit in a category platforms commonly restrict or
-prohibit, and GLP-1 is the single highest-risk item in the catalogue because the
-compound class is publicly associated with weight loss — moderation will read the
-category, not the copy. Every concept below is marked `needs_verification` or
-`restricted`. **Recommendation: run all ten organically first.** Organic is
-unaffected by the ruling, and a hook that works organically is evidence worth
-having whichever way the ruling lands. Submit the domain and `/products/glp-1`
-for category review before a dollar of paid spend.
+**1. Eligibility gate — partially resolved as of 10 Aug 2026.**
+No written category ruling has been obtained for the Vanta Labs domain. But a
+competitor screen recording supplied by the operator shows a research-peptide
+seller running a **paid** TikTok ad in-feed — "Ad" label, Shop coupon sticker,
+spark code — for a research compound, carrying the disclaimer *"For research use
+only. Not for human consumption."*
+
+That is real evidence the category is **not blanket-prohibited** on TikTok, and it
+moves the honest read from "genuinely unknown" to "the category demonstrably runs;
+get your own ruling." Two caveats that stop it being a green light:
+
+- Approval is **per-advertiser and per-account**, not per-category. Another
+  account clearing review says nothing about whether yours will.
+- The observed ad was for a non-GLP compound. **GLP-1 remains the highest-risk
+  item in the catalogue** because the compound class is publicly tied to weight
+  loss, and moderation reads the category, not the copy.
+
+**Revised recommendation:** submit for category review, but lead the submission
+with a low-risk item — Bacteriostatic Water or GHK-Cu — not GLP-1. Keep organic
+running in parallel; a hook that works organically is evidence worth having
+whichever way the ruling lands. Every concept below stays `needs_verification`
+until a written answer exists.
 
 **2. There are no published COAs yet.**
 `coa-library-notice.tsx` states, in the operator's own words, that Vanta-branded
@@ -555,6 +567,81 @@ If only three can be shot: **009** (lowest claim surface — the right first
 submission for category review), **001** (cheapest read on whether the verification
 angle hooks at all), **005** (tests the documentation angle, and its production
 requirement — a real support reply — is a useful stress test of the funnel itself).
+
+---
+
+# Competitor structural read — 10 Aug 2026
+
+Source: operator-supplied screen recording of a competitor's paid TikTok ad.
+**Structure only. No asset, look, copy or claim from that ad is reused, and the
+competitor is never named in any Vanta creative.**
+
+## The structure it uses
+
+| Beat | What it does |
+|---|---|
+| 0–3s | Slow forward dolly down a long lab corridor toward one small vial, far away. No face, no text, no voice. Pure curiosity open. |
+| 3–6s | Cut in. Macro on the vial, label legible. |
+| 6–10s | Hero: vial on a lit plinth, label fully readable, camera near-static. |
+| 10–13s | Extreme macro on the label's fine print. |
+| 13–15s | Pull back down the corridor. Final frame matches the first — it loops. |
+
+Product-only. No creator, no voiceover, no talking head. All copy lives outside
+the video file.
+
+## Three things worth taking
+
+**The RUO disclaimer is a persistent bottom strip**, not a one-frame flash. Worth
+copying as practice — it is plausibly part of why that ad clears review.
+
+**All the selling copy is platform chrome, not pixels.** The "Top-tier research
+compounds. Use code…" line is the **ad caption**. The "Extra 20% off / Claim" chip
+is a **TikTok coupon sticker**. Neither is rendered into the video. This is the
+single most useful finding: the video stays clean and evergreen, and every claim,
+price and code is editable at upload without a re-render.
+
+**Product-only carries no testimonial risk at all.** No creator means no
+first-person experience to fabricate. For a brand that cannot make outcome claims,
+this is structurally the safest format available.
+
+## Two things deliberately NOT taken
+
+**The purity figure printed on the label artwork.** The competitor's vial reads
+"99% Purity" in the render. Printing a purity number into label artwork is still
+making the claim — the pixels are the claim. Vanta's ≥99% is not on a published
+COA, so it goes on no label, in no render, in no caption. This is exactly the trap
+in `compliance.md`.
+
+**The cyan CGI neon look.** Glowing liquid, teal rim light, holographic plinths —
+`brand.md` rules this out by name as stock-photo science, and matching a
+competitor's look is borrowing an asset rather than learning a structure. The
+Vanta cut of this structure is near-black neutral charcoal, cool white key light,
+one champagne `#c7ae5e` edge accent at roughly 8% of frame, real macro over CGI
+glow.
+
+---
+
+# Caption + overlay copy (platform chrome — never burned into the video)
+
+The video files carry no text. Everything below is typed into TikTok at upload.
+
+**Coupon sticker:** `20% off` · Code: `VANTA`
+**Caption:** `Research peptides. Lot number, storage condition and research-use-only printed on every vial. Use code VANTA for 20% off.`
+**Disclaimer strip (all ads, always):** `For research use only. Not for human consumption.`
+
+Two things to settle before this posts:
+
+1. **The `VANTA` coupon must exist and be enabled on the live store.** No coupon
+   named `VANTA` is seeded anywhere in this repo — it lives in the admin DB, and
+   promotions default OFF. Verify it is live, at 20%, on the day the ad goes up.
+   Operator confirmed on 10 Aug 2026 that they will create it.
+2. **"Leading research peptides" was requested and is not used.** "Leading" is an
+   unsupported superiority claim — the same class `compliance.md` puts alongside
+   invented certifications, and there is nothing on file substantiating it. The
+   caption above says what is checkable instead. Because this copy is platform
+   chrome, swapping the word back is a text edit at upload and costs no re-render
+   — but it ships unsubstantiated, and that is the operator's call to make
+   knowingly.
 
 ## Recommendation, not instruction
 
