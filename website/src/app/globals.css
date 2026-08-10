@@ -1133,6 +1133,17 @@ textarea.vl-input { min-height: 6rem; }
   letter-spacing: -0.01em;
 }
 
+/* Sans display.
+   The Cormorant serif is an editorial voice and reads as literary next to the
+   VANTA LABS wordmark, which is a tracked geometric sans. Where a page wants
+   the wordmark's own voice at display size — tight, modern, engineered — this
+   is it. Negative tracking does the work that the serif's contrast used to. */
+.vl2-display {
+  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+}
+
 .vl2-eyebrow {
   font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
   font-size: 0.68rem;

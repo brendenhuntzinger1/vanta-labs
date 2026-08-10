@@ -71,7 +71,7 @@ export default async function WholesalePage() {
           <div className="grid items-center gap-12 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)] lg:gap-16">
             <div className="max-w-xl">
               <p className="vl2-eyebrow text-[color:var(--accent-gold)]/80">Bulk &amp; wholesale</p>
-              <h1 className="vl2-serif mt-5 text-[38px] leading-[1.05] tracking-[-0.01em] text-white sm:text-[56px] lg:text-[64px]">
+              <h1 className="vl2-display mt-5 text-[40px] leading-[0.98] text-white sm:text-[58px] lg:text-[68px]">
                 Research supply
                 <span className="block text-white/55">at scale</span>
               </h1>
@@ -98,7 +98,7 @@ export default async function WholesalePage() {
                   aria-hidden="true"
                   className="pointer-events-none absolute h-[60%] w-[60%] rounded-full bg-[color:var(--accent-gold)]/[0.06] blur-3xl"
                 />
-                <p className="vl2-serif relative text-center text-[64px] leading-none text-white/[0.07] sm:text-[92px]">
+                <p className="vl2-display relative text-center text-[64px] leading-none text-white/[0.07] sm:text-[92px]">
                   VANTA
                   <span className="block">LABS</span>
                 </p>
@@ -113,7 +113,7 @@ export default async function WholesalePage() {
         <section className="mx-auto mt-24 max-w-[1280px] px-4 sm:mt-32 sm:px-6 lg:px-12">
           <div className="max-w-xl">
             <p className="vl2-eyebrow text-white/35">The program</p>
-            <h2 className="vl2-serif mt-4 text-[28px] leading-tight text-white sm:text-[40px]">
+            <h2 className="vl2-display mt-4 text-[28px] leading-tight text-white sm:text-[40px]">
               Built around your requirement
             </h2>
           </div>
@@ -145,7 +145,7 @@ export default async function WholesalePage() {
 
             <div className={bulkImages.length > 0 ? "order-1 lg:order-2" : ""}>
               <p className="vl2-eyebrow text-white/35">Bulk orders</p>
-              <h2 className="vl2-serif mt-4 max-w-md text-[28px] leading-tight text-white sm:text-[40px]">
+              <h2 className="vl2-display mt-4 max-w-md text-[28px] leading-tight text-white sm:text-[40px]">
                 Built around your volume
               </h2>
               <p className="mt-6 max-w-md text-sm leading-7 text-white/50">
@@ -171,7 +171,7 @@ export default async function WholesalePage() {
         <section className="mx-auto mt-24 max-w-[1280px] px-4 sm:mt-32 sm:px-6 lg:px-12">
           <div className="max-w-xl">
             <p className="vl2-eyebrow text-white/35">How it works</p>
-            <h2 className="vl2-serif mt-4 text-[28px] leading-tight text-white sm:text-[40px]">Four steps</h2>
+            <h2 className="vl2-display mt-4 text-[28px] leading-tight text-white sm:text-[40px]">Four steps</h2>
           </div>
 
           <ol className="relative mt-12 grid gap-10 sm:grid-cols-2 lg:grid-cols-4 lg:gap-8">
@@ -202,7 +202,7 @@ export default async function WholesalePage() {
           <div className="grid gap-10 lg:grid-cols-[minmax(0,0.4fr)_minmax(0,0.6fr)] lg:gap-16">
             <div className="lg:sticky lg:top-28 lg:self-start">
               <p className="vl2-eyebrow text-[color:var(--accent-gold)]/80">Request pricing</p>
-              <h2 className="vl2-serif mt-4 text-[28px] leading-tight text-white sm:text-[40px]">
+              <h2 className="vl2-display mt-4 text-[28px] leading-tight text-white sm:text-[40px]">
                 Start a wholesale request
               </h2>
               <p className="mt-6 max-w-sm text-sm leading-7 text-white/50">
@@ -230,7 +230,7 @@ export default async function WholesalePage() {
         {/* ── CLOSING ──────────────────────────────────────────────────────*/}
         <section className="mt-24 border-t border-white/[0.06] bg-[#0e0e0e] py-20 sm:mt-32 sm:py-24">
           <div className="mx-auto max-w-[1280px] px-4 text-center sm:px-6 lg:px-12">
-            <h2 className="vl2-serif mx-auto max-w-2xl text-[26px] leading-tight text-white sm:text-[38px]">
+            <h2 className="vl2-display mx-auto max-w-2xl text-[26px] leading-tight text-white sm:text-[38px]">
               Planning a larger order?
             </h2>
             <p className="mx-auto mt-4 max-w-md text-sm leading-7 text-white/45">
