@@ -220,6 +220,365 @@
           "note": "registered"
         }
       ]
+    },
+    {
+      "concept_id": "vl-doc-001",
+      "archetype": "documentation",
+      "hook": "This product has no test report yet. It says so on the page.",
+      "eligibility": "needs_verification",
+      "platform": "tiktok",
+      "landing_page": "/coa-library",
+      "length_seconds": 12,
+      "hypothesis": "Advertising the absence of data outperforms asserting quality, because it is the one thing in this category a viewer cannot assume is marketing. Disproved if view-through holds but CTR to /coa-library is at or below the offer-led control — that would mean the honesty reads as a weakness rather than a reason to look.",
+      "status": "draft",
+      "brief": "creative/2026-08-evidence-led/README.md",
+      "opening_frame": "Macro, dark field: the printed lower half of a vial label, so close that only the small print is legible. No logo, no wordmark, no title card. It is already moving — a slow lateral drift begins on frame one.",
+      "script": [
+        {
+          "t": "0.0-2.5",
+          "spoken": "This product has no test report yet.",
+          "on_screen": "none"
+        },
+        {
+          "t": "2.5-5.0",
+          "spoken": "The site says so, on the product page, in writing.",
+          "on_screen": "DOCUMENTATION PENDING"
+        },
+        {
+          "t": "5.0-8.5",
+          "spoken": "Reports are filed per batch, not per product. A product without one is marked pending rather than given a placeholder figure.",
+          "on_screen": "FILED PER BATCH"
+        },
+        {
+          "t": "8.5-12.0",
+          "spoken": "That is the whole policy. Read it yourself.",
+          "on_screen": "COA LIBRARY / vantalabs COA library"
+        }
+      ],
+      "shot_list": [
+        {
+          "n": 1,
+          "duration": "0.0-2.5",
+          "shot": "MACRO, slow lateral drift. Lower half of the printed label, small print legible, glass curve catching one thin highlight. Dark field falling to black at the edges."
+        },
+        {
+          "n": 2,
+          "duration": "2.5-5.0",
+          "shot": "MEDIUM, locked off. The single vial upright on a matte charcoal plinth, lit from behind, soft contact shadow. Text sets in the empty field beside it, never over the label."
+        },
+        {
+          "n": 3,
+          "duration": "5.0-8.5",
+          "shot": "SCREEN CAPTURE, real. The live COA library page scrolling slowly to the 'About our testing' section, captured at device resolution, no mockup frame, no device bezel."
+        },
+        {
+          "n": 4,
+          "duration": "8.5-12.0",
+          "shot": "MEDIUM WIDE, slow pull back. Vial small in frame, generous negative space, CTA line in the lower-middle third above the platform UI band."
+        }
+      ],
+      "visual_direction": "Dark matte laboratory per brand.md. Background #0a0a0a, pure neutral, no blue tint. Gold #c7ae5e held to roughly 8% of frame — a thin edge highlight on the crimp seal and the CTA rule only, never a filled shape. Glass, not gold. Motion 200-350ms eased, no whip transitions, no bounce. Frame edges fall away to black rather than ending in a hard rectangle.",
+      "on_screen_text": [
+        {
+          "text": "DOCUMENTATION PENDING",
+          "t": "2.5-5.0",
+          "note": "Manrope, sentence-height caps, centred in negative space right of the vial. Clear of top 12% and bottom 20%; never overlapping the printed label."
+        },
+        {
+          "text": "FILED PER BATCH",
+          "t": "5.0-8.5",
+          "note": "Lower-middle third, left-aligned to the screen capture."
+        },
+        {
+          "text": "COA LIBRARY",
+          "t": "8.5-12.0",
+          "note": "Fraunces 500, tight tracking. Sits above the bottom 20% band."
+        },
+        {
+          "text": "For laboratory research use only. Not for human consumption.",
+          "t": "0.0-12.0",
+          "note": "Persistent, Manrope, muted #a3a3a3, single instance only, above the bottom 20% safe area."
+        }
+      ],
+      "voiceover": "Male or female, level and unhurried, close-mic, no music bed under the first two seconds. Reads as a statement of policy, not a pitch. No upward inflection on the final line.",
+      "cta": "Read the COA library",
+      "caption": "we publish the report when there is a report. until then the page says pending.",
+      "audience": "Cold. Buyers who have been burned by a supplier claiming purity with nothing behind it, and who evaluate a site by whether it will admit a gap.",
+      "claims_used": [
+        {
+          "claim": "Reports are filed per batch rather than per product",
+          "source": "website/src/components/coa-testing-disclosure.tsx — 'Batch-level traceability': 'Documentation is filed per batch rather than per product, so a report always corresponds to a specific production run and its own testing date.'"
+        },
+        {
+          "claim": "A product with no published report is marked Documentation Pending rather than given a placeholder figure",
+          "source": "website/src/components/coa-testing-disclosure.tsx — 'Nothing is claimed without a document'."
+        },
+        {
+          "claim": "Batch-specific reports are being prepared",
+          "source": "website/src/components/coa-testing-disclosure.tsx — hasPublishedRecords=false branch: 'Batch-specific reports are being prepared and will appear here as they are released.'"
+        },
+        {
+          "claim": "The vial shows a printed lot number",
+          "source": "Render artwork (Lot VL25001). Shown only as print on the label. Never presented as a batch with a readable report — see creative/2026-08-ugc-launch/README.md:46."
+        }
+      ],
+      "no_claims_made": [
+        "No purity figure, assay value or impurity figure — none is published.",
+        "No laboratory name — the site deliberately does not publish partner identity.",
+        "No 'third-party tested' as a blanket claim; the VO attributes testing to the site's own wording about production batches only.",
+        "No price, discount or promotion of any kind."
+      ],
+      "notes": "VERIFY BEFORE SHOOT: whether getCoaLibrarySnapshot() currently returns published records. The script above is written for hasPublishedRecords=false. If reports are live, line 3 changes to point at a real published batch and the CLAIMS_USED entry must name it.",
+      "compliance_gate": "PASS (website/src/lib/ads/compliance.ts). No lot number in on-screen text; the label print is visual only.",
+      "registered_at": "2026-08-11T02:16:14.359605+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-11T02:16:14.359639+00:00",
+          "note": "registered"
+        }
+      ]
+    },
+    {
+      "concept_id": "vl-cin-001",
+      "archetype": "cinematic_product",
+      "hook": "One vial, held on screen long enough to look at. No offer, no claim.",
+      "eligibility": "likely_eligible",
+      "platform": "tiktok",
+      "landing_page": "/products",
+      "length_seconds": 12,
+      "hypothesis": "In a feed of shouted discounts, restraint is the pattern interrupt — a product held still reads as a company with something to show rather than something to move. Disproved if view-through is at or below the offer-led control, which would mean the format needs a spoken line to survive without a hook sentence.",
+      "status": "draft",
+      "brief": "creative/2026-08-evidence-led/README.md",
+      "opening_frame": "Extreme macro on the crimp seal, already drifting. The frame is 90% black. One thin champagne highlight runs down the aluminium edge. No logo, no text, no product name yet.",
+      "script": [
+        {
+          "t": "0.0-3.0",
+          "spoken": "none",
+          "on_screen": "none"
+        },
+        {
+          "t": "3.0-6.0",
+          "spoken": "none",
+          "on_screen": "GHK-Cu"
+        },
+        {
+          "t": "6.0-9.0",
+          "spoken": "none",
+          "on_screen": "70mg lyophilized powder"
+        },
+        {
+          "t": "9.0-12.0",
+          "spoken": "none",
+          "on_screen": "Vanta Labs / See the catalogue"
+        }
+      ],
+      "shot_list": [
+        {
+          "n": 1,
+          "duration": "0.0-3.0",
+          "shot": "EXTREME MACRO, slow drift left to right across the crimp seal and glass shoulder. Deep focus. Nothing else in frame."
+        },
+        {
+          "n": 2,
+          "duration": "3.0-6.0",
+          "shot": "MACRO, slow push in on the white lyophilized cake through the glass — its texture, the shadow it casts inside the vial. Product name sets in the black field beside it."
+        },
+        {
+          "n": 3,
+          "duration": "6.0-9.0",
+          "shot": "MEDIUM, locked off. Full vial upright on matte charcoal, lit from behind and above, soft true contact shadow, background falling to pure black."
+        },
+        {
+          "n": 4,
+          "duration": "9.0-12.0",
+          "shot": "MEDIUM WIDE, slow reverse dolly settling into the same composition as shot 3 so the clip loops cleanly. Wordmark and CTA appear in negative space."
+        }
+      ],
+      "visual_direction": "The direct correction of the black-and-gold offer cut. Cool white key from behind, one restrained champagne-gold edge accent on glass and metal only — never filling a shape and never more than ~8% of frame. No ring-light halo, no gold silk, no bloom, no lens flare. Background #0a0a0a pure neutral. Four shots in twelve seconds: each holds long enough to be looked at. Transitions are eased dissolves or slow cuts on the beat, 200-350ms, nothing whips, nothing bounces.",
+      "on_screen_text": [
+        {
+          "text": "GHK-Cu",
+          "t": "3.0-6.0",
+          "note": "Fraunces 500, tight tracking, set in the black field to the right of the vial. Never over the printed label."
+        },
+        {
+          "text": "70mg lyophilized powder",
+          "t": "6.0-9.0",
+          "note": "Manrope, muted #a3a3a3, directly under the product name, same left edge."
+        },
+        {
+          "text": "Vanta Labs",
+          "t": "9.0-12.0",
+          "note": "Wordmark only, small, upper-middle third. Not a full-bleed logo card."
+        },
+        {
+          "text": "See the catalogue",
+          "t": "9.0-12.0",
+          "note": "Manrope with a hairline gold rule beneath — a rule, not a filled pill. Above the bottom 20% band."
+        },
+        {
+          "text": "For laboratory research use only. Not for human consumption.",
+          "t": "0.0-12.0",
+          "note": "Persistent, muted, single instance, above the bottom 20% safe area."
+        }
+      ],
+      "voiceover": "none",
+      "cta": "See the catalogue",
+      "caption": "ghk-cu, 70mg, lyophilized. that is the whole post.",
+      "audience": "Cold, top of funnel. Viewers who scroll past discount creative reflexively and respond to production restraint as a proxy for seriousness.",
+      "claims_used": [
+        {
+          "claim": "GHK-Cu, 70mg, lyophilized powder",
+          "source": "Product identity as printed on the label artwork and listed in the catalogue. VERIFY the SKU, mass and stock status against the live product page before shoot."
+        },
+        {
+          "claim": "Vanta Labs sells laboratory research materials",
+          "source": "Site-wide research-use-only positioning; references/compliance.md."
+        }
+      ],
+      "no_claims_made": [
+        "No purity figure, batch number, testing date or laboratory name appears on screen at any point.",
+        "No price, discount, bundle or promotion.",
+        "No outcome, benefit or use of any kind — the ad describes what the object is and stops."
+      ],
+      "notes": "This is the replacement for the 8s BUY 2 GET 1 offer cut. Same asset class, same product, opposite posture. Shoot or render one SKU only — the offer cut intercut GLOW and GHK-Cu labels on the same lot and read as a mislabelling error. Music must be commercially licensed for paid use; trending audio is not cleared.",
+      "compliance_gate": "PASS (website/src/lib/ads/compliance.ts).",
+      "registered_at": "2026-08-11T02:16:14.410324+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-11T02:16:14.410358+00:00",
+          "note": "registered"
+        }
+      ]
+    },
+    {
+      "concept_id": "vl-edu-001",
+      "archetype": "educational",
+      "hook": "That white disc at the bottom of the vial is not powder that settled.",
+      "eligibility": "needs_verification",
+      "platform": "tiktok",
+      "landing_page": "/products",
+      "length_seconds": 15,
+      "hypothesis": "Explaining what the material physically is earns attention that an offer buys, and gives a viewer a reason to look at the vial for more than a beat. Disproved if view-through beats the control but CTR does not — that would mean the concept entertains without transferring any intent to the catalogue.",
+      "status": "draft",
+      "brief": "creative/2026-08-evidence-led/README.md",
+      "opening_frame": "Extreme macro on the white cake inside the vial, shot through the glass, already pushing in slowly. The disc fills most of the frame. No face, no logo, no title card.",
+      "script": [
+        {
+          "t": "0.0-2.0",
+          "spoken": "That white disc at the bottom of the vial is not powder that settled.",
+          "on_screen": "none"
+        },
+        {
+          "t": "2.0-6.0",
+          "spoken": "It is a cake. The compound was frozen in solution, then the ice was drawn off under vacuum as vapour, without ever passing through liquid.",
+          "on_screen": "LYOPHILIZED"
+        },
+        {
+          "t": "6.0-10.0",
+          "spoken": "What is left holds the shape the liquid had. That is why it looks moulded rather than poured.",
+          "on_screen": "none"
+        },
+        {
+          "t": "10.0-13.0",
+          "spoken": "It is also why the label says store at two to eight degrees. The structure is the point.",
+          "on_screen": "2-8 C"
+        },
+        {
+          "t": "13.0-15.0",
+          "spoken": "Lyophilized. It is printed on every vial we ship.",
+          "on_screen": "See the catalogue"
+        }
+      ],
+      "shot_list": [
+        {
+          "n": 1,
+          "duration": "0.0-2.0",
+          "shot": "EXTREME MACRO, slow push. The cake through glass, its porous surface and the shadow it throws inside the vial. Deep focus, dark field."
+        },
+        {
+          "n": 2,
+          "duration": "2.0-6.0",
+          "shot": "MACRO, slow lateral drift across the cake's edge where it meets the glass wall, showing the shrink gap. Cool key from behind."
+        },
+        {
+          "n": 3,
+          "duration": "6.0-10.0",
+          "shot": "MEDIUM, locked off. Full vial upright, matte charcoal plinth, backlit so the cake reads as a solid mass rather than loose powder."
+        },
+        {
+          "n": 4,
+          "duration": "10.0-13.0",
+          "shot": "MACRO, locked off. The printed storage line on the label, square to camera, unchanged angle, only the small print in frame."
+        },
+        {
+          "n": 5,
+          "duration": "13.0-15.0",
+          "shot": "MEDIUM WIDE, slow pull back into negative space. CTA sets in the lower-middle third."
+        }
+      ],
+      "visual_direction": "Dark matte laboratory, brand.md palette. Background #0a0a0a pure neutral, gold confined to a single thin edge highlight on the crimp seal. Glass, not gold. The whole piece is one continuous examination of one object — five held shots, no whips, eased 200-350ms transitions. No beakers, no gloved hands, no pipettes, no glowing liquid: this is the object under a light, not stock-photo science.",
+      "on_screen_text": [
+        {
+          "text": "LYOPHILIZED",
+          "t": "2.0-6.0",
+          "note": "Fraunces 500, black field left of the vial, never over the printed label."
+        },
+        {
+          "text": "2-8 C",
+          "t": "10.0-13.0",
+          "note": "Geist Mono, small, beside the macro of the printed line it refers to."
+        },
+        {
+          "text": "See the catalogue",
+          "t": "13.0-15.0",
+          "note": "Manrope with hairline gold rule. Above the bottom 20% band."
+        },
+        {
+          "text": "For laboratory research use only. Not for human consumption.",
+          "t": "0.0-15.0",
+          "note": "Persistent, muted #a3a3a3, single instance, above the bottom 20% safe area."
+        }
+      ],
+      "voiceover": "Level, close-mic, explanatory rather than enthusiastic. One idea per sentence, full stops not commas. No upward inflection, no 'so basically', no hype.",
+      "cta": "See the catalogue",
+      "caption": "freeze-dried under vacuum. the ice leaves as vapour and the shape stays.",
+      "audience": "Cold to warm. Viewers with technical curiosity who will watch an explanation of a physical process and who read 'this brand knows what it is selling' from it.",
+      "claims_used": [
+        {
+          "claim": "The material is lyophilized powder",
+          "source": "Printed on the product label and stated in the catalogue listing ('70mg Lyophilized Powder')."
+        },
+        {
+          "claim": "Lyophilisation freezes a solution and removes ice by sublimation under vacuum, leaving a cake that retains the frozen form",
+          "source": "General, uncontested description of freeze-drying as a process. No Vanta-specific performance or quality claim is drawn from it."
+        },
+        {
+          "claim": "The label says store at 2-8 C",
+          "source": "Printed on the product label artwork. Stated as a description of what the label says, not as an instruction to the viewer."
+        }
+      ],
+      "no_claims_made": [
+        "No purity, stability, potency or shelf-life claim is made or implied.",
+        "No reconstitution, mixing, dilution or preparation content of any kind.",
+        "No storage-for-use instruction — the storage line is described as printed label copy, never addressed to the viewer as something to do.",
+        "No price, discount or promotion."
+      ],
+      "notes": "COMPLIANCE WATCH: the 2-8 C beat is the one line in this concept that sits near the reconstitution/storage-for-use prohibition in compliance.md. It stays only in the third person ('the label says'). If a reviewer wants more distance, cut shot 4 and the 10-13s beat entirely — the concept still works at 12s without it. Do not let this drift into 'how to store yours'.",
+      "compliance_gate": "PASS (website/src/lib/ads/compliance.ts). Flagged here for human review on the storage beat regardless of the automated verdict.",
+      "registered_at": "2026-08-11T02:16:14.465047+00:00",
+      "metrics_history": [],
+      "status_history": [
+        {
+          "status": "draft",
+          "at": "2026-08-11T02:16:14.465084+00:00",
+          "note": "registered"
+        }
+      ]
     }
   ]
 }

@@ -1,0 +1,53 @@
+{
+  "concept_id": "vl-edu-001",
+  "archetype": "educational",
+  "hook": "That white disc at the bottom of the vial is not powder that settled.",
+  "eligibility": "needs_verification",
+  "platform": "tiktok",
+  "landing_page": "/products",
+  "length_seconds": 15,
+  "hypothesis": "Explaining what the material physically is earns attention that an offer buys, and gives a viewer a reason to look at the vial for more than a beat. Disproved if view-through beats the control but CTR does not — that would mean the concept entertains without transferring any intent to the catalogue.",
+  "status": "draft",
+  "brief": "creative/2026-08-evidence-led/README.md",
+
+  "opening_frame": "Extreme macro on the white cake inside the vial, shot through the glass, already pushing in slowly. The disc fills most of the frame. No face, no logo, no title card.",
+  "script": [
+    {"t": "0.0-2.0", "spoken": "That white disc at the bottom of the vial is not powder that settled.", "on_screen": "none"},
+    {"t": "2.0-6.0", "spoken": "It is a cake. The compound was frozen in solution, then the ice was drawn off under vacuum as vapour, without ever passing through liquid.", "on_screen": "LYOPHILIZED"},
+    {"t": "6.0-10.0", "spoken": "What is left holds the shape the liquid had. That is why it looks moulded rather than poured.", "on_screen": "none"},
+    {"t": "10.0-13.0", "spoken": "It is also why the label says store at two to eight degrees. The structure is the point.", "on_screen": "2-8 C"},
+    {"t": "13.0-15.0", "spoken": "Lyophilized. It is printed on every vial we ship.", "on_screen": "See the catalogue"}
+  ],
+  "shot_list": [
+    {"n": 1, "duration": "0.0-2.0", "shot": "EXTREME MACRO, slow push. The cake through glass, its porous surface and the shadow it throws inside the vial. Deep focus, dark field."},
+    {"n": 2, "duration": "2.0-6.0", "shot": "MACRO, slow lateral drift across the cake's edge where it meets the glass wall, showing the shrink gap. Cool key from behind."},
+    {"n": 3, "duration": "6.0-10.0", "shot": "MEDIUM, locked off. Full vial upright, matte charcoal plinth, backlit so the cake reads as a solid mass rather than loose powder."},
+    {"n": 4, "duration": "10.0-13.0", "shot": "MACRO, locked off. The printed storage line on the label, square to camera, unchanged angle, only the small print in frame."},
+    {"n": 5, "duration": "13.0-15.0", "shot": "MEDIUM WIDE, slow pull back into negative space. CTA sets in the lower-middle third."}
+  ],
+  "visual_direction": "Dark matte laboratory, brand.md palette. Background #0a0a0a pure neutral, gold confined to a single thin edge highlight on the crimp seal. Glass, not gold. The whole piece is one continuous examination of one object — five held shots, no whips, eased 200-350ms transitions. No beakers, no gloved hands, no pipettes, no glowing liquid: this is the object under a light, not stock-photo science.",
+  "on_screen_text": [
+    {"text": "LYOPHILIZED", "t": "2.0-6.0", "note": "Fraunces 500, black field left of the vial, never over the printed label."},
+    {"text": "2-8 C", "t": "10.0-13.0", "note": "Geist Mono, small, beside the macro of the printed line it refers to."},
+    {"text": "See the catalogue", "t": "13.0-15.0", "note": "Manrope with hairline gold rule. Above the bottom 20% band."},
+    {"text": "For laboratory research use only. Not for human consumption.", "t": "0.0-15.0", "note": "Persistent, muted #a3a3a3, single instance, above the bottom 20% safe area."}
+  ],
+  "voiceover": "Level, close-mic, explanatory rather than enthusiastic. One idea per sentence, full stops not commas. No upward inflection, no 'so basically', no hype.",
+  "cta": "See the catalogue",
+  "caption": "freeze-dried under vacuum. the ice leaves as vapour and the shape stays.",
+  "audience": "Cold to warm. Viewers with technical curiosity who will watch an explanation of a physical process and who read 'this brand knows what it is selling' from it.",
+
+  "claims_used": [
+    {"claim": "The material is lyophilized powder", "source": "Printed on the product label and stated in the catalogue listing ('70mg Lyophilized Powder')."},
+    {"claim": "Lyophilisation freezes a solution and removes ice by sublimation under vacuum, leaving a cake that retains the frozen form", "source": "General, uncontested description of freeze-drying as a process. No Vanta-specific performance or quality claim is drawn from it."},
+    {"claim": "The label says store at 2-8 C", "source": "Printed on the product label artwork. Stated as a description of what the label says, not as an instruction to the viewer."}
+  ],
+  "no_claims_made": [
+    "No purity, stability, potency or shelf-life claim is made or implied.",
+    "No reconstitution, mixing, dilution or preparation content of any kind.",
+    "No storage-for-use instruction — the storage line is described as printed label copy, never addressed to the viewer as something to do.",
+    "No price, discount or promotion."
+  ],
+  "notes": "COMPLIANCE WATCH: the 2-8 C beat is the one line in this concept that sits near the reconstitution/storage-for-use prohibition in compliance.md. It stays only in the third person ('the label says'). If a reviewer wants more distance, cut shot 4 and the 10-13s beat entirely — the concept still works at 12s without it. Do not let this drift into 'how to store yours'.",
+  "compliance_gate": "PASS (website/src/lib/ads/compliance.ts). Flagged here for human review on the storage beat regardless of the automated verdict."
+}

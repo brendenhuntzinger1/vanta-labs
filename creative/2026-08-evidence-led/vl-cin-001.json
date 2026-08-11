@@ -1,0 +1,50 @@
+{
+  "concept_id": "vl-cin-001",
+  "archetype": "cinematic_product",
+  "hook": "One vial, held on screen long enough to look at. No offer, no claim.",
+  "eligibility": "likely_eligible",
+  "platform": "tiktok",
+  "landing_page": "/products",
+  "length_seconds": 12,
+  "hypothesis": "In a feed of shouted discounts, restraint is the pattern interrupt — a product held still reads as a company with something to show rather than something to move. Disproved if view-through is at or below the offer-led control, which would mean the format needs a spoken line to survive without a hook sentence.",
+  "status": "draft",
+  "brief": "creative/2026-08-evidence-led/README.md",
+
+  "opening_frame": "Extreme macro on the crimp seal, already drifting. The frame is 90% black. One thin champagne highlight runs down the aluminium edge. No logo, no text, no product name yet.",
+  "script": [
+    {"t": "0.0-3.0", "spoken": "none", "on_screen": "none"},
+    {"t": "3.0-6.0", "spoken": "none", "on_screen": "GHK-Cu"},
+    {"t": "6.0-9.0", "spoken": "none", "on_screen": "70mg lyophilized powder"},
+    {"t": "9.0-12.0", "spoken": "none", "on_screen": "Vanta Labs / See the catalogue"}
+  ],
+  "shot_list": [
+    {"n": 1, "duration": "0.0-3.0", "shot": "EXTREME MACRO, slow drift left to right across the crimp seal and glass shoulder. Deep focus. Nothing else in frame."},
+    {"n": 2, "duration": "3.0-6.0", "shot": "MACRO, slow push in on the white lyophilized cake through the glass — its texture, the shadow it casts inside the vial. Product name sets in the black field beside it."},
+    {"n": 3, "duration": "6.0-9.0", "shot": "MEDIUM, locked off. Full vial upright on matte charcoal, lit from behind and above, soft true contact shadow, background falling to pure black."},
+    {"n": 4, "duration": "9.0-12.0", "shot": "MEDIUM WIDE, slow reverse dolly settling into the same composition as shot 3 so the clip loops cleanly. Wordmark and CTA appear in negative space."}
+  ],
+  "visual_direction": "The direct correction of the black-and-gold offer cut. Cool white key from behind, one restrained champagne-gold edge accent on glass and metal only — never filling a shape and never more than ~8% of frame. No ring-light halo, no gold silk, no bloom, no lens flare. Background #0a0a0a pure neutral. Four shots in twelve seconds: each holds long enough to be looked at. Transitions are eased dissolves or slow cuts on the beat, 200-350ms, nothing whips, nothing bounces.",
+  "on_screen_text": [
+    {"text": "GHK-Cu", "t": "3.0-6.0", "note": "Fraunces 500, tight tracking, set in the black field to the right of the vial. Never over the printed label."},
+    {"text": "70mg lyophilized powder", "t": "6.0-9.0", "note": "Manrope, muted #a3a3a3, directly under the product name, same left edge."},
+    {"text": "Vanta Labs", "t": "9.0-12.0", "note": "Wordmark only, small, upper-middle third. Not a full-bleed logo card."},
+    {"text": "See the catalogue", "t": "9.0-12.0", "note": "Manrope with a hairline gold rule beneath — a rule, not a filled pill. Above the bottom 20% band."},
+    {"text": "For laboratory research use only. Not for human consumption.", "t": "0.0-12.0", "note": "Persistent, muted, single instance, above the bottom 20% safe area."}
+  ],
+  "voiceover": "none",
+  "cta": "See the catalogue",
+  "caption": "ghk-cu, 70mg, lyophilized. that is the whole post.",
+  "audience": "Cold, top of funnel. Viewers who scroll past discount creative reflexively and respond to production restraint as a proxy for seriousness.",
+
+  "claims_used": [
+    {"claim": "GHK-Cu, 70mg, lyophilized powder", "source": "Product identity as printed on the label artwork and listed in the catalogue. VERIFY the SKU, mass and stock status against the live product page before shoot."},
+    {"claim": "Vanta Labs sells laboratory research materials", "source": "Site-wide research-use-only positioning; references/compliance.md."}
+  ],
+  "no_claims_made": [
+    "No purity figure, batch number, testing date or laboratory name appears on screen at any point.",
+    "No price, discount, bundle or promotion.",
+    "No outcome, benefit or use of any kind — the ad describes what the object is and stops."
+  ],
+  "notes": "This is the replacement for the 8s BUY 2 GET 1 offer cut. Same asset class, same product, opposite posture. Shoot or render one SKU only — the offer cut intercut GLOW and GHK-Cu labels on the same lot and read as a mislabelling error. Music must be commercially licensed for paid use; trending audio is not cleared.",
+  "compliance_gate": "PASS (website/src/lib/ads/compliance.ts)."
+}

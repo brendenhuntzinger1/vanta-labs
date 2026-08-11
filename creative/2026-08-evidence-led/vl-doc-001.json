@@ -1,0 +1,52 @@
+{
+  "concept_id": "vl-doc-001",
+  "archetype": "documentation",
+  "hook": "This product has no test report yet. It says so on the page.",
+  "eligibility": "needs_verification",
+  "platform": "tiktok",
+  "landing_page": "/coa-library",
+  "length_seconds": 12,
+  "hypothesis": "Advertising the absence of data outperforms asserting quality, because it is the one thing in this category a viewer cannot assume is marketing. Disproved if view-through holds but CTR to /coa-library is at or below the offer-led control — that would mean the honesty reads as a weakness rather than a reason to look.",
+  "status": "draft",
+  "brief": "creative/2026-08-evidence-led/README.md",
+
+  "opening_frame": "Macro, dark field: the printed lower half of a vial label, so close that only the small print is legible. No logo, no wordmark, no title card. It is already moving — a slow lateral drift begins on frame one.",
+  "script": [
+    {"t": "0.0-2.5", "spoken": "This product has no test report yet.", "on_screen": "none"},
+    {"t": "2.5-5.0", "spoken": "The site says so, on the product page, in writing.", "on_screen": "DOCUMENTATION PENDING"},
+    {"t": "5.0-8.5", "spoken": "Reports are filed per batch, not per product. A product without one is marked pending rather than given a placeholder figure.", "on_screen": "FILED PER BATCH"},
+    {"t": "8.5-12.0", "spoken": "That is the whole policy. Read it yourself.", "on_screen": "COA LIBRARY / vantalabs COA library"}
+  ],
+  "shot_list": [
+    {"n": 1, "duration": "0.0-2.5", "shot": "MACRO, slow lateral drift. Lower half of the printed label, small print legible, glass curve catching one thin highlight. Dark field falling to black at the edges."},
+    {"n": 2, "duration": "2.5-5.0", "shot": "MEDIUM, locked off. The single vial upright on a matte charcoal plinth, lit from behind, soft contact shadow. Text sets in the empty field beside it, never over the label."},
+    {"n": 3, "duration": "5.0-8.5", "shot": "SCREEN CAPTURE, real. The live COA library page scrolling slowly to the 'About our testing' section, captured at device resolution, no mockup frame, no device bezel."},
+    {"n": 4, "duration": "8.5-12.0", "shot": "MEDIUM WIDE, slow pull back. Vial small in frame, generous negative space, CTA line in the lower-middle third above the platform UI band."}
+  ],
+  "visual_direction": "Dark matte laboratory per brand.md. Background #0a0a0a, pure neutral, no blue tint. Gold #c7ae5e held to roughly 8% of frame — a thin edge highlight on the crimp seal and the CTA rule only, never a filled shape. Glass, not gold. Motion 200-350ms eased, no whip transitions, no bounce. Frame edges fall away to black rather than ending in a hard rectangle.",
+  "on_screen_text": [
+    {"text": "DOCUMENTATION PENDING", "t": "2.5-5.0", "note": "Manrope, sentence-height caps, centred in negative space right of the vial. Clear of top 12% and bottom 20%; never overlapping the printed label."},
+    {"text": "FILED PER BATCH", "t": "5.0-8.5", "note": "Lower-middle third, left-aligned to the screen capture."},
+    {"text": "COA LIBRARY", "t": "8.5-12.0", "note": "Fraunces 500, tight tracking. Sits above the bottom 20% band."},
+    {"text": "For laboratory research use only. Not for human consumption.", "t": "0.0-12.0", "note": "Persistent, Manrope, muted #a3a3a3, single instance only, above the bottom 20% safe area."}
+  ],
+  "voiceover": "Male or female, level and unhurried, close-mic, no music bed under the first two seconds. Reads as a statement of policy, not a pitch. No upward inflection on the final line.",
+  "cta": "Read the COA library",
+  "caption": "we publish the report when there is a report. until then the page says pending.",
+  "audience": "Cold. Buyers who have been burned by a supplier claiming purity with nothing behind it, and who evaluate a site by whether it will admit a gap.",
+
+  "claims_used": [
+    {"claim": "Reports are filed per batch rather than per product", "source": "website/src/components/coa-testing-disclosure.tsx — 'Batch-level traceability': 'Documentation is filed per batch rather than per product, so a report always corresponds to a specific production run and its own testing date.'"},
+    {"claim": "A product with no published report is marked Documentation Pending rather than given a placeholder figure", "source": "website/src/components/coa-testing-disclosure.tsx — 'Nothing is claimed without a document'."},
+    {"claim": "Batch-specific reports are being prepared", "source": "website/src/components/coa-testing-disclosure.tsx — hasPublishedRecords=false branch: 'Batch-specific reports are being prepared and will appear here as they are released.'"},
+    {"claim": "The vial shows a printed lot number", "source": "Render artwork (Lot VL25001). Shown only as print on the label. Never presented as a batch with a readable report — see creative/2026-08-ugc-launch/README.md:46."}
+  ],
+  "no_claims_made": [
+    "No purity figure, assay value or impurity figure — none is published.",
+    "No laboratory name — the site deliberately does not publish partner identity.",
+    "No 'third-party tested' as a blanket claim; the VO attributes testing to the site's own wording about production batches only.",
+    "No price, discount or promotion of any kind."
+  ],
+  "notes": "VERIFY BEFORE SHOOT: whether getCoaLibrarySnapshot() currently returns published records. The script above is written for hasPublishedRecords=false. If reports are live, line 3 changes to point at a real published batch and the CLAIMS_USED entry must name it.",
+  "compliance_gate": "PASS (website/src/lib/ads/compliance.ts). No lot number in on-screen text; the label print is visual only."
+}
