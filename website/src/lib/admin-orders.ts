@@ -5,6 +5,8 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 export interface AdminOrderRow {
   id: string;
   order_id: string;
+  /** The VL-XXXXXXXX reference the customer is given and quotes to support. */
+  order_number: string | null;
   customer_email: string | null;
   customer_name: string | null;
   amount_paid: number;
@@ -57,14 +59,16 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
   let query = supabaseAdmin
     .from("orders")
     .select(
-      "id, order_id, customer_email, customer_name, amount_paid, tax_amount, referral_code, coupon_code, payment_status, fulfillment_status, refund_amount, created_at",
+      "id, order_id, order_number, customer_email, customer_name, amount_paid, tax_amount, referral_code, coupon_code, payment_status, fulfillment_status, refund_amount, created_at",
       { count: "exact" },
     )
     .order("created_at", { ascending: false });
 
   const search = sanitizeSearchTerm(filters.search ?? "");
   if (search) {
-    query = query.or(`order_id.ilike.%${search}%,customer_email.ilike.%${search}%,customer_name.ilike.%${search}%`);
+    // order_number first: it is the reference on the confirmation page and in
+    // the confirmation email, so it is what a customer quotes to support.
+    query = query.or(`order_number.ilike.%${search}%,order_id.ilike.%${search}%,customer_email.ilike.%${search}%,customer_name.ilike.%${search}%`);
   }
 
   if (filters.paymentStatus === "active") {
@@ -111,6 +115,7 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
     rows: orders.map((order) => ({
       id: order.id,
       order_id: order.order_id,
+      order_number: order.order_number ?? null,
       customer_email: order.customer_email,
       customer_name: order.customer_name,
       amount_paid: Number(order.amount_paid ?? 0),

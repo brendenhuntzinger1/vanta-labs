@@ -103,7 +103,7 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
                 <span className="text-xs uppercase tracking-[0.2em] text-zinc-500">Order</span>
               </label>
             </div>
-            <p className="mt-1 text-sm font-semibold text-white break-all">{order.order_id}</p>
+            <p className="mt-1 text-sm font-semibold text-white break-all">{order.order_number ?? order.order_id}</p>
             <div className="mt-3 space-y-1.5 text-sm text-zinc-300">
               <p><span className="text-zinc-500">Customer:</span> {order.customer_email ?? "Unknown"}</p>
               <p><span className="text-zinc-500">Items:</span> {order.item_count}</p>
@@ -154,7 +154,7 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
                     className="h-4 w-4 rounded border-zinc-700 bg-zinc-900"
                   />
                 </td>
-                <td className="px-4 py-3"><Link href={`/admin/orders/${order.order_id}`} className="hover:underline">{order.order_id}</Link></td>
+                <td className="px-4 py-3"><Link href={`/admin/orders/${order.order_id}`} className="hover:underline">{order.order_number ?? order.order_id}</Link></td>
                 <td className="px-4 py-3">{order.customer_email ?? "Unknown"}</td>
                 <td className="px-4 py-3">{order.item_count}</td>
                 <td className="px-4 py-3">{money(order.amount_paid)}</td>
