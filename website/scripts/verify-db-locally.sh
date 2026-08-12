@@ -30,6 +30,11 @@ create schema if not exists auth;
 create table if not exists auth.users (id uuid primary key default gen_random_uuid(), email text unique);
 create or replace function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create or replace function auth.role() returns text language sql stable as $$ select coalesce(current_setting('request.jwt.claim.role', true), 'anon') $$;
+-- Supabase grants these; without them an RLS policy that calls auth.uid()
+-- fails with "permission denied for schema auth" instead of evaluating to
+-- false, which reads as an RLS failure here when the policy is actually fine.
+grant usage on schema auth to anon, authenticated;
+grant execute on function auth.uid(), auth.role() to anon, authenticated;
 SQL
 
 echo "==> load production schema (deploy-run-once.sql)"
