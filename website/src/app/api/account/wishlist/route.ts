@@ -3,6 +3,7 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getWishlistSlugs } from "@/lib/customer-account";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -26,7 +27,7 @@ export async function GET() {
     const slugs = await getWishlistSlugs(user.id);
     return NextResponse.json({ success: true, slugs });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to load wishlist";
+    const message = customerSafeMessage(error, "Unable to load wishlist");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }
@@ -73,7 +74,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, inWishlist: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to update wishlist";
+    const message = customerSafeMessage(error, "Unable to update wishlist");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

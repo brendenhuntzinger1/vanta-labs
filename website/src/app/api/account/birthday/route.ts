@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { setCustomerBirthday } from "@/lib/customer-account";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 export async function PATCH(request: Request) {
   const user = await getAuthenticatedUser();
@@ -33,7 +34,7 @@ export async function PATCH(request: Request) {
     await setCustomerBirthday(user.id, birthday);
     return NextResponse.json({ success: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to save birthday";
+    const message = customerSafeMessage(error, "Unable to save birthday");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

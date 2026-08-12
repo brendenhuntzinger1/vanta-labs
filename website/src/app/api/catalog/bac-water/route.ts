@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCatalogProductBySlug } from "@/lib/catalog";
 import { BAC_WATER_SLUG } from "@/lib/bac-water";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 export const dynamic = "force-dynamic";
 
@@ -15,7 +16,7 @@ export async function GET() {
     }
     return NextResponse.json({ success: true, product });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to load product";
+    const message = customerSafeMessage(error, "Unable to load product");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

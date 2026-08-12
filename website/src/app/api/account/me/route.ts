@@ -3,6 +3,7 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getDefaultCustomerAddress } from "@/lib/customer-account";
 import { getActivePointsMultiplier, getCustomerMembership, getMembershipPerks, getPointsBalance, isEligibleForBulkSavings } from "@/lib/membership";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 export async function GET() {
   const user = await getAuthenticatedUser();
@@ -25,7 +26,7 @@ export async function GET() {
   } catch (error) {
     // The account dashboard's primary endpoint must degrade to a clean JSON
     // error, not a raw 500 + stack, if any one read hiccups.
-    const message = error instanceof Error ? error.message : "Unable to load account";
+    const message = customerSafeMessage(error, "Unable to load account");
     return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 

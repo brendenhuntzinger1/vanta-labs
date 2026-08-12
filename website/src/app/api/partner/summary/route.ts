@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getSiteUrl } from "@/lib/env";
 import { getApprovedPartnerByAuthUserId, getPartnerSummary } from "@/lib/partner-portal";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 export async function GET() {
   const user = await getAuthenticatedUser();
@@ -22,7 +23,7 @@ export async function GET() {
     const summary = await getPartnerSummary(partner.id, siteUrl);
     return NextResponse.json({ success: true, summary });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to load partner summary";
+    const message = customerSafeMessage(error, "Unable to load partner summary");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

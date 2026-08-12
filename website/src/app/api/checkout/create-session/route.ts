@@ -6,6 +6,7 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { isCheckoutOpen } from "@/lib/payment-provider";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { customerSafeMessage } from "@/lib/safe-error";
 import { getRequestIpAddress } from "@/lib/admin-auth";
 import type { CustomerInput } from "@/lib/payment-types";
 
@@ -145,6 +146,21 @@ export async function POST(request: Request) {
     const message = raw === "Altered total detected"
       ? "A discount on your order is no longer available, so your total has been updated. Please refresh this page to see the current total, then place your order."
       : raw;
-    return NextResponse.json({ success: false, error: message }, { status: 400 });
+    // Shopper-actionable text (coupon rejected, item out of stock, referral
+    // minimum) still reaches the customer verbatim. Anything that names the
+    // processor, an env var or a database detail does not: an unconfigured
+    // gateway used to answer a completed checkout with "Missing VEYRA_API_BASE
+    // environment variable."
+    console.error("[checkout/create-session]", error);
+    return NextResponse.json(
+      {
+        success: false,
+        error: customerSafeMessage(
+          message,
+          "We couldn't start checkout just now. No charge was made and no order was placed — please try again in a moment.",
+        ),
+      },
+      { status: 400 },
+    );
   }
 }

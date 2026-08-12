@@ -24,6 +24,7 @@ import { buildOrderRow, insertOrderItems, insertOrderRow, quoteOrder } from "@/l
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { CustomerInput } from "@/lib/payment-types";
 import { recordOrderAttribution } from "@/lib/order-attribution";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -224,7 +225,8 @@ export async function POST(request: Request) {
     });
     quoteFull = await quoteOrder({ ...quoteInputs, customer, mode: "full" });
   } catch (error) {
-    return refuse(error instanceof Error ? error.message : "We couldn't complete that payment.");
+    console.error("[checkout/express/authorize]", error);
+    return refuse(customerSafeMessage(error, "We couldn't complete that payment."));
   }
 
   if (quoteA.addressIndependentCents !== intent.amount_cents) {

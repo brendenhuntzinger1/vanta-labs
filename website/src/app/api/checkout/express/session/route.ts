@@ -23,6 +23,7 @@ import { checkRateLimit } from "@/lib/rate-limit";
 import { US_STATE_TAX_TABLE } from "@/lib/sales-tax";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { CartItemInput } from "@/lib/payment-types";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 export const dynamic = "force-dynamic";
 
@@ -141,7 +142,8 @@ export async function POST(request: Request) {
       mode: "address_optional",
     });
   } catch (error) {
-    return unavailable(error instanceof Error ? error.message : "This order can't use express checkout.");
+    console.error("[checkout/express/session]", error);
+    return unavailable(customerSafeMessage(error, "This order can't use express checkout."));
   }
 
   // `A` — the address-independent amount the sheet opens on. Shipping and tax

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -49,7 +50,7 @@ export async function PATCH(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to save preferences";
+    const message = customerSafeMessage(error, "Unable to save preferences");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

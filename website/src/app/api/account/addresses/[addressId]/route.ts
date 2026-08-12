@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -59,7 +60,7 @@ export async function PATCH(request: Request, context: { params: Promise<{ addre
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to update address";
+    const message = customerSafeMessage(error, "Unable to update address");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }
@@ -85,7 +86,7 @@ export async function DELETE(request: Request, context: { params: Promise<{ addr
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to delete address";
+    const message = customerSafeMessage(error, "Unable to delete address");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

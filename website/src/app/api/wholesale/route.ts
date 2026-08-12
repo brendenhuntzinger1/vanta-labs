@@ -3,6 +3,7 @@ import { sendEmail } from "@/lib/email/send";
 import { wholesaleInquiryAutoReplyTemplate, wholesaleInquiryNotificationTemplate } from "@/lib/email/templates";
 import { getBusinessSettings } from "@/lib/admin-control";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 /**
  * Wholesale enquiries.
@@ -140,7 +141,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to send request";
+    console.error("[wholesale]", error);
+    const message = customerSafeMessage(error, "Unable to send request");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }
