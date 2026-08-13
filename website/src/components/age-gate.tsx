@@ -40,10 +40,36 @@ function subscribeToAgeVerified(callback: () => void) {
   };
 }
 
+// Each statement is acknowledged individually: a single combined tick is one
+// click that stands for four different representations, which is exactly the
+// assent a regulator would question. Entry is refused until all four are made.
+const ATTESTATIONS = [
+  { id: "age", text: "I am 21 years of age or older" },
+  {
+    id: "organization",
+    text: "I represent a laboratory, business, educational institution, or qualified research organization",
+  },
+  {
+    id: "researchUse",
+    text: "I understand products are sold for research/laboratory purposes only and are not intended for human consumption",
+  },
+  { id: "terms", text: null }, // rendered separately — it carries policy links
+] as const;
+
+type AttestationId = (typeof ATTESTATIONS)[number]["id"];
+
 export function AgeGate({ children }: { children: React.ReactNode }) {
   const [localVerified, setLocalVerified] = useState(false);
-  const [agreed, setAgreed] = useState(false);
+  const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
   const [showPrompt, setShowPrompt] = useState(false);
+  const agreed = ATTESTATIONS.every((a) => confirmed[a.id]);
+
+  const toggle = (id: AttestationId, value: boolean) => {
+    setConfirmed((prev) => ({ ...prev, [id]: value }));
+    if (showPrompt) {
+      setShowPrompt(false);
+    }
+  };
   const isVerifiedFromStorage = useSyncExternalStore(
     subscribeToAgeVerified,
     getAgeVerifiedSnapshot,
@@ -158,24 +184,53 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
 
           <div className="my-7 h-px w-full bg-gradient-to-r from-transparent via-white/12 to-transparent" />
 
-          <p className="text-lg font-medium text-white sm:text-xl">Are you 21 years of age or older?</p>
+          <p className="text-lg font-medium text-white sm:text-xl">Confirm each statement to enter</p>
 
-          <label className="group mt-5 flex cursor-pointer items-start gap-3 rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-left text-sm text-white/70 transition-colors duration-200 hover:border-white/20 has-[:checked]:border-[color:var(--accent-gold)]/40 has-[:checked]:bg-[var(--accent-gold-soft)]">
-            <input
-              type="checkbox"
-              checked={agreed}
-              onChange={(event) => {
-                setAgreed(event.target.checked);
-                if (showPrompt) {
-                  setShowPrompt(false);
-                }
-              }}
-              className="mt-0.5 h-5 w-5 shrink-0 rounded accent-[var(--accent-gold-bright)]"
-            />
-            <span>I confirm that I am at least 21 years of age and understand that Vanta Labs products are intended only for lawful laboratory research purposes.</span>
-          </label>
+          <div className="mt-5 flex flex-col gap-2.5">
+            {ATTESTATIONS.map((attestation) => (
+              <label
+                key={attestation.id}
+                className="group flex cursor-pointer items-start gap-3 rounded-xl border border-white/10 bg-white/[0.02] p-3.5 text-left text-[0.8125rem] leading-6 text-white/70 transition-colors duration-200 hover:border-white/20 has-[:checked]:border-[color:var(--accent-gold)]/40 has-[:checked]:bg-[var(--accent-gold-soft)] has-[:checked]:text-white/85"
+              >
+                <input
+                  type="checkbox"
+                  checked={Boolean(confirmed[attestation.id])}
+                  onChange={(event) => toggle(attestation.id, event.target.checked)}
+                  className="mt-0.5 h-5 w-5 shrink-0 rounded accent-[var(--accent-gold-bright)]"
+                />
+                {attestation.text ? (
+                  <span>{attestation.text}</span>
+                ) : (
+                  <span>
+                    I agree to the{" "}
+                    {/* Opened in a new tab, and the click is kept off the label so
+                        reading a policy never silently ticks the box for you. */}
+                    <a
+                      href="/legal/terms"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(event) => event.stopPropagation()}
+                      className="text-[color:var(--accent-gold)] underline underline-offset-4 decoration-[color:var(--accent-gold)]/40 transition hover:decoration-[color:var(--accent-gold)]"
+                    >
+                      Terms &amp; Conditions
+                    </a>{" "}
+                    and{" "}
+                    <a
+                      href="/legal/research-disclaimer"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(event) => event.stopPropagation()}
+                      className="text-[color:var(--accent-gold)] underline underline-offset-4 decoration-[color:var(--accent-gold)]/40 transition hover:decoration-[color:var(--accent-gold)]"
+                    >
+                      Research Use Policy
+                    </a>
+                  </span>
+                )}
+              </label>
+            ))}
+          </div>
 
-          {showPrompt ? <p role="alert" className="mt-3 text-sm text-[color:var(--accent-gold)]">Please confirm your age before continuing.</p> : null}
+          {showPrompt ? <p role="alert" className="mt-3 text-sm text-[color:var(--accent-gold)]">Please confirm all four statements before continuing.</p> : null}
 
           <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:justify-center">
             <button
