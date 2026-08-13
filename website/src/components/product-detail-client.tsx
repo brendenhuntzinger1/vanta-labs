@@ -196,9 +196,9 @@ export function ProductDetailClient({
         : null)
     : null;
 
-  // Which dose gets the "★ Most Popular" badge. GLP products keep their 10mg
-  // badge; BAC Water highlights the 30mL; every other two-dose product
-  // highlights its higher-priced dose.
+  // Which dose gets the "★ Most Popular" badge. GLP-3 spotlights its 30mg; the
+  // other GLP lines keep their 10mg badge; BAC Water highlights the 30mL; every
+  // other two-dose product highlights its higher-priced dose.
   const mostPopularDoseId = useMemo(() => {
     const doses = product.doses ?? [];
     if (doses.length < 2) return null;
@@ -206,8 +206,10 @@ export function ProductDetailClient({
     if (isBacWater(product.slug)) {
       return doses.find((dose) => normalized(dose) === "30ml")?.id ?? null;
     }
-    if (product.slug.toLowerCase().startsWith("glp-")) {
-      return doses.find((dose) => normalized(dose) === "10mg")?.id ?? null;
+    const slug = product.slug.toLowerCase();
+    if (slug.startsWith("glp-")) {
+      const spotlight = slug === "glp-3" ? "30mg" : "10mg";
+      return doses.find((dose) => normalized(dose) === spotlight)?.id ?? null;
     }
     if (doses.length === 2) {
       const price = (dose: ProductDose) => toPriceNumber(dose.salePrice ?? dose.price);
