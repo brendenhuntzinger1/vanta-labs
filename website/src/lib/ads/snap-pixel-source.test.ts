@@ -211,7 +211,12 @@ describe("the Snap pixel is gated on consent, exactly like the TikTok pixel", ()
     // published policy false, which is a worse problem than no pixel at all.
     const legal = read(join(SRC, "lib", "legal-content.ts"));
     expect(legal).toMatch(/Snap Pixel/);
-    expect(legal).toMatch(/neither pixel is loaded at all/);
+    // Asserts the PROMISE, not the sentence. This used to pin the literal
+    // "neither pixel is loaded at all", which broke the moment a third pixel
+    // made "neither" untrue — pushing the fix toward rewording the policy back
+    // into inaccuracy rather than updating the test.
+    expect(legal).toMatch(/pixels? (is|are) (n[o']?t |never )?loaded at all|are loaded at all/i);
+    expect(legal).toMatch(/no request (is made to|reaches)[^.]*Snap/i);
     // The identity claim has to match what the code actually sends: a digest
     // on a paid order, never a raw address.
     expect(legal).toMatch(/raw email address and phone number are never sent/);

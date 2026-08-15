@@ -65,7 +65,7 @@ To process and fulfill orders, verify payments, provide support, send transactio
 ## Analytics and advertising technologies
 Analytics is off until you accept it. If you decline, no analytics identifiers are created and no analytics events are sent.
 
-When you accept, four things run: our own first-party analytics, which records page views and store events to our own database; Vercel Analytics, a privacy-focused measurement service provided by our hosting provider; the TikTok Pixel; and the Snap Pixel.
+When you accept, five things run: our own first-party analytics, which records page views and store events to our own database; Vercel Analytics, a privacy-focused measurement service provided by our hosting provider; the TikTok Pixel; the Snap Pixel; and the Reddit Pixel.
 
 **The TikTok Pixel.** We advertise on TikTok, and the pixel is how we measure whether those adverts work. If you accept cookies, it loads on our pages and sends TikTok your page views along with the technical data any web request carries — IP address, browser and device type, referring page — and an identifier TikTok stores in your browser. TikTok uses this to report advert performance to us and, in line with its own privacy policy, for its own purposes including advert targeting.
 
@@ -79,7 +79,11 @@ Snap is treated exactly as TikTok is on the point that matters most: your raw em
 
 We do not send Snap your age or your location. The pixel is initialised with our advertising account's public identifier and nothing about you.
 
-If you decline cookies, neither pixel is loaded at all. No request is made to TikTok or Snap, no identifier is set, and neither platform receives anything about your visit.
+**The Reddit Pixel.** We also advertise on Reddit. This pixel is narrower than the other two: it loads only if you accept cookies, and it reports your page views together with the technical data any web request carries — IP address, browser and device type, referring page — and an identifier Reddit stores in your browser. Reddit uses this to report advert performance to us and, in line with its own privacy policy, for its own purposes including advert targeting.
+
+It does not report shopping actions. Which products you view, what you add to the cart, when you begin checkout and when an order is paid are all sent to TikTok and Snap, and none of them are sent to Reddit. Reddit's setup offers a field for an email address or a customer identifier at initialisation; we leave it empty, so no identifier of yours — not your address, not a hash of it — is sent to Reddit at any point, including on a paid order. If that changes, this policy will be updated to say so before it is switched on.
+
+If you decline cookies, none of these pixels are loaded at all. No request is made to TikTok, Snap or Reddit, no identifier is set, and no platform receives anything about your visit.
 
 We do not run a Meta pixel, a Google Ads tag or any equivalent technology. If we add one, this policy and our Cookie Policy will be updated to name the platform, the data shared and the purpose before it is switched on.
 
@@ -165,7 +169,7 @@ Email ${email} with your order number and reason. Approved refunds are issued to
 
 **Analytics — only if you accept.** A random visitor and session identifier stored in your browser, any campaign parameters from the link you arrived through, and Vercel Analytics, our hosting provider's privacy-focused measurement service. Nothing in this category is created or sent unless you choose Accept on the cookie banner.
 
-**Advertising — only if you accept.** Two pixels, which measure whether our adverts lead to visits and orders: the TikTok Pixel and the Snap Pixel. Each sets an identifier in your browser and sends its platform your page views together with the technical data any web request carries. Declining means neither is ever loaded, so no request reaches TikTok or Snap and no identifier is set. We do not run a Meta pixel, a Google Ads tag or any equivalent.
+**Advertising — only if you accept.** Three pixels, which measure whether our adverts lead to visits and orders: the TikTok Pixel, the Snap Pixel and the Reddit Pixel. Each sets an identifier in your browser and sends its platform your page views together with the technical data any web request carries. TikTok and Snap additionally receive shopping actions; Reddit receives page views only. Declining means none of them is ever loaded, so no request reaches TikTok, Snap or Reddit and no identifier is set. We do not run a Meta pixel, a Google Ads tag or any equivalent.
 
 ## Your choices
 Choosing Decline on the banner stops all non-essential storage; nothing in the analytics category is created. Your choice is remembered in your browser. To change it, clear this site's data in your browser and the banner will appear again on your next visit. You can also control cookies through your browser settings, though disabling essential cookies may break checkout or login.
