@@ -64,7 +64,9 @@ function injectedSnippet(): string {
 
 describe("exactly one Reddit data source", () => {
   it("initialises the pixel in exactly one place", () => {
-    const loaders = files.filter((path) => /rdt\(\s*['"]init['"]/.test(read(path)));
+    // Executable source only: the matching module and its API route DESCRIBE
+    // init in prose, and explaining a call is not making one.
+    const loaders = files.filter((path) => /rdt\(\s*['"]init['"]/.test(executableSource(path)));
     expect(loaders.map(relative)).toEqual(["src/components/reddit-pixel.tsx"]);
   });
 
@@ -78,14 +80,20 @@ describe("exactly one Reddit data source", () => {
     expect(withId.map(relative)).toEqual(["src/components/reddit-pixel.tsx"]);
   });
 
-  it("uses the same id for the loader URL and the init call", () => {
+  it("uses the same id for the loader URL and both init forms", () => {
     // Reddit's snippet carries the id twice. Two different ids means the SDK
     // downloads for one account and reports to another — the loader still works,
     // so nothing looks broken, and the conversions simply never arrive.
-    const snippet = injectedSnippet();
-    const occurrences = snippet.match(/\$\{REDDIT_PIXEL_ID\}/g) ?? [];
-    expect(occurrences).toHaveLength(2);
-    expect(snippet).not.toMatch(/pixel_id=a2_/);
+    // The id is now referenced from three places (loader URL, init-with-keys,
+    // init-without-keys) and every one must be the same constant.
+    const source = read(REDDIT_PIXEL);
+    expect(injectedSnippet()).toContain("pixel_id=${REDDIT_PIXEL_ID}");
+    const initForms = source.match(/rdt\('init','\$\{REDDIT_PIXEL_ID\}'/g) ?? [];
+    expect(initForms).toHaveLength(2);
+    // No hard-coded id anywhere except the env-var default.
+    const literals = source.match(/a2_[a-z0-9]+/g) ?? [];
+    expect(literals).toHaveLength(1);
+    expect(source).toContain('process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID ?? "a2_jipuxv3ugrju"');
   });
 
   it("is mounted once, globally, from the root layout", () => {
@@ -100,22 +108,41 @@ describe("exactly one Reddit data source", () => {
 });
 
 describe("no customer identifier is ever handed to Reddit", () => {
-  it("initialises with the pixel id and nothing else", () => {
-    // Asserting the call is exactly this — rather than merely email-free — is
-    // what makes it durable: it also rejects a phone number, an external id, or
-    // anything else a future paste drops into the second argument.
-    const init = injectedSnippet().match(/rdt\('init'[^\n]*?\);/)?.[0] ?? "";
-    expect(init).toBe("rdt('init','${REDDIT_PIXEL_ID}');");
+  it("builds the init call from a serialised digest object, never from raw text", () => {
+    // Advanced Matching goes in init's second argument. Reddit's own example
+    // puts a PLAINTEXT address there. The guarantee here is that the only thing
+    // that can reach it is the object fetched from the server, serialised — so
+    // there is no position in this file where an address could be interpolated.
+    const source = read(REDDIT_PIXEL);
+    expect(source).toContain("JSON.stringify(matchKeys)");
+    expect(source).toMatch(/rdt\('init','\$\{REDDIT_PIXEL_ID\}'\);/); // the no-keys form
   });
 
-  it("never ships an identifier field anywhere near rdt", () => {
-    for (const path of files) {
-      const source = executableSource(path);
-      if (!source.includes("rdt")) continue;
-      expect(source, `${relative(path)} passes an identifier to Reddit`).not.toMatch(
-        /email|externalId|external_id|phoneNumber|aaid|idfa/i,
-      );
-    }
+  it("never reads a raw address in the browser — the component only ever sees digests", () => {
+    // The component may name the FIELD (its payload has an `email` key holding a
+    // digest); what it must never do is read a customer's actual address off a
+    // session, a form or a prop.
+    const source = executableSource(REDDIT_PIXEL);
+    expect(source).not.toMatch(/user\??\.email|customer\??\.email|\.email\s*=|getAuthenticatedUser/);
+    expect(source).toContain('fetch("/api/ads/reddit-match-keys"');
+  });
+
+  it("hashes on the server, and the endpoint takes no input it could be tricked with", () => {
+    const route = read(join(SRC, "app", "api", "ads", "reddit-match-keys", "route.ts"));
+    // Derived from the session only. No request body, no query parameter — so
+    // it cannot be used as an oracle to hash an arbitrary address.
+    expect(route).toContain("getAuthenticatedUser()");
+    expect(route).toContain("buildRedditMatchKeys");
+    expect(route).not.toMatch(/request\.json\(\)|searchParams/);
+    // Per-person values must never land in a shared cache.
+    expect(route).toContain("no-store");
+  });
+
+  it("the match-key lookup can never prevent the pixel loading", () => {
+    const source = read(REDDIT_PIXEL);
+    // Resolves to null on any failure, and the timeout guarantees it resolves.
+    expect(source).toContain("setMatchKeys(null)");
+    expect(source).toContain("MATCH_KEY_TIMEOUT_MS");
   });
 
   it("sends page views only — no commerce events, which is what the policy states", () => {
@@ -176,5 +203,12 @@ describe("the disclosure names Reddit", () => {
   it("names it in the cookie policy alongside the other two", () => {
     expect(legal).toMatch(/Reddit Pixel/);
     expect(legal).toMatch(/no request reaches TikTok, Snap or Reddit/);
+  });
+
+  it("states that what Reddit receives is a hash, never a raw address", () => {
+    // The policy previously said no identifier of any kind reached Reddit. That
+    // stopped being true the moment Advanced Matching was switched on, and a
+    // published policy that is false is worse than no pixel at all.
+    expect(legal).toMatch(/SHA-256[^.]*Reddit|Reddit[^.]*SHA-256/);
   });
 });

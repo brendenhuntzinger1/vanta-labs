@@ -25,13 +25,21 @@ import { useEffect, useRef, useState } from "react";
  * MODIFY UNLESS TO REPLACE A USER IDENTIFIER"; the only substitution made is
  * the pixel id, and it is the same id the snippet arrived with.
  *
- * ON IDENTITY: Reddit's `rdt('init', ...)` accepts an optional second argument
- * carrying an email or an external id. It is deliberately absent. The root
- * layout does not know who the visitor is, and sending an address to a third
- * party on every page load is exactly what the TikTok and Snap integrations go
- * out of their way not to do — identity there is attached at one point only, a
- * confirmed paid order, and only ever as a SHA-256 digest produced on the
- * server. Nothing here should be the exception.
+ * ON IDENTITY (Advanced Matching, Reddit's setup step 3): `rdt('init')` takes
+ * an optional second argument carrying match keys. Reddit's own example puts a
+ * PLAINTEXT address there and lets its SDK hash it in the browser. This does
+ * not do that. The keys are SHA-256 digests computed on the server and fetched
+ * from /api/ads/reddit-match-keys, so the raw address is never handed to client
+ * JavaScript, never sits in a prop, and never appears in the page's serialised
+ * payload — the same rule the TikTok and Snap integrations follow. Reddit
+ * cannot tell the difference; it hashes to the same 64 hex digits either way.
+ *
+ * Keys exist only for a SIGNED-IN customer. A guest sends none, which is the
+ * behaviour this component shipped with.
+ *
+ * The lookup is best-effort and must never gate the pixel: on error, on a slow
+ * response, or for a guest, the script is injected with no keys rather than not
+ * at all. An advertising identifier is not worth losing the page view over.
  */
 
 export const REDDIT_PIXEL_ID = process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID ?? "a2_jipuxv3ugrju";
@@ -54,8 +62,16 @@ function hasAccepted(): boolean {
   }
 }
 
+type MatchKeys = { email?: string; externalId?: string };
+
+/** How long the match-key lookup may delay the pixel before we give up on it. */
+const MATCH_KEY_TIMEOUT_MS = 1500;
+
 export function RedditPixel() {
   const [accepted, setAccepted] = useState(false);
+  // undefined = still deciding, null = resolved with no keys (guest, error or
+  // timeout). The script waits only for the transition out of undefined.
+  const [matchKeys, setMatchKeys] = useState<MatchKeys | null | undefined>(undefined);
   const pathname = usePathname();
   const searchParams = useSearchParams();
   // The inline snippet fires PageVisit once on load. Skipping that first
@@ -73,6 +89,33 @@ export function RedditPixel() {
     };
   }, []);
 
+  // Resolve the match keys once, after consent. Deliberately not re-run on
+  // navigation: init happens once, so a later answer could not be applied
+  // without a second init, and a second init double-counts.
+  useEffect(() => {
+    if (!accepted) return;
+    let cancelled = false;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), MATCH_KEY_TIMEOUT_MS);
+
+    fetch("/api/ads/reddit-match-keys", { signal: controller.signal, cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body) => {
+        if (!cancelled) setMatchKeys((body?.matchKeys as MatchKeys | null) ?? null);
+      })
+      .catch(() => {
+        // Guest, offline, aborted, anything: load the pixel without keys.
+        if (!cancelled) setMatchKeys(null);
+      })
+      .finally(() => clearTimeout(timer));
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [accepted]);
+
   // A single-page app: after the first load, navigation never reloads the
   // document, so without this every visit would report exactly one page view
   // however much of the site someone read.
@@ -86,11 +129,21 @@ export function RedditPixel() {
   }, [accepted, pathname, searchParams]);
 
   if (!accepted) return null;
+  // Still waiting on the lookup. It resolves within MATCH_KEY_TIMEOUT_MS in
+  // every case including failure, so this is a brief delay, never a dead end.
+  if (matchKeys === undefined) return null;
+
+  // Serialised rather than interpolated by hand: JSON.stringify is what makes
+  // the values inert inside an inline <script>, and the digests are plain hex
+  // so nothing here can carry a quote or a script-closing sequence.
+  const init = matchKeys
+    ? `rdt('init','${REDDIT_PIXEL_ID}',${JSON.stringify(matchKeys)});`
+    : `rdt('init','${REDDIT_PIXEL_ID}');`;
 
   return (
     <Script id="reddit-pixel" strategy="afterInteractive">
       {`
-!function(w,d){if(!w.rdt){var p=w.rdt=function(){p.sendEvent?p.sendEvent.apply(p,arguments):p.callQueue.push(arguments)};p.callQueue=[];var t=d.createElement("script");t.src="https://www.redditstatic.com/ads/pixel.js?pixel_id=${REDDIT_PIXEL_ID}",t.async=!0;var s=d.getElementsByTagName("script")[0];s.parentNode.insertBefore(t,s)}}(window,document);rdt('init','${REDDIT_PIXEL_ID}');rdt('track', 'PageVisit');
+!function(w,d){if(!w.rdt){var p=w.rdt=function(){p.sendEvent?p.sendEvent.apply(p,arguments):p.callQueue.push(arguments)};p.callQueue=[];var t=d.createElement("script");t.src="https://www.redditstatic.com/ads/pixel.js?pixel_id=${REDDIT_PIXEL_ID}",t.async=!0;var s=d.getElementsByTagName("script")[0];s.parentNode.insertBefore(t,s)}}(window,document);${init}rdt('track', 'PageVisit');
       `}
     </Script>
   );
