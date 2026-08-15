@@ -2,6 +2,7 @@ import "server-only";
 
 import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { invalidateCatalogCache } from "@/lib/catalog-cache";
 import type { Product, ProductBadge, ProductDose, ProductFaqItem, ProductImage } from "@/lib/catalog-types";
 import { parseProductFaq } from "@/lib/product-faq";
 import { resolveProductImage } from "@/lib/product-image";
@@ -442,6 +443,7 @@ export async function createAdminProduct(input: ProductCreateInput) {
     await addProductImageFromUrl({ productId, imageUrl: input.imageUrl, isPrimary: true });
   }
 
+  invalidateCatalogCache();
   return getAdminProductById(productId);
 }
 
@@ -569,6 +571,7 @@ export async function updateAdminProduct(productId: string, input: ProductUpdate
     console.error("Unable to record product cost change history:", logError);
   }
 
+  invalidateCatalogCache();
   return getAdminProductById(productId);
 }
 
@@ -582,6 +585,8 @@ export async function deleteAdminProduct(productId: string) {
   if (imagesError) throw imagesError;
   if (dosesError) throw dosesError;
   if (productError) throw productError;
+
+  invalidateCatalogCache();
 }
 
 export async function duplicateAdminProduct(productId: string) {
@@ -661,6 +666,8 @@ export async function reorderAdminProducts(productIdsInOrder: string[]) {
       throw result.error;
     }
   }
+
+  invalidateCatalogCache();
 }
 
 export async function bulkUpdateAdminProducts(input: {
@@ -719,6 +726,8 @@ export async function bulkUpdateAdminProducts(input: {
   if (error) {
     throw error;
   }
+
+  invalidateCatalogCache();
 }
 
 async function getNextImagePosition(productId: string) {
@@ -781,6 +790,7 @@ export async function addProductImageFromUrl(input: {
     if (productUpdateError) throw productUpdateError;
   }
 
+  invalidateCatalogCache();
   return imageId;
 }
 
@@ -807,6 +817,8 @@ export async function setPrimaryProductImage(input: { productId: string; imageId
     .update({ image_url: image.image_url, updated_at: now })
     .eq("id", input.productId);
   if (productError) throw productError;
+
+  invalidateCatalogCache();
 }
 
 export async function reorderProductImages(input: { productId: string; imageIdsInOrder: string[] }) {
@@ -824,6 +836,8 @@ export async function reorderProductImages(input: { productId: string; imageIdsI
       throw result.error;
     }
   }
+
+  invalidateCatalogCache();
 }
 
 export async function deleteProductImage(input: { productId: string; imageId: string }) {
@@ -880,6 +894,8 @@ export async function deleteProductImage(input: { productId: string; imageId: st
       throw productUpdateError;
     }
   }
+
+  invalidateCatalogCache();
 }
 
 export async function replaceProductDoses(productId: string, doses: DoseInput[]) {
@@ -919,6 +935,8 @@ export async function replaceProductDoses(productId: string, doses: DoseInput[])
       throw productError;
     }
   }
+
+  invalidateCatalogCache();
 }
 
 const PRODUCT_IMAGE_BUCKET = "product-images";

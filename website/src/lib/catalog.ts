@@ -3,6 +3,7 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isInventoryTrackingActive } from "@/lib/inventory-settings";
+import { CATALOG_CACHE_TAG } from "@/lib/catalog-tag";
 import type { Product, ProductDose, ProductImage } from "@/lib/catalog-types";
 import { parseProductFaq } from "@/lib/product-faq";
 import { sanitizeCoaUrl } from "@/lib/coa-url";
@@ -10,9 +11,11 @@ import { resolveProductImage } from "@/lib/product-image";
 
 // The catalog changes rarely but the storefront (home / PDP / list) is
 // force-dynamic and re-queried it on EVERY request — the top launch-scale risk.
-// These reads are cached with a short TTL and a shared tag; admin product
-// mutations call revalidateTag(CATALOG_CACHE_TAG) so edits show up promptly.
-export const CATALOG_CACHE_TAG = "catalog";
+// These reads are cached with a short TTL and a shared tag. Every write that
+// can change displayed availability calls invalidateCatalogCache() (see
+// lib/catalog-cache.ts), which revalidates this tag, so an admin save is
+// visible on the next request instead of up to two requests later.
+export { CATALOG_CACHE_TAG };
 const CATALOG_CACHE_TTL = 60; // seconds
 
 // Single source of truth for the product columns every public read selects, so
@@ -189,6 +192,9 @@ async function fetchProductRelations(productIds: string[]) {
       // Availability, not stock on hand. A unit held by someone mid-checkout is
       // not sellable, and showing it as In Stock sends a second shopper all the
       // way to checkout before telling them it is gone.
+      availableQuantity: inventoryActive
+        ? sellable(parseNumber(row.inventory_quantity, 0), reserved.byDoseId.get(String(row.id)) ?? 0)
+        : null,
       stockStatus: resolveStockStatus(
         String(row.stock_status ?? "In Stock"),
         inventoryActive,
@@ -257,6 +263,14 @@ function mapProductRow(
     salePrice: defaultDose?.salePrice ?? (salePriceCents > 0 ? formatPriceFromCents(salePriceCents) : undefined),
     stockStatus,
     inventoryQuantity: defaultInventoryQuantity,
+    // A product with doses is sold through its doses, so its headline
+    // availability is the default dose's already-computed figure; a product
+    // without doses subtracts its own reservations here.
+    availableQuantity: !inventoryActive
+      ? null
+      : defaultDose
+        ? defaultDose.availableQuantity ?? null
+        : sellable(defaultInventoryQuantity, reservedQuantity),
     isPublished: parseBoolean(row.is_published, true),
     isEnabled: parseBoolean(row.is_enabled, true),
     isArchived: parseBoolean(row.is_archived, false),

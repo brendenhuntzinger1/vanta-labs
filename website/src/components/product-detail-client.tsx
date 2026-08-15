@@ -52,6 +52,11 @@ const BUNDLE_OPTIONS = [
   { quantity: 10, label: "10 Vials", badge: "Best Value" },
 ] as const;
 
+/** The largest bundle the quantity controls offer; also the "+" button's ceiling. */
+const MAX_BUNDLE_QUANTITY = 10;
+
+/** At or below this many units left, the availability line is emphasised. */
+const LOW_STOCK_DISPLAY_THRESHOLD = 5;
 
 const TRUST_ROW = [
   {
@@ -163,7 +168,10 @@ export function ProductDetailClient({
   const { addToCart, membershipTiers, memberDiscountPercent } = useCart();
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
   const [selectedDoseId, setSelectedDoseId] = useState<string | null>(defaultDose?.id ?? null);
-  const [quantity, setQuantity] = useState(1);
+  // The shopper's chosen quantity, BEFORE it is clamped to what is on the
+  // shelf. Read `quantity` (derived below), never this — switching to a dose
+  // with less stock must not carry the old number over.
+  const [requestedQuantity, setQuantity] = useState(1);
   const [message, setMessage] = useState<string | null>(null);
   // Collapsed by default — no panel is shown until the shopper taps a tab.
   const [activeTab, setActiveTab] = useState<TabKey | null>(null);
@@ -180,8 +188,42 @@ export function ProductDetailClient({
   // whose data is absent or "Pending". Keeps on-page claims substantiated.
   const hasVerifiedTesting = Boolean(selectedCoaUrl) && Boolean(selectedPurity) && selectedPurity !== "Pending";
   const selectedStockStatus = selectedDose?.stockStatus ?? product.stockStatus;
-  const isOutOfStock = selectedStockStatus === "Out of Stock" || selectedStockStatus === "Reserved";
   const unitPrice = toPriceNumber(selectedPrice);
+
+  // Units the shopper can actually buy of the dose they have selected, net of
+  // what other in-flight checkouts are holding. `null` means availability is
+  // not being counted at all (inventory tracking is off store-wide) — which is
+  // NOT the same as zero, so it must neither cap the selector nor render a
+  // count. Everything downstream keys off these two values.
+  const availableQuantity = selectedDose
+    ? selectedDose.availableQuantity ?? null
+    : product.availableQuantity ?? null;
+  const isTrackingAvailability = typeof availableQuantity === "number";
+  // The ceiling for the quantity controls. Uncounted stock keeps the existing
+  // 10-vial bundle ceiling; counted stock can never be ordered beyond what is
+  // on the shelf, so the shopper is stopped here rather than at the payment
+  // step after entering their card.
+  const maxSelectableQuantity = isTrackingAvailability
+    ? Math.min(MAX_BUNDLE_QUANTITY, Math.max(0, availableQuantity))
+    : MAX_BUNDLE_QUANTITY;
+
+  // Clamped at render rather than corrected in an effect: switching doses
+  // changes the ceiling, and a render that briefly shows the old, too-large
+  // number is a render that can be clicked. At zero the value stays 1 so the
+  // price copy still reads sensibly — the buttons are disabled either way.
+  const quantity = maxSelectableQuantity > 0
+    ? Math.min(requestedQuantity, maxSelectableQuantity)
+    : 1;
+
+  // Two independent reasons a purchase control is dead: the stored status says
+  // so, or there is genuinely nothing left to sell. The second is stated
+  // explicitly rather than relied upon through the status string, so a stale or
+  // hand-edited "In Stock" on a zero-count line can never leave the buttons live.
+  const isOutOfStock =
+    selectedStockStatus === "Out of Stock" ||
+    selectedStockStatus === "Reserved" ||
+    (isTrackingAvailability && availableQuantity <= 0);
+
   const currentBundleRate = bundleDiscountRate(quantity, bundleConfig);
 
   // Member pricing on the selected dose — members see their price; everyone
@@ -718,11 +760,30 @@ export function ProductDetailClient({
                 )
               ) : null}
 
+              {/* Availability, stated only when it is actually being counted.
+                  With tracking off there is no number to report, and inventing
+                  one ("In Stock") is the claim the product spec rules out. */}
+              {isTrackingAvailability ? (
+                <p className="mt-5 text-sm" aria-live="polite">
+                  {availableQuantity <= 0 ? (
+                    <span className="font-semibold uppercase tracking-[0.08em] text-[#e5484d]">Out of stock</span>
+                  ) : (
+                    <span className={availableQuantity <= LOW_STOCK_DISPLAY_THRESHOLD ? "font-medium text-[color:var(--accent-gold)]" : "text-[#a3a3a3]"}>
+                      {availableQuantity} available
+                    </span>
+                  )}
+                </p>
+              ) : null}
+
               <div className="mt-6">
                 <p className="vl2-lab-eyebrow">Quantity</p>
                 <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-5">
                   {BUNDLE_OPTIONS.map((option) => {
                     const isSelected = option.quantity === 10 ? quantity >= 10 : quantity === option.quantity;
+                    // A bundle bigger than the shelf is not an offer, it is a
+                    // failed checkout three steps later. Disabled, not hidden,
+                    // so the shopper can see the tier exists and why it is off.
+                    const exceedsStock = option.quantity > maxSelectableQuantity;
                     const rate = bundleDiscountRate(option.quantity, bundleConfig);
                     const lineTotal = getBundleDiscountedLineTotal(unitPrice, option.quantity, bundleConfig);
                     const freeShip = lineTotal >= FREE_SHIPPING_THRESHOLD;
@@ -730,8 +791,10 @@ export function ProductDetailClient({
                       <button
                         key={option.quantity}
                         type="button"
+                        disabled={exceedsStock}
+                        title={exceedsStock ? `Only ${maxSelectableQuantity} available` : undefined}
                         onClick={() => setQuantity(option.quantity)}
-                        className={`relative rounded-xl border px-2 py-3.5 text-center transition duration-200 ${isSelected ? "border-[color:var(--accent-gold)]/70 bg-[#181818] text-white shadow-[0_8px_20px_-12px_rgba(0,0,0,0.9)]" : "border-white/[0.06] bg-[#121212] text-white hover:border-white/20"}`}
+                        className={`relative rounded-xl border px-2 py-3.5 text-center transition duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${isSelected ? "border-[color:var(--accent-gold)]/70 bg-[#181818] text-white shadow-[0_8px_20px_-12px_rgba(0,0,0,0.9)]" : "border-white/[0.06] bg-[#121212] text-white hover:border-white/20"}`}
                       >
                         {option.badge ? (
                           <span className={`absolute -top-2 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full border px-1.5 py-[0.1rem] text-[9px] font-medium uppercase tracking-[0.1em] ${option.badge === "Best Value" ? "border-[color:var(--accent-gold)]/50 bg-[#0f0f0f] text-white" : "border-[color:var(--accent-gold)]/30 bg-[#0f0f0f] text-[color:var(--accent-gold)]"}`}>
@@ -767,8 +830,9 @@ export function ProductDetailClient({
                     <button
                       type="button"
                       aria-label="Increase quantity"
-                      onClick={() => setQuantity((q) => Math.min(10, q + 1))}
-                      className="inline-flex h-11 w-11 items-center justify-center border border-white/[0.08] text-lg text-[#a3a3a3] transition hover:border-white/[0.16]"
+                      disabled={quantity >= maxSelectableQuantity}
+                      onClick={() => setQuantity((q) => Math.min(maxSelectableQuantity, q + 1))}
+                      className="inline-flex h-11 w-11 items-center justify-center border border-white/[0.08] text-lg text-[#a3a3a3] transition hover:border-white/[0.16] disabled:cursor-not-allowed disabled:opacity-40"
                     >+</button>
                     {currentBundleRate > 0 ? (
                       <span className="text-xs font-medium text-[color:var(--accent-gold)]">Save {Math.round(currentBundleRate * 100)}% <span className="text-white tabular-nums">— {formatUsd(getBundleDiscountedLineTotal(unitPrice, quantity, bundleConfig))} total</span></span>

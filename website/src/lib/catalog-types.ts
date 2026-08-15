@@ -25,6 +25,17 @@ export type ProductDose = {
    *  contexts; never selected for or shown to customers. */
   productCostCents?: number;
   inventoryQuantity: number;
+  /**
+   * Units a shopper can actually buy right now: on hand, less what in-flight
+   * checkouts are holding. This — NOT inventoryQuantity — is what the quantity
+   * selector is capped at and what "N available" reports, because on-hand
+   * includes units that are already spoken for.
+   *
+   * `null` means availability is not being counted (inventory tracking is off
+   * globally), which is a different statement from "zero available" and must
+   * not be rendered as one.
+   */
+  availableQuantity?: number | null;
   stockStatus?: "In Stock" | "Limited" | "Reserved" | "Out of Stock";
   batchNumber?: string;
   coaUrl?: string;
@@ -47,6 +58,8 @@ export type Product = {
   salePrice?: string;
   stockStatus: "In Stock" | "Limited" | "Reserved" | "Out of Stock";
   inventoryQuantity?: number;
+  /** See ProductDose.availableQuantity — same contract, for the default dose. */
+  availableQuantity?: number | null;
   isPublished?: boolean;
   isEnabled?: boolean;
   isArchived?: boolean;

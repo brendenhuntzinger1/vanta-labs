@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { planInventoryAdjustments, type OrderItemRef } from "@/lib/inventory-fulfillment";
+import { invalidateCatalogCache } from "@/lib/catalog-cache";
 
 // Enterprise inventory reservation (see src/lib/sql/inventory-reservations.sql).
 // Stock is held atomically the instant a checkout/payment session is created,
@@ -143,6 +144,9 @@ export async function reserveInventoryForOrder(
     await releaseInventoryForOrder(orderId);
     return { ok: false, unavailable, degraded: false };
   }
+  // Holds reduce what the next shopper can buy, and the storefront now reports
+  // availability net of them, so the cached catalog has to be dropped too.
+  invalidateCatalogCache();
   return { ok: true, unavailable: [], degraded: false };
 }
 
@@ -154,6 +158,7 @@ export async function finalizeInventoryForOrder(orderId: string): Promise<{ fina
   try {
     const { data, error } = await supabaseAdmin.rpc("finalize_inventory_for_order", { p_order_id: orderId });
     if (error) return { finalized: 0, degraded: true };
+    invalidateCatalogCache();
     return { finalized: Number(data ?? 0), degraded: false };
   } catch {
     return { finalized: 0, degraded: true };
@@ -165,6 +170,7 @@ export async function finalizeInventoryForOrder(orderId: string): Promise<{ fina
 export async function releaseInventoryForOrder(orderId: string): Promise<void> {
   try {
     await supabaseAdmin.rpc("release_inventory_for_order", { p_order_id: orderId });
+    invalidateCatalogCache();
   } catch (error) {
     console.error("Unable to release inventory reservation for order", orderId, error);
   }
@@ -176,6 +182,9 @@ export async function expireStaleReservations(): Promise<number> {
   try {
     const { data, error } = await supabaseAdmin.rpc("expire_stale_reservations", {});
     if (error) return 0;
+    // Reclaimed holds put units back on sale — publish that immediately rather
+    // than leaving them looking unavailable until the TTL lapses.
+    if (Number(data ?? 0) > 0) invalidateCatalogCache();
     return Number(data ?? 0);
   } catch {
     return 0;

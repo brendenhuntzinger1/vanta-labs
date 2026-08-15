@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { recordInventoryTransaction, type InventoryTransactionType } from "@/lib/inventory-ledger";
+import { invalidateCatalogCache } from "@/lib/catalog-cache";
 
 // ---------------------------------------------------------------------------
 // The stock movements a human makes.
@@ -93,6 +94,11 @@ export async function adjustStock(input: {
     return { ok: false, message: "Could not update the stock count." };
   }
 
+  // Sellable stock moved, so the cached catalog is now wrong. Invalidate here
+  // rather than in each caller — receiveShipment, receiveAllIncoming and the
+  // operations route all funnel through this one write.
+  invalidateCatalogCache();
+
   await recordInventoryTransaction({
     productId: input.ref.productId,
     doseId: input.ref.doseId ?? null,
@@ -142,6 +148,10 @@ export async function setIncoming(input: {
     console.error("Incoming update failed", id, error);
     return { ok: false, message: "Could not update the incoming count." };
   }
+
+  // Incoming is surfaced on the storefront as "more on the way", so it is
+  // cached alongside the sellable count and has to be dropped with it.
+  invalidateCatalogCache();
 
   // Deliberately NOT ledgered. The ledger records movements of SELLABLE stock;
   // an expectation that has not arrived has moved nothing. Logging it would

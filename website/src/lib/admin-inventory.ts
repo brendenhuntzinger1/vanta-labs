@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { invalidateCatalogCache } from "@/lib/catalog-cache";
 import { lineWeightOz } from "@/lib/shippo/parcel";
 
 /**
@@ -415,6 +416,13 @@ export async function adjustInventoryLine(input: InventoryLineAdjustment) {
   if (error) {
     throw error;
   }
+
+  // The storefront reads the catalog through a 60s cache. Without this, a count
+  // saved here was invisible on the product page until that TTL lapsed — and
+  // because time-based revalidation is stale-while-revalidate, the first
+  // request after it lapsed still served the old number. Drop the cache at the
+  // source of the change so the very next page load re-queries.
+  invalidateCatalogCache();
 
   // Append to the ledger. Best-effort: the stock has already moved, so throwing
   // here would fail an operation that succeeded and turn a missing audit row

@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { invalidateCatalogCache } from "@/lib/catalog-cache";
 
 // Inventory movement for the PAID path. An order's stock is only ever committed
 // when money is actually captured (manual payment approved, or card
@@ -83,6 +84,9 @@ export async function decrementInventoryForOrder(items: OrderItemRef[]): Promise
       console.error("Unable to decrement inventory for", adjustment, error);
     }
   }
+  // A sale just changed what is left on the shelf; the cached catalog would
+  // keep advertising the pre-sale count for up to a minute otherwise.
+  invalidateCatalogCache();
 }
 
 // Atomic exactly-once claim for an order's restock. Flips inventory_restocked_at
@@ -122,4 +126,5 @@ export async function restockInventoryForOrder(items: OrderItemRef[]): Promise<v
       console.error("Unable to restock inventory for", adjustment, error);
     }
   }
+  invalidateCatalogCache();
 }

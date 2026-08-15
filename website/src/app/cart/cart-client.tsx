@@ -2,9 +2,9 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { formatCartCurrency, getShippingProgress, useCart } from "@/components/cart-context";
+import { formatCartCurrency, getShippingProgress, useCart, type CartItem } from "@/components/cart-context";
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
@@ -12,6 +12,10 @@ import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
 export function CartPageClient() {
   const router = useRouter();
   const [referralInput, setReferralInput] = useState("");
+  // What live inventory said about this cart, if anything. Set by the
+  // re-validation below; drives the per-line notices and the checkout button.
+  const [stockNotices, setStockNotices] = useState<string[]>([]);
+  const [isValidatingStock, setIsValidatingStock] = useState(false);
   const {
     items,
     isHydrated,
@@ -40,6 +44,97 @@ export function CartPageClient() {
     setShippingProtectionEnabled,
     shippingProtectionFee,
   } = useCart();
+
+  /**
+   * Re-check the cart against live inventory.
+   *
+   * A cart is a snapshot in localStorage; by the time it is opened the stock it
+   * was built from may be gone. This trims any line that no longer fits and
+   * tells the shopper exactly what changed, HERE, where a quantity can be
+   * edited — instead of letting them fill in an address and get refused at the
+   * payment step. It is advisory only: the binding check is still the atomic
+   * reservation taken when the order is created.
+   *
+   * Returns true when the cart is safe to take to checkout.
+   */
+  const revalidateStock = useCallback(
+    async (current: CartItem[], showSpinner: boolean) => {
+      if (current.length === 0) {
+        setStockNotices([]);
+        return true;
+      }
+
+      // Only the button press shows a pending state. The page-entry check runs
+      // quietly so the cart does not flash "Checking availability…" on load.
+      if (showSpinner) setIsValidatingStock(true);
+      try {
+        const response = await fetch("/api/cart/validate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            items: current.map((item) => ({
+              key: item.key,
+              slug: item.slug,
+              variantId: item.variantId ?? null,
+              quantity: item.quantity,
+            })),
+          }),
+        });
+        const payload = await response.json();
+        if (!payload?.success || !payload.tracking || !Array.isArray(payload.lines)) {
+          // Tracking off, or the check degraded — nothing to correct.
+          setStockNotices([]);
+          return true;
+        }
+
+        const notices: string[] = [];
+        for (const line of payload.lines as Array<{ key: string; allowed: number; requested: number; name: string | null }>) {
+          if (line.allowed >= line.requested) continue;
+          const item = current.find((candidate) => candidate.key === line.key);
+          const label = item?.name ?? line.name ?? "An item in your cart";
+          if (line.allowed <= 0) {
+            removeFromCart(line.key);
+            notices.push(`${label} just sold out and was removed from your cart.`);
+          } else {
+            updateQuantity(line.key, line.allowed);
+            notices.push(`Quantity updated — only ${line.allowed} of ${label} left.`);
+          }
+        }
+
+        setStockNotices(notices);
+        return notices.length === 0;
+      } catch {
+        // Never block checkout on this check failing; the reservation still gates.
+        setStockNotices([]);
+        return true;
+      } finally {
+        if (showSpinner) setIsValidatingStock(false);
+      }
+    },
+    [removeFromCart, updateQuantity],
+  );
+
+  // Reconcile once, as soon as the cart has hydrated, so a cart reopened days
+  // later is corrected before the shopper starts reading totals off it. Guarded
+  // by a ref rather than a dependency list because the reconciliation itself
+  // edits `items`, and re-running on that edit would loop.
+  const hasReconciledRef = useRef(false);
+  useEffect(() => {
+    if (!isHydrated || hasReconciledRef.current) return;
+    hasReconciledRef.current = true;
+    const snapshot = items;
+    // Deferred off the effect body: the corrections land in a later task, so
+    // this never cascades a render synchronously with the effect.
+    void Promise.resolve().then(() => revalidateStock(snapshot, false));
+  }, [isHydrated, items, revalidateStock]);
+
+  const handleContinueToCheckout = async () => {
+    // Last look before leaving the page. If anything was trimmed, stay put and
+    // let the shopper see the corrected cart rather than silently proceeding.
+    const unchanged = await revalidateStock(items, true);
+    if (!unchanged) return;
+    router.push("/checkout");
+  };
 
   const effectiveReferralInput = referralInput || referralCode || "";
   const freeShipThreshold = shippingConfig.freeShippingThreshold;
@@ -250,13 +345,25 @@ export function CartPageClient() {
               <p className="mt-4 text-sm text-white/60">Ambassador {referralDetails.ambassadorName} • {referralDetails.customerDiscountPercent}% customer discount</p>
             ) : null}
 
+            {stockNotices.length > 0 ? (
+              <div role="alert" className="mt-6 rounded-xl border border-[color:var(--accent-gold)]/40 bg-[var(--accent-gold-soft)] p-3.5 text-sm leading-6 text-white/85">
+                {stockNotices.map((notice) => (
+                  <p key={notice}>{notice}</p>
+                ))}
+              </div>
+            ) : null}
+
             <button
               type="button"
-              onClick={() => router.push("/checkout")}
-              disabled={isHydrated && items.length === 0}
+              onClick={() => void handleContinueToCheckout()}
+              disabled={(isHydrated && items.length === 0) || isValidatingStock}
               className="vl2-btn-primary vl-focus-ring mt-8 inline-flex w-full justify-center px-5 py-3 text-center text-sm disabled:cursor-not-allowed disabled:opacity-50"
             >
-              {isHydrated && items.length === 0 ? "Your cart is empty" : "Continue to checkout"}
+              {isHydrated && items.length === 0
+                ? "Your cart is empty"
+                : isValidatingStock
+                  ? "Checking availability…"
+                  : "Continue to checkout"}
             </button>
 
             <div className="mt-5 flex items-center justify-center gap-6 text-[10px] uppercase tracking-[0.14em] text-white/70">
