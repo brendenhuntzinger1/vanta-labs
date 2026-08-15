@@ -38,6 +38,7 @@ function tableFor(ref: StockLineRef): { table: "products" | "product_doses"; id:
 interface StockRow {
   inventory_quantity: number | null;
   incoming_quantity: number | null;
+  stock_status?: string | null;
   sku?: string | null;
 }
 
@@ -45,7 +46,7 @@ async function readStock(ref: StockLineRef): Promise<StockRow | null> {
   const { table, id } = tableFor(ref);
   const { data } = await supabaseAdmin
     .from(table)
-    .select("inventory_quantity, incoming_quantity, sku")
+    .select("inventory_quantity, incoming_quantity, stock_status, sku")
     .eq("id", id)
     .maybeSingle<StockRow>();
   return data ?? null;
@@ -84,9 +85,32 @@ export async function adjustStock(input: {
   const after = Math.max(0, before + delta);
 
   const { table, id } = tableFor(input.ref);
+
+  // Move the STATUS with the quantity, or receiving a shipment does not put the
+  // product back on sale.
+  //
+  // Once tracking is on, resolveStockStatus() only forces "Out of Stock" at a
+  // count of zero; above zero it defers to this stored string. So a line that
+  // sold out, was stamped "Out of Stock", and then had 10 units received
+  // through this function came back with quantity 10 and status "Out of
+  // Stock" — invisible on the storefront, unbuyable, with the owner looking at
+  // a healthy count in /admin/inventory and no idea why.
+  //
+  // Only the automatic pair is touched. "Limited" and "Reserved" are set
+  // deliberately in the product editor and must survive a stock movement, which
+  // is the same rule adjustInventoryLine() follows for manual saves.
+  const currentStatus = String(current.stock_status ?? "In Stock");
+  const updatePayload: Record<string, unknown> = {
+    inventory_quantity: after,
+    updated_at: new Date().toISOString(),
+  };
+  if (currentStatus === "In Stock" || currentStatus === "Out of Stock") {
+    updatePayload.stock_status = after > 0 ? "In Stock" : "Out of Stock";
+  }
+
   const { error } = await supabaseAdmin
     .from(table)
-    .update({ inventory_quantity: after, updated_at: new Date().toISOString() })
+    .update(updatePayload)
     .eq("id", id);
 
   if (error) {

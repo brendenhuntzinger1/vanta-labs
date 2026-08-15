@@ -817,7 +817,12 @@ export function ProductDetailClient({
                     <button
                       type="button"
                       aria-label="Decrease quantity"
-                      onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+                      // Steps from the DISPLAYED quantity, not the stored one.
+                      // They differ whenever the stored value is above what the
+                      // selected dose can supply — and stepping down from the
+                      // stored value then produced no visible change at all, so
+                      // the button looked broken.
+                      onClick={() => setQuantity(Math.max(1, quantity - 1))}
                       className="inline-flex h-11 w-11 items-center justify-center border border-white/[0.08] text-lg text-[#a3a3a3] transition hover:border-white/[0.16]"
                     >−</button>
                     <span className="text-sm text-white" aria-live="polite">{quantity} vials</span>
@@ -825,7 +830,7 @@ export function ProductDetailClient({
                       type="button"
                       aria-label="Increase quantity"
                       disabled={quantity >= maxSelectableQuantity}
-                      onClick={() => setQuantity((q) => Math.min(maxSelectableQuantity, q + 1))}
+                      onClick={() => setQuantity(Math.min(maxSelectableQuantity, quantity + 1))}
                       className="inline-flex h-11 w-11 items-center justify-center border border-white/[0.08] text-lg text-[#a3a3a3] transition hover:border-white/[0.16] disabled:cursor-not-allowed disabled:opacity-40"
                     >+</button>
                     {currentBundleRate > 0 ? (

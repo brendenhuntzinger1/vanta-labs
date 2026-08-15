@@ -130,14 +130,14 @@ export async function POST(request: Request) {
       doseIds.length > 0
         ? supabaseAdmin
             .from("product_doses")
-            .select("id, label, inventory_quantity, reserved_quantity")
+            .select("id, label, inventory_quantity, reserved_quantity, stock_status")
             .eq("is_enabled", true)
             .in("id", doseIds)
         : Promise.resolve({ data: [], error: null }),
       slugs.length > 0
         ? supabaseAdmin
             .from("products")
-            .select("slug, name, inventory_quantity, reserved_quantity")
+            .select("slug, name, inventory_quantity, reserved_quantity, stock_status")
             // Same visibility filters as every public catalog read. Without
             // them this route answers stock questions about unpublished and
             // archived rows that the storefront does not even list.
@@ -160,13 +160,24 @@ export async function POST(request: Request) {
       });
     }
 
-    const sellable = (onHand: unknown, reserved: unknown) =>
-      Math.max(0, Number(onHand ?? 0) - Number(reserved ?? 0));
+    // A stored "Out of Stock" or "Reserved" blocks the sale at checkout
+    // (quote-order rejects the line outright), so the cart has to honour it too
+    // — otherwise a line with a positive count but a blocking status sails
+    // through this check and hard-fails at the payment step, which is the exact
+    // late refusal this endpoint exists to prevent.
+    const BLOCKING_STATUSES = new Set(["out of stock", "reserved"]);
+
+    const sellable = (onHand: unknown, reserved: unknown, status: unknown) => {
+      if (BLOCKING_STATUSES.has(String(status ?? "").trim().toLowerCase())) {
+        return 0;
+      }
+      return Math.max(0, Number(onHand ?? 0) - Number(reserved ?? 0));
+    };
 
     const byDoseId = new Map<string, { available: number; name: string | null }>();
     for (const row of doseResult.data ?? []) {
       byDoseId.set(String(row.id), {
-        available: sellable(row.inventory_quantity, row.reserved_quantity),
+        available: sellable(row.inventory_quantity, row.reserved_quantity, row.stock_status),
         name: row.label ? String(row.label) : null,
       });
     }
@@ -174,7 +185,7 @@ export async function POST(request: Request) {
     const bySlug = new Map<string, { available: number; name: string | null }>();
     for (const row of productResult.data ?? []) {
       bySlug.set(String(row.slug), {
-        available: sellable(row.inventory_quantity, row.reserved_quantity),
+        available: sellable(row.inventory_quantity, row.reserved_quantity, row.stock_status),
         name: row.name ? String(row.name) : null,
       });
     }

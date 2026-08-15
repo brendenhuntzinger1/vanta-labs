@@ -165,7 +165,11 @@ describe("purchase controls respect what is actually on the shelf", () => {
 
   it("the + button stops at the ceiling", () => {
     expect(productDetail).toMatch(/disabled=\{quantity >= maxSelectableQuantity\}/);
-    expect(productDetail).toMatch(/setQuantity\(\(q\) => Math\.min\(maxSelectableQuantity, q \+ 1\)\)/);
+    // Steps from the DISPLAYED quantity, not the stored one: they diverge once
+    // the stored value exceeds what the selected dose can supply, and stepping
+    // from the stored value made the buttons look dead.
+    expect(productDetail).toMatch(/setQuantity\(Math\.min\(maxSelectableQuantity, quantity \+ 1\)\)/);
+    expect(productDetail).toMatch(/setQuantity\(Math\.max\(1, quantity - 1\)\)/);
   });
 
   it("zero available disables add-to-cart independently of the stored status", () => {

@@ -36,7 +36,12 @@ export function getOrderProgress(paymentStatus: string, fulfillmentStatus: strin
 
   let activeIndex = 0; // Ordered
   if (paid) activeIndex = 1; // Confirmed
-  if (paid && ["processing", "awaiting_fulfillment", "partially_fulfilled"].includes(ful)) activeIndex = 2;
+  // Every state that means "we are working on it". `label_purchased` and
+  // `ready_to_fulfill` are written by the Shippo sync and the fulfilment queue
+  // respectively; omitting them left the tracker showing "Payment confirmed"
+  // for the whole window between buying a label and the carrier's first scan —
+  // a customer watching their order see no movement for a day or more.
+  if (paid && ["processing", "awaiting_fulfillment", "partially_fulfilled", "ready_to_fulfill", "label_purchased"].includes(ful)) activeIndex = 2;
   if (["shipped", "out_for_delivery"].includes(ful)) activeIndex = 3;
   if (["delivered", "fulfilled"].includes(ful)) activeIndex = 4;
 

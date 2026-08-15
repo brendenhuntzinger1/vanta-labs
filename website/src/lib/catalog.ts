@@ -491,6 +491,15 @@ export const getCatalogProductsByCategory = unstable_cache(
  * Uncached on purpose. A stale count is fine for merchandising and wrong for a
  * purchase decision, and this is only ever called on the checkout path.
  *
+ * ONLY TRACKED ROWS ARE RETURNED. That is not a filter for convenience — it is
+ * what keeps checkout agreeing with the storefront. `track_inventory` defaults
+ * to false, and an untracked row's count is decorative: the storefront sells it
+ * freely and reserve_inventory() lets it through without a hold. Returning the
+ * count anyway made quoteOrder's guard enforce a number nothing else believed,
+ * so a shopper could be refused 10 units of something the site was advertising
+ * as available — a lost sale caused by a figure the owner had been told was
+ * inert.
+ *
  * Keys are `slug` for a product-level count and the dose UUID for a variant.
  * A failure returns an empty map, which makes the guard a no-op — the atomic
  * reservation still refuses the sale, so failing open here cannot oversell.
@@ -504,27 +513,33 @@ export async function getStockLevelsBySlugs(slugs: string[]): Promise<Map<string
   try {
     const { data: products, error } = await supabaseAdmin
       .from("products")
-      .select("id, slug, inventory_quantity")
+      .select("id, slug, inventory_quantity, track_inventory")
       .in("slug", slugs);
 
     if (error) throw error;
 
     const productIds: string[] = [];
-    for (const row of (products ?? []) as Array<{ id?: string; slug?: string; inventory_quantity?: number | null }>) {
-      if (row.slug) levels.set(String(row.slug), Math.max(0, Number(row.inventory_quantity ?? 0)));
+    for (const row of (products ?? []) as Array<{ id?: string; slug?: string; inventory_quantity?: number | null; track_inventory?: boolean | null }>) {
+      if (row.slug && row.track_inventory === true) {
+        levels.set(String(row.slug), Math.max(0, Number(row.inventory_quantity ?? 0)));
+      }
+      // Doses are still fetched for an untracked parent: tracking is per-row, so
+      // a tracked dose under an untracked product must still be enforced.
       if (row.id) productIds.push(String(row.id));
     }
 
     if (productIds.length > 0) {
       const { data: doses, error: doseError } = await supabaseAdmin
         .from("product_doses")
-        .select("id, inventory_quantity")
+        .select("id, inventory_quantity, track_inventory")
         .in("product_id", productIds);
 
       if (doseError) throw doseError;
 
-      for (const row of (doses ?? []) as Array<{ id?: string; inventory_quantity?: number | null }>) {
-        if (row.id) levels.set(String(row.id), Math.max(0, Number(row.inventory_quantity ?? 0)));
+      for (const row of (doses ?? []) as Array<{ id?: string; inventory_quantity?: number | null; track_inventory?: boolean | null }>) {
+        if (row.id && row.track_inventory === true) {
+          levels.set(String(row.id), Math.max(0, Number(row.inventory_quantity ?? 0)));
+        }
       }
     }
   } catch (error) {

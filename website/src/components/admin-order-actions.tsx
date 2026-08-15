@@ -132,8 +132,17 @@ export function AdminOrderActions({
         </label>
         <label className="text-sm text-zinc-300">Fulfillment status
           <select value={fulfillmentStatus} onChange={(e) => setFulfillmentStatus(e.target.value)} className="vl-input mt-1 w-full px-3 py-2">
+            {/* Every value the system actually writes must be listed. A select
+                whose current value is absent from its options silently displays
+                the FIRST option instead, so an order sitting in
+                "awaiting_fulfillment" or "label_purchased" showed as "Pending"
+                — and saving anything else on the form then wrote that
+                regression back, re-running the status-change side effects. */}
             <option value="pending">Pending</option>
+            <option value="awaiting_fulfillment">Awaiting fulfillment</option>
+            <option value="ready_to_fulfill">Ready to fulfill</option>
             <option value="processing">Processing</option>
+            <option value="label_purchased">Label purchased</option>
             <option value="shipped">Shipped</option>
             <option value="delivered">Delivered</option>
             <option value="cancelled">Cancelled</option>
