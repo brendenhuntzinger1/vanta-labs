@@ -22,6 +22,34 @@
 
 export type RedditEventName = "ViewContent" | "AddToCart" | "Purchase";
 
+/**
+ * A fresh conversion id for one occurrence of an event.
+ *
+ * WHY NOT A DERIVED, STABLE ID like the TikTok module's `vc-${slug}`. Those
+ * exist so a server leg can recompute the same key without the browser telling
+ * it, and they are paired with a localStorage store that sends each key at most
+ * once per browser. That is the right trade for TikTok's design and the wrong
+ * one here: Reddit dedupes on an exact conversionId match, so a key that is
+ * stable per PRODUCT would make a shopper's second add of the same item collapse
+ * into their first and quietly disappear from the funnel.
+ *
+ * Purchase is the deliberate exception — see buildRedditPurchase, which uses the
+ * order id precisely BECAUSE it is stable: refreshing the confirmation page must
+ * not invent a second sale.
+ *
+ * When the Conversions API leg is added, the browser generates this once and
+ * relays it, exactly as relay-client.ts already does with TikTok's event_id.
+ */
+export function newConversionId(prefix: string): string {
+  const random =
+    typeof globalThis.crypto?.randomUUID === "function"
+      ? globalThis.crypto.randomUUID()
+      : // Older in-app browsers have no randomUUID. Uniqueness only has to hold
+        // within one advertiser's event stream, so time plus entropy is ample.
+        `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `${prefix}-${random}`;
+}
+
 export type RedditProduct = {
   id: string;
   name?: string;
@@ -92,13 +120,20 @@ export function buildRedditViewContent(input: {
   name?: string | null;
   category?: string | null;
   price?: number | null;
+  /** One occurrence of this view. See newConversionId. */
+  conversionId?: string;
 }): RedditEvent | null {
   const item = product(input);
   if (!item) return null;
   const value = money(input.price);
   return {
     name: "ViewContent",
-    properties: { currency: "USD", products: [item], ...(value !== undefined ? { value } : {}) },
+    properties: {
+      currency: "USD",
+      products: [item],
+      ...(value !== undefined ? { value } : {}),
+      ...(input.conversionId ? { conversionId: input.conversionId } : {}),
+    },
   };
 }
 
@@ -109,6 +144,8 @@ export function buildRedditAddToCart(input: {
   category?: string | null;
   quantity?: number | null;
   price?: number | null;
+  /** One occurrence of this add. See newConversionId. */
+  conversionId?: string;
 }): RedditEvent | null {
   const item = product(input);
   if (!item) return null;
@@ -120,6 +157,7 @@ export function buildRedditAddToCart(input: {
       currency: "USD",
       itemCount: quantity,
       products: [item],
+      ...(input.conversionId ? { conversionId: input.conversionId } : {}),
       // Line value, not unit price — Reddit reports `value` as the money the
       // action represents, and two vials is twice the intent of one.
       ...(unit !== undefined ? { value: money(unit * quantity) } : {}),

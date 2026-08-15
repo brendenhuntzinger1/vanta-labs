@@ -5,7 +5,7 @@ import { browserFiredStore, emitEvent, mapAnalyticsDetail, type AnalyticsDetail,
 import { LISTENER_FLAG } from "@/lib/ads/tracking-health-browser";
 import { relayToServer } from "@/lib/ads/relay-client";
 import { buildSnapAddToCart, buildSnapCheckout, emitSnapEvent } from "@/lib/ads/snap-events";
-import { buildRedditAddToCart, emitRedditEvent } from "@/lib/ads/reddit-events";
+import { buildRedditAddToCart, emitRedditEvent, newConversionId } from "@/lib/ads/reddit-events";
 
 /**
  * AddToCart and InitiateCheckout, forwarded to the TikTok pixel.
@@ -68,6 +68,7 @@ export function TikTokCommerceEvents() {
             category: detail?.productCategory ?? null,
             quantity: Number(detail?.quantity ?? 1),
             price: Number(detail?.price ?? 0),
+            conversionId: newConversionId("atc"),
           }),
           (name, properties) => window.rdt?.("track", name, properties),
         );

@@ -4,6 +4,7 @@ import {
   buildRedditPurchase,
   buildRedditViewContent,
   emitRedditEvent,
+  newConversionId,
 } from "@/lib/ads/reddit-events";
 
 // ---------------------------------------------------------------------------
@@ -96,6 +97,53 @@ describe("buildRedditPurchase", () => {
     const event = buildRedditPurchase({ orderId: "order-9", total: 50, items: [] });
     expect(event?.properties.value).toBe(50);
     expect(event?.properties).not.toHaveProperty("products");
+  });
+});
+
+describe("conversion ids — Reddit's deduplication key", () => {
+  it("gives every occurrence its own id", () => {
+    // A key that is stable per PRODUCT would make a shopper's second add of the
+    // same item collapse into their first and vanish from the funnel.
+    const ids = new Set(Array.from({ length: 200 }, () => newConversionId("atc")));
+    expect(ids.size).toBe(200);
+  });
+
+  it("labels the id with the event it belongs to", () => {
+    expect(newConversionId("vc").startsWith("vc-")).toBe(true);
+    expect(newConversionId("atc").startsWith("atc-")).toBe(true);
+  });
+
+  it("still produces an id where crypto.randomUUID is missing", () => {
+    // Some in-app browsers have no randomUUID; losing the id there would mean
+    // the CAPI leg could never dedupe for those visitors.
+    const original = globalThis.crypto?.randomUUID;
+    try {
+      if (globalThis.crypto) {
+        // @ts-expect-error deliberately removing it for the fallback path
+        globalThis.crypto.randomUUID = undefined;
+      }
+      const ids = new Set(Array.from({ length: 50 }, () => newConversionId("vc")));
+      expect(ids.size).toBe(50);
+      expect([...ids][0]).toMatch(/^vc-/);
+    } finally {
+      if (globalThis.crypto && original) globalThis.crypto.randomUUID = original;
+    }
+  });
+
+  it("carries the id onto ViewContent and AddToCart when given one", () => {
+    expect(buildRedditViewContent({ slug: "a", conversionId: "vc-1" })?.properties.conversionId).toBe("vc-1");
+    expect(buildRedditAddToCart({ slug: "a", conversionId: "atc-1" })?.properties.conversionId).toBe("atc-1");
+  });
+
+  it("omits the field entirely rather than sending an empty one", () => {
+    expect(buildRedditViewContent({ slug: "a" })?.properties).not.toHaveProperty("conversionId");
+  });
+
+  it("uses the STABLE order id for Purchase, so a refresh is not a second sale", () => {
+    const first = buildRedditPurchase({ orderId: "order-7", total: 10 });
+    const refreshed = buildRedditPurchase({ orderId: "order-7", total: 10 });
+    expect(first?.properties.conversionId).toBe("order-7");
+    expect(refreshed?.properties.conversionId).toBe(first?.properties.conversionId);
   });
 });
 

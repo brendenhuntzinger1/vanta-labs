@@ -180,6 +180,17 @@ describe("no customer identifier is ever handed to Reddit", () => {
     const events = read(join(SRC, "lib", "ads", "reddit-events.ts"));
     expect(events).toContain("conversionId: orderId");
   });
+
+  it("gives every emitted event a conversion id", () => {
+    // Reddit's "Prepare for deduplication" step. An event without one can never
+    // be matched to its Conversions API twin, so adding the server leg later
+    // would double-count exactly the events that lack it. Purchase derives its
+    // id from the order; the other two are generated per occurrence.
+    const viewContent = read(join(SRC, "components", "tiktok-view-content.tsx"));
+    const commerce = read(join(SRC, "components", "tiktok-commerce-events.tsx"));
+    expect(viewContent).toContain('newConversionId("vc")');
+    expect(commerce).toContain('newConversionId("atc")');
+  });
 });
 
 describe("the Reddit pixel is gated on consent, exactly like the others", () => {

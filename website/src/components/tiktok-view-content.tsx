@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { browserFiredStore, buildViewContent, emitEvent, type Emitter } from "@/lib/ads/tiktok-events";
 import { whenPixelReady } from "@/lib/ads/pixel-ready";
 import { buildSnapViewContent, emitSnapEvent } from "@/lib/ads/snap-events";
-import { buildRedditViewContent, emitRedditEvent } from "@/lib/ads/reddit-events";
+import { buildRedditViewContent, emitRedditEvent, newConversionId } from "@/lib/ads/reddit-events";
 import { relayToServer } from "@/lib/ads/relay-client";
 
 /**
@@ -67,7 +67,7 @@ export function TikTokViewContent({
       // Reddit, from the same data and the same gate, for the same reason: one
       // decision about when a product view counts, not three.
       emitRedditEvent(
-        buildRedditViewContent({ slug, name, price, category }),
+        buildRedditViewContent({ slug, name, price, category, conversionId: newConversionId("vc") }),
         (eventName, properties) => window.rdt?.("track", eventName, properties),
       );
     });
