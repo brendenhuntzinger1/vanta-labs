@@ -97,7 +97,10 @@ export function CartPageClient() {
             notices.push(`${label} just sold out and was removed from your cart.`);
           } else {
             updateQuantity(line.key, line.allowed);
-            notices.push(`Quantity updated — only ${line.allowed} of ${label} left.`);
+            // States that the line changed, never how much is left. The new
+            // quantity is visible on the line itself, so nothing is hidden from
+            // the shopper — the shelf depth simply isn't published.
+            notices.push(`We've reduced ${label} to the quantity we can ship right now.`);
           }
         }
 

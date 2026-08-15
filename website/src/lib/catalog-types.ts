@@ -24,16 +24,22 @@ export type ProductDose = {
   /** Internal cost (COGS) in cents — admin-only, populated only in admin
    *  contexts; never selected for or shown to customers. */
   productCostCents?: number;
-  inventoryQuantity: number;
   /**
-   * Units a shopper can actually buy right now: on hand, less what in-flight
-   * checkouts are holding. This — NOT inventoryQuantity — is what the quantity
-   * selector is capped at and what "N available" reports, because on-hand
-   * includes units that are already spoken for.
+   * Raw units on hand. ADMIN-ONLY: the public catalog reads deliberately leave
+   * this undefined, because these objects are serialized into pages that
+   * customers can view the source of. Server code that genuinely needs the real
+   * figure calls getStockLevelsBySlugs() instead.
+   */
+  inventoryQuantity?: number;
+  /**
+   * How many units may be OFFERED to a shopper right now: on hand, less what
+   * in-flight checkouts are holding, then clamped to the per-line order ceiling
+   * before it leaves the server. It is what the quantity controls are capped
+   * at. It is never rendered — customers see "out of stock" or nothing.
    *
    * `null` means availability is not being counted (inventory tracking is off
    * globally), which is a different statement from "zero available" and must
-   * not be rendered as one.
+   * not be treated as one.
    */
   availableQuantity?: number | null;
   stockStatus?: "In Stock" | "Limited" | "Reserved" | "Out of Stock";
@@ -57,6 +63,7 @@ export type Product = {
   compareAtPrice?: string;
   salePrice?: string;
   stockStatus: "In Stock" | "Limited" | "Reserved" | "Out of Stock";
+  /** Raw units on hand. ADMIN-ONLY — see ProductDose.inventoryQuantity. */
   inventoryQuantity?: number;
   /** See ProductDose.availableQuantity — same contract, for the default dose. */
   availableQuantity?: number | null;

@@ -80,10 +80,14 @@ async function readAvailable(
 }
 
 /**
- * One sentence telling the customer exactly what is short and by how much.
+ * One sentence telling the customer WHICH line is short and what to do.
  *
- * "Sorry, something sold out" makes the customer guess which line and by how
- * much; naming the item and the number turns an abandoned cart into an edit.
+ * Names the item — "sorry, something sold out" makes the shopper guess which of
+ * five lines to edit — but never the remaining count. Stock depth is the
+ * owner's commercial information, and an error that reports it makes checkout a
+ * free inventory API: send quantity 2, 4, 8… and the replies binary-search the
+ * exact figure. "Sold out" is the one stock fact a customer is shown, because
+ * they cannot act on the line without it.
  */
 export function describeUnavailable(lines: UnavailableLine[]): string {
   if (lines.length === 0) {
@@ -93,7 +97,7 @@ export function describeUnavailable(lines: UnavailableLine[]): string {
     const name = line.name ?? "An item in your cart";
     if (line.available === null) return `${name} is no longer available`;
     if (line.available === 0) return `${name} just sold out`;
-    return `${name}: only ${line.available} left (you asked for ${line.quantity})`;
+    return `we can't ship that many of ${name} right now`;
   });
   return `${parts.join(". ")}. Please adjust your cart and try again.`;
 }

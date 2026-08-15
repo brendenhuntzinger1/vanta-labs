@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isInventoryTrackingActive } from "@/lib/inventory-settings";
+import { MAX_UNITS_PER_ORDER_LINE } from "@/lib/purchase-limits";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { getRequestIpAddress } from "@/lib/admin-auth";
 
 /**
  * POST /api/cart/validate
@@ -20,8 +23,11 @@ import { isInventoryTrackingActive } from "@/lib/inventory-settings";
  * and a wrong answer here can only produce a friendlier error one step earlier —
  * never a sale that should not have happened.
  *
- * The response reports availability NET of live reservations, matching what the
- * product page shows, so the two screens cannot disagree.
+ * Availability is computed NET of live reservations, matching what gates the
+ * product page, so the two screens cannot disagree. The RAW COUNT NEVER LEAVES
+ * THE SERVER: the response says only what each line may be reduced to and
+ * whether it sold out. Returning the figure would hand any visitor a public
+ * inventory API for the entire catalogue.
  */
 
 interface CartLineInput {
@@ -36,19 +42,59 @@ export interface CartLineValidation {
   key: string;
   slug: string;
   variantId: string | null;
-  /** What the cart currently holds. */
+  /** What the cart currently holds — the client's own input, echoed back. */
   requested: number;
-  /** Sellable units, or null when availability is not being counted. */
-  available: number | null;
-  /** The quantity the cart should be reduced to; equals `requested` when fine. */
+  /**
+   * The quantity this line should be reduced to; equals `requested` when the
+   * line is fine.
+   *
+   * The raw sellable count is deliberately NOT in this response. The endpoint
+   * answers "may I have this many", not "how many are there": a shopper needs
+   * their cart corrected, and nothing more. Publishing the figure would make
+   * this a public inventory API for the whole catalogue.
+   */
   allowed: number;
+  /** True when the line is gone entirely — the one stock fact customers see. */
+  soldOut: boolean;
   name: string | null;
 }
 
 const MAX_LINES = 50;
 
+/**
+ * What a line may be reduced to — and the ONLY number this endpoint publishes.
+ *
+ * The third clamp is the important one, and it is not an optimisation. Without
+ * it `allowed` is exactly `available` whenever the caller asks for more than
+ * exists, so `{"quantity": 999999}` reads the live count back verbatim: an
+ * unauthenticated, unpaginated inventory API for fifty SKUs per request. With
+ * it, the largest number that can ever leave here is the per-line order
+ * ceiling — precisely what publishableAvailability() already allows the catalog
+ * to publish, so this route discloses nothing the product page does not.
+ *
+ * The cost is a genuine but rare under-offer: a shopper asking for 20 of
+ * something with 15 left is reduced to 10 rather than 15. The product page
+ * cannot even produce a line above the ceiling, so this only bites a cart hand-
+ * stepped past it, and it errs toward selling less — never toward overselling.
+ */
+export function resolveAllowedQuantity(requested: number, available: number): number {
+  return Math.max(0, Math.min(requested, available, MAX_UNITS_PER_ORDER_LINE));
+}
+
 export async function POST(request: Request) {
   try {
+    // A real shopper validates their cart a handful of times per visit. Anyone
+    // sweeping the catalogue does it thousands of times, so throttle by IP.
+    // Fails open, like every other limiter here — availability checks must not
+    // break for real customers if the limiter is unavailable.
+    const ip = getRequestIpAddress(request) ?? "unknown";
+    const rateLimit = await checkRateLimit(`cart-validate:${ip}`, 30, 60);
+    if (!rateLimit.allowed) {
+      const res = NextResponse.json({ success: true, tracking: false, degraded: true, lines: [] }, { status: 429 });
+      res.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
+      return res;
+    }
+
     const body = await request.json().catch(() => ({}));
     const rawLines: CartLineInput[] = Array.isArray(body?.items) ? body.items.slice(0, MAX_LINES) : [];
 
@@ -73,7 +119,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         success: true,
         tracking: false,
-        lines: lines.map((line) => ({ ...line, available: null, allowed: line.requested, name: null })),
+        lines: lines.map((line) => ({ ...line, allowed: line.requested, soldOut: false, name: null })),
       });
     }
 
@@ -85,12 +131,19 @@ export async function POST(request: Request) {
         ? supabaseAdmin
             .from("product_doses")
             .select("id, label, inventory_quantity, reserved_quantity")
+            .eq("is_enabled", true)
             .in("id", doseIds)
         : Promise.resolve({ data: [], error: null }),
       slugs.length > 0
         ? supabaseAdmin
             .from("products")
             .select("slug, name, inventory_quantity, reserved_quantity")
+            // Same visibility filters as every public catalog read. Without
+            // them this route answers stock questions about unpublished and
+            // archived rows that the storefront does not even list.
+            .eq("is_enabled", true)
+            .eq("is_published", true)
+            .eq("is_archived", false)
             .in("slug", slugs)
         : Promise.resolve({ data: [], error: null }),
     ]);
@@ -103,7 +156,7 @@ export async function POST(request: Request) {
         success: true,
         tracking: false,
         degraded: true,
-        lines: lines.map((line) => ({ ...line, available: null, allowed: line.requested, name: null })),
+        lines: lines.map((line) => ({ ...line, allowed: line.requested, soldOut: false, name: null })),
       });
     }
 
@@ -131,12 +184,12 @@ export async function POST(request: Request) {
       // A row we cannot find is left alone rather than zeroed — an unknown line
       // is a lookup gap, not a sold-out product.
       if (!match) {
-        return { ...line, available: null, allowed: line.requested, name: null };
+        return { ...line, allowed: line.requested, soldOut: false, name: null };
       }
       return {
         ...line,
-        available: match.available,
-        allowed: Math.min(line.requested, match.available),
+        allowed: resolveAllowedQuantity(line.requested, match.available),
+        soldOut: match.available <= 0,
         name: match.name,
       };
     });

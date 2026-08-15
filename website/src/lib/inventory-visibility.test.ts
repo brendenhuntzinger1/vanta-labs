@@ -32,6 +32,9 @@ const inventoryReservation = read("src/lib/inventory-reservation.ts");
 const adminProducts = read("src/lib/admin-products.ts");
 const productDetail = read("src/components/product-detail-client.tsx");
 const cartValidate = read("src/app/api/cart/validate/route.ts");
+const cartClient = read("src/app/cart/cart-client.tsx");
+const quoteOrder = read("src/lib/quote-order.ts");
+const catalogTypes = read("src/lib/catalog-types.ts");
 
 describe("cache invalidation exists and is reachable from every write path", () => {
   it("invalidateCatalogCache actually calls revalidateTag on the catalog tag", () => {
@@ -79,6 +82,68 @@ describe("the storefront reports availability, not stock on hand", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// STOCK DEPTH IS NOT PUBLISHED.
+//
+// A customer may learn exactly one thing about stock: that an item is out of
+// it. Counts, "only N left", low-stock nudges and remaining-quantity error
+// messages are all disclosure of the owner's commercial position, and an error
+// message that names a number is a binary-searchable inventory API for anyone
+// who wants to measure the shop.
+// ---------------------------------------------------------------------------
+describe("no stock quantity reaches a customer", () => {
+  it("the published availability figure is clamped before it leaves the server", () => {
+    expect(catalog).toMatch(/function publishableAvailability/);
+    expect(catalog).toMatch(/Math\.min\(available, MAX_UNITS_PER_ORDER_LINE\)/);
+    // Both mapping sites go through the clamp, not raw sellable().
+    expect(catalog).toMatch(/availableQuantity: inventoryActive\s*\n?\s*\?\s*publishableAvailability\(/);
+    expect(catalog).toMatch(/:\s*publishableAvailability\(sellable\(productLevelQuantity, reservedQuantity\)\)/);
+  });
+
+  it("the raw on-hand count is never placed on a published catalog object", () => {
+    // The public mappers must not assign inventoryQuantity at all — these
+    // objects are handed to client components and end up in the page source.
+    expect(catalog).not.toMatch(/^\s*inventoryQuantity:/m);
+    expect(catalogTypes).toMatch(/inventoryQuantity\?: number/);
+  });
+
+  it("checkout reads real stock through a dedicated server-only function", () => {
+    expect(catalog).toMatch(/export async function getStockLevelsBySlugs/);
+    expect(quoteOrder).toMatch(/getStockLevelsBySlugs/);
+    expect(quoteOrder).toMatch(/stockLevels\.get\(selectedDose\.id\)/);
+  });
+
+  it("the product page renders no count, only OUT OF STOCK", () => {
+    expect(productDetail).not.toMatch(/\{availableQuantity\}/);
+    expect(productDetail).not.toMatch(/available<\/span>|\} available/);
+    expect(productDetail).not.toMatch(/Only \$\{maxSelectableQuantity\}/);
+    expect(productDetail).toMatch(/isOutOfStock \? \(/);
+  });
+
+  it("the checkout oversell message names the item but not the count", () => {
+    expect(quoteOrder).not.toMatch(/Only \$\{trackedInventory\}/);
+    expect(quoteOrder).toMatch(/can't ship that many of \$\{product\.name\}/);
+  });
+
+  it("the reservation message never interpolates the remaining count", () => {
+    expect(inventoryReservation).not.toMatch(/only \$\{line\.available\}/);
+    expect(inventoryReservation).toMatch(/just sold out/);
+  });
+
+  it("the cart notice states the change, not the shelf depth", () => {
+    expect(cartClient).not.toMatch(/only \$\{line\.allowed\}/);
+    expect(cartClient).toMatch(/reduced \$\{label\} to the quantity we can ship/);
+  });
+
+  it("the cart validation response carries no availability figure", () => {
+    const code = cartValidate.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+    // `allowed` and `soldOut` are answers to "may I have this many"; `available`
+    // would be an answer to "how many are there".
+    expect(code).not.toMatch(/available:\s*match\.available/);
+    expect(code).toMatch(/soldOut:\s*match\.available <= 0/);
+  });
+});
+
 describe("purchase controls respect what is actually on the shelf", () => {
   it("the quantity ceiling comes from availability, not just the bundle max", () => {
     expect(productDetail).toMatch(/maxSelectableQuantity\s*=\s*isTrackingAvailability/);
@@ -106,10 +171,7 @@ describe("purchase controls respect what is actually on the shelf", () => {
     expect(productDetail).toMatch(/isTrackingAvailability && availableQuantity <= 0/);
   });
 
-  it("a count is shown only when availability is genuinely counted", () => {
-    expect(productDetail).toMatch(/isTrackingAvailability \?/);
-    expect(productDetail).toContain("available");
-  });
+
 });
 
 describe("cart re-validation fails open and never invents a shortfall", () => {

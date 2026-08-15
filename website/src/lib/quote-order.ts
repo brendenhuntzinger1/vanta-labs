@@ -2,7 +2,7 @@
 // straight lift out of it): the unit tests import the checkout path directly,
 // and the transitive supabase-server import already makes a client import a
 // build error.
-import { getCatalogProductsBySlugs } from "@/lib/catalog";
+import { getCatalogProductsBySlugs, getStockLevelsBySlugs } from "@/lib/catalog";
 import { calculateDiscountAmount } from "@/lib/referral-service";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { validateCoupon } from "@/lib/coupons";
@@ -318,6 +318,10 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
 
   const requestedSlugs = Array.from(new Set(sanitizedItems.map((item) => item.id.split("::")[0])));
   const catalogProducts = await getCatalogProductsBySlugs(requestedSlugs);
+  // Raw stock, read separately and server-side only. The catalog objects above
+  // are the same ones handed to client components, so they carry no counts —
+  // see getStockLevelsBySlugs. Keyed by slug for a product, dose id for a variant.
+  const stockLevels = await getStockLevelsBySlugs(requestedSlugs);
 
   // Real per-SKU cost (COGS) for the profit floor. The catalog select omits cost,
   // so fetch it directly here — the profit guard must price against the ACTUAL
@@ -407,12 +411,19 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     // the last step. With tracking off, 0 still means "not tracked" and the
     // catalogue stays fully purchasable, exactly as before.
     const trackedInventory = selectedDose
-      ? selectedDose.inventoryQuantity
-      : catalogProduct?.inventoryQuantity;
+      ? stockLevels.get(selectedDose.id)
+      : catalogProduct
+        ? stockLevels.get(catalogProduct.slug)
+        : undefined;
     if (typeof trackedInventory === "number" && Number.isFinite(trackedInventory) && trackedInventory > 0) {
       if (item.quantity > trackedInventory) {
+        // Deliberately does NOT name the count. Stock depth is the owner's
+        // commercial information, and an error message that reports it turns
+        // checkout into a free inventory API — a competitor could binary-search
+        // the exact figure for every line in the catalogue. The shopper is told
+        // what to do instead, which is the only part they needed.
         throw new Error(
-          `Only ${trackedInventory} of ${product.name} ${trackedInventory === 1 ? "is" : "are"} in stock.`,
+          `We can't ship that many of ${product.name} right now. Please lower the quantity and try again.`,
         );
       }
     }

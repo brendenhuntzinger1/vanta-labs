@@ -154,7 +154,14 @@ vi.mock("@/lib/catalog", () => ({
       labName: "Vanta Independent Testing Group",
       coaUrl: "/demo-coa.pdf",
       molecularFormula: "C62H98N16O22",
+      // Note the ABSENCE of inventoryQuantity: the real catalog reads no longer
+      // publish it, because these objects are serialized to client components.
+      // The checkout oversell guard reads getStockLevelsBySlugs instead.
     })),
+  // Empty map = no stock on record, which makes the secondary oversell guard a
+  // no-op. That is the correct default here: these suites test pricing, and the
+  // authoritative gate is the atomic reservation, not this guard.
+  getStockLevelsBySlugs: async () => new Map<string, number>(),
 }));
 
 vi.mock("@/lib/supabase-server", () => {

@@ -13,14 +13,26 @@ function line(overrides: Partial<UnavailableLine> = {}): UnavailableLine {
 }
 
 // The point of this message is that the customer can ACT on it. "Something sold
-// out" makes them guess which line and by how much, which is how a cart that
-// could have been edited gets abandoned instead.
+// out" makes them guess which line, which is how a cart that could have been
+// edited gets abandoned instead. It names the ITEM for that reason — and
+// deliberately not the remaining COUNT, which is the owner's commercial
+// information and would turn checkout into a binary-searchable inventory API.
 describe("describeUnavailable", () => {
-  it("names the item and how many are left", () => {
+  it("names the short item and what to do, without naming the count", () => {
     const message = describeUnavailable([line()]);
     expect(message).toContain("BPC-157 10mg");
-    expect(message).toContain("only 1 left");
-    expect(message).toContain("you asked for 3");
+    expect(message).toMatch(/adjust your cart/i);
+    expect(message).not.toMatch(/only 1|1 left|you asked for/i);
+  });
+
+  // Stronger than grepping for digits (the product name itself contains "10"):
+  // if the wording is identical for every positive count, the message provably
+  // carries no information about how deep the shelf is.
+  it("reads identically whatever the remaining quantity is", () => {
+    const messages = [1, 2, 3, 7, 42, 999].map((available) =>
+      describeUnavailable([line({ quantity: 1000, available })]),
+    );
+    expect(new Set(messages).size).toBe(1);
   });
 
   it("says sold out when nothing is left, rather than 'only 0 left'", () => {

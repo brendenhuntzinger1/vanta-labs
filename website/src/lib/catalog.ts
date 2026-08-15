@@ -4,6 +4,7 @@ import { unstable_cache } from "next/cache";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isInventoryTrackingActive } from "@/lib/inventory-settings";
 import { CATALOG_CACHE_TAG } from "@/lib/catalog-tag";
+import { MAX_UNITS_PER_ORDER_LINE } from "@/lib/purchase-limits";
 import type { Product, ProductDose, ProductImage } from "@/lib/catalog-types";
 import { parseProductFaq } from "@/lib/product-faq";
 import { sanitizeCoaUrl } from "@/lib/coa-url";
@@ -119,6 +120,22 @@ function sellable(onHand: number, reserved: number): number {
   return Math.max(0, onHand - reserved);
 }
 
+/**
+ * The availability figure that is safe to publish to a browser.
+ *
+ * Stock depth is the owner's commercial information — how fast a line is
+ * moving, how much capital sits on the shelf, when a competitor could drain it.
+ * The storefront only ever needs to know two things: is there none, and may I
+ * offer this many. Clamping to the per-line order ceiling answers both while
+ * telling a reader of the page source at most "ten or more".
+ *
+ * Zero passes through unclamped, because zero is the one stock fact a customer
+ * IS shown.
+ */
+function publishableAvailability(available: number): number {
+  return Math.min(available, MAX_UNITS_PER_ORDER_LINE);
+}
+
 async function fetchProductRelations(productIds: string[]) {
   const inventoryActive = await isInventoryActive();
   if (productIds.length === 0) {
@@ -188,12 +205,16 @@ async function fetchProductRelations(productIds: string[]) {
       price: formatPriceFromCents(basePriceCents),
       compareAtPrice: compareAtCents > 0 ? formatPriceFromCents(compareAtCents) : undefined,
       salePrice: salePriceCents > 0 ? formatPriceFromCents(salePriceCents) : undefined,
-      inventoryQuantity: parseNumber(row.inventory_quantity, 0),
+      // inventoryQuantity is deliberately ABSENT. These objects are handed to
+      // client components, so anything on them is readable in the page source;
+      // the shelf depth is the owner's information. Server code that needs the
+      // real figure calls getStockLevelsBySlugs() below.
+      //
       // Availability, not stock on hand. A unit held by someone mid-checkout is
       // not sellable, and showing it as In Stock sends a second shopper all the
       // way to checkout before telling them it is gone.
       availableQuantity: inventoryActive
-        ? sellable(parseNumber(row.inventory_quantity, 0), reserved.byDoseId.get(String(row.id)) ?? 0)
+        ? publishableAvailability(sellable(parseNumber(row.inventory_quantity, 0), reserved.byDoseId.get(String(row.id)) ?? 0))
         : null,
       stockStatus: resolveStockStatus(
         String(row.stock_status ?? "In Stock"),
@@ -232,19 +253,24 @@ function mapProductRow(
   const rowPrice = salePriceCents > 0 ? salePriceCents : basePriceCents;
 
   const displayPrice = defaultDose?.salePrice ?? defaultDose?.price ?? formatPriceFromCents(rowPrice);
-  const defaultInventoryQuantity = defaultDose?.inventoryQuantity ?? parseNumber(row.inventory_quantity, 0);
-  // Availability has exactly one source of truth: Vanta Labs. Until tracking is on
-  // (inventoryActive === false) everything is In Stock; the doses were already
-  // resolved the same way in fetchProductRelations.
-  // The dose's own status already carries the zero-quantity rule from
-  // fetchProductRelations, so pass the quantity that actually backs this
-  // product -- the default dose's count when there is one, else the product's.
-  // A dose's own status already accounts for its reservations; a product
-  // without doses needs its own subtraction here.
+  // Only meaningful for a product sold WITHOUT doses; a dosed product's stock
+  // lives on the dose rows, and this column is a stale shadow of it.
+  const productLevelQuantity = parseNumber(row.inventory_quantity, 0);
+  // What backs this product, expressed as "units we may offer". For a dosed
+  // product that is the default dose's already-computed figure (its own status
+  // and reservations are baked in by fetchProductRelations); for an undosed one
+  // it is this row's count less its holds. Note the dose branch reads
+  // availableQuantity, NOT a raw count — the dose objects no longer carry one,
+  // and this value is exactly as good for the zero test below.
+  const backingAvailability = defaultDose
+    ? defaultDose.availableQuantity ?? undefined
+    : sellable(productLevelQuantity, reservedQuantity);
+  // Availability has exactly one source of truth: Vanta Labs. Until tracking is
+  // on (inventoryActive === false) everything is In Stock.
   const stockStatus = resolveStockStatus(
     String(defaultDose?.stockStatus ?? row.stock_status ?? "In Stock"),
     inventoryActive,
-    defaultDose ? defaultInventoryQuantity : sellable(defaultInventoryQuantity, reservedQuantity),
+    backingAvailability,
   );
   const effectiveImage = resolveProductImage(defaultDose?.imageUrl ?? primaryImage?.imageUrl ?? row.image_url);
   const effectiveBatchNumber = defaultDose?.batchNumber ?? String(row.batch_number ?? "");
@@ -262,7 +288,7 @@ function mapProductRow(
     compareAtPrice: defaultDose?.compareAtPrice ?? (compareAtPriceCents > 0 ? formatPriceFromCents(compareAtPriceCents) : undefined),
     salePrice: defaultDose?.salePrice ?? (salePriceCents > 0 ? formatPriceFromCents(salePriceCents) : undefined),
     stockStatus,
-    inventoryQuantity: defaultInventoryQuantity,
+    // inventoryQuantity is deliberately ABSENT — see the dose mapping above.
     // A product with doses is sold through its doses, so its headline
     // availability is the default dose's already-computed figure; a product
     // without doses subtracts its own reservations here.
@@ -270,7 +296,7 @@ function mapProductRow(
       ? null
       : defaultDose
         ? defaultDose.availableQuantity ?? null
-        : sellable(defaultInventoryQuantity, reservedQuantity),
+        : publishableAvailability(sellable(productLevelQuantity, reservedQuantity)),
     isPublished: parseBoolean(row.is_published, true),
     isEnabled: parseBoolean(row.is_enabled, true),
     isArchived: parseBoolean(row.is_archived, false),
@@ -451,3 +477,60 @@ export const getCatalogProductsByCategory = unstable_cache(
   ["catalog-products-by-category"],
   { tags: [CATALOG_CACHE_TAG], revalidate: CATALOG_CACHE_TTL },
 );
+
+/**
+ * Raw stock counts for the checkout guard — SERVER ONLY, never serialized.
+ *
+ * The public catalog objects deliberately carry no `inventoryQuantity`: they
+ * are handed to client components, so anything on them ends up readable in the
+ * page source, and the depth of the shelf is the owner's commercial
+ * information. quoteOrder() still needs the true figure for its secondary
+ * oversell check (the authoritative one is the row-locked reserve_inventory()),
+ * so it asks for exactly that, here, and nothing else travels with it.
+ *
+ * Uncached on purpose. A stale count is fine for merchandising and wrong for a
+ * purchase decision, and this is only ever called on the checkout path.
+ *
+ * Keys are `slug` for a product-level count and the dose UUID for a variant.
+ * A failure returns an empty map, which makes the guard a no-op — the atomic
+ * reservation still refuses the sale, so failing open here cannot oversell.
+ */
+export async function getStockLevelsBySlugs(slugs: string[]): Promise<Map<string, number>> {
+  const levels = new Map<string, number>();
+  if (slugs.length === 0) {
+    return levels;
+  }
+
+  try {
+    const { data: products, error } = await supabaseAdmin
+      .from("products")
+      .select("id, slug, inventory_quantity")
+      .in("slug", slugs);
+
+    if (error) throw error;
+
+    const productIds: string[] = [];
+    for (const row of (products ?? []) as Array<{ id?: string; slug?: string; inventory_quantity?: number | null }>) {
+      if (row.slug) levels.set(String(row.slug), Math.max(0, Number(row.inventory_quantity ?? 0)));
+      if (row.id) productIds.push(String(row.id));
+    }
+
+    if (productIds.length > 0) {
+      const { data: doses, error: doseError } = await supabaseAdmin
+        .from("product_doses")
+        .select("id, inventory_quantity")
+        .in("product_id", productIds);
+
+      if (doseError) throw doseError;
+
+      for (const row of (doses ?? []) as Array<{ id?: string; inventory_quantity?: number | null }>) {
+        if (row.id) levels.set(String(row.id), Math.max(0, Number(row.inventory_quantity ?? 0)));
+      }
+    }
+  } catch (error) {
+    console.error("[catalog] getStockLevelsBySlugs failed; oversell guard degrades to the atomic reservation", error);
+    return new Map();
+  }
+
+  return levels;
+}

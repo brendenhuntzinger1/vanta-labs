@@ -95,7 +95,13 @@ describe("the real implementation matches", () => {
   });
 
   it("passes availability at the product call site when there is no dose", () => {
-    expect(catalog).toContain("defaultDose ? defaultInventoryQuantity : sellable(defaultInventoryQuantity, reservedQuantity)");
+    // A dosed product defers to the dose's already-resolved availability; an
+    // undosed one subtracts its own holds here. Neither branch reads a raw
+    // count off the published object any more — those objects no longer carry
+    // one, because they are serialized into pages customers can view-source.
+    expect(catalog).toContain("const backingAvailability = defaultDose");
+    expect(catalog).toContain("defaultDose.availableQuantity ?? undefined");
+    expect(catalog).toContain("sellable(productLevelQuantity, reservedQuantity)");
   });
 
   it("subtracts reservations rather than clamping them away", () => {

@@ -14,6 +14,7 @@ import { SubscribeSave } from "@/components/subscribe-save";
 import { bundleDiscountRate, getBundleDiscountedLineTotal, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
 import type { Product, ProductDose, ProductFaqItem } from "@/lib/catalog-types";
 import { isBacWater } from "@/lib/bac-water";
+import { MAX_UNITS_PER_ORDER_LINE } from "@/lib/purchase-limits";
 // Free-shipping threshold comes from the shared shipping module so the "Free
 // Ship" badge can never disagree with what checkout actually charges.
 import { FREE_SHIPPING_THRESHOLD } from "@/lib/shipping";
@@ -53,10 +54,7 @@ const BUNDLE_OPTIONS = [
 ] as const;
 
 /** The largest bundle the quantity controls offer; also the "+" button's ceiling. */
-const MAX_BUNDLE_QUANTITY = 10;
-
-/** At or below this many units left, the availability line is emphasised. */
-const LOW_STOCK_DISPLAY_THRESHOLD = 5;
+const MAX_BUNDLE_QUANTITY = MAX_UNITS_PER_ORDER_LINE;
 
 const TRUST_ROW = [
   {
@@ -190,11 +188,12 @@ export function ProductDetailClient({
   const selectedStockStatus = selectedDose?.stockStatus ?? product.stockStatus;
   const unitPrice = toPriceNumber(selectedPrice);
 
-  // Units the shopper can actually buy of the dose they have selected, net of
-  // what other in-flight checkouts are holding. `null` means availability is
-  // not being counted at all (inventory tracking is off store-wide) — which is
-  // NOT the same as zero, so it must neither cap the selector nor render a
-  // count. Everything downstream keys off these two values.
+  // Units the shopper can buy of the dose they have selected, net of what
+  // in-flight checkouts are holding AND clamped to the per-line order ceiling
+  // before it ever leaves the server — so this is "how many may I offer", not
+  // "how deep is the shelf". `null` means availability is not being counted at
+  // all (tracking is off store-wide), which is NOT the same as zero and must
+  // not cap anything. Never rendered: it only gates controls.
   const availableQuantity = selectedDose
     ? selectedDose.availableQuantity ?? null
     : product.availableQuantity ?? null;
@@ -760,18 +759,14 @@ export function ProductDetailClient({
                 )
               ) : null}
 
-              {/* Availability, stated only when it is actually being counted.
-                  With tracking off there is no number to report, and inventing
-                  one ("In Stock") is the claim the product spec rules out. */}
-              {isTrackingAvailability ? (
+              {/* OUT OF STOCK is the only stock statement a customer ever sees.
+                  Counts, "only N left" and low-stock warnings are deliberately
+                  absent: stock depth is commercial information for the owner,
+                  not merchandising copy. Everything below still respects the
+                  real count, it simply never names it. */}
+              {isOutOfStock ? (
                 <p className="mt-5 text-sm" aria-live="polite">
-                  {availableQuantity <= 0 ? (
-                    <span className="font-semibold uppercase tracking-[0.08em] text-[#e5484d]">Out of stock</span>
-                  ) : (
-                    <span className={availableQuantity <= LOW_STOCK_DISPLAY_THRESHOLD ? "font-medium text-[color:var(--accent-gold)]" : "text-[#a3a3a3]"}>
-                      {availableQuantity} available
-                    </span>
-                  )}
+                  <span className="font-semibold uppercase tracking-[0.08em] text-[#e5484d]">Out of stock</span>
                 </p>
               ) : null}
 
@@ -792,7 +787,6 @@ export function ProductDetailClient({
                         key={option.quantity}
                         type="button"
                         disabled={exceedsStock}
-                        title={exceedsStock ? `Only ${maxSelectableQuantity} available` : undefined}
                         onClick={() => setQuantity(option.quantity)}
                         className={`relative rounded-xl border px-2 py-3.5 text-center transition duration-200 disabled:cursor-not-allowed disabled:opacity-40 ${isSelected ? "border-[color:var(--accent-gold)]/70 bg-[#181818] text-white shadow-[0_8px_20px_-12px_rgba(0,0,0,0.9)]" : "border-white/[0.06] bg-[#121212] text-white hover:border-white/20"}`}
                       >

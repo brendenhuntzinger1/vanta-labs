@@ -620,7 +620,10 @@ export async function duplicateAdminProduct(productId: string) {
       priceCents: Math.round(parseNumber(dose.price.replace(/[^0-9.]/g, "")) * 100),
       compareAtPriceCents: dose.compareAtPrice ? Math.round(parseNumber(dose.compareAtPrice.replace(/[^0-9.]/g, "")) * 100) : 0,
       salePriceCents: dose.salePrice ? Math.round(parseNumber(dose.salePrice.replace(/[^0-9.]/g, "")) * 100) : 0,
-      inventoryQuantity: dose.inventoryQuantity,
+      // The source here is an ADMIN read, which does populate the count; the ?? 0
+      // only satisfies the now-optional public type (the storefront reads leave
+      // it undefined on purpose so stock depth is never serialized to a browser).
+      inventoryQuantity: dose.inventoryQuantity ?? 0,
       stockStatus: dose.stockStatus,
       batchNumber: dose.batchNumber,
       coaUrl: dose.coaUrl,
