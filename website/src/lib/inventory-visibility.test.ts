@@ -35,6 +35,7 @@ const cartValidate = read("src/app/api/cart/validate/route.ts");
 const cartClient = read("src/app/cart/cart-client.tsx");
 const quoteOrder = read("src/lib/quote-order.ts");
 const catalogTypes = read("src/lib/catalog-types.ts");
+const cartContext = read("src/components/cart-context.tsx");
 
 describe("cache invalidation exists and is reachable from every write path", () => {
   it("invalidateCatalogCache actually calls revalidateTag on the catalog tag", () => {
@@ -215,5 +216,42 @@ describe("admin saves are exact and absolute", () => {
   it("every manual save writes an audit row with before and after", () => {
     expect(adminInventory).toMatch(/recordInventoryTransaction\(\{[\s\S]{0,400}quantityBefore/);
     expect(adminInventory).toMatch(/quantityAfter: after/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A DOSED PRODUCT IS ALWAYS BOUGHT AS A DOSE.
+//
+// ProductCard's "Add to Cart" on the catalogue grid has no dose picker, so it
+// produced a cart line with a bare slug. Pricing was fine (the card shows the
+// default dose's price) and quoteOrder's oversell guard even resolved the
+// default dose — but the line ID it recorded did not, and that ID is what
+// parseOrderItemRef() splits to choose WHICH ROW inventory moves on. So a grid
+// purchase reserved and decremented `products` while the storefront reads
+// `product_doses`: the shelf never went down and the same units could be sold
+// over and over. Both halves are pinned here.
+// ---------------------------------------------------------------------------
+describe("a grid add resolves to the default dose", () => {
+  it("the quote rebuilds the line id around the resolved dose", () => {
+    expect(quoteOrder).toMatch(/id: selectedDose \? `\$\{slug\}::\$\{selectedDose\.id\}` : item\.id/);
+  });
+
+  it("the cart resolves the default dose when no variant was supplied", () => {
+    expect(cartContext).toMatch(/const fallbackDose = !options\?\.variantId/);
+    expect(cartContext).toMatch(/product\.doses\?\.find\(\(dose\) => dose\.isDefault\) \?\? product\.doses\?\.\[0\]/);
+  });
+
+  it("the cart line is built from the resolved dose, not the raw options", () => {
+    // Reading `options` here instead of `resolved` is exactly how the variant
+    // silently goes missing again.
+    expect(cartContext).toMatch(/const variantKey = resolved\?\.variantId/);
+    expect(cartContext).toMatch(/variantId: resolved\?\.variantId,/);
+    expect(cartContext).toMatch(/doseLabel: resolved\?\.doseLabel,/);
+  });
+
+  it("an explicit variant still wins over the default", () => {
+    // fallbackDose is only computed when options.variantId is absent.
+    expect(cartContext).toMatch(/!options\?\.variantId/);
+    expect(cartContext).toMatch(/\.\.\.options,/);
   });
 });

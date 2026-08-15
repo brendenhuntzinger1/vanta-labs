@@ -816,11 +816,34 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       stockStatusOverride?: string;
     },
   ) => {
+    // A product sold in doses is ALWAYS bought as one of them. The catalogue
+    // grid's Add to Cart has no dose picker and passes no options, which used to
+    // create a variant-less line: it priced fine (the card shows the default
+    // dose's price) but it was a different cart key from the same dose added on
+    // the product page, so the two never merged, and the packing slip named no
+    // strength. Resolving the default dose here — the one place every caller
+    // funnels through — makes a grid add and a product-page add the same line.
+    const fallbackDose = !options?.variantId
+      ? product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0]
+      : undefined;
+    const resolved = fallbackDose
+      ? {
+          variantId: fallbackDose.id,
+          doseLabel: fallbackDose.label,
+          sku: fallbackDose.sku,
+          priceOverride: Number((fallbackDose.salePrice ?? fallbackDose.price).replace(/[^0-9.]/g, "")),
+          imageOverride: fallbackDose.imageUrl,
+          batchNumberOverride: fallbackDose.batchNumber,
+          stockStatusOverride: fallbackDose.stockStatus,
+          ...options,
+        }
+      : options;
+
     if (typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("vanta:cart-fly", {
           detail: {
-            image: options?.imageOverride ?? product.image,
+            image: resolved?.imageOverride ?? product.image,
             name: product.name,
             fromRect: sourceElement?.getBoundingClientRect() ?? null,
           },
@@ -832,21 +855,21 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           detail: {
             eventType: "add_to_cart",
             productSlug: product.slug,
-            variantId: options?.variantId ?? null,
+            variantId: resolved?.variantId ?? null,
             // Descriptive only. Measurement reads these to label the product in
             // ad reporting; nothing in the cart depends on them.
             productName: product.name,
             productCategory: product.category,
-            variantLabel: options?.doseLabel ?? null,
+            variantLabel: resolved?.doseLabel ?? null,
             quantity,
-            price: (options?.priceOverride ?? Number(product.price.replace(/[^0-9.]/g, ""))) || 0,
+            price: (resolved?.priceOverride ?? Number(product.price.replace(/[^0-9.]/g, ""))) || 0,
           },
         }),
       );
     }
 
     setItems((currentItems) => {
-      const variantKey = options?.variantId ? `${product.slug}::${options.variantId}` : product.slug;
+      const variantKey = resolved?.variantId ? `${product.slug}::${resolved.variantId}` : product.slug;
       const existing = currentItems.find((item) => item.key === variantKey);
       if (existing) {
         return currentItems.map((item) =>
@@ -855,21 +878,21 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
             : item,
         );
       }
-      const parsedPrice = options?.priceOverride ?? Number(product.price.replace(/[^0-9.]/g, ""));
+      const parsedPrice = resolved?.priceOverride ?? Number(product.price.replace(/[^0-9.]/g, ""));
       return [
         ...currentItems,
         {
           key: variantKey,
-          variantId: options?.variantId,
-          doseLabel: options?.doseLabel,
-          sku: options?.sku,
+          variantId: resolved?.variantId,
+          doseLabel: resolved?.doseLabel,
+          sku: resolved?.sku,
           slug: product.slug,
           name: product.name,
           price: Number.isFinite(parsedPrice) ? parsedPrice : 0,
           quantity,
-          batchNumber: options?.batchNumberOverride ?? product.batchNumber,
-          image: options?.imageOverride ?? product.image,
-          stockStatus: options?.stockStatusOverride ?? product.stockStatus,
+          batchNumber: resolved?.batchNumberOverride ?? product.batchNumber,
+          image: resolved?.imageOverride ?? product.image,
+          stockStatus: resolved?.stockStatusOverride ?? product.stockStatus,
         },
       ];
     });

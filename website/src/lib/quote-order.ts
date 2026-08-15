@@ -384,7 +384,22 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     // preview using the exact same shared formula.
     const product: ServerProduct = {
       ...baseProduct,
-      id: item.id,
+      // Carry the RESOLVED dose in the line id, not whatever the cart sent.
+      //
+      // A cart line added from the catalogue grid has no `::<doseId>` suffix —
+      // ProductCard's Add to Cart has no dose picker — so `item.id` is the bare
+      // slug. This block already resolves the default dose for pricing and for
+      // the oversell guard, but the id was passed through untouched, and that id
+      // becomes order_items.product_id, which is what parseOrderItemRef() splits
+      // to decide WHICH ROW inventory moves on. The result was a genuine
+      // oversell: a grid purchase reserved and decremented `products`, while the
+      // storefront reads the dose row, so the shelf never went down and the same
+      // two units could be sold indefinitely.
+      //
+      // Rebuilding the id here fixes it at the single point where the dose is
+      // known, and it repairs carts that were already saved with a bare slug —
+      // no shopper has to re-add anything.
+      id: selectedDose ? `${slug}::${selectedDose.id}` : item.id,
       price: getBundleDiscountedUnitPrice(baseUnitPrice, item.quantity, bundleConfig),
       stockStatus: selectedDose?.stockStatus ?? baseProduct.stockStatus,
       variantId: selectedDose?.id,
