@@ -1,5 +1,6 @@
 import { randomBytes } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { buildOrderOwnershipFilter } from "@/lib/order-ownership";
 
 export interface CustomerOrderRow {
   orderId: string;
@@ -18,18 +19,11 @@ export interface CustomerOrderRow {
 // customer_accounts.sql RLS policy (that policy exists for any future
 // client-side/anon-key access path).
 export async function getCustomerOrders(userId: string, email?: string | null): Promise<CustomerOrderRow[]> {
-  // Sanitize before interpolating into PostgREST's comma-delimited .or() string
-  // (mirrors admin-orders / partner-portal): strip anything that could inject an
-  // extra filter clause. userId is a server UUID; email comes from Supabase auth,
-  // but we never trust-interpolate raw user-derived text into an .or().
-  const safeUserId = userId.replace(/[^a-zA-Z0-9-]/g, "");
-  const normalizedEmail = (email ?? "").trim().toLowerCase().replace(/[^a-zA-Z0-9@._-]/g, "");
-  // Match on the account id first (survives an email change and works for
-  // phone-only accounts that have no email), OR the current email for legacy
-  // orders placed before customer_user_id was stored.
-  const orFilter = normalizedEmail
-    ? `customer_user_id.eq.${safeUserId},customer_email.ilike.${normalizedEmail}`
-    : `customer_user_id.eq.${safeUserId}`;
+  // Ownership is an equality question, not a pattern match — see
+  // lib/order-ownership.ts for the two bugs the hand-rolled ILIKE version had
+  // (an `_` wildcard that leaked other customers' orders, and a stripped `+`
+  // that hid plus-addressed customers' own orders).
+  const orFilter = buildOrderOwnershipFilter(userId, email);
 
   const { data, error } = await supabaseAdmin
     .from("orders")

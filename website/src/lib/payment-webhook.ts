@@ -459,7 +459,7 @@ async function releaseEvent(eventId: string) {
 async function getOrderByOrderId(orderId: string) {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, points_redeemed, store_credit_redeemed_cents")
+    .select("id, order_id, order_number, order_type, membership_tier_id, membership_cycle, payment_status, fulfillment_status, payment_id, referral_code, ambassador_id, coupon_code, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, amount_paid, refund_amount, paid_at, customer_user_id, customer_email, customer_name, shipping_address, city, postal_code, points_redeemed, store_credit_redeemed_cents")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -1390,20 +1390,40 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   if (!orderRecord || nextStatus !== "paid") {
     await upsertOrderRecord({
       orderId,
-      paymentId: eventPayload.paymentId,
-      customerEmail: eventPayload.customer?.email,
-      customerName: eventPayload.customer?.fullName,
-      shippingAddress: eventPayload.customer?.address,
-      city: eventPayload.customer?.city,
-      postalCode: eventPayload.customer?.postalCode,
+      // EVERY field below falls back to the stored row, and that is the whole
+      // point of this block.
+      //
+      // A real processor's callback carries a charge, not a shopper: it has no
+      // top-level `customer`. Only our own mock gateway populates one, and it
+      // does so by reading these very columns back out of the database — which
+      // is exactly why this never showed up in testing. Against a live webhook
+      // the identity fields arrived undefined, basePayload turned each one into
+      // `?? null`, and this UPDATE wiped the customer's email, name and address
+      // off a real order.
+      //
+      // It fires on any NON-paid event, so the trigger is routine: a first-
+      // attempt card decline, or a refund/chargeback on a completed order. The
+      // consequences are silent and expensive — no confirmation email (the
+      // receipt is gated on the email), no ambassador commission, no coupon
+      // redemption, a Shippo label with an empty address, and an /admin row with
+      // no idea who bought it.
+      //
+      // customerUserId and pointsRedeemed already had this fallback; the
+      // identity fields simply never got it.
+      paymentId: eventPayload.paymentId ?? orderRecord?.payment_id ?? undefined,
+      customerEmail: eventPayload.customer?.email ?? orderRecord?.customer_email ?? undefined,
+      customerName: eventPayload.customer?.fullName ?? orderRecord?.customer_name ?? undefined,
+      shippingAddress: eventPayload.customer?.address ?? orderRecord?.shipping_address ?? undefined,
+      city: eventPayload.customer?.city ?? orderRecord?.city ?? undefined,
+      postalCode: eventPayload.customer?.postalCode ?? orderRecord?.postal_code ?? undefined,
       currency: eventPayload.currency ?? "USD",
       subtotal,
       shippingAmount,
       discountAmount,
       amountPaid,
-      referralCode: eventPayload.referralCode,
-      ambassadorId: eventPayload.ambassadorId,
-      couponCode: eventPayload.couponCode,
+      referralCode: eventPayload.referralCode ?? orderRecord?.referral_code ?? undefined,
+      ambassadorId: eventPayload.ambassadorId ?? orderRecord?.ambassador_id ?? undefined,
+      couponCode: eventPayload.couponCode ?? orderRecord?.coupon_code ?? undefined,
       customerUserId: eventPayload.customerUserId ?? orderRecord?.customer_user_id ?? undefined,
       pointsRedeemed: eventPayload.pointsRedeemed ?? orderRecord?.points_redeemed ?? 0,
       paymentStatus: refundOutcome.paymentStatus,

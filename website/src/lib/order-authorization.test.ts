@@ -92,11 +92,20 @@ describe("the real implementation still enforces it", () => {
 
   it("sanitises both identifiers before they reach the filter string", () => {
     // The filter is built as a PostgREST expression, so an unsanitised value
-    // would be injected into it directly.
-    const fn = accountOrders.slice(accountOrders.indexOf("function ownershipFilter"));
-    const body = fn.slice(0, fn.indexOf("\n}"));
-    expect(body).toContain("userId.replace(");
-    expect(body).toContain("toLowerCase().replace(");
+    // would be injected into it directly. It now lives in one shared module —
+    // this used to assert the shape of a local `toLowerCase().replace(...)`
+    // allow-list, which was itself the bug: that allow-list let `_` through as
+    // a live SQL wildcard and deleted `+` out of legitimate addresses. See
+    // order-ownership.test.ts for the value-level proof.
+    expect(accountOrders).toContain('from "@/lib/order-ownership"');
+    expect(accountOrders).toContain("const ownershipFilter = buildOrderOwnershipFilter;");
+    const ownership = readFileSync(join(process.cwd(), "src/lib/order-ownership.ts"), "utf8");
+    expect(ownership).toContain('String(userId).replace(/[^a-zA-Z0-9-]/g, "")');
+    // Equality, never a pattern match. Comments are stripped first — the module
+    // documents the ILIKE bug it replaced, and that prose is not an operator.
+    const code = ownership.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, "");
+    expect(code).toContain("customer_email.eq.");
+    expect(code).not.toContain("ilike");
   });
 });
 

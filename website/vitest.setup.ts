@@ -190,6 +190,13 @@ vi.mock("@/lib/supabase-server", () => {
     ],
   };
 
+  // Exposed so a suite can seed a pre-existing row and then assert what a
+  // webhook did to it. Without this the mock is write-only from a test's point
+  // of view, which is how a webhook that NULLED a real order's customer email
+  // sat here undetected: every existing test asserted the returned status, and
+  // none could look at the row afterwards.
+  (globalThis as Record<string, unknown>).__vlSupabaseState = state;
+
   function maybeSingleFor(table: string, filterCol?: string, filterValue?: string | boolean) {
     if (table === "products") {
       if (filterCol === "slug") {

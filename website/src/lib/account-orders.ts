@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { buildOrderOwnershipFilter } from "@/lib/order-ownership";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { resolveCarrier } from "@/lib/tracking-url";
 import { resolveProductImage } from "@/lib/product-image";
@@ -181,13 +182,9 @@ function mapRow(row: OrderRow, items: AccountOrderItem[], shipment: AccountOrder
   };
 }
 
-function ownershipFilter(userId: string, email?: string | null): string {
-  const safeUserId = userId.replace(/[^a-zA-Z0-9-]/g, "");
-  const normalizedEmail = (email ?? "").trim().toLowerCase().replace(/[^a-zA-Z0-9@._-]/g, "");
-  return normalizedEmail
-    ? `customer_user_id.eq.${safeUserId},customer_email.ilike.${normalizedEmail}`
-    : `customer_user_id.eq.${safeUserId}`;
-}
+// Kept as a thin alias so the call sites below read the same as before; the
+// real implementation (and the reasoning) lives in lib/order-ownership.ts.
+const ownershipFilter = buildOrderOwnershipFilter;
 
 export async function getCustomerOrdersDetailed(userId: string, email?: string | null): Promise<AccountOrder[]> {
   const { data, error } = await supabaseAdmin
