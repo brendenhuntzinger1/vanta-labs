@@ -5,6 +5,7 @@ import { browserFiredStore, emitEvent, mapAnalyticsDetail, type AnalyticsDetail,
 import { LISTENER_FLAG } from "@/lib/ads/tracking-health-browser";
 import { relayToServer } from "@/lib/ads/relay-client";
 import { buildSnapAddToCart, buildSnapCheckout, emitSnapEvent } from "@/lib/ads/snap-events";
+import { buildRedditAddToCart, emitRedditEvent } from "@/lib/ads/reddit-events";
 
 /**
  * AddToCart and InitiateCheckout, forwarded to the TikTok pixel.
@@ -51,6 +52,26 @@ export function TikTokCommerceEvents() {
               slug: String(item.slug ?? ""),
               quantity: Number(item.quantity ?? 1),
             }));
+
+      // Reddit, from the same broadcast. Gated on rdt's presence for the same
+      // reason ttq is: the pixel only exists after consent.
+      //
+      // AddToCart only. Reddit has no InitiateCheckout in its standard set, and
+      // a custom event there is one no campaign objective can optimise against,
+      // so begin-checkout is deliberately not forwarded.
+      if (window.rdt && mapped.name === "AddToCart") {
+        emitRedditEvent(
+          buildRedditAddToCart({
+            slug: String(detail?.productSlug ?? ""),
+            variantId: detail?.variantId ?? null,
+            name: detail?.productName ?? null,
+            category: detail?.productCategory ?? null,
+            quantity: Number(detail?.quantity ?? 1),
+            price: Number(detail?.price ?? 0),
+          }),
+          (name, properties) => window.rdt?.("track", name, properties),
+        );
+      }
 
       // Snapchat, from the same broadcast. Gated on snaptr's presence for the
       // same reason ttq is: the pixel only exists after consent.

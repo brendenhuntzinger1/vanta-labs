@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { browserFiredStore, emitEvent, type TikTokEvent } from "@/lib/ads/tiktok-events";
 import { emitSnapEvent, type SnapEvent } from "@/lib/ads/snap-events";
+import { emitRedditEvent, type RedditEvent } from "@/lib/ads/reddit-events";
 
 /**
  * Purchase — the only event that represents money.
@@ -55,6 +56,7 @@ export function TikTokPurchaseEvent({
       const body = (await response.json()) as {
         event?: TikTokEvent | null;
         snapPurchase?: SnapEvent | null;
+        redditPurchase?: RedditEvent | null;
       };
       if (!body?.event) return; // not paid — nothing to report, and that is correct
 
@@ -80,6 +82,13 @@ export function TikTokPurchaseEvent({
           (eventName, properties) => window.snaptr?.("track", eventName, properties),
           browserFiredStore(),
         );
+      }
+
+      // Reddit, behind the same single paid gate. No identify() call: its match
+      // keys are attached once at init, as server-side digests, so there is
+      // nothing to send again here.
+      if (body.redditPurchase) {
+        emitRedditEvent(body.redditPurchase, (name, properties) => window.rdt?.("track", name, properties));
       }
     } catch {
       // A failed check must never invent a conversion. Staying silent loses at

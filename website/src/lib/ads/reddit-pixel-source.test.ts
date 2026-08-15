@@ -145,17 +145,40 @@ describe("no customer identifier is ever handed to Reddit", () => {
     expect(source).toContain("MATCH_KEY_TIMEOUT_MS");
   });
 
-  it("sends page views only — no commerce events, which is what the policy states", () => {
-    // The cookie policy tells customers that TikTok and Snap receive shopping
-    // actions and Reddit does not. If that stops being true, the policy is
-    // wrong before anyone notices, so the claim is pinned to the code.
+  it("sends only events Reddit actually has, and no invented ones", () => {
+    // A name outside Reddit's standard set is recorded as a CUSTOM event, which
+    // no campaign objective can optimise against — it looks like it works and
+    // buys nothing. Notably absent: InitiateCheckout, which TikTok and Snap both
+    // have and Reddit does not.
+    const REDDIT_STANDARD = new Set([
+      "PageVisit", "ViewContent", "Search", "AddToCart", "AddToWishlist", "Purchase", "Lead", "SignUp",
+    ]);
+    const names = new Set<string>();
     for (const path of files) {
       const source = executableSource(path);
-      if (!source.includes("rdt")) continue;
-      const tracked = [...source.matchAll(/rdt\?\.\(\s*["']track["']\s*,\s*["']([^"']+)["']/g)].map((m) => m[1]);
-      const inlineTracked = [...source.matchAll(/rdt\('track',\s*'([^']+)'\)/g)].map((m) => m[1]);
-      expect(new Set([...tracked, ...inlineTracked])).toEqual(new Set(["PageVisit"]));
+      for (const match of source.matchAll(/rdt\('track',\s*'([^']+)'\)/g)) names.add(match[1]);
     }
+    // Builder-declared names too, since those are what reach rdt at runtime.
+    const events = read(join(SRC, "lib", "ads", "reddit-events.ts"));
+    const declared = events.match(/export type RedditEventName =([^;]+);/)?.[1] ?? "";
+    for (const match of declared.matchAll(/"([^"]+)"/g)) names.add(match[1]);
+
+    expect(names.size).toBeGreaterThan(0);
+    for (const name of names) {
+      expect(REDDIT_STANDARD, `"${name}" is not a Reddit standard event`).toContain(name);
+    }
+    expect(names).not.toContain("InitiateCheckout");
+  });
+
+  it("never puts identity on an event — it belongs at init, once", () => {
+    const events = read(join(SRC, "lib", "ads", "reddit-events.ts"));
+    const code = events.replace(/\/\*[\s\S]*?\*\//g, "").split("\n").filter((l) => !/^\s*\/\//.test(l)).join("\n");
+    expect(code).not.toMatch(/email|phoneNumber|externalId/);
+  });
+
+  it("uses the order id as the conversionId, so a CAPI leg can dedupe later", () => {
+    const events = read(join(SRC, "lib", "ads", "reddit-events.ts"));
+    expect(events).toContain("conversionId: orderId");
   });
 });
 
@@ -203,6 +226,13 @@ describe("the disclosure names Reddit", () => {
   it("names it in the cookie policy alongside the other two", () => {
     expect(legal).toMatch(/Reddit Pixel/);
     expect(legal).toMatch(/no request reaches TikTok, Snap or Reddit/);
+  });
+
+  it("does not still claim Reddit receives page views only", () => {
+    // It did, until conversion events were added. A policy that describes the
+    // previous version of the integration is the failure mode this catches.
+    expect(legal).not.toMatch(/Reddit receives page views only/);
+    expect(legal).not.toMatch(/none of them are sent to Reddit/);
   });
 
   it("states that what Reddit receives is a hash, never a raw address", () => {

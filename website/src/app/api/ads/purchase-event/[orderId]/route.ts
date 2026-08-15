@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { buildPurchase } from "@/lib/ads/tiktok-events";
 import { buildSnapPurchase } from "@/lib/ads/snap-events";
+import { buildRedditPurchase } from "@/lib/ads/reddit-events";
 import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { credentialStatus, describeResult, sendServerEvents } from "@/lib/ads/tiktok-events-api";
@@ -136,6 +137,27 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     identity: { hashedEmail: identity?.email ?? null, hashedPhone: identity?.phone_number ?? null },
   });
 
+  // Reddit, from the SAME server-confirmed paid gate. It carries no identity at
+  // all: Reddit's match keys are attached once at init as server-side digests,
+  // and repeating them per event would mean handling an address on the one page
+  // where the site knows who the visitor is. conversionId is the order id, so a
+  // Conversions API leg added later collapses into one conversion instead of
+  // doubling the reported revenue.
+  const redditPurchase = isPaid
+    ? buildRedditPurchase({
+        orderId: paidOrder.orderId,
+        total: paidOrder.amountPaid,
+        itemCount: items.reduce((sum, item) => sum + Number(item.quantity ?? 0), 0),
+        items: paidOrder.items
+          .filter((item) => Boolean(item.slug))
+          .map((item) => ({
+            slug: String(item.slug),
+            name: item.productName,
+            category: item.productId ? categoryByProductId.get(item.productId) ?? null : null,
+          })),
+      })
+    : null;
+
   // Server-side Purchase, sent with the SAME event_id the browser uses so
   // TikTok collapses the pair into one conversion. It is gated on exactly the
   // same condition as the browser event — `event` is non-null only when the
@@ -187,6 +209,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
         eventsApiConfigured: credentialStatus().configured,
         event: event ? { name: event.name, eventId: event.eventId, properties: event.properties } : null,
         snapPurchase,
+        redditPurchase,
         // The reason an unpaid order reports nothing, stated rather than implied.
         reason: event
           ? null
@@ -247,7 +270,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   }
 
   return NextResponse.json(
-    { found: true, isPaid, event, snapPurchase },
+    { found: true, isPaid, event, snapPurchase, redditPurchase },
     { headers: { "cache-control": "no-store" } },
   );
 }
