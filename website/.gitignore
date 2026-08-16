@@ -41,3 +41,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local test-rig stub (Postgres shim used by the audit harness)
+.pgrst-shim.mjs
