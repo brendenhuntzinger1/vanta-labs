@@ -9,13 +9,14 @@ import { buildRedditPurchase } from "@/lib/ads/reddit-events";
 // This is the one integration in the stack that could not be verified against
 // the real endpoint from the build environment — outbound calls to
 // ads-api.reddit.com are blocked there — so the structure is asserted against
-// the cURL sample Reddit's own Events Manager produced for this pixel:
+// the templates Reddit's own Events Manager produced for THIS pixel.
 //
-//   POST /api/v3/pixels/<pixel_id>/conversion_events
-//   { "data": { "events": [ { event_at, action_source, type: { tracking_type } } ] } }
-//
-// A wrong field name does not error. It produces a 2xx and a conversion that
-// never appears, which is the most expensive kind of quiet failure in ad tech.
+// That mattered: the first version of this module used `event_metadata` and
+// `value_decimal`, both taken from third-party write-ups of the v2 API. The
+// console's own "Add parameters" screen shows `metadata` and `value`. A wrong
+// field name does not error — Reddit answers 2xx and the conversion simply
+// never appears, which is the most expensive kind of quiet failure in ad tech,
+// so the exact names are pinned below.
 // ---------------------------------------------------------------------------
 
 const sha256 = (value: string) => createHash("sha256").update(value, "utf8").digest("hex");
@@ -61,20 +62,31 @@ describe("deduplication against the browser pixel", () => {
     // The pixel puts the order id in conversionId; this must match exactly or
     // Reddit counts the sale twice.
     const payload = buildRedditConversionPayload({ event: purchase, user: {}, occurredAt }) as {
-      data: { events: Array<{ event_metadata: Record<string, unknown> }> };
+      data: { events: Array<{ metadata: Record<string, unknown> }> };
     };
-    expect(payload.data.events[0].event_metadata.conversion_id).toBe("order-123");
+    expect(payload.data.events[0].metadata.conversion_id).toBe("order-123");
     expect(purchase.properties.conversionId).toBe("order-123");
   });
 
-  it("reports the money as value_decimal with the currency", () => {
+  it("uses the console's field names: metadata + value, NOT event_metadata + value_decimal", () => {
+    // The exact pair that was wrong. Both spellings look plausible and only one
+    // is read; the other is dropped in silence.
     const payload = buildRedditConversionPayload({ event: purchase, user: {}, occurredAt }) as {
-      data: { events: Array<{ event_metadata: Record<string, unknown> }> };
+      data: { events: Array<Record<string, unknown>> };
     };
-    expect(payload.data.events[0].event_metadata).toMatchObject({
-      currency: "USD",
-      value_decimal: 189.98,
-      item_count: 2,
+    const event = payload.data.events[0];
+    expect(event).toHaveProperty("metadata");
+    expect(event).not.toHaveProperty("event_metadata");
+    expect(event.metadata).toMatchObject({ currency: "USD", value: 189.98, item_count: 2 });
+    expect(event.metadata).not.toHaveProperty("value_decimal");
+  });
+
+  it("names products with id / name / category, as the template does", () => {
+    const payload = buildRedditConversionPayload({ event: purchase, user: {}, occurredAt }) as {
+      data: { events: Array<{ metadata: { products?: Array<Record<string, unknown>> } }> };
+    };
+    expect(payload.data.events[0].metadata.products?.[0]).toEqual({
+      id: "bpc-157::dose-1", name: "BPC-157", category: "Peptides",
     });
   });
 });
@@ -99,12 +111,15 @@ describe("identity is hashed, never raw", () => {
     expect(event.user.email).not.toBe(sha256("jo.smith+shop@gmail.com"));
   });
 
-  it("hashes the external id and the ip", () => {
+  it("hashes the external id", () => {
     expect(event.user.external_id).toBe(sha256("user-1"));
-    expect(event.user.ip_address).toBe(sha256("203.0.113.9"));
   });
 
-  it("passes the user agent through, since it is not an identifier on its own", () => {
+  it("sends the IP and user agent RAW, because a hash of them matches nothing", () => {
+    // Reddit compares an IP against ones it observed itself. A digest would be
+    // sent for no benefit at all — data shared, no attribution gained.
+    expect(event.user.ip_address).toBe("203.0.113.9");
+    expect(event.user.ip_address).not.toBe(sha256("203.0.113.9"));
     expect(event.user.user_agent).toBe("Mozilla/5.0");
   });
 
@@ -112,11 +127,12 @@ describe("identity is hashed, never raw", () => {
     expect(event.click_id).toBe("rdt_cid_abc");
   });
 
-  it("contains no raw address anywhere in the request", () => {
+  it("contains no raw EMAIL anywhere in the request", () => {
+    // The address is the identifier that must never leave in the clear. The IP
+    // is a separate decision, made above and disclosed in the cookie policy.
     const serialised = JSON.stringify(payload);
     expect(serialised).not.toContain("@");
     expect(serialised).not.toContain("Jo.Smith");
-    expect(serialised).not.toContain("203.0.113.9");
   });
 
   it("omits the user object entirely rather than sending an empty one", () => {

@@ -1,6 +1,5 @@
 import "server-only";
 
-import { createHash } from "node:crypto";
 import { hashRedditEmail, hashRedditExternalId } from "@/lib/ads/reddit-matching";
 import type { RedditEvent } from "@/lib/ads/reddit-events";
 import { REDDIT_PIXEL_ID } from "@/lib/ads/reddit-pixel-id";
@@ -21,7 +20,15 @@ import { REDDIT_PIXEL_ID } from "@/lib/ads/reddit-pixel-id";
  *
  *   POST https://ads-api.reddit.com/api/v3/pixels/<pixel_id>/conversion_events
  *   Authorization: Bearer <token>
- *   { "data": { "events": [ { event_at, action_source, type: { tracking_type } } ] } }
+ *   { "data": { "events": [ { event_at, action_source, type: { tracking_type },
+ *                             click_id, user: {...}, metadata: {...} } ] } }
+ *
+ * THE FIELD NAMES CAME FROM THE CONSOLE, NOT FROM DOCUMENTATION, and two of
+ * them differ from every third-party write-up of the v2 shape: the container is
+ * `metadata` (not `event_metadata`) and the money field is `value` (not
+ * `value_decimal`). Getting either wrong is the worst failure mode this
+ * integration has — Reddit answers 2xx and the conversion simply never appears,
+ * so nothing anywhere reports a problem.
  *
  * ATTRIBUTION SIGNAL. Reddit drops an event that carries no way to identify the
  * person: it needs a click id, an email, or IP + user agent. A paid order gives
@@ -34,10 +41,6 @@ const DEFAULT_TIMEOUT_MS = 8000;
 
 /** Reddit rejects anything older than seven days. */
 export const MAX_EVENT_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
-}
 
 export type RedditConversionUser = {
   email?: string | null;
@@ -86,16 +89,22 @@ export function buildRedditConversionPayload(input: {
   const hashedExternalId = hashRedditExternalId(user.externalId);
 
   const userPayload: Record<string, unknown> = {};
+  // Email and external id are SHA-256: Reddit documents pre-hashed values as
+  // supported for both, so we hash here and the raw address never leaves.
   if (hashedEmail) userPayload.email = hashedEmail;
   if (hashedExternalId) userPayload.external_id = hashedExternalId;
-  // Hashed for the same reason the address is. If Reddit turns out to want the
-  // raw value here, the cost is a weaker match on this one signal — never a
-  // rejected event, because the email above already satisfies the requirement.
-  if (user.ipAddress) userPayload.ip_address = sha256(String(user.ipAddress).trim().toLowerCase());
+  // IP and user agent go RAW, deliberately, and the distinction is not
+  // squeamishness — it is whether the signal works at all. Reddit's own Match
+  // keys template shows `"ip_address": "{{IP address}}"`, and it matches an IP
+  // against ones it observed itself; a digest of ours would compare against
+  // nothing, so hashing here would send the data AND get no attribution for it,
+  // which is the worst of both. Reddit already sees this address on every pixel
+  // request, and the cookie policy discloses it.
+  if (user.ipAddress) userPayload.ip_address = String(user.ipAddress).trim();
   if (user.userAgent) userPayload.user_agent = String(user.userAgent);
 
   const metadata: Record<string, unknown> = { currency: event.properties.currency };
-  if (typeof event.properties.value === "number") metadata.value_decimal = event.properties.value;
+  if (typeof event.properties.value === "number") metadata.value = event.properties.value;
   if (typeof event.properties.itemCount === "number") metadata.item_count = event.properties.itemCount;
   if (event.properties.conversionId) metadata.conversion_id = event.properties.conversionId;
   if (event.properties.products?.length) {
@@ -117,7 +126,7 @@ export function buildRedditConversionPayload(input: {
           type: { tracking_type: event.name },
           ...(user.clickId ? { click_id: String(user.clickId) } : {}),
           ...(Object.keys(userPayload).length > 0 ? { user: userPayload } : {}),
-          event_metadata: metadata,
+          metadata,
         },
       ],
     },
