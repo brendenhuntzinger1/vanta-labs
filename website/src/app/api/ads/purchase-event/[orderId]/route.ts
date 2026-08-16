@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { buildPurchase } from "@/lib/ads/tiktok-events";
 import { buildSnapPurchase } from "@/lib/ads/snap-events";
 import { buildRedditPurchase } from "@/lib/ads/reddit-events";
+import { describeRedditResult, redditCredentialStatus, sendRedditConversion } from "@/lib/ads/reddit-conversions";
 import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { credentialStatus, describeResult, sendServerEvents } from "@/lib/ads/tiktok-events-api";
@@ -46,7 +47,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   try {
     const { data } = await supabaseAdmin
       .from("orders")
-      .select("order_id, payment_status, amount_paid, customer_email, order_items(product_id, product_name, quantity, unit_price)")
+      .select("order_id, payment_status, amount_paid, customer_email, customer_user_id, order_items(product_id, product_name, quantity, unit_price)")
       .eq("order_id", orderId)
       .maybeSingle();
     order = data as Record<string, unknown> | null;
@@ -222,6 +223,38 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   }
 
   let serverDelivery: string | null = null;
+  let redditDelivery: string | null = null;
+
+  // Reddit, on its OWN credential check — deliberately not nested inside
+  // TikTok's.
+  //
+  // It was nested at first, and that is a silent single point of failure: with
+  // a Reddit token configured and a TikTok one absent, `credentialStatus()`
+  // below is false, the whole block is skipped, and Reddit's conversions never
+  // send while every dashboard looks fine. Two platforms, two independent
+  // gates.
+  //
+  // Sent with the order id as conversion_id — the identical value the browser
+  // pixel sends — so Reddit collapses the pair into one conversion rather than
+  // reporting the sale twice. Awaited before the TikTok leg rather than beside
+  // it because each is best-effort telemetry that must not fail the response.
+  if (redditPurchase && !alreadySent && redditCredentialStatus().configured) {
+    const redditOutcome = await sendRedditConversion({
+      event: redditPurchase,
+      occurredAt: new Date(),
+      user: {
+        email: order.customer_email ? String(order.customer_email) : null,
+        externalId: order.customer_user_id ? String(order.customer_user_id) : null,
+        ipAddress: getRequestIpAddress(request) ?? null,
+        userAgent: request.headers.get("user-agent"),
+      },
+    });
+    redditDelivery = describeRedditResult(redditOutcome);
+    if (!redditOutcome.delivered) {
+      console.error("[ads/reddit-conversions]", redditDelivery);
+    }
+  }
+
   if (event && !alreadySent && credentialStatus().configured) {
     const attribution = await getOrderAttribution(String(order.order_id)).catch(() => null);
     const outcome = await sendServerEvents([
@@ -266,11 +299,11 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     }
     // Diagnostics only. No token, no customer data — describeResult is built
     // from a fixed field set precisely so this line cannot leak either.
-    console.info(`[ads] order ${String(order.order_id)} — ${serverDelivery}`);
+    console.info(`[ads] order ${String(order.order_id)} — ${[serverDelivery, redditDelivery].filter(Boolean).join(" | ")}`);
   }
 
   return NextResponse.json(
-    { found: true, isPaid, event, snapPurchase, redditPurchase },
+    { found: true, isPaid, event, snapPurchase, redditPurchase, serverDelivery: [serverDelivery, redditDelivery].filter(Boolean).join(" | ") || null },
     { headers: { "cache-control": "no-store" } },
   );
 }

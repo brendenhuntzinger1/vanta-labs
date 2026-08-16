@@ -3,6 +3,7 @@
 import Script from "next/script";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { REDDIT_PIXEL_ID } from "@/lib/ads/reddit-pixel-id";
 
 /**
  * Reddit Pixel — installed globally, behind the same consent gate as TikTok and
@@ -42,7 +43,8 @@ import { useEffect, useRef, useState } from "react";
  * at all. An advertising identifier is not worth losing the page view over.
  */
 
-export const REDDIT_PIXEL_ID = process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID ?? "a2_jipuxv3ugrju";
+// Single source of truth, shared with the server-side Conversions API.
+export { REDDIT_PIXEL_ID } from "@/lib/ads/reddit-pixel-id";
 const STORAGE_KEY = "vl_cookie_consent";
 const CONSENT_EVENT = "vanta:cookie-consent";
 

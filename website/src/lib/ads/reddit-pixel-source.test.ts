@@ -76,8 +76,12 @@ describe("exactly one Reddit data source", () => {
   });
 
   it("holds the pixel id in exactly one file", () => {
+    // The browser pixel and the server-side Conversions API both need it, and
+    // the CAPI endpoint is keyed on it. Two hard-coded copies would be two
+    // things to update and one to forget — the SDK loading for one pixel while
+    // conversions report to another, with neither path erroring.
     const withId = files.filter((path) => read(path).includes("a2_jipuxv3ugrju"));
-    expect(withId.map(relative)).toEqual(["src/components/reddit-pixel.tsx"]);
+    expect(withId.map(relative)).toEqual(["src/lib/ads/reddit-pixel-id.ts"]);
   });
 
   it("uses the same id for the loader URL and both init forms", () => {
@@ -90,10 +94,11 @@ describe("exactly one Reddit data source", () => {
     expect(injectedSnippet()).toContain("pixel_id=${REDDIT_PIXEL_ID}");
     const initForms = source.match(/rdt\('init','\$\{REDDIT_PIXEL_ID\}'/g) ?? [];
     expect(initForms).toHaveLength(2);
-    // No hard-coded id anywhere except the env-var default.
-    const literals = source.match(/a2_[a-z0-9]+/g) ?? [];
-    expect(literals).toHaveLength(1);
-    expect(source).toContain('process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID ?? "a2_jipuxv3ugrju"');
+    // The id itself lives in one shared module; the component only imports it.
+    expect(source.match(/a2_[a-z0-9]+/g) ?? []).toHaveLength(0);
+    expect(source).toContain('from "@/lib/ads/reddit-pixel-id"');
+    expect(read(join(SRC, "lib", "ads", "reddit-pixel-id.ts")))
+      .toContain('process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID ?? "a2_jipuxv3ugrju"');
   });
 
   it("is mounted once, globally, from the root layout", () => {
