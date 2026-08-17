@@ -1109,6 +1109,14 @@ textarea.vl-input { min-height: 6rem; }
   transition: background-color var(--duration-base) var(--ease-out-premium), border-color var(--duration-base) var(--ease-out-premium), backdrop-filter var(--duration-base) var(--ease-out-premium);
 }
 
+/* The welcome-offer banner is fixed above the nav; move the nav down by exactly
+   the height the banner reports so the two stack instead of drawing through
+   each other. Falls back to a sane height if the variable is ever missing, and
+   applies only while the banner is actually on screen. */
+body[data-welcome-offer="true"] .vl2-nav {
+  top: var(--welcome-offer-height, 44px);
+}
+
 .vl2-nav[data-scrolled="true"] {
   background: rgba(11, 11, 11, 0.72);
   border-bottom-color: var(--hairline);

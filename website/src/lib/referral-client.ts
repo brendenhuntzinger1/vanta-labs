@@ -1,5 +1,22 @@
 import { supabase } from "@/lib/supabase";
 
+/**
+ * Confirm a referral code is real and active, for the cart's benefit.
+ *
+ * DELIBERATELY RETURNS NO DISCOUNT PERCENTAGE. It used to return a hardcoded
+ * `discountPercent: 10`, which neither caller ever read — both take the figure
+ * from /api/catalog/promotions instead. A constant that looks authoritative,
+ * is wrong for any ambassador with a personal rate, and happens to be ignored
+ * is a trap for whoever wires it up next, so it is gone rather than corrected.
+ *
+ * THE SERVER OWNS THE NUMBER regardless. quoteOrder resolves the per-ambassador
+ * override against the program default and then picks the single best discount
+ * available to that basket, so what the cart shows is an estimate of the
+ * referral line and the order is authoritative. That is also why a referred
+ * order can legitimately record a zero referral discount: quantity-bundle
+ * pricing is already inside the subtotal, and when it beats the referral the
+ * customer keeps the larger saving.
+ */
 export async function validateReferralCodeClient(code: string) {
   const normalizedCode = code.trim().toUpperCase();
 
@@ -38,7 +55,6 @@ export async function validateReferralCodeClient(code: string) {
       ambassadorId: String(ambassador.id),
       ambassadorName: String(ambassador.name ?? "Ambassador"),
       commissionPercent: Number(ambassador.commission_percent ?? 0),
-      discountPercent: 10,
     };
   }
 
@@ -51,6 +67,5 @@ export async function validateReferralCodeClient(code: string) {
     ambassadorId: data.ambassador_id,
     ambassadorName: data.ambassador_name,
     commissionPercent: data.commission_percent,
-    discountPercent: 10,
   };
 }
