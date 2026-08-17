@@ -14,18 +14,24 @@ export type { EmailProviderName };
 // so nothing is sent and no email-triggering action ever fails. Once enabled
 // and configured, every transactional email flows through the selected
 // provider automatically.
-export async function getEmailProvider(): Promise<EmailProvider> {
+export async function getEmailProvider(options?: { from?: string }): Promise<EmailProvider> {
   const config = await getEmailRuntimeConfig();
 
   if (!config.enabled) {
     return new NoopEmailProvider();
   }
 
+  // A caller may send as a different identity — marketing mail uses its own
+  // From so campaign complaints cannot damage the reputation of the domain
+  // that carries receipts and password resets. Blank falls back to the
+  // transactional address, which is the behaviour every caller had before.
+  const from = options?.from?.trim() || config.from;
+
   switch (config.provider) {
     case "resend":
-      return new ResendEmailProvider({ apiKey: config.resend.apiKey, from: config.from });
+      return new ResendEmailProvider({ apiKey: config.resend.apiKey, from });
     case "sendgrid":
-      return new SendgridEmailProvider({ apiKey: config.sendgrid.apiKey, from: config.from });
+      return new SendgridEmailProvider({ apiKey: config.sendgrid.apiKey, from });
     case "smtp":
     default:
       return new SmtpEmailProvider({
@@ -34,7 +40,7 @@ export async function getEmailProvider(): Promise<EmailProvider> {
         secure: config.smtp.secure,
         user: config.smtp.user,
         password: config.smtp.password,
-        from: config.from,
+        from,
       });
   }
 }

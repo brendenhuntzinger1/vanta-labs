@@ -78,6 +78,7 @@ export function AdminSettingsClient({
   const [resendKey, setResendKey] = useState("");
   const [sendgridKey, setSendgridKey] = useState("");
   const [postalAddress, setPostalAddress] = useState(email.marketingPostalAddress ?? "");
+  const [marketingFrom, setMarketingFrom] = useState(email.marketingFrom ?? "");
 
   // Processor state
   const [procEnabled, setProcEnabled] = useState(processor.enabled);
@@ -213,6 +214,7 @@ export function AdminSettingsClient({
             resend_api_key: resendKey,
             sendgrid_api_key: sendgridKey,
             marketing_postal_address: postalAddress,
+            marketing_from: marketingFrom,
           },
           processor: {
             enabled: procEnabled,
@@ -342,6 +344,20 @@ export function AdminSettingsClient({
           </Labeled>
           <Labeled label="From address" hint="e.g. Vanta Labs &lt;support@yourdomain.com&gt;">
             <input value={from} onChange={(e) => setFrom(e.target.value)} placeholder="support@yourdomain.com" className="vl-input mt-1 w-full px-3 py-2 text-sm" />
+          </Labeled>
+        </div>
+
+        <div className="mt-3">
+          <Labeled
+            label="Marketing From address (optional)"
+            hint="Leave blank to send marketing from the address above. Setting a separate subdomain (e.g. news@mail.yourdomain.com) keeps campaign complaints from damaging the reputation of the domain that sends receipts and password resets."
+          >
+            <input
+              value={marketingFrom}
+              onChange={(e) => setMarketingFrom(e.target.value)}
+              placeholder="Vanta Labs <news@mail.yourdomain.com>"
+              className="vl-input mt-1 w-full px-3 py-2 text-sm"
+            />
           </Labeled>
         </div>
 

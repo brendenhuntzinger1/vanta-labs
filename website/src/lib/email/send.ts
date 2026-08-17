@@ -7,7 +7,9 @@ import type { EmailMessage, EmailSendResult, EmailTemplate } from "@/lib/email/t
 // that action just because email isn't configured or a provider call
 // errors — this always resolves, and the caller decides what (if anything)
 // to do with a failed result (e.g. log it, queue for retry).
-export async function sendEmail(input: { to: string; replyTo?: string } & EmailTemplate): Promise<EmailSendResult> {
+export async function sendEmail(
+  input: { to: string; replyTo?: string; from?: string } & EmailTemplate,
+): Promise<EmailSendResult> {
   const message: EmailMessage = {
     to: input.to,
     subject: input.subject,
@@ -17,7 +19,9 @@ export async function sendEmail(input: { to: string; replyTo?: string } & EmailT
   };
 
   try {
-    const provider = await getEmailProvider();
+    // `from` is only supplied by the marketing path, which may send from its
+    // own subdomain; everything else inherits the transactional identity.
+    const provider = await getEmailProvider({ from: input.from });
     return await provider.send(message);
   } catch (error) {
     return { success: false, error: error instanceof Error ? error.message : "Unable to send email" };

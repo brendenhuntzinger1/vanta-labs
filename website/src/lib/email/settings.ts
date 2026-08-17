@@ -54,6 +54,20 @@ export interface EmailRuntimeConfig {
    * failure mode that can't quietly ship non-compliant mail.
    */
   marketingPostalAddress: string;
+  /**
+   * Optional separate From address for MARKETING mail only.
+   *
+   * Sending reputation is per-domain. A campaign that draws spam complaints
+   * damages the reputation of whatever domain sent it — and if that is the same
+   * domain as the receipts, the order confirmations and password resets start
+   * landing in spam too. Those are the emails a customer genuinely needs, and
+   * the failure is invisible from this side.
+   *
+   * Empty means "use the transactional From", which is exactly the behaviour
+   * this had before the field existed, so nothing changes until an operator
+   * sets up a subdomain and fills it in.
+   */
+  marketingFrom: string;
 }
 
 function str(value: unknown): string {
@@ -100,7 +114,17 @@ export async function getEmailRuntimeConfig(): Promise<EmailRuntimeConfig> {
       apiKey: str(cfg.sendgrid_api_key) || process.env.SENDGRID_API_KEY || "",
     },
     marketingPostalAddress: str(cfg.marketing_postal_address) || process.env.MARKETING_POSTAL_ADDRESS || "",
+    marketingFrom: str(cfg.marketing_from) || process.env.MARKETING_EMAIL_FROM || "",
   };
+}
+
+/**
+ * The From address marketing mail should use: the dedicated one when an
+ * operator has configured it, otherwise the transactional one. Exported so the
+ * rule lives in one place rather than being re-derived at each send site.
+ */
+export function resolveMarketingFrom(config: EmailRuntimeConfig): string {
+  return config.marketingFrom.trim() || config.from;
 }
 
 export interface EmailAdminSettings {
@@ -113,6 +137,9 @@ export interface EmailAdminSettings {
   /** True when the selected provider has everything it needs to send. */
   ready: boolean;
   marketingPostalAddress: string;
+  marketingFrom: string;
+  /** The address marketing actually sends from, after the fallback. */
+  effectiveMarketingFrom: string;
   /**
    * True when marketing campaigns may be sent: delivery is ready AND the
    * CAN-SPAM postal address is set. Separate from `ready` because transactional
@@ -148,6 +175,8 @@ export async function getEmailAdminSettings(): Promise<EmailAdminSettings> {
     sendgrid: { apiKeySet: Boolean(config.sendgrid.apiKey) },
     ready: isReady(config),
     marketingPostalAddress: config.marketingPostalAddress,
+    marketingFrom: config.marketingFrom,
+    effectiveMarketingFrom: resolveMarketingFrom(config),
     marketingReady: config.enabled && isReady(config) && Boolean(config.marketingPostalAddress.trim()),
   };
 }

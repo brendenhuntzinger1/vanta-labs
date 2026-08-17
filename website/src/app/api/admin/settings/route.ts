@@ -74,10 +74,14 @@ export async function PATCH(request: Request) {
       await setIfPresent("email", "smtp_password", e.smtp_password);
       await setIfPresent("email", "resend_api_key", e.resend_api_key);
       await setIfPresent("email", "sendgrid_api_key", e.sendgrid_api_key);
-      // The CAN-SPAM postal address printed in the footer of marketing email.
-      // Set with `set`, not `setIfPresent`: an empty string is a meaningful
-      // value here (it blocks campaign sending) rather than "leave unchanged",
-      // which is what the secret fields need.
+      // Both marketing fields use `set`, not `setIfPresent`, unlike the secrets
+      // above: for these an empty string is a REAL value an operator may want
+      // to store — blank postal address blocks campaign sending, and a blank
+      // marketing From means "go back to sending marketing from the
+      // transactional address". `setIfPresent` would make them unclearable.
+      if (typeof e.marketing_from === "string") {
+        await set("email", "marketing_from", e.marketing_from.trim().slice(0, 200));
+      }
       if (typeof e.marketing_postal_address === "string") {
         await set("email", "marketing_postal_address", e.marketing_postal_address.trim().slice(0, 300));
       }

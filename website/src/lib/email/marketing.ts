@@ -3,6 +3,7 @@ import { sendEmail } from "@/lib/email/send";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { generateUnsubscribeToken } from "@/lib/email/unsubscribe";
 import { getSiteUrl } from "@/lib/env";
+import { getEmailRuntimeConfig, resolveMarketingFrom } from "@/lib/email/settings";
 import type { EmailSendResult, EmailTemplate } from "@/lib/email/types";
 
 // Compliance wrapper for every promotional/marketing send (welcome,
@@ -39,7 +40,18 @@ export async function sendMarketingEmail(
     : `${input.html}${appendedHtml}`;
   const text = `${input.text}\n\nUnsubscribe: ${unsubscribeUrl}`;
 
-  const result = await sendEmail({ to: input.to, subject: input.subject, html, text });
+  // Marketing sends from its OWN address when one is configured, so a campaign
+  // that draws complaints damages only that domain's reputation — not the one
+  // carrying receipts and password resets. Unset, this resolves to the
+  // transactional From and nothing changes.
+  const emailConfig = await getEmailRuntimeConfig();
+  const result = await sendEmail({
+    to: input.to,
+    subject: input.subject,
+    html,
+    text,
+    from: resolveMarketingFrom(emailConfig),
+  });
 
   // Logged best-effort - a logging failure must never fail the send itself.
   //
