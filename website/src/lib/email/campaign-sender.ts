@@ -124,7 +124,15 @@ export async function queueCampaign(campaignId: string): Promise<QueueResult> {
  */
 async function reclaimStaleClaims(campaignId: string, now: number): Promise<number> {
   const cutoff = new Date(now - CLAIM_RECLAIM_AFTER_MS).toISOString();
-  const { data, error } = await supabaseAdmin
+
+  // EVERY stale claim is resolved, not just the retryable ones. This used to
+  // reclaim only rows with attempts remaining, which left any row stranded at
+  // max attempts sitting in 'claiming' forever. Nothing would ever move it, so
+  // `remaining` could never reach zero, the campaign could never close out —
+  // and because the sweep works oldest-campaign-first, that one stuck row would
+  // spend every future sweep's budget and starve every campaign behind it.
+  // A stalled queue is worse than a failed recipient.
+  const { data: retryable, error } = await supabaseAdmin
     .from("email_campaign_recipients")
     .update({ status: "pending", claimed_at: null })
     .eq("campaign_id", campaignId)
@@ -133,7 +141,17 @@ async function reclaimStaleClaims(campaignId: string, now: number): Promise<numb
     .lt("attempts", MAX_ATTEMPTS)
     .select("id");
   if (error) return 0;
-  return (data ?? []).length;
+
+  // Out of attempts: give up on the recipient rather than on the campaign.
+  await supabaseAdmin
+    .from("email_campaign_recipients")
+    .update({ status: "failed", claimed_at: null, error: "abandoned mid-send after repeated attempts" })
+    .eq("campaign_id", campaignId)
+    .eq("status", "claiming")
+    .lt("claimed_at", cutoff)
+    .gte("attempts", MAX_ATTEMPTS);
+
+  return (retryable ?? []).length;
 }
 
 /**
