@@ -77,6 +77,7 @@ export function AdminSettingsClient({
   const [smtpPassword, setSmtpPassword] = useState("");
   const [resendKey, setResendKey] = useState("");
   const [sendgridKey, setSendgridKey] = useState("");
+  const [postalAddress, setPostalAddress] = useState(email.marketingPostalAddress ?? "");
 
   // Processor state
   const [procEnabled, setProcEnabled] = useState(processor.enabled);
@@ -211,6 +212,7 @@ export function AdminSettingsClient({
             smtp_password: smtpPassword,
             resend_api_key: resendKey,
             sendgrid_api_key: sendgridKey,
+            marketing_postal_address: postalAddress,
           },
           processor: {
             enabled: procEnabled,
@@ -340,6 +342,21 @@ export function AdminSettingsClient({
           </Labeled>
           <Labeled label="From address" hint="e.g. Vanta Labs &lt;support@yourdomain.com&gt;">
             <input value={from} onChange={(e) => setFrom(e.target.value)} placeholder="support@yourdomain.com" className="vl-input mt-1 w-full px-3 py-2 text-sm" />
+          </Labeled>
+        </div>
+
+        <div className="mt-3">
+          <Labeled
+            label="Mailing address (marketing email)"
+            hint="Printed in the footer of promotional email only — US law (CAN-SPAM) requires a real postal address in every commercial message. A PO Box is fine. Receipts and shipping notices are exempt and are unaffected. Campaigns cannot send while this is blank."
+          >
+            <textarea
+              rows={3}
+              value={postalAddress}
+              onChange={(e) => setPostalAddress(e.target.value)}
+              placeholder={"Vanta Labs\nPO Box 1234\nDenver, CO 80202"}
+              className="vl-input mt-1 w-full px-3 py-2 text-sm"
+            />
           </Labeled>
         </div>
 

@@ -74,6 +74,13 @@ export async function PATCH(request: Request) {
       await setIfPresent("email", "smtp_password", e.smtp_password);
       await setIfPresent("email", "resend_api_key", e.resend_api_key);
       await setIfPresent("email", "sendgrid_api_key", e.sendgrid_api_key);
+      // The CAN-SPAM postal address printed in the footer of marketing email.
+      // Set with `set`, not `setIfPresent`: an empty string is a meaningful
+      // value here (it blocks campaign sending) rather than "leave unchanged",
+      // which is what the secret fields need.
+      if (typeof e.marketing_postal_address === "string") {
+        await set("email", "marketing_postal_address", e.marketing_postal_address.trim().slice(0, 300));
+      }
     }
 
     if (body.processor) {
