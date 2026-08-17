@@ -106,6 +106,38 @@ export function AdminEmailClient({
         ? "Add a physical postal address in Settings before sending marketing email — US law (CAN-SPAM) requires it in every commercial message."
         : null;
 
+  /**
+   * Run an action so it ALWAYS ends with the UI usable and something on screen.
+   *
+   * Every handler here used to be a bare async function: `setBusy(true)`, an
+   * `await fetch`, `setBusy(false)` at the end. If the fetch threw — a dropped
+   * connection, a blocked request, the tab going offline for a second — the
+   * rejection escaped, `setBusy(false)` never ran and no message was ever set.
+   * The result from the operator's side is that the button goes dead and stays
+   * dead: they click Send test, nothing happens, and every click after that
+   * does nothing either, with no clue why. That is precisely the report this
+   * was written for.
+   *
+   * `finally` is the whole point — it clears `busy` whether the action
+   * succeeded, failed, or threw.
+   */
+  async function run(action: () => Promise<void>) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await action();
+    } catch (error) {
+      setMessage({
+        tone: "error",
+        text: error instanceof Error
+          ? `Something went wrong: ${error.message}. Nothing was sent — try again.`
+          : "Something went wrong. Nothing was sent — try again.",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveCampaign(): Promise<string | null> {
     const url = editingId ? `/api/admin/email/campaigns/${editingId}` : "/api/admin/email/campaigns";
     const response = await fetch(url, {
@@ -124,30 +156,28 @@ export function AdminEmailClient({
   }
 
   async function handleSave() {
-    setBusy(true);
-    setMessage(null);
-    const id = await saveCampaign();
-    if (id) setMessage({ tone: "ok", text: "Draft saved." });
-    setBusy(false);
+    await run(async () => {
+      const id = await saveCampaign();
+      if (id) setMessage({ tone: "ok", text: "Draft saved." });
+    });
   }
 
   async function handleTest() {
-    setBusy(true);
-    setMessage(null);
-    const id = await saveCampaign();
-    if (!id) return setBusy(false);
-    const response = await fetch(`/api/admin/email/campaigns/${id}/send`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "test", testEmail }),
+    await run(async () => {
+      const id = await saveCampaign();
+      if (!id) return;
+      const response = await fetch(`/api/admin/email/campaigns/${id}/send`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "test", testEmail }),
+      });
+      const data = await response.json().catch(() => null);
+      setMessage(
+        data?.success
+          ? { tone: "ok", text: `Test sent to ${testEmail}. If it doesn't arrive, check spam and your email provider's log.` }
+          : { tone: "error", text: data?.error ?? `Unable to send the test (HTTP ${response.status}).` },
+      );
     });
-    const data = await response.json().catch(() => null);
-    setMessage(
-      data?.success
-        ? { tone: "ok", text: `Test sent to ${testEmail}.` }
-        : { tone: "error", text: data?.error ?? "Unable to send the test." },
-    );
-    setBusy(false);
   }
 
   async function handleSend(mode: "now" | "schedule") {
@@ -158,10 +188,9 @@ export function AdminEmailClient({
       );
       if (!confirmed) return;
     }
-    setBusy(true);
-    setMessage(null);
+    await run(async () => {
     const id = await saveCampaign();
-    if (!id) return setBusy(false);
+    if (!id) return;
 
     const response = await fetch(`/api/admin/email/campaigns/${id}/send`, {
       method: "POST",
@@ -171,8 +200,7 @@ export function AdminEmailClient({
     const data = await response.json().catch(() => null);
 
     if (!data?.success) {
-      setMessage({ tone: "error", text: data?.error ?? "Unable to send this campaign." });
-      setBusy(false);
+      setMessage({ tone: "error", text: data?.error ?? `Unable to send this campaign (HTTP ${response.status}).` });
       return;
     }
 
@@ -186,9 +214,9 @@ export function AdminEmailClient({
         text: `Sending to ${data.recipients} subscriber${data.recipients === 1 ? "" : "s"}. ${data.sent} sent so far${data.remaining ? `, ${data.remaining} queued — the rest goes out automatically.` : "."}`,
       });
     }
-    setBusy(false);
     // Refresh so the history table reflects the send that just started.
     setTimeout(() => window.location.reload(), 1500);
+    });
   }
 
   function loadIntoComposer(campaign: CampaignSummary) {
@@ -212,20 +240,20 @@ export function AdminEmailClient({
       + `This prevents the remaining ${campaign.pending} from going out.`,
     );
     if (!confirmed) return;
-    setBusy(true);
-    const response = await fetch(`/api/admin/email/campaigns/${campaign.id}/stop`, { method: "POST" });
-    const data = await response.json().catch(() => null);
-    setMessage(
-      data?.success
-        ? { tone: "ok", text: `Stopped. ${data.alreadySent} had already been sent; ${data.stoppedBeforeSending} were prevented.` }
-        : { tone: "error", text: data?.error ?? "Unable to stop this campaign." },
-    );
-    setBusy(false);
-    if (data?.success) setTimeout(() => window.location.reload(), 1200);
+    await run(async () => {
+      const response = await fetch(`/api/admin/email/campaigns/${campaign.id}/stop`, { method: "POST" });
+      const data = await response.json().catch(() => null);
+      setMessage(
+        data?.success
+          ? { tone: "ok", text: `Stopped. ${data.alreadySent} had already been sent; ${data.stoppedBeforeSending} were prevented.` }
+          : { tone: "error", text: data?.error ?? "Unable to stop this campaign." },
+      );
+      if (data?.success) setTimeout(() => window.location.reload(), 1200);
+    });
   }
 
   async function saveAutomation(row: AutomationRow) {
-    setBusy(true);
+    await run(async () => {
     const response = await fetch("/api/admin/email/automations", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -247,7 +275,7 @@ export function AdminEmailClient({
         ? { tone: "ok", text: `Saved "${row.key.replace(/_/g, " ")}".` }
         : { tone: "error", text: data?.error ?? "Unable to save this automation." },
     );
-    setBusy(false);
+    });
   }
 
   return (
