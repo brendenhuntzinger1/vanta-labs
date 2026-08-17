@@ -7,19 +7,64 @@ import { expireStaleReservations } from "@/lib/inventory-reservation";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
 import { expireStaleExpressIntents, reconcileVeyraPendingPayments } from "@/lib/express-reconcile";
 import { sweepMissingShipments, sweepUnsyncedOrders } from "@/lib/shippo/order-sync";
+import { runCampaignSweep } from "@/lib/email/campaign-sender";
+import { runAutomationSweep } from "@/lib/email/automations";
 import { recordSystemAlert } from "@/lib/monitoring";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
-// Single scheduled entry point for every time-based job in the app
-// (membership billing dates + the abandoned-cart-recovery email sequence).
-// Protected by CRON_SECRET rather than a user session, since nothing
-// human-driven calls this - see vercel.json for the schedule. Both sweeps
-// are individually idempotent (see their own doc comments), so calling
-// this more often than strictly necessary is always safe, and calling it
-// less often than the "ideal" cadence just means coarser timing, not
-// incorrect behavior.
+// Single scheduled entry point for every time-based job in the app. Protected
+// by CRON_SECRET rather than a user session, since nothing human-driven calls
+// this - see vercel.json for the schedule. Every job is individually
+// idempotent, so running this more often than necessary is always safe, and
+// running it less often just means coarser timing, not incorrect behavior.
+//
+// JOBS ARE KEYED, NOT POSITIONAL. This used to be a bare array whose results
+// were destructured into a matching list of names, with nothing tying one to
+// the other — inserting a job in the middle silently shifted every result after
+// it onto the wrong name, which had already happened once to the last two
+// entries. The response key, the alert label, and the function now travel
+// together in one object, so adding a job cannot mislabel an existing one.
+// The object key is the JSON response field; `label` is the operator-facing
+// name used in alerts. Both are contracts with something outside this file —
+// the response keys with anything reading the sweep output, the labels with the
+// alert an operator reads at 2am — so they are stated rather than derived from
+// each other.
+const JOBS = {
+  membershipBilling: { label: "membership_billing", run: runMembershipBillingSweep },
+  cartRecovery: { label: "cart_recovery", run: runAbandonedCartSweep },
+  storeCredit: { label: "store_credit", run: grantMonthlyStoreCreditSweep },
+  // Advance ambassador commissions past the 14-day hold automatically, instead
+  // of only when someone happens to load the partner page. Idempotent.
+  commissionApproval: { label: "commission_approval", run: autoApproveEligibleCommissions },
+  // Reclaim inventory held by abandoned checkouts past their expiry window.
+  reservationsExpired: { label: "reservation_expiry", run: expireStaleReservations },
+  // Retry transactional emails (receipts/shipping) that failed to send.
+  emailRetry: { label: "email_retry", run: retryPendingEmails },
+  // Settle charges whose confirmation webhook was lost. This is the only thing
+  // standing between a charged card and an order that reads unpaid forever, so
+  // a failure here is genuinely critical.
+  paymentReconcile: { label: "payment_reconcile", run: reconcileVeyraPendingPayments },
+  // Push paid orders into Shippo. Deliberately NOT done in the payment webhook:
+  // a Shippo call can take 15s and delayed the webhook response past the
+  // provider's timeout, leaving shoppers on "Processing…" for a paid order.
+  shippoSync: { label: "shippo_sync", run: sweepUnsyncedOrders },
+  // Hygiene: retire wallet sessions that were armed and never used.
+  expressIntentsExpired: { label: "express_intent_expiry", run: expireStaleExpressIntents },
+  // Repair orders that reached Shippo without their parcel. Nothing else
+  // retries these -- every other path keys off shippo_order_id being NULL.
+  shipmentRepair: { label: "shipment_repair", run: sweepMissingShipments },
+  // Marketing: advance any in-flight campaign by one batch, and start any
+  // campaign whose scheduled time has arrived. Self-limiting to a time budget
+  // so it cannot consume the whole 60s window.
+  emailCampaigns: { label: "email_campaigns", run: runCampaignSweep },
+  // Marketing: retention sequences (welcome, post-purchase, win-back).
+  emailAutomations: { label: "email_automations", run: runAutomationSweep },
+} as const;
+
+type JobName = keyof typeof JOBS;
+
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
   const authHeader = request.headers.get("authorization") ?? "";
@@ -33,77 +78,36 @@ export async function GET(request: Request) {
     return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
   }
 
-  // Destructured names must line up with the array below POSITIONALLY -- there
-  // is nothing keying one to the other, so a job inserted in the middle silently
-  // shifts every result after it onto the wrong name. That had already happened
-  // to the last two.
-  const [membershipResult, cartRecoveryResult, storeCreditResult, commissionApprovalResult, reservationExpiryResult, emailRetryResult, paymentReconcileResult, shippoSyncResult, expressIntentResult, shipmentRepairResult] = await Promise.allSettled([
-    runMembershipBillingSweep(),
-    runAbandonedCartSweep(),
-    grantMonthlyStoreCreditSweep(),
-    // Advance ambassador commissions past the 14-day hold automatically, instead
-    // of only when someone happens to load the partner page. Idempotent.
-    autoApproveEligibleCommissions(),
-    // Reclaim inventory held by abandoned checkouts past their expiry window.
-    expireStaleReservations(),
-    // Retry transactional emails (receipts/shipping) that failed to send.
-    retryPendingEmails(),
-    // Settle charges whose confirmation webhook was lost. This is the only
-    // thing standing between a charged card and an order that reads unpaid
-    // forever, so a failure here is genuinely critical.
-    reconcileVeyraPendingPayments(),
-    // Push paid orders into Shippo. Deliberately NOT done in the payment
-    // webhook: a Shippo call can take 15s and delayed the webhook response past
-    // the provider's timeout, leaving shoppers on "Processing…" for an order
-    // that was already paid.
-    sweepUnsyncedOrders(),
-    // Hygiene: retire wallet sessions that were armed and never used.
-    expireStaleExpressIntents(),
-    // Repair orders that reached Shippo without their parcel. Nothing else
-    // retries these -- every other path keys off shippo_order_id being NULL.
-    sweepMissingShipments(),
-  ]);
+  const names = Object.keys(JOBS) as JobName[];
+  const settled = await Promise.allSettled(names.map((name) => JOBS[name].run()));
+
+  // zip by index against the SAME array the calls were built from, so the
+  // pairing is derived rather than hand-maintained.
+  const results = names.map((name, index) => [name, settled[index]] as const);
 
   // Surface any failed job as a durable, operator-visible alert (critical =
   // emails the operator). Without this a rejected sweep only appeared in the
   // HTTP response body that nobody reads, so renewals/recovery could silently
   // stall. Best-effort and never throws.
-  const jobs: Array<[string, PromiseSettledResult<unknown>]> = [
-    ["membership_billing", membershipResult],
-    ["cart_recovery", cartRecoveryResult],
-    ["store_credit", storeCreditResult],
-    ["commission_approval", commissionApprovalResult],
-    ["reservation_expiry", reservationExpiryResult],
-    ["email_retry", emailRetryResult],
-    ["payment_reconcile", paymentReconcileResult],
-    ["express_intent_expiry", expressIntentResult],
-    // Was missing entirely, so a failed push to Shippo raised no alert at all --
-    // on the one job whose silent failure leaves a paid order with nowhere to
-    // ship from.
-    ["shippo_sync", shippoSyncResult],
-    ["shipment_repair", shipmentRepairResult],
-  ];
-  const failed = jobs.filter(([, r]) => r.status === "rejected");
+  const failed = results.filter(([, result]) => result.status === "rejected");
   if (failed.length > 0) {
     await recordSystemAlert({
       type: "cron_sweep_failed",
       severity: "critical",
-      message: `Scheduled sweep had ${failed.length} failing job(s): ${failed.map(([name]) => name).join(", ")}. Renewals, cart recovery, reservation expiry, or email retries may be stalled.`,
-      context: Object.fromEntries(failed.map(([name, r]) => [name, String((r as PromiseRejectedResult).reason)])),
+      message: `Scheduled sweep had ${failed.length} failing job(s): ${failed.map(([name]) => JOBS[name].label).join(", ")}. Renewals, cart recovery, reservation expiry, or email retries may be stalled.`,
+      context: Object.fromEntries(
+        failed.map(([name, result]) => [JOBS[name].label, String((result as PromiseRejectedResult).reason)]),
+      ),
     });
   }
 
   return NextResponse.json({
     success: true,
-    membershipBilling: membershipResult.status === "fulfilled" ? membershipResult.value : { error: String(membershipResult.reason) },
-    cartRecovery: cartRecoveryResult.status === "fulfilled" ? cartRecoveryResult.value : { error: String(cartRecoveryResult.reason) },
-    storeCredit: storeCreditResult.status === "fulfilled" ? storeCreditResult.value : { error: String(storeCreditResult.reason) },
-    commissionApproval: commissionApprovalResult.status === "fulfilled" ? commissionApprovalResult.value : { error: String(commissionApprovalResult.reason) },
-    reservationsExpired: reservationExpiryResult.status === "fulfilled" ? reservationExpiryResult.value : { error: String(reservationExpiryResult.reason) },
-    emailRetry: emailRetryResult.status === "fulfilled" ? emailRetryResult.value : { error: String(emailRetryResult.reason) },
-    paymentReconcile: paymentReconcileResult.status === "fulfilled" ? paymentReconcileResult.value : { error: String(paymentReconcileResult.reason) },
-    expressIntentsExpired: expressIntentResult.status === "fulfilled" ? expressIntentResult.value : { error: String(expressIntentResult.reason) },
-    shippoSync: shippoSyncResult.status === "fulfilled" ? shippoSyncResult.value : { error: String(shippoSyncResult.reason) },
-    shipmentRepair: shipmentRepairResult.status === "fulfilled" ? shipmentRepairResult.value : { error: String(shipmentRepairResult.reason) },
+    ...Object.fromEntries(
+      results.map(([name, result]) => [
+        name,
+        result.status === "fulfilled" ? result.value : { error: String(result.reason) },
+      ]),
+    ),
   });
 }

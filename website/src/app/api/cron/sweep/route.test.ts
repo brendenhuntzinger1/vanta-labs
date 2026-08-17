@@ -23,6 +23,8 @@ const paymentReconcile = sentinel("paymentReconcile");
 const expressIntents = sentinel("expressIntents");
 const shippoSync = sentinel("shippoSync");
 const shipmentRepair = sentinel("shipmentRepair");
+const emailCampaigns = sentinel("emailCampaigns");
+const emailAutomations = sentinel("emailAutomations");
 interface SystemAlert {
   type: string;
   severity: string;
@@ -47,6 +49,8 @@ vi.mock("@/lib/shippo/order-sync", () => ({
   sweepUnsyncedOrders: () => shippoSync(),
   sweepMissingShipments: () => shipmentRepair(),
 }));
+vi.mock("@/lib/email/campaign-sender", () => ({ runCampaignSweep: () => emailCampaigns() }));
+vi.mock("@/lib/email/automations", () => ({ runAutomationSweep: () => emailAutomations() }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: (alert: SystemAlert) => recordSystemAlert(alert) }));
 
 const SECRET = "test-cron-secret";

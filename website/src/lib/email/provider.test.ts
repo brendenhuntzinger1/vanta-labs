@@ -33,6 +33,7 @@ function baseConfig(overrides: Partial<EmailRuntimeConfig> = {}): EmailRuntimeCo
     smtp: { host: "", port: 587, secure: false, user: "", password: "" },
     resend: { apiKey: "" },
     sendgrid: { apiKey: "" },
+    marketingPostalAddress: "",
     ...overrides,
   };
 }

@@ -40,6 +40,20 @@ export interface EmailRuntimeConfig {
   sendgrid: {
     apiKey: string;
   };
+  /**
+   * Physical postal address printed in the footer of every MARKETING email.
+   *
+   * Required by CAN-SPAM for commercial mail — a promotional message without a
+   * valid physical address is non-compliant regardless of how good the opt-out
+   * is. Transactional mail (receipts, shipping, password resets) is carved out
+   * and does not need it, which is why this lives here rather than being forced
+   * into the shared layout.
+   *
+   * Empty by default and deliberately NOT given a fake placeholder: the
+   * campaign sender refuses to send while it is blank, which is the only
+   * failure mode that can't quietly ship non-compliant mail.
+   */
+  marketingPostalAddress: string;
 }
 
 function str(value: unknown): string {
@@ -85,6 +99,7 @@ export async function getEmailRuntimeConfig(): Promise<EmailRuntimeConfig> {
     sendgrid: {
       apiKey: str(cfg.sendgrid_api_key) || process.env.SENDGRID_API_KEY || "",
     },
+    marketingPostalAddress: str(cfg.marketing_postal_address) || process.env.MARKETING_POSTAL_ADDRESS || "",
   };
 }
 
@@ -97,6 +112,13 @@ export interface EmailAdminSettings {
   sendgrid: { apiKeySet: boolean };
   /** True when the selected provider has everything it needs to send. */
   ready: boolean;
+  marketingPostalAddress: string;
+  /**
+   * True when marketing campaigns may be sent: delivery is ready AND the
+   * CAN-SPAM postal address is set. Separate from `ready` because transactional
+   * mail is unaffected by the address being blank.
+   */
+  marketingReady: boolean;
 }
 
 function isReady(config: EmailRuntimeConfig): boolean {
@@ -125,7 +147,19 @@ export async function getEmailAdminSettings(): Promise<EmailAdminSettings> {
     resend: { apiKeySet: Boolean(config.resend.apiKey) },
     sendgrid: { apiKeySet: Boolean(config.sendgrid.apiKey) },
     ready: isReady(config),
+    marketingPostalAddress: config.marketingPostalAddress,
+    marketingReady: config.enabled && isReady(config) && Boolean(config.marketingPostalAddress.trim()),
   };
+}
+
+/** Why a campaign can't be sent yet, or null when it can. */
+export function marketingBlockedReason(config: EmailRuntimeConfig): string | null {
+  if (!config.enabled) return "Email sending is turned off in Settings.";
+  if (!isReady(config)) return "The email provider isn't fully configured in Settings.";
+  if (!config.marketingPostalAddress.trim()) {
+    return "A physical postal address is required in Settings before marketing email can be sent (CAN-SPAM).";
+  }
+  return null;
 }
 
 export function emailConfigIsReady(config: EmailRuntimeConfig): boolean {

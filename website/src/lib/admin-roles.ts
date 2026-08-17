@@ -74,3 +74,10 @@ export function canManageMembership(role: AdminRole) {
 export function canManageCartRecovery(role: AdminRole) {
   return role === "manager" || role === "super_admin";
 }
+
+// Marketing campaigns reach every customer who opted in, and a bad send cannot
+// be recalled — so the bar is the same as refunds and coupons rather than the
+// lower one used for read-only reporting.
+export function canManageEmailCampaigns(role: AdminRole) {
+  return role === "manager" || role === "super_admin";
+}

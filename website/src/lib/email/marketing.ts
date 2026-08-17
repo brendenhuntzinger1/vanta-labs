@@ -42,6 +42,11 @@ export async function sendMarketingEmail(
   const result = await sendEmail({ to: input.to, subject: input.subject, html, text });
 
   // Logged best-effort - a logging failure must never fail the send itself.
+  //
+  // The OUTCOME is recorded, not just the attempt. Callers dedupe against this
+  // log ("has this already gone to this address?"), and a row that doesn't say
+  // whether the send succeeded turns a transient provider failure into a
+  // permanent one: the recipient looks done and is never retried.
   try {
     await supabaseAdmin.from("email_send_log").insert({
       campaign_type: input.campaignType,
@@ -49,6 +54,7 @@ export async function sendMarketingEmail(
       recipient_email: email,
       template_key: input.templateKey,
       sent_at: new Date().toISOString(),
+      status: result.success ? "sent" : "failed",
     });
   } catch {
     // Non-fatal.

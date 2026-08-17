@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 import { recordOrderAttribution } from "@/lib/order-attribution";
+import { attributeOrderToCampaign } from "@/lib/email/campaign-attribution";
+import { readCampaignCookie } from "@/lib/email/campaign-links";
 import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-service";
 import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
 import { detectRoleFromUser } from "@/lib/auth-role";
@@ -125,6 +127,14 @@ export async function POST(request: Request) {
     // lib/order-attribution.ts. Nothing about the order, its totals or its
     // payment depends on the outcome.
     await recordOrderAttribution({ orderId: result.orderId, raw: body.attribution });
+
+    // Same contract, different signal: credit the order to the email campaign
+    // whose tracked link brought them here, if the click is still inside the
+    // attribution window. Non-throwing by construction.
+    await attributeOrderToCampaign({
+      orderId: result.orderId,
+      cookieValue: readCampaignCookie(request),
+    });
 
     return NextResponse.json({
       success: true,

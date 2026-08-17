@@ -1,0 +1,307 @@
+import "server-only";
+
+import { supabaseAdmin } from "@/lib/supabase-server";
+import { isPaidOrderStatus } from "@/lib/ledger";
+
+/**
+ * Who a campaign goes to.
+ *
+ * CONSENT IS THE FLOOR, AND IT IS NOT A SEGMENT. Every segment below is applied
+ * as a filter ON TOP of the consented set — never as a way of reaching someone
+ * who hasn't opted in. "Customers who bought category X" means *consented*
+ * customers who bought category X. Having someone's address because they placed
+ * an order is not permission to market to them, and keeping that rule in one
+ * place is the only way it stays true as segments get added.
+ *
+ * Consent has two stores, for a real reason rather than an accident:
+ *   * `customer_preferences.marketing_emails` — account holders, keyed by user id
+ *   * `marketing_subscribers` — guests, keyed by email (a guest has no user row)
+ *
+ * Suppression (`email_suppressions`) is subtracted here as well as being
+ * enforced per-send by sendMarketingEmail. That is deliberate duplication: the
+ * per-send check is the guarantee, but subtracting up front is what makes the
+ * recipient count the admin sees before pressing Send the truth rather than an
+ * overestimate that quietly shrinks.
+ */
+
+export type CampaignSegment =
+  | "all"
+  | "purchasers"
+  | "dormant_30"
+  | "dormant_60"
+  | "dormant_90"
+  | "account_no_order"
+  | "category";
+
+export const CAMPAIGN_SEGMENTS: Array<{ value: CampaignSegment; label: string; needsParam?: boolean; hint: string }> = [
+  { value: "all", label: "All marketing subscribers", hint: "Everyone who opted in and hasn't unsubscribed." },
+  { value: "purchasers", label: "Customers who purchased before", hint: "At least one paid order." },
+  { value: "dormant_30", label: "No order in 30+ days", hint: "Bought before, but not recently." },
+  { value: "dormant_60", label: "No order in 60+ days", hint: "Bought before, but not recently." },
+  { value: "dormant_90", label: "No order in 90+ days", hint: "Bought before, but not recently." },
+  { value: "account_no_order", label: "Signed up, never ordered", hint: "Has an account, no paid order yet." },
+  { value: "category", label: "Bought a specific category", hint: "Ordered any product in the chosen category.", needsParam: true },
+];
+
+export function isCampaignSegment(value: unknown): value is CampaignSegment {
+  return CAMPAIGN_SEGMENTS.some((segment) => segment.value === value);
+}
+
+const DORMANT_DAYS: Partial<Record<CampaignSegment, number>> = {
+  dormant_30: 30,
+  dormant_60: 60,
+  dormant_90: 90,
+};
+
+function normalize(email: unknown): string {
+  return String(email ?? "").trim().toLowerCase();
+}
+
+export type ConsentedAudience = {
+  /** Opted in via an account preference. */
+  accounts: Set<string>;
+  /** Opted in by email (guest checkout, footer, anywhere without an account). */
+  subscribers: Set<string>;
+  /** The union, already minus suppressions. */
+  all: Set<string>;
+};
+
+/**
+ * Load everyone who may receive marketing, split by how they consented.
+ *
+ * The split matters for exactly one segment — "signed up, never ordered" is
+ * about account holders specifically — but resolving it here keeps every caller
+ * from having to know that two consent stores exist.
+ */
+export async function loadConsentedAudience(): Promise<ConsentedAudience> {
+  const accounts = new Set<string>();
+  const subscribers = new Set<string>();
+
+  const { data: prefs, error: prefsError } = await supabaseAdmin
+    .from("customer_preferences")
+    .select("user_id")
+    .eq("marketing_emails", true);
+  if (prefsError) throw prefsError;
+
+  const optedInUserIds = new Set((prefs ?? []).map((row) => row.user_id).filter(Boolean));
+
+  // Resolve opted-in user ids to addresses by paging the auth admin list once,
+  // rather than one lookup per customer against a rate-limited API.
+  if (optedInUserIds.size > 0) {
+    const PER_PAGE = 1000;
+    const MAX_PAGES = 100;
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const { data: pageData, error: pageError } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: PER_PAGE });
+      if (pageError) throw pageError;
+      const users = pageData?.users ?? [];
+      for (const user of users) {
+        if (optedInUserIds.has(user.id)) {
+          const email = normalize(user.email);
+          if (email) accounts.add(email);
+        }
+      }
+      if (users.length < PER_PAGE) break;
+    }
+  }
+
+  const { data: subs, error: subsError } = await supabaseAdmin
+    .from("marketing_subscribers")
+    .select("email")
+    .is("unsubscribed_at", null);
+  if (subsError) throw subsError;
+  for (const row of subs ?? []) {
+    const email = normalize(row.email);
+    if (email) subscribers.add(email);
+  }
+
+  // Subtract unsubscribes last, so an address can never survive by being
+  // present in the other consent store.
+  const { data: suppressed, error: suppressedError } = await supabaseAdmin
+    .from("email_suppressions")
+    .select("email");
+  if (suppressedError) throw suppressedError;
+  const blocked = new Set((suppressed ?? []).map((row) => normalize(row.email)));
+
+  for (const email of blocked) {
+    accounts.delete(email);
+    subscribers.delete(email);
+  }
+
+  const all = new Set<string>([...accounts, ...subscribers]);
+  return { accounts, subscribers, all };
+}
+
+type PurchaseHistory = {
+  /** email → most recent paid order time (ms). */
+  lastPaidAt: Map<string, number>;
+};
+
+/**
+ * Every paid order's email and date, paged.
+ *
+ * Only PAID orders count. A pending or failed checkout is not a purchase, and
+ * treating it as one would put a genuine never-ordered customer into the
+ * "bought before" segment and out of the win-back they should have received.
+ */
+async function loadPurchaseHistory(): Promise<PurchaseHistory> {
+  const lastPaidAt = new Map<string, number>();
+  const PAGE = 1000;
+
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from("orders")
+      .select("customer_email, payment_status, created_at")
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    for (const row of rows) {
+      if (!isPaidOrderStatus(row.payment_status as string | null)) continue;
+      const email = normalize(row.customer_email);
+      if (!email) continue;
+      const at = new Date(String(row.created_at)).getTime();
+      if (!Number.isFinite(at)) continue;
+      const existing = lastPaidAt.get(email);
+      if (existing === undefined || at > existing) lastPaidAt.set(email, at);
+    }
+    if (rows.length < PAGE) break;
+  }
+
+  return { lastPaidAt };
+}
+
+/** Emails that have a paid order containing any product in `category`. */
+async function loadCategoryBuyers(category: string): Promise<Set<string>> {
+  const wanted = category.trim();
+  const buyers = new Set<string>();
+  if (!wanted) return buyers;
+
+  const { data: products, error: productsError } = await supabaseAdmin
+    .from("products")
+    .select("slug")
+    .eq("category", wanted);
+  if (productsError) throw productsError;
+  const slugs = new Set((products ?? []).map((row) => String(row.slug ?? "")).filter(Boolean));
+  if (slugs.size === 0) return buyers;
+
+  // order_items.product_id holds the product SLUG (verified against live rows),
+  // and order_id is the human order key, not a uuid — so the join back to
+  // orders is on that text column.
+  const paidOrderIds = new Set<string>();
+  const orderEmail = new Map<string, string>();
+  const PAGE = 1000;
+
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from("orders")
+      .select("order_id, customer_email, payment_status")
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    for (const row of rows) {
+      if (!isPaidOrderStatus(row.payment_status as string | null)) continue;
+      const id = String(row.order_id ?? "");
+      const email = normalize(row.customer_email);
+      if (!id || !email) continue;
+      paidOrderIds.add(id);
+      orderEmail.set(id, email);
+    }
+    if (rows.length < PAGE) break;
+  }
+
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from("order_items")
+      .select("order_id, product_id")
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    const rows = data ?? [];
+    for (const row of rows) {
+      const orderId = String(row.order_id ?? "");
+      if (!paidOrderIds.has(orderId)) continue;
+      if (!slugs.has(String(row.product_id ?? ""))) continue;
+      const email = orderEmail.get(orderId);
+      if (email) buyers.add(email);
+    }
+    if (rows.length < PAGE) break;
+  }
+
+  return buyers;
+}
+
+/**
+ * Pure segment filter, exported so the rules can be tested without a database.
+ *
+ * `now` is injected rather than read from the clock so the dormancy boundaries
+ * are assertable — an off-by-one in a 30-day window is invisible in production
+ * and obvious in a test.
+ */
+export function applySegment(input: {
+  segment: CampaignSegment;
+  audience: ConsentedAudience;
+  lastPaidAt: Map<string, number>;
+  categoryBuyers?: Set<string>;
+  now: number;
+}): string[] {
+  const { segment, audience, lastPaidAt, now } = input;
+  const candidates = Array.from(audience.all);
+
+  switch (segment) {
+    case "all":
+      return candidates;
+
+    case "purchasers":
+      return candidates.filter((email) => lastPaidAt.has(email));
+
+    case "dormant_30":
+    case "dormant_60":
+    case "dormant_90": {
+      const days = DORMANT_DAYS[segment] ?? 30;
+      const cutoff = now - days * 24 * 60 * 60 * 1000;
+      // Must have bought at some point: someone who never ordered is a
+      // different campaign (and a different message) than someone lapsing.
+      return candidates.filter((email) => {
+        const at = lastPaidAt.get(email);
+        return at !== undefined && at <= cutoff;
+      });
+    }
+
+    case "account_no_order":
+      // Account holders specifically — a guest who opted in at checkout but
+      // whose payment failed is not someone who "signed up".
+      return candidates.filter((email) => audience.accounts.has(email) && !lastPaidAt.has(email));
+
+    case "category": {
+      const buyers = input.categoryBuyers ?? new Set<string>();
+      return candidates.filter((email) => buyers.has(email));
+    }
+
+    default:
+      return [];
+  }
+}
+
+/** Resolve a segment to the addresses that should receive the campaign. */
+export async function resolveAudience(input: {
+  segment: CampaignSegment;
+  segmentParam?: string | null;
+  now?: number;
+}): Promise<string[]> {
+  const audience = await loadConsentedAudience();
+  if (audience.all.size === 0) return [];
+
+  // Skip the work each segment doesn't need — "all" is the common case and
+  // shouldn't page the entire orders table to answer.
+  const needsHistory = input.segment !== "all" && input.segment !== "category";
+  const { lastPaidAt } = needsHistory ? await loadPurchaseHistory() : { lastPaidAt: new Map<string, number>() };
+  const categoryBuyers = input.segment === "category"
+    ? await loadCategoryBuyers(String(input.segmentParam ?? ""))
+    : undefined;
+
+  return applySegment({
+    segment: input.segment,
+    audience,
+    lastPaidAt,
+    categoryBuyers,
+    now: input.now ?? Date.now(),
+  });
+}

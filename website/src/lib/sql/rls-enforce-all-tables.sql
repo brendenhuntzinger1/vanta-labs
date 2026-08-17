@@ -41,7 +41,14 @@ declare
     'referrals', 'referral_orders',
     'abandoned_carts', 'abandoned_cart_emails', 'back_in_stock_requests',
     'wishlist_items', 'email_send_log', 'email_suppressions', 'notification_queue',
-    'fulfillment_orders', 'fulfillment_events', 'website_analytics_events'
+    'fulfillment_orders', 'fulfillment_events', 'website_analytics_events',
+    -- Marketing consent and campaign machinery. These each enable RLS in their
+    -- own migration, but this sweep is what asserts it — a table that is only
+    -- protected by the migration that created it loses that protection the
+    -- first time someone recreates it by hand. marketing_subscribers is a list
+    -- of customer email addresses, so it is exactly the wrong one to leave out.
+    'marketing_subscribers', 'email_campaigns', 'email_campaign_recipients',
+    'email_campaign_clicks', 'email_automations'
   ];
 begin
   foreach target in array tables loop

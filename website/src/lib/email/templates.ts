@@ -21,7 +21,11 @@ function money(value: number) {
 // or product contained an ampersand read "Ben &amp; Jerry" in the heading of
 // their receipt. Naming it `titleHtml` states the contract the way `bodyHtml`
 // already did, instead of leaving two plausible readings of `title`.
-function renderLayout(input: { preheader: string; titleHtml: string; bodyHtml: string; ctaLabel?: string; ctaUrl?: string }) {
+// `footerNoteHtml` is already-escaped HTML appended inside the footer cell. It
+// exists for the CAN-SPAM postal address that commercial mail must carry and
+// transactional mail must not be forced to invent; anything else that belongs
+// below the rule can use it too.
+function renderLayout(input: { preheader: string; titleHtml: string; bodyHtml: string; ctaLabel?: string; ctaUrl?: string; footerNoteHtml?: string }) {
   const cta = input.ctaUrl && input.ctaLabel
     ? `<tr><td style="padding:28px 0 4px;"><a href="${escapeHtml(input.ctaUrl)}" style="display:inline-block;background:#f4f4f4;color:#111111;text-decoration:none;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;font-size:13px;padding:12px 24px;border-radius:999px;">${escapeHtml(input.ctaLabel)}</a></td></tr>`
     : "";
@@ -46,6 +50,7 @@ function renderLayout(input: { preheader: string; titleHtml: string; bodyHtml: s
         ${cta}
         <tr><td style="padding:28px 32px 24px;border-top:1px solid rgba(255,255,255,0.1);margin-top:24px;">
           <p style="margin:20px 0 0;font-size:12px;color:#71717a;">Vanta Labs · Research Use Only<br/>Questions? <a href="mailto:support@vantalabsresearch.com" style="color:#a1a1aa;">support@vantalabsresearch.com</a></p>
+          ${input.footerNoteHtml ?? ""}
         </td></tr>
       </table>
     </td></tr>
@@ -1210,4 +1215,82 @@ export function wholesaleInquiryAutoReplyTemplate(input: { firstName: string }):
     html: body.map((line) => `<p>${escapeHtml(line)}</p>`).join(""),
     text: body.join("\n\n"),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Generic campaign template.
+//
+// One reusable branded message driven entirely by admin input, rather than a
+// hand-built template per promotion. The admin supplies a headline, some body
+// copy, an optional promo code and a call to action; everything else — brand
+// header, dark styling, button, footer, postal address — is applied here, so a
+// campaign takes under a minute to compose and can't drift off-brand.
+//
+// BODY COPY IS PLAIN TEXT, NOT HTML, and that is a security decision as much as
+// a usability one. Accepting HTML from the composer would put arbitrary markup
+// into mail sent to every customer on the list; instead the text is escaped and
+// blank-line-separated paragraphs are turned into <p> elements. An operator
+// gets paragraphs, which is what they actually need, and nothing else is
+// reachable from the compose box.
+// ---------------------------------------------------------------------------
+export function campaignTemplate(input: {
+  subject: string;
+  previewText?: string | null;
+  headline: string;
+  body: string;
+  promoCode?: string | null;
+  ctaLabel: string;
+  ctaUrl: string;
+  /** CAN-SPAM postal address. The sender refuses to send without one. */
+  postalAddress: string;
+}): EmailTemplate {
+  // Coerced rather than trusted. Every other template here is called from one
+  // known site with a typed object; this one is driven by a database row an
+  // operator edits, so a null that slipped past a migration default should
+  // render an empty line, not throw partway through a send.
+  const bodyText = String(input.body ?? "");
+  const postalAddress = String(input.postalAddress ?? "");
+
+  const paragraphs = bodyText
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter(Boolean)
+    // Single newlines inside a paragraph become <br/>, so a short list typed in
+    // the composer survives instead of collapsing onto one line.
+    .map((block) => `<p>${escapeHtml(block).replace(/\n/g, "<br/>")}</p>`)
+    .join("");
+
+  const code = input.promoCode?.trim();
+  const codeBlock = code
+    ? `<div style="margin:18px 0 4px;padding:14px;border:1px dashed rgba(255,255,255,0.35);border-radius:12px;text-align:center;"><span style="font-size:20px;font-weight:800;letter-spacing:0.14em;color:#ffffff;">${escapeHtml(code)}</span></div>`
+    : "";
+
+  // The address is escaped and rendered as plain text; newlines become <br/> so
+  // a multi-line address stays readable.
+  const footerNoteHtml = `<p style="margin:12px 0 0;font-size:11px;color:#71717a;">${escapeHtml(postalAddress).replace(/\n/g, "<br/>")}</p>`;
+
+  const preheader = input.previewText?.trim() || input.headline;
+
+  const html = renderLayout({
+    preheader,
+    titleHtml: escapeHtml(input.headline),
+    bodyHtml: `${paragraphs}${codeBlock}`,
+    ctaLabel: input.ctaLabel,
+    ctaUrl: input.ctaUrl,
+    footerNoteHtml,
+  });
+
+  const text = toText([
+    input.headline,
+    "",
+    bodyText.trim(),
+    code ? "" : null,
+    code ? `Code: ${code}` : null,
+    "",
+    `${input.ctaLabel}: ${input.ctaUrl}`,
+    "",
+    postalAddress,
+  ]);
+
+  return { subject: input.subject, html, text };
 }

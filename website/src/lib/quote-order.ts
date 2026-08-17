@@ -983,7 +983,7 @@ export async function insertOrderRow(draft: OrderRowDraft): Promise<OrderInsertO
   }
   if (insertError) {
     const message = String(insertError.message ?? "").toLowerCase();
-    const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state") || message.includes("idempotency_key") || message.includes("billing_") || message.includes("checkout_channel");
+    const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state") || message.includes("idempotency_key") || message.includes("billing_") || message.includes("checkout_channel") || message.includes("attributed_");
     const looksLikeMissingColumn = message.includes("does not exist")
       || message.includes("schema cache")
       || message.includes("could not find")
