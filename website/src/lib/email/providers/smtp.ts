@@ -44,7 +44,7 @@ export class SmtpEmailProvider implements EmailProvider {
         auth: { user, pass },
       });
 
-      await transport.sendMail({
+      const info = await transport.sendMail({
         from,
         to: message.to,
         subject: message.subject,
@@ -52,6 +52,32 @@ export class SmtpEmailProvider implements EmailProvider {
         html: message.html,
         replyTo: message.replyTo,
       });
+
+      // NOT THROWING IS NOT THE SAME AS DELIVERED. nodemailer resolves rather
+      // than rejects when a server refuses a recipient at RCPT TO — the refusal
+      // comes back in `rejected` instead. This used to ignore the result
+      // entirely and return success, so a 550 (unknown mailbox), a 421 (server
+      // busy) or a 535 was recorded as a successful send: the campaign marked
+      // that person delivered and never retried them, and the transactional
+      // retry queue did the same with their receipt.
+      //
+      // `accepted` is the authority. An empty `accepted` with no exception is
+      // the exact shape of a silently-dropped message.
+      const accepted = Array.isArray(info?.accepted) ? info.accepted : [];
+      const rejected = Array.isArray(info?.rejected) ? info.rejected : [];
+      const asAddress = (entry: unknown): string =>
+        (typeof entry === "string" ? entry : String((entry as { address?: string })?.address ?? "")).trim().toLowerCase();
+      const target = message.to.trim().toLowerCase();
+
+      if (rejected.some((entry) => asAddress(entry) === target) || accepted.length === 0) {
+        const response = typeof info?.response === "string" ? info.response : "";
+        return {
+          success: false,
+          // The server's own reply names the reason (mailbox unknown, over
+          // quota, blocked) and is the only useful thing to put in a log.
+          error: `SMTP recipient rejected${response ? `: ${response.slice(0, 200)}` : ""}`,
+        };
+      }
 
       return { success: true };
     } catch (error) {
