@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { couponAnnouncementTemplate } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
+import { readAllRows } from "@/lib/supabase-page";
 import type { AdminCoupon } from "@/lib/admin-coupons";
 
 // Emails of customers who opted into marketing (the "Marketing emails" toggle
@@ -53,11 +54,14 @@ export async function getMarketingRecipientEmails(): Promise<string[]> {
   // Union the email-keyed opt-in list (guests + at-checkout opt-ins). Best-
   // effort: if the table isn't present yet, fall back to account opt-ins only.
   try {
-    const { data: subs } = await supabaseAdmin
+    // Paged: past the server's row cap an unpaged read silently returns a
+    // short list, so the broadcast would skip subscribers without any error.
+    const subs = await readAllRows<{ email: string }>((from, to) => supabaseAdmin
       .from("marketing_subscribers")
       .select("email")
-      .is("unsubscribed_at", null);
-    for (const row of subs ?? []) {
+      .is("unsubscribed_at", null)
+      .range(from, to));
+    for (const row of subs) {
       const email = String(row.email ?? "").trim().toLowerCase();
       if (email) emails.add(email);
     }

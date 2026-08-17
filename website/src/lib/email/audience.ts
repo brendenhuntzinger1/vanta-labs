@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isPaidOrderStatus } from "@/lib/ledger";
+import { readAllRows } from "@/lib/supabase-page";
 
 /**
  * Who a campaign goes to.
@@ -77,13 +78,16 @@ export async function loadConsentedAudience(): Promise<ConsentedAudience> {
   const accounts = new Set<string>();
   const subscribers = new Set<string>();
 
-  const { data: prefs, error: prefsError } = await supabaseAdmin
+  // Paged for the same reason as the lists below: past the server's row cap an
+  // unpaged read returns a short list with no error, silently dropping
+  // account-holders from every audience.
+  const prefs = await readAllRows<{ user_id: string }>((from, to) => supabaseAdmin
     .from("customer_preferences")
     .select("user_id")
-    .eq("marketing_emails", true);
-  if (prefsError) throw prefsError;
+    .eq("marketing_emails", true)
+    .range(from, to));
 
-  const optedInUserIds = new Set((prefs ?? []).map((row) => row.user_id).filter(Boolean));
+  const optedInUserIds = new Set(prefs.map((row) => row.user_id).filter(Boolean));
 
   // Resolve opted-in user ids to addresses by paging the auth admin list once,
   // rather than one lookup per customer against a rate-limited API.
@@ -104,23 +108,28 @@ export async function loadConsentedAudience(): Promise<ConsentedAudience> {
     }
   }
 
-  const { data: subs, error: subsError } = await supabaseAdmin
+  // Paged: an unpaged read stops at the server's row cap without saying so,
+  // which would silently drop subscribers from every audience past that point.
+  const subs = await readAllRows<{ email: string }>((from, to) => supabaseAdmin
     .from("marketing_subscribers")
     .select("email")
-    .is("unsubscribed_at", null);
-  if (subsError) throw subsError;
-  for (const row of subs ?? []) {
+    .is("unsubscribed_at", null)
+    .range(from, to));
+  for (const row of subs) {
     const email = normalize(row.email);
     if (email) subscribers.add(email);
   }
 
   // Subtract unsubscribes last, so an address can never survive by being
   // present in the other consent store.
-  const { data: suppressed, error: suppressedError } = await supabaseAdmin
+  // Paged, and this is the one that matters most: a truncated suppression list
+  // does not fail, it just stops mentioning some of the people who
+  // unsubscribed — and the next campaign mails them.
+  const suppressed = await readAllRows<{ email: string }>((from, to) => supabaseAdmin
     .from("email_suppressions")
-    .select("email");
-  if (suppressedError) throw suppressedError;
-  const blocked = new Set((suppressed ?? []).map((row) => normalize(row.email)));
+    .select("email")
+    .range(from, to));
+  const blocked = new Set(suppressed.map((row) => normalize(row.email)));
 
   for (const email of blocked) {
     accounts.delete(email);

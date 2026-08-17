@@ -5,6 +5,7 @@ import { isPaidOrderStatus, netOrderRevenue } from "@/lib/ledger";
 import { loadConsentedAudience } from "@/lib/email/audience";
 import { isSafeSitePath } from "@/lib/email/cta-path";
 import { getSiteUrl } from "@/lib/env";
+import { readAllRows } from "@/lib/supabase-page";
 
 /**
  * Reporting for the admin Email tab.
@@ -60,26 +61,32 @@ function rate(numerator: number, denominator: number): number {
 export { rate as campaignRate };
 
 export async function getEmailDashboard(): Promise<EmailDashboard> {
-  const [{ data: campaignRows }, { data: recipientRows }, { data: orderRows }] = await Promise.all([
+  const [{ data: campaignRows }, recipientRows, orderRows] = await Promise.all([
     supabaseAdmin
       .from("email_campaigns")
       .select("id, name, subject, segment, segment_param, status, created_at, scheduled_at, completed_at, recipient_count")
       .order("created_at", { ascending: false })
       .limit(100),
-    supabaseAdmin
-      .from("email_campaign_recipients")
-      .select("campaign_id, status, opened_at, clicked_at"),
-    supabaseAdmin
-      .from("orders")
-      .select("attributed_campaign_id, payment_status, amount_paid, refund_amount")
-      .not("attributed_campaign_id", "is", null),
+    readAllRows<{ campaign_id: string; status: string; opened_at: string | null; clicked_at: string | null }>(
+      (from, to) => supabaseAdmin
+        .from("email_campaign_recipients")
+        .select("campaign_id, status, opened_at, clicked_at")
+        .range(from, to),
+    ),
+    readAllRows<{ attributed_campaign_id: string; payment_status: string; amount_paid: number | null; refund_amount: number | null }>(
+      (from, to) => supabaseAdmin
+        .from("orders")
+        .select("attributed_campaign_id, payment_status, amount_paid, refund_amount")
+        .not("attributed_campaign_id", "is", null)
+        .range(from, to),
+    ),
   ]);
 
   type Tally = { sent: number; failed: number; suppressed: number; pending: number; opened: number; clicked: number };
   const tallies = new Map<string, Tally>();
   const blank = (): Tally => ({ sent: 0, failed: 0, suppressed: 0, pending: 0, opened: 0, clicked: 0 });
 
-  for (const row of recipientRows ?? []) {
+  for (const row of recipientRows) {
     const id = String(row.campaign_id ?? "");
     if (!id) continue;
     const tally = tallies.get(id) ?? blank();
@@ -96,7 +103,7 @@ export async function getEmailDashboard(): Promise<EmailDashboard> {
   }
 
   const revenueByCampaign = new Map<string, { orders: number; revenue: number }>();
-  for (const row of orderRows ?? []) {
+  for (const row of orderRows) {
     if (!isPaidOrderStatus(row.payment_status as string | null)) continue;
     const id = String(row.attributed_campaign_id ?? "");
     if (!id) continue;
