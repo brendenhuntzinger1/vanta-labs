@@ -471,18 +471,19 @@ export default function CheckoutPage() {
 
   // Whether the marketing box starts ticked, until the shopper touches it.
   //
-  // ALLOWLIST, NOT A BLOCKLIST. This used to read `!isCanada(country)` — every
-  // destination got a pre-ticked box except Canada. But an opt-out default is
-  // lawful in very few places and the US is the outlier that allows it, so a
-  // blocklist is wrong by default for every country nobody thought to add.
-  // Country is a free-text field, so "United Kingdom" or "Germany" is one
-  // keystroke away, and under UK/EU GDPR a pre-ticked box is not consent at
-  // all — consent has to be an affirmative act. CASL says the same for Canada,
-  // which is why Canada was carved out in the first place.
+  // ALLOWLIST, NOT A BLOCKLIST — a robustness change, not a bug fix.
   //
-  // Inverting it means an unrecognised country fails safe: the box starts
-  // empty and the shopper has to actually tick it. Nobody loses the ability to
-  // subscribe; they just have to say yes.
+  // This previously read `!isCanada(country)`, and that was CORRECT for what
+  // the form can produce: the country control is a two-option select (United
+  // States, Canada), so carving out Canada for CASL covered every reachable
+  // destination. Both forms behave identically today.
+  //
+  // Stated as an allowlist because the reason Canada is excluded is that an
+  // opt-out default is lawful in very few places and the US is the outlier
+  // that allows it. Written as a blocklist, adding a third country to that
+  // select silently gives it a pre-ticked box; written this way, a new
+  // destination starts unticked until someone decides otherwise. Nobody loses
+  // the ability to subscribe — they just have to say yes.
   const marketingOptIn = marketingTouched ? marketingChoice : isUnitedStates(form.country);
 
   // Reveal the savings panel when a code becomes applied, so an applied code is
