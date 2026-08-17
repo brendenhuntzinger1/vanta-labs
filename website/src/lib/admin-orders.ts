@@ -1,6 +1,9 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { sendEmail } from "@/lib/email/send";
+import { deliveryConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
+import { getSiteUrl } from "@/lib/env";
 
 export interface AdminOrderRow {
   id: string;
@@ -137,26 +140,61 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
 
 export type AdminOrderBulkAction = "mark_shipped" | "mark_delivered" | "cancel";
 
+/**
+ * Statuses a customer is told about, matching the single-order route exactly.
+ * "cancelled" is deliberately absent there and here: a cancellation is handled
+ * by the refund flow, which has its own message.
+ */
+const BULK_NOTIFY_STATUSES = new Set(["shipped", "delivered"]);
+
+/**
+ * Apply a bulk fulfillment action AND tell the affected customers.
+ *
+ * The notification is the point of this function's length. Marking one order
+ * shipped from the order page emails that customer; marking fifty shipped from
+ * the list used to email nobody, so whether a customer heard their order had
+ * left depended on which screen an operator happened to use. Support then
+ * fields "has my order shipped?" for orders that shipped days ago.
+ *
+ * The rules are lifted from the single-order route rather than reinvented:
+ *   * only a REAL transition notifies — re-running "mark shipped" over orders
+ *     that are already shipped sends nothing, so a double-click or an operator
+ *     re-applying an action to a filtered list cannot spam anyone;
+ *   * "delivered" gets the delivery confirmation, "shipped" the shipping
+ *     update;
+ *   * sending is best-effort per order. The status change is the operation the
+ *     admin asked for and it has already committed; one bad address must not
+ *     roll it back or abort the rest of the batch.
+ */
 export async function bulkUpdateAdminOrders(input: { orderIds: string[]; action: AdminOrderBulkAction }) {
   if (input.orderIds.length === 0) {
-    return;
+    return { updated: 0, notified: 0 };
   }
 
   const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
+  let nextStatus: string;
 
   switch (input.action) {
     case "mark_shipped":
-      payload.fulfillment_status = "shipped";
+      nextStatus = "shipped";
       break;
     case "mark_delivered":
-      payload.fulfillment_status = "delivered";
+      nextStatus = "delivered";
       break;
     case "cancel":
-      payload.fulfillment_status = "cancelled";
+      nextStatus = "cancelled";
       break;
     default:
       throw new Error("Unsupported bulk action");
   }
+  payload.fulfillment_status = nextStatus;
+
+  // Read the PRIOR state before updating: afterwards every row reads as the new
+  // status, and "did this actually change?" becomes unanswerable.
+  const { data: before } = await supabaseAdmin
+    .from("orders")
+    .select("order_id, order_number, customer_email, customer_name, fulfillment_status, tracking_number")
+    .in("order_id", input.orderIds);
 
   const { error } = await supabaseAdmin
     .from("orders")
@@ -166,4 +204,41 @@ export async function bulkUpdateAdminOrders(input: { orderIds: string[]; action:
   if (error) {
     throw error;
   }
+
+  if (!BULK_NOTIFY_STATUSES.has(nextStatus)) {
+    return { updated: input.orderIds.length, notified: 0 };
+  }
+
+  const transitioned = (before ?? []).filter(
+    (row) => String(row.fulfillment_status ?? "").toLowerCase() !== nextStatus && row.customer_email,
+  );
+
+  let notified = 0;
+  for (const row of transitioned) {
+    try {
+      // The reference the CUSTOMER knows, matching the Shippo-driven emails and
+      // the order confirmation. The internal key is a raw `order-<uuid>` that
+      // means nothing to them and cannot be quoted to support.
+      const orderId = String(row.order_number ?? "") || String(row.order_id);
+      const trackingNumber = row.tracking_number ? String(row.tracking_number) : undefined;
+      const template = nextStatus === "delivered"
+        ? deliveryConfirmationTemplate({ customerName: String(row.customer_name ?? ""), orderId })
+        : shippingUpdateTemplate({
+            customerName: String(row.customer_name ?? ""),
+            orderId,
+            status: nextStatus,
+            trackingNumber,
+            // No carrier is known in a bulk action, so there is no carrier
+            // deep-link to build — send them to their own order list, which is
+            // the same fallback the single-order path uses.
+            trackingUrl: `${getSiteUrl()}/account/orders`,
+          });
+      const result = await sendEmail({ to: String(row.customer_email), ...template });
+      if (result.success) notified++;
+    } catch {
+      // Best-effort: the status change already succeeded and must stand.
+    }
+  }
+
+  return { updated: input.orderIds.length, notified };
 }

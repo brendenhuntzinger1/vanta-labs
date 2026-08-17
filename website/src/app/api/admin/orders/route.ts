@@ -33,7 +33,7 @@ export async function PATCH(request: Request) {
       );
     }
 
-    await bulkUpdateAdminOrders({ orderIds, action });
+    const result = await bulkUpdateAdminOrders({ orderIds, action });
 
     await supabaseAdmin.from("admin_audit_logs").insert({
       action: `order_bulk_${action}`,
@@ -42,6 +42,9 @@ export async function PATCH(request: Request) {
       metadata: {
         orderIds,
         count: orderIds.length,
+        // Recorded so the audit log answers "was the customer told?" — the
+        // question support actually asks about a bulk action.
+        customersNotified: result.notified,
         performedAt: new Date().toISOString(),
         performedBy: session.username,
         ipAddress: getRequestIpAddress(request),
@@ -49,7 +52,7 @@ export async function PATCH(request: Request) {
       },
     });
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, updated: result.updated, notified: result.notified });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to update orders";
     return NextResponse.json({ success: false, error: message }, { status: 400 });

@@ -204,17 +204,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
           if (order?.customer_email) {
             const trackingNumber = newTracking || undefined;
             const carrier = body.carrier?.trim() || undefined;
+            // Quote the reference the CUSTOMER holds, not the internal key.
+            // `orderId` here is the route parameter — a raw `order-<uuid>` that
+            // appears nowhere in their receipt and cannot be quoted to support.
+            // The Shippo-driven emails and the order confirmation both use the
+            // order number already; this is the path that did not.
+            const orderReference = String(order.order_number ?? "") || orderId;
             // A transition to "delivered" gets the dedicated delivery
             // confirmation; every other shipping transition (and tracking
             // changes) uses the generic shipping-update email.
             const template = newStatus.toLowerCase() === "delivered"
               ? deliveryConfirmationTemplate({
                   customerName: String(order.customer_name ?? ""),
-                  orderId,
+                  orderId: orderReference,
                 })
               : shippingUpdateTemplate({
                   customerName: String(order.customer_name ?? ""),
-                  orderId,
+                  orderId: orderReference,
                   status: String(updatePayload.fulfillment_status ?? order.fulfillment_status ?? "updated"),
                   carrier,
                   trackingNumber,
