@@ -36,6 +36,7 @@ export type CampaignSummary = {
   failed: number;
   suppressed: number;
   pending: number;
+  cancelled: number;
   opened: number;
   clicked: number;
   orders: number;
@@ -82,9 +83,9 @@ export async function getEmailDashboard(): Promise<EmailDashboard> {
     ),
   ]);
 
-  type Tally = { sent: number; failed: number; suppressed: number; pending: number; opened: number; clicked: number };
+  type Tally = { sent: number; failed: number; suppressed: number; pending: number; cancelled: number; opened: number; clicked: number };
   const tallies = new Map<string, Tally>();
-  const blank = (): Tally => ({ sent: 0, failed: 0, suppressed: 0, pending: 0, opened: 0, clicked: 0 });
+  const blank = (): Tally => ({ sent: 0, failed: 0, suppressed: 0, pending: 0, cancelled: 0, opened: 0, clicked: 0 });
 
   for (const row of recipientRows) {
     const id = String(row.campaign_id ?? "");
@@ -94,6 +95,9 @@ export async function getEmailDashboard(): Promise<EmailDashboard> {
     if (status === "sent") tally.sent++;
     else if (status === "failed") tally.failed++;
     else if (status === "suppressed") tally.suppressed++;
+    // Stopped by an operator. Counted separately from 'pending' because those
+    // mean opposite things: pending is still going out, cancelled never will.
+    else if (status === "cancelled") tally.cancelled++;
     // 'claiming' is in flight, not a distinct outcome — counted as pending so
     // the numbers add up to the audience while a send is running.
     else tally.pending++;

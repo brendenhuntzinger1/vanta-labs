@@ -206,6 +206,24 @@ export function AdminEmailClient({
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  async function handleStop(campaign: CampaignSummary) {
+    const confirmed = window.confirm(
+      `Stop "${campaign.name}"?\n\n${campaign.sent} email(s) have already been sent and CANNOT be recalled. `
+      + `This prevents the remaining ${campaign.pending} from going out.`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    const response = await fetch(`/api/admin/email/campaigns/${campaign.id}/stop`, { method: "POST" });
+    const data = await response.json().catch(() => null);
+    setMessage(
+      data?.success
+        ? { tone: "ok", text: `Stopped. ${data.alreadySent} had already been sent; ${data.stoppedBeforeSending} were prevented.` }
+        : { tone: "error", text: data?.error ?? "Unable to stop this campaign." },
+    );
+    setBusy(false);
+    if (data?.success) setTimeout(() => window.location.reload(), 1200);
+  }
+
   async function saveAutomation(row: AutomationRow) {
     setBusy(true);
     const response = await fetch("/api/admin/email/automations", {
@@ -509,6 +527,9 @@ export function AdminEmailClient({
                       {campaign.pending > 0 ? (
                         <span className="block text-[11px] text-amber-300/80">{campaign.pending} queued</span>
                       ) : null}
+                      {campaign.cancelled > 0 ? (
+                        <span className="block text-[11px] text-zinc-500">{campaign.cancelled} stopped</span>
+                      ) : null}
                     </td>
                     <td className="py-2.5 pr-3">{campaign.sent}</td>
                     <td className="py-2.5 pr-3">{percent(campaign.opened, campaign.sent)}</td>
@@ -516,13 +537,29 @@ export function AdminEmailClient({
                     <td className="py-2.5 pr-3">{campaign.orders}</td>
                     <td className="py-2.5 pr-3 text-emerald-300">{money(campaign.revenue)}</td>
                     <td className="py-2.5">
-                      <button
-                        type="button"
-                        onClick={() => loadIntoComposer(campaign)}
-                        className="text-xs text-cyan-300 hover:underline"
-                      >
-                        Duplicate
-                      </button>
+                      <div className="flex flex-col items-start gap-1">
+                        <button
+                          type="button"
+                          onClick={() => loadIntoComposer(campaign)}
+                          className="text-xs text-cyan-300 hover:underline"
+                        >
+                          Duplicate
+                        </button>
+                        {/* Only offered while something is actually in flight —
+                            a finished campaign has nothing left to stop, and an
+                            enabled-looking button that always errors is worse
+                            than no button. */}
+                        {campaign.status === "sending" || campaign.status === "scheduled" ? (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleStop(campaign)}
+                            className="text-xs font-semibold text-rose-300 hover:underline disabled:opacity-40"
+                          >
+                            Stop sending
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))}

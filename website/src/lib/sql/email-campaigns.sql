@@ -74,7 +74,7 @@ create table if not exists public.email_campaign_recipients (
   id uuid primary key default gen_random_uuid(),
   campaign_id uuid not null references public.email_campaigns(id) on delete cascade,
   email text not null,
-  -- pending | claiming | sent | suppressed | failed
+  -- pending | claiming | sent | suppressed | failed | cancelled
   --
   -- 'claiming' is what makes overlapping cron runs safe. A worker moves rows
   -- pending -> claiming in a single conditional update and only sends the rows
