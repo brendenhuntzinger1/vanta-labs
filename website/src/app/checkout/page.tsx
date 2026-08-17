@@ -469,7 +469,21 @@ export default function CheckoutPage() {
     }
   }, [form.email, setKnownEmail]);
 
-  const marketingOptIn = marketingTouched ? marketingChoice : !isCanada(form.country);
+  // Whether the marketing box starts ticked, until the shopper touches it.
+  //
+  // ALLOWLIST, NOT A BLOCKLIST. This used to read `!isCanada(country)` — every
+  // destination got a pre-ticked box except Canada. But an opt-out default is
+  // lawful in very few places and the US is the outlier that allows it, so a
+  // blocklist is wrong by default for every country nobody thought to add.
+  // Country is a free-text field, so "United Kingdom" or "Germany" is one
+  // keystroke away, and under UK/EU GDPR a pre-ticked box is not consent at
+  // all — consent has to be an affirmative act. CASL says the same for Canada,
+  // which is why Canada was carved out in the first place.
+  //
+  // Inverting it means an unrecognised country fails safe: the box starts
+  // empty and the shopper has to actually tick it. Nobody loses the ability to
+  // subscribe; they just have to say yes.
+  const marketingOptIn = marketingTouched ? marketingChoice : isUnitedStates(form.country);
 
   // Reveal the savings panel when a code becomes applied, so an applied code is
   // never hidden behind a collapsed row — while still letting the shopper

@@ -48,7 +48,25 @@ declare
     -- first time someone recreates it by hand. marketing_subscribers is a list
     -- of customer email addresses, so it is exactly the wrong one to leave out.
     'marketing_subscribers', 'email_campaigns', 'email_campaign_recipients',
-    'email_campaign_clicks', 'email_automations'
+    'email_campaign_clicks', 'email_automations',
+    -- Tables this sweep had never covered, found by asking Postgres which
+    -- public tables still had rowsecurity = false rather than by re-reading the
+    -- list. Every one is written only through the service-role client, so
+    -- enabling RLS changes nothing for the app.
+    --
+    -- pending_emails is the urgent one: it is the retry queue for transactional
+    -- mail and stores `to_email` plus the rendered `html` of anything that
+    -- failed to send — which includes password-reset messages, and therefore
+    -- live reset links. Anon-readable, that is an account-takeover path, not
+    -- just a privacy problem.
+    'pending_emails',
+    -- Operational alerts, whose `context` carries whatever a failing job put
+    -- there.
+    'system_alerts',
+    -- Unit costs and margin history.
+    'product_cost_changes',
+    -- Ambassador code history, including the actor's IP address and user agent.
+    'referral_code_changes', 'referral_code_aliases'
   ];
 begin
   foreach target in array tables loop

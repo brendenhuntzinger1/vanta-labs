@@ -7,6 +7,7 @@ import { getEmailRuntimeConfig, marketingBlockedReason } from "@/lib/email/setti
 import { loadConsentedAudience } from "@/lib/email/audience";
 import { isPaidOrderStatus } from "@/lib/ledger";
 import { getSiteUrl } from "@/lib/env";
+import { resolveSitePath } from "@/lib/email/cta-path";
 
 /**
  * Automated retention sequences.
@@ -273,9 +274,7 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
         // campaign click tracker: click attribution is keyed on a campaign id,
         // and these have none. Their value is measured by orders following the
         // send, not by a per-click stamp.
-        const path = automation.cta_path.startsWith("/") && !automation.cta_path.startsWith("//")
-          ? automation.cta_path
-          : "/products";
+        const destination = resolveSitePath(automation.cta_path, site);
 
         const template = campaignTemplate({
           subject: automation.subject,
@@ -284,7 +283,7 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
           body: automation.body,
           promoCode: automation.promo_code,
           ctaLabel: automation.cta_label,
-          ctaUrl: `${site}${path}`,
+          ctaUrl: destination,
           postalAddress: config.marketingPostalAddress,
         });
 

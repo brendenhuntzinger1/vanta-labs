@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageEmailCampaigns } from "@/lib/admin-roles";
 import { isAutomationKey } from "@/lib/email/automations";
+import { isSafeSitePath } from "@/lib/email/cta-path";
+import { getSiteUrl } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
 // Edit one retention automation (copy, delay, on/off).
@@ -28,7 +30,7 @@ export async function PATCH(request: Request) {
   }
 
   const ctaPath = text(body.ctaPath, 300) || "/products";
-  if (!ctaPath.startsWith("/") || ctaPath.startsWith("//")) {
+  if (!isSafeSitePath(ctaPath, getSiteUrl())) {
     return NextResponse.json({ success: false, error: "The button link must be a path on this site, like /products." }, { status: 400 });
   }
 

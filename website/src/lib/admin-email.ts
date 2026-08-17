@@ -3,6 +3,8 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isPaidOrderStatus, netOrderRevenue } from "@/lib/ledger";
 import { loadConsentedAudience } from "@/lib/email/audience";
+import { isSafeSitePath } from "@/lib/email/cta-path";
+import { getSiteUrl } from "@/lib/env";
 
 /**
  * Reporting for the admin Email tab.
@@ -173,9 +175,10 @@ export function validateCampaignInput(input: Record<string, unknown>): { ok: tru
   if (!body) return { ok: false, error: "Message body is required." };
 
   const ctaPathRaw = text(input.ctaPath, 300) || "/products";
-  // Same-origin only. `//host` is the case that a naive "starts with /" check
-  // lets through: browsers read it as protocol-relative and leave the site.
-  if (!ctaPathRaw.startsWith("/") || ctaPathRaw.startsWith("//")) {
+  // Same-origin only, decided by RESOLVING the path rather than by matching its
+  // prefix — see lib/email/cta-path.ts for why `/\evil.com` defeats the
+  // obvious-looking string test.
+  if (!isSafeSitePath(ctaPathRaw, getSiteUrl())) {
     return { ok: false, error: "The button link must be a path on this site, like /products." };
   }
 

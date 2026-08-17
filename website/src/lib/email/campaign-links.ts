@@ -2,6 +2,7 @@ import "server-only";
 
 import crypto from "crypto";
 import { getSiteUrl } from "@/lib/env";
+import { resolveSitePath } from "@/lib/email/cta-path";
 
 /**
  * Click-tracked campaign links, and the attribution cookie they set.
@@ -90,12 +91,11 @@ export function buildCampaignOpenUrl(campaignId: string, email: string): string 
  * another host even though it passes a naive "starts with /" check.
  */
 export function safeCampaignDestination(ctaPath: string | null | undefined): string {
-  const raw = String(ctaPath ?? "").trim();
-  const site = getSiteUrl().replace(/\/$/, "");
-  if (!raw.startsWith("/") || raw.startsWith("//")) return `${site}/products`;
-  // Strip any control characters before they reach a Location header.
-  const cleaned = raw.replace(/[\r\n\t]/g, "");
-  return `${site}${cleaned}`;
+  // The last line of defence, and the one that actually protects customers:
+  // the API layers validate on the way in, but this runs on the way out, so a
+  // row written before those checks existed — or by hand — still cannot send
+  // anyone off-site. Resolution-based, not prefix-based; see cta-path.ts.
+  return resolveSitePath(String(ctaPath ?? "").trim(), getSiteUrl());
 }
 
 /**
