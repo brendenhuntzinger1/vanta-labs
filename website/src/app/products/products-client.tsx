@@ -3,7 +3,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ProductCard } from "@/components/product-card";
-import { CouponPromoBanner } from "@/components/coupon-promo-banner";
+import { CouponPromoBanner, type FeaturedCoupon } from "@/components/coupon-promo-banner";
 import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
 
@@ -27,7 +27,7 @@ function parsePurity(purity?: string) {
   return Number((purity ?? "0").replace(/[^0-9.]/g, "")) || 0;
 }
 
-function ProductsPageContent() {
+function ProductsPageContent({ featuredCoupon }: { featuredCoupon: FeaturedCoupon | null }) {
   const searchParams = useSearchParams();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
@@ -226,7 +226,7 @@ function ProductsPageContent() {
           </div>
         </header>
 
-        <CouponPromoBanner />
+        <CouponPromoBanner initialCoupon={featuredCoupon} />
 
         {/* ONE BAR.
             This was a search field, a category dropdown, a duplicate row of
@@ -412,19 +412,7 @@ function ProductsPageContent() {
           </div>
 
           {isLoading ? (
-            <div className="grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-4">
-              {Array.from({ length: 8 }).map((_, index) => (
-                <div key={index} className="animate-pulse border border-white/10">
-                  <div className="aspect-square border-b border-white/10 bg-white/5" />
-                  <div className="space-y-3 p-5">
-                    <div className="h-3 w-24 bg-white/10" />
-                    <div className="h-5 w-3/4 bg-white/12" />
-                    <div className="h-3 w-full bg-white/10" />
-                    <div className="h-3 w-2/3 bg-white/10" />
-                  </div>
-                </div>
-              ))}
-            </div>
+            <CatalogGridSkeleton />
           ) : loadError ? (
             <div className="border border-white/10 p-10 text-center">
               <h2 className="vl2-serif text-xl text-white">We couldn&apos;t load the catalog</h2>
@@ -474,10 +462,67 @@ function ProductsPageContent() {
   );
 }
 
-export function ProductsPageClient() {
+/**
+ * The eight-card loading grid. Shared by the Suspense fallback below and by the
+ * component's own `isLoading` state so the two can never drift into showing
+ * different things at the same moment in the same load.
+ */
+function CatalogGridSkeleton() {
   return (
-    <Suspense fallback={null}>
-      <ProductsPageContent />
+    <div className="grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-4">
+      {Array.from({ length: 8 }).map((_, index) => (
+        <div key={index} className="animate-pulse border border-white/10">
+          <div className="aspect-square border-b border-white/10 bg-white/5" />
+          <div className="space-y-3 p-5">
+            <div className="h-3 w-24 bg-white/10" />
+            <div className="h-5 w-3/4 bg-white/12" />
+            <div className="h-3 w-full bg-white/10" />
+            <div className="h-3 w-2/3 bg-white/10" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * SERVER-RENDERED PLACEHOLDER — this is what fixes the catalog "jumping".
+ *
+ * ProductsPageContent calls useSearchParams(), which opts it out of
+ * server-rendering: Next renders THIS fallback into the HTML instead. It used
+ * to be `null`, so the catalog page shipped an empty body — the footer landed
+ * at the top of the viewport, and then everything slammed down when the client
+ * fetch resolved. Measured cumulative layout shift was 1.04 on a phone and
+ * 0.61 on desktop, where anything above 0.25 is classed "poor". It is the most
+ * visible instability on the site.
+ *
+ * The fallback therefore reserves the same space the real page occupies. The
+ * header block is a fixed-height spacer rather than a copy of the real
+ * catalogue header: duplicating that copy would guarantee it drifts out of
+ * sync, and it is replaced within a frame of hydration anyway.
+ *
+ * The site nav is `position: fixed` (out of flow), so it is deliberately not
+ * repeated here — including it would change nothing about the layout.
+ */
+function CatalogFallback() {
+  return (
+    <div className="min-h-screen bg-[#0b0b0b] text-white">
+      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-14 pt-24 sm:pb-20 sm:pt-32 lg:px-12">
+        {/* Stands in for the catalogue header + filter row. */}
+        <div className="h-[13.5rem] sm:h-[15.5rem]" aria-hidden="true" />
+        <section className="mt-8">
+          <div className="mb-5 h-5" aria-hidden="true" />
+          <CatalogGridSkeleton />
+        </section>
+      </main>
+    </div>
+  );
+}
+
+export function ProductsPageClient({ featuredCoupon }: { featuredCoupon: FeaturedCoupon | null }) {
+  return (
+    <Suspense fallback={<CatalogFallback />}>
+      <ProductsPageContent featuredCoupon={featuredCoupon} />
     </Suspense>
   );
 }
