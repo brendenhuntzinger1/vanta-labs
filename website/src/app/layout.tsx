@@ -128,10 +128,14 @@ export default function RootLayout({
             <WelcomeOffer />
             {children}
             <SiteFooter />
+            {/* vl-bottom-bar lifts this out of the consent banner's way while
+                the banner is on screen. Being fixed, the link cannot be
+                scrolled clear, so without it the admin entry point is
+                untappable on a phone until cookies are answered. */}
             <Link
               href="/vault"
               aria-label="Secure access"
-              className="fixed bottom-2 right-2 z-40 text-[10px] uppercase tracking-[0.2em] text-white/15 transition hover:text-white/45"
+              className="vl-bottom-bar fixed bottom-2 right-2 z-40 text-[10px] uppercase tracking-[0.2em] text-white/15 transition hover:text-white/45"
             >
               vault
             </Link>

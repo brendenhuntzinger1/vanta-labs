@@ -1179,11 +1179,20 @@ body[data-welcome-offer="true"] .vl2-nav {
   height: 100%;
   object-fit: cover;
   opacity: 0.82;
+  /* Decorative and aria-hidden: it must never receive a tap. On iOS a tap that
+     reaches a <video> can hand the visitor to the native fullscreen player,
+     which is a dead end with no way back to the store. */
+  pointer-events: none;
+  /* Fades in once it is genuinely playing (hero-video.tsx sets opacity: 0
+     until then), so a refused autoplay never flashes a paused frame. */
+  transition: opacity 400ms var(--ease-in-out-premium, ease);
 }
 
 .vl2-hero-scrim {
   position: absolute;
   inset: 0;
+  /* Purely a gradient over the video — same reasoning as above. */
+  pointer-events: none;
   /* Mobile: the copy is nearly full-width, so the lift has to come from the
      bottom rather than from one side. */
   background:
@@ -1208,6 +1217,39 @@ body[data-welcome-offer="true"] .vl2-nav {
   min-height: 100svh;
   flex-direction: column;
   justify-content: flex-end;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Nothing may be stranded under the cookie consent banner.           */
+/*                                                                     */
+/*  The banner is `fixed` to the bottom of the viewport and, on a       */
+/*  phone, roughly 190px tall — a quarter of the screen. It used to be  */
+/*  lifted another 96px to clear the sticky bottom bars, which put it   */
+/*  squarely over the homepage hero's CTA cluster: a visitor arriving   */
+/*  from a bio link tapped "Shop the catalog" and hit the banner        */
+/*  instead. Nothing happened, and they were left looking at the hero.  */
+/*                                                                     */
+/*  The fix inverts which layer yields. The consent banner is transient */
+/*  and now sits at the very bottom; the PERSISTENT bottom bars (mobile */
+/*  add-to-cart, checkout summary, account nav) lift out of its way for */
+/*  as long as it is on screen. Body padding gives whatever sits at the */
+/*  very end of a document room to scroll clear of it too.              */
+/*                                                                     */
+/*  --cookie-banner-height is measured and published by                 */
+/*  components/cookie-consent.tsx, because the copy wraps to a          */
+/*  different number of lines at every viewport width.                  */
+/* ------------------------------------------------------------------ */
+body[data-cookie-banner="true"] {
+  /* The banner's own height PLUS the 0.75rem it is inset from the bottom, plus
+     breathing room — otherwise the last element in the document scrolls to
+     within a few pixels of the banner and is still un-tappable. */
+  padding-bottom: calc(var(--cookie-banner-height, 0px) + 1.5rem);
+}
+
+/* Marks the app's persistent, fixed-to-bottom bars. They are the ones that
+   must move for the consent banner rather than be covered by it. */
+body[data-cookie-banner="true"] .vl-bottom-bar {
+  bottom: calc(var(--cookie-banner-height, 0px) + 1.5rem);
 }
 
 /* Quiet scroll cue at the base of the hero — a slim capsule with a dot that

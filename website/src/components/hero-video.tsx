@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Background hero video that tries as hard as the browser will allow to stay
@@ -12,12 +12,23 @@ import { useEffect, useRef } from "react";
  * again, and on the first user interaction — so a blocked autoplay recovers
  * the moment it's allowed instead of parking behind a tap-to-play button.
  *
- * Note: iOS Low Power Mode blocks video autoplay at the OS level and no web
- * code can override it; in that one case Safari still shows its own play
- * glyph until the user taps. Everywhere else this keeps the vial spinning.
+ * WHEN AUTOPLAY IS REFUSED, THE VIDEO HIDES ITSELF. iOS Low Power Mode blocks
+ * autoplay at the OS level, and some in-app browsers (the Instagram/TikTok
+ * webviews a bio link opens in) do the same. No web code can override that —
+ * and a paused <video> is not neutral: Safari paints its OWN play glyph over
+ * it, which `controls={false}` does not suppress. A visitor arriving from a
+ * bio link therefore met a still vial with a play badge stamped on it, looking
+ * like a broken embed rather than a hero.
+ *
+ * So the element stays transparent until it is genuinely playing. Underneath
+ * is the gradient `.vl2-hero` already paints for exactly this case, so a
+ * refused autoplay degrades to the designed still hero instead of a play
+ * button. The retry-on-gesture path below still runs, so if the browser later
+ * relents the video fades in.
  */
 export function HeroVideo({ className, src }: { className?: string; src: string }) {
   const ref = useRef<HTMLVideoElement | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
 
   useEffect(() => {
     const video = ref.current;
@@ -58,8 +69,18 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
       }
     };
 
+    // Only these decide visibility. "playing" fires when frames are actually
+    // being presented, which is the one signal that means there is something
+    // worth showing — readyState and a resolved play() promise can both be
+    // true while the element still renders a paused first frame.
+    const onPlaying = () => setIsPlaying(true);
+    const onStalled = () => setIsPlaying(false);
+
     video.addEventListener("loadedmetadata", attempt);
     video.addEventListener("canplay", attempt);
+    video.addEventListener("playing", onPlaying);
+    video.addEventListener("pause", onStalled);
+    video.addEventListener("error", onStalled);
     document.addEventListener("visibilitychange", onVisibility);
     for (const ev of gestureEvents) {
       document.addEventListener(ev, onGesture, { passive: true });
@@ -69,6 +90,9 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
       cancelled = true;
       video.removeEventListener("loadedmetadata", attempt);
       video.removeEventListener("canplay", attempt);
+      video.removeEventListener("playing", onPlaying);
+      video.removeEventListener("pause", onStalled);
+      video.removeEventListener("error", onStalled);
       document.removeEventListener("visibilitychange", onVisibility);
       removeGestureListeners();
     };
@@ -78,6 +102,9 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
     <video
       ref={ref}
       className={className}
+      // Transparent until frames are actually on screen — see the note above.
+      // Transitioned so a slow start fades in rather than snapping.
+      style={{ opacity: isPlaying ? undefined : 0 }}
       src={src}
       autoPlay
       muted

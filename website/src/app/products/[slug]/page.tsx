@@ -17,7 +17,17 @@ export async function generateMetadata({
   const { slug } = await params;
   const product = await getCatalogProductBySlug(slug);
   if (!product) return {};
-  const title = product.seoTitle ?? `${product.name} | Vanta Labs`;
+
+  // The ROOT layout already carries `template: "%s | Vanta Labs"`, so the title
+  // returned here must NOT carry the brand itself — appending it produced
+  // "GLP-1 | Vanta Labs | Vanta Labs" on every product page, which is the one
+  // page type that actually has to rank.
+  //
+  // Open Graph and Twitter cards do NOT go through that template, so they get
+  // the brand added explicitly — unless an admin-entered SEO title already
+  // includes it, which is why this checks rather than blindly concatenating.
+  const title = product.seoTitle ?? product.name;
+  const socialTitle = /vanta labs/i.test(title) ? title : `${title} | Vanta Labs`;
   const description = product.seoDescription ?? product.shortDescription ?? product.description;
   const image = product.image || product.coverImage;
   const canonical = `/products/${slug}`;
@@ -26,7 +36,7 @@ export async function generateMetadata({
     description,
     alternates: { canonical },
     openGraph: {
-      title,
+      title: socialTitle,
       description,
       type: "website",
       url: canonical,
@@ -34,7 +44,7 @@ export async function generateMetadata({
     },
     twitter: {
       card: "summary_large_image",
-      title,
+      title: socialTitle,
       description,
       images: image ? [image] : undefined,
     },
