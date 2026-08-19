@@ -1162,22 +1162,24 @@ body[data-welcome-offer="true"] .vl2-nav {
 }
 
 /* ------------------------------------------------------------------ */
-/*  AGE GATE — resolved before the first paint.                        */
+/*  AGE GATE — the storefront is inert until someone confirms.          */
 /*                                                                     */
-/*  data-age-verified is written onto <html> by the inline script in    */
-/*  app/layout.tsx while the browser is still parsing the HTML, and is  */
-/*  kept in step with React afterwards by components/age-gate.tsx.      */
+/*  data-age-verified is rendered onto <html> by app/layout.tsx as the  */
+/*  constant "false" — every document, every request, no exceptions —   */
+/*  and components/age-gate.tsx flips it to "true" in memory once all   */
+/*  four attestations are made. It is never persisted, so there is no   */
+/*  such thing as a document that arrives already verified.             */
 /*                                                                     */
-/*  Whether someone confirmed their age is client-only state, so the    */
-/*  server sends the gate to everyone and React removed it in an        */
-/*  effect — i.e. after paint. Returning visitors saw the panel flash    */
-/*  for ~270ms on every load. These two rules act on the answer before  */
-/*  anything is drawn.                                                  */
+/*  These rules exist because the gate is a client component: React     */
+/*  cannot mount it until hydration, and on a slow connection the store */
+/*  behind it was scrollable in the meantime. Keyed off the attribute,  */
+/*  they apply the moment this stylesheet does — which is also the      */
+/*  first moment anything is painted at all.                            */
 /*                                                                     */
 /*  Both are keyed off an EXPLICIT "true"/"false", never the absence of */
-/*  the attribute: with JavaScript disabled nothing is written, no rule */
-/*  applies, and the gate is shown exactly as it is today. This can     */
-/*  only ever hide the gate from someone who already confirmed.         */
+/*  the attribute, so nothing can hide the gate by accident. With       */
+/*  JavaScript disabled the attribute stays "false" and the gate stays  */
+/*  up: the failure mode is a locked store, never an open one.          */
 /* ------------------------------------------------------------------ */
 html[data-age-verified="true"] [data-age-gate] {
   display: none;

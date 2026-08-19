@@ -1,44 +1,30 @@
 "use client";
 
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { usePathname } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 
-function getAgeVerifiedSnapshot() {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  try {
-    if (window.localStorage.getItem("vanta-labs-age-verified") === "true") {
-      return true;
-    }
-  } catch (error) {
-    console.error("Unable to read age verification state", error);
-  }
-
-  // Fall back to the cookie mirror when localStorage is unavailable/blocked.
-  try {
-    return document.cookie.split("; ").some((c) => c === "vl_age_verified=true");
-  } catch {
-    return false;
-  }
-}
-
-function subscribeToAgeVerified(callback: () => void) {
-  if (typeof window === "undefined") {
-    return () => undefined;
-  }
-
-  const handleStorage = (event: StorageEvent) => {
-    if (event.key === "vanta-labs-age-verified") {
-      callback();
-    }
-  };
-
-  window.addEventListener("storage", handleStorage);
-  return () => {
-    window.removeEventListener("storage", handleStorage);
-  };
-}
+// -----------------------------------------------------------------------------
+// AGE VERIFICATION IS NEVER REMEMBERED.
+//
+// This gate used to persist confirmation for 30 days in localStorage
+// ("vanta-labs-age-verified") with a cookie mirror ("vl_age_verified"), and an
+// inline script in the root layout read them before first paint. A returning
+// visitor therefore reached the storefront without being asked again — and a
+// shared or previously-used device carried one person's attestation to the next.
+//
+// That persistence is now GONE. Confirmation lives only in React state for the
+// life of the loaded document:
+//
+//   * a fresh load, a refresh, a new tab, a reopened browser, a direct link to
+//     ANY storefront route -> the gate is shown;
+//   * client-side navigation within one visit -> the state survives, so a
+//     visitor is not re-asked while browsing;
+//   * being signed in grants nothing. Authentication and age attestation are
+//     separate, and no account, profile or session can satisfy this gate.
+//
+// There is deliberately no storage read anywhere below. Adding one back would
+// reintroduce exactly the behaviour this removes.
+// -----------------------------------------------------------------------------
 
 // Each statement is acknowledged individually: a single combined tick is one
 // click that stands for four different representations, which is exactly the
@@ -58,7 +44,24 @@ const ATTESTATIONS = [
 
 type AttestationId = (typeof ATTESTATIONS)[number]["id"];
 
+// The gate protects the STOREFRONT. These are the staff areas — the admin
+// console and the /vault door that leads to it — and they are not customer
+// facing, so the age attestation does not apply to them.
+//
+// Without this the owner would meet the gate on every single admin page load,
+// because confirmation is no longer remembered for anyone. That is a real cost
+// during inventory and order work, and it buys nothing: /admin is already
+// behind authentication, which is the control that actually matters there.
+//
+// Deliberately narrow. Everything a shopper can reach — products, cart,
+// checkout, account, membership, ambassador, legal — is gated.
+const STAFF_ONLY = ["/admin", "/vault"];
+
 export function AgeGate({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const isStaffArea = STAFF_ONLY.some(
+    (p) => pathname === p || pathname?.startsWith(`${p}/`),
+  );
   const [localVerified, setLocalVerified] = useState(false);
   const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
   const [showPrompt, setShowPrompt] = useState(false);
@@ -70,23 +73,12 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
       setShowPrompt(false);
     }
   };
-  const isVerifiedFromStorage = useSyncExternalStore(
-    subscribeToAgeVerified,
-    getAgeVerifiedSnapshot,
-    () => false,
-  );
-  const isVerified = isVerifiedFromStorage || localVerified;
+  // The ONLY source of truth: in-memory state for this document. It starts
+  // false on the server and on every fresh client load, so the gate is always
+  // rendered first.
+  const isVerified = localVerified || isStaffArea;
 
   const markVerified = () => {
-    try {
-      window.localStorage.setItem("vanta-labs-age-verified", "true");
-      // A cookie mirrors the flag so verification survives localStorage being
-      // unavailable (private mode, some in-app browsers) and is consistent
-      // across tabs. 30-day attestation window.
-      document.cookie = "vl_age_verified=true; path=/; max-age=" + 60 * 60 * 24 * 30 + "; samesite=lax";
-    } catch (error) {
-      console.error("Unable to save age verification state", error);
-    }
     setLocalVerified(true);
   };
 
@@ -110,12 +102,15 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
   };
 
   const handleExit = () => {
+    // Nothing to clear — nothing was ever stored. Also clears any flag left in
+    // a returning visitor's browser by the previous persisted implementation,
+    // so an old 30-day token cannot outlive this change.
     setLocalVerified(false);
     try {
       window.localStorage.removeItem("vanta-labs-age-verified");
       document.cookie = "vl_age_verified=; path=/; max-age=0; samesite=lax";
-    } catch (error) {
-      console.error("Unable to clear age verification state", error);
+    } catch {
+      /* storage may be unavailable; there is nothing this gate depends on */
     }
     window.location.assign("https://www.google.com");
   };
@@ -124,10 +119,10 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
   // users land on it instead of the (inert) page behind it.
   const dialogRef = useRef<HTMLDivElement>(null);
 
-  // Keep the pre-paint attribute (written by the inline script in the root
-  // layout) in step with React once hydrated. Without this the attribute would
-  // still read "false" after someone confirms, and the CSS scroll-lock keyed
-  // off it would leave the store permanently unscrollable.
+  // Keep the attribute (server-rendered as "false" in the root layout) in step
+  // with React. Without this it would still read "false" after someone
+  // confirms, and the CSS scroll-lock keyed off it would leave the store
+  // permanently unscrollable.
   useEffect(() => {
     document.documentElement.setAttribute("data-age-verified", isVerified ? "true" : "false");
   }, [isVerified]);
