@@ -1281,6 +1281,21 @@ body[data-cookie-banner="true"] .vl-bottom-bar {
   bottom: calc(var(--cookie-banner-height, 0px) + 1.5rem);
 }
 
+/* The cart drawer's pay bar needs the same treatment but cannot use the rule
+   above: it is not `fixed`, it is the last flex child of a full-height drawer
+   panel, so there is no `bottom` to shift. Below `sm` that panel fills the
+   viewport, which puts "Proceed to checkout" exactly under the consent banner
+   — and because the bar is pinned to the panel rather than the document, no
+   amount of scrolling frees it. That is a dead checkout button on a phone.
+   Above `sm` the panel is inset (sm:my-4 sm:mr-4) and the two never meet, so
+   this is deliberately scoped to the small screens where it actually happens.
+   The padding keeps the bar's own safe-area inset and adds the banner on top. */
+@media (max-width: 639px) {
+  body[data-cookie-banner="true"] .vl-drawer-paybar {
+    padding-bottom: calc(max(env(safe-area-inset-bottom), 1rem) + var(--cookie-banner-height, 0px));
+  }
+}
+
 /* Quiet scroll cue at the base of the hero — a slim capsule with a dot that
    drifts down, signaling there's more below without shouting. */
 .vl2-hero-scroll-cue {

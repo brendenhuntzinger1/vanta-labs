@@ -74,6 +74,20 @@ describe("the cookie banner never sits on top of what a visitor must tap", () =>
     expect(css).toMatch(/body\[data-cookie-banner="true"\]\s*\.vl-bottom-bar\s*\{[^}]*bottom/);
   });
 
+  it("the cart drawer's pay bar gets out of the way too", () => {
+    // The drawer's pay bar is NOT fixed — it is the last flex child of a
+    // full-height drawer panel — so the .vl-bottom-bar `bottom` shift cannot
+    // move it. Below sm that panel fills the viewport, putting "Proceed to
+    // checkout" under the consent banner with no way to scroll it clear: a
+    // dead checkout button on a phone. It gets padding instead.
+    expect(read("src/components/cart-drawer.tsx")).toContain("vl-drawer-paybar");
+    expect(css).toMatch(/body\[data-cookie-banner="true"\]\s*\.vl-drawer-paybar\s*\{[^}]*padding-bottom/);
+    // Scoped to the small screens where the collision actually happens; above
+    // sm the panel is inset (sm:my-4 sm:mr-4) and the two never meet.
+    const idx = css.indexOf(".vl-drawer-paybar");
+    expect(css.slice(Math.max(0, idx - 400), idx)).toMatch(/@media \(max-width: 639px\)/);
+  });
+
   it("every fixed bottom-anchored bar opts into that lift", () => {
     // A new bar that forgets the class gets silently buried under the banner.
     const files = [
