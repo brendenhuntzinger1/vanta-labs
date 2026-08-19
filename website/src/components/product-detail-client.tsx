@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 import { useCart } from "@/components/cart-context";
 import { bestPaidTier, quoteMemberPrice } from "@/lib/member-pricing";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
-import { CouponPromoBanner } from "@/components/coupon-promo-banner";
+import { CouponPromoBanner, type FeaturedCoupon } from "@/components/coupon-promo-banner";
 import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { WishlistButton } from "@/components/wishlist-button";
@@ -155,6 +155,10 @@ export function ProductDetailClient({
   bundleConfig = DEFAULT_BUNDLE_CONFIG,
   bacWater = null,
   coaDocuments = [],
+  // Resolved by the server page. Left optional so the component keeps working
+  // unchanged for any caller that does not pass it (the banner then fetches for
+  // itself, exactly as before).
+  featuredCoupon,
 }: {
   product: Product;
   relatedProducts?: Product[];
@@ -162,6 +166,7 @@ export function ProductDetailClient({
   bundleConfig?: BundleConfig;
   bacWater?: Product | null;
   coaDocuments?: PublicCoaDocument[];
+  featuredCoupon?: FeaturedCoupon | null;
 }) {
   const { addToCart, membershipTiers, memberDiscountPercent } = useCart();
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
@@ -331,7 +336,7 @@ export function ProductDetailClient({
           <span className="text-white">{product.name}</span>
         </nav>
 
-        <CouponPromoBanner />
+        <CouponPromoBanner initialCoupon={featuredCoupon} />
 
         {promoBuy3Get1Enabled ? (
           <div className="vl2-lab-panel mt-6 flex flex-wrap items-center gap-2 border-white/[0.06] bg-[#141414] px-5 py-3.5 text-sm text-white">
@@ -954,7 +959,7 @@ export function ProductDetailClient({
 
       {/* Sticky add-to-cart: charcoal bar under a thin gold hairline, so it
           reads as part of the brand rather than a floating utility strip. */}
-      <div className="fixed inset-x-0 bottom-0 z-50 border-t border-[color:var(--accent-gold)]/20 bg-[#141414]/95 px-5 pt-4 pb-[max(env(safe-area-inset-bottom),1rem)] shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.8)] backdrop-blur-xl lg:hidden">
+      <div className="vl-bottom-bar fixed inset-x-0 bottom-0 z-50 border-t border-[color:var(--accent-gold)]/20 bg-[#141414]/95 px-5 pt-4 pb-[max(env(safe-area-inset-bottom),1rem)] shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.8)] backdrop-blur-xl lg:hidden">
         <div className="flex items-center gap-4">
           <div className="min-w-0 flex-1">
             <p className="truncate text-xs text-[#a3a3a3]">{product.name}</p>

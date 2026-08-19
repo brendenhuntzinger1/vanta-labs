@@ -1161,6 +1161,35 @@ body[data-welcome-offer="true"] .vl2-nav {
   color: var(--graphite-300);
 }
 
+/* ------------------------------------------------------------------ */
+/*  AGE GATE — resolved before the first paint.                        */
+/*                                                                     */
+/*  data-age-verified is written onto <html> by the inline script in    */
+/*  app/layout.tsx while the browser is still parsing the HTML, and is  */
+/*  kept in step with React afterwards by components/age-gate.tsx.      */
+/*                                                                     */
+/*  Whether someone confirmed their age is client-only state, so the    */
+/*  server sends the gate to everyone and React removed it in an        */
+/*  effect — i.e. after paint. Returning visitors saw the panel flash    */
+/*  for ~270ms on every load. These two rules act on the answer before  */
+/*  anything is drawn.                                                  */
+/*                                                                     */
+/*  Both are keyed off an EXPLICIT "true"/"false", never the absence of */
+/*  the attribute: with JavaScript disabled nothing is written, no rule */
+/*  applies, and the gate is shown exactly as it is today. This can     */
+/*  only ever hide the gate from someone who already confirmed.         */
+/* ------------------------------------------------------------------ */
+html[data-age-verified="true"] [data-age-gate] {
+  display: none;
+}
+
+/* The scroll lock is otherwise applied by an effect, which cannot run until
+   hydration — on a slow connection the store scrolled behind the overlay in
+   the meantime. */
+html[data-age-verified="false"] body {
+  overflow: hidden;
+}
+
 .vl2-hero {
   position: relative;
   min-height: 100svh;
@@ -1179,11 +1208,20 @@ body[data-welcome-offer="true"] .vl2-nav {
   height: 100%;
   object-fit: cover;
   opacity: 0.82;
+  /* Decorative and aria-hidden: it must never receive a tap. On iOS a tap that
+     reaches a <video> can hand the visitor to the native fullscreen player,
+     which is a dead end with no way back to the store. */
+  pointer-events: none;
+  /* Fades in once it is genuinely playing (hero-video.tsx sets opacity: 0
+     until then), so a refused autoplay never flashes a paused frame. */
+  transition: opacity 400ms var(--ease-in-out-premium, ease);
 }
 
 .vl2-hero-scrim {
   position: absolute;
   inset: 0;
+  /* Purely a gradient over the video — same reasoning as above. */
+  pointer-events: none;
   /* Mobile: the copy is nearly full-width, so the lift has to come from the
      bottom rather than from one side. */
   background:
@@ -1208,6 +1246,54 @@ body[data-welcome-offer="true"] .vl2-nav {
   min-height: 100svh;
   flex-direction: column;
   justify-content: flex-end;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Nothing may be stranded under the cookie consent banner.           */
+/*                                                                     */
+/*  The banner is `fixed` to the bottom of the viewport and, on a       */
+/*  phone, roughly 190px tall — a quarter of the screen. It used to be  */
+/*  lifted another 96px to clear the sticky bottom bars, which put it   */
+/*  squarely over the homepage hero's CTA cluster: a visitor arriving   */
+/*  from a bio link tapped "Shop the catalog" and hit the banner        */
+/*  instead. Nothing happened, and they were left looking at the hero.  */
+/*                                                                     */
+/*  The fix inverts which layer yields. The consent banner is transient */
+/*  and now sits at the very bottom; the PERSISTENT bottom bars (mobile */
+/*  add-to-cart, checkout summary, account nav) lift out of its way for */
+/*  as long as it is on screen. Body padding gives whatever sits at the */
+/*  very end of a document room to scroll clear of it too.              */
+/*                                                                     */
+/*  --cookie-banner-height is measured and published by                 */
+/*  components/cookie-consent.tsx, because the copy wraps to a          */
+/*  different number of lines at every viewport width.                  */
+/* ------------------------------------------------------------------ */
+body[data-cookie-banner="true"] {
+  /* The banner's own height PLUS the 0.75rem it is inset from the bottom, plus
+     breathing room — otherwise the last element in the document scrolls to
+     within a few pixels of the banner and is still un-tappable. */
+  padding-bottom: calc(var(--cookie-banner-height, 0px) + 1.5rem);
+}
+
+/* Marks the app's persistent, fixed-to-bottom bars. They are the ones that
+   must move for the consent banner rather than be covered by it. */
+body[data-cookie-banner="true"] .vl-bottom-bar {
+  bottom: calc(var(--cookie-banner-height, 0px) + 1.5rem);
+}
+
+/* The cart drawer's pay bar needs the same treatment but cannot use the rule
+   above: it is not `fixed`, it is the last flex child of a full-height drawer
+   panel, so there is no `bottom` to shift. Below `sm` that panel fills the
+   viewport, which puts "Proceed to checkout" exactly under the consent banner
+   — and because the bar is pinned to the panel rather than the document, no
+   amount of scrolling frees it. That is a dead checkout button on a phone.
+   Above `sm` the panel is inset (sm:my-4 sm:mr-4) and the two never meet, so
+   this is deliberately scoped to the small screens where it actually happens.
+   The padding keeps the bar's own safe-area inset and adds the banner on top. */
+@media (max-width: 639px) {
+  body[data-cookie-banner="true"] .vl-drawer-paybar {
+    padding-bottom: calc(max(env(safe-area-inset-bottom), 1rem) + var(--cookie-banner-height, 0px));
+  }
 }
 
 /* Quiet scroll cue at the base of the hero — a slim capsule with a dot that

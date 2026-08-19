@@ -41,7 +41,12 @@ export default async function PartnerProgramPage() {
   }
 
   return (
-    <Suspense fallback={null}>
+    // PartnerProgramLanding reads useSearchParams, so this fallback is what
+    // gets server rendered. `null` meant an empty body and a 0.60 layout shift
+    // on desktop as the footer snapped from the top of the viewport down to
+    // where it belongs. Reserving a viewport of the page's own background
+    // holds the footer below the fold until the real content arrives.
+    <Suspense fallback={<div className="min-h-screen overflow-x-hidden bg-[#0b0b0b]" aria-hidden="true" />}>
       <PartnerProgramLanding initialStats={stats} />
     </Suspense>
   );

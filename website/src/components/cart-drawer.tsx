@@ -662,7 +662,7 @@ export function CartDrawer() {
 
         {/* Sticky pay bar — always in reach */}
         {hasItems ? (
-          <div className="border-t border-white/[0.06] bg-[#0a0a0a]/95 px-5 pt-4 pb-[max(env(safe-area-inset-bottom),1rem)] backdrop-blur-2xl sm:px-6">
+          <div className="vl-drawer-paybar border-t border-white/[0.06] bg-[#0a0a0a]/95 px-5 pt-4 pb-[max(env(safe-area-inset-bottom),1rem)] backdrop-blur-2xl sm:px-6">
             <div className="mb-1 flex items-baseline justify-between">
               {/* With express on, this figure is pre-tax: the wallet sheet adds
                   sales tax and shipping once it has the address. Labelling it

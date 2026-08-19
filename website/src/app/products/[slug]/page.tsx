@@ -5,6 +5,7 @@ import { TikTokViewContent } from "@/components/tiktok-view-content";
 import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/catalog";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getPublishedCoaDocumentsForProduct } from "@/lib/coa";
+import { getStorefrontCoupon } from "@/lib/coupons";
 import { BAC_WATER_SLUG, isBacWater } from "@/lib/bac-water";
 
 export const dynamic = "force-dynamic";
@@ -17,7 +18,17 @@ export async function generateMetadata({
   const { slug } = await params;
   const product = await getCatalogProductBySlug(slug);
   if (!product) return {};
-  const title = product.seoTitle ?? `${product.name} | Vanta Labs`;
+
+  // The ROOT layout already carries `template: "%s | Vanta Labs"`, so the title
+  // returned here must NOT carry the brand itself — appending it produced
+  // "GLP-1 | Vanta Labs | Vanta Labs" on every product page, which is the one
+  // page type that actually has to rank.
+  //
+  // Open Graph and Twitter cards do NOT go through that template, so they get
+  // the brand added explicitly — unless an admin-entered SEO title already
+  // includes it, which is why this checks rather than blindly concatenating.
+  const title = product.seoTitle ?? product.name;
+  const socialTitle = /vanta labs/i.test(title) ? title : `${title} | Vanta Labs`;
   const description = product.seoDescription ?? product.shortDescription ?? product.description;
   const image = product.image || product.coverImage;
   const canonical = `/products/${slug}`;
@@ -26,7 +37,7 @@ export async function generateMetadata({
     description,
     alternates: { canonical },
     openGraph: {
-      title,
+      title: socialTitle,
       description,
       type: "website",
       url: canonical,
@@ -34,7 +45,7 @@ export async function generateMetadata({
     },
     twitter: {
       card: "summary_large_image",
-      title,
+      title: socialTitle,
       description,
       images: image ? [image] : undefined,
     },
@@ -61,6 +72,10 @@ export default async function ProductDetailPage({
   // it so a shopper checking a specific lot doesn't have to leave the page.
   const coaDocuments = await getPublishedCoaDocumentsForProduct(product.id ?? "");
   const { promoBuy3Get1Enabled, bundleConfig } = await getHomepageControlConfig();
+  // Resolved server-side so the promo banner is in the first paint. Fetched in
+  // the browser it arrived late and pushed the whole product panel down the
+  // page. A failure resolves to null — no banner, never a broken product page.
+  const featuredCoupon = await getStorefrontCoupon().catch(() => null);
   // BAC Water cross-sell (accessory block + Frequently Bought Together).
   // Null on the BAC Water page itself, or until the product exists in the DB.
   const bacWater = isBacWater(product.slug)
@@ -108,6 +123,7 @@ export default async function ProductDetailPage({
           same server-resolved figure the structured data uses. */}
       <TikTokViewContent slug={product.slug} name={product.name} price={priceNumber} category={product.category} />
       <ProductDetailClient
+        featuredCoupon={featuredCoupon}
         product={product}
         relatedProducts={relatedProducts}
         promoBuy3Get1Enabled={Boolean(promoBuy3Get1Enabled)}

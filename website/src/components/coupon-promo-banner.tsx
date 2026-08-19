@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { formatDisplayDate } from "@/lib/format-date";
 
-type FeaturedCoupon = {
+export type FeaturedCoupon = {
   code: string;
   discountType: "percent" | "fixed";
   discountValue: number;
@@ -25,15 +25,33 @@ function endsLabel(endsAt: string | null): string | null {
   return label ? `Ends ${label}` : null;
 }
 
-export function CouponPromoBanner() {
-  const [coupon, setCoupon] = useState<FeaturedCoupon | null>(null);
-  const [entered, setEntered] = useState(false);
+/**
+ * `initialCoupon` lets the SERVER decide whether this banner exists.
+ *
+ * Fetching it in the browser meant the banner rendered nothing, then dropped an
+ * ~87px block into the middle of the page a few hundred milliseconds later,
+ * shoving the product content down under the reader's eye — a measured layout
+ * shift of 0.15 on the product page, and the "things jump around" complaint in
+ * visible form.
+ *
+ * `undefined` means "the server did not resolve this" and preserves the
+ * original client-fetch behaviour exactly, so any caller that has not been
+ * updated keeps working. `null` means the server checked and there is no live
+ * coupon — render nothing, and do not fetch.
+ */
+export function CouponPromoBanner({ initialCoupon }: { initialCoupon?: FeaturedCoupon | null } = {}) {
+  const serverResolved = initialCoupon !== undefined;
+  const [coupon, setCoupon] = useState<FeaturedCoupon | null>(initialCoupon ?? null);
+  // A server-resolved banner is present in the very first paint, so it must not
+  // start in the pre-entrance (translated, transparent) state.
+  const [entered, setEntered] = useState(serverResolved);
   const [copied, setCopied] = useState(false);
 
   // The banner is intentionally NOT dismissible: it stays up for as long as the
   // coupon is live and disappears on its own once the coupon is no longer
   // active (the endpoint returns nothing), so shoppers never miss the offer.
   useEffect(() => {
+    if (serverResolved) return;
     let active = true;
     fetch("/api/coupons/featured", { cache: "no-store" })
       .then((res) => res.json())
@@ -49,7 +67,7 @@ export function CouponPromoBanner() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [serverResolved]);
 
   if (!coupon) return null;
 
