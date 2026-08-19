@@ -313,6 +313,33 @@ export async function createCheckoutSession(
    });
    paymentId = checkout.paymentId;
    hostedCheckoutUrl = checkout.hostedCheckoutUrl;
+
+   // PERSIST THE SESSION ID ON THE ORDER, not just in the response.
+   //
+   // Until now this id lived only in the returned object: the order row was
+   // inserted with payment_id null and nothing wrote it back, so 639 of 991
+   // card orders in the fixture carry a null payment_id. That leaves a card
+   // order with no way to be recovered if its webhook never arrives —
+   // reconcileVeyraPendingPayments (express-reconcile.ts) selects
+   // `.not("payment_id", "is", null)`, so those rows are invisible to it. Its
+   // own header names the consequence it exists to prevent: "money moved,
+   // order reads unpaid, stock released at reservation expiry" — and the card
+   // lane was outside its reach.
+   //
+   // Writing the id here also gives the webhook its documented fallback route
+   // to the order (findOrderIdByPaymentId, "if we wrote one") when provider
+   // metadata is missing.
+   //
+   // Best-effort by design: the customer is about to be sent to the processor
+   // and a bookkeeping write must never block, or undo, a checkout that has
+   // already succeeded. A failure here leaves exactly today's behaviour.
+   const { error: paymentIdError } = await supabaseAdmin
+     .from("orders")
+     .update({ payment_id: paymentId, updated_at: new Date().toISOString() })
+     .eq("order_id", orderId);
+   if (paymentIdError) {
+     console.error("Unable to persist payment session id for order", orderId, paymentIdError);
+   }
  }
 
  return {
