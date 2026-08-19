@@ -123,6 +123,15 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
   // Move focus into the blocking gate when it appears so keyboard/screen-reader
   // users land on it instead of the (inert) page behind it.
   const dialogRef = useRef<HTMLDivElement>(null);
+
+  // Keep the pre-paint attribute (written by the inline script in the root
+  // layout) in step with React once hydrated. Without this the attribute would
+  // still read "false" after someone confirms, and the CSS scroll-lock keyed
+  // off it would leave the store permanently unscrollable.
+  useEffect(() => {
+    document.documentElement.setAttribute("data-age-verified", isVerified ? "true" : "false");
+  }, [isVerified]);
+
   useEffect(() => {
     if (isVerified) return;
     dialogRef.current?.focus();
@@ -144,7 +153,10 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
     <>
       {children}
       {!isVerified ? (
-      <div className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-[#060606] px-4 py-8 text-zinc-100 sm:items-center sm:px-6 sm:py-10">
+      <div
+        data-age-gate="true"
+        className="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-[#060606] px-4 py-8 text-zinc-100 sm:items-center sm:px-6 sm:py-10"
+      >
         {/* Layered ambient light — warm gold + cool blue, matching the brand */}
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_28%_18%,_rgba(199,174,94,0.12),_transparent_52%),radial-gradient(ellipse_at_82%_85%,_rgba(140,180,255,0.09),_transparent_50%),linear-gradient(160deg,_#050505_0%,_#0c0c0c_48%,_#050505_100%)]" />
         {/* Faint grid texture for depth */}

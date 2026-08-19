@@ -1161,6 +1161,35 @@ body[data-welcome-offer="true"] .vl2-nav {
   color: var(--graphite-300);
 }
 
+/* ------------------------------------------------------------------ */
+/*  AGE GATE — resolved before the first paint.                        */
+/*                                                                     */
+/*  data-age-verified is written onto <html> by the inline script in    */
+/*  app/layout.tsx while the browser is still parsing the HTML, and is  */
+/*  kept in step with React afterwards by components/age-gate.tsx.      */
+/*                                                                     */
+/*  Whether someone confirmed their age is client-only state, so the    */
+/*  server sends the gate to everyone and React removed it in an        */
+/*  effect — i.e. after paint. Returning visitors saw the panel flash    */
+/*  for ~270ms on every load. These two rules act on the answer before  */
+/*  anything is drawn.                                                  */
+/*                                                                     */
+/*  Both are keyed off an EXPLICIT "true"/"false", never the absence of */
+/*  the attribute: with JavaScript disabled nothing is written, no rule */
+/*  applies, and the gate is shown exactly as it is today. This can     */
+/*  only ever hide the gate from someone who already confirmed.         */
+/* ------------------------------------------------------------------ */
+html[data-age-verified="true"] [data-age-gate] {
+  display: none;
+}
+
+/* The scroll lock is otherwise applied by an effect, which cannot run until
+   hydration — on a slow connection the store scrolled behind the overlay in
+   the meantime. */
+html[data-age-verified="false"] body {
+  overflow: hidden;
+}
+
 .vl2-hero {
   position: relative;
   min-height: 100svh;

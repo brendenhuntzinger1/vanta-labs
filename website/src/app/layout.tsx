@@ -95,7 +95,40 @@ export default function RootLayout({
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} ${manrope.variable} h-full antialiased`}
+      // The inline script below writes data-age-verified onto this element
+      // before React hydrates, so the DOM legitimately differs from the
+      // server's output here.
+      suppressHydrationWarning
     >
+      <head>
+        {/*
+          RESOLVE THE AGE GATE BEFORE THE FIRST PAINT.
+
+          Whether someone already confirmed their age lives in localStorage and
+          a cookie mirror — neither of which exists during server rendering. So
+          the server sends the gate to EVERYONE, and the gate's own effect
+          removed it after hydration. That is a `useEffect`, which runs after
+          paint: returning visitors watched the "Restricted Access · 21+" panel
+          flash for ~270ms on every single page load.
+
+          This script runs synchronously while the browser parses the HTML —
+          before anything is painted — and records the answer as an attribute
+          that CSS reacts to (see globals.css). It reads exactly the same two
+          sources, in the same order, as getAgeVerifiedSnapshot() in
+          components/age-gate.tsx, so the script and React can never disagree.
+
+          Fails CLOSED: any error, or JavaScript disabled entirely, leaves the
+          attribute unset or "false" and the gate is shown. This never lets
+          anyone past the gate who has not confirmed — it only stops the panel
+          being shown to someone who already did.
+        */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              '(function(){var v="false";try{if(localStorage.getItem("vanta-labs-age-verified")==="true"||document.cookie.split("; ").indexOf("vl_age_verified=true")>-1){v="true"}}catch(e){}document.documentElement.setAttribute("data-age-verified",v)})()',
+          }}
+        />
+      </head>
       <body className="min-h-full flex flex-col">
         {/* Site-wide Organization + WebSite structured data for brand/knowledge
             panel eligibility. Rendered server-side so crawlers always see it. */}
