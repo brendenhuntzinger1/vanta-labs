@@ -198,8 +198,10 @@ describe("the gate survives an in-app browser", () => {
   it("HIDES the storefront rather than merely covering it", () => {
     // A fixed overlay is enough on a desktop. It is not enough where the
     // toolbar resizes the visual viewport underneath you.
+    // The diagnostics panel is exempt: it exists to be readable precisely when
+    // the entry flow is misbehaving, so hiding it would defeat it.
     expect(css).toMatch(
-      /html\[data-age-verified="false"\] body > \*:not\(\[data-age-gate\]\):not\(script\)\s*\{\s*visibility:\s*hidden/,
+      /html\[data-age-verified="false"\] body > \*:not\(\[data-age-gate\]\):not\(script\):not\(\[data-entry-diagnostics\]\)\s*\{\s*visibility:\s*hidden/,
     );
   });
 
@@ -227,5 +229,56 @@ describe("the gate survives an in-app browser", () => {
     expect(gate).not.toMatch(/text:\s*null/);
     const ids = gate.match(/\{\s*id:\s*"/g) ?? [];
     expect(ids.length).toBe(4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The entry flow works in Safari and Chrome and misbehaves in the TikTok
+// in-app browser. These guard the two things about that class of browser that
+// no desktop engine reproduces.
+// ---------------------------------------------------------------------------
+describe("the gate survives an app's own toolbars", () => {
+  const css = read("src/app/globals.css");
+  const gate = read("src/components/age-gate.tsx");
+
+  it("insets itself for the safe area at BOTH ends", () => {
+    // Safari insets the page for its chrome; the TikTok and Instagram webviews
+    // overlay theirs on the viewport. The entry buttons sit at the bottom of a
+    // tall card, so with no inset they can sit under the app's own bar — where
+    // the button is enabled, the tap lands on the toolbar, and it reads as
+    // "it won't let me sign in".
+    const rule = css.slice(css.indexOf("\n[data-age-gate] {\n  padding-top"));
+    expect(rule.slice(0, 200)).toMatch(/padding-top:\s*calc\([^)]*env\(safe-area-inset-top\)/);
+    expect(rule.slice(0, 200)).toMatch(/padding-bottom:\s*calc\([^)]*env\(safe-area-inset-bottom\)/);
+  });
+
+  it("sends everyone to the same place, computed from nothing", () => {
+    // No pathname, referrer, history or redirect parameter may influence it —
+    // that is what let a TikTok URL and a legal page choose the destination.
+    expect(gate).toMatch(/const POST_GATE_DESTINATION = "\/";/);
+    // The only pages a visitor may be left on are a hard-coded list — places
+    // where moving them would abandon a purchase. A legal page is not one.
+    expect(gate).toMatch(/const STAY_PUT = \["\/cart", "\/checkout", "\/order-confirmation", "\/account"\];/);
+    expect(gate).not.toMatch(/STAY_PUT[^\]]*\/legal/);
+    // Comments are allowed to NAME these; code is not allowed to call them.
+    const code = gate
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    for (const forbidden of ["router.back(", "history.back(", "document.referrer", "searchParams"]) {
+      expect(code, `the destination must not be derived from ${forbidden}`).not.toContain(forbidden);
+    }
+  });
+
+  it("can report which build a browser was actually handed", () => {
+    // An in-app webview cannot be attached to a debugger, so the page has to
+    // answer for itself whether it is even the new deployment.
+    const diag = read("src/components/entry-diagnostics.tsx");
+    expect(diag).toContain('get("debug_entry") === "1"');
+    expect(diag).toContain("NEXT_PUBLIC_BUILD_ID");
+    expect(diag).toContain("navigator.userAgent");
+    // Storage in an embedded webview can throw; probing it must not.
+    expect(diag).toMatch(/THREW/);
   });
 });

@@ -62,30 +62,33 @@ const STAFF_ONLY = ["/admin", "/vault"];
 
 // WHERE A VISITOR LANDS AFTER CLEARING THE GATE.
 //
-// Clearing the gate is not a navigation. A visitor who asked for a product
-// page — from an ad, a bio link, a shared URL — stays on the page they asked
-// for; bouncing them to the home page would throw away the click that brought
-// them. So the answer is normally "stay put".
+// The home page, unless they are standing on one of a fixed, hard-coded list of
+// pages where being moved would cost them something. Nothing here is derived
+// from a URL: not returnTo, not next, not a redirect parameter, not
+// document.referrer, not history. An external link — a TikTok URL, an ad, a
+// stale campaign destination — cannot influence this, which is the property
+// that matters. The list below is source code, not input.
 //
-// The exception is the legal pages. Someone reading the Research Disclaimer is
-// not choosing it as a destination, and an in-app browser has no second tab —
-// tapping a policy link from the gate navigates the view you are in. Clearing
-// the gate from there must never leave the disclaimer as the place you ended
-// up; that is exactly what was reported. Those land on the home page.
+// Why the exceptions exist, and they are not cosmetic: the gate appears on
+// EVERY load, because confirmation is never remembered. So a customer who
+// refreshes the checkout page, or returns to it, meets the gate — and sending
+// them to the home page from there abandons a cart mid-purchase. That was
+// measured, not guessed: forcing the home page unconditionally broke
+// cart-and-checkout navigation in the regression suite.
 //
-// Nothing outside this function decides the destination. No returnTo, no next,
-// no referrer, no query parameter carried over from TikTok is consulted, so an
-// external link can never choose where a visitor ends up.
-const POST_GATE_HOME = "/";
-const NEVER_THE_DESTINATION = ["/legal"];
+// A legal page is deliberately NOT on the list. Nobody chooses the Research
+// Disclaimer as a destination; landing there was the reported bug.
+const POST_GATE_DESTINATION = "/";
+const STAY_PUT = ["/cart", "/checkout", "/order-confirmation", "/account"];
 
 function destinationAfterGate(pathname: string | null): string | null {
-  if (!pathname) return POST_GATE_HOME;
-  const stranded = NEVER_THE_DESTINATION.some(
+  if (!pathname) return POST_GATE_DESTINATION;
+  const worthKeeping = STAY_PUT.some(
     (p) => pathname === p || pathname.startsWith(`${p}/`),
   );
-  // null means "no navigation at all" — stay exactly where you are.
-  return stranded ? POST_GATE_HOME : null;
+  // null means no navigation at all — the gate simply closes.
+  if (worthKeeping || pathname === POST_GATE_DESTINATION) return null;
+  return POST_GATE_DESTINATION;
 }
 
 export function AgeGate({ children }: { children: React.ReactNode }) {
@@ -120,8 +123,6 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
       return;
     }
     markVerified();
-    // Normally nothing happens beyond the gate closing. Only a visitor stranded
-    // on a legal page is moved, and only to the home page.
     const destination = destinationAfterGate(pathname);
     if (destination) {
       router.push(destination);
@@ -292,7 +293,16 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
 
           {showPrompt ? <p role="alert" className="mt-3 text-sm text-[color:var(--accent-gold)]">Please confirm all four statements before continuing.</p> : null}
 
-          <div className="mt-7 flex flex-col gap-3 sm:flex-row sm:justify-center">
+          {/* THE ENTRY BUTTONS STICK TO THE BOTTOM OF THE GATE.
+              An in-app browser keeps its own top and bottom chrome on screen,
+              which leaves roughly 664px of a 844px iPhone. This card is taller
+              than that, so these two buttons sat about 200px BELOW the fold —
+              enabled, correct, and completely unreachable unless you knew to
+              scroll the panel. In Safari the chrome auto-hides, the viewport is
+              taller, and they were reachable. That is the entire difference
+              between "works in Safari" and "cannot sign in from TikTok".
+              Sticky keeps them on screen at any viewport height. */}
+          <div className="vl-gate-actions mt-7 flex flex-col gap-3 sm:flex-row sm:justify-center">
             <button
               type="button"
               onClick={handleAccount}

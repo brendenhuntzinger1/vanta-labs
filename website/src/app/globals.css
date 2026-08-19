@@ -1237,8 +1237,51 @@ html[data-age-verified="false"] [data-age-gate] {
    than a site where every URL looks like the same "Are you 21?" panel.
    <script> is excluded because hiding it is meaningless and it must keep
    running — analytics and consent load from here. */
-html[data-age-verified="false"] body > *:not([data-age-gate]):not(script) {
+html[data-age-verified="false"] body > *:not([data-age-gate]):not(script):not([data-entry-diagnostics]) {
   visibility: hidden;
+}
+
+/* THE APP'S OWN TOOLBARS SIT ON TOP OF THE PAGE.
+   Safari insets the page for its chrome. The TikTok and Instagram webviews do
+   not always do the same — their top and bottom bars overlay the viewport. The
+   gate is a full-screen fixed panel whose entry buttons live at the BOTTOM of a
+   tall card, so without an inset those buttons can sit underneath the app's own
+   bar, where a tap never reaches them. That reads exactly like "it won't let me
+   sign in": the gate is complete, the button is enabled, and tapping does
+   nothing because the tap is landing on TikTok's toolbar.
+
+   env(safe-area-inset-*) is 0 where there is nothing to avoid, so this costs a
+   normal browser nothing. The extra 1.5rem at the bottom is for in-app bars,
+   which the safe-area inset does not describe. */
+[data-age-gate] {
+  padding-top: calc(2rem + env(safe-area-inset-top));
+  padding-bottom: calc(3.5rem + env(safe-area-inset-bottom));
+}
+
+/* THE WAY OUT OF THE GATE IS ALWAYS ON SCREEN.
+   The gate scrolls internally, and the card is taller than an in-app browser's
+   viewport, so "Create account / Sign in" and "Continue as guest" sat below the
+   fold — enabled and unreachable unless the visitor guessed to scroll. Sticking
+   them to the bottom of the scroller means they are visible at any height, on
+   any device, without shortening the card or dropping anything from it.
+
+   The backdrop is what keeps the attestation text from showing through as it
+   scrolls underneath. */
+.vl-gate-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  margin-left: -0.25rem;
+  margin-right: -0.25rem;
+  padding: 0.75rem 0.25rem;
+  background: linear-gradient(180deg, rgba(12, 12, 12, 0) 0%, rgba(12, 12, 12, 0.92) 22%, rgba(12, 12, 12, 0.97) 100%);
+  backdrop-filter: blur(6px);
+}
+
+/* Published so the diagnostics panel can report what the device actually says. */
+:root {
+  --sa-top: env(safe-area-inset-top, 0px);
+  --sa-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 .vl2-hero {

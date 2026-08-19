@@ -9,6 +9,7 @@ import { CartProvider } from "@/components/cart-context";
 import { SiteAnalyticsTracker } from "@/components/site-analytics-tracker";
 import { SiteFooter } from "@/components/site-footer";
 import { CookieConsent } from "@/components/cookie-consent";
+import { EntryDiagnostics } from "@/components/entry-diagnostics";
 import { WelcomeOffer } from "@/components/welcome-offer";
 import { ConsentedAnalytics } from "@/components/consented-analytics";
 import { TikTokPixel } from "@/components/tiktok-pixel";
@@ -173,6 +174,10 @@ export default function RootLayout({
           <RedditPixel />
         </Suspense>
         <TikTokCommerceEvents />
+        {/* Renders only for ?debug_entry=1 — see components/entry-diagnostics.tsx.
+            It exists to answer, from inside an app's own browser, which build
+            that browser was handed. Delete this line and the file to remove it. */}
+        <EntryDiagnostics />
       </body>
     </html>
   );
