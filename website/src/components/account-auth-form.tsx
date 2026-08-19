@@ -47,9 +47,20 @@ function getEmailRedirectUrl(path: string) {
   return undefined;
 }
 
+// A legal page is somewhere you READ, never somewhere you are sent. Landing
+// there after signing in was reported from a phone: a policy link tapped at the
+// age gate became the destination that followed the visitor through auth.
+const NEVER_A_SIGN_IN_DESTINATION = ["/legal", "/account/login"];
+
 function safeNextPath(value: string | null): string {
+  // Same-origin only — "//evil.com" is a protocol-relative URL, not a path.
   if (value && value.startsWith("/") && !value.startsWith("//")) {
-    return value;
+    const stranded = NEVER_A_SIGN_IN_DESTINATION.some(
+      (p) => value === p || value.startsWith(`${p}/`) || value.startsWith(`${p}?`),
+    );
+    if (!stranded) {
+      return value;
+    }
   }
   // After a normal sign-in (no explicit destination) send shoppers to the
   // home page rather than leaving them on the login screen.

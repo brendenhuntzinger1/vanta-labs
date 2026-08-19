@@ -60,6 +60,34 @@ type AttestationId = (typeof ATTESTATIONS)[number]["id"];
 // checkout, account, membership, ambassador, legal — is gated.
 const STAFF_ONLY = ["/admin", "/vault"];
 
+// WHERE A VISITOR LANDS AFTER CLEARING THE GATE.
+//
+// Clearing the gate is not a navigation. A visitor who asked for a product
+// page — from an ad, a bio link, a shared URL — stays on the page they asked
+// for; bouncing them to the home page would throw away the click that brought
+// them. So the answer is normally "stay put".
+//
+// The exception is the legal pages. Someone reading the Research Disclaimer is
+// not choosing it as a destination, and an in-app browser has no second tab —
+// tapping a policy link from the gate navigates the view you are in. Clearing
+// the gate from there must never leave the disclaimer as the place you ended
+// up; that is exactly what was reported. Those land on the home page.
+//
+// Nothing outside this function decides the destination. No returnTo, no next,
+// no referrer, no query parameter carried over from TikTok is consulted, so an
+// external link can never choose where a visitor ends up.
+const POST_GATE_HOME = "/";
+const NEVER_THE_DESTINATION = ["/legal"];
+
+function destinationAfterGate(pathname: string | null): string | null {
+  if (!pathname) return POST_GATE_HOME;
+  const stranded = NEVER_THE_DESTINATION.some(
+    (p) => pathname === p || pathname.startsWith(`${p}/`),
+  );
+  // null means "no navigation at all" — stay exactly where you are.
+  return stranded ? POST_GATE_HOME : null;
+}
+
 export function AgeGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -92,6 +120,12 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
       return;
     }
     markVerified();
+    // Normally nothing happens beyond the gate closing. Only a visitor stranded
+    // on a legal page is moved, and only to the home page.
+    const destination = destinationAfterGate(pathname);
+    if (destination) {
+      router.push(destination);
+    }
   };
 
   // Confirm age first (same gate), then send the visitor to the account
