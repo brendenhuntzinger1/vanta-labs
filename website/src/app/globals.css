@@ -1239,6 +1239,26 @@ html[data-age-verified="false"] [data-age-gate] {
    running — analytics and consent load from here. */
 html[data-age-verified="false"] body > *:not([data-age-gate]):not(script):not([data-entry-diagnostics]) {
   visibility: hidden;
+  /* A tap must not reach the storefront either. Hidden content does not take
+     hit-tests, but a compositing layer that escapes `visibility` can, so this
+     is stated rather than assumed. */
+  pointer-events: none;
+}
+
+/* A PLAYING VIDEO IS NOT COVERED BY `visibility: hidden` IN WEBKIT.
+   It is promoted to its own compositing layer, and on iOS that layer paints
+   through an ancestor's visibility. The result, reported from a phone: ticking
+   an age-gate checkbox made the hero vial appear over the gate — because the
+   tap that ticked the box was also the first user gesture, which is what
+   unblocks autoplay (see components/hero-video.tsx).
+
+   `display: none` removes the element from the render tree altogether, so
+   there is no layer left to escape. The video is restored the instant the
+   attribute flips, and hero-video.tsx starts playback then. No layout shift:
+   the element is absolutely positioned inside .vl2-hero, which keeps its own
+   background. */
+html[data-age-verified="false"] video {
+  display: none !important;
 }
 
 /* THE APP'S OWN TOOLBARS SIT ON TOP OF THE PAGE.

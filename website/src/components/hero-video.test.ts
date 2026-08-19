@@ -173,3 +173,48 @@ describe("the gate covers a viewport that changes size", () => {
     expect(rule.slice(0, 120)).toMatch(/min-height:\s*100dvh/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Reported from a phone: ticking an age-gate checkbox made the hero vial
+// appear OVER the gate. Only in TikTok's browser; never in Safari or Chrome.
+//
+// The tap that ticked the box was also the page's FIRST USER GESTURE, and the
+// gesture listeners are bound to `document` — so it started playback behind the
+// gate. Chromium keeps a hidden video hidden. WebKit promotes a PLAYING video
+// to its own compositing layer, and on iOS that layer paints through an
+// ancestor's `visibility: hidden`.
+// ---------------------------------------------------------------------------
+describe("nothing behind the age gate wakes up", () => {
+  const source = read("src/components/hero-video.tsx");
+  const css = read("src/app/globals.css");
+
+  it("refuses to play while the gate is up", () => {
+    expect(source).toMatch(/const gateIsUp = \(\) =>/);
+    expect(source).toMatch(/getAttribute\("data-age-verified"\) !== "true"/);
+    // The guard has to be inside attempt(), which every path calls — a check
+    // at one call site would leave the others.
+    const attempt = source.slice(source.indexOf("const attempt ="), source.indexOf("attempt();"));
+    expect(attempt).toMatch(/if \(cancelled \|\| gateIsUp\(\)\) return;/);
+  });
+
+  it("starts the moment access is granted, so entry is what wakes it", () => {
+    expect(source).toContain("MutationObserver");
+    expect(source).toMatch(/attributeFilter: \["data-age-verified"\]/);
+    expect(source).toContain("gateWatcher.disconnect()");
+  });
+
+  it("is removed from the render tree entirely while gated", () => {
+    // visibility is not enough: a compositing layer can outlive it. display
+    // leaves no layer to escape.
+    expect(css).toMatch(/html\[data-age-verified="false"\] video\s*\{\s*display:\s*none\s*!important/);
+  });
+
+  it("the storefront cannot be touched through the gate either", () => {
+    // Read to the closing brace rather than a fixed length, so a comment inside
+    // the rule cannot push the declaration out of view.
+    const start = css.indexOf("body > *:not([data-age-gate])");
+    const rule = css.slice(start, css.indexOf("}", start));
+    expect(rule).toMatch(/visibility:\s*hidden/);
+    expect(rule).toMatch(/pointer-events:\s*none/);
+  });
+});

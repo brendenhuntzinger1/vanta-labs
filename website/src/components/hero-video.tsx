@@ -37,13 +37,45 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
     video.defaultMuted = true;
 
     let cancelled = false;
+
+    // NOTHING PLAYS WHILE THE AGE GATE IS UP.
+    //
+    // This is not a nicety, it is the fix for a real bug. The listeners below
+    // are bound to `document`, so the FIRST TAP ANYWHERE counts as the gesture
+    // that unblocks autoplay — including a tap on an age-gate checkbox, which
+    // is the first thing anyone touches. Playback would start behind the gate.
+    //
+    // Behind the gate the storefront is `visibility: hidden`, which is enough
+    // in Chromium. It is NOT enough in WebKit: a PLAYING video is promoted to
+    // its own compositing layer, and on iOS that layer paints through an
+    // ancestor's visibility. So ticking a box made the vial appear over the
+    // gate — on an iPhone in an in-app browser, and nowhere else.
+    //
+    // Playback is therefore gated on the same attribute the CSS uses, and the
+    // observer below starts it the moment access is actually granted.
+    const gateIsUp = () =>
+      document.documentElement.getAttribute("data-age-verified") !== "true";
+
     const attempt = () => {
-      if (cancelled) return;
+      if (cancelled || gateIsUp()) return;
       const p = video.play();
       if (p && typeof p.catch === "function") p.catch(() => {});
     };
 
     attempt();
+
+    // Entry is what starts the vial, not a stray tap on a checkbox.
+    const gateWatcher = new MutationObserver(() => {
+      if (gateIsUp()) {
+        video.pause();
+      } else {
+        attempt();
+      }
+    });
+    gateWatcher.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["data-age-verified"],
+    });
 
     const onVisibility = () => {
       if (document.visibilityState === "visible") attempt();
@@ -80,6 +112,7 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
 
     return () => {
       cancelled = true;
+      gateWatcher.disconnect();
       video.removeEventListener("loadedmetadata", attempt);
       video.removeEventListener("canplay", attempt);
       video.removeEventListener("pause", attempt);
