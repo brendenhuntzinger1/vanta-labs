@@ -1209,6 +1209,26 @@ html[data-age-verified="false"] [data-age-gate] {
   overscroll-behavior: contain;
 }
 
+/* THE STOREFRONT IS HIDDEN, NOT MERELY COVERED.
+   The gate is a fixed full-screen overlay, which is enough on a desktop
+   browser. It is NOT enough in the TikTok/Instagram webviews: their toolbars
+   resize the visual viewport as you interact, and a fixed overlay can be left
+   momentarily shorter than the screen or offset from it. The owner reported
+   exactly that — tapping an attestation flashed the home page's hero vial out
+   from behind the gate, over and over.
+
+   Covering can fail. Hiding cannot. Everything in the body except the gate is
+   made invisible until the attribute flips to "true".
+
+   visibility, deliberately, NOT display: the markup stays in the document and
+   in the server-rendered HTML, so crawlers still receive the real page rather
+   than a site where every URL looks like the same "Are you 21?" panel.
+   <script> is excluded because hiding it is meaningless and it must keep
+   running — analytics and consent load from here. */
+html[data-age-verified="false"] body > *:not([data-age-gate]):not(script) {
+  visibility: hidden;
+}
+
 .vl2-hero {
   position: relative;
   min-height: 100svh;

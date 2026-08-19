@@ -178,3 +178,54 @@ describe("the hero vial is always visible", () => {
     expect(hero).toMatch(/visibilitychange/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Reported from a phone opening the link from a TikTok bio, and none of it is
+// reproducible in a desktop browser:
+//
+//   * tapping an attestation flashed the home page's hero vial out from behind
+//     the gate, repeatedly;
+//   * a tap aimed at the fourth row hit a policy link, and because an in-app
+//     webview has no second tab it NAVIGATED there — landing on the Research
+//     Disclaimer with the gate and every ticked box gone;
+//   * so all four boxes could never be held ticked at once, and the sign-in
+//     buttons stayed disabled.
+// ---------------------------------------------------------------------------
+describe("the gate survives an in-app browser", () => {
+  const gate = read("src/components/age-gate.tsx");
+  const css = read("src/app/globals.css");
+
+  it("HIDES the storefront rather than merely covering it", () => {
+    // A fixed overlay is enough on a desktop. It is not enough where the
+    // toolbar resizes the visual viewport underneath you.
+    expect(css).toMatch(
+      /html\[data-age-verified="false"\] body > \*:not\(\[data-age-gate\]\):not\(script\)\s*\{\s*visibility:\s*hidden/,
+    );
+  });
+
+  it("keeps the page in the document so crawlers still see it", () => {
+    // visibility, not display — the server-rendered HTML must stay real.
+    const rule = css.slice(css.indexOf('body > *:not([data-age-gate])'));
+    expect(rule.slice(0, 120)).not.toMatch(/display:\s*none/);
+  });
+
+  it("puts no link inside a tappable attestation row", () => {
+    // Everything between the ATTESTATIONS map and the end of the label must be
+    // inert text. One <a> in there is the whole bug.
+    const start = gate.indexOf("{ATTESTATIONS.map(");
+    const end = gate.indexOf("</label>", start);
+    expect(start).toBeGreaterThan(-1);
+    expect(gate.slice(start, end)).not.toMatch(/<a\b/);
+  });
+
+  it("still offers both policies, just out of the way", () => {
+    expect(gate).toContain('href="/legal/terms"');
+    expect(gate).toContain('href="/legal/research-disclaimer"');
+  });
+
+  it("gives all four rows real text now that none carries markup", () => {
+    expect(gate).not.toMatch(/text:\s*null/);
+    const ids = gate.match(/\{\s*id:\s*"/g) ?? [];
+    expect(ids.length).toBe(4);
+  });
+});

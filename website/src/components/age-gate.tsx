@@ -39,7 +39,10 @@ const ATTESTATIONS = [
     id: "researchUse",
     text: "I understand products are sold for research/laboratory purposes only and are not intended for human consumption",
   },
-  { id: "terms", text: null }, // rendered separately — it carries policy links
+  {
+    id: "terms",
+    text: "I agree to the Terms & Conditions and Research Use Policy",
+  },
 ] as const;
 
 type AttestationId = (typeof ATTESTATIONS)[number]["id"];
@@ -214,37 +217,44 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
                   onChange={(event) => toggle(attestation.id, event.target.checked)}
                   className="mt-0.5 h-5 w-5 shrink-0 rounded accent-[var(--accent-gold-bright)]"
                 />
-                {attestation.text ? (
-                  <span>{attestation.text}</span>
-                ) : (
-                  <span>
-                    I agree to the{" "}
-                    {/* Opened in a new tab, and the click is kept off the label so
-                        reading a policy never silently ticks the box for you. */}
-                    <a
-                      href="/legal/terms"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(event) => event.stopPropagation()}
-                      className="text-[color:var(--accent-gold)] underline underline-offset-4 decoration-[color:var(--accent-gold)]/40 transition hover:decoration-[color:var(--accent-gold)]"
-                    >
-                      Terms &amp; Conditions
-                    </a>{" "}
-                    and{" "}
-                    <a
-                      href="/legal/research-disclaimer"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(event) => event.stopPropagation()}
-                      className="text-[color:var(--accent-gold)] underline underline-offset-4 decoration-[color:var(--accent-gold)]/40 transition hover:decoration-[color:var(--accent-gold)]"
-                    >
-                      Research Use Policy
-                    </a>
-                  </span>
-                )}
+                {/* NO LINKS INSIDE THE ROW.
+                    The policy links used to live in this label, inline with the
+                    text. A thumb aiming at a 44px row lands on a link often
+                    enough — and in the TikTok and Instagram webviews
+                    target="_blank" does NOT open a second tab, it navigates the
+                    view you are already in. So a mistimed tap threw the visitor
+                    onto the Research Disclaimer page, losing the gate and every
+                    box already ticked. The links are still offered, below, where
+                    only a deliberate tap reaches them. */}
+                <span>{attestation.text}</span>
               </label>
             ))}
           </div>
+
+          {/* The policies themselves, on their own line and well clear of the
+              tappable rows above. Opening one leaves the gate — unavoidable in
+              an in-app browser, where a new tab is not a thing — so it must
+              take a deliberate tap, never a stray one. */}
+          <p className="mt-3 text-center text-xs leading-6 text-white/45">
+            Read the{" "}
+            <a
+              href="/legal/terms"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[color:var(--accent-gold)] underline underline-offset-4 decoration-[color:var(--accent-gold)]/40 transition hover:decoration-[color:var(--accent-gold)]"
+            >
+              Terms &amp; Conditions
+            </a>{" "}
+            and{" "}
+            <a
+              href="/legal/research-disclaimer"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-[color:var(--accent-gold)] underline underline-offset-4 decoration-[color:var(--accent-gold)]/40 transition hover:decoration-[color:var(--accent-gold)]"
+            >
+              Research Use Policy
+            </a>
+          </p>
 
           {showPrompt ? <p role="alert" className="mt-3 text-sm text-[color:var(--accent-gold)]">Please confirm all four statements before continuing.</p> : null}
 
