@@ -18,18 +18,28 @@ describe("the hero video can never present itself as a broken embed", () => {
   const source = read("src/components/hero-video.tsx");
   const css = read("src/app/globals.css");
 
-  it("stays invisible until it is genuinely playing", () => {
-    // iOS refuses autoplay in Low Power Mode and in some in-app webviews, and
-    // paints its OWN play glyph over a paused video — `controls={false}` does
-    // not suppress it. Hiding the element until playback starts is what keeps
-    // a refused autoplay looking like a still hero instead of a dead player.
-    expect(source).toMatch(/opacity:\s*isPlaying\s*\?\s*undefined\s*:\s*0/);
-    expect(source).toContain('addEventListener("playing"');
+  // REVERSED DELIBERATELY. This used to require the opposite: the element hid
+  // itself until the "playing" event fired, so that a refused autoplay could
+  // not show a paused frame with iOS's play glyph on it.
+  //
+  // On a real phone that produced a worse bug than the one it prevented. In an
+  // in-app browser, on a weak signal, or simply before the first frame had
+  // decoded, the hero was BLACK — the vial, which is the entire hero, was gone.
+  // The owner reported exactly that. A still vial is a product shot; an empty
+  // black panel is a broken page.
+  it("is always on screen, never hidden by playback state", () => {
+    expect(source).not.toMatch(/opacity:\s*isPlaying/);
+    expect(source).not.toMatch(/setIsPlaying/);
+    expect(source).not.toMatch(/style=\{\{\s*opacity/);
   });
 
-  it("hides itself again if playback stops or errors", () => {
+  it("keeps asking to play so a deferred autoplay eventually starts", () => {
+    // iOS defers autoplay until a gesture rather than refusing outright, so the
+    // vial starts spinning on the visitor's first tap or scroll.
     expect(source).toContain('addEventListener("pause"');
-    expect(source).toContain('addEventListener("error"');
+    for (const ev of ["pointerdown", "touchstart", "click", "keydown", "scroll"]) {
+      expect(source).toContain(`"${ev}"`);
+    }
   });
 
   it("cannot be tapped, so it can never open the native fullscreen player", () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef } from "react";
 
 /**
  * Background hero video that tries as hard as the browser will allow to stay
@@ -12,23 +12,21 @@ import { useEffect, useRef, useState } from "react";
  * again, and on the first user interaction — so a blocked autoplay recovers
  * the moment it's allowed instead of parking behind a tap-to-play button.
  *
- * WHEN AUTOPLAY IS REFUSED, THE VIDEO HIDES ITSELF. iOS Low Power Mode blocks
- * autoplay at the OS level, and some in-app browsers (the Instagram/TikTok
- * webviews a bio link opens in) do the same. No web code can override that —
- * and a paused <video> is not neutral: Safari paints its OWN play glyph over
- * it, which `controls={false}` does not suppress. A visitor arriving from a
- * bio link therefore met a still vial with a play badge stamped on it, looking
- * like a broken embed rather than a hero.
+ * THE VIAL IS ALWAYS VISIBLE. This element used to keep itself transparent
+ * until the "playing" event fired, to avoid a paused first frame with iOS's
+ * play glyph stamped on it. That cure was worse than the disease: in an in-app
+ * browser, on a weak signal, or any time the first frame had not decoded yet,
+ * the hero was simply BLACK — no vial at all. The vial is the hero; an empty
+ * black panel is not an acceptable fallback for it.
  *
- * So the element stays transparent until it is genuinely playing. Underneath
- * is the gradient `.vl2-hero` already paints for exactly this case, so a
- * refused autoplay degrades to the designed still hero instead of a play
- * button. The retry-on-gesture path below still runs, so if the browser later
- * relents the video fades in.
+ * So the video paints whatever it has: a live loop when playback is allowed, a
+ * still first frame when it is not. Either way a visitor sees the product. The
+ * retry-on-gesture path below still runs, so a deferred autoplay starts moving
+ * the moment the browser relents — which on iOS is the visitor's first tap or
+ * scroll.
  */
 export function HeroVideo({ className, src }: { className?: string; src: string }) {
   const ref = useRef<HTMLVideoElement | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
 
   useEffect(() => {
     const video = ref.current;
@@ -69,18 +67,12 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
       }
     };
 
-    // Only these decide visibility. "playing" fires when frames are actually
-    // being presented, which is the one signal that means there is something
-    // worth showing — readyState and a resolved play() promise can both be
-    // true while the element still renders a paused first frame.
-    const onPlaying = () => setIsPlaying(true);
-    const onStalled = () => setIsPlaying(false);
-
+    // A pause that nobody asked for means the browser deferred playback, so
+    // ask again. Nothing here controls visibility any more — the element is
+    // always on screen.
     video.addEventListener("loadedmetadata", attempt);
     video.addEventListener("canplay", attempt);
-    video.addEventListener("playing", onPlaying);
-    video.addEventListener("pause", onStalled);
-    video.addEventListener("error", onStalled);
+    video.addEventListener("pause", attempt);
     document.addEventListener("visibilitychange", onVisibility);
     for (const ev of gestureEvents) {
       document.addEventListener(ev, onGesture, { passive: true });
@@ -90,9 +82,7 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
       cancelled = true;
       video.removeEventListener("loadedmetadata", attempt);
       video.removeEventListener("canplay", attempt);
-      video.removeEventListener("playing", onPlaying);
-      video.removeEventListener("pause", onStalled);
-      video.removeEventListener("error", onStalled);
+      video.removeEventListener("pause", attempt);
       document.removeEventListener("visibilitychange", onVisibility);
       removeGestureListeners();
     };
@@ -102,9 +92,6 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
     <video
       ref={ref}
       className={className}
-      // Transparent until frames are actually on screen — see the note above.
-      // Transitioned so a slow start fades in rather than snapping.
-      style={{ opacity: isPlaying ? undefined : 0 }}
       src={src}
       autoPlay
       muted

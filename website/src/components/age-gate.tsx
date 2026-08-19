@@ -1,6 +1,6 @@
 "use client";
 
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
 // -----------------------------------------------------------------------------
@@ -59,6 +59,7 @@ const STAFF_ONLY = ["/admin", "/vault"];
 
 export function AgeGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
+  const router = useRouter();
   const isStaffArea = STAFF_ONLY.some(
     (p) => pathname === p || pathname?.startsWith(`${p}/`),
   );
@@ -92,13 +93,21 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
 
   // Confirm age first (same gate), then send the visitor to the account
   // sign-up / sign-in page instead of straight into the storefront.
+  //
+  // THIS MUST BE A CLIENT-SIDE NAVIGATION. It used to be
+  // window.location.assign(), which loads a whole new document — and because
+  // age confirmation is no longer remembered anywhere, that new document came
+  // up showing the gate again. Tapping "Create account / Sign in" therefore
+  // looked like it did nothing: you attested, the page reloaded, and you were
+  // staring at the same gate. router.push keeps the visitor inside the current
+  // document, so the confirmation they just gave still stands.
   const handleAccount = () => {
     if (!agreed) {
       setShowPrompt(true);
       return;
     }
     markVerified();
-    window.location.assign("/account/login");
+    router.push("/account/login");
   };
 
   const handleExit = () => {

@@ -1187,9 +1187,26 @@ html[data-age-verified="true"] [data-age-gate] {
 
 /* The scroll lock is otherwise applied by an effect, which cannot run until
    hydration — on a slow connection the store scrolled behind the overlay in
-   the meantime. */
+   the meantime.
+
+   `overflow: hidden` alone is NOT a scroll lock on iOS. WebKit still scrolls
+   the document underneath a fixed overlay, so a tap inside the gate could drag
+   the storefront up behind it and land the visitor somewhere down the home
+   page. Pinning both elements to the viewport is what actually holds it: with
+   height fixed and overflow hidden on BOTH html and body there is nothing left
+   to scroll. Released the moment the attribute flips to "true". */
+html[data-age-verified="false"],
 html[data-age-verified="false"] body {
   overflow: hidden;
+  height: 100%;
+  overscroll-behavior: none;
+}
+
+/* The gate itself is the one thing that may scroll — it is taller than a phone
+   screen — and it needs momentum scrolling of its own on iOS. */
+html[data-age-verified="false"] [data-age-gate] {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .vl2-hero {
@@ -1214,9 +1231,6 @@ html[data-age-verified="false"] body {
      reaches a <video> can hand the visitor to the native fullscreen player,
      which is a dead end with no way back to the store. */
   pointer-events: none;
-  /* Fades in once it is genuinely playing (hero-video.tsx sets opacity: 0
-     until then), so a refused autoplay never flashes a paused frame. */
-  transition: opacity 400ms var(--ease-in-out-premium, ease);
 }
 
 .vl2-hero-scrim {

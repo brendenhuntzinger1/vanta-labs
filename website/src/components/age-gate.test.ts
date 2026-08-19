@@ -81,7 +81,22 @@ describe("the gate fails closed and locks the page behind it", () => {
   });
 
   it("locks scrolling from the first paint, not from hydration", () => {
-    expect(css).toMatch(/html\[data-age-verified="false"\]\s*body\s*\{\s*overflow:\s*hidden/);
+    // Both html AND body. `overflow: hidden` on body alone does not stop
+    // WebKit scrolling the document under a fixed overlay, which let a tap
+    // inside the gate drag the storefront up behind it.
+    expect(css).toMatch(
+      /html\[data-age-verified="false"\],\s*html\[data-age-verified="false"\] body\s*\{[^}]*overflow:\s*hidden/,
+    );
+    expect(css).toMatch(
+      /html\[data-age-verified="false"\],\s*html\[data-age-verified="false"\] body\s*\{[^}]*height:\s*100%/,
+    );
+  });
+
+  it("sends an age-confirmed visitor to sign-in WITHOUT reloading the document", () => {
+    // A full page load would come up showing the gate again, because the
+    // confirmation is not persisted — so the button appeared to do nothing.
+    expect(gate).toMatch(/router\.push\("\/account\/login"\)/);
+    expect(gate).not.toMatch(/window\.location\.assign\("\/account\/login"\)/);
   });
 
   it("keeps the attribute in step with React so the lock releases on accept", () => {
@@ -119,5 +134,47 @@ describe("the gate fails closed and locks the page behind it", () => {
     // that way — gating them would break the processor and Shippo.
     expect(layout).toContain("<AgeGate>");
     expect(layout).not.toMatch(/AgeGate[\s\S]{0,200}\/api\//);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The hero vial is the first thing anyone sees. It must be ON SCREEN.
+//
+// The video used to keep itself transparent until the "playing" event fired,
+// so that a refused autoplay could not show a paused frame with iOS's play
+// glyph on it. In an in-app browser, on a weak signal, or before the first
+// frame decoded, that left the hero completely BLACK — no vial at all, which
+// is a worse failure than the one it was avoiding.
+// ---------------------------------------------------------------------------
+describe("the hero vial is always visible", () => {
+  const hero = readFileSync(join(process.cwd(), "src/components/hero-video.tsx"), "utf8");
+  const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+
+  it("never hides itself based on playback state", () => {
+    expect(hero).not.toMatch(/opacity:\s*isPlaying/);
+    expect(hero).not.toMatch(/setIsPlaying/);
+    expect(hero).not.toMatch(/style=\{\{\s*opacity/);
+  });
+
+  it("keeps the element visible in CSS", () => {
+    // 0.82 is the designed blend with the hero gradient — visible, not hidden.
+    expect(css).toMatch(/\.vl2-hero-video\s*\{[^}]*opacity:\s*0\.8/);
+    expect(css).not.toMatch(/\.vl2-hero-video\s*\{[^}]*opacity:\s*0;/);
+  });
+
+  it("still refuses taps, so it cannot open the native fullscreen player", () => {
+    expect(css).toMatch(/\.vl2-hero-video\s*\{[^}]*pointer-events:\s*none/);
+    expect(hero).toContain("disablePictureInPicture");
+    expect(hero).toContain("playsInline");
+    expect(hero).toContain('aria-hidden="true"');
+  });
+
+  it("keeps retrying playback so a deferred autoplay still starts", () => {
+    // iOS defers autoplay until a gesture; these are what make the vial start
+    // spinning on the visitor's first tap or scroll instead of staying still.
+    for (const ev of ["pointerdown", "touchstart", "click", "keydown", "scroll"]) {
+      expect(hero).toContain(`"${ev}"`);
+    }
+    expect(hero).toMatch(/visibilitychange/);
   });
 });
