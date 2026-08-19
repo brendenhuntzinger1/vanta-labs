@@ -329,9 +329,13 @@ export function ProductDetailClient({
 
       <main className="relative mx-auto max-w-[1440px] px-4 sm:px-6 pb-12 pt-24 sm:pb-16 sm:pt-28 lg:px-12 lg:pt-32">
         <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-[#a3a3a3]">
-          <Link href="/" className="transition hover:text-white">Home</Link>
+          {/* min-h-6 lifts these to a 24px tap target (WCAG 2.2 AA 2.5.8). At
+              text-xs the breadcrumb links were 16px tall — the standalone
+              navigation back out of a product, and the hardest thing on the
+              page to hit on a phone. Only the hit area changes. */}
+          <Link href="/" className="inline-flex min-h-6 items-center transition hover:text-white">Home</Link>
           <span>/</span>
-          <Link href="/products" className="transition hover:text-white">Products</Link>
+          <Link href="/products" className="inline-flex min-h-6 items-center transition hover:text-white">Products</Link>
           <span>/</span>
           <span className="text-white">{product.name}</span>
         </nav>
@@ -929,7 +933,8 @@ export function ProductDetailClient({
                   <p className="vl2-eyebrow">You May Also Need</p>
                   <h2 className="vl2-serif mt-2 text-2xl text-white">Related Products</h2>
                 </div>
-                <Link href="/products" className="text-xs uppercase tracking-[0.16em] text-white/50 transition hover:text-white">
+                {/* Same 24px floor — standalone section link, was 16px tall. */}
+                <Link href="/products" className="inline-flex min-h-6 items-center text-xs uppercase tracking-[0.16em] text-white/50 transition hover:text-white">
                   View all
                 </Link>
               </div>

@@ -168,7 +168,10 @@ export default function RootLayout({
             <Link
               href="/vault"
               aria-label="Secure access"
-              className="vl-bottom-bar fixed bottom-2 right-2 z-40 text-[10px] uppercase tracking-[0.2em] text-white/15 transition hover:text-white/45"
+              /* inline-flex + min-h-6 gives the box a 24px tap height while the
+                 10px label and its faint colour are untouched — the link looks
+                 exactly as before, it is simply reachable. */
+              className="vl-bottom-bar fixed bottom-2 right-2 z-40 inline-flex min-h-6 items-center text-[10px] uppercase tracking-[0.2em] text-white/15 transition hover:text-white/45"
             >
               vault
             </Link>

@@ -221,7 +221,9 @@ export default async function HomePage() {
                 <p className="vl2-eyebrow">Selection</p>
                 <h2 className="vl2-serif mt-2 text-2xl text-white sm:mt-3 sm:text-4xl">Most requested compounds</h2>
               </div>
-              <Link href="/products" className="text-xs uppercase tracking-[0.14em] text-white/55 transition hover:text-white">
+              {/* inline-flex + min-h-6: a 24px tap target (WCAG 2.2 AA 2.5.8)
+                  for a standalone section link that was 16px tall. */}
+              <Link href="/products" className="inline-flex min-h-6 items-center text-xs uppercase tracking-[0.14em] text-white/55 transition hover:text-white">
                 Full catalog →
               </Link>
             </div>

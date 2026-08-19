@@ -95,7 +95,11 @@ export function CookieConsent() {
     >
       <p className="flex-1 leading-6">
         We use essential cookies to run the store, plus analytics and our advertising pixels (TikTok, Snapchat and Reddit) if you accept. Decline and none of those load. See our{" "}
-        <Link href="/legal/cookies" className="text-white underline underline-offset-4">Cookie Policy</Link>.
+        {/* py-1 -my-1 grows the tap box to 24px (WCAG 2.2 AA 2.5.8) while the
+            negative margin cancels the same amount of layout, so the sentence
+            keeps its exact line box. inline-flex is wrong here — this link sits
+            mid-sentence and must stay on the text baseline. */}
+        <Link href="/legal/cookies" className="-my-1 inline-block py-1 text-white underline underline-offset-4">Cookie Policy</Link>.
       </p>
       <div className="mt-3 flex gap-2 sm:mt-0">
         <button type="button" onClick={() => dismiss("declined")} className="vl2-btn-secondary vl-focus-ring flex-1 px-4 py-2.5 text-xs sm:flex-none">Decline</button>
