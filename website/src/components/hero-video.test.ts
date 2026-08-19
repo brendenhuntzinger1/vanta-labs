@@ -218,3 +218,44 @@ describe("nothing behind the age gate wakes up", () => {
     expect(rule).toMatch(/pointer-events:\s*none/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Reported: entering from TikTok landed "inside the vial video on a white
+// background". Nothing navigates to the asset — it appears exactly once in the
+// codebase, as this component's src — so that was iOS's NATIVE FULLSCREEN
+// PLAYER, whose chrome is light.
+//
+// Two iOS rules open it, and the entry tap hit both at once: play() called
+// synchronously inside a gesture handler reads as "the user asked to watch
+// this", and an element with no layout box cannot play inline (behind the gate
+// the video is display:none).
+// ---------------------------------------------------------------------------
+describe("entering the site never opens a media player", () => {
+  const source = read("src/components/hero-video.tsx");
+
+  it("never starts playback inside the entry gesture", () => {
+    // Deferred by two frames: past the gesture's call stack, and past the
+    // style/layout pass that gives the element its box.
+    expect(source).toMatch(/requestAnimationFrame\(\(\) => requestAnimationFrame\(startWhenReady\)\)/);
+  });
+
+  it("waits for a real layout box before playing", () => {
+    expect(source).toMatch(/const box = video\.getBoundingClientRect\(\);/);
+    expect(source).toMatch(/if \(box\.width < 1 \|\| box\.height < 1\)/);
+    // Retries rather than playing blind.
+    expect(source).toMatch(/requestAnimationFrame\(startWhenReady\);/);
+  });
+
+  it("carries the legacy inline attribute as well as the modern one", () => {
+    // Older WebKit, and the WebView builds some apps ship, only honour the
+    // prefixed form — without it they hand playback to the native player.
+    expect(source).toContain("playsInline");
+    expect(source).toContain('"webkit-playsinline": "true"');
+  });
+
+  it("backs out of fullscreen if iOS ever presents it anyway", () => {
+    // A decorative hero has no state in which fullscreen is correct.
+    expect(source).toContain('addEventListener("webkitbeginfullscreen"');
+    expect(source).toContain("webkitExitFullscreen");
+  });
+});

@@ -56,10 +56,43 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
     const gateIsUp = () =>
       document.documentElement.getAttribute("data-age-verified") !== "true";
 
-    const attempt = () => {
+    // PLAYBACK MUST NEVER START INSIDE THE ENTRY TAP, AND NEVER WITHOUT A BOX.
+    //
+    // Two iOS rules meet here, and getting either wrong opens the native
+    // fullscreen player — a standalone video on white chrome, which is what
+    // "it took me into the vial video" was:
+    //
+    //   1. play() called as the direct result of a user gesture reads as "the
+    //      user asked to watch this video", which iPhone answers with its own
+    //      player unless the element can play inline;
+    //   2. an element with no layout box CANNOT play inline. Behind the gate
+    //      this video is display:none, so at the instant the gate opens it has
+    //      no box yet.
+    //
+    // The entry tap satisfied both at once: tap -> state -> effect ->
+    // setAttribute -> observer -> play(), all in one gesture, on an element
+    // that was display:none a moment earlier. Hence fullscreen.
+    //
+    // So: wait for a real layout box, and let the gesture finish first. The
+    // video is muted, and muted autoplay needs no gesture at all — deferring
+    // costs nothing and is what keeps playback inline.
+    const startWhenReady = () => {
       if (cancelled || gateIsUp()) return;
+      const box = video.getBoundingClientRect();
+      if (box.width < 1 || box.height < 1) {
+        // Not laid out yet. Try again next frame rather than playing blind.
+        requestAnimationFrame(startWhenReady);
+        return;
+      }
       const p = video.play();
       if (p && typeof p.catch === "function") p.catch(() => {});
+    };
+
+    // Two frames out: past the current gesture, and past the style/layout pass
+    // that gives the element its box.
+    const attempt = () => {
+      if (cancelled || gateIsUp()) return;
+      requestAnimationFrame(() => requestAnimationFrame(startWhenReady));
     };
 
     attempt();
@@ -102,6 +135,20 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
     // A pause that nobody asked for means the browser deferred playback, so
     // ask again. Nothing here controls visibility any more — the element is
     // always on screen.
+    // BACKSTOP, not the fix. This hero is decorative and there is no state in
+    // which a fullscreen player is correct, so if iOS ever begins presenting
+    // one anyway, back out immediately. The real repair is above — never start
+    // playback inside a gesture, never start it without a layout box.
+    const refuseFullscreen = () => {
+      const el = video as HTMLVideoElement & { webkitExitFullscreen?: () => void };
+      try {
+        el.webkitExitFullscreen?.();
+      } catch {
+        /* not presenting, or the browser does not offer the call */
+      }
+    };
+    video.addEventListener("webkitbeginfullscreen", refuseFullscreen);
+
     video.addEventListener("loadedmetadata", attempt);
     video.addEventListener("canplay", attempt);
     video.addEventListener("pause", attempt);
@@ -113,6 +160,7 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
     return () => {
       cancelled = true;
       gateWatcher.disconnect();
+      video.removeEventListener("webkitbeginfullscreen", refuseFullscreen);
       video.removeEventListener("loadedmetadata", attempt);
       video.removeEventListener("canplay", attempt);
       video.removeEventListener("pause", attempt);
@@ -130,6 +178,13 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
       muted
       loop
       playsInline
+      /* The modern attribute is `playsinline`, which React writes from
+         playsInline above. Older WebKit — and the WebView builds some apps
+         still ship — only recognise the webkit-prefixed one, and without it
+         they hand playback to the native fullscreen player. Both are given, so
+         whichever the browser understands keeps the vial inside the hero. */
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      {...({ "webkit-playsinline": "true", "x5-playsinline": "true" } as any)}
       /* METADATA, NOT AUTO.
          The hero file is ~6.2 MB. preload="auto" told the browser to buffer it
          aggressively from first paint, competing with the CSS, fonts and hero
