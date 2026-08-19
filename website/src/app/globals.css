@@ -1209,6 +1209,18 @@ html[data-age-verified="false"] [data-age-gate] {
   overscroll-behavior: contain;
 }
 
+/* COVER THE VISUAL VIEWPORT, NOT THE LAYOUT ONE.
+   `fixed inset-0` sizes against the LAYOUT viewport. In an in-app webview the
+   toolbar collapses as you interact and the VISUAL viewport grows past it,
+   leaving a strip at the bottom that the overlay never covered — the home page
+   showing through the moment you tapped an attestation. 100dvh follows the
+   viewport as it changes; the vh line before it is the fallback for anything
+   that does not know dvh. */
+[data-age-gate] {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
 /* THE STOREFRONT IS HIDDEN, NOT MERELY COVERED.
    The gate is a fixed full-screen overlay, which is enough on a desktop
    browser. It is NOT enough in the TikTok/Instagram webviews: their toolbars
@@ -1247,6 +1259,12 @@ html[data-age-verified="false"] body > *:not([data-age-gate]):not(script) {
   height: 100%;
   object-fit: cover;
   opacity: 0.82;
+  /* A <video> with no frames yet paints whatever the compositor happens to
+     hold — which showed up on a phone as a light grey band washing over half
+     the hero. The file is 6.4 MB, so there is always a window before the first
+     frame decodes. Giving the element its own near-black ground means that
+     window looks like the designed dark hero instead of a grey panel. */
+  background-color: #0a0a0a;
   /* Decorative and aria-hidden: it must never receive a tap. On iOS a tap that
      reaches a <video> can hand the visitor to the native fullscreen player,
      which is a dead end with no way back to the store. */
@@ -1259,9 +1277,14 @@ html[data-age-verified="false"] body > *:not([data-age-gate]):not(script) {
   /* Purely a gradient over the video — same reasoning as above. */
   pointer-events: none;
   /* Mobile: the copy is nearly full-width, so the lift has to come from the
-     bottom rather than from one side. */
+     bottom rather than from one side.
+
+     The middle stop used to fall to 0.18, which is close enough to clear that a
+     bright stretch of video glared straight through it — on a phone that read
+     as a light panel over the hero. Held at 0.42 the vial still shows, but no
+     frame of it can wash the section out. */
   background:
-    linear-gradient(180deg, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.18) 30%, rgba(0, 0, 0, 0.62) 68%, rgba(0, 0, 0, 0.92) 100%);
+    linear-gradient(180deg, rgba(0, 0, 0, 0.62) 0%, rgba(0, 0, 0, 0.42) 30%, rgba(0, 0, 0, 0.68) 68%, rgba(0, 0, 0, 0.93) 100%);
 }
 
 /* Desktop: weight the scrim LEFT, where the headline and CTAs live, and let it

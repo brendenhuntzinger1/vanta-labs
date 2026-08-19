@@ -130,3 +130,46 @@ describe("product pages do not double the brand in their title", () => {
     expect(page).toMatch(/socialTitle\s*=\s*\/vanta labs\/i\.test\(title\)/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// From a phone, after entering as a guest: a light grey band washed over half
+// the hero. Two causes, both here.
+// ---------------------------------------------------------------------------
+describe("the hero can never wash out light", () => {
+  const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+  const heroRule = css.slice(css.indexOf(".vl2-hero-video"), css.indexOf(".vl2-hero-scrim"));
+
+  it("the video paints on its own dark ground before any frame decodes", () => {
+    // A <video> with nothing decoded yet shows whatever the compositor holds.
+    // The file is 6.4 MB, so that window always exists.
+    expect(heroRule).toMatch(/background-color:\s*#0a0a0a/);
+  });
+
+  it("the mobile scrim never falls close to transparent", () => {
+    // Its middle stop used to drop to 0.18, which a bright stretch of video
+    // glared straight through.
+    const scrim = css.slice(css.indexOf(".vl2-hero-scrim"), css.indexOf(".vl2-hero-content"));
+    const mobile = scrim.slice(0, scrim.indexOf("@media"));
+    const alphas = [...mobile.matchAll(/rgba\(0,\s*0,\s*0,\s*([0-9.]+)\)/g)].map((m) => Number(m[1]));
+    expect(alphas.length).toBeGreaterThan(0);
+    expect(Math.min(...alphas)).toBeGreaterThanOrEqual(0.4);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The gate must cover the VISUAL viewport. `fixed inset-0` sizes against the
+// layout viewport, and an in-app webview's toolbar collapses as you interact —
+// growing the visual viewport past the overlay and exposing a strip of the
+// storefront underneath.
+// ---------------------------------------------------------------------------
+describe("the gate covers a viewport that changes size", () => {
+  const css = readFileSync(join(process.cwd(), "src/app/globals.css"), "utf8");
+
+  it("sizes itself in dvh, with a vh fallback", () => {
+    // Anchored to the start of a line so this finds the standalone rule rather
+    // than the `html[data-age-verified="true"] [data-age-gate]` one above it.
+    const rule = css.slice(css.indexOf("\n[data-age-gate] {") + 1);
+    expect(rule.slice(0, 120)).toMatch(/min-height:\s*100vh/);
+    expect(rule.slice(0, 120)).toMatch(/min-height:\s*100dvh/);
+  });
+});
