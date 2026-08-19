@@ -642,6 +642,25 @@ export async function getShippingConfig(): Promise<ShippingConfig> {
   }
 }
 
+/**
+ * A blank admin field means "I have nothing to say here", not "render nothing".
+ *
+ * Every caller of this config writes `control.x ?? "designed default"`, and `??`
+ * only fires on null/undefined — so an empty or whitespace-only string stored
+ * against a homepage field passed straight through and rendered as an empty
+ * element. That is how the homepage hero came to show its eyebrow and its two
+ * buttons with no headline and no subheadline between them: not missing markup,
+ * an empty string winning over the fallback.
+ *
+ * Collapsing blank to undefined restores the designed copy and cannot change
+ * what any non-blank value renders.
+ */
+function text(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 export async function getHomepageControlConfig(): Promise<HomepageControlConfig> {
   try {
     const snapshot = await getControlSnapshot();
@@ -649,13 +668,13 @@ export async function getHomepageControlConfig(): Promise<HomepageControlConfig>
     const promotions = snapshot.promotions ?? {};
     return {
       promoTickerItems: Array.isArray(homepage.promo_ticker_items) ? homepage.promo_ticker_items as string[] : undefined,
-      heroKicker: typeof homepage.hero_kicker === "string" ? homepage.hero_kicker : undefined,
-      heroHeadline: typeof homepage.hero_headline === "string" ? homepage.hero_headline : undefined,
-      heroSubheadline: typeof homepage.hero_subheadline === "string" ? homepage.hero_subheadline : undefined,
+      heroKicker: text(homepage.hero_kicker),
+      heroHeadline: text(homepage.hero_headline),
+      heroSubheadline: text(homepage.hero_subheadline),
       promoPills: Array.isArray(homepage.promo_pills) ? homepage.promo_pills as string[] : undefined,
-      promoCaption: typeof homepage.promo_caption === "string" ? homepage.promo_caption : undefined,
+      promoCaption: text(homepage.promo_caption),
       featuredProductSlugs: Array.isArray(homepage.featured_product_slugs) ? homepage.featured_product_slugs as string[] : undefined,
-      qualityPanelTitle: typeof homepage.quality_panel_title === "string" ? homepage.quality_panel_title : undefined,
+      qualityPanelTitle: text(homepage.quality_panel_title),
       qualityPanelItems: Array.isArray(homepage.quality_panel_items) ? homepage.quality_panel_items as string[] : undefined,
       promoBuy3Get1Enabled: Boolean(promotions.buy_3_get_1_enabled ?? false),
       promoBuy2Get1HalfEnabled: Boolean(promotions.buy_2_get_1_half_enabled ?? false),
