@@ -135,6 +135,7 @@ export async function createCheckoutSession(
      if (existing) {
        const existingIsManual = isManualPaymentMethod(getPaymentMethodById(paymentMethods, String(existing.payment_method ?? "")));
        let existingHostedUrl = "";
+       let existingPaymentId = existing.payment_id ? String(existing.payment_id) : "";
        if (!existingIsManual) {
          try {
            const resumed = await provider.createCheckoutSession({
@@ -145,6 +146,33 @@ export async function createCheckoutSession(
              metadata: { orderId: String(existing.order_id), orderNumber: String(existing.order_number) },
            });
            existingHostedUrl = resumed.hostedCheckoutUrl ?? "";
+
+           // THE RESUMED SESSION IS THE ONE THAT WILL BE PAID — record it.
+           //
+           // This branch mints a NEW processor session so the shopper gets a
+           // working card iframe, but only its URL was kept: the order row went
+           // on pointing at the ABANDONED session from the first attempt.
+           //
+           // With a stale id on the row, reconcileVeyraPendingPayments polls the
+           // wrong session. The old one reports `expired`, which is a member of
+           // DEAD_SESSION_STATUSES, so a genuinely paid order would be marked
+           // payment_failed and its stock released — worse than the stranded
+           // order the reconciler exists to rescue. Reachable whenever the first
+           // response is lost in transit after the server committed, which is
+           // precisely what the idempotency key is for.
+           if (resumed.paymentId && resumed.paymentId !== existingPaymentId) {
+             existingPaymentId = resumed.paymentId;
+             const { error: resumeIdError } = await supabaseAdmin
+               .from("orders")
+               .update({ payment_id: resumed.paymentId, updated_at: new Date().toISOString() })
+               // Never move the pointer on an order that has already settled:
+               // its payment_id is the session that actually paid.
+               .eq("order_id", String(existing.order_id))
+               .neq("payment_status", "paid");
+             if (resumeIdError) {
+               console.error("Unable to persist resumed payment session id for order", existing.order_id, resumeIdError);
+             }
+           }
          } catch {
            existingHostedUrl = "";
          }
@@ -161,7 +189,10 @@ export async function createCheckoutSession(
          isManualPayment: existingIsManual,
          cardProcessingFee: Number(existing.card_processing_fee ?? 0),
          cardProcessingFeePercent: Number(existing.card_processing_fee_percent ?? 0),
-         paymentId: String(existing.payment_id ?? existing.order_id),
+         // The resumed session when one was minted above, otherwise whatever the
+         // order already carried. Returning the superseded id here would report a
+         // session the shopper is not being sent to.
+         paymentId: existingPaymentId || String(existing.order_id),
          hostedCheckoutUrl: existingHostedUrl,
        };
      }

@@ -146,7 +146,12 @@ export function CartPageClient() {
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
-      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-24 sm:pt-32 lg:px-12">
+      {/* pt-20 / mt-6 on phones (was pt-24 / mt-10). On a short in-app-browser
+          viewport (~664px once the host app's chrome is subtracted) the empty
+          cart's only way out — "Browse products" — landed at y=473, inside the
+          consent banner sitting at y=464. Reclaiming 32px lifts it clear.
+          Desktop spacing is unchanged. */}
+      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-20 sm:pt-32 lg:px-12">
         <div className="max-w-2xl">
           <p className="vl2-eyebrow">Shopping Cart</p>
           <h1 className="vl2-serif mt-3 text-4xl text-white sm:text-5xl">Review your materials.</h1>
@@ -155,10 +160,14 @@ export function CartPageClient() {
           </p>
         </div>
 
-        <div className="mt-10 grid gap-6 lg:grid-cols-[1.2fr_0.8fr] lg:gap-10">
+        <div className="mt-6 sm:mt-10 grid gap-6 lg:grid-cols-[1.2fr_0.8fr] lg:gap-10">
           <div className="space-y-3">
             {isHydrated && items.length === 0 ? (
-              <div className="border border-dashed border-white/15 p-10 text-center text-white/55">
+              /* p-6 on phones (p-10 stays from sm up). 40px of padding around
+                 an EMPTY panel is what pushed "Browse products" — the only exit
+                 from an empty cart — down into the consent banner on a short
+                 in-app-browser viewport. */
+              <div className="border border-dashed border-white/15 p-6 sm:p-10 text-center text-white/55">
                 <p className="text-lg text-white">No items yet.</p>
                 <p className="mt-3">Visit the catalog to add products.</p>
                 <Link href="/products" className="vl2-btn-primary vl-focus-ring mt-6 inline-flex px-5 py-3 text-sm">

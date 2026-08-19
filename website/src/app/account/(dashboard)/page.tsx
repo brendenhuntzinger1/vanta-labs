@@ -234,7 +234,7 @@ export default async function AccountDashboardPage() {
         <div className="flex items-center justify-between">
           <h2 className="text-lg font-semibold text-white">Latest orders</h2>
           {orders.length > 0 ? (
-            <Link href="/account/orders" className="vl-focus-ring text-xs text-cyan-300 underline-offset-2 hover:underline">View all →</Link>
+            <Link href="/account/orders" className="vl-focus-ring inline-flex min-h-6 items-center text-xs text-cyan-300 underline-offset-2 hover:underline">View all →</Link>
           ) : null}
         </div>
 
@@ -310,7 +310,7 @@ export default async function AccountDashboardPage() {
         <section className="vl-panel rounded-2xl p-5 sm:p-6">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-white">Your wishlist</h2>
-            <Link href="/account/wishlist" className="vl-focus-ring text-xs text-cyan-300 underline-offset-2 hover:underline">View all →</Link>
+            <Link href="/account/wishlist" className="vl-focus-ring inline-flex min-h-6 items-center text-xs text-cyan-300 underline-offset-2 hover:underline">View all →</Link>
           </div>
           <div className="mt-4 flex snap-x gap-3 overflow-x-auto pb-1 sm:grid sm:grid-cols-4 sm:overflow-visible [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             {wishlistProducts.slice(0, 4).map((product) => (

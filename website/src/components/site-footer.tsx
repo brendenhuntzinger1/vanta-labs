@@ -37,12 +37,17 @@ function FooterColumn({
       <ul className="mt-4 space-y-3">
         {links.map((link) => (
           <li key={link.label}>
+            {/* inline-flex + min-h-6 gives every footer link a 24px tap target
+                (WCAG 2.2 AA 2.5.8) without moving the text: at text-sm the link
+                box was 19px tall, which is a fiddly thing to hit on a phone and
+                there are a dozen of them on every page. The label stays
+                vertically centred, so only the hit area grows. */}
             {link.href.startsWith("mailto:") ? (
-              <a href={link.href} className="text-sm text-white/55 transition hover:text-white">
+              <a href={link.href} className="inline-flex min-h-6 items-center text-sm text-white/55 transition hover:text-white">
                 {link.label}
               </a>
             ) : (
-              <Link href={link.href} className="text-sm text-white/55 transition hover:text-white">
+              <Link href={link.href} className="inline-flex min-h-6 items-center text-sm text-white/55 transition hover:text-white">
                 {link.label}
               </Link>
             )}
@@ -88,7 +93,9 @@ export function SiteFooter() {
         <div className="mt-12 flex flex-col gap-3 border-t border-white/10 pt-6 text-xs text-white/70 sm:flex-row sm:items-center sm:justify-between">
           <p>
             Support{" "}
-            <a href="mailto:support@vantalabsresearch.com" className="text-white/70 underline-offset-4 transition hover:text-white hover:underline">
+            {/* Same 24px floor. This is the support address — the one link a
+                frustrated customer reaches for — and it sat 17px tall. */}
+            <a href="mailto:support@vantalabsresearch.com" className="inline-flex min-h-6 items-center text-white/70 underline-offset-4 transition hover:text-white hover:underline">
               support@vantalabsresearch.com
             </a>
           </p>
