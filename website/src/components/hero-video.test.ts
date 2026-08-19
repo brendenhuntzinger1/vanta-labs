@@ -33,13 +33,16 @@ describe("the hero video can never present itself as a broken embed", () => {
     expect(source).not.toMatch(/style=\{\{\s*opacity/);
   });
 
-  it("keeps asking to play so a deferred autoplay eventually starts", () => {
-    // iOS defers autoplay until a gesture rather than refusing outright, so the
-    // vial starts spinning on the visitor's first tap or scroll.
-    expect(source).toContain('addEventListener("pause"');
-    for (const ev of ["pointerdown", "touchstart", "click", "keydown", "scroll"]) {
-      expect(source).toContain(`"${ev}"`);
+  it("never listens for a user gesture in order to start playing", () => {
+    // Gesture listeners are what made a tap look like a request to watch the
+    // video, which is how iOS came to hand over its fullscreen player.
+    for (const ev of ["pointerdown", "touchstart", "click", "keydown"]) {
+      expect(source, `a ${ev} listener would tie playback to a tap again`)
+        .not.toContain(`"${ev}"`);
     }
+    // Playback comes from the attribute, not from script.
+    expect(source).toContain("autoPlay");
+    expect(source).toContain("muted");
   });
 
   it("cannot be tapped, so it can never open the native fullscreen player", () => {
@@ -184,40 +187,6 @@ describe("the gate covers a viewport that changes size", () => {
 // to its own compositing layer, and on iOS that layer paints through an
 // ancestor's `visibility: hidden`.
 // ---------------------------------------------------------------------------
-describe("nothing behind the age gate wakes up", () => {
-  const source = read("src/components/hero-video.tsx");
-  const css = read("src/app/globals.css");
-
-  it("refuses to play while the gate is up", () => {
-    expect(source).toMatch(/const gateIsUp = \(\) =>/);
-    expect(source).toMatch(/getAttribute\("data-age-verified"\) !== "true"/);
-    // The guard has to be inside attempt(), which every path calls — a check
-    // at one call site would leave the others.
-    const attempt = source.slice(source.indexOf("const attempt ="), source.indexOf("attempt();"));
-    expect(attempt).toMatch(/if \(cancelled \|\| gateIsUp\(\)\) return;/);
-  });
-
-  it("starts the moment access is granted, so entry is what wakes it", () => {
-    expect(source).toContain("MutationObserver");
-    expect(source).toMatch(/attributeFilter: \["data-age-verified"\]/);
-    expect(source).toContain("gateWatcher.disconnect()");
-  });
-
-  it("is removed from the render tree entirely while gated", () => {
-    // visibility is not enough: a compositing layer can outlive it. display
-    // leaves no layer to escape.
-    expect(css).toMatch(/html\[data-age-verified="false"\] video\s*\{\s*display:\s*none\s*!important/);
-  });
-
-  it("the storefront cannot be touched through the gate either", () => {
-    // Read to the closing brace rather than a fixed length, so a comment inside
-    // the rule cannot push the declaration out of view.
-    const start = css.indexOf("body > *:not([data-age-gate])");
-    const rule = css.slice(start, css.indexOf("}", start));
-    expect(rule).toMatch(/visibility:\s*hidden/);
-    expect(rule).toMatch(/pointer-events:\s*none/);
-  });
-});
 
 // ---------------------------------------------------------------------------
 // Reported: entering from TikTok landed "inside the vial video on a white
@@ -230,32 +199,99 @@ describe("nothing behind the age gate wakes up", () => {
 // this", and an element with no layout box cannot play inline (behind the gate
 // the video is display:none).
 // ---------------------------------------------------------------------------
-describe("entering the site never opens a media player", () => {
-  const source = read("src/components/hero-video.tsx");
 
-  it("never starts playback inside the entry gesture", () => {
-    // Deferred by two frames: past the gesture's call stack, and past the
-    // style/layout pass that gives the element its box.
-    expect(source).toMatch(/requestAnimationFrame\(\(\) => requestAnimationFrame\(startWhenReady\)\)/);
+// ---------------------------------------------------------------------------
+// THE STRUCTURAL SEPARATION.
+//
+// Completing the age gate on an iPhone, inside the TikTok and Instagram
+// browsers, kept opening Apple's native fullscreen player: the vial alone on
+// white chrome. Nothing navigated to the asset. iOS was deciding the visitor
+// had asked to watch a video, because the entry tap and the video were
+// connected — and every attempt to manage that connection with timing passed in
+// Chromium and failed on the device.
+//
+// The connection is now absent rather than managed. A–H below are the
+// properties that make it absent; each is one careless edit from returning, and
+// none of them shows up in a desktop browser.
+// ---------------------------------------------------------------------------
+describe("the entry gate and the hero video are separate systems", () => {
+  // Comments in these files DESCRIBE the bug — they say "play()",
+  // "MutationObserver", "video" and so on while explaining what was removed.
+  // Assertions about what the code does must read the code, not the prose.
+  const codeOnly = (s: string) =>
+    s.replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+      .join("\n");
+
+  const hero = read("src/components/hero-video.tsx");
+  const heroCode = codeOnly(hero);
+  const gateCode = codeOnly(read("src/components/age-gate.tsx"));
+  const page = read("src/app/page.tsx");
+  const css = read("src/app/globals.css");
+
+  // A. No <video> exists while the gate is active.
+  it("A — does not render a video element until access is granted", () => {
+    // Not hidden. Absent. An early return before any JSX.
+    expect(heroCode).toMatch(/if \(!granted \|\| !settled\) return null;/);
+    expect(heroCode).toMatch(/const granted = useAccessGranted\(\);/);
   });
 
-  it("waits for a real layout box before playing", () => {
-    expect(source).toMatch(/const box = video\.getBoundingClientRect\(\);/);
-    expect(source).toMatch(/if \(box\.width < 1 \|\| box\.height < 1\)/);
-    // Retries rather than playing blind.
-    expect(source).toMatch(/requestAnimationFrame\(startWhenReady\);/);
+  // D. It mounts only after the gate completes AND in a later task.
+  it("D — mounts in a later task, after the entry interaction has finished", () => {
+    // setTimeout schedules past the current task, so creating the element is
+    // never part of the tap that let the visitor in.
+    expect(heroCode).toMatch(/const t = setTimeout\(\(\) => setSettled\(true\), 0\);/);
+    expect(heroCode).toMatch(/if \(!granted\) return;/);
   });
 
-  it("carries the legacy inline attribute as well as the modern one", () => {
-    // Older WebKit, and the WebView builds some apps ship, only honour the
-    // prefixed form — without it they hand playback to the native player.
-    expect(source).toContain("playsInline");
-    expect(source).toContain('"webkit-playsinline": "true"');
+  // B + C. Nothing in the entry path can reach the video.
+  it("B, C — the gate holds no video reference and cannot call play()", () => {
+    for (const forbidden of ["play(", "video", "HTMLMediaElement", "webkitEnterFullscreen", "MutationObserver"]) {
+      expect(gateCode, `the entry path must not touch ${forbidden}`)
+        .not.toContain(forbidden);
+    }
+    // It publishes a boolean; the video subscribes. Never the other way round.
+    expect(gateCode).toContain("AccessContext.Provider");
+    expect(gateCode).toContain("export function useAccessGranted()");
   });
 
-  it("backs out of fullscreen if iOS ever presents it anyway", () => {
-    // A decorative hero has no state in which fullscreen is correct.
-    expect(source).toContain('addEventListener("webkitbeginfullscreen"');
-    expect(source).toContain("webkitExitFullscreen");
+  // G. No entry action can produce a gesture-initiated play().
+  it("G — playback is never started from a user gesture", () => {
+    for (const ev of ["pointerdown", "touchstart", "click", "keydown"]) {
+      expect(heroCode, `a ${ev} listener re-creates the bug`).not.toContain(`"${ev}"`);
+    }
+    // And no attribute-watching wake-up either.
+    expect(heroCode).not.toContain("MutationObserver");
+    expect(heroCode).not.toContain("data-age-verified");
+  });
+
+  // E. It stays a decorative, non-interactive, inline background.
+  it("E — inline, muted, looping, autoplaying, uncontrollable and untappable", () => {
+    expect(hero).toContain("autoPlay");
+    expect(hero).toContain("muted");
+    expect(hero).toContain("loop");
+    expect(hero).toContain("playsInline");
+    expect(hero).toContain('"webkit-playsinline": "true"');
+    expect(hero).toContain("controls={false}");
+    expect(hero).toContain("disablePictureInPicture");
+    expect(hero).toContain('aria-hidden="true"');
+    const rule = css.slice(css.indexOf(".vl2-hero-video"), css.indexOf(".vl2-hero-scrim"));
+    expect(rule).toMatch(/pointer-events:\s*none/);
+  });
+
+  // F. Nothing links to the asset.
+  it("F — the asset is a video source and nothing else", () => {
+    // One reference, as a src prop. Not an href, not a route.
+    expect(page).toContain('<HeroVideo className="vl2-hero-video" src="/videos/vanta-labs-hero.mp4" />');
+    expect(page).not.toMatch(/href="[^"]*\.mp4/);
+    expect(heroCode).not.toMatch(/href=/);
+    expect(heroCode).not.toMatch(/<a\b/);
+  });
+
+  // The failsafe, which is explicitly not the fix.
+  it("keeps a fullscreen failsafe, while not relying on it", () => {
+    expect(hero).toContain('addEventListener("webkitbeginfullscreen"');
+    expect(hero).toContain("webkitExitFullscreen");
   });
 });

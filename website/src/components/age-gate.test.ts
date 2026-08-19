@@ -169,12 +169,18 @@ describe("the hero vial is always visible", () => {
     expect(hero).toContain('aria-hidden="true"');
   });
 
-  it("keeps retrying playback so a deferred autoplay still starts", () => {
-    // iOS defers autoplay until a gesture; these are what make the vial start
-    // spinning on the visitor's first tap or scroll instead of staying still.
-    for (const ev of ["pointerdown", "touchstart", "click", "keydown", "scroll"]) {
-      expect(hero).toContain(`"${ev}"`);
+  // REVERSED DELIBERATELY. This used to REQUIRE gesture listeners, so that a
+  // deferred autoplay would start on the visitor's first tap. On an iPhone that
+  // is indistinguishable from the visitor asking to watch the video, and iOS
+  // answered it with the native fullscreen player. Playback now comes from the
+  // autoplay attribute alone.
+  it("never ties playback to a user gesture", () => {
+    for (const ev of ["pointerdown", "touchstart", "click", "keydown"]) {
+      expect(hero, `a ${ev} listener would make a tap look like a play request`)
+        .not.toContain(`"${ev}"`);
     }
+    // Returning to the foreground is not a gesture, and browsers pause
+    // background media, so this one recovery stays.
     expect(hero).toMatch(/visibilitychange/);
   });
 });

@@ -1,7 +1,24 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
+
+// ACCESS IS PUBLISHED, NEVER REACHED FOR.
+//
+// The gate knows nothing about the homepage, the hero, or any media. It answers
+// one question — has this visitor been let in — and anything that cares
+// subscribes. That direction matters: the gate previously reached out to wake
+// the hero video, which is how a tap on a checkbox ended up starting playback
+// and handing an iPhone its native fullscreen player.
+//
+// Nothing in the entry path may hold a video ref, call play(), or touch a media
+// API. Components that depend on access decide for themselves what to do.
+const AccessContext = createContext(false);
+
+/** True once the visitor has been let past the age gate, for this document. */
+export function useAccessGranted() {
+  return useContext(AccessContext);
+}
 
 // -----------------------------------------------------------------------------
 // AGE VERIFICATION IS NEVER REMEMBERED.
@@ -192,7 +209,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
   // visitors the gate is a fixed full-screen overlay on top of that content
   // until they confirm; body scroll is locked so they can't interact behind it.
   return (
-    <>
+    <AccessContext.Provider value={isVerified}>
       {children}
       {!isVerified ? (
       <div
@@ -339,6 +356,6 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
         </div>
       </div>
       ) : null}
-    </>
+    </AccessContext.Provider>
   );
 }

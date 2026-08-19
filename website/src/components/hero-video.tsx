@@ -1,171 +1,108 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useAccessGranted } from "@/components/age-gate";
 
 /**
- * Background hero video that tries as hard as the browser will allow to stay
- * live and looping, and never exposes a play/pause affordance.
+ * The homepage hero vial: a decorative, muted, looping background animation.
  *
- * The <video> is muted + inline + autoplay + loop, which is the combination
- * browsers require for gesture-free autoplay. On top of that we re-issue
- * play() on mount, once the media is ready, when the tab becomes visible
- * again, and on the first user interaction — so a blocked autoplay recovers
- * the moment it's allowed instead of parking behind a tap-to-play button.
+ * WHY THIS IS STRUCTURED THE WAY IT IS
  *
- * THE VIAL IS ALWAYS VISIBLE. This element used to keep itself transparent
- * until the "playing" event fired, to avoid a paused first frame with iOS's
- * play glyph stamped on it. That cure was worse than the disease: in an in-app
- * browser, on a weak signal, or any time the first frame had not decoded yet,
- * the hero was simply BLACK — no vial at all. The vial is the hero; an empty
- * black panel is not an acceptable fallback for it.
+ * On an iPhone — specifically inside the TikTok and Instagram in-app browsers —
+ * completing the age gate kept handing the visitor Apple's NATIVE FULLSCREEN
+ * VIDEO PLAYER: the vial alone on white chrome. Nothing ever navigated to the
+ * .mp4; the file is referenced once, as this component's src. iOS was simply
+ * deciding that the visitor had asked to watch a video.
  *
- * So the video paints whatever it has: a live loop when playback is allowed, a
- * still first frame when it is not. Either way a visitor sees the product. The
- * retry-on-gesture path below still runs, so a deferred autoplay starts moving
- * the moment the browser relents — which on iOS is the visitor's first tap or
- * scroll.
+ * It kept deciding that because the entry tap and this element were connected.
+ * Earlier attempts fought that connection with timing — defer play() a frame,
+ * check for a layout box, watch an attribute and start playback when it flips.
+ * Each passed in Chromium and failed on the device, because each still ended
+ * with "a tap happened, then this video started".
+ *
+ * So the connection is gone rather than managed:
+ *
+ *   * while the gate is up THERE IS NO VIDEO ELEMENT. Not hidden, not
+ *     display:none, not opacity zero — absent. There is nothing for a tap to
+ *     activate, nothing to promote to a compositing layer, and nothing for iOS
+ *     to hand a player for;
+ *   * the element mounts only after access is granted AND in a later task, so
+ *     its creation is not part of the entry gesture's work;
+ *   * nothing here calls play() in response to any user input. There are no
+ *     gesture listeners and no MutationObserver. Playback comes from the
+ *     `autoplay` attribute on a muted inline video, which browsers start on
+ *     their own and which iOS treats as decorative rather than requested.
+ *
+ * The gate is not aware this component exists. It publishes one boolean and
+ * this subscribes to it.
  */
 export function HeroVideo({ className, src }: { className?: string; src: string }) {
+  const granted = useAccessGranted();
+  const [settled, setSettled] = useState(false);
+
+  useEffect(() => {
+    if (!granted) return;
+    // A LATER TASK, deliberately. setTimeout schedules past the current task,
+    // so the element is created after the entry interaction has fully finished
+    // and the homepage has rendered — never as part of the tap that let the
+    // visitor in. This is sequencing, not a race: `granted` cannot go true
+    // before the visitor has actually entered.
+    const t = setTimeout(() => setSettled(true), 0);
+    return () => {
+      clearTimeout(t);
+      setSettled(false);
+    };
+  }, [granted]);
+
+  // Both conditions, so losing access unmounts the element on the same render
+  // rather than waiting for an effect to catch up.
+  if (!granted || !settled) return null;
+  return <HeroVideoElement className={className} src={src} />;
+}
+
+function HeroVideoElement({ className, src }: { className?: string; src: string }) {
   const ref = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     const video = ref.current;
     if (!video) return;
 
-    // iOS honors the muted *property* (not just the attribute) for autoplay.
+    // iOS honours the muted *property*, not only the attribute, when deciding
+    // whether autoplay is allowed without a gesture.
     video.muted = true;
     video.defaultMuted = true;
 
-    let cancelled = false;
-
-    // NOTHING PLAYS WHILE THE AGE GATE IS UP.
-    //
-    // This is not a nicety, it is the fix for a real bug. The listeners below
-    // are bound to `document`, so the FIRST TAP ANYWHERE counts as the gesture
-    // that unblocks autoplay — including a tap on an age-gate checkbox, which
-    // is the first thing anyone touches. Playback would start behind the gate.
-    //
-    // Behind the gate the storefront is `visibility: hidden`, which is enough
-    // in Chromium. It is NOT enough in WebKit: a PLAYING video is promoted to
-    // its own compositing layer, and on iOS that layer paints through an
-    // ancestor's visibility. So ticking a box made the vial appear over the
-    // gate — on an iPhone in an in-app browser, and nowhere else.
-    //
-    // Playback is therefore gated on the same attribute the CSS uses, and the
-    // observer below starts it the moment access is actually granted.
-    const gateIsUp = () =>
-      document.documentElement.getAttribute("data-age-verified") !== "true";
-
-    // PLAYBACK MUST NEVER START INSIDE THE ENTRY TAP, AND NEVER WITHOUT A BOX.
-    //
-    // Two iOS rules meet here, and getting either wrong opens the native
-    // fullscreen player — a standalone video on white chrome, which is what
-    // "it took me into the vial video" was:
-    //
-    //   1. play() called as the direct result of a user gesture reads as "the
-    //      user asked to watch this video", which iPhone answers with its own
-    //      player unless the element can play inline;
-    //   2. an element with no layout box CANNOT play inline. Behind the gate
-    //      this video is display:none, so at the instant the gate opens it has
-    //      no box yet.
-    //
-    // The entry tap satisfied both at once: tap -> state -> effect ->
-    // setAttribute -> observer -> play(), all in one gesture, on an element
-    // that was display:none a moment earlier. Hence fullscreen.
-    //
-    // So: wait for a real layout box, and let the gesture finish first. The
-    // video is muted, and muted autoplay needs no gesture at all — deferring
-    // costs nothing and is what keeps playback inline.
-    const startWhenReady = () => {
-      if (cancelled || gateIsUp()) return;
-      const box = video.getBoundingClientRect();
-      if (box.width < 1 || box.height < 1) {
-        // Not laid out yet. Try again next frame rather than playing blind.
-        requestAnimationFrame(startWhenReady);
-        return;
-      }
-      const p = video.play();
-      if (p && typeof p.catch === "function") p.catch(() => {});
-    };
-
-    // Two frames out: past the current gesture, and past the style/layout pass
-    // that gives the element its box.
-    const attempt = () => {
-      if (cancelled || gateIsUp()) return;
-      requestAnimationFrame(() => requestAnimationFrame(startWhenReady));
-    };
-
-    attempt();
-
-    // Entry is what starts the vial, not a stray tap on a checkbox.
-    const gateWatcher = new MutationObserver(() => {
-      if (gateIsUp()) {
-        video.pause();
-      } else {
-        attempt();
-      }
-    });
-    gateWatcher.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["data-age-verified"],
-    });
-
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") attempt();
-    };
-
-    // First user gesture unblocks autoplay everywhere it was deferred.
-    const onGesture = () => {
-      attempt();
-      removeGestureListeners();
-    };
-    const gestureEvents: (keyof DocumentEventMap)[] = [
-      "pointerdown",
-      "touchstart",
-      "click",
-      "keydown",
-      "scroll",
-    ];
-    const removeGestureListeners = () => {
-      for (const ev of gestureEvents) {
-        document.removeEventListener(ev, onGesture);
-      }
-    };
-
-    // A pause that nobody asked for means the browser deferred playback, so
-    // ask again. Nothing here controls visibility any more — the element is
-    // always on screen.
-    // BACKSTOP, not the fix. This hero is decorative and there is no state in
-    // which a fullscreen player is correct, so if iOS ever begins presenting
-    // one anyway, back out immediately. The real repair is above — never start
-    // playback inside a gesture, never start it without a layout box.
+    // FAILSAFE, NOT THE FIX. A decorative background has no state in which a
+    // fullscreen player is correct, so if iOS ever begins presenting one, leave
+    // it immediately and carry on inline. The architecture above is what stops
+    // it being asked for in the first place.
     const refuseFullscreen = () => {
       const el = video as HTMLVideoElement & { webkitExitFullscreen?: () => void };
       try {
         el.webkitExitFullscreen?.();
       } catch {
-        /* not presenting, or the browser does not offer the call */
+        /* not presenting, or the call is unavailable */
       }
     };
     video.addEventListener("webkitbeginfullscreen", refuseFullscreen);
 
-    video.addEventListener("loadedmetadata", attempt);
-    video.addEventListener("canplay", attempt);
-    video.addEventListener("pause", attempt);
+    // The ONLY recovery, and it is not a user gesture: a tab returning to the
+    // foreground. Browsers pause background media, and without this the vial
+    // would stay frozen after the visitor switches away and back. Playback
+    // started this way is programmatic, which is exactly what iOS keeps inline.
+    //
+    // There are deliberately NO pointerdown/touchstart/click listeners. Those
+    // are what made a tap look like a request to watch the video.
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      const p = video.play();
+      if (p && typeof p.catch === "function") p.catch(() => {});
+    };
     document.addEventListener("visibilitychange", onVisibility);
-    for (const ev of gestureEvents) {
-      document.addEventListener(ev, onGesture, { passive: true });
-    }
 
     return () => {
-      cancelled = true;
-      gateWatcher.disconnect();
       video.removeEventListener("webkitbeginfullscreen", refuseFullscreen);
-      video.removeEventListener("loadedmetadata", attempt);
-      video.removeEventListener("canplay", attempt);
-      video.removeEventListener("pause", attempt);
       document.removeEventListener("visibilitychange", onVisibility);
-      removeGestureListeners();
     };
   }, []);
 
@@ -174,15 +111,16 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
       ref={ref}
       className={className}
       src={src}
+      // autoplay + muted + playsinline is the combination browsers start on
+      // their own, with no script and no gesture involved.
       autoPlay
       muted
       loop
       playsInline
-      /* The modern attribute is `playsinline`, which React writes from
-         playsInline above. Older WebKit — and the WebView builds some apps
-         still ship — only recognise the webkit-prefixed one, and without it
-         they hand playback to the native fullscreen player. Both are given, so
-         whichever the browser understands keeps the vial inside the hero. */
+      /* React writes `playsinline` from playsInline. Older WebKit — including
+         the WebView builds some apps still ship — only honours the prefixed
+         form, and without it hands playback to the native player. Both are
+         given so whichever the browser understands keeps the vial in the hero. */
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       {...({ "webkit-playsinline": "true", "x5-playsinline": "true" } as any)}
       /* METADATA, NOT AUTO.
@@ -191,11 +129,7 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
          copy for bandwidth -- on a phone that is roughly ten seconds of black
          hero on a normal 4G connection. "metadata" fetches only the headers;
          autoplay still starts and the file streams progressively, so the
-         animation is unchanged while the critical render path is not starved.
-
-         Worth adding a poster frame too (a single still from the video):
-         without one there is nothing to paint until the first frame decodes.
-         That needs ffmpeg, which is not available in this environment. */
+         animation is unchanged while the critical render path is not starved. */
       preload="metadata"
       controls={false}
       disablePictureInPicture
