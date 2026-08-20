@@ -295,3 +295,31 @@ describe("the entry gate and the hero video are separate systems", () => {
     expect(hero).toContain("webkitExitFullscreen");
   });
 });
+
+// ---------------------------------------------------------------------------
+// A media file is not a landing page.
+//
+// Opening a .mp4 as a page gives the browser's bare media viewer: the clip on a
+// blank white background, no site, no gate. Reported only from TikTok and the
+// ad platforms — which is where a destination link is configured, and exactly
+// what a link pointing at the hero file (or an old redirect resolving to it)
+// produces every time, while typing the domain into Safari looks perfect.
+// ---------------------------------------------------------------------------
+describe("an ad link cannot land someone inside a media file", () => {
+  const mw = read("middleware.ts");
+
+  it("redirects a top-level navigation to a media file to the home page", () => {
+    expect(mw).toMatch(/const MEDIA_EXTENSIONS = \/\\\.\(mp4\|webm\|mov/);
+    expect(mw).toMatch(/if \(MEDIA_EXTENSIONS\.test\(pathname\) && isTopLevelNavigation\(request\)\)/);
+    expect(mw).toMatch(/home\.pathname = "\/";/);
+  });
+
+  it("only redirects real page loads, never the hero fetching its source", () => {
+    // A <video> requests its source with Sec-Fetch-Dest: video, and range
+    // requests are a player pulling bytes. Redirecting either would break the
+    // animation this whole exercise exists to protect.
+    expect(mw).toMatch(/sec-fetch-dest"\) === "document"/);
+    expect(mw).toMatch(/!request\.headers\.get\("range"\)/);
+    expect(mw).toMatch(/request\.method === "GET"/);
+  });
+});

@@ -242,8 +242,47 @@ async function hasValidAdminSession(request: NextRequest) {
   return isValidAdminSessionToken(token);
 }
 
+// A MEDIA FILE IS NOT A LANDING PAGE.
+//
+// Opening a .mp4 as a page gives you the browser's bare media viewer: the clip
+// alone on a blank white background, no site, no header, no age gate. That is
+// exactly what was reported from TikTok and the ad platforms — and only from
+// there, because that is where the destination link is configured. A link that
+// points at the hero file, or an older redirect that still resolves to it,
+// produces this every time while typing the domain into Safari looks perfect.
+//
+// This makes the destination survive being wrong. A top-level navigation to a
+// media file is sent to the home page instead, so an ad click lands on the
+// storefront whatever the campaign URL says.
+//
+// It does NOT interfere with the hero playing. A <video> fetches its source
+// with Sec-Fetch-Dest: video (or audio/empty for a range request), never
+// "document" — only an address-bar-style navigation is redirected. The header
+// is sent by every browser that matters; where it is absent nothing changes,
+// so the media still loads.
+const MEDIA_EXTENSIONS = /\.(mp4|webm|mov|m4v|ogv|avi|mkv|mp3|wav|m4a)$/i;
+
+function isTopLevelNavigation(request: NextRequest) {
+  return (
+    request.method === "GET" &&
+    request.headers.get("sec-fetch-dest") === "document" &&
+    // A range request is a media player fetching bytes, never a page load.
+    !request.headers.get("range")
+  );
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
+
+  if (MEDIA_EXTENSIONS.test(pathname) && isTopLevelNavigation(request)) {
+    const home = request.nextUrl.clone();
+    home.pathname = "/";
+    home.search = "";
+    // 307, not 308: this is a routing correction, not a permanent statement
+    // about the asset's address, and it must not be cached by intermediaries
+    // in a way that would follow the file itself around.
+    return applySecurityHeaders(NextResponse.redirect(home, 307));
+  }
 
   // CSRF defense-in-depth: reject cross-site state-changing requests to the
   // cookie-authenticated app APIs. Webhooks (/api/webhooks, HMAC-signed) and
