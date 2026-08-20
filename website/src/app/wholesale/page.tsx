@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import Link from "next/link";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { SiteFooter } from "@/components/site-footer";
@@ -39,11 +40,12 @@ import Image from "next/image";
 const BULK_IMAGE = "/images/wholesale-bulk.png";
 const hasBulkImage = existsSync(join(process.cwd(), "public", "images", "wholesale-bulk.png"));
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/wholesale",
   title: "Wholesale",
   description:
     "Bulk and wholesale supply of research-use-only materials from Vanta Labs. Submit a request and we will review your volume and requirements.",
-};
+});
 
 const BENEFITS = [
   { n: "01", title: "Volume pricing", body: "Priced around the quantity and cadence you actually order." },

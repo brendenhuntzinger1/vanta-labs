@@ -665,7 +665,13 @@ export function CoaLibraryPageClient({ snapshot }: { snapshot: CoaLibrarySnapsho
             </section>
 
             {/* ——— Archive ——————————————————————————————————————————— */}
-            <section className="mx-auto max-w-[1180px] px-5 pb-24 pt-10 sm:px-6 sm:pt-12 lg:px-10">
+            <section
+              className="mx-auto max-w-[1180px] px-5 pb-24 pt-10 sm:px-6 sm:pt-12 lg:px-10"
+              aria-labelledby="coa-archive-heading"
+            >
+              {/* Each record card titles itself with an h3; this names the
+                  section they sit in so the outline does not jump h1 → h3. */}
+              <h2 id="coa-archive-heading" className="sr-only">Certificate archive</h2>
               {visibleProducts.length > 0 ? (
                 <div className="grid gap-4 sm:grid-cols-2 sm:gap-5 lg:grid-cols-3 lg:gap-6">
                   {visibleProducts.map((product) => (

@@ -314,7 +314,11 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
             with an empty fourth slot. Column count now follows the number of
             tiers and the track is centred, so three tiers land in the middle of
             the screen and four still fill the row. */}
+        {/* Each tier card titles itself with an h3, so the plans need a section
+            heading of their own or the outline jumps straight from the page h1. */}
+        <h2 id="membership-plans-heading" className="sr-only">Membership plans</h2>
         <div
+          aria-labelledby="membership-plans-heading"
           className={`mx-auto mt-8 grid grid-cols-1 justify-center gap-4 pt-4 sm:grid-cols-2 ${
             paidTiers.length === 3 ? "lg:max-w-5xl lg:grid-cols-3" : "lg:grid-cols-4"
           }`}

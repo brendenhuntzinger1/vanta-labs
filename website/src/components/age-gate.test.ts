@@ -283,8 +283,28 @@ describe("the gate survives an app's own toolbars", () => {
       .split("\n")
       .filter((line) => !line.trim().startsWith("//"))
       .join("\n");
-    for (const forbidden of ["router.back(", "history.back(", "document.referrer", "searchParams"]) {
+    for (const forbidden of ["router.back(", "history.back(", "searchParams"]) {
       expect(code, `the destination must not be derived from ${forbidden}`).not.toContain(forbidden);
+    }
+
+    // document.referrer is a special case. Reading it to CLASSIFY a visitor as
+    // social traffic is fine and is what cameFromSocial does. Using it to build
+    // a destination would not be: the referrer is attacker-controlled, so a
+    // path derived from it is an open redirect. Allow the read, and require the
+    // destination to remain one of the two hard-coded constants.
+    // Bound the slice to this function alone: it is declared at the top level,
+    // so the next line that is exactly "}" closes it.
+    const fnStart = code.indexOf("function destinationAfterGate");
+    const after = code.slice(fnStart);
+    const destinationFn = after.slice(0, after.indexOf("\n}") + 2);
+    expect(destinationFn, "the destination function must not read the referrer")
+      .not.toContain("document.referrer");
+    const returnedPaths = [...destinationFn.matchAll(/return ([^;]+);/g)].map((m) => m[1].trim());
+    for (const returned of returnedPaths) {
+      expect(
+        ["POST_GATE_DESTINATION", "null", "`${SOCIAL_DESTINATION}${query}`"],
+        `destinationAfterGate returned an unexpected expression: ${returned}`,
+      ).toContain(returned);
     }
   });
 

@@ -1,14 +1,17 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import Link from "next/link";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { getAllArticles } from "@/lib/articles";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/research",
   title: "Research Library",
-  description: "Educational guides on research-use-only materials: reading a COA, purity and third-party testing, storage, and more.",
-};
+  description:
+    "Educational guides on research-use-only materials: reading a COA, purity and third-party testing, storage, and more.",
+});
 
 export default async function ResearchLibraryPage() {
   const articles = await getAllArticles();
