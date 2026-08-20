@@ -162,11 +162,11 @@ describe("the hero vial is always visible", () => {
     expect(css).not.toMatch(/\.vl2-hero-video\s*\{[^}]*opacity:\s*0;/);
   });
 
-  it("still refuses taps, so it cannot open the native fullscreen player", () => {
-    expect(css).toMatch(/\.vl2-hero-video\s*\{[^}]*pointer-events:\s*none/);
+  it("still refuses taps, and is a canvas with no native player", () => {
+    const rule = css.slice(css.indexOf(".vl2-hero-video"), css.indexOf(".vl2-hero-scrim"));
+    expect(rule).toMatch(/pointer-events:\s*none/);
+    expect(hero).toContain("<canvas");
     expect(hero).toContain("video.disablePictureInPicture = true;");
-    expect(hero).toContain('video.setAttribute("playsinline", "")');
-    expect(hero).toContain('video.setAttribute("aria-hidden", "true")');
   });
 
   // REVERSED DELIBERATELY. This used to REQUIRE gesture listeners, so that a

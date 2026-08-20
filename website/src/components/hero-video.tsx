@@ -6,35 +6,38 @@ import { useAccessGranted } from "@/components/age-gate";
 /**
  * The homepage hero vial: a decorative, muted, looping background animation.
  *
- * WHY THIS IS STRUCTURED THE WAY IT IS
+ * THERE IS NO <video> ELEMENT ON THIS PAGE. The vial is painted into a
+ * <canvas>, frame by frame, from a video that is never attached to the
+ * document.
  *
- * On an iPhone — specifically inside the TikTok and Instagram in-app browsers —
- * completing the age gate kept handing the visitor Apple's NATIVE FULLSCREEN
- * VIDEO PLAYER: the vial alone on white chrome. Nothing ever navigated to the
- * .mp4; the file is referenced once, as this component's src. iOS was simply
- * deciding that the visitor had asked to watch a video.
+ * WHY IT HAD TO GO THIS FAR
  *
- * It kept deciding that because the entry tap and this element were connected.
- * Earlier attempts fought that connection with timing — defer play() a frame,
- * check for a layout box, watch an attribute and start playback when it flips.
- * Each passed in Chromium and failed on the device, because each still ended
- * with "a tap happened, then this video started".
+ * On an iPhone, inside the TikTok and Instagram in-app browsers, entering the
+ * site kept handing the visitor Apple's own fullscreen player: the vial alone
+ * on white. Nothing navigated to the file — it is referenced once, here, as a
+ * source. iOS was deciding the visitor had asked to watch a video, and taking
+ * the screen.
  *
- * So the connection is gone rather than managed:
+ * Four rounds of fixes each removed one way it could reach that decision:
+ * playback deferred out of the entry gesture, the element unmounted while the
+ * gate is up, muted and playsinline set before the source rather than after.
+ * Every one passed on desktop and failed on the phone, because on iOS a
+ * <video> is not really a page element — it is a request for the system player
+ * that the browser may honour whenever it likes.
  *
- *   * while the gate is up THERE IS NO VIDEO ELEMENT. Not hidden, not
- *     display:none, not opacity zero — absent. There is nothing for a tap to
- *     activate, nothing to promote to a compositing layer, and nothing for iOS
- *     to hand a player for;
- *   * the element mounts only after access is granted AND in a later task, so
- *     its creation is not part of the entry gesture's work;
- *   * nothing here calls play() in response to any user input. There are no
- *     gesture listeners and no MutationObserver. Playback comes from the
- *     `autoplay` attribute on a muted inline video, which browsers start on
- *     their own and which iOS treats as decorative rather than requested.
+ * A <canvas> is not. It has no player, no fullscreen affordance, no native UI
+ * and no privileged behaviour: it is a rectangle of pixels. Painting the frames
+ * ourselves removes the entire class of failure rather than another instance of
+ * it. The decoder still does the work; iOS simply has nothing to take over.
  *
- * The gate is not aware this component exists. It publishes one boolean and
- * this subscribes to it.
+ * The video is created detached, muted and inline, played programmatically, and
+ * never appended anywhere. If it cannot decode — Low Power Mode, a refused
+ * autoplay, a stalled network — the canvas stays empty and the hero shows the
+ * gradient it already paints, which is the same outcome as before and never a
+ * broken player.
+ *
+ * The gate knows nothing about any of this. It publishes one boolean; this
+ * subscribes to it, and mounts only after entry.
  */
 export function HeroVideo({ className, src }: { className?: string; src: string }) {
   const granted = useAccessGranted();
@@ -42,11 +45,8 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
 
   useEffect(() => {
     if (!granted) return;
-    // A LATER TASK, deliberately. setTimeout schedules past the current task,
-    // so the element is created after the entry interaction has fully finished
-    // and the homepage has rendered — never as part of the tap that let the
-    // visitor in. This is sequencing, not a race: `granted` cannot go true
-    // before the visitor has actually entered.
+    // A LATER TASK, deliberately: past the entry interaction, so nothing here
+    // is part of the tap that let the visitor in.
     const t = setTimeout(() => setSettled(true), 0);
     return () => {
       clearTimeout(t);
@@ -54,113 +54,120 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
     };
   }, [granted]);
 
-  // Both conditions, so losing access unmounts the element on the same render
-  // rather than waiting for an effect to catch up.
   if (!granted || !settled) return null;
-  return <HeroVideoElement className={className} src={src} />;
+  return <HeroVialCanvas className={className} src={src} />;
 }
 
-function HeroVideoElement({ className, src }: { className?: string; src: string }) {
-  const hostRef = useRef<HTMLDivElement | null>(null);
+function HeroVialCanvas({ className, src }: { className?: string; src: string }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // THE ELEMENT IS BUILT BY HAND, AND THE ORDER IS THE WHOLE POINT.
-  //
-  // Written as JSX, React applied the props in the order they appeared, and the
-  // browser received:
-  //
-  //   <video class src="…mp4" autoplay loop playsinline … muted>
-  //
-  // src SECOND. Assigning src is the moment iOS decides whether a video may
-  // play inline, and at that instant this one was neither muted nor marked
-  // playsinline — so iOS classified it as a video wanting a player, and when
-  // autoplay started it took the screen. On a real iPhone that is the vial
-  // alone on white, which is exactly what was reported; every desktop engine
-  // ignores the ordering entirely and looks perfect.
-  //
-  // Building the element here makes the order explicit and guaranteed: muted
-  // and playsinline first, while the element is still detached and inert, and
-  // the source LAST, once it is already eligible to play inline.
   useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const context = canvas.getContext("2d", { alpha: false });
+    if (!context) return;
 
+    // DETACHED. This element is never appended to the document, so it has no
+    // layout, no hit-testing, no compositing layer of its own and nothing for
+    // the browser to present a player for.
     const video = document.createElement("video");
 
-    // 1. INLINE ELIGIBILITY, before anything can trigger loading.
-    //    Both the property and the attribute: iOS consults the property for the
-    //    autoplay decision, and the attribute is what survives in the markup.
+    // Inline eligibility first, source last — the order still matters for
+    // whether iOS will decode without demanding its own UI.
     video.muted = true;
     video.defaultMuted = true;
     video.setAttribute("muted", "");
     video.setAttribute("playsinline", "");
-    // Older WebKit, and the WebView builds some apps ship, only honour the
-    // prefixed spellings.
     video.setAttribute("webkit-playsinline", "true");
     video.setAttribute("x5-playsinline", "true");
-
-    // 2. Everything else about how it behaves.
     video.loop = true;
     video.controls = false;
     video.disablePictureInPicture = true;
-    video.setAttribute("disableremoteplayback", "");
-    video.tabIndex = -1;
-    video.setAttribute("aria-hidden", "true");
-    // The hero file is ~6.2 MB. "auto" buffers aggressively from first paint,
-    // competing with the CSS, fonts and hero copy; "metadata" fetches the
-    // headers and lets autoplay stream the rest progressively.
-    video.preload = "metadata";
-    if (className) video.className = className;
+    video.preload = "auto";
+    video.crossOrigin = "anonymous";
 
-    // FAILSAFE, NOT THE FIX. A decorative background has no state in which a
-    // fullscreen player is correct, so if iOS ever begins presenting one, leave
-    // it immediately and carry on inline. The architecture above is what stops
-    // it being asked for in the first place.
-    const refuseFullscreen = () => {
-      const el = video as HTMLVideoElement & { webkitExitFullscreen?: () => void };
-      try {
-        el.webkitExitFullscreen?.();
-      } catch {
-        /* not presenting, or the call is unavailable */
+    let raf = 0;
+    let stopped = false;
+
+    // Match the canvas's backing store to the box it actually occupies, so the
+    // vial is sharp on a 3x phone screen without painting more pixels than the
+    // display can show.
+    const resize = () => {
+      const rect = canvas.getBoundingClientRect();
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = Math.max(1, Math.round(rect.width * dpr));
+      const h = Math.max(1, Math.round(rect.height * dpr));
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
       }
     };
-    video.addEventListener("webkitbeginfullscreen", refuseFullscreen);
 
-    // The ONLY recovery, and it is not a user gesture: a tab returning to the
-    // foreground. Browsers pause background media, and without this the vial
-    // would stay frozen after the visitor switches away and back. Playback
-    // started this way is programmatic, which is exactly what iOS keeps inline.
-    //
-    // There are deliberately NO pointerdown/touchstart/click listeners. Those
-    // are what made a tap look like a request to watch the video.
-    const onVisibility = () => {
-      if (document.visibilityState !== "visible") return;
+    // object-fit: cover, by hand — the canvas is the hero's full area and the
+    // clip must fill it without distorting.
+    const paint = () => {
+      if (stopped) return;
+      raf = requestAnimationFrame(paint);
+      if (video.readyState < 2 || !video.videoWidth) return;
+      resize();
+      const cw = canvas.width;
+      const ch = canvas.height;
+      const scale = Math.max(cw / video.videoWidth, ch / video.videoHeight);
+      const dw = video.videoWidth * scale;
+      const dh = video.videoHeight * scale;
+      context.drawImage(video, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+    };
+
+    const start = () => {
       const p = video.play();
       if (p && typeof p.catch === "function") p.catch(() => {});
     };
+
+    video.addEventListener("loadeddata", start);
+    video.addEventListener("canplay", start);
+    // A pause nobody asked for means the browser deferred playback; ask again.
+    video.addEventListener("pause", start);
+
+    // Returning to the foreground, which is not a user gesture. Browsers pause
+    // background media, and without this the vial would stay frozen.
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") start();
+    };
     document.addEventListener("visibilitychange", onVisibility);
 
-    // 3. THE SOURCE, LAST. By the time loading can begin the element is muted
-    //    and inline-eligible, so iOS never classifies it as media the visitor
-    //    asked to watch. autoplay is set here too, immediately before src, so
-    //    nothing can start before the flags above are in place.
-    video.autoplay = true;
-    video.setAttribute("autoplay", "");
     video.src = src;
-    host.appendChild(video);
+    start();
+    // Size the backing store immediately rather than waiting for the first
+    // decoded frame, so the very first painted frame is already sharp and the
+    // canvas never briefly holds the 300x150 default.
+    resize();
+    window.addEventListener("resize", resize);
+    raf = requestAnimationFrame(paint);
 
     return () => {
-      video.removeEventListener("webkitbeginfullscreen", refuseFullscreen);
+      stopped = true;
+      cancelAnimationFrame(raf);
+      window.removeEventListener("resize", resize);
       document.removeEventListener("visibilitychange", onVisibility);
-      // Stop the download and tear the element down; leaving a detached video
-      // loading is a real cost on a phone.
+      video.removeEventListener("loadeddata", start);
+      video.removeEventListener("canplay", start);
+      video.removeEventListener("pause", start);
+      // Stop the download; a detached element still streaming is a real cost
+      // on a phone.
       video.pause();
       video.removeAttribute("src");
       video.load();
-      video.remove();
     };
-  }, [src, className]);
+  }, [src]);
 
-  // The element is created above and appended here. This wrapper carries no
-  // styling of its own -- the class goes on the video, exactly as before.
-  return <div ref={hostRef} />;
+  return (
+    <canvas
+      ref={canvasRef}
+      className={className}
+      aria-hidden="true"
+      // Decorative: never focusable, never tappable. The CSS already sets
+      // pointer-events: none; this is the same statement in the markup.
+      tabIndex={-1}
+    />
+  );
 }

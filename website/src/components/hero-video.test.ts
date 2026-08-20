@@ -33,31 +33,27 @@ describe("the hero video can never present itself as a broken embed", () => {
     expect(source).not.toMatch(/style=\{\{\s*opacity/);
   });
 
-  it("sets muted and playsinline BEFORE the source, which is the whole fix", () => {
-    // Assigning src is when iOS decides whether a video may play inline. Written
-    // as JSX, React applied src second — before muted and playsinline — so iOS
-    // classified the hero as media the visitor wanted to watch and took the
-    // screen with its own player. Order is explicit now, so this checks it.
+  it("puts NO video element on the page at all", () => {
+    // The definitive property. On iOS a <video> is not really a page element —
+    // it is a request for the system player, which the browser may honour
+    // whenever it likes. Four rounds of fixes each removed one route to that
+    // decision and each still failed on a phone. A <canvas> has no player, no
+    // fullscreen affordance and no native UI; it is a rectangle of pixels.
+    expect(source).toContain("<canvas");
+    expect(source).toContain('document.createElement("video")');
+    // The video is created but NEVER attached, so nothing can present it.
+    expect(source).not.toContain("appendChild");
+    expect(source).toContain("context.drawImage(video");
+  });
+
+  it("still sets muted and inline before the source on the decoder", () => {
     const inlineAt = source.indexOf('video.setAttribute("playsinline"');
     const mutedAt = source.indexOf("video.muted = true;");
     const srcAt = source.indexOf("video.src = src;");
-    const appendAt = source.indexOf("host.appendChild(video);");
     expect(mutedAt).toBeGreaterThan(-1);
     expect(inlineAt).toBeGreaterThan(-1);
-    expect(srcAt).toBeGreaterThan(-1);
     expect(mutedAt, "muted must be set before the source").toBeLessThan(srcAt);
     expect(inlineAt, "playsinline must be set before the source").toBeLessThan(srcAt);
-    expect(srcAt, "the source must be assigned before the element is inserted").toBeLessThan(appendAt);
-    // Built by hand precisely so the order cannot be reshuffled by JSX.
-    expect(source).toContain('document.createElement("video")');
-    // Code only: the comment above the fix quotes the old broken markup as an
-    // illustration, and that is not a JSX element.
-    const codeOnly = source
-      .replace(/\/\*[\s\S]*?\*\//g, "")
-      .split("\n")
-      .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
-      .join("\n");
-    expect(codeOnly, "the element must be built by hand, not as JSX").not.toMatch(/<video\b/);
   });
 
   it("never listens for a user gesture in order to start playing", () => {
@@ -68,7 +64,10 @@ describe("the hero video can never present itself as a broken embed", () => {
         .not.toContain(`"${ev}"`);
     }
     // Playback comes from the attribute, not from script.
-    expect(source).toContain('video.setAttribute("autoplay", "")');
+    // A detached element gets no autoplay attribute — playback is started
+    // programmatically, which is never a gesture and never a watch request.
+    expect(source).toContain("const start = () => {");
+    expect(source).toContain("video.play()");
     expect(source).toContain("video.muted = true;");
   });
 
@@ -294,14 +293,12 @@ describe("the entry gate and the hero video are separate systems", () => {
   });
 
   // E. It stays a decorative, non-interactive, inline background.
-  it("E — inline, muted, looping, autoplaying, uncontrollable and untappable", () => {
-    expect(heroCode).toContain('video.setAttribute("playsinline", "")');
-    expect(heroCode).toContain('video.setAttribute("webkit-playsinline", "true")');
+  it("E — decorative: muted, looping, uncontrollable, untappable", () => {
     expect(heroCode).toContain("video.muted = true;");
     expect(heroCode).toContain("video.loop = true;");
     expect(heroCode).toContain("video.controls = false;");
     expect(heroCode).toContain("video.disablePictureInPicture = true;");
-    expect(heroCode).toContain('video.setAttribute("aria-hidden", "true")');
+    expect(heroCode).toContain('aria-hidden="true"');
     const rule = css.slice(css.indexOf(".vl2-hero-video"), css.indexOf(".vl2-hero-scrim"));
     expect(rule).toMatch(/pointer-events:\s*none/);
   });
@@ -316,9 +313,11 @@ describe("the entry gate and the hero video are separate systems", () => {
   });
 
   // The failsafe, which is explicitly not the fix.
-  it("keeps a fullscreen failsafe, while not relying on it", () => {
-    expect(hero).toContain('addEventListener("webkitbeginfullscreen"');
-    expect(hero).toContain("webkitExitFullscreen");
+  it("needs no fullscreen failsafe, because there is nothing to go fullscreen", () => {
+    // The previous build carried a webkitbeginfullscreen handler that tried to
+    // back out of the player. It is gone with the element it guarded.
+    expect(heroCode).not.toContain("webkitExitFullscreen");
+    expect(heroCode).not.toContain("webkitbeginfullscreen");
   });
 });
 
