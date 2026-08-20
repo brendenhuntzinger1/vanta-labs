@@ -1489,22 +1489,31 @@ body[data-cookie-banner="true"] .vl-bottom-bar {
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.015));
   /* SEPARATION AT REST, NOT ON HOVER.
-     Against a near-black page these cards sat almost flush with the
-     background — a hairline and a shadow tucked 22px up, so the grid read as a
-     flat sheet rather than a set of objects. Most of this store's traffic is on
-     a phone and can never hover, so the finished look has to be the resting
-     one.
+     Most of this store's traffic is on a phone and can never hover, so the
+     finished look has to be the resting one.
 
-     Three layers, each doing one job: the existing inset highlight along the
-     top edge; a tight contact shadow that seats the card on the page; and one
-     soft ambient pass for depth. The warm rim is held at 0.05 alpha —
-     deliberately below the point where it reads as a gold outline. It should
-     register as the card having an edge, not as a glow anyone can name. */
+     The thing that matters here: ON A NEAR-BLACK PAGE, A BLACK SHADOW IS
+     INVISIBLE. An earlier version of this stacked three dark layers and a warm
+     rim at 0.05 alpha, and the result was no perceptible glow at all — dark on
+     dark separates nothing, and 5% gold over #0b0b0b is below the threshold of
+     sight. Separation on a dark ground has to come from LIGHT.
+
+     So the warm light does the work and the dark is kept only for contact:
+       1. inset highlight along the top edge — the card catches light;
+       2. a tight 2px contact shadow that seats it on the page;
+       3. a warm rim at 0.16 — reads as an illuminated edge, not an outline;
+       4. a close warm halo, tight radius so it hugs the card;
+       5. one wider, fainter warm pass for the diffused bloom.
+
+     Total warm alpha stays under 0.30 across all layers and no blur exceeds
+     34px, which keeps it the kind of glow you feel rather than name — and
+     keeps it cheap enough for a WebView to composite. */
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.04) inset,
-    0 1px 2px rgba(0, 0, 0, 0.45),
-    0 14px 34px -20px rgba(0, 0, 0, 0.85),
-    0 0 0 1px rgba(199, 174, 94, 0.05);
+    0 1px 0 rgba(255, 255, 255, 0.06) inset,
+    0 1px 2px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(199, 174, 94, 0.16),
+    0 2px 14px -6px rgba(199, 174, 94, 0.11),
+    0 8px 34px -14px rgba(199, 174, 94, 0.07);
   transition: transform var(--duration-base) var(--ease-out-premium), border-color var(--duration-base) var(--ease-out-premium), box-shadow var(--duration-base) var(--ease-out-premium);
 }
 
@@ -1519,12 +1528,16 @@ body[data-cookie-banner="true"] .vl-bottom-bar {
   /* The vial photography is white on black -- it already supplies the
      contrast. A halo around the card competes with it. */
   transform: translateY(-3px);
-  border-color: rgba(199, 174, 94, 0.22);
+  border-color: rgba(199, 174, 94, 0.3);
+  /* The same five layers, warmed by roughly half a step. The resting state is
+     already the finished look, so hover only has to confirm the card is live —
+     if the difference were large, the phone view would be the poor relation. */
   box-shadow:
-    0 1px 0 rgba(255, 255, 255, 0.05) inset,
-    0 2px 4px rgba(0, 0, 0, 0.45),
-    0 26px 52px -28px rgba(0, 0, 0, 0.9),
-    0 0 0 1px rgba(199, 174, 94, 0.12);
+    0 1px 0 rgba(255, 255, 255, 0.08) inset,
+    0 2px 4px rgba(0, 0, 0, 0.5),
+    0 0 0 1px rgba(199, 174, 94, 0.24),
+    0 4px 18px -6px rgba(199, 174, 94, 0.16),
+    0 12px 42px -16px rgba(199, 174, 94, 0.1);
 }
 
 /* The vial photography is the strongest asset on the page. A slow, small scale
