@@ -291,14 +291,34 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
           aria-modal="true"
           aria-labelledby="age-gate-title"
           tabIndex={-1}
-          className="vl2-fade-in vl-focus-ring relative w-full max-w-lg rounded-[1.75rem] border border-white/10 bg-[rgba(12,12,12,0.72)] p-6 text-center shadow-[0_28px_80px_rgba(0,0,0,0.6)] backdrop-blur-2xl sm:rounded-[2rem] sm:p-9"
+          /* WIDTH IS PER-DEVICE, NOT ONE PHONE COLUMN FOR EVERYTHING.
+             This was max-w-lg at every size: a 512px column, which is right on
+             a phone and is 26% of a 2000px laptop screen — the gate read as a
+             phone layout letterboxed in black. Worse, stacking four
+             attestations made the card 1052px tall, taller than a MacBook Air
+             (900), a 14" (982) and a 1280x800 laptop, so it overflowed off the
+             TOP of the screen and cut the wordmark in half.
+             Widening at lg and pairing the attestations two-up fixes both at
+             once: the card fills the screen properly AND gets short enough to
+             fit without scrolling. */
+          className="vl2-fade-in vl-focus-ring relative w-full max-w-lg rounded-[1.75rem] border border-white/10 bg-[rgba(12,12,12,0.72)] p-6 text-center shadow-[0_28px_80px_rgba(0,0,0,0.6)] backdrop-blur-2xl sm:rounded-[2rem] sm:p-9 lg:max-w-3xl lg:p-8 xl:max-w-4xl"
         >
           {/* Monogram */}
-          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full border border-[color:var(--accent-gold)]/25 bg-gradient-to-br from-[color:var(--accent-gold)]/[0.12] to-white/[0.02] shadow-[0_0_28px_rgba(199,174,94,0.14)]">
+          <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full lg:mx-0 border border-[color:var(--accent-gold)]/25 bg-gradient-to-br from-[color:var(--accent-gold)]/[0.12] to-white/[0.02] shadow-[0_0_28px_rgba(199,174,94,0.14)]">
             <span className="vl2-serif text-xl tracking-[0.12em] text-white">VL</span>
           </div>
 
-          <p className="vl2-eyebrow mt-6 flex items-center justify-center gap-2 text-[color:var(--accent-gold)]/70">
+          {/* TWO COLUMNS ON A LAPTOP, ONE ON A PHONE.
+              A single column of brand-then-form is 921px tall even paired
+              two-up, which still overflows a MacBook Air and a 1280x800
+              laptop. Setting the brand beside the form instead of above it
+              takes the tallest screen requirement to roughly 600px, so the
+              whole gate fits without scrolling on every laptop measured.
+              Below lg this is not a grid at all and the DOM order is
+              unchanged, so the phone layout behaves exactly as before. */}
+          <div className="lg:grid lg:grid-cols-[minmax(0,0.85fr)_minmax(0,1fr)] lg:items-center lg:gap-9 lg:text-left">
+          <div>
+          <p className="vl2-eyebrow mt-6 flex items-center justify-center gap-2 text-[color:var(--accent-gold)]/70 lg:mt-0 lg:justify-start">
             <span className="h-px w-6 bg-[color:var(--accent-gold)]/30" />
             Restricted Access · 21+
             <span className="h-px w-6 bg-[color:var(--accent-gold)]/30" />
@@ -308,7 +328,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
           <p className="mt-3 text-sm text-white/55 sm:text-base">Research Integrity. Verified Quality.</p>
 
           {/* Trust chips */}
-          <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+          <div className="mt-6 flex flex-wrap items-center justify-center gap-2 lg:justify-start">
             {["Batch Tested", "COA Documented", "Encrypted Checkout"].map((point) => (
               <span key={point} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[0.62rem] font-medium uppercase tracking-[0.14em] text-white/55">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 text-[color:var(--accent-gold)]/80" aria-hidden="true"><path d="m5 12 4 4 10-10" /></svg>
@@ -317,11 +337,14 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
             ))}
           </div>
 
-          <div className="my-7 h-px w-full bg-gradient-to-r from-transparent via-white/12 to-transparent" />
+          <div className="my-7 h-px w-full bg-gradient-to-r from-transparent via-white/12 to-transparent lg:hidden" />
+          </div>
 
-          <p className="text-lg font-medium text-white sm:text-xl">Confirm each statement to enter</p>
+          <div>
 
-          <div className="mt-5 flex flex-col gap-2.5">
+          <p className="text-lg font-medium text-white sm:text-xl lg:mt-0">Confirm each statement to enter</p>
+
+          <div className="mt-5 flex flex-col gap-2.5 lg:mt-4">
             {ATTESTATIONS.map((attestation) => (
               <label
                 key={attestation.id}
@@ -351,7 +374,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
               tappable rows above. Opening one leaves the gate — unavoidable in
               an in-app browser, where a new tab is not a thing — so it must
               take a deliberate tap, never a stray one. */}
-          <p className="mt-3 text-center text-xs leading-6 text-white/45">
+          <p className="mt-3 text-center text-xs leading-6 text-white/45 lg:text-left">
             Read the{" "}
             <a
               href="/legal/terms"
@@ -383,7 +406,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
               taller, and they were reachable. That is the entire difference
               between "works in Safari" and "cannot sign in from TikTok".
               Sticky keeps them on screen at any viewport height. */}
-          <div className="vl-gate-actions mt-7 flex flex-col gap-3 sm:flex-row sm:justify-center">
+          <div className="vl-gate-actions mt-7 flex flex-col gap-3 sm:flex-row sm:justify-center lg:mt-5 lg:justify-start">
             <button
               type="button"
               onClick={handleAccount}
@@ -402,19 +425,22 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
             </button>
           </div>
 
-          <p className="mx-auto mt-5 max-w-sm text-xs leading-6 text-white/45">
+          <p className="mx-auto mt-5 max-w-sm text-xs leading-6 text-white/45 lg:mx-0 lg:mt-4">
             Create a free account to track orders, save your cart, and earn rewards — or continue as a guest and check out with just your email.
           </p>
+
+          </div>
+          </div>
 
           <button
             type="button"
             onClick={handleExit}
-            className="vl-focus-ring mt-5 text-xs text-white/40 underline-offset-4 transition hover:text-white/70 hover:underline"
+            className="vl-focus-ring mt-5 lg:mt-4 text-xs text-white/40 underline-offset-4 transition hover:text-white/70 hover:underline"
           >
             I am under 21 — exit
           </button>
 
-          <p className="mt-6 border-t border-white/[0.07] pt-5 text-[0.62rem] uppercase tracking-[0.2em] text-white/30">
+          <p className="mt-6 border-t border-white/[0.07] pt-5 text-[0.62rem] lg:mt-4 lg:pt-4 uppercase tracking-[0.2em] text-white/30">
             Research Use Only · © Vanta Labs
           </p>
         </div>
