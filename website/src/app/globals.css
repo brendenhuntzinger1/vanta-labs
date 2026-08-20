@@ -1488,7 +1488,23 @@ body[data-cookie-banner="true"] .vl-bottom-bar {
   border: 1px solid var(--hairline);
   border-radius: 18px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), rgba(255, 255, 255, 0.015));
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 10px 30px -22px rgba(0, 0, 0, 0.8);
+  /* SEPARATION AT REST, NOT ON HOVER.
+     Against a near-black page these cards sat almost flush with the
+     background — a hairline and a shadow tucked 22px up, so the grid read as a
+     flat sheet rather than a set of objects. Most of this store's traffic is on
+     a phone and can never hover, so the finished look has to be the resting
+     one.
+
+     Three layers, each doing one job: the existing inset highlight along the
+     top edge; a tight contact shadow that seats the card on the page; and one
+     soft ambient pass for depth. The warm rim is held at 0.05 alpha —
+     deliberately below the point where it reads as a gold outline. It should
+     register as the card having an edge, not as a glow anyone can name. */
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 1px 2px rgba(0, 0, 0, 0.45),
+    0 14px 34px -20px rgba(0, 0, 0, 0.85),
+    0 0 0 1px rgba(199, 174, 94, 0.05);
   transition: transform var(--duration-base) var(--ease-out-premium), border-color var(--duration-base) var(--ease-out-premium), box-shadow var(--duration-base) var(--ease-out-premium);
 }
 
@@ -1506,7 +1522,9 @@ body[data-cookie-banner="true"] .vl-bottom-bar {
   border-color: rgba(199, 174, 94, 0.22);
   box-shadow:
     0 1px 0 rgba(255, 255, 255, 0.05) inset,
-    0 24px 48px -30px rgba(0, 0, 0, 0.85);
+    0 2px 4px rgba(0, 0, 0, 0.45),
+    0 26px 52px -28px rgba(0, 0, 0, 0.9),
+    0 0 0 1px rgba(199, 174, 94, 0.12);
 }
 
 /* The vial photography is the strongest asset on the page. A slow, small scale
@@ -1526,13 +1544,32 @@ body[data-cookie-banner="true"] .vl-bottom-bar {
     transition: none;
     transform: none;
   }
+  .vl2-product-card,
+  .vl2-product-card:hover,
+  .vl2-product-card:active {
+    transform: none;
+    transition: box-shadow var(--duration-base) ease, border-color var(--duration-base) ease;
+  }
 }
 
 /* Steady, non-distracting on touch devices: no hover-lift that can stick after
    a tap on phones. Press feedback comes from the buttons themselves. */
 @media (hover: none) {
+  /* A tapped card can keep :hover on a phone, which would strand the heavier
+     hover shadow on it. The resting state above is the finished one here. */
   .vl2-product-card:hover {
     transform: none;
+    border-color: var(--hairline);
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.04) inset,
+      0 1px 2px rgba(0, 0, 0, 0.45),
+      0 14px 34px -20px rgba(0, 0, 0, 0.85),
+      0 0 0 1px rgba(199, 174, 94, 0.05);
+  }
+  /* Touch gets its acknowledgement from a press instead. */
+  .vl2-product-card:active {
+    transform: scale(0.988);
+    transition-duration: 90ms;
   }
 }
 
