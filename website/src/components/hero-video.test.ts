@@ -381,3 +381,60 @@ describe("the hero fails to a still vial, never to nothing", () => {
     expect(page).toContain("/videos/vanta-labs-hero-opt.mp4");
   });
 });
+
+// ---------------------------------------------------------------------------
+// NO VIDEO AT ALL INSIDE AN APP'S BROWSER.
+//
+// Five rounds of work could not keep a clip playing inline in the TikTok
+// WebView. Each fix was correct and each passed in every engine available
+// here; each still ended with an iPhone showing the vial alone on white. So in
+// those browsers there is nothing to decode — a still frame is the whole hero.
+// ---------------------------------------------------------------------------
+describe("an app's browser gets a still hero, never a clip", () => {
+  const hero = read("src/components/hero-video.tsx");
+  const detect = read("src/lib/in-app-browser.ts");
+
+  it("renders an image, not a canvas or a video, in an in-app browser", () => {
+    expect(hero).toContain("detectInAppBrowser");
+    expect(hero).toMatch(/if \(inApp\) \{[\s\S]*?<img/);
+    // The still is the poster; no source is requested at all.
+    expect(hero).toMatch(/<img[\s\S]*?src=\{poster\}/);
+  });
+
+  it("keeps the animation everywhere else", () => {
+    expect(hero).toContain("return <HeroVialCanvas");
+  });
+
+  it("recognises the browsers that actually cause this", () => {
+    for (const app of ["tiktok", "musical_ly", "instagram", "fbav", "snapchat"]) {
+      expect(detect, `${app} must be treated as an in-app browser`).toContain(`"${app}"`);
+    }
+    // Compared lower-case, so a capitalised UA still matches.
+    expect(detect).toContain("userAgent.toLowerCase()");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// An app's embedded browser gives the page no browser UI worth using: TikTok's
+// back arrow leaves the site entirely, and there is no in-page way to retrace a
+// step, so a visitor who opens a product can get stuck on it.
+// ---------------------------------------------------------------------------
+describe("the site carries its own back control", () => {
+  const header = read("src/components/site-header-v2.tsx");
+
+  it("offers a back button below lg, where the nav row is hidden", () => {
+    expect(header).toContain('aria-label="Go back"');
+    expect(header).toContain("router.back()");
+    expect(header).toMatch(/lg:hidden/);
+  });
+
+  it("shows it only when there is somewhere to go back to", () => {
+    // Not on the home page — there, back means leaving the site.
+    expect(header).toMatch(/const canGoBack = hasHistory && pathname !== "\/";/);
+    expect(header).toContain("window.history.length > 1");
+  });
+
+  it("gives it a real tap target", () => {
+    expect(header).toMatch(/aria-label="Go back"[\s\S]{0,400}h-11/);
+  });
+});

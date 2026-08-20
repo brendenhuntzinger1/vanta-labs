@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useAccessGranted } from "@/components/age-gate";
+import { detectInAppBrowser } from "@/lib/in-app-browser";
 
 /**
  * The homepage hero vial: a decorative, muted, looping background animation.
@@ -67,6 +68,45 @@ export function HeroVideo({
   }, [granted]);
 
   if (!granted || !settled) return null;
+  return <HeroVial className={className} src={src} poster={poster} />;
+}
+
+/**
+ * NO VIDEO AT ALL INSIDE AN APP'S BROWSER.
+ *
+ * This is the owner's call, made after five rounds of trying to keep a clip
+ * playing inline in the TikTok WebView: defer playback out of the entry
+ * gesture, unmount the element behind the gate, order the attributes so muted
+ * and playsinline precede the source, paint into a canvas so no video element
+ * exists on the page. Each was correct, each passed in every engine available
+ * here, and each still ended with an iPhone showing the vial alone on white.
+ *
+ * So in those browsers there is nothing to decode: a still frame, and that is
+ * the whole hero. It cannot be taken over, cannot go fullscreen, cannot be
+ * mistaken for media the visitor asked to watch. Everywhere else — Safari,
+ * Chrome, desktop — the animation runs exactly as designed.
+ *
+ * A still product shot instead of a spinning one is a downgrade nobody will
+ * notice. A fullscreen player instead of a storefront has cost this store
+ * days.
+ */
+function HeroVial({ className, src, poster }: { className?: string; src: string; poster: string }) {
+  // Read once, on the client. Server-rendered markup is identical either way
+  // because this component only ever mounts after entry.
+  const [inApp] = useState(detectInAppBrowser);
+
+  if (inApp) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        className={className}
+        src={poster}
+        alt=""
+        aria-hidden="true"
+        draggable={false}
+      />
+    );
+  }
   return <HeroVialCanvas className={className} src={src} poster={poster} />;
 }
 

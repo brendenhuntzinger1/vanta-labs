@@ -88,12 +88,49 @@ export function SiteHeaderV2() {
   // never over-highlights.
   const isActive = (href: string) => pathname === href || pathname.startsWith(`${href}/`);
 
+  // Somewhere to go back TO, and somewhere worth leaving. The home page is the
+  // root of the site, so a back control there would only take a visitor out of
+  // it — which in an app's browser means back to the feed. history.length is
+  // the only signal available for "this tab has been somewhere else"; it is
+  // read after mount so the server and client agree on the first render.
+  const [hasHistory, setHasHistory] = useState(false);
+  useEffect(() => {
+    // Next frame, so this is not a synchronous setState inside the effect body.
+    const id = requestAnimationFrame(() => setHasHistory(window.history.length > 1));
+    return () => cancelAnimationFrame(id);
+  }, [pathname]);
+  const canGoBack = hasHistory && pathname !== "/";
+
   return (
     <header className="vl2-nav" data-scrolled={scrolled}>
       <div className="mx-auto flex max-w-[1440px] items-center justify-between gap-2 px-4 py-3 sm:gap-4 sm:px-6 sm:py-5 lg:px-12">
-        <Link href="/" className="vl-focus-ring vl2-serif text-lg tracking-[0.08em] text-white" onClick={() => setMobileNavOpen(false)}>
-          VANTA LABS
-        </Link>
+        <div className="flex items-center gap-1">
+          {/* OUR OWN BACK CONTROL.
+              An app's embedded browser gives the page no browser UI worth
+              using — TikTok's chrome offers a back arrow that leaves the site
+              entirely, and there is no in-page way to retrace a step. A
+              visitor who opens a product from the catalog can get stuck there.
+              Shown only when there is somewhere to go back to, and only below
+              lg where the full navigation row is hidden. */}
+          {canGoBack ? (
+            <button
+              type="button"
+              onClick={() => {
+                setMobileNavOpen(false);
+                router.back();
+              }}
+              aria-label="Go back"
+              className="vl-focus-ring -ml-1 inline-flex h-11 w-9 items-center justify-center text-white/70 transition hover:text-white lg:hidden"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5" aria-hidden="true">
+                <path d="M15 18l-6-6 6-6" />
+              </svg>
+            </button>
+          ) : null}
+          <Link href="/" className="vl-focus-ring vl2-serif text-lg tracking-[0.08em] text-white" onClick={() => setMobileNavOpen(false)}>
+            VANTA LABS
+          </Link>
+        </div>
 
         <nav className="hidden items-center gap-1 lg:flex">
           {NAV_LINKS.map((link) => (

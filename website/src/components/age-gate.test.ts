@@ -267,7 +267,16 @@ describe("the gate survives an app's own toolbars", () => {
     // The single exception is a legal page, which nobody chooses as a
     // destination and which an in-app browser can land you on by accident.
     expect(gate).toMatch(/const NEVER_A_DESTINATION = \["\/legal"\];/);
-    expect(gate).toMatch(/return stranded \? POST_GATE_DESTINATION : null;/);
+    expect(gate).toMatch(/if \(stranded\) return POST_GATE_DESTINATION;/);
+    // Social traffic is sent to the catalog, and ONLY from the home page — a
+    // visitor who asked for a specific page keeps it.
+    expect(gate).toMatch(/const SOCIAL_DESTINATION = "\/products";/);
+    expect(gate).toMatch(/if \(pathname === POST_GATE_DESTINATION && cameFromSocial\(\)\) \{/);
+    // Attribution must survive the redirect or paid traffic stops being
+    // measurable, and the loss would be invisible until a report came back empty.
+    expect(gate).toMatch(/return `\$\{SOCIAL_DESTINATION\}\$\{query\}`;/);
+    // Judged on arrival, never on a destination a link asserts.
+    expect(gate).not.toMatch(/params\.get\("(next|redirect|returnTo|redirectTo)"\)/);
     // Comments are allowed to NAME these; code is not allowed to call them.
     const code = gate
       .replace(/\/\*[\s\S]*?\*\//g, "")

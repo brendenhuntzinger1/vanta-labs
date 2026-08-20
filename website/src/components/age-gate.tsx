@@ -2,6 +2,7 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { detectInAppBrowser } from "@/lib/in-app-browser";
 
 // ACCESS IS PUBLISHED, NEVER REACHED FOR.
 //
@@ -96,7 +97,43 @@ const STAFF_ONLY = ["/admin", "/vault"];
 // A legal page is deliberately NOT on the list. Nobody chooses the Research
 // Disclaimer as a destination; landing there was the reported bug.
 const POST_GATE_DESTINATION = "/";
+const SOCIAL_DESTINATION = "/products";
 const NEVER_A_DESTINATION = ["/legal"];
+
+// SOCIAL TRAFFIC GOES TO THE SHOP; EVERYONE ELSE GETS THE HOME PAGE.
+//
+// Somebody who tapped a link in TikTok is mid-scroll and came to look at a
+// product. The catalog is the shortest honest path to that, and it also keeps
+// the highest-risk browsers off the animated hero entirely. Somebody who typed
+// the domain, or found it through search, is choosing to visit the brand and
+// gets the home page they asked for.
+//
+// Judged on how the visitor ARRIVED, never on anything a link can assert about
+// where it wants them sent. A campaign marker or a social referrer is evidence
+// of a traffic source; it is not a destination, so the worst a forged one can
+// do is show the catalog.
+function cameFromSocial(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    const params = new URLSearchParams(window.location.search);
+    // The markers real campaigns actually carry.
+    for (const key of ["ttclid", "fbclid", "igshid", "sccid", "twclid", "utm_source", "utm_medium"]) {
+      const value = params.get(key);
+      if (!value) continue;
+      if (key.startsWith("utm_")) {
+        if (/tiktok|instagram|facebook|meta|snap|reddit|pinterest|twitter|social|paid/i.test(value)) return true;
+      } else {
+        return true;
+      }
+    }
+    // An in-app browser IS social traffic, whatever the URL carries.
+    if (detectInAppBrowser()) return true;
+    const ref = document.referrer;
+    return Boolean(ref) && /tiktok|instagram|facebook|snapchat|reddit|pinterest|t\.co|lnkd\.in/i.test(ref);
+  } catch {
+    return false;
+  }
+}
 
 function destinationAfterGate(pathname: string | null): string | null {
   if (!pathname) return POST_GATE_DESTINATION;
@@ -115,7 +152,24 @@ function destinationAfterGate(pathname: string | null): string | null {
   // shared URL — put the visitor through the gate and then dumped them on the
   // home page, throwing away the click that brought them. A refresh mid-
   // checkout did the same to a cart. Clearing the gate is not a navigation.
-  return stranded ? POST_GATE_DESTINATION : null;
+  if (stranded) return POST_GATE_DESTINATION;
+  // Only a visitor who arrived on the home page is re-routed. Anyone who asked
+  // for a specific page — a product, the cart, checkout — stays there; sending
+  // them to the catalog would throw away the click that brought them.
+  if (pathname === POST_GATE_DESTINATION && cameFromSocial()) {
+    // ATTRIBUTION SURVIVES THE REDIRECT. ttclid, fbclid, utm_*, a referral
+    // code — everything the campaign attached is carried onto the catalog.
+    // Dropping it here would silently break attribution for exactly the paid
+    // traffic this route exists to serve, and the loss would be invisible
+    // until a report came back empty.
+    //
+    // The query is carried, never consulted: it decides nothing about where
+    // the visitor goes, so a forged parameter still cannot choose a
+    // destination. Only the path above does that, and it is a constant.
+    const query = typeof window !== "undefined" ? window.location.search : "";
+    return `${SOCIAL_DESTINATION}${query}`;
+  }
+  return null;
 }
 
 export function AgeGate({ children }: { children: React.ReactNode }) {
