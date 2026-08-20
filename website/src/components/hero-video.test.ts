@@ -43,7 +43,7 @@ describe("the hero video can never present itself as a broken embed", () => {
     expect(source).toContain('document.createElement("video")');
     // The video is created but NEVER attached, so nothing can present it.
     expect(source).not.toContain("appendChild");
-    expect(source).toContain("context.drawImage(video");
+    expect(source).toContain("cover(video, video.videoWidth");
   });
 
   it("still sets muted and inline before the source on the decoder", () => {
@@ -306,7 +306,7 @@ describe("the entry gate and the hero video are separate systems", () => {
   // F. Nothing links to the asset.
   it("F — the asset is a video source and nothing else", () => {
     // One reference, as a src prop. Not an href, not a route.
-    expect(page).toContain('<HeroVideo className="vl2-hero-video" src="/videos/vanta-labs-hero.mp4" />');
+    expect(page).toMatch(/<HeroVideo className="vl2-hero-video" src="\/videos\/vanta-labs-hero(-opt)?\.mp4" \/>/);
     expect(page).not.toMatch(/href="[^"]*\.mp4/);
     expect(heroCode).not.toMatch(/href=/);
     expect(heroCode).not.toMatch(/<a\b/);
@@ -346,5 +346,38 @@ describe("an ad link cannot land someone inside a media file", () => {
     expect(mw).toMatch(/sec-fetch-dest"\) === "document"/);
     expect(mw).toMatch(/!request\.headers\.get\("range"\)/);
     expect(mw).toMatch(/request\.method === "GET"/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE FALLBACK RULE, set by the owner after five rounds of iOS video fixes:
+// if the clip cannot be made to play reliably inside an in-app browser, show a
+// clean still hero rather than ever throwing the customer into a fullscreen
+// player. A still vial is a product shot.
+// ---------------------------------------------------------------------------
+describe("the hero fails to a still vial, never to nothing", () => {
+  const source = read("src/components/hero-video.tsx");
+  const page = read("src/app/page.tsx");
+
+  it("paints a poster frame before any video decoding", () => {
+    expect(source).toContain('poster = "/images/hero-vial-poster.jpg"');
+    expect(source).toContain("const stillFrame = new Image();");
+    expect(source).toContain("stillFrame.src = poster;");
+    // Drawn on load, independently of the video.
+    expect(source).toMatch(/stillFrame\.onload = \(\) => \{[\s\S]*?cover\(stillFrame/);
+  });
+
+  it("leaves the still frame up when nothing has decoded", () => {
+    // The paint loop must RETURN rather than clear the canvas, or a failed
+    // decode would wipe the poster and leave an empty rectangle.
+    expect(source).toMatch(/if \(video\.readyState < 2 \|\| !video\.videoWidth\) return;/);
+    expect(source).not.toContain("clearRect");
+  });
+
+  it("uses the compressed, audio-free clip", () => {
+    // 6.4 MB with an audio track became 520 KB without one. An audio track
+    // makes iOS treat a video as real media rather than decoration, and the
+    // size was what left the hero black on a weak signal.
+    expect(page).toContain("/videos/vanta-labs-hero-opt.mp4");
   });
 });

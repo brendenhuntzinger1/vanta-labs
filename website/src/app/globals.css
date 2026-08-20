@@ -1287,15 +1287,20 @@ html[data-age-verified="false"] video {
 
    The backdrop is what keeps the attestation text from showing through as it
    scrolls underneath. */
+/* NOT STICKY, DELIBERATELY.
+   These buttons were pinned to the bottom of the gate's scroller so they could
+   not sit below the fold on a short in-app viewport. That cured one problem and
+   caused a worse one: a sticky bar is painted OVER whatever scrolls beneath it,
+   and it landed across the middle of the attestation list — so a tap aimed at
+   the second or third row activated "Create account / Sign in" instead of the
+   checkbox. Measured, not theorised: elementFromPoint on row 2's centre
+   returned the button.
+
+   A hijacked control is far worse than a scroll. The gate is a scrolling panel
+   and always has been; the buttons sit at the end of it, reachable the ordinary
+   way, and nothing overlays anything. */
 .vl-gate-actions {
-  position: sticky;
-  bottom: 0;
-  z-index: 1;
-  margin-left: -0.25rem;
-  margin-right: -0.25rem;
-  padding: 0.75rem 0.25rem;
-  background: linear-gradient(180deg, rgba(12, 12, 12, 0) 0%, rgba(12, 12, 12, 0.92) 22%, rgba(12, 12, 12, 0.97) 100%);
-  backdrop-filter: blur(6px);
+  position: relative;
 }
 
 /* Published so the diagnostics panel can report what the device actually says. */

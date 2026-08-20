@@ -31,15 +31,27 @@ import { useAccessGranted } from "@/components/age-gate";
  * it. The decoder still does the work; iOS simply has nothing to take over.
  *
  * The video is created detached, muted and inline, played programmatically, and
- * never appended anywhere. If it cannot decode — Low Power Mode, a refused
- * autoplay, a stalled network — the canvas stays empty and the hero shows the
- * gradient it already paints, which is the same outcome as before and never a
- * broken player.
+ * never appended anywhere.
+ *
+ * AND IT FAILS TO A STILL VIAL, NEVER TO NOTHING. A 33 KB poster frame is
+ * painted first, so the hero shows the product immediately and keeps showing it
+ * if the clip never decodes at all — Low Power Mode, a refused autoplay, a
+ * stalled connection. The animation draws over it if and when playback starts.
+ * A still vial is a product shot; the two failure modes this replaces were an
+ * empty black hero and a fullscreen player, and both are now impossible.
  *
  * The gate knows nothing about any of this. It publishes one boolean; this
  * subscribes to it, and mounts only after entry.
  */
-export function HeroVideo({ className, src }: { className?: string; src: string }) {
+export function HeroVideo({
+  className,
+  src,
+  poster = "/images/hero-vial-poster.jpg",
+}: {
+  className?: string;
+  src: string;
+  poster?: string;
+}) {
   const granted = useAccessGranted();
   const [settled, setSettled] = useState(false);
 
@@ -55,10 +67,18 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
   }, [granted]);
 
   if (!granted || !settled) return null;
-  return <HeroVialCanvas className={className} src={src} />;
+  return <HeroVialCanvas className={className} src={src} poster={poster} />;
 }
 
-function HeroVialCanvas({ className, src }: { className?: string; src: string }) {
+function HeroVialCanvas({
+  className,
+  src,
+  poster,
+}: {
+  className?: string;
+  src: string;
+  poster: string;
+}) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -104,18 +124,55 @@ function HeroVialCanvas({ className, src }: { className?: string; src: string })
     };
 
     // object-fit: cover, by hand — the canvas is the hero's full area and the
-    // clip must fill it without distorting.
+    // source must fill it without distorting.
+    const cover = (source: CanvasImageSource, sw: number, sh: number) => {
+      const cw = canvas.width;
+      const ch = canvas.height;
+      const scale = Math.max(cw / sw, ch / sh);
+      const dw = sw * scale;
+      const dh = sh * scale;
+      context.drawImage(source, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+    };
+
+    // THE FALLBACK, PAINTED FIRST.
+    //
+    // A still frame goes up as soon as it loads — a 33 KB JPEG against a 520 KB
+    // clip — so the hero shows the vial immediately and keeps showing it if the
+    // video never decodes at all: Low Power Mode, a refused autoplay, a stalled
+    // connection, a codec the browser will not touch. The animation draws over
+    // it when and if it starts.
+    //
+    // This is the rule the owner set, and it is the right one: a still vial is
+    // a product shot. There is no failure mode left where the hero is empty,
+    // and none where it is a fullscreen player.
+    const stillFrame = new Image();
+    stillFrame.decoding = "async";
+    let stillReady = false;
+    stillFrame.onload = () => {
+      stillReady = true;
+      if (stopped) return;
+      resize();
+      cover(stillFrame, stillFrame.naturalWidth, stillFrame.naturalHeight);
+    };
+    stillFrame.src = poster;
+
     const paint = () => {
       if (stopped) return;
       raf = requestAnimationFrame(paint);
+      // Nothing decoded yet: leave the still frame on screen rather than
+      // clearing to an empty rectangle.
       if (video.readyState < 2 || !video.videoWidth) return;
       resize();
-      const cw = canvas.width;
-      const ch = canvas.height;
-      const scale = Math.max(cw / video.videoWidth, ch / video.videoHeight);
-      const dw = video.videoWidth * scale;
-      const dh = video.videoHeight * scale;
-      context.drawImage(video, (cw - dw) / 2, (ch - dh) / 2, dw, dh);
+      cover(video, video.videoWidth, video.videoHeight);
+    };
+
+    // A resize would otherwise leave the canvas blank until the next decoded
+    // frame, so repaint the still frame too.
+    const onResize = () => {
+      resize();
+      if (stillReady && video.readyState < 2) {
+        cover(stillFrame, stillFrame.naturalWidth, stillFrame.naturalHeight);
+      }
     };
 
     const start = () => {
@@ -141,13 +198,13 @@ function HeroVialCanvas({ className, src }: { className?: string; src: string })
     // decoded frame, so the very first painted frame is already sharp and the
     // canvas never briefly holds the 300x150 default.
     resize();
-    window.addEventListener("resize", resize);
+    window.addEventListener("resize", onResize);
     raf = requestAnimationFrame(paint);
 
     return () => {
       stopped = true;
       cancelAnimationFrame(raf);
-      window.removeEventListener("resize", resize);
+      window.removeEventListener("resize", onResize);
       document.removeEventListener("visibilitychange", onVisibility);
       video.removeEventListener("loadeddata", start);
       video.removeEventListener("canplay", start);
@@ -157,8 +214,9 @@ function HeroVialCanvas({ className, src }: { className?: string; src: string })
       video.pause();
       video.removeAttribute("src");
       video.load();
+      stillFrame.onload = null;
     };
-  }, [src]);
+  }, [src, poster]);
 
   return (
     <canvas

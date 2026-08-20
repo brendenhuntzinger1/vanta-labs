@@ -116,7 +116,7 @@ export default async function HomePage() {
       <main>
 
       <section className="vl2-hero">
-        <HeroVideo className="vl2-hero-video" src="/videos/vanta-labs-hero.mp4" />
+        <HeroVideo className="vl2-hero-video" src="/videos/vanta-labs-hero-opt.mp4" />
         <div className="vl2-hero-scrim" aria-hidden="true" />
 
         {/* The content block is bottom-anchored over a full-height video, so

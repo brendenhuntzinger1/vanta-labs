@@ -96,16 +96,26 @@ const STAFF_ONLY = ["/admin", "/vault"];
 // A legal page is deliberately NOT on the list. Nobody chooses the Research
 // Disclaimer as a destination; landing there was the reported bug.
 const POST_GATE_DESTINATION = "/";
-const STAY_PUT = ["/cart", "/checkout", "/order-confirmation", "/account"];
+const NEVER_A_DESTINATION = ["/legal"];
 
 function destinationAfterGate(pathname: string | null): string | null {
   if (!pathname) return POST_GATE_DESTINATION;
-  const worthKeeping = STAY_PUT.some(
+  // A legal page is somewhere you READ, never somewhere you are sent. Being
+  // left on the Research Disclaimer after clearing the gate was the reported
+  // bug, and in an in-app browser a policy link navigates the view you are in,
+  // so this is reachable by accident.
+  const stranded = NEVER_A_DESTINATION.some(
     (p) => pathname === p || pathname.startsWith(`${p}/`),
   );
-  // null means no navigation at all — the gate simply closes.
-  if (worthKeeping || pathname === POST_GATE_DESTINATION) return null;
-  return POST_GATE_DESTINATION;
+  // Otherwise: null, meaning no navigation at all. The gate simply closes and
+  // the visitor is left on the page they asked for.
+  //
+  // This was briefly "always send them to /", and that was wrong in a way the
+  // journey test caught: a link straight to a product — an ad, a bio link, a
+  // shared URL — put the visitor through the gate and then dumped them on the
+  // home page, throwing away the click that brought them. A refresh mid-
+  // checkout did the same to a cart. Clearing the gate is not a navigation.
+  return stranded ? POST_GATE_DESTINATION : null;
 }
 
 export function AgeGate({ children }: { children: React.ReactNode }) {

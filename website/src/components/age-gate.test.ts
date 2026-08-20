@@ -262,10 +262,12 @@ describe("the gate survives an app's own toolbars", () => {
     // No pathname, referrer, history or redirect parameter may influence it —
     // that is what let a TikTok URL and a legal page choose the destination.
     expect(gate).toMatch(/const POST_GATE_DESTINATION = "\/";/);
-    // The only pages a visitor may be left on are a hard-coded list — places
-    // where moving them would abandon a purchase. A legal page is not one.
-    expect(gate).toMatch(/const STAY_PUT = \["\/cart", "\/checkout", "\/order-confirmation", "\/account"\];/);
-    expect(gate).not.toMatch(/STAY_PUT[^\]]*\/legal/);
+    // Clearing the gate is not a navigation: the visitor stays on the page
+    // they asked for, so an ad or bio link straight to a product still works.
+    // The single exception is a legal page, which nobody chooses as a
+    // destination and which an in-app browser can land you on by accident.
+    expect(gate).toMatch(/const NEVER_A_DESTINATION = \["\/legal"\];/);
+    expect(gate).toMatch(/return stranded \? POST_GATE_DESTINATION : null;/);
     // Comments are allowed to NAME these; code is not allowed to call them.
     const code = gate
       .replace(/\/\*[\s\S]*?\*\//g, "")
