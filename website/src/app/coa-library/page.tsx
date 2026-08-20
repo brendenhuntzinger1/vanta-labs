@@ -1,16 +1,17 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import { getCoaLibrarySnapshot } from "@/lib/coa";
 import type { CoaLibrarySnapshot } from "@/lib/coa-types";
 import { CoaLibraryPageClient } from "./coa-library-client";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/coa-library",
   title: "Certificates of Analysis",
   description:
     "Third-party testing and batch documentation for Vanta Labs research compounds. Search by product, batch, or lot number and open the full Certificate of Analysis.",
-  alternates: { canonical: "/coa-library" },
-};
+});
 
 const EMPTY_SNAPSHOT: CoaLibrarySnapshot = {
   products: [],

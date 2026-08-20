@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { pageMetadata } from "@/lib/page-metadata";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
@@ -7,10 +8,12 @@ import { MembershipLanding } from "@/components/membership-landing";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/membership",
   title: "Membership",
-  description: "Join Vanta Labs membership for member pricing, priority processing, and exclusive access. Annual and monthly plans available.",
-};
+  description:
+    "Join Vanta Labs membership for member pricing, priority processing, and exclusive access. Annual and monthly plans available.",
+});
 
 export default async function MembershipPage() {
   // "No tiers configured" and "the tier query failed" are different problems
@@ -33,11 +36,16 @@ export default async function MembershipPage() {
   return (
     <div className="vl2-galaxy min-h-screen text-white">
       <SiteHeaderV2 />
-      <MembershipLanding
-        tiers={tierResult.data}
-        isSignedInCustomer={isSignedInCustomer}
-        loadFailed={!tierResult.ok}
-      />
+      {/* Every other route wraps its content in a main landmark; this one did
+          not, so "skip to content" and screen-reader landmark navigation had
+          nothing to jump to. */}
+      <main>
+        <MembershipLanding
+          tiers={tierResult.data}
+          isSignedInCustomer={isSignedInCustomer}
+          loadFailed={!tierResult.ok}
+        />
+      </main>
     </div>
   );
 }

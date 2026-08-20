@@ -442,6 +442,11 @@ function ProductsPageContent({ featuredCoupon }: { featuredCoupon: FeaturedCoupo
               </button>
             </div>
           ) : (
+            // Each card titles itself with an h3. Without a section heading
+            // between them and the page h1, the outline jumps h1 → h3, and a
+            // screen reader navigating by heading loses the grouping.
+            <section aria-labelledby="catalog-grid-heading">
+            <h2 id="catalog-grid-heading" className="sr-only">Products</h2>
             <div className="grid grid-cols-2 gap-3 sm:gap-5 xl:grid-cols-4">
               {visibleProducts.map((product) => {
                 const productImage = imageOverrides[product.slug] || product.coverImage || product.image;
@@ -455,6 +460,7 @@ function ProductsPageContent({ featuredCoupon }: { featuredCoupon: FeaturedCoupo
                 );
               })}
             </div>
+            </section>
           )}
         </section>
       </main>

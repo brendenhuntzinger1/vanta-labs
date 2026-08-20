@@ -53,6 +53,9 @@ export const metadata: Metadata = {
   },
   description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
   applicationName: "Vanta Labs",
+  // Ads append their own tracking parameters to the landing URL. Without a
+  // canonical, each variant is a separate page competing with the real one.
+  alternates: { canonical: "/" },
   manifest: "/site.webmanifest",
   icons: {
     icon: [
