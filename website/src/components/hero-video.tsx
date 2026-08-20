@@ -61,16 +61,55 @@ export function HeroVideo({ className, src }: { className?: string; src: string 
 }
 
 function HeroVideoElement({ className, src }: { className?: string; src: string }) {
-  const ref = useRef<HTMLVideoElement | null>(null);
+  const hostRef = useRef<HTMLDivElement | null>(null);
 
+  // THE ELEMENT IS BUILT BY HAND, AND THE ORDER IS THE WHOLE POINT.
+  //
+  // Written as JSX, React applied the props in the order they appeared, and the
+  // browser received:
+  //
+  //   <video class src="…mp4" autoplay loop playsinline … muted>
+  //
+  // src SECOND. Assigning src is the moment iOS decides whether a video may
+  // play inline, and at that instant this one was neither muted nor marked
+  // playsinline — so iOS classified it as a video wanting a player, and when
+  // autoplay started it took the screen. On a real iPhone that is the vial
+  // alone on white, which is exactly what was reported; every desktop engine
+  // ignores the ordering entirely and looks perfect.
+  //
+  // Building the element here makes the order explicit and guaranteed: muted
+  // and playsinline first, while the element is still detached and inert, and
+  // the source LAST, once it is already eligible to play inline.
   useEffect(() => {
-    const video = ref.current;
-    if (!video) return;
+    const host = hostRef.current;
+    if (!host) return;
 
-    // iOS honours the muted *property*, not only the attribute, when deciding
-    // whether autoplay is allowed without a gesture.
+    const video = document.createElement("video");
+
+    // 1. INLINE ELIGIBILITY, before anything can trigger loading.
+    //    Both the property and the attribute: iOS consults the property for the
+    //    autoplay decision, and the attribute is what survives in the markup.
     video.muted = true;
     video.defaultMuted = true;
+    video.setAttribute("muted", "");
+    video.setAttribute("playsinline", "");
+    // Older WebKit, and the WebView builds some apps ship, only honour the
+    // prefixed spellings.
+    video.setAttribute("webkit-playsinline", "true");
+    video.setAttribute("x5-playsinline", "true");
+
+    // 2. Everything else about how it behaves.
+    video.loop = true;
+    video.controls = false;
+    video.disablePictureInPicture = true;
+    video.setAttribute("disableremoteplayback", "");
+    video.tabIndex = -1;
+    video.setAttribute("aria-hidden", "true");
+    // The hero file is ~6.2 MB. "auto" buffers aggressively from first paint,
+    // competing with the CSS, fonts and hero copy; "metadata" fetches the
+    // headers and lets autoplay stream the rest progressively.
+    video.preload = "metadata";
+    if (className) video.className = className;
 
     // FAILSAFE, NOT THE FIX. A decorative background has no state in which a
     // fullscreen player is correct, so if iOS ever begins presenting one, leave
@@ -100,42 +139,28 @@ function HeroVideoElement({ className, src }: { className?: string; src: string 
     };
     document.addEventListener("visibilitychange", onVisibility);
 
+    // 3. THE SOURCE, LAST. By the time loading can begin the element is muted
+    //    and inline-eligible, so iOS never classifies it as media the visitor
+    //    asked to watch. autoplay is set here too, immediately before src, so
+    //    nothing can start before the flags above are in place.
+    video.autoplay = true;
+    video.setAttribute("autoplay", "");
+    video.src = src;
+    host.appendChild(video);
+
     return () => {
       video.removeEventListener("webkitbeginfullscreen", refuseFullscreen);
       document.removeEventListener("visibilitychange", onVisibility);
+      // Stop the download and tear the element down; leaving a detached video
+      // loading is a real cost on a phone.
+      video.pause();
+      video.removeAttribute("src");
+      video.load();
+      video.remove();
     };
-  }, []);
+  }, [src, className]);
 
-  return (
-    <video
-      ref={ref}
-      className={className}
-      src={src}
-      // autoplay + muted + playsinline is the combination browsers start on
-      // their own, with no script and no gesture involved.
-      autoPlay
-      muted
-      loop
-      playsInline
-      /* React writes `playsinline` from playsInline. Older WebKit — including
-         the WebView builds some apps still ship — only honours the prefixed
-         form, and without it hands playback to the native player. Both are
-         given so whichever the browser understands keeps the vial in the hero. */
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      {...({ "webkit-playsinline": "true", "x5-playsinline": "true" } as any)}
-      /* METADATA, NOT AUTO.
-         The hero file is ~6.2 MB. preload="auto" told the browser to buffer it
-         aggressively from first paint, competing with the CSS, fonts and hero
-         copy for bandwidth -- on a phone that is roughly ten seconds of black
-         hero on a normal 4G connection. "metadata" fetches only the headers;
-         autoplay still starts and the file streams progressively, so the
-         animation is unchanged while the critical render path is not starved. */
-      preload="metadata"
-      controls={false}
-      disablePictureInPicture
-      disableRemotePlayback
-      tabIndex={-1}
-      aria-hidden="true"
-    />
-  );
+  // The element is created above and appended here. This wrapper carries no
+  // styling of its own -- the class goes on the video, exactly as before.
+  return <div ref={hostRef} />;
 }

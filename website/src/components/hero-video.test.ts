@@ -33,6 +33,33 @@ describe("the hero video can never present itself as a broken embed", () => {
     expect(source).not.toMatch(/style=\{\{\s*opacity/);
   });
 
+  it("sets muted and playsinline BEFORE the source, which is the whole fix", () => {
+    // Assigning src is when iOS decides whether a video may play inline. Written
+    // as JSX, React applied src second — before muted and playsinline — so iOS
+    // classified the hero as media the visitor wanted to watch and took the
+    // screen with its own player. Order is explicit now, so this checks it.
+    const inlineAt = source.indexOf('video.setAttribute("playsinline"');
+    const mutedAt = source.indexOf("video.muted = true;");
+    const srcAt = source.indexOf("video.src = src;");
+    const appendAt = source.indexOf("host.appendChild(video);");
+    expect(mutedAt).toBeGreaterThan(-1);
+    expect(inlineAt).toBeGreaterThan(-1);
+    expect(srcAt).toBeGreaterThan(-1);
+    expect(mutedAt, "muted must be set before the source").toBeLessThan(srcAt);
+    expect(inlineAt, "playsinline must be set before the source").toBeLessThan(srcAt);
+    expect(srcAt, "the source must be assigned before the element is inserted").toBeLessThan(appendAt);
+    // Built by hand precisely so the order cannot be reshuffled by JSX.
+    expect(source).toContain('document.createElement("video")');
+    // Code only: the comment above the fix quotes the old broken markup as an
+    // illustration, and that is not a JSX element.
+    const codeOnly = source
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+      .join("\n");
+    expect(codeOnly, "the element must be built by hand, not as JSX").not.toMatch(/<video\b/);
+  });
+
   it("never listens for a user gesture in order to start playing", () => {
     // Gesture listeners are what made a tap look like a request to watch the
     // video, which is how iOS came to hand over its fullscreen player.
@@ -41,8 +68,8 @@ describe("the hero video can never present itself as a broken embed", () => {
         .not.toContain(`"${ev}"`);
     }
     // Playback comes from the attribute, not from script.
-    expect(source).toContain("autoPlay");
-    expect(source).toContain("muted");
+    expect(source).toContain('video.setAttribute("autoplay", "")');
+    expect(source).toContain("video.muted = true;");
   });
 
   it("cannot be tapped, so it can never open the native fullscreen player", () => {
@@ -268,14 +295,13 @@ describe("the entry gate and the hero video are separate systems", () => {
 
   // E. It stays a decorative, non-interactive, inline background.
   it("E — inline, muted, looping, autoplaying, uncontrollable and untappable", () => {
-    expect(hero).toContain("autoPlay");
-    expect(hero).toContain("muted");
-    expect(hero).toContain("loop");
-    expect(hero).toContain("playsInline");
-    expect(hero).toContain('"webkit-playsinline": "true"');
-    expect(hero).toContain("controls={false}");
-    expect(hero).toContain("disablePictureInPicture");
-    expect(hero).toContain('aria-hidden="true"');
+    expect(heroCode).toContain('video.setAttribute("playsinline", "")');
+    expect(heroCode).toContain('video.setAttribute("webkit-playsinline", "true")');
+    expect(heroCode).toContain("video.muted = true;");
+    expect(heroCode).toContain("video.loop = true;");
+    expect(heroCode).toContain("video.controls = false;");
+    expect(heroCode).toContain("video.disablePictureInPicture = true;");
+    expect(heroCode).toContain('video.setAttribute("aria-hidden", "true")');
     const rule = css.slice(css.indexOf(".vl2-hero-video"), css.indexOf(".vl2-hero-scrim"));
     expect(rule).toMatch(/pointer-events:\s*none/);
   });
