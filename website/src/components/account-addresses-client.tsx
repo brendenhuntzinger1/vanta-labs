@@ -3,6 +3,13 @@
 import { useState } from "react";
 import type { CustomerAddress } from "@/lib/customer-account";
 
+// The list is refreshed from the API response rather than by reloading the
+// document. A reload is a fresh page load, and the age gate is shown on every
+// fresh load and remembered nowhere — so reloading here walled a signed-in
+// customer behind the 21+ attestation just for saving an address, and threw
+// away the "Address saved." confirmation before they could read it.
+type AddressMutationResult = { success: boolean; error?: string; addresses?: CustomerAddress[] };
+
 const EMPTY_FORM = { label: "", fullName: "", address: "", city: "", postalCode: "" };
 
 export function AccountAddressesClient({ initialAddresses }: { initialAddresses: CustomerAddress[] }) {
@@ -29,14 +36,14 @@ export function AccountAddressesClient({ initialAddresses }: { initialAddresses:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
-      const result = await response.json() as { success: boolean; error?: string };
+      const result = await response.json() as AddressMutationResult;
       if (!result.success) {
         setError(result.error ?? "Unable to save address.");
         return;
       }
       setForm(EMPTY_FORM);
       setMessage("Address saved.");
-      window.location.reload();
+      if (result.addresses) setAddresses(result.addresses);
     } catch {
       setError("Unable to save address right now.");
     } finally {
@@ -53,12 +60,12 @@ export function AccountAddressesClient({ initialAddresses }: { initialAddresses:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isDefault: true }),
       });
-      const result = await response.json() as { success: boolean; error?: string };
+      const result = await response.json() as AddressMutationResult;
       if (!result.success) {
         setError(result.error ?? "Unable to update address.");
         return;
       }
-      window.location.reload();
+      if (result.addresses) setAddresses(result.addresses);
     } catch {
       setError("Unable to update address right now.");
     } finally {
