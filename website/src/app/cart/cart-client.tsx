@@ -311,6 +311,36 @@ export function CartPageClient() {
               ) : null}
             </div>
 
+            {/* WHAT SHIPPING ACTUALLY MEANS, BEFORE COMMITTING TO CHECKOUT.
+                Every line here is read from configuration or from a statement
+                the store already publishes; nothing new is promised.
+
+                  * Destinations: quote-order.ts rejects anything outside the
+                    US and Canada with "We currently ship only to the United
+                    States and Canada." Until now a customer learned that only
+                    after entering checkout and filling in an address, which is
+                    a dead end at the worst possible moment.
+                  * Free shipping: the threshold comes from the same
+                    shippingConfig the server totals use, never a literal.
+                  * One business day is PREPARATION, not delivery. It is worded
+                    as processing and explicitly separated from carrier transit,
+                    because the store controls the first and not the second.
+                    This is the wording already on the product page.
+
+                No delivery date, no transit estimate and no guarantee is
+                stated, because none is configured anywhere in this codebase. */}
+            <ul className="mt-5 space-y-1.5 border-t border-white/10 pt-4 text-xs leading-5 text-white/45">
+              <li>Ships to the United States and Canada.</li>
+              <li>
+                Free shipping on orders over {formatCartCurrency(freeShipThreshold)}.
+              </li>
+              <li>
+                Most in-stock orders are prepared within one business day. Carrier transit time is
+                additional.
+              </li>
+              <li>Tracking is emailed after dispatch.</li>
+            </ul>
+
             {isBuy3Get1FreeActive ? (
               <p className="mt-8 border border-white/20 px-3 py-2 text-sm text-white/75">
                 Buy 3 Get 1 Free is active. Referral discounts cannot be combined with this promotion.
