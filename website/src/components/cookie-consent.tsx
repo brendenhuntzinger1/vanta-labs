@@ -88,12 +88,19 @@ export function CookieConsent() {
   // homepage hero's CTAs and swallowed the first tap a visitor ever makes.
   // Those bars now move for it instead (see .vl-bottom-bar in globals.css),
   // and the z-index clears them so a consent notice is never painted over.
+  //
+  // The phone layout is deliberately tighter than the desktop one. Measured at
+  // 390x664 — a TikTok in-app browser — this banner was 188px tall, 28% of the
+  // viewport, and it sat directly on top of the catalog's Filters control, so
+  // a first tap meant for Filters landed on Decline. The DISCLOSURE TEXT IS
+  // UNCHANGED, deliberately: it still names every pixel and links the policy,
+  // and both choices remain equally weighted. Only padding and type size move.
   return (
     <div
       ref={bannerRef}
-      className="fixed inset-x-3 bottom-3 z-[60] mx-auto max-w-2xl rounded-2xl border border-white/15 bg-[#111]/95 p-4 text-sm text-white/80 shadow-2xl backdrop-blur sm:flex sm:items-center sm:gap-4"
+      className="fixed inset-x-3 bottom-3 z-[60] mx-auto max-w-2xl rounded-2xl border border-white/15 bg-[#111]/95 p-3 text-xs text-white/80 shadow-2xl backdrop-blur sm:flex sm:items-center sm:gap-4 sm:p-4 sm:text-sm"
     >
-      <p className="flex-1 leading-6">
+      <p className="flex-1 leading-5 sm:leading-6">
         We use essential cookies to run the store, plus analytics and our advertising pixels (TikTok, Snapchat and Reddit) if you accept. Decline and none of those load. See our{" "}
         {/* py-1 -my-1 grows the tap box to 24px (WCAG 2.2 AA 2.5.8) while the
             negative margin cancels the same amount of layout, so the sentence
@@ -101,7 +108,7 @@ export function CookieConsent() {
             mid-sentence and must stay on the text baseline. */}
         <Link href="/legal/cookies" className="-my-1 inline-block py-1 text-white underline underline-offset-4">Cookie Policy</Link>.
       </p>
-      <div className="mt-3 flex gap-2 sm:mt-0">
+      <div className="mt-2.5 flex gap-2 sm:mt-0">
         <button type="button" onClick={() => dismiss("declined")} className="vl2-btn-secondary vl-focus-ring flex-1 px-4 py-2.5 text-xs sm:flex-none">Decline</button>
         <button type="button" onClick={() => dismiss("accepted")} className="vl2-btn-primary vl-focus-ring flex-1 px-5 py-2.5 text-xs sm:flex-none">Accept</button>
       </div>
