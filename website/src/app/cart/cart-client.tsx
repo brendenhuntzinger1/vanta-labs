@@ -8,6 +8,7 @@ import { formatCartCurrency, getShippingProgress, useCart, type CartItem } from 
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
+import { CHECKOUT_SHORT, DESTINATIONS_SENTENCE, FULFILMENT_SENTENCE, FULFILMENT_SHORT, TRACKING_SENTENCE } from "@/lib/trust-claims";
 
 export function CartPageClient() {
   const router = useRouter();
@@ -330,15 +331,12 @@ export function CartPageClient() {
                 No delivery date, no transit estimate and no guarantee is
                 stated, because none is configured anywhere in this codebase. */}
             <ul className="mt-5 space-y-1.5 border-t border-white/10 pt-4 text-xs leading-5 text-white/45">
-              <li>Ships to the United States and Canada.</li>
+              <li>{DESTINATIONS_SENTENCE}</li>
               <li>
                 Free shipping on orders over {formatCartCurrency(freeShipThreshold)}.
               </li>
-              <li>
-                Most in-stock orders are prepared within one business day. Carrier transit time is
-                additional.
-              </li>
-              <li>Tracking is emailed after dispatch.</li>
+              <li>{FULFILMENT_SENTENCE}</li>
+              <li>{TRACKING_SENTENCE}</li>
             </ul>
 
             {isBuy3Get1FreeActive ? (
@@ -409,8 +407,8 @@ export function CartPageClient() {
             </button>
 
             <div className="mt-5 flex items-center justify-center gap-6 text-[10px] uppercase tracking-[0.14em] text-white/70">
-              <span>Encrypted Checkout</span>
-              <span>Fast Dispatch</span>
+              <span>{CHECKOUT_SHORT}</span>
+              <span>{FULFILMENT_SHORT}</span>
             </div>
           </div>
         </div>

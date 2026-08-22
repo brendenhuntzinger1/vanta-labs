@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { detectInAppBrowser } from "@/lib/in-app-browser";
+import { TRUST_POINTS } from "@/lib/trust-claims";
 
 // ACCESS IS PUBLISHED, NEVER REACHED FOR.
 //
@@ -329,7 +330,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
 
           {/* Trust chips */}
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2 lg:justify-start">
-            {["Batch Tested", "COA Documented", "Encrypted Checkout"].map((point) => (
+            {TRUST_POINTS.slice(0, 3).map((point) => (
               <span key={point} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[0.62rem] font-medium uppercase tracking-[0.14em] text-white/55">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 text-[color:var(--accent-gold)]/80" aria-hidden="true"><path d="m5 12 4 4 10-10" /></svg>
                 {point}

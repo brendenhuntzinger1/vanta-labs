@@ -5,6 +5,7 @@ import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getCatalogProducts } from "@/lib/catalog";
+import { FULFILMENT_SHORT } from "@/lib/trust-claims";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +36,7 @@ const TRUST_POINTS = [
         <circle cx="17" cy="18.5" r="1.6" />
       </svg>
     ),
-    label: "Fast Shipping",
+    label: FULFILMENT_SHORT,
   },
   {
     icon: (
