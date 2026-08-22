@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { TRUST_POINTS } from "@/lib/trust-claims";
+import { RESEARCH_USE_SENTENCE, TRUST_POINTS } from "@/lib/trust-claims";
 
 const FOOTER_COLUMNS = {
   shop: [
@@ -84,6 +84,12 @@ export function SiteFooter() {
             <div className="mt-6 inline-flex items-center rounded-full border border-white/15 bg-white/[0.03] px-3.5 py-1.5 text-[11px] uppercase tracking-[0.18em] text-white/70">
               Research Use Only
             </div>
+            {/* The badge is a label; this is the statement. The footer is on
+                every one of the 111 public URLs, so putting the full sentence
+                here is the one change that covers the whole site — including
+                the catalogue and the home page, where a chip reading "RESEARCH
+                USE ONLY" was previously the only thing said on the subject. */}
+            <p className="mt-3 max-w-md text-xs leading-6 text-white/45">{RESEARCH_USE_SENTENCE}</p>
           </div>
 
           <FooterColumn title="Shop" links={FOOTER_COLUMNS.shop} />

@@ -3542,6 +3542,14 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   flex: 1 1 auto;
   text-decoration: none;
   color: inherit;
+  /* A TAP TARGET, not just a text run. Hiding the eyebrow on narrow screens
+     left this link exactly one line tall — measured at 287x20 — which is under
+     the 24px floor (WCAG 2.2 AA 2.5.8) and is the whole "shop the offer"
+     affordance. The min-height costs no visible layout because the row is
+     already taller than this. */
+  display: flex;
+  align-items: center;
+  min-height: 2rem;
 }
 
 .vl-offer-body {
