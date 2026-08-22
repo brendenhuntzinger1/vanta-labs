@@ -128,11 +128,23 @@ export default async function HomePage() {
             further would crowd the scroll cue. */}
         <div className="vl2-hero-content mx-auto w-full max-w-[1440px] px-4 sm:px-6 pb-12 pt-28 sm:pb-12 sm:pt-40 lg:px-12 lg:pb-14">
           <div className="vl2-fade-in">
-            {control.promoBuy3Get1Enabled ? (
-              <div className="mb-5 inline-flex items-center gap-2 rounded-full border border-amber-200/40 bg-amber-200/[0.12] px-4 py-1.5 text-xs font-semibold uppercase tracking-[0.12em] text-amber-200 backdrop-blur">
-                🎁 Buy 3 Get 1 Free — Limited Time
-              </div>
-            ) : null}
+            {/* THE HERO PROMO PILL WAS REMOVED, AND IT WAS THREE PROBLEMS.
+                It read "🎁 Buy 3 Get 1 Free — Limited Time" in amber, gated on
+                the same `promoBuy3Get1Enabled` flag the offers bar now reads.
+
+                  1. It was a SECOND promotion surface for the SAME promotion,
+                     and on the home page both were above the fold at once —
+                     the duplicate-on-one-viewport case this feature exists to
+                     end.
+                  2. "Limited Time" was not backed by anything. Buy 3 Get 1 is
+                     an admin toggle with no end date, so the urgency was
+                     manufactured.
+                  3. An emoji in an amber pill is the discount-store look the
+                     brand is defined against.
+
+                The promotion is still advertised — accurately, once, at the
+                top, by StorefrontOffersBar, which states the real terms and
+                says it applies automatically. */}
             <p className="vl2-eyebrow">Research Use Only</p>
             <h1 className="vl2-serif mt-5 max-w-2xl text-[2.6rem] leading-[1.04] tracking-[-0.01em] text-white sm:text-5xl md:text-6xl lg:text-7xl">
               {control.heroHeadline ?? "Precision, in every vial."}

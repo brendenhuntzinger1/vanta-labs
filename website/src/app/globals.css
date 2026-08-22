@@ -3430,11 +3430,28 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
    across a 7-width x 4-height x 3-route sweep. In flow it covers nothing:
    it takes its own height at the top of the page and scrolls away.
    --------------------------------------------------------------------------- */
-/* While consent is pending the header is not pinned to the viewport, so the
-   in-flow consent bar above it is never scrolled underneath it. The header
-   returns to `fixed` the moment a choice is made — this rule only ever applies
-   to a visitor's first screens. */
-:root[data-consent-pending] .vl2-nav {
+/* THE HEADER JOINS NORMAL FLOW WHENEVER AN IN-FLOW BAR SITS ABOVE IT.
+   ---------------------------------------------------------------------------
+   `.vl2-nav` is `position: fixed` at the top of the viewport. Anything placed
+   above it in the document therefore ends up UNDERNEATH it, drawn through by
+   the header, at the exact coordinates a visitor reads first.
+
+   The consent bar hit this and was fixed by making the header static while a
+   choice is pending. THE OFFERS BAR THEN HIT THE SAME THING, and it was worse,
+   because it was invisible in testing: with consent still pending the header
+   was already static and the two stacked correctly, so every automated run
+   looked clean. The moment a visitor accepts or declines — i.e. for every
+   returning visitor — the header went back to fixed and swallowed the promotion
+   whole. Measured at 390px: bar 0..49, nav 0..69, 49px of overlap. The entire
+   bar.
+
+   So the rule is stated once, for the general case: if there is an in-flow bar
+   at the top of the document, the header is part of that stack rather than
+   floating over it. `:has()` is what lets the offers bar say so without a
+   client-side effect, which would paint the collision for one frame and then
+   correct it. */
+:root[data-consent-pending] .vl2-nav,
+:root:has(.vl-offer-bar) .vl2-nav {
   position: static;
 }
 
