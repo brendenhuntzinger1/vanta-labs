@@ -33,7 +33,7 @@ export async function PATCH(request: Request) {
       );
     }
 
-    const result = await bulkUpdateAdminOrders({ orderIds, action });
+    const result = await bulkUpdateAdminOrders({ orderIds, action, actor: session.username });
 
     await supabaseAdmin.from("admin_audit_logs").insert({
       action: `order_bulk_${action}`,
@@ -45,6 +45,12 @@ export async function PATCH(request: Request) {
         // Recorded so the audit log answers "was the customer told?" — the
         // question support actually asks about a bulk action.
         customersNotified: result.notified,
+        // The pipeline refuses moves that are illegal from an order's current
+        // state, so a bulk action over a mixed selection genuinely can be
+        // partial. Recording which orders did NOT move, and why, is the
+        // difference between an audit trail and a receipt.
+        updated: result.updated,
+        refused: result.failed.map((f) => ({ orderId: f.orderId, reason: f.reason })),
         performedAt: new Date().toISOString(),
         performedBy: session.username,
         ipAddress: getRequestIpAddress(request),
@@ -52,7 +58,16 @@ export async function PATCH(request: Request) {
       },
     });
 
-    return NextResponse.json({ success: true, updated: result.updated, notified: result.notified });
+    // NEVER report "100 successful" when 97 moved and 3 were refused. The
+    // refusals carry the pipeline's own explanation so the operator can see
+    // that, say, an order was already shipped or is too far along to cancel.
+    return NextResponse.json({
+      success: true,
+      updated: result.updated,
+      notified: result.notified,
+      refused: result.failed,
+      requested: orderIds.length,
+    });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to update orders";
     return NextResponse.json({ success: false, error: message }, { status: 400 });

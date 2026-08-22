@@ -5,11 +5,17 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { AdminOrderRow } from "@/lib/admin-orders";
 
-type BulkAction = "mark_shipped" | "mark_delivered" | "cancel";
+// "Mark Delivered" is gone on purpose. Delivery is what the CARRIER reports —
+// order-pipeline.ts permits only the "shippo" source to write `delivered` — and
+// a dashboard button that asserts it anyway tells a customer their parcel
+// arrived when nothing has scanned it. The Shippo tracking webhook already
+// drives delivered automatically, so this button was never needed for the
+// normal path; it existed only to paper over a carrier that had not scanned
+// yet, which is an exception to investigate, not a routine bulk action.
+type BulkAction = "mark_shipped" | "cancel";
 
 const BULK_ACTIONS: Array<{ action: BulkAction; label: string }> = [
   { action: "mark_shipped", label: "Mark Shipped" },
-  { action: "mark_delivered", label: "Mark Delivered" },
   { action: "cancel", label: "Cancel" },
 ];
 

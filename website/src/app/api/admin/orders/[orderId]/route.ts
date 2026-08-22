@@ -1,4 +1,5 @@
 import { NextResponse, after } from "next/server";
+import { setOrderFulfillmentStatus } from "@/lib/shippo/service";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds, canViewProfit } from "@/lib/admin-roles";
 import { recordActualShippingCost } from "@/lib/admin-profit";
@@ -124,12 +125,18 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         );
       }
 
+      // fulfillment_status is DELIBERATELY not in this payload any more.
+      //
+      // It used to be written here by a raw UPDATE that never consulted
+      // order-pipeline.ts, so this route could set any status from any state —
+      // including `delivered`, which the pipeline reserves for the carrier —
+      // and it wrote no order_status_history row, leaving operator changes
+      // invisible in the customer-facing timeline. The payment guard above is
+      // kept as defence in depth: the pipeline validates transitions, not
+      // whether the money arrived.
       const updatePayload: Record<string, unknown> = { updated_at: now };
       if (body.paymentStatus) {
         updatePayload.payment_status = String(body.paymentStatus);
-      }
-      if (body.fulfillmentStatus) {
-        updatePayload.fulfillment_status = String(body.fulfillmentStatus);
       }
       if (typeof body.trackingNumber === "string") {
         updatePayload.tracking_number = body.trackingNumber.trim() || null;
@@ -142,6 +149,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
 
       if (error) {
         throw error;
+      }
+
+      // The status change goes through the same writer the bulk action and the
+      // Shippo webhook use. Tracking is saved FIRST so that if this transition
+      // triggers a shipping email, the tracking number is already on the row.
+      if (body.fulfillmentStatus) {
+        const transition = await setOrderFulfillmentStatus({
+          orderId,
+          to: String(body.fulfillmentStatus),
+          source: "admin",
+          actor: session.username,
+        });
+        if (!transition.ok) {
+          // A refusal is the pipeline doing its job — report its sentence
+          // verbatim rather than a generic failure, so the operator learns why.
+          return NextResponse.json({ success: false, error: transition.message }, { status: 400 });
+        }
       }
 
       const { error: auditError } = await supabaseAdmin
