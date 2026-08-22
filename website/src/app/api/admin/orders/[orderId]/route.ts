@@ -545,12 +545,27 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
 
     if (action === "cancel" || action === "resend_confirmation") {
       if (action === "cancel") {
-        const { error } = await supabaseAdmin
-          .from("orders")
-          .update({ fulfillment_status: "cancelled", updated_at: now })
-          .eq("order_id", orderId);
-        if (error) {
-          throw error;
+        // CANCELLATION IS A TRANSITION, NOT A FIELD WRITE.
+        //
+        // This used to be a raw UPDATE, which meant an admin could cancel an
+        // order the carrier had already delivered — reproduced before this
+        // change: delivered, in_transit, shipped and refunded all accepted a
+        // cancel, each leaving zero history rows. FULFILLMENT_TRANSITIONS
+        // reaches `cancelled` only from awaiting_payment, paid,
+        // ready_to_fulfill and packed, and says why: "No cancel after shipping:
+        // the goods are gone, so the honest outcomes are a refund or a return."
+        //
+        // Routing through the canonical writer applies that rule, records the
+        // change in order_status_history, and returns the pipeline's own
+        // sentence when it refuses.
+        const cancelled = await setOrderFulfillmentStatus({
+          orderId,
+          to: "cancelled",
+          source: "admin",
+          actor: session.username,
+        });
+        if (!cancelled.ok) {
+          return NextResponse.json({ success: false, error: cancelled.message }, { status: 400 });
         }
       }
 

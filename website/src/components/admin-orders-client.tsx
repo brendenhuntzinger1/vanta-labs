@@ -28,6 +28,8 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  /** Per-order refusals from the last bulk action, with the pipeline's reason. */
+  const [refusals, setRefusals] = useState<Array<{ orderId: string; reason?: string }>>([]);
 
   const toggleOne = (orderId: string) => {
     setSelected((prev) => {
@@ -52,19 +54,55 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
 
     setBusy(true);
     setMessage(null);
+    setRefusals([]);
     try {
       const response = await fetch("/api/admin/orders", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ orderIds: Array.from(selected), action }),
       });
-      const result = await response.json() as { success: boolean; error?: string };
+      // REPORT WHAT THE SERVER DID, NOT WHAT WAS ASKED FOR.
+      //
+      // This used to read `Updated ${selected.size} orders` — the SELECTION
+      // size. Since the pipeline refuses moves that are illegal from an order's
+      // current state, a mixed selection genuinely comes back partial: pick 5,
+      // 3 move, and the screen still claimed 5. The server has always sent the
+      // real numbers; the client was reading back its own input.
+      const result = await response.json() as {
+        success: boolean;
+        error?: string;
+        requested?: number;
+        updated?: number;
+        refused?: Array<{ orderId: string; reason?: string }>;
+      };
       if (!result.success) {
         setMessage(result.error ?? "Unable to update selected orders.");
         return;
       }
-      setMessage(`Updated ${selected.size} order${selected.size === 1 ? "" : "s"}.`);
-      setSelected(new Set());
+
+      const updated = result.updated ?? 0;
+      const refused = result.refused ?? [];
+      const plural = (n: number) => (n === 1 ? "order" : "orders");
+
+      if (updated === 0) {
+        // A complete failure must never wear a success message.
+        setMessage(`No orders were updated. ${refused.length} ${plural(refused.length)} could not be changed.`);
+      } else if (refused.length > 0) {
+        setMessage(`${updated} ${plural(updated)} updated · ${refused.length} could not be updated.`);
+      } else {
+        setMessage(`${updated} ${plural(updated)} updated.`);
+      }
+      // The reasons are kept so the operator can see WHY, rather than being
+      // told a number and left to guess which orders it referred to.
+      setRefusals(refused);
+
+      // Only clear the selection for the orders that actually moved: leaving
+      // the refused ones selected is what lets an operator act on them next.
+      if (refused.length === 0) {
+        setSelected(new Set());
+      } else {
+        setSelected(new Set(refused.map((r) => r.orderId)));
+      }
       router.refresh();
     } catch {
       setMessage("Unable to update selected orders right now.");
@@ -93,6 +131,26 @@ export function AdminOrdersClient({ orders }: { orders: AdminOrderRow[] }) {
         </div>
       ) : message ? (
         <p className="mb-4 text-xs text-zinc-400">{message}</p>
+      ) : null}
+
+      {/* WHICH orders were refused, and why. A count on its own tells an
+          operator that something did not happen without telling them what to
+          do about it — and these are exactly the orders that still need
+          attention, so they are named. */}
+      {refusals.length > 0 ? (
+        <div role="status" className="vl-panel-soft mb-4 rounded-xl p-3">
+          <p className="text-xs font-medium text-amber-300">
+            {refusals.length} order{refusals.length === 1 ? "" : "s"} could not be updated
+          </p>
+          <ul className="mt-2 space-y-1">
+            {refusals.map((refusal) => (
+              <li key={refusal.orderId} className="text-xs text-zinc-400">
+                <span className="font-mono text-zinc-300">{refusal.orderId}</span>
+                {refusal.reason ? <> — {refusal.reason}</> : null}
+              </li>
+            ))}
+          </ul>
+        </div>
       ) : null}
 
       <div className="grid gap-3 sm:hidden">
