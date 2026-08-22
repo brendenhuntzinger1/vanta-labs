@@ -247,6 +247,7 @@ import {
   clearQuotedRateCache,
   getLabelUrlForOrder,
   getRatesForOrder,
+  purchaseLabelForOrder,
   voidLabelForOrder,
 } from "@/lib/shippo/service";
 import { deactivatePackagePreset, getDefaultPackagePreset, setDefaultPackagePreset } from "@/lib/shippo/packages";
@@ -858,5 +859,305 @@ describe("package presets", () => {
     const fallback = await getDefaultPackagePreset();
     expect(fallback?.id).toBe(second);
     expect(table("shipping_package_presets").filter((row) => row.is_default === true)).toHaveLength(1);
+  });
+});
+
+// ===========================================================================
+// THE MONEY PATH.
+//
+// purchaseLabelForOrder is the only function in this application that spends
+// the owner's money, and it was restored deliberately so Vanta — not Shippo's
+// dashboard — is where postage gets bought.
+//
+// THE INVARIANT, stated once: ONE ORDER MUST NEVER BUY TWO ACTIVE LABELS.
+// Every test below is that sentence under a different kind of pressure. Where
+// certainty is impossible, the required behaviour is to STOP and surface an
+// exception — never to guess by trying again.
+// ===========================================================================
+describe("purchaseLabelForOrder — exactly once", () => {
+  /** A successful Shippo purchase. */
+  function shippoSucceeds(overrides: Record<string, unknown> = {}) {
+    purchaseLabel.mockResolvedValue({
+      ok: true,
+      data: {
+        transactionId: "transaction_bought_1",
+        rateId: USPS_RATE.object_id,
+        trackingNumber: "9400111899223197428490",
+        labelUrl: "https://shippo-delivery.s3.amazonaws.com/label.pdf",
+        trackingUrlProvider: null,
+        carrier: "USPS",
+        service: "Ground Advantage",
+        serviceToken: "usps_ground_advantage",
+        postageCostCents: 520,
+        raw: {},
+        ...overrides,
+      },
+    });
+  }
+
+  async function quoted() {
+    seedOrder();
+    await getRatesForOrder(ORDER_ID);
+  }
+
+  it("buys once and records the transaction, tracking, carrier and exact cost", async () => {
+    await quoted();
+    shippoSucceeds();
+
+    const result = await purchaseLabelForOrder({
+      orderId: ORDER_ID,
+      selection: { cheapest: true },
+      actor: "owner",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.data.reused).toBe(false);
+    expect(result.data.postageCostCents).toBe(520);
+    expect(purchaseLabel).toHaveBeenCalledTimes(1);
+
+    const order = currentOrder();
+    expect(order.shippo_transaction_id).toBe("transaction_bought_1");
+    expect(order.tracking_number).toBe("9400111899223197428490");
+    expect(order.shipping_carrier).toBe("USPS");
+    expect(order.postage_cost_cents).toBe(520);
+    // Through the canonical pipeline, not a raw write.
+    expect(order.fulfillment_status).toBe("label_purchased");
+    expect(recordActualShippingCost).toHaveBeenCalledWith(
+      expect.objectContaining({ amountCents: 520, source: "shippo" }),
+    );
+  });
+
+  it("writes fulfillment history rather than bypassing it", async () => {
+    await quoted();
+    shippoSucceeds();
+    await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true }, actor: "owner" });
+
+    const history = table("order_status_history").filter((r) => r.order_id === ORDER_ID);
+    expect(history.length).toBeGreaterThan(0);
+    expect(history.some((r) => r.to_status === "label_purchased")).toBe(true);
+  });
+
+  it("REFUSES to buy without an explicit selection", async () => {
+    await quoted();
+    shippoSucceeds();
+    const result = await purchaseLabelForOrder({ orderId: ORDER_ID, selection: {}, actor: "owner" });
+    expect(result.ok).toBe(false);
+    // Nothing was bought, and no claim was taken.
+    expect(purchaseLabel).not.toHaveBeenCalled();
+    expect(currentOrder().label_purchase_claimed_at ?? null).toBeNull();
+  });
+
+  it("a SECOND request returns the same label and does not call Shippo again", async () => {
+    await quoted();
+    shippoSucceeds();
+    const first = await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } });
+    const second = await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } });
+
+    expect(first.ok && second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.data.reused).toBe(true);
+    expect(second.data.transactionId).toBe("transaction_bought_1");
+    // THE INVARIANT.
+    expect(purchaseLabel).toHaveBeenCalledTimes(1);
+  });
+
+  it("a DOUBLE-CLICK — two concurrent requests — buys exactly one label", async () => {
+    await quoted();
+    shippoSucceeds();
+
+    const [a, b] = await Promise.all([
+      purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } }),
+      purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } }),
+    ]);
+
+    expect(purchaseLabel).toHaveBeenCalledTimes(1);
+    // Exactly one wins; the loser is told a purchase is in flight rather than
+    // being handed a second charge.
+    const outcomes = [a, b].map((r) => (r.ok ? "ok" : r.code));
+    expect(outcomes.filter((o) => o === "ok")).toHaveLength(1);
+    expect(outcomes).toContain("purchase_in_progress");
+  });
+
+  it("FIVE simultaneous tabs still buy exactly one label", async () => {
+    await quoted();
+    shippoSucceeds();
+
+    const results = await Promise.all(
+      Array.from({ length: 5 }, () =>
+        purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } }),
+      ),
+    );
+
+    expect(purchaseLabel).toHaveBeenCalledTimes(1);
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+  });
+
+  it("sends Shippo an idempotency key derived from the ORDER", async () => {
+    await quoted();
+    shippoSucceeds();
+    await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } });
+
+    const [input] = purchaseLabel.mock.calls[0] as [{ idempotencyKey?: string; metadata?: string }];
+    // Keyed on the order, so even a defeated local claim cannot create a second
+    // transaction at Shippo.
+    expect(input.idempotencyKey).toBe(`vanta-label-${ORDER_ID}`);
+    expect(input.metadata).toBe(ORDER_ID);
+  });
+
+  it("refuses when a previous purchase's outcome is still unknown", async () => {
+    await quoted();
+    currentOrder().label_purchase_claimed_at = new Date().toISOString();
+
+    const result = await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("purchase_in_progress");
+    expect(purchaseLabel).not.toHaveBeenCalled();
+  });
+
+  it("never buys for an order that already shipped", async () => {
+    await quoted();
+    seedPurchasedLabel({ fulfillment_status: "in_transit" });
+    const result = await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } });
+    // Short-circuits on the existing label; no second charge.
+    expect(result.ok).toBe(true);
+    expect(purchaseLabel).not.toHaveBeenCalled();
+  });
+});
+
+describe("purchaseLabelForOrder — failure is never a retry", () => {
+  async function quoted() {
+    seedOrder();
+    await getRatesForOrder(ORDER_ID);
+  }
+
+  it("a DEFINITIVE rejection frees the claim so a corrected attempt can proceed", async () => {
+    await quoted();
+    purchaseLabel.mockResolvedValue({
+      ok: false,
+      kind: "rejected",
+      message: "Shippo could not buy this label.",
+      // Shippo's own statement that nothing was created.
+      safeToRetry: true,
+    });
+
+    const result = await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } });
+    expect(result.ok).toBe(false);
+    // Safe to try again — nothing was charged.
+    expect(currentOrder().label_purchase_claimed_at ?? null).toBeNull();
+  });
+
+  it("a TIMEOUT keeps the claim, so the order stops rather than buying twice", async () => {
+    await quoted();
+    purchaseLabel.mockResolvedValue({
+      ok: false,
+      kind: "timeout",
+      message: "Shippo did not respond within 30 seconds.",
+      // The request may have been fully processed before the connection died.
+      safeToRetry: false,
+    });
+
+    const first = await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } });
+    expect(first.ok).toBe(false);
+    // THE CLAIM IS HELD. This is the whole point.
+    expect(currentOrder().label_purchase_claimed_at ?? null).not.toBeNull();
+
+    // And a retry is refused rather than gambling a second charge.
+    purchaseLabel.mockClear();
+    const retry = await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } });
+    expect(retry.ok).toBe(false);
+    if (retry.ok) return;
+    expect(retry.code).toBe("purchase_in_progress");
+    expect(purchaseLabel).not.toHaveBeenCalled();
+  });
+
+  it("a LOST RESPONSE after Shippo charged keeps the claim too", async () => {
+    await quoted();
+    purchaseLabel.mockResolvedValue({
+      ok: false,
+      kind: "network",
+      message: "Could not reach Shippo.",
+      safeToRetry: false,
+    });
+
+    await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } });
+    expect(currentOrder().label_purchase_claimed_at ?? null).not.toBeNull();
+    expect(currentOrder().shippo_transaction_id ?? null).toBeNull();
+  });
+
+  it("a 2xx with no transaction id is treated as ambiguous, not as success", async () => {
+    await quoted();
+    purchaseLabel.mockResolvedValue({
+      ok: false,
+      kind: "invalid_response",
+      message: "Shippo accepted the purchase but did not return a transaction id.",
+      safeToRetry: false,
+    });
+
+    const result = await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } });
+    expect(result.ok).toBe(false);
+    expect(currentOrder().label_purchase_claimed_at ?? null).not.toBeNull();
+  });
+
+  it("an EXPIRED RATE fails before claiming and before spending", async () => {
+    seedOrder();
+    // No quote at all, and a rate id that resolves to nothing.
+    createShipmentWithRates.mockResolvedValue({
+      ok: false,
+      kind: "rejected",
+      message: "no rates",
+      safeToRetry: true,
+    });
+
+    const result = await purchaseLabelForOrder({
+      orderId: ORDER_ID,
+      selection: { rateId: "rate_that_expired" },
+    });
+    expect(result.ok).toBe(false);
+    expect(purchaseLabel).not.toHaveBeenCalled();
+    // No claim was taken, so the order is not stranded by a failed lookup.
+    expect(currentOrder().label_purchase_claimed_at ?? null).toBeNull();
+  });
+
+  it("a rate quoted for ANOTHER order can never be purchased against this one", async () => {
+    seedOrder();
+    await getRatesForOrder(ORDER_ID);
+    const rateId = String(USPS_RATE.object_id);
+    // Same rate id, different order.
+    const other = await purchaseLabelForOrder({
+      orderId: "vl-some-other-order",
+      selection: { rateId },
+    });
+    expect(other.ok).toBe(false);
+    expect(purchaseLabel).not.toHaveBeenCalled();
+  });
+});
+
+describe("purchaseLabelForOrder — reprint and void", () => {
+  it("reprinting returns the stored label and never calls Shippo", async () => {
+    seedOrder();
+    await getRatesForOrder(ORDER_ID);
+    seedPurchasedLabel();
+
+    const printed = await getLabelUrlForOrder(ORDER_ID);
+    expect(printed.ok).toBe(true);
+    // Reprinting is a printing problem, not a purchase.
+    expect(purchaseLabel).not.toHaveBeenCalled();
+  });
+
+  it("a voided label frees the claim so a replacement can be bought", async () => {
+    seedOrder();
+    await getRatesForOrder(ORDER_ID);
+    seedPurchasedLabel();
+    voidLabel.mockResolvedValue({
+      ok: true,
+      data: { refundId: "refund_1", transactionId: "transaction_test_1", status: "QUEUED", pending: true },
+    });
+
+    await voidLabelForOrder(ORDER_ID, "owner");
+    expect(currentOrder().label_purchase_claimed_at ?? null).toBeNull();
+    expect(currentOrder().shippo_transaction_id).toBe("transaction_test_1");
+    expect(currentOrder().label_voided_at).not.toBeNull();
   });
 });

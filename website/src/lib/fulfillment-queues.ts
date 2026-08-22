@@ -56,6 +56,11 @@ export interface QueueOrder {
   carrier: string | null;
   /** True when a Shippo label was bought for this order. */
   hasLabel: boolean;
+  /**
+   * Shippo's own words for why a sync failed, surfaced so the operator reads
+   * the error instead of being told to go and look up a column.
+   */
+  shippoSyncError: string | null;
   paidAt: string | null;
   createdAt: string;
   batchId: string | null;
@@ -83,6 +88,7 @@ function toQueueOrder(row: Record<string, unknown>, batchId: string | null = nul
     trackingNumber: row.tracking_number ? String(row.tracking_number) : null,
     carrier: row.shipping_carrier ? String(row.shipping_carrier) : null,
     hasLabel: Boolean(row.shippo_transaction_id || row.label_url),
+    shippoSyncError: row.shippo_sync_error ? String(row.shippo_sync_error) : null,
     paidAt: row.paid_at ? String(row.paid_at) : null,
     createdAt: String(row.created_at),
     batchId,

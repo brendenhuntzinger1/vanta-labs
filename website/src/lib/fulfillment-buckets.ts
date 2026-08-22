@@ -178,13 +178,13 @@ export const EXCEPTION_REASONS: readonly ExceptionDefinition[] = [
   {
     reason: "shippo_error",
     label: "Shippo sync failed",
-    action: "Read shippo_sync_error, fix the cause, and re-sync.",
+    action: "Shippo rejected this order. The reason is shown below — fix it, then retry the sync.",
     derivedFrom: "shippo_sync_status = 'error'",
   },
   {
     reason: "shippo_blocked",
     label: "Blocked before Shippo",
-    action: "Usually a ship-from address or parcel configuration problem.",
+    action: "Vanta stopped before sending this to Shippo — usually the ship-from address or the parcel setup.",
     derivedFrom: "shippo_sync_status = 'blocked'",
   },
   {
@@ -196,7 +196,7 @@ export const EXCEPTION_REASONS: readonly ExceptionDefinition[] = [
   {
     reason: "label_claim_stranded",
     label: "Label purchase never completed",
-    action: "A purchase was begun and never finished. Release the claim or complete it.",
+    action: "A label purchase started and never confirmed. Postage may have been charged \u2014 check Shippo before buying again.",
     derivedFrom: "label_purchase_claimed_at IS NOT NULL AND shippo_transaction_id IS NULL",
   },
 ];

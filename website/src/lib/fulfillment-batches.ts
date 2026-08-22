@@ -327,6 +327,13 @@ export interface PackingOrder {
   hasLabel: boolean;
   labelUrl: string | null;
   trackingNumber: string | null;
+  /**
+   * Carrier and service, shown at the bench so the packer knows whether they
+   * are holding a UPS Ground or a USPS Ground Advantage parcel without opening
+   * Shippo to find out.
+   */
+  carrier: string | null;
+  service: string | null;
   /** Position in the batch, for "order 12 of 99". */
   position: number;
   ofTotal: number;
@@ -352,7 +359,7 @@ export async function getNextToPack(batchId: string): Promise<PackingOrder | nul
 
   const { data: orders, error } = await supabaseAdmin
     .from("orders")
-    .select("order_id, order_number, customer_name, city, state, country, payment_status, fulfillment_status, label_url, tracking_number, shippo_transaction_id, paid_at")
+    .select("order_id, order_number, customer_name, city, state, country, payment_status, fulfillment_status, label_url, tracking_number, shippo_transaction_id, shipping_carrier, shipping_service, label_voided_at, paid_at")
     .in("order_id", orderIds)
     .order("paid_at", { ascending: true, nullsFirst: false });
   if (error) throw error;
@@ -383,7 +390,11 @@ export async function getNextToPack(batchId: string): Promise<PackingOrder | nul
     items: packItems,
     totalUnits: packItems.reduce((s, i) => s + i.quantity, 0),
     fulfillmentStatus: String(next.fulfillment_status ?? ""),
-    hasLabel: Boolean(next.shippo_transaction_id || next.label_url),
+    // A voided label is not a label — the carrier has been told that parcel is
+    // not coming, so the bench must not offer it for printing.
+    hasLabel: Boolean((next.shippo_transaction_id || next.label_url) && !next.label_voided_at),
+    carrier: next.shipping_carrier ? String(next.shipping_carrier) : null,
+    service: next.shipping_service ? String(next.shipping_service) : null,
     labelUrl: next.label_url ? String(next.label_url) : null,
     trackingNumber: next.tracking_number ? String(next.tracking_number) : null,
     position: live.length - remaining.length + 1,

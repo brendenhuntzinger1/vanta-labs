@@ -5,6 +5,7 @@ import { sendEmail } from "@/lib/email/send";
 import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { deliveryConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
+import { recordActualShippingCost } from "@/lib/admin-profit";
 import { resolveCarrier } from "@/lib/tracking-url";
 import { getSiteUrl } from "@/lib/env";
 import { normalizeUsState } from "@/lib/sales-tax";
@@ -17,7 +18,7 @@ import {
   type OrderStatusHistoryRecord,
   type TransitionSource,
 } from "@/lib/order-pipeline";
-import { createShipmentWithRates, voidLabel, type ShippoFailure } from "@/lib/shippo/client";
+import { createShipmentWithRates, purchaseLabel, voidLabel, type ShippoFailure } from "@/lib/shippo/client";
 import {
   buildParcel,
   computeParcelWeightOz,
@@ -933,16 +934,267 @@ export interface PurchaseLabelRequest {
  *      statement that nothing was created; anything else keeps the claim so a
  *      human checks before another cent is spent.
  */
-// purchaseLabelForOrder REMOVED — labels are bought in Shippo's dashboard.
-//
-// Two systems able to buy a label for one order means two labels and two
-// charges for one parcel. The atomic claim below still exists and still guards
-// the rate/void paths, but it can only serialize callers of THIS app; it cannot
-// see a purchase made by hand in Shippo's UI. The guarantee has to come from
-// there being exactly one place that can spend the money.
-//
-// Real postage now arrives through applyTransactionCreated() in
-// src/lib/shippo/order-sync.ts.
+/**
+ * Turn "what the admin clicked" into the full rate object a purchase needs.
+ *
+ * The cached id is the fast path. A miss re-quotes and matches on
+ * carrier + service token, which survives the quote expiring. Nothing here
+ * spends money, so an unresolvable selection is a clean `rate_expired` with no
+ * claim held and no charge.
+ */
+async function resolveSelectedRate(
+  order: OrderShippingRow,
+  selection: RateSelection,
+): Promise<ServiceResult<ShippoRate>> {
+  const wantedId = text(selection?.rateId);
+  if (wantedId) {
+    const cached = quotedRates.get(wantedId);
+    // The orderId check is load bearing: a rate quoted for one order must never
+    // be purchasable against another, or a cheap parcel buys a heavy one's
+    // postage.
+    if (cached && cached.orderId === order.order_id && cached.expiresAt > Date.now()) {
+      return { ok: true, data: cached.rate };
+    }
+  }
+
+  const quote = await quoteShipment(order);
+  if (!quote.ok) return quote;
+
+  const rates = quote.data.rates;
+  if (wantedId) {
+    const exact = rates.find((rate) => rate.object_id === wantedId);
+    if (exact) return { ok: true, data: exact };
+  }
+
+  const wantedCarrier = text(selection?.carrier)?.toLowerCase();
+  const wantedService = text(selection?.serviceToken)?.toLowerCase();
+  if (wantedCarrier || wantedService) {
+    const matched = rates.find(
+      (rate) =>
+        (!wantedCarrier || String(rate.provider ?? "").toLowerCase() === wantedCarrier) &&
+        (!wantedService || String(rate.servicelevel?.token ?? "").toLowerCase() === wantedService),
+    );
+    if (matched) return { ok: true, data: matched };
+  }
+
+  // `cheapest` is honoured only when asked for explicitly — never as a silent
+  // fallback, because quietly buying a different service than the one clicked
+  // is how a customer paying for overnight gets ground.
+  if (selection?.cheapest) {
+    const cheapest = rates[0];
+    if (cheapest) return { ok: true, data: cheapest };
+  }
+
+  return fail("rate_expired", "That shipping rate is no longer available. Re-quote and choose again.");
+}
+
+/**
+ * The atomic claim. Exactly one caller per order gets through.
+ *
+ * Postgres serializes two concurrent UPDATEs on one row, so with
+ * `where label_purchase_claimed_at is null` exactly one of them matches and
+ * returns a row. Everyone else loses and must not call Shippo. Same shape as
+ * claimInventoryRestock() and the paid_side_effects_at claim.
+ */
+async function claimLabelPurchase(orderId: string): Promise<"won" | "lost" | "error"> {
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .update({ label_purchase_claimed_at: new Date().toISOString() })
+    .eq("order_id", orderId)
+    .is("label_purchase_claimed_at", null)
+    .select("order_id")
+    .maybeSingle<{ order_id: string }>();
+
+  if (error) {
+    console.error("Unable to claim the label purchase for order", orderId, error);
+    return "error";
+  }
+  return data ? "won" : "lost";
+}
+
+/**
+ * Buy the postage for an order. THIS SPENDS MONEY, AT MOST ONCE.
+ *
+ * The order of operations is the whole design:
+ *
+ *   1. SHORT-CIRCUIT. A label already bought and not voided comes straight
+ *      back with `reused: true`. This is what makes a refresh, a back-button
+ *      re-submit and an HTTP retry free.
+ *   2. RESOLVE THE RATE FIRST, before claiming. Resolution can fail, and
+ *      failing while holding the claim would strand the order for no reason.
+ *   3. CLAIM. One atomic UPDATE decides who may talk to Shippo.
+ *   4. BUY, then persist, advance the status, record the exact postage.
+ *   5. RELEASE ONLY ON A KNOWN-SAFE FAILURE. `safeToRetry` is Shippo's own
+ *      statement that nothing was created. ANYTHING ELSE KEEPS THE CLAIM and
+ *      raises an exception, so a human verifies before another cent is spent.
+ *
+ * NEVER call this from a webhook, a render, a queue entry or an automatic
+ * retry. It is reachable only from an authenticated admin action.
+ */
+export async function purchaseLabelForOrder(
+  request: PurchaseLabelRequest,
+): Promise<ServiceResult<OrderLabel>> {
+  const { orderId, selection, overrides, actor = null } = request;
+
+  const loaded = await loadOrder(orderId);
+  if (!loaded.ok) return loaded;
+
+  // 1. ALREADY BOUGHT.
+  const existing = labelFromOrder(loaded.data, true);
+  if (existing) return { ok: true, data: existing };
+
+  const notShippable = assertShippable(loaded.data);
+  if (notShippable) return notShippable;
+
+  const applied = await applyParcelOverrides(loaded.data, overrides);
+  if (!applied.ok) return applied;
+  const order = applied.data.order;
+
+  // A claim already held means a previous purchase's outcome is unknown. Never
+  // buy over the top of that.
+  if (text(order.label_purchase_claimed_at)) {
+    return fail(
+      "purchase_in_progress",
+      "A label purchase for this order was started and its outcome is unconfirmed. Verify it before buying again.",
+    );
+  }
+
+  // 2. RESOLVE THE RATE BEFORE CLAIMING.
+  const resolved = await resolveSelectedRate(order, selection);
+  if (!resolved.ok) return resolved;
+  const rate = resolved.data;
+
+  // 3. CLAIM.
+  const claim = await claimLabelPurchase(order.order_id);
+  if (claim === "error") {
+    return fail("db_error", "Could not reserve this order for purchase. Nothing was bought.");
+  }
+  if (claim === "lost") {
+    return fail("purchase_in_progress", "Another purchase for this order is already in progress.");
+  }
+
+  // 4. BUY.
+  const bought = await purchaseLabel({
+    rate,
+    metadata: order.order_id,
+    // Keyed on the ORDER, so a defeated local claim still cannot produce a
+    // second transaction at Shippo.
+    idempotencyKey: `vanta-label-${order.order_id}`,
+  });
+
+  if (!bought.ok) {
+    if (bought.safeToRetry) {
+      // 5a. Shippo says nothing was created. Safe to hand the claim back.
+      await releaseLabelClaim(order.order_id);
+      return fromShippoFailure(bought);
+    }
+
+    // 5b. AMBIGUOUS OR CHARGED. The claim STAYS. This order stops being normal
+    // work and becomes an exception a human resolves — the alternative is
+    // gambling a second postage charge on a guess.
+    await recordSystemAlert({
+      type: "shippo_label_unconfirmed",
+      severity: "critical",
+      message: `Label purchase for order ${order.order_id} did not confirm. Postage may have been charged.`,
+      context: {
+        orderId: order.order_id,
+        actor,
+        reason: bought.message,
+        transactionId: "transactionId" in bought ? bought.transactionId ?? null : null,
+      },
+    });
+    return fromShippoFailure(bought);
+  }
+
+  const label = bought.data;
+  const now = new Date().toISOString();
+  const transition = applyTransition({
+    orderId: order.order_id,
+    from: order.fulfillment_status,
+    to: "label_purchased",
+    source: "shippo",
+  });
+
+  const update: Record<string, unknown> = {
+    shippo_transaction_id: label.transactionId,
+    shippo_rate_id: label.rateId,
+    shipping_carrier: label.carrier,
+    shipping_service: label.service,
+    tracking_number: label.trackingNumber || null,
+    label_url: label.labelUrl || null,
+    postage_cost_cents: label.postageCostCents,
+    label_purchased_at: now,
+    label_voided_at: null,
+    updated_at: now,
+  };
+  // Monotonic, exactly as the webhook path is: a label bought for an order the
+  // carrier has already scanned must not drag it backwards.
+  if (transition.ok) update.fulfillment_status = transition.next;
+
+  const { error } = await supabaseAdmin.from("orders").update(update).eq("order_id", order.order_id);
+  if (error) {
+    // POSTAGE WAS CHARGED and we could not record it. The label still travels
+    // back so it can be printed; nothing about this invites a retry.
+    console.error("Bought a Shippo label but could not update the order", order.order_id, error);
+    await recordSystemAlert({
+      type: "shippo_label_unsaved",
+      severity: "critical",
+      message: `Label for order ${order.order_id} was purchased at Shippo but not recorded on the order.`,
+      context: { orderId: order.order_id, transactionId: label.transactionId },
+    });
+    return fail("db_error", "The label was purchased but the order could not be updated.", {
+      label: {
+        orderId: order.order_id,
+        orderNumber: text(order.order_number) ?? order.order_id,
+        transactionId: label.transactionId,
+        rateId: label.rateId,
+        carrier: label.carrier,
+        service: label.service,
+        trackingNumber: label.trackingNumber || null,
+        trackingUrl: resolveCarrier(label.carrier, label.trackingNumber)?.trackingUrl ?? null,
+        labelUrl: label.labelUrl || null,
+        postageCostCents: label.postageCostCents,
+        purchasedAt: now,
+        fulfillmentStatus: String(order.fulfillment_status ?? ""),
+        reused: false,
+      } satisfies OrderLabel,
+    });
+  }
+
+  if (transition.ok) {
+    await recordStatusHistory(transition.history);
+    await upsertShipment({
+      orderId: order.order_id,
+      carrier: label.carrier,
+      trackingNumber: label.trackingNumber || null,
+      status: transition.next,
+    });
+  }
+  await recordActualShippingCost({
+    orderId: order.order_id,
+    amountCents: label.postageCostCents,
+    source: "shippo",
+  });
+
+  return {
+    ok: true,
+    data: {
+      orderId: order.order_id,
+      orderNumber: text(order.order_number) ?? order.order_id,
+      transactionId: label.transactionId,
+      rateId: label.rateId,
+      carrier: label.carrier,
+      service: label.service,
+      trackingNumber: label.trackingNumber || null,
+      trackingUrl: resolveCarrier(label.carrier, label.trackingNumber)?.trackingUrl ?? null,
+      labelUrl: label.labelUrl || null,
+      postageCostCents: label.postageCostCents,
+      purchasedAt: now,
+      fulfillmentStatus: transition.ok ? transition.next : String(order.fulfillment_status ?? ""),
+      reused: false,
+    },
+  };
+}
 
 /**
  * Reprint. Returns the SAME stored label and never touches Shippo — reprinting
