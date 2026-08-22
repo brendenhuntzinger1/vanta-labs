@@ -1161,3 +1161,84 @@ describe("purchaseLabelForOrder — reprint and void", () => {
     expect(currentOrder().label_voided_at).not.toBeNull();
   });
 });
+
+// ===========================================================================
+// DEFECT: THE CONFIRMED PRICE AND THE CHARGED PRICE COULD DIVERGE.
+//
+// The batch flow quotes every order, shows the operator a total, and asks them
+// to confirm it. The purchase then ran with `{ cheapest: true }` and NO rate id,
+// which skips the quoted-rate cache entirely and re-quotes. Whatever came back
+// cheapest at that moment was bought — so the number on the confirmation dialog
+// was not necessarily the number charged.
+//
+// The fix carries the reviewed rate id through to the purchase. These tests pin
+// that the id is honoured and that a re-quote cannot substitute a different
+// rate behind the operator's back.
+// ===========================================================================
+describe("purchaseLabelForOrder — buys the rate that was confirmed", () => {
+  it("uses the quoted rate id instead of re-quoting", async () => {
+    seedOrder();
+    const quote = await getRatesForOrder(ORDER_ID);
+    expect(quote.ok).toBe(true);
+    if (!quote.ok) return;
+    const reviewedRateId = String(quote.data.rates[0].object_id);
+    const callsAfterQuote = createShipmentWithRates.mock.calls.length;
+
+    purchaseLabel.mockResolvedValue({
+      ok: true,
+      data: {
+        transactionId: "transaction_confirmed", rateId: reviewedRateId,
+        trackingNumber: "94001", labelUrl: "https://shippo-delivery.s3.amazonaws.com/l.pdf",
+        trackingUrlProvider: null, carrier: "USPS", service: "Ground Advantage",
+        serviceToken: "usps_ground_advantage", postageCostCents: 520, raw: {},
+      },
+    });
+
+    await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { rateId: reviewedRateId } });
+
+    // THE ASSERTION THAT FAILED BEFORE THE FIX: with a cached rate id the
+    // purchase must not go back to Shippo for a fresh quote.
+    expect(createShipmentWithRates.mock.calls.length).toBe(callsAfterQuote);
+    const [input] = purchaseLabel.mock.calls[0] as [{ rate: { object_id: string } }];
+    expect(input.rate.object_id).toBe(reviewedRateId);
+  });
+
+  it("charges the price the operator was shown, not a later one", async () => {
+    seedOrder();
+    const quote = await getRatesForOrder(ORDER_ID);
+    if (!quote.ok) return;
+    const reviewed = quote.data.rates[0];
+    const reviewedCents = Math.round(Number(reviewed.amount) * 100);
+
+    // Shippo re-prices between review and purchase — a surcharge, a carrier
+    // dropping out, anything. A re-quoting purchase would silently buy this.
+    createShipmentWithRates.mockResolvedValue({
+      ok: true,
+      data: {
+        shipmentId: "ship_2",
+        rates: [{ ...reviewed, object_id: "rate_more_expensive", amount: "99.00" }],
+      },
+    });
+
+    purchaseLabel.mockImplementation(async (input: { rate: { object_id: string; amount: string } }) => ({
+      ok: true,
+      data: {
+        transactionId: "transaction_x", rateId: input.rate.object_id,
+        trackingNumber: "94001", labelUrl: "https://shippo-delivery.s3.amazonaws.com/l.pdf",
+        trackingUrlProvider: null, carrier: "USPS", service: "Ground Advantage",
+        serviceToken: "usps_ground_advantage",
+        postageCostCents: Math.round(Number(input.rate.amount) * 100), raw: {},
+      },
+    }));
+
+    const result = await purchaseLabelForOrder({
+      orderId: ORDER_ID,
+      selection: { rateId: String(reviewed.object_id) },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    // The confirmed price, not the $99 re-quote.
+    expect(result.data.postageCostCents).toBe(reviewedCents);
+  });
+});

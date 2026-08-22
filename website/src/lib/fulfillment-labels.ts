@@ -275,17 +275,26 @@ const AMBIGUOUS_CODES = new Set([
  * nothing is retried automatically.
  */
 export async function purchaseBatchLabels(
-  orderIds: string[],
+  targets: Array<{ orderId: string; rateId?: string | null }>,
   actor: string | null,
 ): Promise<BatchPurchaseResult> {
   const lines: PurchaseResultLine[] = [];
 
-  for (const orderId of orderIds) {
+  for (const { orderId, rateId } of targets) {
     try {
       const result = await purchaseLabelForOrder({
         orderId,
-        // Cheapest, matching what the review quoted and displayed.
-        selection: { cheapest: true },
+        // THE RATE THE OPERATOR WAS SHOWN AND CONFIRMED.
+        //
+        // Passing only `cheapest` here would skip the quoted-rate cache and
+        // re-quote at purchase time, so a rate that moved between the review
+        // and the click would be bought silently — and the total on the
+        // confirmation dialog would not be the total charged.
+        //
+        // `cheapest` remains as the fallback for a line whose quote expired,
+        // because refusing to ship is worse than buying the cheapest available
+        // service, which is what the review offered anyway.
+        selection: rateId ? { rateId, cheapest: true } : { cheapest: true },
         actor,
       });
 

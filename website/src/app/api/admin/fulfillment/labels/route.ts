@@ -58,9 +58,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: false, error: "Invalid request body." }, { status: 400 });
   }
 
-  const orderIds = Array.isArray(body.orderIds)
-    ? body.orderIds.map((id) => String(id)).filter((id) => id.length > 0)
+  // Accepts either bare ids or {orderId, rateId} pairs. The pair form carries
+  // the rate the operator confirmed, so the purchase buys what was priced.
+  const targets = Array.isArray(body.orderIds)
+    ? body.orderIds
+        .map((entry) =>
+          typeof entry === "string"
+            ? { orderId: entry, rateId: null as string | null }
+            : {
+                orderId: String((entry as Record<string, unknown>)?.orderId ?? ""),
+                rateId:
+                  typeof (entry as Record<string, unknown>)?.rateId === "string"
+                    ? String((entry as Record<string, unknown>).rateId)
+                    : null,
+              },
+        )
+        .filter((t) => t.orderId.length > 0)
     : [];
+  const orderIds = targets.map((t) => t.orderId);
 
   if (orderIds.length === 0) {
     return NextResponse.json(
@@ -90,7 +105,7 @@ export async function POST(request: Request) {
 
   let result;
   try {
-    result = await purchaseBatchLabels(orderIds, session.username);
+    result = await purchaseBatchLabels(targets, session.username);
   } catch (error) {
     console.error("Batch label purchase failed outright", error);
     return NextResponse.json(

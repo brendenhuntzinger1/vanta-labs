@@ -183,7 +183,11 @@ export function FulfillmentWorkstation({
    */
   const purchaseLabels = async () => {
     if (!review || !activeBatch) return;
-    const targets = review.lines.filter((l) => l.readiness === "ready").map((l) => l.orderId);
+    // Carry the reviewed rate with each order so the purchase buys the rate
+    // that was priced on screen, not a fresh quote taken seconds later.
+    const targets = review.lines
+      .filter((l) => l.readiness === "ready")
+      .map((l) => ({ orderId: l.orderId, rateId: l.rateId }));
     if (targets.length === 0) return;
 
     setBusy(true); setConfirming(false); setMessage(null);
