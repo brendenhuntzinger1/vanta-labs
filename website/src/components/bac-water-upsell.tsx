@@ -62,12 +62,29 @@ function useBacWaterProduct() {
 // Product page — "Recommended Accessories", right below Add to Cart.
 // Light lab theme. Hidden on the BAC Water page itself.
 // -------------------------------------------------------------------------
-export function BacWaterAccessoryBlock({ bacWater, hostSlug }: { bacWater: Product | null; hostSlug: string }) {
+/**
+ * ELIGIBILITY, IN ONE PLACE.
+ *
+ * A product may be offered bacteriostatic water only when an operator has said
+ * it ships lyophilized. The old rule was "anything that is not BAC Water
+ * itself", which recommended a reconstitution step for liquid products too.
+ *
+ * Deliberately strict: `=== true`. A product loaded before the column existed,
+ * or a cart line persisted before the field existed, reads as undefined and is
+ * treated as not eligible. Under-showing is the safe direction — a missed
+ * cross-sell costs a few dollars, a reconstitution prompt on a liquid costs
+ * credibility with exactly the customers who read labels.
+ */
+function needsReconstitution(product: { requiresReconstitution?: boolean } | null | undefined) {
+  return product?.requiresReconstitution === true;
+}
+
+export function BacWaterAccessoryBlock({ bacWater, host }: { bacWater: Product | null; host: Product | null }) {
   const { addToCart } = useCart();
   const [addedKey, setAddedKey] = useState<string | null>(null);
   const offers = useMemo(() => getBacWaterDoseOffers(bacWater), [bacWater]);
 
-  if (!bacWater || isBacWater(hostSlug) || offers.length === 0) return null;
+  if (!bacWater || !host || isBacWater(host.slug) || !needsReconstitution(host) || offers.length === 0) return null;
 
   const handleAdd = (offer: BacWaterDoseOffer, sourceElement: HTMLElement | null) => {
     addToCart(bacWater, 1, sourceElement, bacWaterAddOptions(bacWater, offer));
@@ -137,7 +154,7 @@ export function FrequentlyBoughtTogether({
   const [selectedOfferKey, setSelectedOfferKey] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<string | null>(null);
 
-  if (!bacWater || isBacWater(product.slug) || offers.length === 0) return null;
+  if (!bacWater || isBacWater(product.slug) || !needsReconstitution(product) || offers.length === 0) return null;
 
   // 30mL is the spotlighted size, so it's the pre-selected pairing.
   const defaultOffer = offers.find(isFeaturedBacWaterOffer) ?? offers[0];
@@ -224,7 +241,11 @@ export function BacWaterCartCheckboxes() {
   const bacWater = useBacWaterProduct();
   const offers = useMemo(() => getBacWaterDoseOffers(bacWater), [bacWater]);
 
-  if (!bacWater || offers.length === 0) return null;
+  // The cart only ever sees lines, never products — which is why the flag is
+  // snapshotted onto the line when it is added. Offer BAC Water only while
+  // something in the basket actually needs reconstituting.
+  const cartNeedsReconstitution = items.some((item) => item.requiresReconstitution === true);
+  if (!bacWater || offers.length === 0 || !cartNeedsReconstitution) return null;
 
   return (
     <div className="vl-panel-soft rounded-[1.25rem] p-4">
@@ -284,10 +305,19 @@ export function BacWaterAddedPopup() {
 
   useEffect(() => {
     const handleAnalytics = (event: Event) => {
-      const detail = (event as CustomEvent<{ eventType?: string; productSlug?: string }>).detail;
+      const detail = (event as CustomEvent<{
+        eventType?: string;
+        productSlug?: string;
+        requiresReconstitution?: boolean;
+      }>).detail;
       if (detail?.eventType !== "add_to_cart") return;
       if (!detail.productSlug || detail.productSlug === BAC_WATER_SLUG) return;
       if (!bacWaterRef.current) return;
+      // Only nudge when the product just added is flagged lyophilized. The
+      // flag rides on the event rather than being looked up in the cart: this
+      // handler runs synchronously on dispatch, before React has re-rendered,
+      // so the cart ref does not yet contain the line that triggered it.
+      if (detail.requiresReconstitution !== true) return;
       if (itemsRef.current.some((item) => item.slug === BAC_WATER_SLUG)) return;
       try {
         if (window.sessionStorage.getItem(NUDGE_SESSION_KEY)) return;
@@ -324,68 +354,92 @@ export function BacWaterAddedPopup() {
   };
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-end justify-center px-4 pb-6 sm:items-center sm:pb-4">
+    <div className="vl-bac-sheet-root fixed inset-0 z-[70] flex items-end justify-center sm:items-center sm:px-4 sm:pb-4">
       <button
         type="button"
         tabIndex={-1}
         aria-label="Dismiss reminder"
         onClick={() => setIsOpen(false)}
-        className="absolute inset-0 bg-black/60 backdrop-blur-[2px]"
+        className="absolute inset-0 bg-black/70 backdrop-blur-[3px]"
       />
+      {/* A bottom sheet on a phone and a centred dialog from sm. The sheet is
+          the reliable shape inside TikTok/Instagram webviews: it is anchored to
+          an edge the browser chrome cannot take away, and it needs no viewport
+          height arithmetic. Safe-area padding keeps the action clear of the
+          iPhone home indicator. */}
       <div
         role="dialog"
         aria-modal="true"
         aria-labelledby="bac-water-nudge-title"
-        className="vl-panel relative z-10 w-full max-w-md rounded-[1.5rem] p-5 shadow-2xl sm:p-6"
+        className="vl-bac-sheet relative z-10 w-full max-w-md rounded-t-[1.75rem] p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] sm:rounded-[1.5rem] sm:p-6 sm:pb-6"
       >
+        <span aria-hidden="true" className="vl-bac-sheet-grip sm:hidden" />
+
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-3">
-            {hasRealImage ? (
-              <div className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-white/[0.08] bg-black/40">
-                <Image src={image} alt={bacWater.name} fill sizes="56px" className="object-cover" />
-              </div>
-            ) : null}
-            <div>
-              <p id="bac-water-nudge-title" className="text-base font-semibold text-white">Don&apos;t forget BAC Water</p>
-              <p className="mt-1 text-xs leading-5 text-[#a3a3a3]">
-                Lyophilized compounds require a sterile diluent for reconstitution.
-              </p>
-            </div>
-          </div>
+          <p className="vl-bac-eyebrow">Laboratory Reconstitution</p>
           <button
             ref={dismissButtonRef}
             type="button"
             onClick={() => setIsOpen(false)}
             aria-label="Close"
-            className="-mr-1 -mt-1 inline-flex h-9 w-9 shrink-0 items-center justify-center text-[#a3a3a3] transition hover:text-white"
+            className="vl-focus-ring -mr-1.5 -mt-1.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white/45 transition hover:bg-white/[0.06] hover:text-white"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" className="h-4 w-4"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>
         </div>
-        <div className="mt-4 space-y-2">
-          {offers.map((offer) => (
-            <button
-              key={offer.cartKey}
-              type="button"
-              onClick={() => handleAdd(offer)}
-              className="vl-focus-ring flex w-full items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-white/[0.02] px-4 py-3 text-left transition hover:border-[color:var(--accent-gold)]/40"
-            >
-              <span className="text-sm text-white">
-                BAC Water {offer.sizeLabel}
-                {isFeaturedBacWaterOffer(offer) ? (
-                  <span className="ml-1.5 inline-flex items-center gap-0.5 align-middle text-[10px] font-semibold uppercase tracking-wide text-[color:var(--accent-gold)]">
-                    <span aria-hidden="true">★</span> Most Popular
-                  </span>
-                ) : null}
-              </span>
-              <span className="text-sm font-semibold text-[color:var(--accent-gold)]">+{offer.displayPrice}</span>
-            </button>
-          ))}
+
+        <div className="mt-3 flex items-center gap-4">
+          {hasRealImage ? (
+            <div className="vl-bac-figure relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl">
+              <Image src={image} alt={bacWater.name} fill sizes="80px" className="object-cover" />
+            </div>
+          ) : null}
+          <div className="min-w-0">
+            <p id="bac-water-nudge-title" className="vl2-serif text-[1.35rem] leading-tight text-white">
+              Don&apos;t forget bacteriostatic water
+            </p>
+            {/* A statement about laboratory practice, not a purchase statistic.
+                There is no order-history query behind this component, so it
+                must never imply a count of other customers. */}
+            <p className="vl-bac-pairing mt-2">Commonly added with lyophilized materials</p>
+          </div>
         </div>
+
+        <p className="mt-3.5 text-[0.8125rem] leading-6 text-white/55">
+          This product is supplied in lyophilized form. Bacteriostatic water is available separately
+          for laboratory reconstitution.
+        </p>
+
+        <div className="mt-4 space-y-2">
+          {offers.map((offer) => {
+            const featured = isFeaturedBacWaterOffer(offer);
+            return (
+              <button
+                key={offer.cartKey}
+                type="button"
+                onClick={() => handleAdd(offer)}
+                className={`vl-bac-offer vl-focus-ring flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left ${featured ? "is-featured" : ""}`}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span className="text-[0.9375rem] font-medium text-white">BAC Water {offer.sizeLabel}</span>
+                  {featured ? <span className="vl-bac-flag">Most Popular</span> : null}
+                </span>
+                <span className="shrink-0 text-[0.9375rem] font-semibold text-[color:var(--accent-gold-bright)]">
+                  +{offer.displayPrice}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <p className="mt-3.5 text-center text-[10px] uppercase tracking-[0.14em] text-white/30">
+          Research use only · Not for human consumption
+        </p>
+
         <button
           type="button"
           onClick={() => setIsOpen(false)}
-          className="mt-3 w-full py-2 text-center text-xs text-[#a3a3a3] transition hover:text-white"
+          className="vl-focus-ring mt-1.5 w-full rounded-xl py-3 text-center text-xs text-white/45 transition hover:text-white"
         >
           No thanks, continue shopping
         </button>
