@@ -3423,3 +3423,80 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 @media (prefers-reduced-motion: reduce) {
   .vl-card-fav { transition: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   COOKIE CONSENT — a bar in the document, not an overlay on top of it.
+   Pinned to the bottom of the viewport, this covered 140 interactive controls
+   across a 7-width x 4-height x 3-route sweep. In flow it covers nothing:
+   it takes its own height at the top of the page and scrolls away.
+   --------------------------------------------------------------------------- */
+/* While consent is pending the header is not pinned to the viewport, so the
+   in-flow consent bar above it is never scrolled underneath it. The header
+   returns to `fixed` the moment a choice is made — this rule only ever applies
+   to a visitor's first screens. */
+:root[data-consent-pending] .vl2-nav {
+  position: static;
+}
+
+.vl-consent-bar {
+  position: relative;
+  z-index: 1;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  background: #0b0b0b;
+  /* Respects a notch when the bar is the first thing under the status bar. */
+  padding: calc(0.45rem + env(safe-area-inset-top, 0px)) 0.9rem 0.45rem;
+}
+
+.vl-consent-inner {
+  margin: 0 auto;
+  display: flex;
+  max-width: 80rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+}
+
+.vl-consent-copy {
+  flex: 1 1 14rem;
+  min-width: 0;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.vl-consent-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.4rem;
+}
+
+/* Both choices carry identical weight; Accept is warmed only enough to read as
+   the affirmative. Neither is hidden, greyed, or made harder to hit. */
+.vl-consent-btn {
+  min-height: 2rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 0.3rem 0.85rem;
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.82);
+  background: transparent;
+  transition: border-color 160ms ease, color 160ms ease;
+}
+.vl-consent-btn:hover { border-color: rgba(255, 255, 255, 0.3); color: #fff; }
+.vl-consent-btn.is-primary {
+  border-color: rgba(199, 174, 94, 0.45);
+  color: #e8dcc0;
+}
+.vl-consent-btn.is-primary:hover { border-color: rgba(199, 174, 94, 0.75); }
+
+@media (min-width: 640px) {
+  .vl-consent-bar { padding: 0.6rem 1.5rem; }
+  .vl-consent-copy { font-size: 0.75rem; }
+  .vl-consent-btn { font-size: 0.75rem; padding: 0.35rem 1rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-consent-btn { transition: none; }
+}

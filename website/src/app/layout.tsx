@@ -171,6 +171,8 @@ export default function RootLayout({
             <SiteAnalyticsTracker />
           </Suspense>
           <AgeGate>
+            {/* In flow, above the header, so it overlays nothing. */}
+            <CookieConsent />
             <WelcomeOffer />
             {children}
             <SiteFooter />
@@ -190,7 +192,6 @@ export default function RootLayout({
             </Link>
             <CartDrawer />
             <BacWaterAddedPopup />
-            <CookieConsent />
           </AgeGate>
         </CartProvider>
         <ConsentedAnalytics />

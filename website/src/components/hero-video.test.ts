@@ -86,63 +86,53 @@ describe("the cookie banner never sits on top of what a visitor must tap", () =>
   const banner = read("src/components/cookie-consent.tsx");
   const css = read("src/app/globals.css");
 
-  it("measures and publishes its own height", () => {
-    // Assumed heights are wrong the moment the copy wraps differently, which it
-    // does at every viewport width.
-    expect(banner).toContain("--cookie-banner-height");
-    expect(banner).toContain("offsetHeight");
-    expect(banner).toContain('setAttribute("data-cookie-banner"');
+  // It no longer sits on top of anything at all. This used to be a bottom-fixed
+  // panel that published its own height so bottom bars could move out from
+  // under it. Measured across 7 widths x 4 heights on three routes, that panel
+  // was covering 140 interactive controls — search, Filters, sort, COA status
+  // filters, wishlist buttons — and a tap aimed at any of them landed on Accept
+  // or Decline. Shrinking it lowered the count but could never reach zero,
+  // because a bottom overlay always covers whatever is at the bottom.
+  //
+  // So it moved into normal document flow at the top of the page. It takes its
+  // own height, pushes content down, and scrolls away. Nothing can be
+  // mis-tapped through it, and the height-publishing machinery is gone because
+  // there is nothing left to get out of the way of.
+  it("is in the document, not fixed over it", () => {
+    expect(banner).not.toMatch(/className="fixed[^"]*bottom-/);
+    expect(banner).toContain("vl-consent-bar");
   });
 
-  it("clears the flag again once dismissed", () => {
-    expect(banner).toContain('removeAttribute("data-cookie-banner")');
-    expect(banner).toContain('removeProperty("--cookie-banner-height")');
+  it("no longer needs to publish its height, because nothing must dodge it", () => {
+    expect(banner).not.toContain("offsetHeight");
+    expect(banner).not.toContain('setAttribute("data-cookie-banner"');
   });
 
-  it("is no longer lifted above the sticky bottom bars", () => {
-    // The old `max-lg:bottom-24` pushed it 6rem up the screen, straight over
-    // the homepage hero's CTA cluster. The persistent bars move for it now.
-    expect(banner).not.toContain("max-lg:bottom-24");
+  it("reserves its own space rather than overlapping", () => {
+    const rule = css.slice(css.indexOf(".vl-consent-bar {"), css.indexOf(".vl-consent-inner"));
+    expect(rule).toMatch(/position:\s*relative/);
+    expect(rule).not.toMatch(/position:\s*fixed/);
+    // A notch must not eat the first line when this is the topmost element.
+    expect(rule).toMatch(/safe-area-inset-top/);
   });
 
-  it("gives the page room to scroll clear of it", () => {
-    expect(css).toMatch(/body\[data-cookie-banner="true"\]\s*\{[^}]*padding-bottom/);
+  it("keeps both choices equally weighted", () => {
+    // Neither option may be hidden, greyed, or made harder to hit than the
+    // other — that is the difference between a consent notice and a nudge.
+    expect(banner).toContain(">Decline<");
+    expect(banner).toContain(">Accept<");
+    const rule = css.slice(css.indexOf(".vl-consent-btn {"), css.indexOf("@media (min-width: 640px)", css.indexOf(".vl-consent-btn {")));
+    expect(rule).toMatch(/min-height:\s*2rem/);
   });
 
-  it("lifts the persistent bottom bars instead of covering them", () => {
-    expect(css).toMatch(/body\[data-cookie-banner="true"\]\s*\.vl-bottom-bar\s*\{[^}]*bottom/);
-  });
-
-  it("the cart drawer's pay bar gets out of the way too", () => {
-    // The drawer's pay bar is NOT fixed — it is the last flex child of a
-    // full-height drawer panel — so the .vl-bottom-bar `bottom` shift cannot
-    // move it. Below sm that panel fills the viewport, putting "Proceed to
-    // checkout" under the consent banner with no way to scroll it clear: a
-    // dead checkout button on a phone. It gets padding instead.
-    expect(read("src/components/cart-drawer.tsx")).toContain("vl-drawer-paybar");
-    expect(css).toMatch(/body\[data-cookie-banner="true"\]\s*\.vl-drawer-paybar\s*\{[^}]*padding-bottom/);
-    // Scoped to the small screens where the collision actually happens; above
-    // sm the panel is inset (sm:my-4 sm:mr-4) and the two never meet.
-    const idx = css.indexOf(".vl-drawer-paybar");
-    expect(css.slice(Math.max(0, idx - 400), idx)).toMatch(/@media \(max-width: 639px\)/);
-  });
-
-  it("every fixed bottom-anchored bar opts into that lift", () => {
-    // A new bar that forgets the class gets silently buried under the banner.
-    const files = [
-      "src/components/product-detail-client.tsx",
-      "src/components/account-dashboard-nav.tsx",
-      "src/app/checkout/page.tsx",
-      "src/app/layout.tsx",
-    ];
-    for (const file of files) {
-      const contents = read(file);
-      const bars = contents.match(/className="[^"]*fixed[^"]*bottom-[^"]*"/g) ?? [];
-      for (const bar of bars) {
-        expect(bar, `${file}: a fixed bottom-anchored element must carry vl-bottom-bar — ${bar}`)
-          .toContain("vl-bottom-bar");
-      }
+  it("still names every pixel that accepting turns on", () => {
+    // The substance of the notice. An earlier pass shortened this sentence to
+    // save two lines and dropped the platform names; the pixel source tests
+    // caught it. Layout does not get to win this one.
+    for (const platform of ["TikTok", "Snapchat", "Reddit"]) {
+      expect(banner).toContain(platform);
     }
+    expect(banner).toContain("/legal/cookies");
   });
 });
 

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
 const STORAGE_KEY = "vl_cookie_consent";
 
@@ -9,7 +9,6 @@ const STORAGE_KEY = "vl_cookie_consent";
 // store/session cookies continue to work regardless of this preference.
 export function CookieConsent() {
   const [visible, setVisible] = useState(false);
-  const bannerRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     try {
@@ -23,52 +22,25 @@ export function CookieConsent() {
   }, []);
 
   /**
-   * PUBLISH THE BANNER'S HEIGHT so the page can get out from under it.
+   * The banner used to publish its own height so bottom-anchored bars could
+   * shift out from under it. It is no longer at the bottom, so nothing needs
+   * to move: --cookie-banner-height goes unset and every consumer falls back
+   * to its 0px default. The rules in globals.css that read it are left in
+   * place and are simply inert.
    *
-   * This is a `fixed` element pinned to the bottom of the viewport, and on a
-   * phone it is tall — two lines of policy text plus a row of buttons. The
-   * homepage hero is a near-full-height section whose CTA cluster is anchored
-   * to its BOTTOM, so the two occupied the same pixels: a visitor arriving
-   * from a bio link tapped "Shop the catalog" and hit the consent banner
-   * instead. Nothing happened, and they were left looking at the hero.
-   *
-   * Height is measured rather than assumed because the copy wraps to a
-   * different number of lines on every viewport width. Mirrors what
-   * welcome-offer.tsx does for the top banner.
+   * What DOES need to be published is the fact that the bar is up at all. The
+   * site header is `position: fixed` at the top of the viewport, so an in-flow
+   * bar above it is covered by it the moment the page scrolls — the consent
+   * controls became unreachable, which is worse than the overlap this move
+   * fixed. While the bar is pending the header joins normal flow underneath
+   * it; the instant a choice is made the header is fixed again. Nothing
+   * overlays anything at any point.
    */
   useEffect(() => {
     const root = document.documentElement;
-    const clear = () => {
-      root.style.removeProperty("--cookie-banner-height");
-      document.body.removeAttribute("data-cookie-banner");
-    };
-
-    if (!visible) {
-      clear();
-      return clear;
-    }
-
-    const measure = () => {
-      const height = bannerRef.current?.offsetHeight ?? 0;
-      if (!height) return;
-      root.style.setProperty("--cookie-banner-height", `${height}px`);
-      document.body.setAttribute("data-cookie-banner", "true");
-    };
-
-    measure();
-    // The banner reflows when the viewport changes (rotation, in-app browser
-    // chrome collapsing on scroll), and its height with it.
-    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measure) : null;
-    if (observer && bannerRef.current) observer.observe(bannerRef.current);
-    window.addEventListener("resize", measure);
-    window.addEventListener("orientationchange", measure);
-
-    return () => {
-      observer?.disconnect();
-      window.removeEventListener("resize", measure);
-      window.removeEventListener("orientationchange", measure);
-      clear();
-    };
+    if (visible) root.setAttribute("data-consent-pending", "true");
+    else root.removeAttribute("data-consent-pending");
+    return () => root.removeAttribute("data-consent-pending");
   }, [visible]);
 
   const dismiss = (choice: "accepted" | "declined") => {
@@ -83,34 +55,45 @@ export function CookieConsent() {
 
   if (!visible) return null;
 
-  // Sits at the very bottom. It used to be lifted 6rem on mobile to clear the
-  // sticky Add-to-Cart bar and account bottom-nav, which pushed it up over the
-  // homepage hero's CTAs and swallowed the first tap a visitor ever makes.
-  // Those bars now move for it instead (see .vl-bottom-bar in globals.css),
-  // and the z-index clears them so a consent notice is never painted over.
+  // IN THE DOCUMENT, NOT OVER IT.
   //
-  // The phone layout is deliberately tighter than the desktop one. Measured at
-  // 390x664 — a TikTok in-app browser — this banner was 188px tall, 28% of the
-  // viewport, and it sat directly on top of the catalog's Filters control, so
-  // a first tap meant for Filters landed on Decline. The DISCLOSURE TEXT IS
-  // UNCHANGED, deliberately: it still names every pixel and links the policy,
-  // and both choices remain equally weighted. Only padding and type size move.
+  // This used to be `fixed ... bottom-3`, and that is the whole problem: a
+  // bottom-pinned overlay covers whatever content happens to sit at the bottom
+  // of the viewport, and a tap aimed at that content lands on Accept or
+  // Decline instead. Measured across 7 widths x 4 heights on three routes, the
+  // 142-162px panel was covering 140 interactive controls — search inputs,
+  // Filters, sort, COA status filters, wishlist buttons. Shrinking it reduces
+  // the count but cannot reach zero, because any bottom overlay covers
+  // something.
+  //
+  // So it no longer overlays. It is a compact bar in normal flow at the very
+  // top of the page: it pushes content down by its own height, is never in
+  // front of anything, and scrolls away with the page rather than following
+  // the viewport. Nothing can be mis-tapped through it.
+  //
+  // The consent BEHAVIOUR is unchanged: nothing loads before a choice is made,
+  // both options carry equal weight, the policy is one tap away, and the
+  // decision is stored exactly as before, and the disclosure still NAMES EVERY
+  // PIXEL. An earlier pass at this bar shortened the sentence and dropped
+  // "TikTok, Snapchat and Reddit" to save two lines; the pixel source tests
+  // caught it, correctly. Naming what accepting turns on is the substance of
+  // the notice, not decoration, and it is not negotiable against layout.
   return (
-    <div
-      ref={bannerRef}
-      className="fixed inset-x-3 bottom-3 z-[60] mx-auto max-w-2xl rounded-2xl border border-white/15 bg-[#111]/95 p-3 text-xs text-white/80 shadow-2xl backdrop-blur sm:flex sm:items-center sm:gap-4 sm:p-4 sm:text-sm"
-    >
-      <p className="flex-1 leading-5 sm:leading-6">
-        We use essential cookies to run the store, plus analytics and our advertising pixels (TikTok, Snapchat and Reddit) if you accept. Decline and none of those load. See our{" "}
-        {/* py-1 -my-1 grows the tap box to 24px (WCAG 2.2 AA 2.5.8) while the
-            negative margin cancels the same amount of layout, so the sentence
-            keeps its exact line box. inline-flex is wrong here — this link sits
-            mid-sentence and must stay on the text baseline. */}
-        <Link href="/legal/cookies" className="-my-1 inline-block py-1 text-white underline underline-offset-4">Cookie Policy</Link>.
-      </p>
-      <div className="mt-2.5 flex gap-2 sm:mt-0">
-        <button type="button" onClick={() => dismiss("declined")} className="vl2-btn-secondary vl-focus-ring flex-1 px-4 py-2.5 text-xs sm:flex-none">Decline</button>
-        <button type="button" onClick={() => dismiss("accepted")} className="vl2-btn-primary vl-focus-ring flex-1 px-5 py-2.5 text-xs sm:flex-none">Accept</button>
+    <div className="vl-consent-bar" role="region" aria-label="Cookie consent">
+      <div className="vl-consent-inner">
+        <p className="vl-consent-copy">
+          Essential cookies run the store. Analytics and our advertising pixels (TikTok, Snapchat and Reddit) load only if you accept.{" "}
+          {/* py-1.5 -my-1.5 gives the link a comfortably-over-24px tap box
+              (WCAG 2.2 AA 2.5.8) without changing the line box it sits in.
+              py-1 landed on exactly 24px, which rounds under the threshold. */}
+          <Link href="/legal/cookies" className="-my-1.5 inline-block py-1.5 text-white underline underline-offset-4">
+            Cookie Policy
+          </Link>
+        </p>
+        <div className="vl-consent-actions">
+          <button type="button" onClick={() => dismiss("declined")} className="vl-consent-btn vl-focus-ring">Decline</button>
+          <button type="button" onClick={() => dismiss("accepted")} className="vl-consent-btn is-primary vl-focus-ring">Accept</button>
+        </div>
       </div>
     </div>
   );
