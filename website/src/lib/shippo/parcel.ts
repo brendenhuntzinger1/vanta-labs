@@ -47,6 +47,65 @@ export const DEFAULT_UNIT_WEIGHT_OZ = 0.36;
 export const GRAMS_PER_OZ = 28.349523125;
 
 /**
+ * Density used to bound the mass of a liquid unit's CONTENTS, in g/mL.
+ *
+ * Water. Not a guess and not a measurement of any particular product: an
+ * aqueous solution is water plus dissolved solute, so its density is at or
+ * above water's. Using 1.0 therefore yields a LOWER BOUND on the liquid's own
+ * mass — the one direction that is safe to assume without a scale.
+ */
+export const LIQUID_DENSITY_G_PER_ML = 1.0;
+
+/**
+ * Does this dose label denote a liquid, and if so how many millilitres?
+ *
+ * Liquids are the one category the dry-vial default cannot cover, because the
+ * contents of a dry vial weigh milligrams and the contents of a 10 mL vial
+ * weigh ten grams — more than the vial. Matching is on the dose label because
+ * that is where the catalogue records the unit ("10mL", "30 mL", "2ml").
+ *
+ * Deliberately narrow: `mg`, `iu` and `mcg` must NOT match, so a dry product is
+ * never pushed onto the liquid path. Returns null for anything that is not
+ * unambiguously a millilitre quantity.
+ */
+export function parseDoseVolumeMl(label: NumericLike): number | null {
+  if (typeof label !== "string") return null;
+  // A number immediately followed by ml/mL, with optional space. The negative
+  // lookahead on a following letter keeps "5mlx" style junk out.
+  const match = /(\d+(?:\.\d+)?)\s*m[lL]\b/.exec(label);
+  if (!match) return null;
+  const ml = Number(match[1]);
+  return Number.isFinite(ml) && ml > 0 ? ml : null;
+}
+
+/**
+ * Fallback weight for a LIQUID unit with no measured weight on file.
+ *
+ * = one vial (the existing dry-vial default, which is what the container is)
+ * + the mass of the liquid it holds (volume x water density).
+ *
+ * INVENTS NOTHING. It composes a constant already in this file with a physical
+ * one. A 10 mL vial resolves to 0.36 + gramsToOz(10) = 0.72 oz rather than the
+ * 0.36 oz a dry vial gets — which is the defect this guards: a 10 mL liquid was
+ * previously declared at the weight of its empty container, ignoring the ten
+ * grams of fluid inside it.
+ *
+ * This is still an ESTIMATE and is reported as one (`hasStoredWeight` is false
+ * for these lines, exactly as before). It is not a substitute for putting the
+ * unit on a scale; it is what stops an unmeasured liquid from being declared at
+ * a weight that is physically impossible.
+ *
+ * Unlike DEFAULT_UNIT_WEIGHT_OZ this one DOES err heavy, and that asymmetry is
+ * intentional: the dry default is a plausible figure for the thing it
+ * describes, whereas any liquid rating at the dry figure is known-wrong.
+ */
+export function liquidFallbackWeightOz(volumeMl: number): number {
+  const ml = Number(volumeMl);
+  if (!Number.isFinite(ml) || ml <= 0) return DEFAULT_UNIT_WEIGHT_OZ;
+  return roundHundredths(DEFAULT_UNIT_WEIGHT_OZ + gramsToOz(ml * LIQUID_DENSITY_G_PER_ML));
+}
+
+/**
  * Grams -> ounces, rounded UP to hundredths.
  *
  * Up, not nearest: a declared weight below the real one is what earns a carrier
@@ -133,6 +192,13 @@ export interface ParcelLine {
   /** snake_case aliases, so a joined row can be passed through unmapped. */
   dose_shipping_weight_oz?: NumericLike;
   product_shipping_weight_oz?: NumericLike;
+  /**
+   * The dose/variant label ("10mL", "5mg"). Used ONLY when no weight is stored
+   * anywhere, to tell a liquid unit apart from a dry one before falling back.
+   * Absent means "treat as dry", which is the pre-existing behaviour.
+   */
+  doseLabel?: NumericLike;
+  dose_label?: NumericLike;
 }
 
 export interface ParcelInput {
@@ -217,13 +283,53 @@ export function resolvePackagePreset(preset?: PackagePresetLike | null): Package
  * next to each item.
  */
 export function lineWeightOz(line: ParcelLine | null | undefined): number {
+  // Dose wins over product, but neither returns early any more: both go through
+  // the plausibility check below, because the backfill that produced the bad
+  // value wrote it to the product row and a dose row can be edited by hand.
   const dose = toPositiveNumber(line?.doseWeightOz ?? line?.dose_shipping_weight_oz);
-  if (dose !== null) return dose;
-
   const product = toPositiveNumber(line?.productWeightOz ?? line?.product_shipping_weight_oz);
-  if (product !== null) return product;
+  const volumeMl = parseDoseVolumeMl(line?.doseLabel ?? line?.dose_label);
+  const stored = dose ?? product;
+
+  if (stored !== null) {
+    // A stored weight is normally the truth and is returned untouched. The one
+    // exception is a value that is PHYSICALLY IMPOSSIBLE for the unit it
+    // describes, which is not a measurement — it is a backfill or a typo.
+    //
+    // For a liquid the floor is unarguable: the fluid alone masses
+    // volume x density, so a vial of it cannot weigh less than that even if the
+    // glass were weightless. A 10 mL unit stored at 0.36 oz is exactly the mass
+    // of the water with nothing holding it, which is how the catalogue-wide
+    // backfill to the dry-vial figure shows up on a liquid SKU.
+    //
+    // Only impossible values are overridden. Anything at or above the fluid
+    // floor is a real measurement and wins, including one LIGHTER than the
+    // estimate below.
+    if (volumeMl !== null && stored <= gramsToOz(volumeMl * LIQUID_DENSITY_G_PER_ML)) {
+      return liquidFallbackWeightOz(volumeMl);
+    }
+    return stored;
+  }
+
+  // Nothing stored. Before using the dry-vial default, check whether this unit
+  // is a liquid — for which that default is not merely imprecise but lighter
+  // than the fluid the vial contains.
+  if (volumeMl !== null) return liquidFallbackWeightOz(volumeMl);
 
   return DEFAULT_UNIT_WEIGHT_OZ;
+}
+
+/**
+ * Is this line's weight a stored measurement, or a fallback estimate?
+ *
+ * Kept next to the resolution it describes so the two cannot drift. Callers use
+ * it to show the operator which lines in a parcel are guesses.
+ */
+export function hasStoredWeight(line: ParcelLine | null | undefined): boolean {
+  return (
+    toPositiveNumber(line?.doseWeightOz ?? line?.dose_shipping_weight_oz) !== null ||
+    toPositiveNumber(line?.productWeightOz ?? line?.product_shipping_weight_oz) !== null
+  );
 }
 
 /**

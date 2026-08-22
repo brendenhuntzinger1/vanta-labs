@@ -5,7 +5,12 @@ import {
   MIN_PARCEL_WEIGHT_OZ,
   buildParcel,
   computeParcelWeightOz,
+  LIQUID_DENSITY_G_PER_ML,
+  gramsToOz,
+  hasStoredWeight,
   lineWeightOz,
+  liquidFallbackWeightOz,
+  parseDoseVolumeMl,
   resolvePackagePreset,
 } from "@/lib/shippo/parcel";
 import { parseAmountToCents } from "@/lib/shippo/client";
@@ -313,5 +318,164 @@ describe("parseAmountToCents", () => {
   it("parses a genuine zero as zero so the caller can reject it deliberately", () => {
     expect(parseAmountToCents("0.00")).toBe(0);
     expect(parseAmountToCents("0")).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE LIQUID GUARDRAIL.
+//
+// The defect this closes: a 10 mL liquid vial with no measured weight on file
+// fell through to DEFAULT_UNIT_WEIGHT_OZ, which is documented in parcel.ts as
+// "a 3ml peptide vial at 10 g". A 10 mL vial holds ten grams of FLUID on its
+// own, before the glass — so the parcel was declared at roughly the weight of
+// the empty container. Under-declaring is exactly the direction that earns a
+// carrier adjustment.
+//
+// The guardrail invents no measurement. It composes the existing dry-vial
+// constant (the container) with water density (the contents), which is a lower
+// bound because an aqueous solution is water plus solute.
+// ---------------------------------------------------------------------------
+describe("liquid weight guardrail", () => {
+  it("rates an unweighed liquid above the dry-vial default", () => {
+    // THE DEFECT, stated as the assertion that used to fail.
+    const tenMl = lineWeightOz({ doseLabel: "10mL" });
+    expect(tenMl).toBeGreaterThan(DEFAULT_UNIT_WEIGHT_OZ);
+    // vial + 10 g of fluid
+    expect(tenMl).toBe(liquidFallbackWeightOz(10));
+    expect(tenMl).toBe(0.72);
+  });
+
+  it("never lets an unweighed liquid declare less than the fluid it contains", () => {
+    for (const ml of [1, 2, 5, 10, 30, 50, 100]) {
+      const declared = lineWeightOz({ doseLabel: `${ml}mL` });
+      expect(declared).toBeGreaterThan(gramsToOz(ml * LIQUID_DENSITY_G_PER_ML));
+    }
+  });
+
+  it("lets a STORED weight win over the guardrail, in both directions", () => {
+    // A measured value is the truth even when it is lighter than the estimate.
+    expect(lineWeightOz({ doseLabel: "10mL", doseWeightOz: 0.5 })).toBe(0.5);
+    expect(lineWeightOz({ doseLabel: "10mL", productWeightOz: 0.61 })).toBe(0.61);
+    expect(lineWeightOz({ doseLabel: "10mL", doseWeightOz: 2 })).toBe(2);
+  });
+
+  it("treats a zero or negative stored weight as missing and still guards the liquid", () => {
+    expect(lineWeightOz({ doseLabel: "10mL", doseWeightOz: 0 })).toBe(0.72);
+    expect(lineWeightOz({ doseLabel: "10mL", doseWeightOz: -1 })).toBe(0.72);
+  });
+
+  it("does NOT push a dry product onto the liquid path", () => {
+    for (const label of ["5mg", "10mg", "24iu", "500mcg", "2 capsules", "", "10 units"]) {
+      expect(lineWeightOz({ doseLabel: label })).toBe(DEFAULT_UNIT_WEIGHT_OZ);
+    }
+  });
+
+  it("leaves every pre-existing case untouched when no label is present", () => {
+    expect(lineWeightOz({})).toBe(DEFAULT_UNIT_WEIGHT_OZ);
+    expect(lineWeightOz(null)).toBe(DEFAULT_UNIT_WEIGHT_OZ);
+    expect(lineWeightOz({ doseLabel: null })).toBe(DEFAULT_UNIT_WEIGHT_OZ);
+    expect(lineWeightOz({ doseLabel: 10 })).toBe(DEFAULT_UNIT_WEIGHT_OZ);
+  });
+
+  it("accepts the snake_case alias a raw row carries", () => {
+    expect(lineWeightOz({ dose_label: "10mL" })).toBe(0.72);
+    expect(lineWeightOz({ dose_label: "30 ml" })).toBe(liquidFallbackWeightOz(30));
+  });
+
+  it("parses the volume forms the catalogue actually uses", () => {
+    expect(parseDoseVolumeMl("10mL")).toBe(10);
+    expect(parseDoseVolumeMl("10 mL")).toBe(10);
+    expect(parseDoseVolumeMl("2ml")).toBe(2);
+    expect(parseDoseVolumeMl("0.5 mL")).toBe(0.5);
+    expect(parseDoseVolumeMl("30mL vial")).toBe(30);
+    // and the ones it must refuse
+    expect(parseDoseVolumeMl("5mg")).toBeNull();
+    expect(parseDoseVolumeMl("500mcg")).toBeNull();
+    expect(parseDoseVolumeMl("24iu")).toBeNull();
+    expect(parseDoseVolumeMl("mL")).toBeNull();
+    expect(parseDoseVolumeMl("0mL")).toBeNull();
+    expect(parseDoseVolumeMl(null)).toBeNull();
+    expect(parseDoseVolumeMl(12)).toBeNull();
+  });
+
+  it("still adds the tare exactly once across a mixed dry/liquid parcel", () => {
+    const total = computeParcelWeightOz({
+      preset: MAILER,
+      items: [
+        { doseLabel: "10mL", quantity: 2 },   // 0.72 x 2 = 1.44
+        { doseWeightOz: 0.4, quantity: 3 },   // 0.40 x 3 = 1.20
+        { doseLabel: "5mg", quantity: 1 },    // 0.36 x 1 = 0.36
+      ],
+    });
+    expect(total).toBe(1.5 + 1.44 + 1.2 + 0.36);
+  });
+
+  it("reports a guardrailed line as an ESTIMATE, not a stored measurement", () => {
+    expect(hasStoredWeight({ doseLabel: "10mL" })).toBe(false);
+    expect(hasStoredWeight({ doseLabel: "10mL", doseWeightOz: 0 })).toBe(false);
+    expect(hasStoredWeight({ doseWeightOz: 0.7 })).toBe(true);
+    expect(hasStoredWeight({ productWeightOz: 0.7 })).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PHYSICALLY-IMPOSSIBLE STORED WEIGHT.
+//
+// The guardrail above only helps a line with NO weight on file. The live defect
+// is worse than that: a past catalogue-wide backfill wrote the dry-vial figure
+// (0.36 oz) onto every product row, INCLUDING the 10 mL liquids. So B12 and
+// LIPO-C do not fall through to a default at all — they carry a stored 0.36,
+// and a stored value normally wins.
+//
+// 0.36 oz is exactly gramsToOz(10) — the mass of 10 mL of water and nothing
+// else. A 10 mL vial cannot weigh that, because the glass is not weightless.
+// The value is therefore not a measurement, and treating it as one is what
+// under-declares the parcel.
+//
+// Only IMPOSSIBLE values are overridden. The catalogue's real measurements
+// (bacteriostatic water 10 mL at 1.06 oz, 30 mL at 2.30 oz) sit well above
+// their fluid floors and must pass through untouched.
+// ---------------------------------------------------------------------------
+describe("physically impossible stored liquid weight", () => {
+  it("refuses a 10mL liquid stored at the mass of its own contents", () => {
+    // THE LIVE DEFECT: B12 / LIPO-C as the catalogue actually holds them.
+    expect(lineWeightOz({ doseLabel: "10mL", productWeightOz: 0.36 })).toBe(0.72);
+    expect(lineWeightOz({ doseLabel: "10mL", doseWeightOz: 0.36 })).toBe(0.72);
+  });
+
+  it("leaves a REAL measurement alone, including bac water at both volumes", () => {
+    // These are the values on file today and must not move.
+    expect(lineWeightOz({ doseLabel: "10mL", doseWeightOz: 1.06 })).toBe(1.06);
+    expect(lineWeightOz({ doseLabel: "30mL", doseWeightOz: 2.3 })).toBe(2.3);
+  });
+
+  it("uses the fluid mass as the floor, not an arbitrary threshold", () => {
+    // 30 mL of water is 1.06 oz. Anything at or below that is impossible for a
+    // 30 mL vial; the first hundredth above it is allowed through.
+    expect(gramsToOz(30 * LIQUID_DENSITY_G_PER_ML)).toBe(1.06);
+    expect(lineWeightOz({ doseLabel: "30mL", doseWeightOz: 1.06 })).toBe(liquidFallbackWeightOz(30));
+    expect(lineWeightOz({ doseLabel: "30mL", doseWeightOz: 1.07 })).toBe(1.07);
+  });
+
+  it("never overrides a DRY product's stored weight, however small", () => {
+    // A 5mg dry vial legitimately weighs very little. No liquid floor applies.
+    expect(lineWeightOz({ doseLabel: "5mg", productWeightOz: 0.36 })).toBe(0.36);
+    expect(lineWeightOz({ doseLabel: "10mg", doseWeightOz: 0.1 })).toBe(0.1);
+    expect(lineWeightOz({ productWeightOz: 0.36 })).toBe(0.36);
+  });
+
+  it("keeps dose precedence over product when both are plausible", () => {
+    expect(lineWeightOz({ doseLabel: "10mL", doseWeightOz: 1.2, productWeightOz: 0.36 })).toBe(1.2);
+  });
+
+  it("corrects the real catalogue parcel it was written for", () => {
+    // 2 x B12 10mL as stored today, in the standard mailer (1.06 oz tare).
+    const before = 1.06 + 0.36 * 2;   // 1.78 oz — what Shippo used to be told
+    const after = computeParcelWeightOz({
+      preset: { ...MAILER, emptyWeightOz: 1.06 },
+      items: [{ doseLabel: "10mL", productWeightOz: 0.36, quantity: 2 }],
+    });
+    expect(after).toBe(1.06 + 0.72 * 2);
+    expect(after).toBeGreaterThan(before);
   });
 });

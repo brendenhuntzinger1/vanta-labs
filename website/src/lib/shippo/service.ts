@@ -18,7 +18,13 @@ import {
   type TransitionSource,
 } from "@/lib/order-pipeline";
 import { createShipmentWithRates, voidLabel, type ShippoFailure } from "@/lib/shippo/client";
-import { buildParcel, computeParcelWeightOz, lineWeightOz, type ParcelLine } from "@/lib/shippo/parcel";
+import {
+  buildParcel,
+  computeParcelWeightOz,
+  hasStoredWeight as hasStoredWeightForLine,
+  lineWeightOz,
+  type ParcelLine,
+} from "@/lib/shippo/parcel";
 import { getDefaultPackagePreset, getPackagePresetById, listPackagePresets, type PackagePresetRecord } from "@/lib/shippo/packages";
 import { getPackageRules, selectPresetForUnits } from "@/lib/shippo/package-rules";
 import { getShippingAddresses, type ShippingAddress } from "@/lib/shipping-origin";
@@ -448,13 +454,21 @@ async function loadItemWeights(items: OrderItemRow[]): Promise<{ lines: ParcelLi
   }
 
   const doseWeights = new Map<string, number | null>();
+  // `label` is selected alongside the weight so an UNWEIGHED liquid can be told
+  // apart from an unweighed dry vial before the fallback is chosen. It is read
+  // only when no weight is stored; a stored weight always wins.
+  const doseLabels = new Map<string, string | null>();
   if (doseIds.length > 0) {
-    const { data, error } = await supabaseAdmin.from("product_doses").select("id, shipping_weight_oz").in("id", doseIds);
+    const { data, error } = await supabaseAdmin
+      .from("product_doses")
+      .select("id, shipping_weight_oz, label")
+      .in("id", doseIds);
     if (error) {
       console.error("Unable to load dose shipping weights", error);
     }
     for (const row of data ?? []) {
       doseWeights.set(String(row.id), row.shipping_weight_oz == null ? null : Number(row.shipping_weight_oz));
+      doseLabels.set(String(row.id), row.label == null ? null : String(row.label));
     }
   }
 
@@ -465,6 +479,7 @@ async function loadItemWeights(items: OrderItemRow[]): Promise<{ lines: ParcelLi
       quantity: ref.quantity,
       doseWeightOz: ref.variantId ? doseWeights.get(ref.variantId) ?? null : null,
       productWeightOz: productWeights.get(ref.slug) ?? null,
+      doseLabel: ref.variantId ? doseLabels.get(ref.variantId) ?? null : null,
     };
     lines.push(line);
 
@@ -477,9 +492,13 @@ async function loadItemWeights(items: OrderItemRow[]): Promise<{ lines: ParcelLi
       unitWeightOz: unit,
       lineWeightOz: Math.round(unit * quantity * 100) / 100,
       // A weight stored against the SKU (or inherited from its parent product)
-      // is a real figure. Neither present means the line fell back to the
-      // catalog default, which makes the parcel total a guess.
-      hasStoredWeight: line.doseWeightOz !== null || line.productWeightOz !== null,
+      // is a real figure. Neither present means the line fell back to an
+      // estimate, which makes the parcel total a guess.
+      //
+      // Uses the shared predicate rather than a null check: a stored 0 or a
+      // negative is treated as MISSING by lineWeightOz(), so counting it as
+      // "stored" here would report a fallback line as a real measurement.
+      hasStoredWeight: hasStoredWeightForLine(line),
     });
   }
 

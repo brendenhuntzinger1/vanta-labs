@@ -162,10 +162,57 @@ export const TRUST_POINTS_DETAILED: readonly { label: string; detail: string }[]
 //     store to one. "Fast" is a promise the owner keeps by answering quickly,
 //     not something the software can enforce or evidence.
 // ---------------------------------------------------------------------------
-export const CATALOG_TRUST_RAIL: readonly { top: string; bottom: string; href?: string; icon: string }[] = [
-  { top: "Same-Day", bottom: "Fulfillment", icon: "fulfillment" },
-  { top: "Batch-Tested", bottom: "COAs", href: "/coa-library", icon: "coas" },
-  { top: "\u226599%", bottom: "Purity", icon: "purity" },
-  { top: "Fast Customer", bottom: "Support", href: "/contact", icon: "support" },
-  { top: "Secure", bottom: "Checkout", icon: "checkout" },
-];
+export type RailItem = { top: string; bottom: string; href?: string; icon: string };
+
+/**
+ * THE COA CLAIM, IN TWO STRENGTHS.
+ *
+ * "Batch-Tested COAs" asserts coverage across the whole catalogue. It is only
+ * true while EVERY published product has a document on file, and the comment
+ * above predicted exactly how it breaks: publish one product without its COA
+ * and the line goes silently false site-wide.
+ *
+ * So it is no longer hard-coded. `catalogTrustRail()` picks the strength from
+ * the catalogue actually on the page:
+ *
+ *   every product has a COA  -> the coverage claim, which is now earned
+ *   any product does not     -> the weaker line, which is true either way
+ *
+ * The weaker line still links to the library and still tells a visitor
+ * documents exist. What it stops doing is claiming they exist for everything.
+ */
+export const COA_RAIL_COMPLETE: RailItem = {
+  top: "Batch-Tested",
+  bottom: "COAs",
+  href: "/coa-library",
+  icon: "coas",
+};
+
+/**
+ * Says only what the COA Library route can always evidence: published
+ * certificates are indexed there. Makes no statement about coverage, so no
+ * catalogue change can turn it into a false claim.
+ */
+export const COA_RAIL_PARTIAL: RailItem = {
+  top: "Published",
+  bottom: "COAs",
+  href: "/coa-library",
+  icon: "coas",
+};
+
+/**
+ * The rail for a given catalogue.
+ *
+ * `everyProductHasCoa` defaults to FALSE, which is the safe direction: while
+ * the catalogue is still loading, or if a caller forgets to pass it, the site
+ * under-claims rather than over-claims.
+ */
+export function catalogTrustRail(everyProductHasCoa = false): readonly RailItem[] {
+  return [
+    { top: "Same-Day", bottom: "Fulfillment", icon: "fulfillment" },
+    everyProductHasCoa ? COA_RAIL_COMPLETE : COA_RAIL_PARTIAL,
+    { top: "\u226599%", bottom: "Purity", icon: "purity" },
+    { top: "Fast Customer", bottom: "Support", href: "/contact", icon: "support" },
+    { top: "Secure", bottom: "Checkout", icon: "checkout" },
+  ];
+}

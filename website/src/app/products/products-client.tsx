@@ -6,6 +6,7 @@ import { ProductCard } from "@/components/product-card";
 import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
 import { CatalogTrustRail } from "@/components/catalog-trust-rail";
+import { hasCoa } from "@/lib/coa-url";
 
 type SortKey = "default" | "price-asc" | "price-desc" | "name-asc" | "purity";
 
@@ -209,7 +210,18 @@ function ProductsPageContent() {
               catalogue rather than an About page. */}
         </header>
 
-        <CatalogTrustRail />
+        {/* The COA claim is decided by the catalogue that actually loaded, not
+            hard-coded. See catalogTrustRail() — the coverage wording appears
+            only when every product on the page has a document.
+
+            Deliberately conservative in two ways. An empty/loading list is not
+            treated as coverage, and `coaUrl` does not see a COA that exists
+            only as a `coa_records` row, so the rail can under-claim but never
+            over-claim. Under-claiming costs a weaker word; over-claiming is an
+            unsupported testing statement on every catalogue page. */}
+        <CatalogTrustRail
+          everyProductHasCoa={products.length > 0 && products.every((product) => hasCoa(product.coaUrl))}
+        />
 
         {/* THE COUPON BANNER THAT WAS HERE MOVED TO THE TOP OF THE PAGE.
             StorefrontOffersBar (rendered in the root layout) now carries every
