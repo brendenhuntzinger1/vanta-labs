@@ -34,13 +34,12 @@ export type CartItem = {
   stockStatus: string;
   /**
    * Snapshot of the product's requires_reconstitution flag, taken when the
-   * line was added. Drives the BAC Water cross-sell in the cart and the
-   * add-to-cart popup, which only ever see cart lines, never products.
+   * line was added. Product metadata only.
    *
-   * Optional because a cart persisted before this field existed rehydrates
-   * without it. Undefined is falsy, so an old cart simply does not trigger
-   * the upsell — under-showing rather than recommending a preparation step
-   * for something that may be a liquid.
+   * It does NOT control the BAC Water cross-sell: that offer is shown for
+   * every published product whatever form it ships in, because the catalogue
+   * holds no formulation data to classify from and a hand-maintained flag
+   * would be silently wrong the first time someone forgot to set it.
    */
   requiresReconstitution?: boolean;
 };
