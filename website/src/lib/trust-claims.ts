@@ -89,6 +89,26 @@ export const DESTINATIONS_SENTENCE = "Ships to the United States and Canada.";
 export const TRACKING_SENTENCE = "Tracking is emailed after dispatch.";
 
 /**
+ * THE RESTRICTION, IN THE PLACE A BUYER DECIDES.
+ *
+ * Found by scanning the rendered text of all 111 public URLs: every page says
+ * "Research Use Only", and the full statement — "Not for human or veterinary
+ * use" — appeared on a product page ONLY inside the Description tab, which is
+ * collapsed until tapped and is conditionally rendered, so it was not in the
+ * document at all. The strongest sentence on the site was one tap away from
+ * every buying decision.
+ *
+ * (The earlier compliance sweeps that reported this clean were reading the age
+ * gate's own copy rather than the pages — see the note in compliance.mjs. The
+ * gap was real; the test was not looking.)
+ *
+ * Stated here once so the badge, the panel and anything added later cannot
+ * drift into three different versions of the same restriction.
+ */
+export const RESEARCH_USE_SENTENCE =
+  "For laboratory research use only. Not for human or veterinary use.";
+
+/**
  * The compact strip used in the footer, the age gate and anywhere else a short
  * row of proof points belongs. Ordered by what a first-time visitor from social
  * actually wants to know: is it tested, can I see the paperwork, is my card

@@ -3551,6 +3551,15 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   min-width: 0;
 }
 
+/* WITHOUT THIS THE HEADLINE CANNOT SHRINK.
+   A flex item's default min-width is `auto`, i.e. its content, so the text
+   block refused to give ground, pushed the code pill out of the row, and at
+   320px the eyebrow ended up drawn straight through the code. Allowing it to
+   shrink is what makes the ellipsis happen instead of the collision. */
+.vl-offer-main,
+.vl-offer-body,
+.vl-offer-text { min-width: 0; }
+
 .vl-offer-icon {
   width: 1.05rem;
   height: 1.05rem;
@@ -3558,15 +3567,18 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   color: rgba(199, 174, 94, 0.75);
 }
 
-.vl-offer-text { min-width: 0; }
-
 .vl-offer-eyebrow {
+  /* Hidden on the narrowest phones. It is a label on the offer, and at 320px
+     the width it costs comes straight out of the offer itself — which is the
+     one thing that must never be the part that gets cut. */
+  display: none;
   font-size: 0.5625rem;
   font-weight: 600;
   letter-spacing: 0.22em;
   text-transform: uppercase;
   color: rgba(199, 174, 94, 0.62);
   line-height: 1.2;
+  white-space: nowrap;
 }
 
 /* THE BENEFIT. Largest thing in the bar, and the only serif in it. */
@@ -3623,6 +3635,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 }
 
 .vl-offer-copy {
+  display: none;
   font-size: 0.5625rem;
   font-weight: 600;
   letter-spacing: 0.1em;
@@ -3658,9 +3671,11 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 
 .vl-offer-link {
   min-height: 2rem;
+  min-width: 2rem;
   padding: 0.25rem 0.5rem;
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   font-size: 0.625rem;
   font-weight: 500;
   letter-spacing: 0.12em;
@@ -3688,11 +3703,23 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   background: rgba(255, 255, 255, 0.06);
 }
 
+/* The narrow layout drops the label text; the icon-only control keeps its
+   accessible name, so nothing is lost to a screen reader. */
+.vl-offer-link-long { display: none; }
+.vl-offer-link-short { display: inline; font-size: 0.875rem; letter-spacing: 0; }
+
 /* From 30rem there is room for the supporting detail without crowding. */
 @media (min-width: 30rem) {
   .vl-offer-headline { font-size: 1.1rem; }
-  .vl-offer-code-label { display: inline; }
+  .vl-offer-eyebrow { display: block; }
+  .vl-offer-copy { display: inline; }
   .vl-offer-auto { display: block; }
+  .vl-offer-link-long { display: inline; }
+  .vl-offer-link-short { display: none; }
+}
+
+@media (min-width: 36rem) {
+  .vl-offer-code-label { display: inline; }
 }
 
 @media (min-width: 48rem) {
@@ -3806,4 +3833,13 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   .vl-offer-link,
   .vl-offer-close,
   .vl-offer-sheet-close { transition: none; }
+}
+
+.vl-offer-sheet-note {
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.38);
 }

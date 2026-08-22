@@ -23,7 +23,7 @@ import { CoaLibraryNotice } from "@/components/coa-library-notice";
 import { formatCoaTestDate } from "@/lib/coa-format";
 import type { PublicCoaDocument } from "@/lib/coa-types";
 import Image from "next/image";
-import { FULFILMENT_DETAIL, FULFILMENT_SENTENCE, FULFILMENT_SHORT, TESTING_DETAIL } from "@/lib/trust-claims";
+import { FULFILMENT_DETAIL, FULFILMENT_SENTENCE, FULFILMENT_SHORT, RESEARCH_USE_SENTENCE, TESTING_DETAIL } from "@/lib/trust-claims";
 
 function parseDose(slug: string) {
   const match = slug.match(/(\d+(?:\.\d+)?(?:mg|iu|mcg|g|ml))$/i);
@@ -654,6 +654,15 @@ export function ProductDetailClient({
                   Research Use Only
                 </span>
               </div>
+
+              {/* THE RESTRICTION, WHERE THE DECISION IS MADE.
+                  The full sentence was already on this page — inside the
+                  Description tab, which is collapsed by default and rendered
+                  only once opened, so it was not in the document at all until
+                  somebody tapped it. The badge above says "Research Use Only";
+                  this says what that means, next to Add to Cart, without a
+                  tap. */}
+              <p className="mt-2 text-[11px] leading-5 text-white/40">{RESEARCH_USE_SENTENCE}</p>
 
               {/* Trust row — third-party proof + guarantee, right next to the
                   buy decision (not hidden inside a tab). */}

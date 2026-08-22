@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { useCallback, useMemo, useState } from "react";
 import {
   MAX_DISMISSALS,
+  ONE_DISCOUNT_NOTE,
   OFFERS_DISMISSED_COOKIE,
   endsLabel,
   offerTag,
@@ -194,15 +195,20 @@ export function StorefrontOffersBar({ offers }: { offers: StorefrontOffer[] }) {
           )}
 
           <div className="vl-offer-actions">
-            {live.length > 1 ? (
-              <button type="button" onClick={() => setSheetOpen(true)} className="vl-offer-link vl-focus-ring">
-                {promotions.length > 1 ? `All ${live.length} offers` : "Details"}
-              </button>
-            ) : (
-              <button type="button" onClick={() => setSheetOpen(true)} className="vl-offer-link vl-focus-ring">
-                Details
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => setSheetOpen(true)}
+              className="vl-offer-link vl-focus-ring"
+              // The visible label collapses to a glyph on a narrow phone, so
+              // the accessible name is stated here rather than read off the
+              // text — it has to say the same thing at every width.
+              aria-label={live.length > 1 ? `View all ${live.length} offers and terms` : "View offer terms"}
+            >
+              <span className="vl-offer-link-long">
+                {live.length > 1 ? `All ${live.length} offers` : "Details"}
+              </span>
+              <span className="vl-offer-link-short" aria-hidden="true">···</span>
+            </button>
             <button type="button" onClick={dismiss} className="vl-offer-close vl-focus-ring" aria-label="Dismiss this offer">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true" className="h-3.5 w-3.5">
                 <path d="M6 6l12 12M18 6L6 18" />
@@ -243,6 +249,14 @@ export function StorefrontOffersBar({ offers }: { offers: StorefrontOffer[] }) {
                 );
               })}
             </ul>
+
+            {/* STATED ONCE, AT THE END. It was attached to every discount
+                offer, which meant reading the same three lines three times in
+                one sheet — the repetition made it look like boilerplate, which
+                is the surest way to have the one thing a customer needs to
+                know go unread. It applies to the whole list, so it belongs to
+                the whole list. */}
+            <p className="vl-offer-sheet-note">{ONE_DISCOUNT_NOTE}</p>
           </div>
         </div>
       ) : null}

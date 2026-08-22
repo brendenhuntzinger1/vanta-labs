@@ -30,7 +30,6 @@ import { getHomepageControlConfig, getShippingConfig, getWelcomeOffer } from "@/
 // which is pure and therefore safe for the client bar to import too. This file
 // is the SERVER half: it reads the promotion systems and nothing else.
 import {
-  ONE_DISCOUNT_NOTE,
   discountHeadline,
   offerId,
   type StorefrontOffer,
@@ -125,7 +124,7 @@ function couponOffer(row: CouponRow): StorefrontOffer {
   const type = row.discount_type === "fixed" ? "fixed" : "percent";
   const value = Number(row.discount_value ?? 0);
   const code = String(row.code).toUpperCase();
-  const details = [ONE_DISCOUNT_NOTE];
+  const details: string[] = [];
   if (typeof row.max_redemptions === "number") {
     const left = row.max_redemptions - Number(row.redemptions_count ?? 0);
     // Only stated when it is genuinely scarce. A "997 remaining" line is
@@ -202,7 +201,6 @@ export async function resolveStorefrontOffers(deps: ResolveOffersDeps = {}): Pro
       endsAt: null,
       details: [
         "Valid on a first order only. Once an order has been paid on your email address, the code stops working.",
-        ONE_DISCOUNT_NOTE,
       ],
       href: "/products",
       priority: 20,
@@ -224,7 +222,6 @@ export async function resolveStorefrontOffers(deps: ResolveOffersDeps = {}): Pro
       endsAt: null,
       details: [
         "Every 4th item in your cart is free. The free item is the lowest-priced one, and it counts across your whole order rather than per product.",
-        ONE_DISCOUNT_NOTE,
       ],
       href: "/products",
       priority: 30,
@@ -271,7 +268,6 @@ export async function resolveStorefrontOffers(deps: ResolveOffersDeps = {}): Pro
         endsAt: null,
         details: [
           "Quantity pricing on a single product, applied as you add units.",
-          ONE_DISCOUNT_NOTE,
         ],
         href: "/products",
         priority: 90,

@@ -132,7 +132,9 @@ describe("the bar never implies discounts stack", () => {
   it("carries the one-discount-per-order note on every discount offer", () => {
     // discount-resolution.ts applies exactly one discount, the largest. A bar
     // listing a coupon next to an automatic promotion has to say so.
-    expect(offer().details).toContain(ONE_DISCOUNT_NOTE);
+    // It is now stated ONCE, as a footer on the offers sheet, rather than
+    // repeated under every offer — see the note in storefront-offers-bar.tsx.
+    expect(ONE_DISCOUNT_NOTE).toMatch(/one discount applies per order/i);
   });
 
   it("says free shipping is separate, because it genuinely is", () => {
