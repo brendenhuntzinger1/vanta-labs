@@ -10,7 +10,15 @@ import { SiteAnalyticsTracker } from "@/components/site-analytics-tracker";
 import { SiteFooter } from "@/components/site-footer";
 import { CookieConsent } from "@/components/cookie-consent";
 import { EntryDiagnostics } from "@/components/entry-diagnostics";
-import { WelcomeOffer } from "@/components/welcome-offer";
+import { StorefrontOffersBar } from "@/components/storefront-offers-bar";
+import { cookies } from "next/headers";
+import {
+  OFFERS_DISMISSED_COOKIE,
+  getStorefrontOffers,
+  offerTag,
+  parseDismissed,
+  visibleOffers,
+} from "@/lib/storefront-offers";
 import { ConsentedAnalytics } from "@/components/consented-analytics";
 import { TikTokPixel } from "@/components/tiktok-pixel";
 import { SnapPixel } from "@/components/snap-pixel";
@@ -113,11 +121,28 @@ export const metadata: Metadata = {
     : { index: false, follow: false },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // RESOLVED ENTIRELY ON THE SERVER, DISMISSALS INCLUDED.
+  //
+  // The bar is at the very top of the document, so anything that decides its
+  // existence after first paint shoves the whole page down under the reader.
+  // That rules out fetching the offers in the browser, and it equally rules out
+  // keeping dismissals in localStorage — a dismissed bar would have to be
+  // painted and then removed. A cookie travels with the request, so the server
+  // can render the final answer once and the page never moves.
+  //
+  // Neither call may take the site down over a promotion, so both are guarded.
+  const [allOffers, cookieStore] = await Promise.all([
+    getStorefrontOffers().catch(() => []),
+    cookies(),
+  ]);
+  const dismissed = new Set(parseDismissed(cookieStore.get(OFFERS_DISMISSED_COOKIE)?.value));
+  const offers = visibleOffers(allOffers.filter((offer) => !dismissed.has(offerTag(offer.id))));
+
   return (
     <html
       lang="en"
@@ -171,9 +196,17 @@ export default function RootLayout({
             <SiteAnalyticsTracker />
           </Suspense>
           <AgeGate>
-            {/* In flow, above the header, so it overlays nothing. */}
+            {/* Both in flow, above the header, so they overlay nothing. */}
             <CookieConsent />
-            <WelcomeOffer />
+            {/* REPLACES <WelcomeOffer />, RATHER THAN JOINING IT.
+                The welcome offer is a promotion, and it is now resolved by
+                storefront-offers.ts alongside every other live offer. Rendering
+                both would put the same code on the screen twice, one above the
+                other, at the top of a phone — the stacked-banner outcome this
+                bar exists to avoid. One bar, every live offer, one source of
+                truth. welcome-offer.tsx and its endpoint are left untouched and
+                simply no longer mounted. */}
+            <StorefrontOffersBar offers={offers} />
             {children}
             <SiteFooter />
             {/* vl-bottom-bar lifts this out of the consent banner's way while

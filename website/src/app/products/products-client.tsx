@@ -3,7 +3,6 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ProductCard } from "@/components/product-card";
-import { CouponPromoBanner, type FeaturedCoupon } from "@/components/coupon-promo-banner";
 import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
 import { CatalogTrustRail } from "@/components/catalog-trust-rail";
@@ -28,7 +27,7 @@ function parsePurity(purity?: string) {
   return Number((purity ?? "0").replace(/[^0-9.]/g, "")) || 0;
 }
 
-function ProductsPageContent({ featuredCoupon }: { featuredCoupon: FeaturedCoupon | null }) {
+function ProductsPageContent() {
   const searchParams = useSearchParams();
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [products, setProducts] = useState<Product[]>([]);
@@ -212,7 +211,11 @@ function ProductsPageContent({ featuredCoupon }: { featuredCoupon: FeaturedCoupo
 
         <CatalogTrustRail />
 
-        <CouponPromoBanner initialCoupon={featuredCoupon} />
+        {/* THE COUPON BANNER THAT WAS HERE MOVED TO THE TOP OF THE PAGE.
+            StorefrontOffersBar (rendered in the root layout) now carries every
+            live offer, including this coupon. Keeping this copy as well put the
+            same headline and the same code twice in one phone viewport, a few
+            hundred pixels apart. One offer, stated once, at the top. */}
 
         {/* ONE BAR.
             This was a search field, a category dropdown, a duplicate row of
@@ -511,10 +514,10 @@ function CatalogFallback() {
   );
 }
 
-export function ProductsPageClient({ featuredCoupon }: { featuredCoupon: FeaturedCoupon | null }) {
+export function ProductsPageClient() {
   return (
     <Suspense fallback={<CatalogFallback />}>
-      <ProductsPageContent featuredCoupon={featuredCoupon} />
+      <ProductsPageContent />
     </Suspense>
   );
 }

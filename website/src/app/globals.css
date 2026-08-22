@@ -3500,3 +3500,310 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
 @media (prefers-reduced-motion: reduce) {
   .vl-consent-btn { transition: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   THE STOREFRONT OFFERS BAR.
+
+   A luxury house running an exclusive offer states it once, quietly, in good
+   type. So: near-black ground, ONE hairline of warm gold, the benefit set
+   large in the serif, and nothing that moves after it has arrived. No gold
+   fill, no glow, no shimmer, no marquee, no countdown, no pulse — every one of
+   those reads as a discount store, and contrast plus space does the work
+   instead.
+
+   IN NORMAL FLOW, like the consent bar and for the same reason: the site header
+   is `position: fixed`, so anything pinned near the top either hides beneath it
+   or covers the page. In flow it pushes content down by exactly its own height,
+   covers nothing, and scrolls away.
+   --------------------------------------------------------------------------- */
+.vl-offer-bar {
+  position: relative;
+  z-index: 1;
+  border-bottom: 1px solid rgba(199, 174, 94, 0.16);
+  background: #0a0a0a;
+  /* The single gold edge. A 1px top hairline reading as light catching a rim,
+     not a border drawn around a box. */
+  box-shadow: inset 0 1px 0 rgba(199, 174, 94, 0.14);
+  padding: calc(0.5rem + env(safe-area-inset-top, 0px)) 0.85rem 0.5rem;
+}
+
+.vl-offer-inner {
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  /* Desktop does not get a mobile ribbon stretched across 1920px: the content
+     stops at the site's own measure and stays centred. */
+  max-width: 80rem;
+}
+
+.vl-offer-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  text-decoration: none;
+  color: inherit;
+}
+
+.vl-offer-body {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+.vl-offer-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex-shrink: 0;
+  color: rgba(199, 174, 94, 0.75);
+}
+
+.vl-offer-text { min-width: 0; }
+
+.vl-offer-eyebrow {
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(199, 174, 94, 0.62);
+  line-height: 1.2;
+}
+
+/* THE BENEFIT. Largest thing in the bar, and the only serif in it. */
+.vl-offer-headline {
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-size: 1rem;
+  line-height: 1.25;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vl-offer-code-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.vl-offer-code-label {
+  display: none;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.vl-offer-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  /* 2rem keeps the tap box over the 24px floor without inflating the bar. */
+  min-height: 2rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid rgba(199, 174, 94, 0.3);
+  border-radius: 999px;
+  background: rgba(199, 174, 94, 0.05);
+  transition: border-color 200ms ease, background-color 200ms ease;
+}
+
+.vl-offer-code:hover {
+  border-color: rgba(199, 174, 94, 0.55);
+  background: rgba(199, 174, 94, 0.09);
+}
+
+.vl-offer-code-text {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--accent-gold);
+}
+
+.vl-offer-copy {
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(199, 174, 94, 0.7);
+}
+
+/* An automatic offer gets a sentence, never a code-shaped chip. */
+.vl-offer-auto {
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.45);
+  display: none;
+}
+
+.vl-offer-ends {
+  display: none;
+  flex-shrink: 0;
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.38);
+  padding-left: 0.6rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.vl-offer-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-shrink: 0;
+}
+
+.vl-offer-link {
+  min-height: 2rem;
+  padding: 0.25rem 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+  transition: color 200ms ease;
+  white-space: nowrap;
+}
+
+.vl-offer-link:hover { color: rgba(255, 255, 255, 0.8); }
+
+.vl-offer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.3);
+  transition: color 200ms ease, background-color 200ms ease;
+}
+
+.vl-offer-close:hover {
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* From 30rem there is room for the supporting detail without crowding. */
+@media (min-width: 30rem) {
+  .vl-offer-headline { font-size: 1.1rem; }
+  .vl-offer-code-label { display: inline; }
+  .vl-offer-auto { display: block; }
+}
+
+@media (min-width: 48rem) {
+  .vl-offer-bar { padding: 0.65rem 1.5rem; }
+  .vl-offer-inner { gap: 1rem; }
+  .vl-offer-body { gap: 0.9rem; }
+  .vl-offer-headline { font-size: 1.25rem; }
+  .vl-offer-icon { width: 1.2rem; height: 1.2rem; }
+  .vl-offer-ends { display: inline; }
+}
+
+/* --- VIEW ALL OFFERS / DETAILS -------------------------------------------
+   A bottom sheet on a phone and a centred panel from sm, matching the BAC
+   Water sheet exactly — the shape already proven inside the TikTok and
+   Instagram webviews, anchored to an edge their chrome cannot take away. */
+.vl-offer-sheet-root {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.vl-offer-sheet {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  max-width: 32rem;
+  max-height: 85vh;
+  max-height: 85dvh;
+  overflow-y: auto;
+  border: 1px solid rgba(199, 174, 94, 0.16);
+  border-bottom: none;
+  border-radius: 1.75rem 1.75rem 0 0;
+  background: #0d0d0d;
+  padding: 1.25rem 1.25rem calc(1.25rem + env(safe-area-inset-bottom));
+}
+
+.vl-offer-sheet-title {
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-size: 1.25rem;
+  color: #fff;
+}
+
+.vl-offer-sheet-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin: -0.375rem -0.375rem 0 0;
+  flex-shrink: 0;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.45);
+  transition: color 200ms ease, background-color 200ms ease;
+}
+
+.vl-offer-sheet-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.vl-offer-list { margin-top: 1rem; }
+
+.vl-offer-list-item {
+  padding: 0.9rem 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.vl-offer-list-item:first-child { border-top: none; padding-top: 0; }
+
+.vl-offer-list-headline {
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-size: 1.0625rem;
+  line-height: 1.3;
+  color: #fff;
+}
+
+.vl-offer-list-meta {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.vl-offer-list-code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--accent-gold);
+}
+
+.vl-offer-list-detail {
+  margin-top: 0.45rem;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.38);
+}
+
+@media (min-width: 40rem) {
+  .vl-offer-sheet-root { align-items: center; padding: 1rem; }
+  .vl-offer-sheet {
+    border: 1px solid rgba(199, 174, 94, 0.16);
+    border-radius: 1.5rem;
+    padding: 1.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-offer-code,
+  .vl-offer-link,
+  .vl-offer-close,
+  .vl-offer-sheet-close { transition: none; }
+}
