@@ -8,10 +8,36 @@ import type { Product, ProductDose } from "@/lib/catalog-types";
 // an admin price change propagates to every surface at once.
 // -------------------------------------------------------------------------
 
+/** The SKU the cross-sell offers. */
 export const BAC_WATER_SLUG = "bacteriostatic-water";
 
-export function isBacWater(slug: string) {
-  return slug === BAC_WATER_SLUG;
+/**
+ * IS THIS PRODUCT ITSELF BACTERIOSTATIC WATER?
+ *
+ * Used only to stop the cross-sell offering a product to itself. The catalogue
+ * currently carries TWO published bacteriostatic water SKUs —
+ * "bacteriostatic-water" (Solvents & Solutions) and "bac-water-30ml"
+ * (Laboratory Supplies) — so matching the single offered slug left the other
+ * one able to trigger a BAC Water offer for BAC Water.
+ *
+ * The name check is a deliberate safety net rather than a classification: this
+ * is an EXCLUSION, so the cost of matching too much is one missed cross-sell,
+ * while the cost of matching too little is a recursive offer. It also means a
+ * third BAC Water SKU added later is excluded on the day it is created,
+ * without anyone having to remember this file.
+ *
+ * Note this is the only place a name is inspected anywhere in the cross-sell.
+ * Nothing here infers physical form, and nothing decides ELIGIBILITY from a
+ * name, slug, category, strength or unit.
+ */
+const BAC_WATER_SLUGS = new Set(["bacteriostatic-water", "bac-water-30ml"]);
+
+export function isBacWater(product: { slug?: string; name?: string } | string | null | undefined) {
+  const slug = (typeof product === "string" ? product : product?.slug ?? "").toLowerCase();
+  const name = (typeof product === "string" ? "" : product?.name ?? "").toLowerCase();
+  if (!slug && !name) return false;
+  if (BAC_WATER_SLUGS.has(slug)) return true;
+  return /bacteriostatic|bac[-\s]?water/.test(slug) || /bacteriostatic|bac[-\s]?water/.test(name);
 }
 
 function toPriceNumber(value?: string) {

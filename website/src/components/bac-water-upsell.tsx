@@ -63,28 +63,35 @@ function useBacWaterProduct() {
 // Light lab theme. Hidden on the BAC Water page itself.
 // -------------------------------------------------------------------------
 /**
- * ELIGIBILITY, IN ONE PLACE.
+ * WHO GETS OFFERED BACTERIOSTATIC WATER.
  *
- * A product may be offered bacteriostatic water only when an operator has said
- * it ships lyophilized. The old rule was "anything that is not BAC Water
- * itself", which recommended a reconstitution step for liquid products too.
+ * Every published, sellable product, whatever form it ships in — deliberately.
+ * An earlier version gated this on a requires_reconstitution flag, which meant
+ * the offer depended on someone correctly classifying 90-odd products as powder
+ * or liquid, and on remembering to classify every future one. There is no
+ * formulation data in the catalogue to derive that from (reconstitution_note is
+ * empty on all 92 live rows), so the flag would have been maintained by hand
+ * and silently wrong the first time it was forgotten. A consistent optional
+ * offer that a customer can decline beats an inconsistent one that depends on
+ * hidden metadata.
  *
- * Deliberately strict: `=== true`. A product loaded before the column existed,
- * or a cart line persisted before the field existed, reads as undefined and is
- * treated as not eligible. Under-showing is the safe direction — a missed
- * cross-sell costs a few dollars, a reconstitution prompt on a liquid costs
- * credibility with exactly the customers who read labels.
+ * The flag still exists as product metadata and is still editable in Admin. It
+ * no longer controls anything on this surface. See the copy below: because the
+ * offer now appears for products that may not need it, nothing here may state
+ * that the product requires reconstituting.
+ *
+ * "Published and sellable" is not re-defined here. The offer is rendered inside
+ * storefront surfaces that only exist for products the catalogue already
+ * returned, and getBacWaterDoseOffers() drops sizes that are out of stock.
+ *
+ * The only exclusion is bacteriostatic water itself — see isBacWater().
  */
-function needsReconstitution(product: { requiresReconstitution?: boolean } | null | undefined) {
-  return product?.requiresReconstitution === true;
-}
-
 export function BacWaterAccessoryBlock({ bacWater, host }: { bacWater: Product | null; host: Product | null }) {
   const { addToCart } = useCart();
   const [addedKey, setAddedKey] = useState<string | null>(null);
   const offers = useMemo(() => getBacWaterDoseOffers(bacWater), [bacWater]);
 
-  if (!bacWater || !host || isBacWater(host.slug) || !needsReconstitution(host) || offers.length === 0) return null;
+  if (!bacWater || !host || isBacWater(host) || offers.length === 0) return null;
 
   const handleAdd = (offer: BacWaterDoseOffer, sourceElement: HTMLElement | null) => {
     addToCart(bacWater, 1, sourceElement, bacWaterAddOptions(bacWater, offer));
@@ -154,7 +161,7 @@ export function FrequentlyBoughtTogether({
   const [selectedOfferKey, setSelectedOfferKey] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<string | null>(null);
 
-  if (!bacWater || isBacWater(product.slug) || !needsReconstitution(product) || offers.length === 0) return null;
+  if (!bacWater || isBacWater(product) || offers.length === 0) return null;
 
   // 30mL is the spotlighted size, so it's the pre-selected pairing.
   const defaultOffer = offers.find(isFeaturedBacWaterOffer) ?? offers[0];
@@ -241,11 +248,10 @@ export function BacWaterCartCheckboxes() {
   const bacWater = useBacWaterProduct();
   const offers = useMemo(() => getBacWaterDoseOffers(bacWater), [bacWater]);
 
-  // The cart only ever sees lines, never products — which is why the flag is
-  // snapshotted onto the line when it is added. Offer BAC Water only while
-  // something in the basket actually needs reconstituting.
-  const cartNeedsReconstitution = items.some((item) => item.requiresReconstitution === true);
-  if (!bacWater || offers.length === 0 || !cartNeedsReconstitution) return null;
+  // Offer it while the basket holds anything that is not itself bacteriostatic
+  // water. A cart containing only BAC Water must not be offered more of it.
+  const hasNonBacWaterItem = items.some((item) => !isBacWater(item));
+  if (!bacWater || offers.length === 0 || !hasNonBacWaterItem) return null;
 
   return (
     <div className="vl-panel-soft rounded-[1.25rem] p-4">
@@ -308,17 +314,18 @@ export function BacWaterAddedPopup() {
       const detail = (event as CustomEvent<{
         eventType?: string;
         productSlug?: string;
+        // Present on the event as product metadata. NOT a gate: the offer is
+        // shown for every published product regardless of this value.
         requiresReconstitution?: boolean;
       }>).detail;
       if (detail?.eventType !== "add_to_cart") return;
-      if (!detail.productSlug || detail.productSlug === BAC_WATER_SLUG) return;
+      // Adding BAC Water must never raise another BAC Water offer.
+      if (!detail.productSlug || isBacWater(detail.productSlug)) return;
       if (!bacWaterRef.current) return;
-      // Only nudge when the product just added is flagged lyophilized. The
-      // flag rides on the event rather than being looked up in the cart: this
-      // handler runs synchronously on dispatch, before React has re-rendered,
-      // so the cart ref does not yet contain the line that triggered it.
-      if (detail.requiresReconstitution !== true) return;
-      if (itemsRef.current.some((item) => item.slug === BAC_WATER_SLUG)) return;
+      // No physical-form check. Any published product the customer just added
+      // may be offered bacteriostatic water; they can decline it.
+      // Already have it? Do not pester.
+      if (itemsRef.current.some((item) => isBacWater(item))) return;
       try {
         if (window.sessionStorage.getItem(NUDGE_SESSION_KEY)) return;
         window.sessionStorage.setItem(NUDGE_SESSION_KEY, "1");
@@ -376,7 +383,7 @@ export function BacWaterAddedPopup() {
         <span aria-hidden="true" className="vl-bac-sheet-grip sm:hidden" />
 
         <div className="flex items-start justify-between gap-3">
-          <p className="vl-bac-eyebrow">Laboratory Reconstitution</p>
+          <p className="vl-bac-eyebrow">Laboratory Supplies</p>
           <button
             ref={dismissButtonRef}
             type="button"
@@ -396,18 +403,20 @@ export function BacWaterAddedPopup() {
           ) : null}
           <div className="min-w-0">
             <p id="bac-water-nudge-title" className="vl2-serif text-[1.35rem] leading-tight text-white">
-              Don&apos;t forget bacteriostatic water
+              Need bacteriostatic water?
             </p>
             {/* A statement about laboratory practice, not a purchase statistic.
                 There is no order-history query behind this component, so it
                 must never imply a count of other customers. */}
-            <p className="vl-bac-pairing mt-2">Commonly added with lyophilized materials</p>
+            <p className="vl-bac-pairing mt-2">Commonly added to research orders</p>
           </div>
         </div>
 
+        {/* Deliberately optional. The offer now appears for products of any
+            form, so it must never assert that THIS product needs it. */}
         <p className="mt-3.5 text-[0.8125rem] leading-6 text-white/55">
-          This product is supplied in lyophilized form. Bacteriostatic water is available separately
-          for laboratory reconstitution.
+          Bacteriostatic water is available separately for laboratory reconstitution. Add it if your
+          protocol calls for it.
         </p>
 
         <div className="mt-4 space-y-2">
