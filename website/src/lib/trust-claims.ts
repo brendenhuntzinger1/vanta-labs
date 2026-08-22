@@ -108,3 +108,44 @@ export const TRUST_POINTS_DETAILED: readonly { label: string; detail: string }[]
   { label: CHECKOUT_SHORT, detail: CHECKOUT_DETAIL },
   { label: FULFILMENT_SHORT, detail: FULFILMENT_DETAIL },
 ];
+
+// ---------------------------------------------------------------------------
+// THE CATALOG RAIL.
+//
+// Five signals under the catalogue headline, replacing a paragraph. Two lines
+// each so they stay legible at 320px without shrinking the type.
+//
+// On the wording, and why one of these is not what was asked for:
+//
+//   * "BATCH-TESTED COAs" is stated on the owner's launch precondition, recorded
+//     2026-08: the store does not open to customers until a Certificate of
+//     Analysis exists for every published product. That makes the claim true
+//     at the moment anyone can read it, which is the test that matters.
+//
+//     IT IS ALSO THE CLAIM MOST EASILY BROKEN LATER. Publishing a new product
+//     before its COA is on file makes this line false site-wide, silently,
+//     with nothing in the application to catch it. The per-product proof is
+//     still independently gated behind hasCoa(), so a product without a
+//     document shows no COA action — but this rail does not read that gate,
+//     and it will keep saying "verified" regardless.
+//
+//   * "≥99% PURITY" rests on the owner's attestation (recorded 2026-08) that
+//     every product is third-party tested to that standard. It is a statement
+//     about the programme and already appears on the home page. It is NOT a
+//     statement about a particular vial: a purity FIGURE is only ever rendered
+//     from that product's own record behind hasVerifiedTesting.
+//
+//   * "FAST CUSTOMER SUPPORT" is the owner's characterisation of their own
+//     operation, backed by a staffed support route (/account/support) and a
+//     published support address. Note what it does NOT do: no response time is
+//     stated, because no SLA exists anywhere in this application to hold the
+//     store to one. "Fast" is a promise the owner keeps by answering quickly,
+//     not something the software can enforce or evidence.
+// ---------------------------------------------------------------------------
+export const CATALOG_TRUST_RAIL: readonly { top: string; bottom: string; href?: string; icon: string }[] = [
+  { top: "Same-Day", bottom: "Fulfillment", icon: "fulfillment" },
+  { top: "Batch-Tested", bottom: "COAs", href: "/coa-library", icon: "coas" },
+  { top: "\u226599%", bottom: "Purity", icon: "purity" },
+  { top: "Fast Customer", bottom: "Support", href: "/contact", icon: "support" },
+  { top: "Secure", bottom: "Checkout", icon: "checkout" },
+];

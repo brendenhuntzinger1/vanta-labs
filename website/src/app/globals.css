@@ -3240,3 +3240,186 @@ select.vl-auth-field {
   .vl-bac-offer { transition: none; }
   .vl-bac-offer:active { transform: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   CATALOG TRUST RAIL
+   Five signals, one hairline between them, and nothing else. Cards here would
+   put a border around every claim and turn a quiet row into five competing
+   boxes — the "everything in a box" look that reads as a template.
+   --------------------------------------------------------------------------- */
+.vl-rail {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  align-items: start;
+  margin-top: 1.5rem;
+  padding: 1.15rem 0 1.35rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  /* Hairlines above and below, warmed very slightly toward the centre. The
+     separation is light on a dark ground, not a box. */
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.vl-rail::-webkit-scrollbar { display: none; }
+
+.vl-rail-item {
+  scroll-snap-align: start;
+  min-width: 5.25rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0 0.75rem;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.72);
+  text-decoration: none;
+  transition: color 200ms ease;
+}
+/* Divider between items, never before the first. */
+.vl-rail-item + .vl-rail-item {
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+a.vl-rail-item:hover { color: #fff; }
+a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); }
+
+.vl-rail-icon {
+  width: 1.35rem;
+  height: 1.35rem;
+  color: rgba(199, 174, 94, 0.78);
+  transition: color 200ms ease;
+}
+
+.vl-rail-label {
+  font-size: 0.625rem;
+  font-weight: 500;
+  line-height: 1.45;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* The rail only stops scrolling once five columns genuinely fit at full type
+   size. "Batch-Tested" and "Fast Customer" are the widest labels, and forcing
+   them into equal columns on a tablet would mean shrinking the type — which is
+   the one thing that makes this look cheap rather than considered. */
+@media (min-width: 900px) {
+  .vl-rail {
+    grid-auto-columns: 1fr;
+    margin-top: 2.25rem;
+    padding: 1.6rem 0 1.75rem;
+    overflow-x: visible;
+  }
+  .vl-rail-icon { width: 1.5rem; height: 1.5rem; }
+  .vl-rail-label { font-size: 0.6875rem; letter-spacing: 0.16em; }
+}
+
+@media (min-width: 640px) and (max-width: 899px) {
+  .vl-rail { margin-top: 2rem; padding: 1.5rem 0 1.6rem; }
+}
+
+/* Desktop earns more room, rather than the phone layout stretched wide. */
+@media (min-width: 1024px) {
+  .vl-rail { padding: 2rem 0 2.15rem; }
+  .vl-rail-item { gap: 0.75rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-rail-item, .vl-rail-icon { transition: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   CATALOG GROUND
+   The page should not read as a flat #000 rectangle. One very low warm radial
+   behind the masthead, done in CSS rather than an image so it costs nothing on
+   a phone. It should be almost invisible until looked for.
+   --------------------------------------------------------------------------- */
+.vl-catalog-ground {
+  position: relative;
+  isolation: isolate;
+}
+.vl-catalog-ground::before {
+  content: "";
+  position: absolute;
+  inset: -8rem 0 auto;
+  height: 34rem;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(58% 42% at 22% 0%, rgba(199, 174, 94, 0.075), transparent 68%),
+    radial-gradient(46% 38% at 88% 6%, rgba(199, 174, 94, 0.045), transparent 70%);
+}
+
+/* ---------------------------------------------------------------------------
+   CATALOG CONTROLS — quieter, thinner, more deliberate.
+   Restyle only. Every one of these elements keeps its existing handler; the
+   search, filter and sort behaviour is untouched.
+   --------------------------------------------------------------------------- */
+.vl-search-input {
+  border-radius: 999px;
+  border-color: rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.018);
+}
+.vl-search-input::placeholder { color: rgba(255, 255, 255, 0.34); }
+.vl-search-input:focus {
+  border-color: rgba(199, 174, 94, 0.4);
+  box-shadow: 0 0 0 1px rgba(199, 174, 94, 0.12);
+}
+
+/* The Filters / sort pair reads as one segmented control rather than two
+   unrelated widgets. */
+.vl-filter-toggle,
+.vl-filter-select {
+  border-radius: 999px;
+  border-color: rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.018);
+  letter-spacing: 0.02em;
+}
+.vl-filter-toggle:hover,
+.vl-filter-select:hover { border-color: rgba(255, 255, 255, 0.18); }
+
+/* An active filter is marked by a warm rim, not a gold fill — a filled pill
+   competes with the product cards for the eye. */
+.vl-filter-toggle.is-on {
+  border-color: rgba(199, 174, 94, 0.5);
+  background: rgba(199, 174, 94, 0.055);
+  color: #e8dcc0;
+}
+
+/* ---------------------------------------------------------------------------
+   PRODUCT CARD — the vial is the subject; the chrome steps back.
+   Separation comes from a faint warm rim, because a black shadow on a
+   near-black page separates nothing.
+   --------------------------------------------------------------------------- */
+.vl-card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 999px;
+  border: 1px solid rgba(199, 174, 94, 0.34);
+  background: rgba(0, 0, 0, 0.72);
+  padding: 0.2rem 0.55rem;
+  font-size: 0.5625rem;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: rgba(214, 202, 177, 0.95);
+  backdrop-filter: blur(6px);
+}
+
+/* Smaller than the old 40px disc, still a 36px target with the padding. */
+.vl-card-fav {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.5);
+  transition: border-color 180ms ease, color 180ms ease;
+}
+.vl-card-fav:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-card-fav { transition: none; }
+}

@@ -6,6 +6,7 @@ import { ProductCard } from "@/components/product-card";
 import { CouponPromoBanner, type FeaturedCoupon } from "@/components/coupon-promo-banner";
 import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
+import { CatalogTrustRail } from "@/components/catalog-trust-rail";
 
 type SortKey = "default" | "price-asc" | "price-desc" | "name-asc" | "purity";
 
@@ -181,7 +182,7 @@ function ProductsPageContent({ featuredCoupon }: { featuredCoupon: FeaturedCoupo
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
 
-      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-14 pt-16 sm:pb-20 sm:pt-32 lg:px-12">
+      <main className="vl-catalog-ground mx-auto max-w-[1440px] px-4 sm:px-6 pb-14 pt-16 sm:pb-20 sm:pt-32 lg:px-12">
         {/* The catalogue header carries the quality claim, so it gets the one
             piece of real emphasis on this page. The glow is a wide, very low
             opacity champagne radial behind the type -- it reads as light on a
@@ -194,7 +195,7 @@ function ProductsPageContent({ featuredCoupon }: { featuredCoupon: FeaturedCoupo
               Cormorant serif read as editorial on a page whose job is to sell
               laboratory supply; its own tracking is set in .vl2-display, so the
               override here is dropped rather than fighting it. */}
-          <h1 className="vl2-display vl-catalog-title relative mt-2 text-[1.875rem] leading-[1.05] sm:mt-3 sm:text-[3.5rem] sm:leading-[1.02]">
+          <h1 className="vl2-serif vl-catalog-title relative mt-2.5 text-[2.35rem] leading-[1.06] sm:mt-3 sm:text-[3.6rem] sm:leading-[1.02] lg:text-[4.25rem]">
             Premium Research Peptides
           </h1>
 
@@ -203,42 +204,13 @@ function ProductsPageContent({ featuredCoupon }: { featuredCoupon: FeaturedCoupo
               page not aligned to the headline and the chips below. */}
           <span aria-hidden="true" className="vl-catalog-rule relative mt-6 hidden h-px w-14 sm:block" />
 
-          {/* The previous copy here advertised an "8-Step Verification Process"
-              that is documented nowhere in this codebase or anywhere else, and
-              a matching "8-Step Verified" chip. An unverifiable process name is
-              worse than no claim: it is the first thing a reviewer or a careful
-              customer will ask to see, and there is nothing to show them.
-              Removed rather than replaced — do not invent a substitute. */}
-          <p className="relative mt-3 max-w-2xl text-[0.875rem] leading-6 text-white/60 sm:mt-5 sm:text-base sm:leading-8">
-            Research materials, documented per batch. Where a Certificate of Analysis has been
-            published for a lot, it is available in the COA Library.
-          </p>
-
-          {/* Three points instead of one, and every one of them is backed by
-              something this page actually does: the research-use positioning
-              that has to stay, the per-batch documentation the sentence above
-              describes, and the COA Library route. Nothing here asserts a
-              process, a purity figure or a delivery speed we cannot show.
-
-              On a phone the chip treatment costs 71px of the first screen —
-              three uppercase pills cannot fit one 390px row, so they wrap —
-              and that pushed the Filters control down under the consent
-              banner. Same three points, rendered as one line; the chips
-              return at sm where they fit on a single row. */}
-          <p className="relative mt-3 text-[0.6875rem] uppercase tracking-[0.09em] text-[#d6cab1]/85 sm:hidden">
-            {["Research Use Only", "Documented per batch", "COA Library"].join(" · ")}
-          </p>
-          <div className="relative mt-6 hidden flex-wrap items-center gap-2.5 sm:flex">
-            {["Research Use Only", "Documented per batch", "COA Library"].map((claim) => (
-              <span key={claim} className="vl-catalog-chip">
-                <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3">
-                  <path d="m5 12 4 4 10-10" />
-                </svg>
-                {claim}
-              </span>
-            ))}
-          </div>
+          {/* The explanatory paragraph and the three-claim line that used to sit
+              here are gone. Five signals in the rail below carry the same
+              meaning in a fraction of the height, and the opening reads as a
+              catalogue rather than an About page. */}
         </header>
+
+        <CatalogTrustRail />
 
         <CouponPromoBanner initialCoupon={featuredCoupon} />
 

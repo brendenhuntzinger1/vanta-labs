@@ -60,16 +60,16 @@ export function ProductCard({
       <WishlistButton
         slug={product.slug}
         initialInWishlist={initialInWishlist}
-        className="absolute right-2.5 top-2.5 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-white/15 bg-black/55 text-white shadow-sm backdrop-blur-md transition hover:scale-105 hover:text-rose-300 active:scale-95"
+        className="vl-card-fav absolute right-2.5 top-2.5 z-20 inline-flex h-9 w-9 items-center justify-center rounded-full text-white/70 backdrop-blur-md hover:text-rose-300"
       />
       <Link href={`/products/${product.slug}`} className="vl-focus-ring flex flex-1 flex-col">
         <div className="vl-product-card-media border-b border-white/10">
           {product.isBestSeller ? (
-            <span className="vl2-eyebrow absolute left-3 top-3 z-10 rounded-full border border-[color:var(--accent-gold)]/40 bg-black/70 px-2.5 py-1 text-[10px] text-[color:var(--accent-gold)] shadow-sm backdrop-blur-md">
-              ★ Best Seller
+            <span className="vl-card-badge absolute left-3 top-3 z-10">
+              <span aria-hidden="true" className="text-[color:var(--accent-gold-bright)]">★</span> Best Seller
             </span>
           ) : product.badge ? (
-            <span className="vl2-eyebrow absolute left-3 top-3 z-10 rounded-full border border-white/20 bg-black/70 px-2.5 py-1 text-[10px] shadow-sm backdrop-blur-md">
+            <span className="vl-card-badge absolute left-3 top-3 z-10">
               {BADGE_LABELS[product.badge]}
             </span>
           ) : null}

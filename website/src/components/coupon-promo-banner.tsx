@@ -88,19 +88,22 @@ export function CouponPromoBanner({ initialCoupon }: { initialCoupon?: FeaturedC
   // aesthetic while still being the one thing on the page that glints.
   return (
     <div
-      className={`relative mt-4 overflow-hidden rounded-xl border border-[color:var(--accent-gold)]/40 bg-black/60 px-4 py-2.5 shadow-[0_0_34px_-12px_rgba(232,213,164,0.5)] backdrop-blur transition-all duration-300 ease-out sm:px-5 sm:py-3 ${
+      className={`relative mt-4 overflow-hidden rounded-xl border border-[color:var(--accent-gold)]/22 bg-black/70 px-4 py-2.5 shadow-[0_0_24px_-18px_rgba(199,174,94,0.55)] backdrop-blur transition-all duration-300 ease-out sm:px-5 sm:py-3 ${
         entered ? "translate-y-0 opacity-100" : "translate-y-1 opacity-0"
       }`}
       role="region"
       aria-label="Promo code"
     >
-      {/* moving gold sheen (disabled by prefers-reduced-motion in globals) */}
-      <div className="vl-gold-sheen pointer-events-none absolute inset-0" aria-hidden="true" />
+      {/* The moving gold sheen that used to live here was removed. A promotion
+          should be noticeable once, not animate for as long as the page is
+          open — a permanent shimmer is the most template-looking thing that
+          can happen to a dark storefront, and it costs a repaint per frame on
+          exactly the phones this has to stay smooth on. */}
 
       <div className="relative flex items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-[9px] font-semibold uppercase tracking-[0.24em] text-[color:var(--accent-gold)]/60 sm:text-[10px]">Limited-time offer</p>
-          <p className="vl2-serif text-lg leading-tight text-[color:var(--accent-gold)] sm:text-2xl">
+          <p className="vl2-serif text-lg leading-tight text-white sm:text-2xl">
             {discountHeadline(coupon)} <span className="text-xs font-normal tracking-normal text-white/60 sm:text-sm">your order</span>
           </p>
           {ends ? <p className="text-[10px] text-white/40 sm:text-[11px]">{ends}</p> : null}
@@ -109,11 +112,11 @@ export function CouponPromoBanner({ initialCoupon }: { initialCoupon?: FeaturedC
         <button
           type="button"
           onClick={copy}
-          className="group relative inline-flex shrink-0 items-center gap-2 rounded-full border border-dashed border-[color:var(--accent-gold)]/50 bg-black/40 px-2.5 py-1.5 transition hover:border-[color:var(--accent-gold)] hover:bg-[color:var(--accent-gold)]/10 sm:px-3.5 sm:py-2"
+          className="group relative inline-flex shrink-0 items-center gap-2 rounded-full border border-[color:var(--accent-gold)]/30 bg-black/50 px-2.5 py-1.5 transition hover:border-[color:var(--accent-gold)]/60 hover:bg-[color:var(--accent-gold)]/[0.06] sm:px-3.5 sm:py-2"
           aria-label={`Copy promo code ${coupon.code}`}
         >
           <span className="font-mono text-xs font-bold tracking-[0.14em] text-[color:var(--accent-gold)] sm:text-base">{coupon.code}</span>
-          <span className="rounded-full bg-[color:var(--accent-gold)] px-2.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-black transition group-hover:bg-[color:var(--accent-gold)] sm:text-xs">
+          <span className="rounded-full border border-[color:var(--accent-gold)]/35 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.1em] text-[color:var(--accent-gold)]/90 transition group-hover:border-[color:var(--accent-gold)]/70 sm:text-xs">
             {copied ? "✓" : "Copy"}
           </span>
         </button>
