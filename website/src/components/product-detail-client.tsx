@@ -24,6 +24,7 @@ import { CoaLibraryNotice } from "@/components/coa-library-notice";
 import { formatCoaTestDate } from "@/lib/coa-format";
 import type { PublicCoaDocument } from "@/lib/coa-types";
 import Image from "next/image";
+import { FULFILMENT_DETAIL, FULFILMENT_SENTENCE, FULFILMENT_SHORT, TESTING_DETAIL } from "@/lib/trust-claims";
 
 function parseDose(slug: string) {
   const match = slug.match(/(\d+(?:\.\d+)?(?:mg|iu|mcg|g|ml))$/i);
@@ -66,8 +67,8 @@ const TRUST_ROW = [
         <circle cx="17" cy="18.5" r="1.6" />
       </svg>
     ),
-    label: "Fast Dispatch",
-    detail: "Ships within one business day",
+    label: FULFILMENT_SHORT,
+    detail: FULFILMENT_DETAIL,
   },
   {
     icon: (
@@ -87,7 +88,7 @@ const TRUST_ROW = [
       </svg>
     ),
     label: "COA Verified",
-    detail: "Third-party batch testing",
+    detail: TESTING_DETAIL,
   },
   {
     icon: (
@@ -113,7 +114,7 @@ const DEFAULT_PRODUCT_FAQ: ProductFaqItem[] = [
   },
   {
     question: "What is your shipping timeline?",
-    answer: "Most in-stock orders are prepared within one business day. You will receive secure tracking information after dispatch.",
+    answer: `${FULFILMENT_SENTENCE} You will receive secure tracking information after dispatch.`,
   },
   {
     question: "Can I combine discounts, codes, or member pricing?",

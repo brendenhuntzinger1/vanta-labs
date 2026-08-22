@@ -12,6 +12,7 @@ import { FREE_SHIPPING_THRESHOLD } from "@/lib/shipping";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { ExpressApplePayButton } from "@/components/express-apple-pay-button";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
+import { FULFILMENT_DETAIL } from "@/lib/trust-claims";
 
 // Byte-identical to the copy on /checkout. This wording is legally
 // load-bearing: reuse it verbatim, never reword it, never merge the three into
@@ -610,7 +611,7 @@ export function CartDrawer() {
                 {[
                   { icon: <path d="M6 10V8a6 6 0 1 1 12 0v2M5 10h14v10H5z" strokeLinejoin="round" />, label: "Secure checkout" },
                   { icon: <><path d="M12 3 5 6v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z" strokeLinejoin="round" /><path d="m9 12 2 2 4-4" strokeLinecap="round" strokeLinejoin="round" /></>, label: "256-bit SSL" },
-                  { icon: <><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z" strokeLinejoin="round" /><circle cx="7" cy="17" r="1.6" /><circle cx="17.5" cy="17" r="1.6" /></>, label: "Ships in 1 business day" },
+                  { icon: <><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z" strokeLinejoin="round" /><circle cx="7" cy="17" r="1.6" /><circle cx="17.5" cy="17" r="1.6" /></>, label: FULFILMENT_DETAIL },
                   { icon: <><path d="M9 3h6M10 3v5l-4 9a2 2 0 0 0 1.8 2.9h8.4A2 2 0 0 0 18 17l-4-9V3" strokeLinejoin="round" /></>, label: "Research use only" },
                 ].map((t) => (
                   <div key={t.label} className="flex items-center gap-2.5">

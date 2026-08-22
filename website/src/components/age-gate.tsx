@@ -3,6 +3,7 @@
 import { usePathname, useRouter } from "next/navigation";
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { detectInAppBrowser } from "@/lib/in-app-browser";
+import { TRUST_POINTS } from "@/lib/trust-claims";
 
 // ACCESS IS PUBLISHED, NEVER REACHED FOR.
 //
@@ -329,7 +330,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
 
           {/* Trust chips */}
           <div className="mt-6 flex flex-wrap items-center justify-center gap-2 lg:justify-start">
-            {["Batch Tested", "COA Documented", "Encrypted Checkout"].map((point) => (
+            {TRUST_POINTS.slice(0, 3).map((point) => (
               <span key={point} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[0.62rem] font-medium uppercase tracking-[0.14em] text-white/55">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 text-[color:var(--accent-gold)]/80" aria-hidden="true"><path d="m5 12 4 4 10-10" /></svg>
                 {point}
@@ -374,13 +375,17 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
               tappable rows above. Opening one leaves the gate — unavoidable in
               an in-app browser, where a new tab is not a thing — so it must
               take a deliberate tap, never a stray one. */}
+          {/* py-1 -my-1 grows each link's tap box to 24px (WCAG 2.2 AA 2.5.8)
+              while the negative margin cancels the same amount of layout, so
+              the sentence keeps its exact line box. Measured at 320px before
+              this: 107x17. Same treatment as the Cookie Policy link. */}
           <p className="mt-3 text-center text-xs leading-6 text-white/45 lg:text-left">
             Read the{" "}
             <a
               href="/legal/terms"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[color:var(--accent-gold)] underline underline-offset-4 decoration-[color:var(--accent-gold)]/40 transition hover:decoration-[color:var(--accent-gold)]"
+              className="-my-1 inline-block py-1 text-[color:var(--accent-gold)] underline underline-offset-4 decoration-[color:var(--accent-gold)]/40 transition hover:decoration-[color:var(--accent-gold)]"
             >
               Terms &amp; Conditions
             </a>{" "}
@@ -389,7 +394,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
               href="/legal/research-disclaimer"
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[color:var(--accent-gold)] underline underline-offset-4 decoration-[color:var(--accent-gold)]/40 transition hover:decoration-[color:var(--accent-gold)]"
+              className="-my-1 inline-block py-1 text-[color:var(--accent-gold)] underline underline-offset-4 decoration-[color:var(--accent-gold)]/40 transition hover:decoration-[color:var(--accent-gold)]"
             >
               Research Use Policy
             </a>

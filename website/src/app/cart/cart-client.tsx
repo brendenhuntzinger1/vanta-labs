@@ -8,6 +8,7 @@ import { formatCartCurrency, getShippingProgress, useCart, type CartItem } from 
 import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
+import { CHECKOUT_SHORT, DESTINATIONS_SENTENCE, FULFILMENT_SENTENCE, FULFILMENT_SHORT, TRACKING_SENTENCE } from "@/lib/trust-claims";
 
 export function CartPageClient() {
   const router = useRouter();
@@ -311,6 +312,33 @@ export function CartPageClient() {
               ) : null}
             </div>
 
+            {/* WHAT SHIPPING ACTUALLY MEANS, BEFORE COMMITTING TO CHECKOUT.
+                Every line here is read from configuration or from a statement
+                the store already publishes; nothing new is promised.
+
+                  * Destinations: quote-order.ts rejects anything outside the
+                    US and Canada with "We currently ship only to the United
+                    States and Canada." Until now a customer learned that only
+                    after entering checkout and filling in an address, which is
+                    a dead end at the worst possible moment.
+                  * Free shipping: the threshold comes from the same
+                    shippingConfig the server totals use, never a literal.
+                  * One business day is PREPARATION, not delivery. It is worded
+                    as processing and explicitly separated from carrier transit,
+                    because the store controls the first and not the second.
+                    This is the wording already on the product page.
+
+                No delivery date, no transit estimate and no guarantee is
+                stated, because none is configured anywhere in this codebase. */}
+            <ul className="mt-5 space-y-1.5 border-t border-white/10 pt-4 text-xs leading-5 text-white/45">
+              <li>{DESTINATIONS_SENTENCE}</li>
+              <li>
+                Free shipping on orders over {formatCartCurrency(freeShipThreshold)}.
+              </li>
+              <li>{FULFILMENT_SENTENCE}</li>
+              <li>{TRACKING_SENTENCE}</li>
+            </ul>
+
             {isBuy3Get1FreeActive ? (
               <p className="mt-8 border border-white/20 px-3 py-2 text-sm text-white/75">
                 Buy 3 Get 1 Free is active. Referral discounts cannot be combined with this promotion.
@@ -379,8 +407,8 @@ export function CartPageClient() {
             </button>
 
             <div className="mt-5 flex items-center justify-center gap-6 text-[10px] uppercase tracking-[0.14em] text-white/70">
-              <span>Encrypted Checkout</span>
-              <span>Fast Dispatch</span>
+              <span>{CHECKOUT_SHORT}</span>
+              <span>{FULFILMENT_SHORT}</span>
             </div>
           </div>
         </div>

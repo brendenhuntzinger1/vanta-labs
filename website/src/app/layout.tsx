@@ -28,17 +28,40 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+// WEIGHTS ARE LOADED ONLY WHERE THEY ARE RENDERED.
+//
+// Verified by measuring the computed (family, weight, style) of every element
+// that renders its own text across twelve routes at 390px — not by reading
+// class names, since a weight can also arrive from globals.css or a browser
+// default. What actually renders:
+//
+//   Fraunces  400 x11, 500 x80          Manrope  400 x1716, 500 x314,
+//   Geist Mono 400 x8, 700 x2                    600 x1047, 700 x3
+//
+// Dropped, each confirmed unreachable rather than merely unseen:
+//   * Fraunces 600 — requested only by .vl-heading-lg, which together with
+//     .vl-heading-xl has zero usages in any .tsx. Both classes are dead CSS
+//     and are left in place rather than deleted here.
+//   * Manrope 800 — the only font-weight:800 in the repository is inline
+//     style on email templates, and email clients never load these files.
+//   * Fraunces italic — the sole occurrence of the word "italic" anywhere in
+//     src/ was this declaration. No class, no <em>, no <i>, nothing computed.
+//
+// Kept: Manrope 700 despite only three occurrences. It is rendered.
+//
+// Note for later, not changed here: .vl-heading-xl asks Fraunces for 700,
+// which was never among the loaded weights, so it has always been synthesised.
 const fraunces = Fraunces({
   variable: "--font-cormorant-display",
   subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  style: ["normal", "italic"],
+  weight: ["400", "500"],
+  style: ["normal"],
 });
 
 const manrope = Manrope({
   variable: "--font-manrope",
   subsets: ["latin"],
-  weight: ["400", "500", "600", "700", "800"],
+  weight: ["400", "500", "600", "700"],
 });
 
 // Falls back to the production domain (never localhost) so link-preview crawlers

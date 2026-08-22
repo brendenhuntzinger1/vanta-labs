@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { TRUST_POINTS } from "@/lib/trust-claims";
 
 const FOOTER_COLUMNS = {
   shop: [
@@ -22,7 +23,7 @@ const FOOTER_COLUMNS = {
   ],
 };
 
-const TRUST_POINTS = ["Batch Tested", "COA Documented", "Encrypted Checkout", "Fast Dispatch"];
+// Single source of truth — see src/lib/trust-claims.ts for each claim's provenance.
 
 function FooterColumn({
   title,

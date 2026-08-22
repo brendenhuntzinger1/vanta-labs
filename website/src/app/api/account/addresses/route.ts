@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { getCustomerAddresses } from "@/lib/customer-account";
 import { customerSafeMessage } from "@/lib/safe-error";
 
 function unauthorizedResponse() {
@@ -66,7 +67,7 @@ export async function POST(request: Request) {
       throw error;
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, addresses: await getCustomerAddresses(user.id) });
   } catch (error) {
     const message = customerSafeMessage(error, "Unable to save address");
     return NextResponse.json({ success: false, error: message }, { status: 400 });

@@ -6,6 +6,7 @@ import type { Product } from "@/lib/catalog-types";
 import { WishlistButton } from "@/components/wishlist-button";
 import { formatCartCurrency, useCart } from "@/components/cart-context";
 import { bestPaidTier, parsePriceValue, quoteMemberPrice } from "@/lib/member-pricing";
+import { hasCoa } from "@/lib/coa-url";
 
 const BADGE_LABELS: Record<NonNullable<Product["badge"]>, string> = {
   new: "New",
@@ -206,6 +207,34 @@ export function ProductCard({
             View Details
           </Link>
         )}
+        {/* Third-party testing is the strongest honest signal this store has,
+            and it was one tap too deep: you had to open the product and find
+            it. This is the same document the product page links, surfaced on
+            the card.
+
+            hasCoa() is the guard, not plain truthiness. The stored value is
+            free text typed in admin, so " ", "pending" and "TBD" all read as
+            true and would advertise a document that opens nothing — worse
+            than admitting the COA is not ready. Today 4 of 93 active products
+            clear it, so this action is rare by design.
+
+            It sits OUTSIDE the card-wide <Link> — this block is after its
+            closing tag — because an anchor inside an anchor is invalid and
+            the browser would drop one of them. */}
+        {hasCoa(product.coaUrl) ? (
+          <a
+            href={product.coaUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="vl-focus-ring col-span-2 -mb-1 inline-flex min-h-6 items-center justify-center gap-1.5 py-1.5 text-[11px] text-[color:var(--accent-gold)]/75 underline-offset-4 transition hover:text-[color:var(--accent-gold)] hover:underline"
+          >
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6" />
+            </svg>
+            View COA
+          </a>
+        ) : null}
         {!soldOut && showMemberPricing && memberQuote && !isMember ? (
           <Link
             href="/membership"

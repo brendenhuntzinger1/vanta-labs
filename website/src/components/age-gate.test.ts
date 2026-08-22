@@ -319,3 +319,23 @@ describe("the gate survives an app's own toolbars", () => {
     expect(diag).toMatch(/THREW/);
   });
 });
+
+// The two policy links on the gate are the first links a visitor can tap, and
+// they were 107x17 at 320px — under the 24px minimum in WCAG 2.2 AA 2.5.8.
+// py-1 grows the box to 24px+ and -my-1 gives the layout back, so the
+// sentence keeps its line box. Same treatment as the Cookie Policy link.
+describe("the gate's policy links are tappable", () => {
+  it("pads both policy links to a 24px tap target", () => {
+    const code = readFileSync(
+      join(process.cwd(), "src/components/age-gate.tsx"),
+      "utf8",
+    );
+    const links = code.match(/<a\s[^>]*href="\/legal\/[^"]*"[\s\S]*?>/g) ?? [];
+    expect(links.length).toBe(2);
+    for (const link of links) {
+      expect(link).toContain("py-1");
+      expect(link).toContain("-my-1");
+      expect(link).toContain("inline-block");
+    }
+  });
+});
