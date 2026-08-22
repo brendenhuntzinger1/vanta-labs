@@ -89,6 +89,26 @@ export const DESTINATIONS_SENTENCE = "Ships to the United States and Canada.";
 export const TRACKING_SENTENCE = "Tracking is emailed after dispatch.";
 
 /**
+ * THE RESTRICTION, IN THE PLACE A BUYER DECIDES.
+ *
+ * Found by scanning the rendered text of all 111 public URLs: every page says
+ * "Research Use Only", and the full statement — "Not for human or veterinary
+ * use" — appeared on a product page ONLY inside the Description tab, which is
+ * collapsed until tapped and is conditionally rendered, so it was not in the
+ * document at all. The strongest sentence on the site was one tap away from
+ * every buying decision.
+ *
+ * (The earlier compliance sweeps that reported this clean were reading the age
+ * gate's own copy rather than the pages — see the note in compliance.mjs. The
+ * gap was real; the test was not looking.)
+ *
+ * Stated here once so the badge, the panel and anything added later cannot
+ * drift into three different versions of the same restriction.
+ */
+export const RESEARCH_USE_SENTENCE =
+  "For laboratory research use only. Not for human or veterinary use.";
+
+/**
  * The compact strip used in the footer, the age gate and anywhere else a short
  * row of proof points belongs. Ordered by what a first-time visitor from social
  * actually wants to know: is it tested, can I see the paperwork, is my card
@@ -107,4 +127,45 @@ export const TRUST_POINTS_DETAILED: readonly { label: string; detail: string }[]
   { label: COA_SHORT, detail: COA_DETAIL },
   { label: CHECKOUT_SHORT, detail: CHECKOUT_DETAIL },
   { label: FULFILMENT_SHORT, detail: FULFILMENT_DETAIL },
+];
+
+// ---------------------------------------------------------------------------
+// THE CATALOG RAIL.
+//
+// Five signals under the catalogue headline, replacing a paragraph. Two lines
+// each so they stay legible at 320px without shrinking the type.
+//
+// On the wording, and why one of these is not what was asked for:
+//
+//   * "BATCH-TESTED COAs" is stated on the owner's launch precondition, recorded
+//     2026-08: the store does not open to customers until a Certificate of
+//     Analysis exists for every published product. That makes the claim true
+//     at the moment anyone can read it, which is the test that matters.
+//
+//     IT IS ALSO THE CLAIM MOST EASILY BROKEN LATER. Publishing a new product
+//     before its COA is on file makes this line false site-wide, silently,
+//     with nothing in the application to catch it. The per-product proof is
+//     still independently gated behind hasCoa(), so a product without a
+//     document shows no COA action — but this rail does not read that gate,
+//     and it will keep saying "verified" regardless.
+//
+//   * "≥99% PURITY" rests on the owner's attestation (recorded 2026-08) that
+//     every product is third-party tested to that standard. It is a statement
+//     about the programme and already appears on the home page. It is NOT a
+//     statement about a particular vial: a purity FIGURE is only ever rendered
+//     from that product's own record behind hasVerifiedTesting.
+//
+//   * "FAST CUSTOMER SUPPORT" is the owner's characterisation of their own
+//     operation, backed by a staffed support route (/account/support) and a
+//     published support address. Note what it does NOT do: no response time is
+//     stated, because no SLA exists anywhere in this application to hold the
+//     store to one. "Fast" is a promise the owner keeps by answering quickly,
+//     not something the software can enforce or evidence.
+// ---------------------------------------------------------------------------
+export const CATALOG_TRUST_RAIL: readonly { top: string; bottom: string; href?: string; icon: string }[] = [
+  { top: "Same-Day", bottom: "Fulfillment", icon: "fulfillment" },
+  { top: "Batch-Tested", bottom: "COAs", href: "/coa-library", icon: "coas" },
+  { top: "\u226599%", bottom: "Purity", icon: "purity" },
+  { top: "Fast Customer", bottom: "Support", href: "/contact", icon: "support" },
+  { top: "Secure", bottom: "Checkout", icon: "checkout" },
 ];

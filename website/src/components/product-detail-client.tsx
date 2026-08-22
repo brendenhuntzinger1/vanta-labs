@@ -5,7 +5,6 @@ import { useMemo, useState } from "react";
 import { useCart } from "@/components/cart-context";
 import { bestPaidTier, quoteMemberPrice } from "@/lib/member-pricing";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
-import { CouponPromoBanner, type FeaturedCoupon } from "@/components/coupon-promo-banner";
 import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { WishlistButton } from "@/components/wishlist-button";
@@ -24,7 +23,7 @@ import { CoaLibraryNotice } from "@/components/coa-library-notice";
 import { formatCoaTestDate } from "@/lib/coa-format";
 import type { PublicCoaDocument } from "@/lib/coa-types";
 import Image from "next/image";
-import { FULFILMENT_DETAIL, FULFILMENT_SENTENCE, FULFILMENT_SHORT, TESTING_DETAIL } from "@/lib/trust-claims";
+import { FULFILMENT_DETAIL, FULFILMENT_SENTENCE, FULFILMENT_SHORT, RESEARCH_USE_SENTENCE, TESTING_DETAIL } from "@/lib/trust-claims";
 
 function parseDose(slug: string) {
   const match = slug.match(/(\d+(?:\.\d+)?(?:mg|iu|mcg|g|ml))$/i);
@@ -159,7 +158,6 @@ export function ProductDetailClient({
   // Resolved by the server page. Left optional so the component keeps working
   // unchanged for any caller that does not pass it (the banner then fetches for
   // itself, exactly as before).
-  featuredCoupon,
 }: {
   product: Product;
   relatedProducts?: Product[];
@@ -167,7 +165,6 @@ export function ProductDetailClient({
   bundleConfig?: BundleConfig;
   bacWater?: Product | null;
   coaDocuments?: PublicCoaDocument[];
-  featuredCoupon?: FeaturedCoupon | null;
 }) {
   const { addToCart, membershipTiers, memberDiscountPercent } = useCart();
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
@@ -341,7 +338,11 @@ export function ProductDetailClient({
           <span className="text-white">{product.name}</span>
         </nav>
 
-        <CouponPromoBanner initialCoupon={featuredCoupon} />
+        {/* Moved to StorefrontOffersBar at the top of the page — see the note
+            in products-client.tsx. The Buy 3 Get 1 panel below is NOT a
+            duplicate of the bar: it sits beside the quantity control, where it
+            is guidance at the moment of the decision, and by then the bar has
+            scrolled off. */}
 
         {promoBuy3Get1Enabled ? (
           <div className="vl2-lab-panel mt-6 flex flex-wrap items-center gap-2 border-white/[0.06] bg-[#141414] px-5 py-3.5 text-sm text-white">
@@ -653,6 +654,15 @@ export function ProductDetailClient({
                   Research Use Only
                 </span>
               </div>
+
+              {/* THE RESTRICTION, WHERE THE DECISION IS MADE.
+                  The full sentence was already on this page — inside the
+                  Description tab, which is collapsed by default and rendered
+                  only once opened, so it was not in the document at all until
+                  somebody tapped it. The badge above says "Research Use Only";
+                  this says what that means, next to Add to Cart, without a
+                  tap. */}
+              <p className="mt-2 text-[11px] leading-5 text-white/40">{RESEARCH_USE_SENTENCE}</p>
 
               {/* Trust row — third-party proof + guarantee, right next to the
                   buy decision (not hidden inside a tab). */}

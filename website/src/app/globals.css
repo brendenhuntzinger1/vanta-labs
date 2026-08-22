@@ -3240,3 +3240,631 @@ select.vl-auth-field {
   .vl-bac-offer { transition: none; }
   .vl-bac-offer:active { transform: none; }
 }
+
+/* ---------------------------------------------------------------------------
+   CATALOG TRUST RAIL
+   Five signals, one hairline between them, and nothing else. Cards here would
+   put a border around every claim and turn a quiet row into five competing
+   boxes — the "everything in a box" look that reads as a template.
+   --------------------------------------------------------------------------- */
+.vl-rail {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: max-content;
+  align-items: start;
+  margin-top: 1.5rem;
+  padding: 1.15rem 0 1.35rem;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+  /* Hairlines above and below, warmed very slightly toward the centre. The
+     separation is light on a dark ground, not a box. */
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.vl-rail::-webkit-scrollbar { display: none; }
+
+.vl-rail-item {
+  scroll-snap-align: start;
+  min-width: 5.25rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0 0.75rem;
+  text-align: center;
+  color: rgba(255, 255, 255, 0.72);
+  text-decoration: none;
+  transition: color 200ms ease;
+}
+/* Divider between items, never before the first. */
+.vl-rail-item + .vl-rail-item {
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+a.vl-rail-item:hover { color: #fff; }
+a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); }
+
+.vl-rail-icon {
+  width: 1.35rem;
+  height: 1.35rem;
+  color: rgba(199, 174, 94, 0.78);
+  transition: color 200ms ease;
+}
+
+.vl-rail-label {
+  font-size: 0.625rem;
+  font-weight: 500;
+  line-height: 1.45;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* The rail only stops scrolling once five columns genuinely fit at full type
+   size. "Batch-Tested" and "Fast Customer" are the widest labels, and forcing
+   them into equal columns on a tablet would mean shrinking the type — which is
+   the one thing that makes this look cheap rather than considered. */
+@media (min-width: 900px) {
+  .vl-rail {
+    grid-auto-columns: 1fr;
+    margin-top: 2.25rem;
+    padding: 1.6rem 0 1.75rem;
+    overflow-x: visible;
+  }
+  .vl-rail-icon { width: 1.5rem; height: 1.5rem; }
+  .vl-rail-label { font-size: 0.6875rem; letter-spacing: 0.16em; }
+}
+
+@media (min-width: 640px) and (max-width: 899px) {
+  .vl-rail { margin-top: 2rem; padding: 1.5rem 0 1.6rem; }
+}
+
+/* Desktop earns more room, rather than the phone layout stretched wide. */
+@media (min-width: 1024px) {
+  .vl-rail { padding: 2rem 0 2.15rem; }
+  .vl-rail-item { gap: 0.75rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-rail-item, .vl-rail-icon { transition: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   CATALOG GROUND
+   The page should not read as a flat #000 rectangle. One very low warm radial
+   behind the masthead, done in CSS rather than an image so it costs nothing on
+   a phone. It should be almost invisible until looked for.
+   --------------------------------------------------------------------------- */
+.vl-catalog-ground {
+  position: relative;
+  isolation: isolate;
+}
+.vl-catalog-ground::before {
+  content: "";
+  position: absolute;
+  inset: -8rem 0 auto;
+  height: 34rem;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(58% 42% at 22% 0%, rgba(199, 174, 94, 0.075), transparent 68%),
+    radial-gradient(46% 38% at 88% 6%, rgba(199, 174, 94, 0.045), transparent 70%);
+}
+
+/* ---------------------------------------------------------------------------
+   CATALOG CONTROLS — quieter, thinner, more deliberate.
+   Restyle only. Every one of these elements keeps its existing handler; the
+   search, filter and sort behaviour is untouched.
+   --------------------------------------------------------------------------- */
+.vl-search-input {
+  border-radius: 999px;
+  border-color: rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.018);
+}
+.vl-search-input::placeholder { color: rgba(255, 255, 255, 0.34); }
+.vl-search-input:focus {
+  border-color: rgba(199, 174, 94, 0.4);
+  box-shadow: 0 0 0 1px rgba(199, 174, 94, 0.12);
+}
+
+/* The Filters / sort pair reads as one segmented control rather than two
+   unrelated widgets. */
+.vl-filter-toggle,
+.vl-filter-select {
+  border-radius: 999px;
+  border-color: rgba(255, 255, 255, 0.09);
+  background: rgba(255, 255, 255, 0.018);
+  letter-spacing: 0.02em;
+}
+.vl-filter-toggle:hover,
+.vl-filter-select:hover { border-color: rgba(255, 255, 255, 0.18); }
+
+/* An active filter is marked by a warm rim, not a gold fill — a filled pill
+   competes with the product cards for the eye. */
+.vl-filter-toggle.is-on {
+  border-color: rgba(199, 174, 94, 0.5);
+  background: rgba(199, 174, 94, 0.055);
+  color: #e8dcc0;
+}
+
+/* ---------------------------------------------------------------------------
+   PRODUCT CARD — the vial is the subject; the chrome steps back.
+   Separation comes from a faint warm rim, because a black shadow on a
+   near-black page separates nothing.
+   --------------------------------------------------------------------------- */
+.vl-card-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  border-radius: 999px;
+  border: 1px solid rgba(199, 174, 94, 0.34);
+  background: rgba(0, 0, 0, 0.72);
+  padding: 0.2rem 0.55rem;
+  font-size: 0.5625rem;
+  font-weight: 500;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+  color: rgba(214, 202, 177, 0.95);
+  backdrop-filter: blur(6px);
+}
+
+/* Smaller than the old 40px disc, still a 36px target with the padding. */
+.vl-card-fav {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.5);
+  transition: border-color 180ms ease, color 180ms ease;
+}
+.vl-card-fav:hover {
+  border-color: rgba(255, 255, 255, 0.24);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-card-fav { transition: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   COOKIE CONSENT — a bar in the document, not an overlay on top of it.
+   Pinned to the bottom of the viewport, this covered 140 interactive controls
+   across a 7-width x 4-height x 3-route sweep. In flow it covers nothing:
+   it takes its own height at the top of the page and scrolls away.
+   --------------------------------------------------------------------------- */
+/* THE HEADER JOINS NORMAL FLOW WHENEVER AN IN-FLOW BAR SITS ABOVE IT.
+   ---------------------------------------------------------------------------
+   `.vl2-nav` is `position: fixed` at the top of the viewport. Anything placed
+   above it in the document therefore ends up UNDERNEATH it, drawn through by
+   the header, at the exact coordinates a visitor reads first.
+
+   The consent bar hit this and was fixed by making the header static while a
+   choice is pending. THE OFFERS BAR THEN HIT THE SAME THING, and it was worse,
+   because it was invisible in testing: with consent still pending the header
+   was already static and the two stacked correctly, so every automated run
+   looked clean. The moment a visitor accepts or declines — i.e. for every
+   returning visitor — the header went back to fixed and swallowed the promotion
+   whole. Measured at 390px: bar 0..49, nav 0..69, 49px of overlap. The entire
+   bar.
+
+   So the rule is stated once, for the general case: if there is an in-flow bar
+   at the top of the document, the header is part of that stack rather than
+   floating over it. `:has()` is what lets the offers bar say so without a
+   client-side effect, which would paint the collision for one frame and then
+   correct it. */
+:root[data-consent-pending] .vl2-nav,
+:root:has(.vl-offer-bar) .vl2-nav {
+  position: static;
+}
+
+.vl-consent-bar {
+  position: relative;
+  z-index: 1;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+  background: #0b0b0b;
+  /* Respects a notch when the bar is the first thing under the status bar. */
+  padding: calc(0.45rem + env(safe-area-inset-top, 0px)) 0.9rem 0.45rem;
+}
+
+.vl-consent-inner {
+  margin: 0 auto;
+  display: flex;
+  max-width: 80rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.4rem 1rem;
+}
+
+.vl-consent-copy {
+  flex: 1 1 14rem;
+  min-width: 0;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.vl-consent-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.4rem;
+}
+
+/* Both choices carry identical weight; Accept is warmed only enough to read as
+   the affirmative. Neither is hidden, greyed, or made harder to hit. */
+.vl-consent-btn {
+  min-height: 2rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 0.3rem 0.85rem;
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.82);
+  background: transparent;
+  transition: border-color 160ms ease, color 160ms ease;
+}
+.vl-consent-btn:hover { border-color: rgba(255, 255, 255, 0.3); color: #fff; }
+.vl-consent-btn.is-primary {
+  border-color: rgba(199, 174, 94, 0.45);
+  color: #e8dcc0;
+}
+.vl-consent-btn.is-primary:hover { border-color: rgba(199, 174, 94, 0.75); }
+
+@media (min-width: 640px) {
+  .vl-consent-bar { padding: 0.6rem 1.5rem; }
+  .vl-consent-copy { font-size: 0.75rem; }
+  .vl-consent-btn { font-size: 0.75rem; padding: 0.35rem 1rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-consent-btn { transition: none; }
+}
+
+/* ---------------------------------------------------------------------------
+   THE STOREFRONT OFFERS BAR.
+
+   A luxury house running an exclusive offer states it once, quietly, in good
+   type. So: near-black ground, ONE hairline of warm gold, the benefit set
+   large in the serif, and nothing that moves after it has arrived. No gold
+   fill, no glow, no shimmer, no marquee, no countdown, no pulse — every one of
+   those reads as a discount store, and contrast plus space does the work
+   instead.
+
+   IN NORMAL FLOW, like the consent bar and for the same reason: the site header
+   is `position: fixed`, so anything pinned near the top either hides beneath it
+   or covers the page. In flow it pushes content down by exactly its own height,
+   covers nothing, and scrolls away.
+   --------------------------------------------------------------------------- */
+.vl-offer-bar {
+  position: relative;
+  z-index: 1;
+  border-bottom: 1px solid rgba(199, 174, 94, 0.16);
+  background: #0a0a0a;
+  /* The single gold edge. A 1px top hairline reading as light catching a rim,
+     not a border drawn around a box. */
+  box-shadow: inset 0 1px 0 rgba(199, 174, 94, 0.14);
+  padding: calc(0.5rem + env(safe-area-inset-top, 0px)) 0.85rem 0.5rem;
+}
+
+.vl-offer-inner {
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  /* Desktop does not get a mobile ribbon stretched across 1920px: the content
+     stops at the site's own measure and stays centred. */
+  max-width: 80rem;
+}
+
+.vl-offer-main {
+  min-width: 0;
+  flex: 1 1 auto;
+  text-decoration: none;
+  color: inherit;
+  /* A TAP TARGET, not just a text run. Hiding the eyebrow on narrow screens
+     left this link exactly one line tall — measured at 287x20 — which is under
+     the 24px floor (WCAG 2.2 AA 2.5.8) and is the whole "shop the offer"
+     affordance. The min-height costs no visible layout because the row is
+     already taller than this. */
+  display: flex;
+  align-items: center;
+  min-height: 2rem;
+}
+
+.vl-offer-body {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-width: 0;
+}
+
+/* WITHOUT THIS THE HEADLINE CANNOT SHRINK.
+   A flex item's default min-width is `auto`, i.e. its content, so the text
+   block refused to give ground, pushed the code pill out of the row, and at
+   320px the eyebrow ended up drawn straight through the code. Allowing it to
+   shrink is what makes the ellipsis happen instead of the collision. */
+.vl-offer-main,
+.vl-offer-body,
+.vl-offer-text { min-width: 0; }
+
+.vl-offer-icon {
+  width: 1.05rem;
+  height: 1.05rem;
+  flex-shrink: 0;
+  color: rgba(199, 174, 94, 0.75);
+}
+
+.vl-offer-eyebrow {
+  /* Hidden on the narrowest phones. It is a label on the offer, and at 320px
+     the width it costs comes straight out of the offer itself — which is the
+     one thing that must never be the part that gets cut. */
+  display: none;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: rgba(199, 174, 94, 0.62);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+/* THE BENEFIT. Largest thing in the bar, and the only serif in it. */
+.vl-offer-headline {
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-size: 1rem;
+  line-height: 1.25;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.vl-offer-code-group {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
+.vl-offer-code-label {
+  display: none;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.vl-offer-code {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  /* 2rem keeps the tap box over the 24px floor without inflating the bar. */
+  min-height: 2rem;
+  padding: 0.25rem 0.6rem;
+  border: 1px solid rgba(199, 174, 94, 0.3);
+  border-radius: 999px;
+  background: rgba(199, 174, 94, 0.05);
+  transition: border-color 200ms ease, background-color 200ms ease;
+}
+
+.vl-offer-code:hover {
+  border-color: rgba(199, 174, 94, 0.55);
+  background: rgba(199, 174, 94, 0.09);
+}
+
+.vl-offer-code-text {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--accent-gold);
+}
+
+.vl-offer-copy {
+  display: none;
+  font-size: 0.5625rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(199, 174, 94, 0.7);
+}
+
+/* An automatic offer gets a sentence, never a code-shaped chip. */
+.vl-offer-auto {
+  flex-shrink: 0;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  color: rgba(255, 255, 255, 0.45);
+  display: none;
+}
+
+.vl-offer-ends {
+  display: none;
+  flex-shrink: 0;
+  font-size: 0.625rem;
+  letter-spacing: 0.06em;
+  color: rgba(255, 255, 255, 0.38);
+  padding-left: 0.6rem;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.vl-offer-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  flex-shrink: 0;
+}
+
+.vl-offer-link {
+  min-height: 2rem;
+  min-width: 2rem;
+  padding: 0.25rem 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.625rem;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.45);
+  transition: color 200ms ease;
+  white-space: nowrap;
+}
+
+.vl-offer-link:hover { color: rgba(255, 255, 255, 0.8); }
+
+.vl-offer-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2rem;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.3);
+  transition: color 200ms ease, background-color 200ms ease;
+}
+
+.vl-offer-close:hover {
+  color: rgba(255, 255, 255, 0.75);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+/* The narrow layout drops the label text; the icon-only control keeps its
+   accessible name, so nothing is lost to a screen reader. */
+.vl-offer-link-long { display: none; }
+.vl-offer-link-short { display: inline; font-size: 0.875rem; letter-spacing: 0; }
+
+/* From 30rem there is room for the supporting detail without crowding. */
+@media (min-width: 30rem) {
+  .vl-offer-headline { font-size: 1.1rem; }
+  .vl-offer-eyebrow { display: block; }
+  .vl-offer-copy { display: inline; }
+  .vl-offer-auto { display: block; }
+  .vl-offer-link-long { display: inline; }
+  .vl-offer-link-short { display: none; }
+}
+
+@media (min-width: 36rem) {
+  .vl-offer-code-label { display: inline; }
+}
+
+@media (min-width: 48rem) {
+  .vl-offer-bar { padding: 0.65rem 1.5rem; }
+  .vl-offer-inner { gap: 1rem; }
+  .vl-offer-body { gap: 0.9rem; }
+  .vl-offer-headline { font-size: 1.25rem; }
+  .vl-offer-icon { width: 1.2rem; height: 1.2rem; }
+  .vl-offer-ends { display: inline; }
+}
+
+/* --- VIEW ALL OFFERS / DETAILS -------------------------------------------
+   A bottom sheet on a phone and a centred panel from sm, matching the BAC
+   Water sheet exactly — the shape already proven inside the TikTok and
+   Instagram webviews, anchored to an edge their chrome cannot take away. */
+.vl-offer-sheet-root {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.vl-offer-sheet {
+  position: relative;
+  z-index: 10;
+  width: 100%;
+  max-width: 32rem;
+  max-height: 85vh;
+  max-height: 85dvh;
+  overflow-y: auto;
+  border: 1px solid rgba(199, 174, 94, 0.16);
+  border-bottom: none;
+  border-radius: 1.75rem 1.75rem 0 0;
+  background: #0d0d0d;
+  padding: 1.25rem 1.25rem calc(1.25rem + env(safe-area-inset-bottom));
+}
+
+.vl-offer-sheet-title {
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-size: 1.25rem;
+  color: #fff;
+}
+
+.vl-offer-sheet-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  margin: -0.375rem -0.375rem 0 0;
+  flex-shrink: 0;
+  border-radius: 999px;
+  color: rgba(255, 255, 255, 0.45);
+  transition: color 200ms ease, background-color 200ms ease;
+}
+
+.vl-offer-sheet-close:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.vl-offer-list { margin-top: 1rem; }
+
+.vl-offer-list-item {
+  padding: 0.9rem 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.vl-offer-list-item:first-child { border-top: none; padding-top: 0; }
+
+.vl-offer-list-headline {
+  font-family: var(--font-fraunces), Georgia, serif;
+  font-size: 1.0625rem;
+  line-height: 1.3;
+  color: #fff;
+}
+
+.vl-offer-list-meta {
+  margin-top: 0.25rem;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.vl-offer-list-code {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--accent-gold);
+}
+
+.vl-offer-list-detail {
+  margin-top: 0.45rem;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.38);
+}
+
+@media (min-width: 40rem) {
+  .vl-offer-sheet-root { align-items: center; padding: 1rem; }
+  .vl-offer-sheet {
+    border: 1px solid rgba(199, 174, 94, 0.16);
+    border-radius: 1.5rem;
+    padding: 1.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .vl-offer-code,
+  .vl-offer-link,
+  .vl-offer-close,
+  .vl-offer-sheet-close { transition: none; }
+}
+
+.vl-offer-sheet-note {
+  margin-top: 1rem;
+  padding-top: 0.9rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.38);
+}

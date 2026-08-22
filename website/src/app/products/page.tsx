@@ -15,6 +15,5 @@ export const metadata: Metadata = pageMetadata({
 // A lookup failure resolves to null, which renders no banner — exactly what the
 // client fetch did on error, so a coupon hiccup still cannot break the page.
 export default async function Page() {
-  const featuredCoupon = await getStorefrontCoupon().catch(() => null);
-  return <ProductsPageClient featuredCoupon={featuredCoupon ?? null} />;
+  return <ProductsPageClient />;
 }

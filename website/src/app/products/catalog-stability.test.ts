@@ -46,29 +46,51 @@ describe("pages that opt out of SSR must still reserve their space", () => {
   });
 });
 
-describe("the promo banner is resolved by the server, not fetched into the page", () => {
-  it("accepts a server-resolved coupon and skips its own fetch when given one", () => {
-    const banner = read("src/components/coupon-promo-banner.tsx");
-    expect(banner).toContain("initialCoupon");
-    // undefined = not server-resolved (keep the old client-fetch behaviour);
-    // null = server checked, no live coupon.
-    expect(banner).toContain("const serverResolved = initialCoupon !== undefined;");
-    expect(banner).toMatch(/if \(serverResolved\) return;/);
+// The per-page CouponPromoBanner these used to guard has been replaced by
+// StorefrontOffersBar in the root layout. The RISK is unchanged — a promotion
+// that arrives after first paint drops a ribbon into the top of the document
+// and shoves the page down under the reader — so the guard moves with it
+// rather than being deleted along with the component it used to watch.
+describe("offers are resolved by the server, not fetched into the page", () => {
+  it("the layout resolves offers before it renders", () => {
+    const layout = read("src/app/layout.tsx");
+    expect(layout, "the layout must await offers so the bar is in the first paint")
+      .toMatch(/getStorefrontOffers\(\)/);
+    // A promotion lookup must never be able to break every page on the site.
+    expect(layout, "the layout must tolerate an offers lookup failure")
+      .toMatch(/getStorefrontOffers\(\)\.catch/);
   });
 
-  it("is passed down from both server pages that render it", () => {
-    for (const file of ["src/app/products/page.tsx", "src/app/products/[slug]/page.tsx"]) {
-      const source = read(file);
-      expect(source, `${file} should resolve the coupon server-side`).toContain("getStorefrontCoupon");
-      // A coupon lookup must never be able to break a product page.
-      expect(source, `${file} must tolerate a coupon lookup failure`).toMatch(/getStorefrontCoupon\(\)\.catch/);
-    }
-    expect(read("src/app/products/products-client.tsx")).toContain("<CouponPromoBanner initialCoupon=");
-    expect(read("src/components/product-detail-client.tsx")).toContain("<CouponPromoBanner initialCoupon=");
+  it("the bar takes its offers as a prop and never fetches them itself", () => {
+    const bar = read("src/components/storefront-offers-bar.tsx");
+    expect(bar).toContain("offers }: { offers: StorefrontOffer[] }");
+    expect(bar, "fetching offers client-side reintroduces the layout shift")
+      .not.toMatch(/fetch\(/);
   });
 
-  it("keeps the prop optional so existing callers are unaffected", () => {
-    const detail = read("src/components/product-detail-client.tsx");
-    expect(detail).toContain("featuredCoupon?: FeaturedCoupon | null;");
+  it("filters dismissals on the SERVER, so the bar never paints and then vanishes", () => {
+    // A dismissal held in localStorage can only be read after mount, which
+    // means painting the bar and then removing it — the same shift in the
+    // other direction. A cookie arrives with the request, so the server sends
+    // the final list and nothing moves.
+    const layout = read("src/app/layout.tsx");
+    expect(layout).toMatch(/OFFERS_DISMISSED_COOKIE/);
+    expect(layout).toMatch(/parseDismissed/);
+    const bar = read("src/components/storefront-offers-bar.tsx");
+    expect(bar, "dismissals must not live in localStorage").not.toMatch(/localStorage/);
+  });
+
+  it("resolves offers per request rather than from a cache", () => {
+    // Next's data cache is stale-while-revalidate: a coupon switched off was
+    // measured still advertised 60s later across three page loads. It also let
+    // /products stay statically prerendered, freezing the bar at build time.
+    const lib = read("src/lib/storefront-offers.ts");
+    expect(lib, "a cached offer read advertises promotions the checkout has stopped honouring")
+      .not.toMatch(/^export const getCachedStorefrontOffers = unstable_cache/m);
+  });
+
+  it("does not also show the same offer inside the catalog or product page", () => {
+    expect(read("src/app/products/products-client.tsx")).not.toContain("<CouponPromoBanner");
+    expect(read("src/components/product-detail-client.tsx")).not.toContain("<CouponPromoBanner");
   });
 });

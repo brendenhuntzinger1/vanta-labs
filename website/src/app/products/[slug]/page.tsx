@@ -75,7 +75,6 @@ export default async function ProductDetailPage({
   // Resolved server-side so the promo banner is in the first paint. Fetched in
   // the browser it arrived late and pushed the whole product panel down the
   // page. A failure resolves to null — no banner, never a broken product page.
-  const featuredCoupon = await getStorefrontCoupon().catch(() => null);
   // BAC Water cross-sell (accessory block + Frequently Bought Together).
   // Null on the BAC Water page itself, or until the product exists in the DB.
   const bacWater = isBacWater(product.slug)
@@ -123,7 +122,6 @@ export default async function ProductDetailPage({
           same server-resolved figure the structured data uses. */}
       <TikTokViewContent slug={product.slug} name={product.name} price={priceNumber} category={product.category} />
       <ProductDetailClient
-        featuredCoupon={featuredCoupon}
         product={product}
         relatedProducts={relatedProducts}
         promoBuy3Get1Enabled={Boolean(promoBuy3Get1Enabled)}
