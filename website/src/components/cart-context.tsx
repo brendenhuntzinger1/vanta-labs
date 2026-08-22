@@ -32,6 +32,17 @@ export type CartItem = {
   batchNumber: string;
   image: string;
   stockStatus: string;
+  /**
+   * Snapshot of the product's requires_reconstitution flag, taken when the
+   * line was added. Drives the BAC Water cross-sell in the cart and the
+   * add-to-cart popup, which only ever see cart lines, never products.
+   *
+   * Optional because a cart persisted before this field existed rehydrates
+   * without it. Undefined is falsy, so an old cart simply does not trigger
+   * the upsell — under-showing rather than recommending a preparation step
+   * for something that may be a liquid.
+   */
+  requiresReconstitution?: boolean;
 };
 
 type CartContextValue = {
@@ -191,6 +202,7 @@ function sanitizeCartItems(raw: unknown): CartItem[] {
       batchNumber: typeof record.batchNumber === "string" ? record.batchNumber : "",
       image: typeof record.image === "string" ? record.image : "",
       stockStatus: typeof record.stockStatus === "string" ? record.stockStatus : "In Stock",
+      requiresReconstitution: record.requiresReconstitution === true,
     });
   }
   return cleaned;
@@ -861,6 +873,12 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
             productName: product.name,
             productCategory: product.category,
             variantLabel: resolved?.doseLabel ?? null,
+            // Carried on the event because the BAC Water sheet reacts to this
+            // dispatch synchronously, before React has re-rendered and updated
+            // the cart it would otherwise have to look the product up in.
+            // Reading the flag from a stale cart is how the sheet silently
+            // never fired.
+            requiresReconstitution: product.requiresReconstitution === true,
             quantity,
             price: (resolved?.priceOverride ?? Number(product.price.replace(/[^0-9.]/g, ""))) || 0,
           },
@@ -893,6 +911,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           batchNumber: resolved?.batchNumberOverride ?? product.batchNumber,
           image: resolved?.imageOverride ?? product.image,
           stockStatus: resolved?.stockStatusOverride ?? product.stockStatus,
+          requiresReconstitution: product.requiresReconstitution === true,
         },
       ];
     });
@@ -961,6 +980,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         batchNumber: "",
         image: item.image ?? "",
         stockStatus: "In Stock",
+        // Not carried on this payload; false suppresses the upsell rather
+        // than guessing that a restored line was lyophilized.
+        requiresReconstitution: false,
       })),
     );
   };

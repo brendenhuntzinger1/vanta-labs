@@ -22,7 +22,7 @@ const CATALOG_CACHE_TTL = 60; // seconds
 // Single source of truth for the product columns every public read selects, so
 // adding a field is a one-line change instead of editing four query strings.
 const PRODUCT_SELECT_COLUMNS =
-  "id, slug, name, category, short_description, long_description, description, price_cents, compare_at_price_cents, sale_price_cents, stock_status, inventory_quantity, is_published, is_enabled, is_archived, is_featured, badge, position, batch_number, purity_result, image_url, testing_date, lab_name, coa_url, molecular_formula, molecular_weight, cas_number, peptide_sequence, storage_recommendation, reconstitution_note, product_faq, seo_title, seo_description";
+  "id, slug, name, category, short_description, long_description, description, price_cents, compare_at_price_cents, sale_price_cents, stock_status, inventory_quantity, is_published, is_enabled, is_archived, is_featured, badge, position, batch_number, purity_result, image_url, testing_date, lab_name, coa_url, molecular_formula, molecular_weight, cas_number, peptide_sequence, storage_recommendation, reconstitution_note, requires_reconstitution, product_faq, seo_title, seo_description";
 
 // A stored "Out of Stock" is only honored once inventory tracking is switched
 // on in admin settings. Until then every product is treated as In Stock, so the
@@ -314,6 +314,7 @@ function mapProductRow(
     testingDate: String(row.testing_date ?? ""),
     labName: String(row.lab_name ?? ""),
     coaUrl: effectiveCoaUrl,
+    requiresReconstitution: row.requires_reconstitution === true,
     molecularFormula: row.molecular_formula ? String(row.molecular_formula) : undefined,
     molecularWeight: row.molecular_weight ? String(row.molecular_weight) : undefined,
     casNumber: row.cas_number ? String(row.cas_number) : undefined,

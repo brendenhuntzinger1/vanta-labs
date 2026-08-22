@@ -43,6 +43,7 @@ export type ProductCreateInput = {
   inventoryQuantity?: number;
   stockStatus?: Product["stockStatus"];
   isFeatured?: boolean;
+  requiresReconstitution?: boolean;
   badge?: ProductBadge;
   batchNumber?: string;
   coaUrl?: string;
@@ -155,6 +156,7 @@ function mapAdminProductRow(
     isEnabled: parseBoolean(row.is_enabled, true),
     isArchived: parseBoolean(row.is_archived, false),
     isFeatured: parseBoolean(row.is_featured, false),
+    requiresReconstitution: parseBoolean(row.requires_reconstitution, false),
     badge: sanitizeBadge(row.badge),
     position: parseNumber(row.position, 0),
     batchNumber: effectiveBatch,
@@ -272,7 +274,7 @@ export async function listAdminProducts(input: {
 }) {
   let query = supabaseAdmin
     .from("products")
-    .select("id, slug, name, category, short_description, long_description, description, price_cents, compare_at_price_cents, sale_price_cents, stock_status, inventory_quantity, is_published, is_enabled, is_archived, is_featured, badge, position, batch_number, purity_result, image_url, testing_date, lab_name, coa_url, molecular_formula, molecular_weight, cas_number, peptide_sequence, storage_recommendation, reconstitution_note, product_faq, seo_title, seo_description, product_cost_cents, suggested_retail_cents, min_selling_price_cents, min_profit_cents, min_profit_percent, updated_at")
+    .select("id, slug, name, category, short_description, long_description, description, price_cents, compare_at_price_cents, sale_price_cents, stock_status, inventory_quantity, is_published, is_enabled, is_archived, is_featured, badge, position, batch_number, purity_result, image_url, testing_date, lab_name, coa_url, molecular_formula, molecular_weight, cas_number, peptide_sequence, storage_recommendation, reconstitution_note, requires_reconstitution, product_faq, seo_title, seo_description, product_cost_cents, suggested_retail_cents, min_selling_price_cents, min_profit_cents, min_profit_percent, updated_at")
     .order("position", { ascending: true })
     .order("updated_at", { ascending: false });
 
@@ -401,6 +403,7 @@ export async function createAdminProduct(input: ProductCreateInput) {
       inventory_quantity: inventoryQuantity,
       stock_status: stockStatus,
       is_featured: input.isFeatured ?? false,
+      requires_reconstitution: input.requiresReconstitution ?? false,
       badge: input.badge ?? null,
       batch_number: input.batchNumber ?? null,
       image_url: input.imageUrl ?? null,
@@ -450,7 +453,7 @@ export async function createAdminProduct(input: ProductCreateInput) {
 export async function getAdminProductById(productId: string) {
   const { data, error } = await supabaseAdmin
     .from("products")
-    .select("id, slug, name, category, short_description, long_description, description, price_cents, compare_at_price_cents, sale_price_cents, stock_status, inventory_quantity, is_published, is_enabled, is_archived, is_featured, badge, position, batch_number, purity_result, image_url, testing_date, lab_name, coa_url, molecular_formula, molecular_weight, cas_number, peptide_sequence, storage_recommendation, reconstitution_note, product_faq, seo_title, seo_description")
+    .select("id, slug, name, category, short_description, long_description, description, price_cents, compare_at_price_cents, sale_price_cents, stock_status, inventory_quantity, is_published, is_enabled, is_archived, is_featured, badge, position, batch_number, purity_result, image_url, testing_date, lab_name, coa_url, molecular_formula, molecular_weight, cas_number, peptide_sequence, storage_recommendation, reconstitution_note, requires_reconstitution, product_faq, seo_title, seo_description")
     .eq("id", productId)
     .single();
 
@@ -505,6 +508,7 @@ export async function updateAdminProduct(productId: string, input: ProductUpdate
     payload.stock_status = normalizeStockStatus(input.stockStatus, nextInventory ?? 1);
   }
   if (input.isFeatured !== undefined) payload.is_featured = input.isFeatured;
+  if (input.requiresReconstitution !== undefined) payload.requires_reconstitution = input.requiresReconstitution;
   if (input.badge !== undefined) payload.badge = input.badge;
   if (input.batchNumber !== undefined) payload.batch_number = input.batchNumber;
   if (input.coaUrl !== undefined) payload.coa_url = input.coaUrl;
@@ -605,6 +609,7 @@ export async function duplicateAdminProduct(productId: string) {
     inventoryQuantity: product.inventoryQuantity ?? 0,
     stockStatus: product.stockStatus,
     isFeatured: product.isFeatured,
+    requiresReconstitution: product.requiresReconstitution,
     badge: product.badge,
     batchNumber: product.batchNumber,
     coaUrl: product.coaUrl,

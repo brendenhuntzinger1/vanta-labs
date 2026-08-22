@@ -877,7 +877,7 @@ export function ProductDetailClient({
                 />
               </div>
 
-              <BacWaterAccessoryBlock bacWater={bacWater} hostSlug={product.slug} />
+              <BacWaterAccessoryBlock bacWater={bacWater} host={product} />
 
               {isOutOfStock ? (
                 <div className="mt-4">

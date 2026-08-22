@@ -564,6 +564,7 @@ export default function AdminProductsPage() {
           isEnabled: nextProduct.isEnabled,
           isArchived: nextProduct.isArchived,
           isFeatured: nextProduct.isFeatured,
+          requiresReconstitution: nextProduct.requiresReconstitution,
           badge: nextProduct.badge,
           batchNumber: nextProduct.batchNumber,
           coaUrl: nextProduct.coaUrl,
@@ -975,6 +976,14 @@ function ProductEditor({
         <label className="flex items-center gap-2 rounded-lg border border-zinc-800 p-2 text-xs text-zinc-300">
           <input type="checkbox" checked={Boolean(draft.isArchived)} onChange={(e) => setDraft((prev) => ({ ...prev, isArchived: e.target.checked }))} />
           Archived
+        </label>
+        {/* The ONLY thing that qualifies a product for the bacteriostatic
+            water cross-sell. Off by default and never inferred from the name
+            or category, so a liquid product cannot start recommending a
+            reconstitution step just because it was added to the catalogue. */}
+        <label className="flex items-center gap-2 rounded-lg border border-zinc-800 p-2 text-xs text-zinc-300" title="Ships lyophilized — offer bacteriostatic water for laboratory reconstitution">
+          <input type="checkbox" checked={Boolean(draft.requiresReconstitution)} onChange={(e) => setDraft((prev) => ({ ...prev, requiresReconstitution: e.target.checked }))} />
+          Lyophilized
         </label>
       </div>
 
