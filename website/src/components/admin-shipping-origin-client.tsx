@@ -104,6 +104,20 @@ export function AdminShippingOriginClient({
     }
   };
 
+  // Exactly what toShippoAddress sends, in the order a label prints it. Blank
+  // fields are dropped rather than rendered as empty lines, so the preview
+  // matches the parcel instead of a form.
+  const returnBlock = [
+    returnAddress.name,
+    returnAddress.company,
+    returnAddress.street1,
+    returnAddress.street2,
+    [returnAddress.city, returnAddress.state].filter(Boolean).join(", "),
+    returnAddress.zip,
+  ]
+    .map((line) => (line ?? "").trim())
+    .filter(Boolean);
+
   return (
     <div className="vl-panel rounded-2xl p-5">
       <h2 className="text-lg font-semibold">Ship from &amp; return address</h2>
@@ -144,9 +158,36 @@ export function AdminShippingOriginClient({
 
         <AddressFields value={returnAddress} onChange={setReturnAddress} idPrefix="return" />
         <p className="mt-2 text-[11px] text-zinc-500">
-          A partly-filled return address is not used — carriers reject incomplete addresses, so it falls
-          back to the origin. Complete every required field or leave it entirely blank.
+          Every required field must be set. Shipping is blocked while this is incomplete rather than
+          falling back to your ship-from address — that fallback is how a home address ends up printed
+          on a stranger&apos;s parcel.
         </p>
+
+        {/*
+          THE PREVIEW.
+          Every field here is individually plausible, which is why a wrong one
+          survives review: "brenden" looks fine sitting in a box labelled Name.
+          Stacked as the customer will actually read it, a personal name at the
+          top of a business return block is obvious in one glance. This renders
+          exactly what Shippo is sent — name, then company, then the street
+          lines — so what is shown is what gets printed.
+        */}
+        <div className="mt-4 rounded-xl border border-white/10 bg-black/30 p-4">
+          <p className="text-[11px] uppercase tracking-[0.14em] text-zinc-500">
+            Printed on every parcel
+          </p>
+          {returnBlock.length > 0 ? (
+            <pre className="mt-2 whitespace-pre-wrap font-mono text-[13px] leading-6 text-zinc-200">
+              {returnBlock.join("\n")}
+            </pre>
+          ) : (
+            <p className="mt-2 text-[13px] text-zinc-500">Fill in the fields above to see this.</p>
+          )}
+          <p className="mt-3 text-[11px] text-zinc-500">
+            Read the top line. It should be your business name — customers see this, not your account
+            name.
+          </p>
+        </div>
       </section>
 
       <div className="mt-5 flex flex-wrap items-center gap-3 border-t border-white/10 pt-4">

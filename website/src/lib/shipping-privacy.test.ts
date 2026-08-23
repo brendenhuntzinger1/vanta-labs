@@ -229,3 +229,65 @@ describe("the shipment whose rate is purchased always carried a return address",
     expect(gate).toBeLessThan(creation);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE PREVIEW THAT MAKES A WRONG FIELD OBVIOUS.
+//
+// Configuration passed every check and was still wrong: the return address had
+// a complete, valid, required-fields-satisfied set of values, with the owner's
+// personal first name in Name. Nothing in code can know that "brenden" is a
+// person and "Vanta Labs" is a business — that judgement is the owner's.
+//
+// What code CAN do is stop asking them to make it one field at a time. Each
+// field in isolation looks fine; stacked as the customer reads them, a personal
+// name at the top of a business return block is obvious at a glance.
+//
+// So the admin renders the return block exactly as the label prints it. These
+// assertions keep the preview honest — a preview that disagrees with the
+// payload is worse than none, because it invites trust it has not earned.
+// ---------------------------------------------------------------------------
+describe("the admin shows what will actually be printed", () => {
+  const panel = readFileSync(
+    resolve(process.cwd(), "src/components/admin-shipping-origin-client.tsx"),
+    "utf8",
+  );
+
+  it("renders a preview of the return block", () => {
+    expect(panel).toContain("Printed on every parcel");
+    expect(panel).toContain("returnBlock");
+  });
+
+  it("previews the RETURN address, not the private origin", () => {
+    const start = panel.indexOf("const returnBlock");
+    const block = panel.slice(start, panel.indexOf(".filter(Boolean);", start));
+    expect(block).toContain("returnAddress.name");
+    expect(block).not.toContain("origin.");
+  });
+
+  it("orders the lines the way toShippoAddress sends them", () => {
+    // name, company, street1, street2, city/state, zip — the order a label
+    // prints. A preview in a different order would show a correct-looking
+    // block for an incorrect payload.
+    const start = panel.indexOf("const returnBlock");
+    const block = panel.slice(start, panel.indexOf(".filter(Boolean);", start));
+    const order = ["name", "company", "street1", "street2", "city", "zip"];
+    let cursor = -1;
+    for (const field of order) {
+      const at = block.indexOf(`returnAddress.${field}`);
+      expect(at).toBeGreaterThan(cursor);
+      cursor = at;
+    }
+  });
+
+  it("tells the owner what the top line is for", () => {
+    // The whole point: the field that leaked is the one a form label makes
+    // look internal.
+    expect(panel).toMatch(/top line/i);
+  });
+
+  it("no longer claims an incomplete return address falls back to the origin", () => {
+    // That copy described the old behaviour. It now fails closed, and stale
+    // instructions on a privacy control are their own defect.
+    expect(panel).not.toMatch(/falls\s*\n?\s*back to the origin\. Complete every required field/);
+  });
+});
