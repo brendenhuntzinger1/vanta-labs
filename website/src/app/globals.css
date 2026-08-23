@@ -3868,3 +3868,78 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   line-height: 1.6;
   color: rgba(255, 255, 255, 0.38);
 }
+
+/* ---------------------------------------------------------------------------
+   PRINTING THE PICK LIST.
+
+   The admin is a dark interface. Printed on paper that is a solid black page
+   and an empty toner cartridge, so print switches the sheet to white, drops
+   every chrome element, and enlarges the type to something readable at arm's
+   length on a shelf.
+
+   `.vl-printable` marks the one region that prints; `.vl-no-print` marks
+   everything that must not. The pick checkbox column exists only on paper —
+   on screen the row is already interactive.
+--------------------------------------------------------------------------- */
+.vl-print-only-cell { display: none; }
+.vl-pick-box { display: none; }
+
+@media print {
+  /* Nothing but the pick list. */
+  .vl-no-print { display: none !important; }
+
+  html, body {
+    background: #fff !important;
+    color: #000 !important;
+  }
+
+  /* Hoist the printable region out of the dark admin shell so no ancestor
+     background, max-width or transform follows it onto the page. */
+  body * { visibility: hidden; }
+  .vl-printable, .vl-printable * { visibility: visible; }
+  .vl-printable {
+    position: absolute;
+    inset: 0 auto auto 0;
+    width: 100%;
+    background: #fff !important;
+    border: 0 !important;
+    padding: 0 !important;
+  }
+
+  .vl-printable, .vl-printable * {
+    color: #000 !important;
+    background: transparent !important;
+    border-color: #999 !important;
+  }
+
+  .vl-printable h2 { font-size: 18pt; margin-bottom: 4pt; }
+  .vl-printable p  { font-size: 10pt; }
+  .vl-printable table { width: 100%; border-collapse: collapse; }
+  .vl-printable th {
+    font-size: 9pt;
+    text-align: left;
+    border-bottom: 1.5pt solid #000 !important;
+    padding: 4pt 6pt;
+  }
+  .vl-printable td {
+    /* Large enough to read while holding a box. */
+    font-size: 13pt;
+    padding: 7pt 6pt;
+    border-bottom: 0.5pt solid #bbb !important;
+  }
+  /* The unit count is the number that matters on the shelf. */
+  .vl-printable td:nth-child(3) { font-size: 17pt; font-weight: 700; }
+  /* The composite product id is for the screen, not for paper. */
+  .vl-printable td span.font-mono { display: none; }
+
+  .vl-print-only-cell { display: table-cell !important; }
+  .vl-pick-box {
+    display: inline-block !important;
+    width: 14pt;
+    height: 14pt;
+    border: 1pt solid #000 !important;
+  }
+
+  /* Never split a product across two pages. */
+  .vl-printable tr { page-break-inside: avoid; }
+}

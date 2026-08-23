@@ -81,6 +81,19 @@ export interface OrderProfitInput {
   commission: number;
   /** Card processing fee the store paid (0 for fee-free / manual methods). */
   processingFee: number;
+  /**
+   * True while `processingFee` is a CONFIGURED PERCENTAGE rather than the fee
+   * the processor actually charged.
+   *
+   * Defaults to TRUE, and that default is the point. No payment provider in
+   * this application reports a per-transaction fee back to us today, so every
+   * processing fee on every surface is a modelled number. A caller that forgets
+   * to say so therefore under-claims precision instead of over-claiming it —
+   * the same direction the COA rail defaults to.
+   *
+   * Set it false only when a REAL settled fee has been ingested for this order.
+   */
+  processingFeeIsEstimate?: boolean;
   /** Amount refunded to the customer (reverses revenue). */
   refund: number;
   /** Worst-case unit cost (cents) used only when a line has no snapshot. */
@@ -92,8 +105,18 @@ export interface OrderProfitInput {
   extraExpenses?: Array<{ key: string; label: string; amount: number; kind?: OrderExpenseKind }>;
 }
 
-/** Profit is "estimated" until the exact shipping-label cost (and every line's
- *  cost) is known; then it's "finalized". */
+/**
+ * Profit is "estimated" until the exact shipping-label cost AND every line's
+ * COGS are known; then it's "finalized".
+ *
+ * DELIBERATELY NOT gated on the processing fee. That fee is always modelled
+ * (nothing reports a settled fee back to us), so including it here would mean
+ * no order could ever finalize and the distinction would carry no information.
+ * "Finalized" therefore means "shipping and COGS are exact" — the two costs
+ * that actually move once an order ships. The processing fee's own precision is
+ * reported separately by `processingFeeIsEstimate`, and its expense line says
+ * so on its face.
+ */
 export type ProfitStatus = "estimated" | "finalized";
 
 export interface OrderProfitResult {
@@ -112,6 +135,8 @@ export interface OrderProfitResult {
   cogs: number;
   commission: number;
   processingFee: number;
+  /** True when the processing fee is modelled from a rate, not a settled fee. */
+  processingFeeIsEstimate: boolean;
   shippingCost: number;
   shippingCostIsEstimate: boolean;
   /** Shipping charged − shipping cost (positive = shipping profit). */
@@ -162,6 +187,8 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   const additionalRevenue = round(Math.max(0, input.additionalRevenue ?? 0));
   const countTaxAsProfit = input.countTaxAsProfit ?? false;
   const shippingCostIsEstimate = input.shippingCostIsEstimate ?? false;
+  // Defaults TRUE — see the field comment. Nothing ingests a settled fee yet.
+  const processingFeeIsEstimate = input.processingFeeIsEstimate ?? true;
 
   // Ordered expense line items — the extensible ledger of deductions.
   const expenses: OrderExpenseLine[] = [];
@@ -174,7 +201,17 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
       kind: "shipping",
     });
   }
-  if (processingFee > 0) expenses.push({ key: "processing_fee", label: "Payment processor fee", amount: processingFee, kind: "processing" });
+  if (processingFee > 0) {
+    // Labelled exactly as the shipping line is. An estimate presented as an
+    // actual cost is the one thing a profit figure must never do, and this line
+    // is ALWAYS an estimate today.
+    expenses.push({
+      key: "processing_fee",
+      label: processingFeeIsEstimate ? "Payment processor fee (estimated)" : "Payment processor fee",
+      amount: processingFee,
+      kind: "processing",
+    });
+  }
   if (commission > 0) expenses.push({ key: "commission", label: "Ambassador commission", amount: commission, kind: "commission" });
   for (const extra of input.extraExpenses ?? []) {
     const amount = round(Math.max(0, Number(extra.amount) || 0));
@@ -205,6 +242,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     cogs,
     commission,
     processingFee,
+    processingFeeIsEstimate,
     shippingCost,
     shippingCostIsEstimate,
     shippingProfit,

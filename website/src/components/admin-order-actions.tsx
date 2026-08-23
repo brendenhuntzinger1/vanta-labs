@@ -41,6 +41,14 @@ export function AdminOrderActions({
   const [saving, setSaving] = useState(false);
   // Replacement panel state: which items (and how many of each) to reship.
   const [replaceOpen, setReplaceOpen] = useState(false);
+  /**
+   * One id per opening of the replacement dialog.
+   *
+   * A double-click, a retried fetch or a second submit reuses this id, so the
+   * server resolves them all to the SAME replacement. Closing and reopening the
+   * dialog mints a new one, so two deliberate replacements still work.
+   */
+  const [replaceRequestId, setReplaceRequestId] = useState(() => crypto.randomUUID());
   const [replaceReason, setReplaceReason] = useState("damaged");
   const [replaceNote, setReplaceNote] = useState("");
   const [replaceQty, setReplaceQty] = useState<Record<string, number>>(
@@ -277,7 +285,7 @@ export function AdminOrderActions({
                     void runAction(
                       "send_replacement",
                       "Send a free replacement shipment for the selected items? The customer will be emailed and the reship goes to fulfillment.",
-                      { reason: replaceReason, note: replaceNote.trim() || undefined, items },
+                      { reason: replaceReason, note: replaceNote.trim() || undefined, items, requestId: replaceRequestId },
                     );
                   }}
                   className="vl-btn-primary px-4 py-2 text-xs disabled:opacity-60"

@@ -1,4 +1,5 @@
 import { NextResponse, after } from "next/server";
+import { setOrderFulfillmentStatus } from "@/lib/shippo/service";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds, canViewProfit } from "@/lib/admin-roles";
 import { recordActualShippingCost } from "@/lib/admin-profit";
@@ -62,6 +63,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       reason?: string;
       items?: Array<{ itemId?: string | number; quantity?: number }>;
       shippingCostAmount?: number;
+      /** Idempotency key for send_replacement — one per confirmation dialog. */
+      requestId?: string;
     };
 
     const action = String(body.action ?? "");
@@ -124,12 +127,18 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         );
       }
 
+      // fulfillment_status is DELIBERATELY not in this payload any more.
+      //
+      // It used to be written here by a raw UPDATE that never consulted
+      // order-pipeline.ts, so this route could set any status from any state —
+      // including `delivered`, which the pipeline reserves for the carrier —
+      // and it wrote no order_status_history row, leaving operator changes
+      // invisible in the customer-facing timeline. The payment guard above is
+      // kept as defence in depth: the pipeline validates transitions, not
+      // whether the money arrived.
       const updatePayload: Record<string, unknown> = { updated_at: now };
       if (body.paymentStatus) {
         updatePayload.payment_status = String(body.paymentStatus);
-      }
-      if (body.fulfillmentStatus) {
-        updatePayload.fulfillment_status = String(body.fulfillmentStatus);
       }
       if (typeof body.trackingNumber === "string") {
         updatePayload.tracking_number = body.trackingNumber.trim() || null;
@@ -142,6 +151,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
 
       if (error) {
         throw error;
+      }
+
+      // The status change goes through the same writer the bulk action and the
+      // Shippo webhook use. Tracking is saved FIRST so that if this transition
+      // triggers a shipping email, the tracking number is already on the row.
+      if (body.fulfillmentStatus) {
+        const transition = await setOrderFulfillmentStatus({
+          orderId,
+          to: String(body.fulfillmentStatus),
+          source: "admin",
+          actor: session.username,
+        });
+        if (!transition.ok) {
+          // A refusal is the pipeline doing its job — report its sentence
+          // verbatim rather than a generic failure, so the operator learns why.
+          return NextResponse.json({ success: false, error: transition.message }, { status: 400 });
+        }
       }
 
       const { error: auditError } = await supabaseAdmin
@@ -448,6 +474,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       const replacement = await createReplacementOrder({
         originalOrderId: orderId,
         reason,
+        // The duplicate guard. One id per confirmation dialog, so a double-click
+        // or a retried fetch resolves to the SAME replacement instead of a
+        // second parcel with a second label and stock deducted twice.
+        requestId: typeof body.requestId === "string" ? body.requestId : null,
         note: typeof body.note === "string" ? body.note : null,
         selections: Array.isArray(body.items)
           ? body.items
@@ -521,12 +551,27 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
 
     if (action === "cancel" || action === "resend_confirmation") {
       if (action === "cancel") {
-        const { error } = await supabaseAdmin
-          .from("orders")
-          .update({ fulfillment_status: "cancelled", updated_at: now })
-          .eq("order_id", orderId);
-        if (error) {
-          throw error;
+        // CANCELLATION IS A TRANSITION, NOT A FIELD WRITE.
+        //
+        // This used to be a raw UPDATE, which meant an admin could cancel an
+        // order the carrier had already delivered — reproduced before this
+        // change: delivered, in_transit, shipped and refunded all accepted a
+        // cancel, each leaving zero history rows. FULFILLMENT_TRANSITIONS
+        // reaches `cancelled` only from awaiting_payment, paid,
+        // ready_to_fulfill and packed, and says why: "No cancel after shipping:
+        // the goods are gone, so the honest outcomes are a refund or a return."
+        //
+        // Routing through the canonical writer applies that rule, records the
+        // change in order_status_history, and returns the pipeline's own
+        // sentence when it refuses.
+        const cancelled = await setOrderFulfillmentStatus({
+          orderId,
+          to: "cancelled",
+          source: "admin",
+          actor: session.username,
+        });
+        if (!cancelled.ok) {
+          return NextResponse.json({ success: false, error: cancelled.message }, { status: 400 });
         }
       }
 

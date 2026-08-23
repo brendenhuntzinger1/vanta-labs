@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { CATALOG_TRUST_RAIL } from "@/lib/trust-claims";
+import { catalogTrustRail } from "@/lib/trust-claims";
 
 // ---------------------------------------------------------------------------
 // THE CATALOG TRUST RAIL.
@@ -82,10 +82,15 @@ function Item({ top, bottom, icon }: { top: string; bottom: string; icon: string
   );
 }
 
-export function CatalogTrustRail() {
+/**
+ * `everyProductHasCoa` decides which COA claim the rail is allowed to make.
+ * Omitted means "not established", which renders the weaker, always-true line —
+ * the rail never over-claims by default or while the catalogue is loading.
+ */
+export function CatalogTrustRail({ everyProductHasCoa = false }: { everyProductHasCoa?: boolean }) {
   return (
     <div className="vl-rail" role="list" aria-label="Why Vanta Labs">
-      {CATALOG_TRUST_RAIL.map(({ top, bottom, href, icon }) =>
+      {catalogTrustRail(everyProductHasCoa).map(({ top, bottom, href, icon }) =>
         href ? (
           <Link key={bottom} href={href} className="vl-rail-item vl-focus-ring" role="listitem">
             <Item top={top} bottom={bottom} icon={icon} />

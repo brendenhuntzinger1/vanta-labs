@@ -226,6 +226,12 @@ interface ShippoRequestInit {
   method: "GET" | "POST";
   path: string;
   body?: Record<string, unknown>;
+  /**
+   * Extra headers. Exists for `Shippo-Idempotency-Key` on the one call that
+   * spends money — see purchaseLabel(). Never used to override Authorization or
+   * Content-Type, which are set after this spreads.
+   */
+  headers?: Record<string, string>;
 }
 
 /**
@@ -258,6 +264,9 @@ async function shippoRequest<T>(request: ShippoRequestInit): Promise<ShippoResul
     response = await fetch(`${SHIPPO_API_BASE}${request.path}`, {
       method: request.method,
       headers: {
+        ...(request.headers ?? {}),
+        // Set AFTER the spread so no caller can replace the credential or the
+        // content type by passing a colliding key.
         Authorization: `ShippoToken ${token}`,
         "Content-Type": "application/json",
       },
@@ -425,6 +434,14 @@ export interface PurchaseLabelInput {
   labelFileType?: ShippoLabelFileType;
   /** Echoed back by Shippo — pass the Vanta order id so a label in Shippo's dashboard is traceable. */
   metadata?: string;
+  /**
+   * `Shippo-Idempotency-Key`, keyed on the ORDER rather than the request.
+   *
+   * The last line of defence: if the local claim were ever defeated — two
+   * processes, a restored database, a hand-crafted request — Shippo returns the
+   * transaction it already created for this key instead of charging twice.
+   */
+  idempotencyKey?: string;
 }
 
 export interface PurchasedLabel {
@@ -448,12 +465,112 @@ function settledCentsFromTransaction(rate: ShippoTransaction["rate"]): number | 
   return cents !== null && cents > 0 ? cents : null;
 }
 
-// purchaseLabel REMOVED — this application cannot buy postage.
-//
-// POST /transactions/ is the Shippo call that spends money. It is deleted
-// rather than merely left uncalled: an unused function is one import away from
-// being used again, and the guarantee the owner asked for is that Shippo's
-// dashboard is the ONLY place a label can be bought.
+/**
+ * BUY THE POSTAGE. The one call in this codebase that spends money.
+ *
+ * Restored deliberately (owner decision, recorded 2026-08) under the inverse of
+ * the rule that removed it: there must be exactly ONE system that can buy a
+ * label, and that system is now Vanta. Shippo's dashboard stays available for
+ * recovery, but the normal day never opens it.
+ *
+ * FOUR LAYERS STAND BETWEEN A DOUBLE-CLICK AND A DOUBLE CHARGE, and this is
+ * only the outermost:
+ *
+ *   1. purchaseLabelForOrder() short-circuits when a label already exists.
+ *   2. An atomic claim on `label_purchase_claimed_at` lets exactly one caller
+ *      through per order.
+ *   3. `Shippo-Idempotency-Key`, below, keyed on the ORDER — so even if layers
+ *      1 and 2 were both defeated, Shippo itself returns the first transaction
+ *      instead of creating a second.
+ *   4. Any ambiguous outcome keeps the claim and raises an exception rather
+ *      than retrying.
+ *
+ * `async: false` makes Shippo settle the transaction before responding, so a
+ * 2xx carries the real tracking number and label URL rather than a QUEUED stub
+ * we would have to poll for.
+ */
+export async function purchaseLabel(input: PurchaseLabelInput): Promise<ShippoResult<PurchasedLabel>> {
+  const rateId = asNonEmptyString(input?.rate?.object_id);
+  if (!rateId) {
+    return {
+      ok: false,
+      kind: "rejected",
+      message: "No Shippo rate was selected for this label.",
+      safeToRetry: false,
+    };
+  }
+
+  // The quoted cost, captured BEFORE the call. If the response comes back
+  // without an expanded rate we still know what we agreed to pay.
+  const quotedCents = parseAmountToCents(input.rate.amount);
+
+  const result = await shippoRequest<ShippoTransaction>({
+    method: "POST",
+    path: "/transactions/",
+    headers: input.idempotencyKey ? { "Shippo-Idempotency-Key": input.idempotencyKey } : undefined,
+    body: {
+      rate: rateId,
+      label_file_type: input.labelFileType ?? "PDF_4x6",
+      async: false,
+      ...(input.metadata ? { metadata: input.metadata } : {}),
+    },
+  });
+  if (!result.ok) return result;
+
+  const transaction = result.data;
+  const transactionId = asNonEmptyString(transaction?.object_id);
+
+  // A transaction that came back ERROR bought nothing, but one that came back
+  // without an object_id is the dangerous shape: Shippo answered 2xx and we
+  // cannot name what it created. Neither is safe to retry blindly.
+  if (transaction?.status === "ERROR" || !transactionId) {
+    return {
+      ok: false,
+      kind: transaction?.status === "ERROR" ? "rejected" : "invalid_response",
+      message:
+        transaction?.status === "ERROR"
+          ? "Shippo could not buy this label."
+          : "Shippo accepted the purchase but did not return a transaction id.",
+      detail: describeMessages(transaction?.messages),
+      // ERROR is a definitive "nothing was created"; a missing id is not.
+      safeToRetry: transaction?.status === "ERROR",
+    };
+  }
+
+  const labelUrl = asNonEmptyString(transaction.label_url);
+  const trackingNumber = asNonEmptyString(transaction.tracking_number);
+  const postageCostCents = settledCentsFromTransaction(transaction.rate) ?? quotedCents;
+
+  // POSTAGE WAS CHARGED by this point. Everything below reports a real spend
+  // whose record is incomplete — never a reason to buy again.
+  if (postageCostCents === null || postageCostCents <= 0) {
+    return {
+      ok: false,
+      kind: "missing_cost",
+      message: "The label was purchased but Shippo did not report what it cost.",
+      transactionId,
+      safeToRetry: false,
+    };
+  }
+
+  const expandedRate = typeof transaction.rate === "object" && transaction.rate !== null ? transaction.rate : null;
+
+  return {
+    ok: true,
+    data: {
+      transactionId,
+      rateId,
+      trackingNumber: trackingNumber ?? "",
+      labelUrl: labelUrl ?? "",
+      trackingUrlProvider: asNonEmptyString(transaction.tracking_url_provider) ?? null,
+      carrier: expandedRate?.provider ?? input.rate.provider ?? null,
+      service: expandedRate?.servicelevel?.name ?? input.rate.servicelevel?.name ?? null,
+      serviceToken: expandedRate?.servicelevel?.token ?? input.rate.servicelevel?.token ?? null,
+      postageCostCents,
+      raw: transaction,
+    },
+  };
+}
 //
 // What remains here is read-only or refunding: quoting a shipment, creating an
 // order record, reading a transaction back, and refunding one.

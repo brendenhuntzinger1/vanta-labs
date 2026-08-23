@@ -2,7 +2,8 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
-import { deliveryConfirmationTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
+import { shippingUpdateTemplate } from "@/lib/email/templates";
+import { setOrderFulfillmentStatus } from "@/lib/shippo/service";
 import { getSiteUrl } from "@/lib/env";
 
 export interface AdminOrderRow {
@@ -138,14 +139,37 @@ export async function getAdminOrderRows(filters: AdminOrderFilters = {}): Promis
   };
 }
 
-export type AdminOrderBulkAction = "mark_shipped" | "mark_delivered" | "cancel";
+/**
+ * MARK_DELIVERED IS DELIBERATELY ABSENT.
+ *
+ * `delivered` is carrier-authoritative: FULFILLMENT_STATUS_SOURCES in
+ * order-pipeline.ts lists exactly ["shippo"] for it, because the only honest
+ * evidence a parcel arrived is the carrier saying so. This function used to
+ * write it anyway, with a raw UPDATE that never consulted the pipeline — so a
+ * dashboard button could assert delivery the carrier had never reported, and
+ * the customer got a "delivered" email for a parcel still on a van.
+ *
+ * If a parcel is genuinely delivered and the carrier never scanned it, that is
+ * an exception to work, not a routine bulk action. A privileged single-order
+ * override belongs behind its own confirmation, reason and audit entry; it is
+ * not part of the normal workflow and is not implemented here.
+ */
+export type AdminOrderBulkAction = "mark_shipped" | "cancel";
 
 /**
  * Statuses a customer is told about, matching the single-order route exactly.
  * "cancelled" is deliberately absent there and here: a cancellation is handled
  * by the refund flow, which has its own message.
  */
-const BULK_NOTIFY_STATUSES = new Set(["shipped", "delivered"]);
+const BULK_NOTIFY_STATUSES = new Set(["shipped"]);
+
+/** One order's outcome. A bulk action reports per order, never in aggregate. */
+export interface BulkOrderOutcome {
+  orderId: string;
+  ok: boolean;
+  /** Why it was refused, in the pipeline's own words. */
+  reason?: string;
+}
 
 /**
  * Apply a bulk fulfillment action AND tell the affected customers.
@@ -160,26 +184,22 @@ const BULK_NOTIFY_STATUSES = new Set(["shipped", "delivered"]);
  *   * only a REAL transition notifies — re-running "mark shipped" over orders
  *     that are already shipped sends nothing, so a double-click or an operator
  *     re-applying an action to a filtered list cannot spam anyone;
- *   * "delivered" gets the delivery confirmation, "shipped" the shipping
- *     update;
+ *   * only "shipped" notifies — "delivered" is no longer a bulk action at all,
+ *     because the carrier owns that state;
  *   * sending is best-effort per order. The status change is the operation the
  *     admin asked for and it has already committed; one bad address must not
  *     roll it back or abort the rest of the batch.
  */
-export async function bulkUpdateAdminOrders(input: { orderIds: string[]; action: AdminOrderBulkAction }) {
+export async function bulkUpdateAdminOrders(input: { orderIds: string[]; action: AdminOrderBulkAction; actor?: string | null }) {
   if (input.orderIds.length === 0) {
-    return { updated: 0, notified: 0 };
+    return { updated: 0, notified: 0, failed: [] as BulkOrderOutcome[] };
   }
 
-  const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
   let nextStatus: string;
 
   switch (input.action) {
     case "mark_shipped":
       nextStatus = "shipped";
-      break;
-    case "mark_delivered":
-      nextStatus = "delivered";
       break;
     case "cancel":
       nextStatus = "cancelled";
@@ -187,7 +207,6 @@ export async function bulkUpdateAdminOrders(input: { orderIds: string[]; action:
     default:
       throw new Error("Unsupported bulk action");
   }
-  payload.fulfillment_status = nextStatus;
 
   // Read the PRIOR state before updating: afterwards every row reads as the new
   // status, and "did this actually change?" becomes unanswerable.
@@ -196,21 +215,54 @@ export async function bulkUpdateAdminOrders(input: { orderIds: string[]; action:
     .select("order_id, order_number, customer_email, customer_name, fulfillment_status, tracking_number")
     .in("order_id", input.orderIds);
 
-  const { error } = await supabaseAdmin
-    .from("orders")
-    .update(payload)
-    .in("order_id", input.orderIds);
+  // ---------------------------------------------------------------------------
+  // ONE ORDER AT A TIME, THROUGH THE PIPELINE.
+  //
+  // This was a single `.update().in(order_id, ids)` — one statement, no
+  // transition check, no history, no payment guard. It could move an order from
+  // any state to any other, including states the pipeline reserves for the
+  // carrier, and it left no trace in order_status_history, so an operator's
+  // change was invisible in the customer-facing timeline.
+  //
+  // Per-order is slower and that is the correct trade: a bulk action is fifty
+  // individual decisions, and fifty orders in different states do not all have
+  // the same legal move. setOrderFulfillmentStatus is the same writer the
+  // single-order screen and the Shippo webhook use, so all three now obey one
+  // set of rules and write one history table.
+  //
+  // A refusal is NOT an error. Re-running "mark shipped" over a filtered list
+  // that already contains shipped orders should skip them quietly, which is
+  // exactly what canTransition's "unchanged" rejection does.
+  // ---------------------------------------------------------------------------
+  const outcomes: BulkOrderOutcome[] = [];
+  const changed = new Set<string>();
 
-  if (error) {
-    throw error;
+  for (const orderId of input.orderIds) {
+    const result = await setOrderFulfillmentStatus({
+      orderId,
+      to: nextStatus,
+      source: "admin",
+      actor: input.actor ?? null,
+    });
+    if (result.ok) {
+      outcomes.push({ orderId, ok: true });
+      changed.add(orderId);
+    } else {
+      outcomes.push({ orderId, ok: false, reason: result.message });
+    }
   }
+
+  const updated = outcomes.filter((o) => o.ok).length;
+  const failed = outcomes.filter((o) => !o.ok);
 
   if (!BULK_NOTIFY_STATUSES.has(nextStatus)) {
-    return { updated: input.orderIds.length, notified: 0 };
+    return { updated, notified: 0, failed };
   }
 
+  // Only orders that ACTUALLY moved are told. An order the pipeline refused has
+  // not changed, so emailing its customer would announce something untrue.
   const transitioned = (before ?? []).filter(
-    (row) => String(row.fulfillment_status ?? "").toLowerCase() !== nextStatus && row.customer_email,
+    (row) => changed.has(String(row.order_id)) && row.customer_email,
   );
 
   let notified = 0;
@@ -221,18 +273,18 @@ export async function bulkUpdateAdminOrders(input: { orderIds: string[]; action:
       // means nothing to them and cannot be quoted to support.
       const orderId = String(row.order_number ?? "") || String(row.order_id);
       const trackingNumber = row.tracking_number ? String(row.tracking_number) : undefined;
-      const template = nextStatus === "delivered"
-        ? deliveryConfirmationTemplate({ customerName: String(row.customer_name ?? ""), orderId })
-        : shippingUpdateTemplate({
-            customerName: String(row.customer_name ?? ""),
-            orderId,
-            status: nextStatus,
-            trackingNumber,
-            // No carrier is known in a bulk action, so there is no carrier
-            // deep-link to build — send them to their own order list, which is
-            // the same fallback the single-order path uses.
-            trackingUrl: `${getSiteUrl()}/account/orders`,
-          });
+      // Only "shipped" reaches here now — BULK_NOTIFY_STATUSES holds nothing
+      // else, and mark_delivered no longer exists as a bulk action.
+      const template = shippingUpdateTemplate({
+        customerName: String(row.customer_name ?? ""),
+        orderId,
+        status: nextStatus,
+        trackingNumber,
+        // No carrier is known in a bulk action, so there is no carrier
+        // deep-link to build — send them to their own order list, which is
+        // the same fallback the single-order path uses.
+        trackingUrl: `${getSiteUrl()}/account/orders`,
+      });
       const result = await sendEmail({ to: String(row.customer_email), ...template });
       if (result.success) notified++;
     } catch {
@@ -240,5 +292,5 @@ export async function bulkUpdateAdminOrders(input: { orderIds: string[]; action:
     }
   }
 
-  return { updated: input.orderIds.length, notified };
+  return { updated, notified, failed };
 }

@@ -7,10 +7,11 @@ import "server-only";
 // charged, no commission/points/coupons apply, and revenue dashboards see
 // $0. It is linked back to the original order for the audit trail.
 
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { PAID_ORDER_STATUSES } from "@/lib/ledger";
 import { decrementInventoryForOrder } from "@/lib/inventory-fulfillment";
+import { recordSystemAlert } from "@/lib/monitoring";
 
 export type ReplacementReason = "damaged" | "lost" | "stolen" | "other";
 
@@ -24,6 +25,8 @@ export interface ReplacementSelection {
 export interface ReplacementResult {
   orderId: string;
   orderNumber: string;
+  /** True when this call found an existing replacement rather than creating one. */
+  duplicate?: boolean;
   items: Array<{ name: string; quantity: number }>;
   customerEmail: string | null;
   customerName: string | null;
@@ -62,6 +65,21 @@ export async function createReplacementOrder(input: {
   reason: ReplacementReason;
   note?: string | null;
   selections?: ReplacementSelection[] | null;
+  /**
+   * One id per intent-to-create, generated when the confirmation dialog opens.
+   *
+   * THE DUPLICATE GUARD. Without it every call minted a fresh random order id,
+   * so a double-click, a retried fetch or a second tab produced TWO replacement
+   * orders — two parcels, two labels, two lots of postage, and stock deducted
+   * twice for one apology.
+   *
+   * With it the new order id is DERIVED from (original order + request id), so
+   * the second identical request collides with the primary key on orders and is
+   * refused by the database rather than by a check that can race. Two genuine
+   * replacements mean two dialogs, two request ids, two orders — which still
+   * works exactly as it should.
+   */
+  requestId?: string | null;
 }): Promise<ReplacementResult> {
   const { data: original, error } = await supabaseAdmin
     .from("orders")
@@ -83,7 +101,42 @@ export async function createReplacementOrder(input: {
     throw new Error("Select at least one item to replace.");
   }
 
-  const orderId = `order-${randomUUID()}`;
+  // Deterministic when a requestId is supplied; random otherwise, so an older
+  // caller that has not been updated still works (it simply loses the guard).
+  const orderId = input.requestId
+    ? `order-rp-${createHash("sha256")
+        .update(`${input.originalOrderId}::${input.requestId}`)
+        .digest("hex")
+        .slice(0, 24)}`
+    : `order-${randomUUID()}`;
+
+  // Cheap pre-check so a genuine duplicate returns the FIRST replacement
+  // instead of an error the operator has to interpret. The primary key below is
+  // still the real guarantee — this only makes the common case read nicely.
+  if (input.requestId) {
+    const { data: existing } = await supabaseAdmin
+      .from("orders")
+      .select("order_id, order_number, customer_email, customer_name")
+      .eq("order_id", orderId)
+      .maybeSingle();
+    if (existing) {
+      const { data: existingItems } = await supabaseAdmin
+        .from("order_items")
+        .select("product_name, product_id, quantity")
+        .eq("order_id", orderId);
+      return {
+        orderId: String(existing.order_id),
+        orderNumber: String(existing.order_number),
+        items: (existingItems ?? []).map((item) => ({
+          name: String(item.product_name ?? item.product_id ?? "Item"),
+          quantity: Number(item.quantity ?? 1),
+        })),
+        customerEmail: existing.customer_email ? String(existing.customer_email) : null,
+        customerName: existing.customer_name ? String(existing.customer_name) : null,
+        duplicate: true,
+      };
+    }
+  }
   const orderNumber = `VL-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
   const now = new Date().toISOString();
 
@@ -178,13 +231,30 @@ export async function createReplacementOrder(input: {
   }
 
   // Real stock leaves the warehouse for a replacement — keep counts honest.
-  // Best-effort: an inventory hiccup must not block the reshipment.
+  //
+  // Still non-fatal: the parcel is going out either way, and refusing to create
+  // the reship over a counter would leave the customer without their apology.
+  // But it is NO LONGER SILENT. A swallowed failure here is precisely how
+  // database stock drifts above the shelf — the units leave, nothing records
+  // it, and the discrepancy only surfaces at a physical count months later.
   try {
     await decrementInventoryForOrder(
       replacementItems.map((item) => ({ product_id: item.product_id, quantity: item.quantity })) as Array<{ product_id?: string | null; quantity?: number | null }>,
     );
-  } catch {
-    /* non-fatal */
+  } catch (error) {
+    await recordSystemAlert({
+      type: "replacement_inventory_not_decremented",
+      severity: "critical",
+      message:
+        `Replacement ${orderNumber} shipped stock that was NOT deducted from inventory. ` +
+        `Adjust it by hand or the count will read high.`,
+      context: {
+        replacementOrderId: orderId,
+        originalOrderId: input.originalOrderId,
+        items: replacementItems.map((item) => ({ productId: item.product_id, quantity: item.quantity })),
+        reason: error instanceof Error ? error.message : String(error),
+      },
+    }).catch(() => undefined);
   }
 
   // The replacement order lands in the admin fulfillment queue and is shipped

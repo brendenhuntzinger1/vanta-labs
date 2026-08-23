@@ -7,6 +7,7 @@ import { createShipmentWithRates, createShippoOrder } from "@/lib/shippo/client"
 import { isShippoConfigured } from "@/lib/shippo/config";
 import { buildOrderParcel, toCountryCode } from "@/lib/shippo/service";
 import type { ShippoAddress, ShippoOrderLineItem, ShippoTransactionCreated } from "@/lib/shippo/types";
+import { canTransition } from "@/lib/order-pipeline";
 
 // ---------------------------------------------------------------------------
 // Pushing orders INTO Shippo, and receiving the label back OUT of it.
@@ -34,6 +35,7 @@ export type SyncOutcome =
 
 interface OrderRow {
   order_id: string;
+  fulfillment_status: string | null;
   order_number: string | null;
   customer_name: string | null;
   customer_email: string | null;
@@ -56,7 +58,10 @@ interface OrderRow {
 }
 
 const ORDER_COLUMNS =
-  "order_id, order_number, customer_name, customer_email, phone, shipping_address, shipping_address_2, city, state, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, currency, paid_at, payment_status, order_type, shippo_order_id";
+  // fulfillment_status is selected so the monotonicity guard in
+// applyTransactionCreated can read the order's CURRENT progress before
+// deciding whether a late label event is allowed to move it.
+  "order_id, order_number, customer_name, customer_email, phone, shipping_address, shipping_address_2, city, state, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, currency, paid_at, payment_status, fulfillment_status, order_type, shippo_order_id";
 
 function money(value: number | null | undefined): string {
   return (Math.round((Number(value) || 0) * 100) / 100).toFixed(2);
@@ -440,6 +445,29 @@ export async function applyTransactionCreated(
   const labelUrl = String(data.label_url ?? "").trim() || null;
   const now = new Date().toISOString();
 
+  // THE STATUS MOVE IS SEPARATE FROM THE LABEL FACTS, AND ONLY THE MOVE IS
+  // GUARDED.
+  //
+  // Shippo replays and reorders deliveries. This used to write
+  // fulfillment_status = "label_purchased" unconditionally, so a
+  // `transaction_created` arriving after the parcel had already been scanned in
+  // transit — or delivered — rewrote the later state with an earlier one and
+  // lost the parcel's real progress. Confirmed by reproduction before this
+  // change: delivered, in_transit and out_for_delivery all regressed.
+  //
+  // canTransition already encodes exactly the right rule for source "shippo":
+  // it refuses a move whose progressRank is lower than the current status, and
+  // refuses any move out of a terminal one. Routing through it keeps ONE
+  // monotonicity rule in the codebase instead of a second, private copy — and
+  // it leaves Shippo's authority over legitimate shipping transitions intact,
+  // because `label_purchased` still lists "shippo" as a permitted source.
+  //
+  // The label METADATA is written either way, deliberately. A tracking number,
+  // a carrier and a postage cost are facts about a shipment that stay true
+  // whenever they arrive; only the STATUS is a claim about progress. Dropping
+  // the metadata on a late event would lose the real cost of a real label.
+  const transition = canTransition(order.fulfillment_status, "label_purchased", "shippo");
+
   await supabaseAdmin
     .from("orders")
     .update({
@@ -453,7 +481,7 @@ export async function applyTransactionCreated(
       // price must leave this NULL so the admin shows "Pending" and the owner
       // can enter it — writing 0 would silently overstate the margin instead.
       ...(amountCents !== null ? { postage_cost_cents: amountCents } : {}),
-      fulfillment_status: "label_purchased",
+      ...(transition.ok ? { fulfillment_status: "label_purchased" } : {}),
       updated_at: now,
     })
     .eq("order_id", order.order_id);
@@ -468,12 +496,19 @@ export async function applyTransactionCreated(
     });
   }
 
-  await supabaseAdmin.from("order_status_history").insert({
-    order_id: order.order_id,
-    to_status: "label_purchased",
-    source: "shippo",
-    actor: "shippo_dashboard",
-  });
+  // History records what actually happened. A refused transition did not move
+  // the order, so writing a row for it would put a state change in the
+  // customer-facing timeline that never occurred. A duplicate delivery of the
+  // same event is refused as "unchanged" and is silent here for the same reason.
+  if (transition.ok) {
+    await supabaseAdmin.from("order_status_history").insert({
+      order_id: order.order_id,
+      from_status: transition.from,
+      to_status: "label_purchased",
+      source: "shippo",
+      actor: "shippo_dashboard",
+    });
+  }
 
   return { matched: true, orderId: order.order_id };
 }
