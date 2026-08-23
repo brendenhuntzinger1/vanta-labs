@@ -198,6 +198,79 @@ export function FulfillmentOwnerGuide({
       ),
     },
     {
+      id: "printing",
+      title: "Printing labels",
+      body: (
+        <div className="space-y-3.5 text-sm leading-6 text-zinc-300">
+          <div className="rounded-lg border border-emerald-400/25 bg-emerald-400/[0.07] p-3.5">
+            <p className="font-semibold text-emerald-100">Reprinting never buys postage again.</p>
+            <p className="mt-1 text-emerald-100/80">
+              Printing opens labels you have already paid for. A jam, an empty roll, a closed tab
+              or a bad print costs you nothing to redo.
+            </p>
+          </div>
+
+          <div>
+            <p className="font-semibold text-white">What happens when you press Print</p>
+            <p className="mt-1 text-zinc-400">
+              Vanta collects every label in the batch into one 4&times;6 PDF, in the same order as
+              your packing screen, and opens it in a new tab. You print it with your computer&apos;s
+              normal print dialog and choose your thermal printer. Vanta does not talk to your
+              printer directly.
+            </p>
+          </div>
+
+          <div>
+            <p className="font-semibold text-white">First time only</p>
+            <ul className="mt-1 space-y-1 pl-4 text-zinc-400">
+              <li className="list-disc">Printer: your thermal label printer</li>
+              <li className="list-disc">Paper: 4 &times; 6</li>
+              <li className="list-disc">
+                Scale: <strong className="text-white">Actual size / 100%</strong>
+              </li>
+              <li className="list-disc">
+                Not <em>Fit to page</em> — it shrinks the barcode and the carrier may fail to scan it
+              </li>
+            </ul>
+            <p className="mt-2 text-zinc-400">
+              Once that prints correctly, every day after is: Print &rarr; one PDF &rarr; one dialog
+              &rarr; Print.
+            </p>
+          </div>
+
+          <div>
+            <p className="font-semibold text-white">The label didn&apos;t print</p>
+            <ol className="mt-1 space-y-1 pl-5 text-zinc-400">
+              <li><strong className="text-rose-200">Do not buy another label.</strong></li>
+              <li>Check the printer is on and connected.</li>
+              <li>Check there is 4 &times; 6 stock loaded.</li>
+              <li>Press Print purchased labels again.</li>
+              <li>Print with 4 &times; 6 paper at Actual size.</li>
+              <li>
+                Check the name and address on the paper match the parcel in front of you before you
+                stick it on.
+              </li>
+              <li>Carry on packing.</li>
+            </ol>
+            <p className="mt-2 text-zinc-400">
+              Jam, out of paper, browser closed, PDF closed, bad print — all of these mean{" "}
+              <strong className="text-white">print again</strong>, never{" "}
+              <strong className="text-white">buy again</strong>.
+            </p>
+          </div>
+
+          <div>
+            <p className="font-semibold text-white">Always check the paper against the parcel</p>
+            <p className="mt-1 text-zinc-400">
+              The sheet is in packing order — page 1 is the first order on screen. Even so, read the
+              customer name on the label before you attach it. It takes a second and it is the only
+              thing standing between a mis-stick and two customers getting each other&apos;s parcels.
+            </p>
+          </div>
+        </div>
+      ),
+    },
+    {
       id: "wrong",
       title: "When something goes wrong",
       body: (

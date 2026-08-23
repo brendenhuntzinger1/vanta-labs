@@ -471,13 +471,19 @@ export function FulfillmentWorkstation({
                   className="vl-btn-secondary px-3 py-1 text-xs disabled:opacity-50">
                   2 · Review labels
                 </button>
+                {/* THE MONEY BOUNDARY, STATED ON THE CONTROL ITSELF.
+                    Purchase spends. Print does not, ever — the print route
+                    never calls Shippo's purchase API. An operator whose
+                    printer jammed must never wonder whether pressing this
+                    again costs postage. */}
                 <a
                   href={`/api/admin/fulfillment/labels/print?batchId=${encodeURIComponent(batch.id)}`}
                   target="_blank"
                   rel="noreferrer"
+                  title="Opens the purchased labels as one 4x6 PDF. Printing and reprinting never buy postage."
                   className="vl-btn-secondary px-3 py-1 text-xs"
                 >
-                  3 · Print all labels
+                  3 · Print purchased labels · $0
                 </a>
                 <button type="button" disabled={busy} onClick={() => { setActiveBatch(batch.id); loadNext(batch.id); }}
                   className="vl-btn-primary px-3 py-1 text-xs disabled:opacity-50">
@@ -486,6 +492,10 @@ export function FulfillmentWorkstation({
               </li>
             ))}
           </ul>
+          <p className="mt-3 text-[11px] text-zinc-500">
+            Only step 2 &rarr; Purchase spends money. Printing and reprinting are always free —
+            they open labels you have already bought.
+          </p>
         </section>
       ) : null}
 

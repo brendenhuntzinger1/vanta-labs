@@ -195,3 +195,97 @@ describe("the label sheet and the packing bench cannot disagree", () => {
     expect(print).toMatch(/X-Labels-Skipped/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// PARTIAL FAILURE MUST NOT SHIFT THE MAPPING.
+//
+// 10 batched orders, labels bought for 8, failed for two. The printed sheet has
+// 8 pages. The danger is a SHIFT — page 4 belonging to order 5 while the bench
+// offers order 4, so every parcel after the failure gets the previous order's
+// label.
+//
+// The design that prevents it: positions compact over SUCCESSFUL labels only,
+// and the bench HALTS on a label-less order rather than skipping it. It cannot
+// be advanced, so the operator can never get out of step with the sheet.
+// ---------------------------------------------------------------------------
+describe("a failed label cannot shift every parcel after it", () => {
+  const labels = source("src/lib/fulfillment-labels.ts");
+  const workstation = source("src/components/fulfillment-workstation.tsx");
+
+  it("numbers pages over successful labels only, with no gaps", () => {
+    // position = printable.length + 1, so a skipped order leaves no hole and no
+    // blank page — 8 labels produce pages 1..8.
+    expect(labels).toContain("position: printable.length + 1");
+  });
+
+  it("skips an order with no live label rather than emitting a placeholder", () => {
+    const fn = labels.slice(labels.indexOf("export async function batchLabelUrls"));
+    expect(fn).toContain("if (!hasLiveLabel(row)) return;");
+    expect(fn).toContain("if (!url) return;");
+  });
+
+  it("treats a voided label as no label", () => {
+    // The carrier has been told that parcel is not coming. Printing it would
+    // put a dead barcode on a real box.
+    expect(labels).toContain("label_voided_at");
+    expect(labels).toContain("function hasLiveLabel");
+  });
+
+  it("stops the bench on a label-less order instead of advancing past it", () => {
+    // This is what keeps the sheet and the bench in step through a failure: the
+    // operator physically cannot mark it packed and move on.
+    //
+    // THE FIRST VERSION OF THIS ASSERTION COULD NOT FAIL. It compared
+    // indexOf(guard) < indexOf(advance) — and indexOf returns -1 when the guard
+    // is ABSENT, so deleting the guard scored -1 and passed. Removing the
+    // protection made the test happier. Verified by sabotage: the guard was
+    // replaced with `true ? (` and all assertions stayed green.
+    //
+    // So it now checks the guard EXISTS first, and that the advance button is
+    // inside it.
+    const guardAt = workstation.indexOf("{packing.hasLabel ? (");
+    expect(guardAt).toBeGreaterThan(-1);
+    const advanceAt = workstation.indexOf("verifyAndAdvance(packing.orderId");
+    expect(advanceAt).toBeGreaterThan(guardAt);
+    // And the else-branch says why, rather than rendering nothing.
+    const branch = workstation.slice(guardAt, guardAt + 1400);
+    expect(branch).toContain("Verified — next order");
+    expect(branch).toContain("text-amber-300");
+  });
+
+  it("disables reprint for an order that has no label to reprint", () => {
+    expect(workstation).toContain('packing.hasLabel ? "" : "pointer-events-none opacity-40"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SAME paid_at — THE DEFECT, PINNED.
+//
+// Demonstrated on Postgres 16 before the fix: ten orders sharing one paid_at
+// came back 01..10 on a fresh table, and after three ordinary UPDATEs — the
+// kind every order gets when it receives a tracking number — came back
+//
+//     01 03 04 06 07 08 10 02 05 09
+//
+// Nothing errored. The label sheet and the packing bench simply disagreed. With
+// order_id appended the sequence was 01..10 on every run and every plan.
+// ---------------------------------------------------------------------------
+describe("orders sharing a paid_at still have one definite order", () => {
+  const buckets = source("src/lib/fulfillment-buckets.ts");
+
+  it("sorts on a unique column after the timestamp", () => {
+    expect(buckets).toContain('PACKING_ORDER_COLUMN = "paid_at"');
+    expect(buckets).toContain('PACKING_ORDER_TIEBREAK = "order_id"');
+  });
+
+  it("applies the timestamp first and the tiebreak second", () => {
+    const fn = buckets.slice(buckets.indexOf("export function inPackingOrder"));
+    expect(fn.indexOf("PACKING_ORDER_COLUMN")).toBeLessThan(fn.indexOf("PACKING_ORDER_TIEBREAK"));
+  });
+
+  it("records why, so the tiebreak is not removed as redundant", () => {
+    // It looks redundant. On a small fresh table it even behaves redundantly.
+    // That is exactly why it needs the note.
+    expect(buckets).toMatch(/equal sort keys/i);
+  });
+});
