@@ -92,9 +92,9 @@ describe("when nothing has been configured", () => {
 
   it("reports each value as NOT stored, so the admin can show it is a default", async () => {
     const s = await settings();
-    expect(s.stored.minimumQualifyingOrder).toBe(false);
-    expect(s.stored.minimumPayoutThreshold).toBe(false);
-    expect(s.stored.commissionHoldDays).toBe(false);
+    expect(s.stored?.minimumQualifyingOrder).toBe(false);
+    expect(s.stored?.minimumPayoutThreshold).toBe(false);
+    expect(s.stored?.commissionHoldDays).toBe(false);
   });
 });
 
@@ -103,7 +103,7 @@ describe("a configured value", () => {
     state.rows = [control("minimum_qualifying_order", 250)];
     const s = await settings();
     expect(s.minimumQualifyingOrder).toBe(250);
-    expect(s.stored.minimumQualifyingOrder).toBe(true);
+    expect(s.stored?.minimumQualifyingOrder).toBe(true);
   });
 
   it("treats a stored ZERO as a real decision, not an empty field", async () => {
@@ -113,14 +113,14 @@ describe("a configured value", () => {
     state.rows = [control("minimum_qualifying_order", 0)];
     const s = await settings();
     expect(s.minimumQualifyingOrder).toBe(0);
-    expect(s.stored.minimumQualifyingOrder).toBe(true);
+    expect(s.stored?.minimumQualifyingOrder).toBe(true);
   });
 
   it("treats a stored zero hold period as immediate payability", async () => {
     state.rows = [control("commission_hold_days", 0)];
     const s = await settings();
     expect(s.commissionHoldDays).toBe(0);
-    expect(s.stored.commissionHoldDays).toBe(true);
+    expect(s.stored?.commissionHoldDays).toBe(true);
   });
 });
 
@@ -173,6 +173,6 @@ describe("when the control table cannot be read", () => {
   it("does not claim the values were stored", async () => {
     state.failRead = true;
     const s = await settings();
-    expect(s.stored.minimumQualifyingOrder).toBe(false);
+    expect(s.stored?.minimumQualifyingOrder).toBe(false);
   });
 });
