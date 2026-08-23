@@ -2,7 +2,12 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
-import { EXCEPTION_REASONS } from "@/lib/fulfillment-buckets";
+import {
+  BUCKETS,
+  CARRIER_ACCEPTANCE_STALE_HOURS,
+  EXCEPTION_REASONS,
+  TRANSIT_STALE_DAYS,
+} from "@/lib/fulfillment-buckets";
 import {
   getBucketCounts,
   getBucketOrders,
@@ -11,6 +16,7 @@ import {
 } from "@/lib/fulfillment-queues";
 import { listBatches } from "@/lib/fulfillment-batches";
 import { FulfillmentWorkstation } from "@/components/fulfillment-workstation";
+import { FulfillmentOwnerGuide } from "@/components/fulfillment-owner-guide";
 
 // ---------------------------------------------------------------------------
 // THE FULFILLMENT WORKSTATION.
@@ -68,6 +74,22 @@ export default async function FulfillmentWorkstationPage() {
           Find one order →
         </Link>
       </header>
+
+      {/*
+        The guide is fed the SAME definitions this page renders the board from,
+        rather than importing them itself — fulfillment-buckets.ts is
+        server-only because it reaches the database. Passing them down keeps one
+        set of definitions instead of a second copy that drifts.
+
+        Closed by default and visually quiet: it must never compete with the
+        actual work below it.
+      */}
+      <FulfillmentOwnerGuide
+        buckets={BUCKETS.map((b) => ({ id: b.id, label: b.label, description: b.description }))}
+        exceptions={EXCEPTION_REASONS.map((e) => ({ reason: e.reason, label: e.label, action: e.action }))}
+        carrierStaleHours={CARRIER_ACCEPTANCE_STALE_HOURS}
+        transitStaleDays={TRANSIT_STALE_DAYS}
+      />
 
       <FulfillmentWorkstation
         counts={counts}

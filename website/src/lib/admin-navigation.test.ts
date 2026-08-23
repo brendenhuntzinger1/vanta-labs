@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { BUCKETS, EXCEPTION_REASONS } from "@/lib/fulfillment-buckets";
 
 // ---------------------------------------------------------------------------
 // A PAGE NOBODY CAN NAVIGATE TO HAS NOT SHIPPED.
@@ -215,5 +216,90 @@ describe("payment controls say what actually happens", () => {
     const subs = source("src/app/account/(dashboard)/subscriptions/page.tsx");
     expect(subs).toContain('cta: "Restart membership"');
     expect(subs).toContain('href="/membership"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE OWNER GUIDE DESCRIBES THE SOFTWARE THAT EXISTS.
+//
+// A hand-maintained guide documents the version it was written against, and
+// that is the version that stops being true first. So the queue list, the
+// exception list and both staleness numbers are RENDERED FROM THE SAME
+// CONSTANTS the Workstation itself uses — passed down as props, because
+// fulfillment-buckets.ts is server-only and correctly so.
+//
+// These assertions hold that wiring. What they cannot check is the prose, which
+// is the part code cannot know.
+// ---------------------------------------------------------------------------
+describe("the Owner Guide is generated from the real definitions", () => {
+  const guide = source("src/components/fulfillment-owner-guide.tsx");
+  const page = source("src/app/admin/fulfillment/workstation/page.tsx");
+
+  it("is on the Workstation, where the work happens", () => {
+    expect(page).toContain("FulfillmentOwnerGuide");
+  });
+
+  it("is fed the real buckets, exceptions and thresholds", () => {
+    expect(page).toContain("buckets={BUCKETS");
+    expect(page).toContain("exceptions={EXCEPTION_REASONS");
+    expect(page).toContain("carrierStaleHours={CARRIER_ACCEPTANCE_STALE_HOURS}");
+    expect(page).toContain("transitStaleDays={TRANSIT_STALE_DAYS}");
+  });
+
+  it("does not keep its own copy of the queue or exception lists", () => {
+    // The failure this prevents: someone adds a queue, the board shows it, and
+    // the guide silently keeps describing the old set.
+    const body = stripComments(guide);
+    expect(body).toContain("buckets.map(");
+    expect(body).toContain("exceptions.map(");
+    // Naming a queue in a sentence is fine — the flow narrative does it. What
+    // must not appear is a second copy of the DEFINITIONS: the descriptions and
+    // the exception guidance both live in fulfillment-buckets.ts, and a copy
+    // here is what silently goes stale when a queue is added or reworded.
+    const definitions = [
+      ...BUCKETS.map((b) => b.description),
+      ...EXCEPTION_REASONS.map((e) => e.action),
+    ];
+    for (const text of definitions) {
+      expect(body).not.toContain(text);
+    }
+  });
+
+  it("never quotes a staleness threshold as a literal number", () => {
+    const body = stripComments(guide);
+    expect(body).toContain("{carrierStaleHours}");
+    expect(body).toContain("{transitStaleDays}");
+    expect(body).not.toMatch(/36 hours/);
+    expect(body).not.toMatch(/10 days/);
+  });
+
+  it("speaks the owner's language, not the database's", () => {
+    // The guide is for the person packing boxes. A column name in it is a
+    // defect: it means the explanation leaked implementation.
+    const body = stripComments(guide);
+    for (const jargon of [
+      "fulfillment_status",
+      "payment_status",
+      "shippo_sync_status",
+      "label_purchase_claimed_at",
+      "order_items",
+      "unit_cost_cents",
+      "SELECT",
+    ]) {
+      expect(body).not.toContain(jargon);
+    }
+  });
+
+  it("does not let the owner think a recorded refund moved money", () => {
+    // The single most expensive misunderstanding available in this admin.
+    expect(guide).toMatch(/does not send money back/i);
+  });
+
+  it("says plainly that reprinting does not buy postage", () => {
+    expect(guide).toMatch(/[Rr]eprinting never buys new postage/);
+  });
+
+  it("marks the processing fee as an estimate, because it always is", () => {
+    expect(guide).toMatch(/processor fee is an estimate/i);
   });
 });
