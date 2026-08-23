@@ -9,7 +9,13 @@ import { batchLabelUrls } from "@/lib/fulfillment-labels";
 //
 // Every purchased label in a batch, merged into ONE 4x6 PDF, in the SAME order
 // the packing bench serves them. One request, one document, one print job, one
-// Zebra queue — instead of ninety-five tabs and ninety-five dialogs.
+// print queue — instead of ninety-five tabs and ninety-five dialogs.
+//
+// VENDOR-NEUTRAL BY CHOICE. Shippo can emit ZPLII, which is Zebra's own page
+// language and prints on nothing else. purchaseLabel() asks for PDF_4x6
+// instead: a plain 4x6in (288x432pt) PDF that any thermal label printer
+// accepts. Nothing in this file, or anywhere else in the codebase, is written
+// against a particular make of printer.
 //
 // READS STORED LABELS ONLY. It never calls Shippo's transaction API, so
 // printing and reprinting are free and can never buy postage. Voided labels are

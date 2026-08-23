@@ -14,7 +14,21 @@ import { describe, expect, it } from "vitest";
 
 const labels = readFileSync("src/lib/fulfillment-labels.ts", "utf8");
 const route = readFileSync("src/app/api/admin/fulfillment/labels/route.ts", "utf8");
-const printRoute = readFileSync("src/app/api/admin/fulfillment/labels/print/route.ts", "utf8");
+const printRouteRaw = readFileSync("src/app/api/admin/fulfillment/labels/print/route.ts", "utf8");
+
+/**
+ * Source with comments removed.
+ *
+ * The "never calls the purchase API" assertion below is about CODE. Matching
+ * the raw file made it fail the moment a comment explained WHY the route does
+ * not purchase — a true statement being read as a violation of itself. Stripping
+ * comments first keeps the assertion strict about what executes while letting
+ * the file document its own reasoning.
+ */
+const stripComments = (src: string) =>
+  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+
+const printRoute = stripComments(printRouteRaw);
 const workstation = readFileSync("src/components/fulfillment-workstation.tsx", "utf8");
 const batches = readFileSync("src/lib/fulfillment-batches.ts", "utf8");
 
