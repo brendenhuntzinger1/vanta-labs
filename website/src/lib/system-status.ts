@@ -200,16 +200,40 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
   try {
     const { data: published } = await supabaseAdmin
       .from("products")
-      .select("name, slug, price_cents, product_cost_cents, track_inventory, inventory_quantity")
+      .select("id, name, slug, price_cents, product_cost_cents, track_inventory, inventory_quantity")
       .eq("is_published", true)
       .eq("is_archived", false);
 
     const rows = (published ?? []) as Array<{
-      name: string | null; slug: string | null;
+      id: string; name: string | null; slug: string | null;
       price_cents: number | null; product_cost_cents: number | null;
       track_inventory: boolean | null; inventory_quantity: number | null;
     }>;
     const label = (row: { name: string | null; slug: string | null }) => row.name ?? row.slug ?? "unnamed";
+
+    // Stock lives on the DOSE for anything sold by dose, so a parent product
+    // can legitimately carry no stock of its own.
+    const { data: doseRows } = rows.length > 0
+      ? await supabaseAdmin
+          .from("product_doses")
+          .select("product_id, track_inventory, inventory_quantity")
+          .in("product_id", rows.map((row) => row.id))
+      : { data: [] };
+    const dosesByProduct = new Map<string, Array<{ track_inventory: boolean | null; inventory_quantity: number | null }>>();
+    for (const dose of (doseRows ?? []) as Array<{ product_id: string; track_inventory: boolean | null; inventory_quantity: number | null }>) {
+      const list = dosesByProduct.get(String(dose.product_id)) ?? [];
+      list.push(dose);
+      dosesByProduct.set(String(dose.product_id), list);
+    }
+
+    /**
+     * The rule reserve_inventory() actually enforces, mirrored exactly:
+     * a row is protected when track_inventory is true OR it carries positive
+     * stock. Reading only the flag reported eighteen correctly-protected
+     * products as able to oversell.
+     */
+    const isProtected = (row: { track_inventory: boolean | null; inventory_quantity: number | null }) =>
+      row.track_inventory === true || Number(row.inventory_quantity ?? 0) > 0;
 
     const unpriced = rows.filter((row) => !(Number(row.price_cents ?? 0) > 0));
     out.push({
@@ -222,18 +246,22 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
       blocksLaunch: true,
     });
 
-    const untracked = rows.filter((row) => row.track_inventory !== true);
-    const trackedWithoutCount = rows.filter(
-      (row) => row.track_inventory === true && row.inventory_quantity == null,
-    );
-    const inventoryProblems = untracked.length + trackedWithoutCount.length;
+    // A product is at risk only when NOTHING that can be bought from it is
+    // protected: every one of its doses is unprotected, or it has no doses and
+    // the product row itself is unprotected.
+    const oversellable = rows.filter((row) => {
+      const doses = dosesByProduct.get(row.id) ?? [];
+      return doses.length > 0
+        ? doses.every((dose) => !isProtected(dose))
+        : !isProtected(row);
+    });
     out.push({
       key: "product_inventory_data",
       label: "Published products have stock numbers",
-      level: inventoryProblems === 0 ? "ok" : "warn",
-      detail: inventoryProblems === 0
-        ? `All ${rows.length} published products are stock-tracked with a count`
-        : `${inventoryProblems} published product(s) can oversell: ${[...untracked, ...trackedWithoutCount].map(label).join(", ")}. Turn on stock tracking and set a count.`,
+      level: oversellable.length === 0 ? "ok" : "warn",
+      detail: oversellable.length === 0
+        ? `All ${rows.length} published products are protected against overselling`
+        : `${oversellable.length} published product(s) can oversell: ${oversellable.map(label).join(", ")}. Turn on stock tracking and set a count.`,
       blocksLaunch: false,
     });
 

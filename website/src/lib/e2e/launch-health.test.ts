@@ -82,6 +82,53 @@ describe("published product data", () => {
     expect(row.detail).toContain("Untracked Peptide");
   });
 
+  it("does NOT warn about a product whose stock lives on its DOSES", async () => {
+    // Anything sold by dose carries stock on the dose rows, so the parent
+    // legitimately has none of its own. Reading only the parent reported
+    // eighteen correctly-protected products as able to oversell.
+    harness.db.seed("products", [{
+      id: "p-dosed", slug: "dosed", name: "Dosed Peptide", price_cents: 4499,
+      product_cost_cents: 1200, track_inventory: false, inventory_quantity: null,
+      is_published: true, is_enabled: true, is_archived: false,
+    }]);
+    harness.db.seed("product_doses", [
+      { id: "d-1", product_id: "p-dosed", label: "5mg", track_inventory: true, inventory_quantity: 12 },
+      { id: "d-2", product_id: "p-dosed", label: "10mg", track_inventory: true, inventory_quantity: 4 },
+    ]);
+
+    const row = check(await status(), "product_inventory_data");
+    expect(row.level).toBe("ok");
+    expect(row.detail).not.toContain("Dosed Peptide");
+  });
+
+  it("does NOT warn about a row carrying real stock with the flag off", async () => {
+    // reserve_inventory() enforces on `track_inventory = true OR
+    // inventory_quantity > 0`, so positive stock is protected either way.
+    harness.db.seed("products", [{
+      id: "p-flagless", slug: "flagless", name: "Flagless Peptide", price_cents: 4499,
+      product_cost_cents: 1200, track_inventory: false, inventory_quantity: 25,
+      is_published: true, is_enabled: true, is_archived: false,
+    }]);
+
+    const row = check(await status(), "product_inventory_data");
+    expect(row.level).toBe("ok");
+  });
+
+  it("DOES warn when every dose of a product is unprotected", async () => {
+    harness.db.seed("products", [{
+      id: "p-loose", slug: "loose", name: "Loose Peptide", price_cents: 4499,
+      product_cost_cents: 1200, track_inventory: false, inventory_quantity: null,
+      is_published: true, is_enabled: true, is_archived: false,
+    }]);
+    harness.db.seed("product_doses", [
+      { id: "d-3", product_id: "p-loose", label: "5mg", track_inventory: false, inventory_quantity: 0 },
+    ]);
+
+    const row = check(await status(), "product_inventory_data");
+    expect(row.level).toBe("warn");
+    expect(row.detail).toContain("Loose Peptide");
+  });
+
   it("warns about a published product with no unit cost, so profit is a guess", async () => {
     harness.db.seed("products", [{
       id: "p-nocost", slug: "nocost", name: "Costless Peptide", price_cents: 4499,
