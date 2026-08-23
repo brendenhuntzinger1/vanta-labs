@@ -20,12 +20,21 @@ import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 // Every case below was confirmed to fail when its protection is removed.
 // ---------------------------------------------------------------------------
 
-const applyTransactionCreated = vi.fn(async () => ({ matched: true, orderId: "order-1" }));
+const applyTransactionCreated = vi.fn(async (): Promise<{
+  matched: boolean;
+  orderId: string | null;
+  reason?: string;
+}> => ({ matched: true, orderId: "order-1" }));
 const applyTrackingUpdate = vi.fn(async () => ({
   ok: true as const,
   data: { duplicate: false, handled: true, statusChanged: false, orderId: "order-1", to: "in_transit" },
 }));
-const recordSystemAlert = vi.fn(async () => {});
+const recordSystemAlert = vi.fn(async (_alert: {
+  type: string;
+  severity: string;
+  message: string;
+  context?: Record<string, unknown>;
+}) => {});
 
 vi.mock("@/lib/shippo/order-sync", () => ({ applyTransactionCreated }));
 vi.mock("@/lib/shippo/service", () => ({ applyTrackingUpdate }));
@@ -160,5 +169,45 @@ describe("who is allowed to move an order", () => {
       expect(applyTransactionCreated).not.toHaveBeenCalled();
       expect(applyTrackingUpdate).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("a label Vanta cannot attribute to any order", () => {
+  // PART 16. Money was spent on postage. If nothing surfaces it, the label is
+  // simply lost: a row in a table nobody opens is the same as dropping it.
+  const unmatched = { matched: false, orderId: null, reason: "no_matching_order" };
+
+  it("raises an owner-visible CRITICAL alert", async () => {
+    applyTransactionCreated.mockResolvedValueOnce(unmatched);
+
+    const response = await callPost(post({ secretQuery: SECRET }));
+
+    expect(response.status).toBe(200);
+    expect(recordSystemAlert).toHaveBeenCalledTimes(1);
+    const alert = recordSystemAlert.mock.calls[0][0];
+    expect(alert.severity).toBe("critical");
+    expect(String(alert.type)).toContain("shippo");
+  });
+
+  it("tells the owner which label it was, so it can be reconciled by hand", async () => {
+    applyTransactionCreated.mockResolvedValueOnce(unmatched);
+    await callPost(post({ secretQuery: SECRET }));
+
+    const alert = recordSystemAlert.mock.calls[0][0];
+    expect(alert.context).toBeDefined();
+    expect(JSON.stringify(alert.context)).toContain("txn_synthetic_1");
+  });
+
+  it("answers 200 rather than making Shippo retry a label that belongs to nothing", async () => {
+    applyTransactionCreated.mockResolvedValueOnce(unmatched);
+    const response = await callPost(post({ secretQuery: SECRET }));
+    expect(response.status).toBe(200);
+  });
+
+  it("raises NO alert when the label matched an order", async () => {
+    // The complement: an alert on every successful purchase would train the
+    // owner to ignore the one that matters.
+    await callPost(post({ secretQuery: SECRET }));
+    expect(recordSystemAlert).not.toHaveBeenCalled();
   });
 });
