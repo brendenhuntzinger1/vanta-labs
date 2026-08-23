@@ -12,7 +12,6 @@ const MembershipCardForm = nextDynamic(() => import("@/components/membership-car
 });
 import { useRouter } from "next/navigation";
 import type { MembershipTier } from "@/lib/membership";
-import { MembershipPaymentMethodPlaceholder } from "@/components/membership-payment-method";
 
 function money(cents: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(cents / 100);
@@ -190,8 +189,27 @@ export function MembershipSubscribeClient({ tier }: { tier: MembershipTier }) {
         )}
       </div>
 
-      <div className="mt-6">
-        <MembershipPaymentMethodPlaceholder />
+      {/*
+        WAS: MembershipPaymentMethodPlaceholder, which told the shopper
+        "Card collection isn't connected yet — Vanta Labs hasn't finished
+        setting up a payment processor... contact support if you'd like your
+        membership activated manually."
+
+        That stopped being true when the Veyra lane landed. Card entry IS
+        connected: the handler above calls /api/membership/card-config, hands
+        off to the hosted card form, and /api/membership/subscribe REFUSES to
+        sell a membership without a real token. The notice survived the
+        integration and kept telling people at the moment of purchase that the
+        store could not take their card.
+
+        Replaced with what actually happens next.
+      */}
+      <div className="mt-6 rounded-2xl border border-white/10 bg-white/[0.03] p-5">
+        <p className="text-sm font-semibold text-white">Payment method</p>
+        <p className="mt-2 text-sm leading-6 text-white/60">
+          Card details are entered on the next step, in the processor&apos;s own secure form.
+          Nothing is charged until you confirm.
+        </p>
       </div>
 
       <label className="mt-6 flex items-start gap-3 rounded-2xl border border-white/10 p-4 text-sm text-white/70">

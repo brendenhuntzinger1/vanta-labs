@@ -77,8 +77,22 @@ export default async function AccountSubscriptionsPage() {
     membership.status === "past_due"
       ? {
           heading: "We couldn't process your last payment",
-          body: "Your member benefits are paused until a payment goes through. Update your card to restore them — nothing is charged until it succeeds.",
-          cta: "Update payment method",
+          // SAYS WHAT THE BUTTON ACTUALLY DOES.
+          //
+          // This read "Update payment method" and linked to /membership — the
+          // plans page, which cannot edit a stored card. There is no
+          // card-replacement screen: /api/membership/update-payment-method
+          // exists and nothing has ever called it. So a member whose card
+          // expired, who is actively trying to give the store money, followed a
+          // button that promised one thing and landed somewhere else.
+          //
+          // What /membership CAN do for them is real: startMembershipSignup
+          // only short-circuits for active/trialing members, so a past-due
+          // member goes through the full Veyra lane — picks their plan, enters
+          // a card, and is billed again. That restores the membership. It is
+          // just not "updating a payment method", so it no longer says so.
+          body: "Your member benefits are paused until a payment goes through. Choose your plan again and enter a card to turn them back on.",
+          cta: "Restart membership",
         }
       : membership.status === "paused"
         ? {

@@ -4,12 +4,18 @@ import { getAuthenticatedUser } from "@/lib/auth-session";
 import { updatePaymentMethod } from "@/lib/membership-billing";
 import { customerSafeMessage } from "@/lib/safe-error";
 
-// paymentMethodRef is an opaque token from whichever billing processor's
-// client SDK eventually collects the card (Stripe Elements, etc.) - this
-// route never sees or stores raw card data. Until a processor is
-// connected there's no client SDK to produce that token yet; see
-// src/components/membership-payment-method.tsx for the current
-// placeholder state.
+// paymentMethodRef is an opaque token from the processor's own card form —
+// this route never sees or stores raw card data.
+//
+// NO IN-APP CALLER TODAY. Card capture for SIGNUP is fully wired through
+// Veyra (card-config -> hosted card form -> subscribe), but there is no
+// "replace my card" screen for an EXISTING member, so nothing posts here.
+//
+// That matters because a past-due member is shown "Update payment method" on
+// /account/subscriptions and it links to /membership — the plans page, which
+// cannot update a card. A member whose card expired is trying to give the
+// store money and has nowhere to do it. Reconnecting that button to a real
+// card-entry step is the missing piece, not this route.
 export async function POST(request: Request) {
   const user = await getAuthenticatedUser();
   if (!user || detectRoleFromUser(user) !== "customer") {

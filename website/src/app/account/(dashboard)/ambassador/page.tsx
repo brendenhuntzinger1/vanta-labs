@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { PartnerDashboardClient } from "@/components/partner-dashboard-client";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getSiteUrl } from "@/lib/env";
-import { getApprovedPartnerByAuthUserId, getPartnerSummary } from "@/lib/partner-portal";
+import { getApprovedPartnerByAuthUserId, getPartnerByAuthUserId, getPartnerSummary } from "@/lib/partner-portal";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +19,21 @@ export default async function AccountAmbassadorPage() {
 
   const partner = await getApprovedPartnerByAuthUserId(user.id);
   if (!partner) {
-    redirect("/account");
+    // TWO DIFFERENT "NO" ANSWERS, and they must not be given the same reply.
+    //
+    // Someone who never applied gets nothing — bouncing them to /account is
+    // correct, and telling them anything would leak that the programme has
+    // states at all.
+    //
+    // Someone who DID apply and is waiting was getting that same silent bounce.
+    // They sign in, look for the ambassador area, and land back on their
+    // account with no explanation — including the applicant we have explicitly
+    // asked for more information, who has no way to learn that we are waiting
+    // on them. /partner/pending exists to say exactly this, with copy for
+    // pending, info_requested, rejected and disabled, and nothing in the
+    // application routed to it.
+    const application = await getPartnerByAuthUserId(user.id);
+    redirect(application ? "/partner/pending" : "/account");
   }
 
   const summary = await getPartnerSummary(partner.id, getSiteUrl());

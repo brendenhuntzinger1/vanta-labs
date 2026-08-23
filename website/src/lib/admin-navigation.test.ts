@@ -35,6 +35,11 @@ function filesUnder(dir: string): string[] {
   return out;
 }
 
+/** Source with comments removed, so an assertion reads what renders. */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
 const WORKSTATION = "/admin/fulfillment/workstation";
 
 describe("the fulfillment Workstation is reachable", () => {
@@ -113,5 +118,102 @@ describe("no admin page is orphaned", () => {
     });
 
     expect(orphans).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SAME DEFECT, ON THE CUSTOMER SIDE.
+//
+// /partner/pending exists to tell an applicant where their application stands
+// — it has written copy for pending, info_requested, rejected and disabled,
+// and a working endpoint behind it. Nothing in the application routed to it.
+//
+// So an ambassador who applied and was waiting got the same silent bounce as a
+// stranger: sign in, look for the ambassador area, land back on the account
+// page with no explanation. Including the applicant we had explicitly asked
+// for more information, who had no way to learn we were waiting on them.
+//
+// The two "no" answers must stay different. Someone who never applied still
+// gets nothing — telling them anything would leak that the programme has
+// states at all.
+// ---------------------------------------------------------------------------
+describe("an ambassador applicant is told where they stand", () => {
+  const page = source("src/app/account/(dashboard)/ambassador/page.tsx");
+
+  it("sends an applicant who is not yet approved to the status page", () => {
+    expect(page).toContain("/partner/pending");
+  });
+
+  it("still sends someone with no application at all back to their account", () => {
+    // The distinction is the whole point: one is information the applicant is
+    // owed, the other would tell a stranger the programme exists.
+    expect(page).toMatch(/application \? "\/partner\/pending" : "\/account"/);
+  });
+
+  it("looks up the application without the approved-only filter", () => {
+    // getApprovedPartnerByAuthUserId returns null for a pending applicant, so
+    // it cannot tell "waiting" apart from "never applied".
+    expect(page).toContain("getPartnerByAuthUserId");
+  });
+
+  it("keeps the status page's own data source intact", () => {
+    // A page routed to but fed by a missing endpoint is the same defect wearing
+    // a different hat.
+    expect(source("src/app/partner/pending/page.tsx")).toContain("/api/partner/me");
+    expect(() => source("src/app/api/partner/me/route.ts")).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A CONTROL MUST NOT PROMISE WHAT THE DESTINATION CANNOT DO.
+//
+// Two of these were live at once, both on the money path, and both are the
+// same shape as the Workstation: the system moved on and the interface did not.
+//
+//   The membership signup page rendered a notice reading "Card collection
+//   isn't connected yet — Vanta Labs hasn't finished setting up a payment
+//   processor... contact support if you'd like your membership activated
+//   manually." That was written before the Veyra lane existed. Card entry is
+//   connected, and /api/membership/subscribe REFUSES to sell without a real
+//   token — so the page was telling shoppers the store could not take their
+//   card at the exact moment they were trying to pay.
+//
+//   The past-due panel offered "Update payment method" pointing at
+//   /membership, the plans page, which cannot edit a stored card. There is no
+//   card-replacement screen at all: /api/membership/update-payment-method has
+//   never had a caller. A member whose card expired, actively trying to pay,
+//   followed a button that did not do what it said.
+// ---------------------------------------------------------------------------
+describe("payment controls say what actually happens", () => {
+  it("no longer tells shoppers the store cannot take a card", () => {
+    // COMMENTS STRIPPED FIRST. The fix left a comment quoting the removed
+    // sentence so the next reader knows why it went; matching raw source would
+    // fail on that explanation rather than on anything a customer can see.
+    // What must not come back is the RENDERED claim.
+    const subscribe = stripComments(source("src/components/membership-subscribe-client.tsx"));
+    // Matched on the claim, not the component name, so re-adding the sentence
+    // anywhere on this page fails even under a different wrapper.
+    expect(subscribe).not.toMatch(/isn&apos;t connected yet|hasn't finished setting up a payment/);
+    expect(subscribe).not.toMatch(/activated manually/);
+  });
+
+  it("keeps the real card lane wired, so the notice was not hiding a gap", () => {
+    const subscribe = source("src/components/membership-subscribe-client.tsx");
+    expect(subscribe).toContain("/api/membership/card-config");
+    expect(subscribe).toContain("setCardConfig");
+  });
+
+  it("does not offer to update a payment method when nothing can", () => {
+    const subs = source("src/app/account/(dashboard)/subscriptions/page.tsx");
+    expect(subs).not.toContain('cta: "Update payment method"');
+  });
+
+  it("still gives a lapsed member a route back to paying", () => {
+    // The fix was to stop the button lying, NOT to remove the member's way
+    // back. /membership genuinely restores a past-due membership, because
+    // startMembershipSignup short-circuits only for active/trialing.
+    const subs = source("src/app/account/(dashboard)/subscriptions/page.tsx");
+    expect(subs).toContain('cta: "Restart membership"');
+    expect(subs).toContain('href="/membership"');
   });
 });
