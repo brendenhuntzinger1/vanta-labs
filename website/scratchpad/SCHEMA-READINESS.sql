@@ -92,3 +92,50 @@ order by
    end),
   r.kind,
   r.object_name;
+
+
+-- =====================================================================
+-- PART 2 — CHECK CONSTRAINTS, BY SHAPE RATHER THAN BY EXISTENCE.
+--
+-- Part 1 asks whether an object is there. That is not the same question as
+-- whether it is RIGHT, and the difference is not academic: production had
+-- every ambassadors column present while ambassadors_status_check still
+-- listed only four statuses. The application writes a fifth,
+-- 'info_requested', so every update to such a row was rejected — including
+-- updates that never touched status, because Postgres re-validates the whole
+-- row. An ambassador could be stuck, uneditable, with the admin page showing
+-- a status the row could not legally hold.
+--
+-- An existence check would have passed that. So this part reads the
+-- constraint DEFINITION and looks for the values the code actually writes.
+-- =====================================================================
+
+with expected(table_name, constraint_name, must_contain, needed_for) as (
+  values
+    ('ambassadors', 'ambassadors_status_check', 'info_requested',
+     'Request Info writes this status; without it the row becomes uneditable'),
+    ('partners',    'partners_status_check',    'info_requested',
+     'Mirror of the same status')
+)
+select
+  e.table_name,
+  e.constraint_name,
+  case
+    when d.definition is null then '*** CONSTRAINT NOT FOUND ***'
+    when position(e.must_contain in d.definition) > 0 then 'OK'
+    else '*** MISSING VALUE: ' || e.must_contain || ' ***'
+  end as status,
+  coalesce(d.definition, '(no such constraint)') as definition,
+  e.needed_for
+from expected e
+left join (
+  select rel.relname::text as table_name,
+         con.conname::text as constraint_name,
+         pg_get_constraintdef(con.oid) as definition
+  from pg_constraint con
+  join pg_class rel on rel.oid = con.conrelid
+  join pg_namespace nsp on nsp.oid = rel.relnamespace
+  where nsp.nspname = 'public'
+) d on d.table_name = e.table_name and d.constraint_name = e.constraint_name
+order by (case when d.definition is not null and position(e.must_contain in d.definition) > 0 then 1 else 0 end),
+         e.table_name;

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 
 // ---------------------------------------------------------------------------
@@ -206,5 +206,44 @@ describe("unknown provenance reads as Default", () => {
   it("never claims a value is saved when it cannot tell", () => {
     expect(adminUi).toContain("const isStored = settings.stored?.[field.prop] ?? false;");
     expect(adminUi).not.toContain("settings.stored?.[field.prop] ?? true");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE CUSTOMER DISCOUNT IS EDITABLE PER AMBASSADOR, FROM THE PARTNERS PAGE.
+//
+// The API accepted customerDiscountPercent from the day it was written, with
+// its own validation and its own three-state null handling. The admin page only
+// ever RENDERED the value — so the only way to change one ambassador's discount
+// was to change the program default, which changes it for everybody.
+//
+// A capability that exists in the route and not in the UI is not a capability.
+// These assertions hold the control in place, and hold the two rates apart.
+// ---------------------------------------------------------------------------
+describe("per-ambassador customer discount control", () => {
+  const client = readFileSync(resolve(process.cwd(), "src/components/admin-partners-client.tsx"), "utf8");
+
+  it("offers a Set Discount action, not only a display of the value", () => {
+    expect(client).toContain(">Set Discount<");
+  });
+
+  it("sends an explicit null to clear the override, never 0", () => {
+    // 0% off and "follow the program default" are different intentions, and the
+    // API distinguishes them. Sending 0 for a blank would pin the ambassador to
+    // a permanent 0% discount that looks identical to the default in the table.
+    expect(client).toContain("customerDiscountPercent: null");
+  });
+
+  it("stops short of 100, matching the API guard and the database constraint", () => {
+    const handler = client.slice(client.indexOf("Customer discount for"));
+    expect(handler).toMatch(/value < 0 \|\| value >= 100/);
+  });
+
+  it("keeps the two rates on separate controls so neither can move the other", () => {
+    // The commission button no longer reads "Set %" — with two percentages on
+    // the row, an unlabelled one is an invitation to set the wrong rate.
+    expect(client).toContain(">Set Earns %<");
+    const discountHandler = client.slice(client.indexOf("Customer discount for"), client.indexOf(">Set Discount<"));
+    expect(discountHandler).not.toContain("commissionPercent");
   });
 });

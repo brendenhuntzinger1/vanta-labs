@@ -1002,7 +1002,56 @@ export function AdminPartnersClient({
                           });
                         }}
                         className="rounded border border-violet-400/35 bg-violet-500/10 px-2 py-1 text-xs text-violet-200"
-                      >Set %</button>
+                      >Set Earns %</button>
+                      {/*
+                        THE CUSTOMER DISCOUNT — a SEPARATE control, deliberately.
+
+                        These are two different rates that must never move each
+                        other: what the shopper comes off with, and what the
+                        ambassador earns. They were previously editable only
+                        through the program default, so setting one person's
+                        discount meant changing it for everyone.
+
+                        Blank clears the override and returns this ambassador to
+                        the program default, which is why the prompt says so and
+                        why an empty string is sent as null rather than 0 — a 0%
+                        discount and "use the default" are different intentions
+                        and the API distinguishes them.
+                      */}
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={() => {
+                          const current = row.customerDiscountPercent == null ? "" : String(row.customerDiscountPercent);
+                          const input = window.prompt(
+                            `Customer discount for ${row.name} — the % their followers come off with.\n\nLeave blank to use the program default (${programDefaultDiscountPercent}%).`,
+                            current,
+                          );
+                          if (input === null) return;
+                          const trimmed = input.trim();
+                          if (trimmed === "") {
+                            applyPartnerAction(row.id, {
+                              action: "set_status",
+                              status: row.status,
+                              customerDiscountPercent: null,
+                            });
+                            return;
+                          }
+                          const value = Number(trimmed);
+                          // Mirrors the API's own guard: 100% off is free product,
+                          // not a discount, so the range stops short of it.
+                          if (!Number.isFinite(value) || value < 0 || value >= 100) {
+                            setMessage("Customer discount must be 0 or more and less than 100.");
+                            return;
+                          }
+                          applyPartnerAction(row.id, {
+                            action: "set_status",
+                            status: row.status,
+                            customerDiscountPercent: value,
+                          });
+                        }}
+                        className="rounded border border-cyan-400/35 bg-cyan-500/10 px-2 py-1 text-xs text-cyan-200"
+                      >Set Discount</button>
                       {row.commissionPercentLocked ? (
                         <button
                           type="button"
