@@ -336,3 +336,97 @@ describe("a Shippo transaction can be traced back to its Vanta order", () => {
     expect(workstation).toMatch(/Fallback: print from Vanta/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE LAUNCH WORKFLOW: VANTA OWNS THE ORDER, SHIPPO BUYS AND PRINTS.
+//
+// The owner opens an order, reads what to pack, goes to Shippo, buys the label
+// and uses Click to Print. Vanta learns about it on its own through the
+// transaction_created webhook — there is no "Mark Fulfilled" button, because a
+// human keeping two systems in step by hand is a defect waiting to happen.
+//
+// The invariant underneath it all: A LABEL IS NOT A SHIPMENT. Buying postage
+// means the parcel is still on the table, so the order becomes Awaiting Carrier
+// and the customer hears nothing. Only a carrier scan makes it In Transit and
+// sends the email.
+// ---------------------------------------------------------------------------
+describe("buying the label in Shippo flows back without the owner doing anything", () => {
+  const sync = source("src/lib/shippo/order-sync.ts");
+  const route = source("src/app/api/webhooks/shippo/route.ts");
+  const card = source("src/components/admin-order-fulfillment-card.tsx");
+
+  it("accepts the event Shippo fires when a label is bought by hand", () => {
+    expect(route).toContain('=== "transaction_created"');
+    expect(route).toContain("applyTransactionCreated");
+  });
+
+  it("records tracking, carrier and the ACTUAL postage from that event", () => {
+    const fn = sync.slice(sync.indexOf("export async function applyTransactionCreated"));
+    expect(fn).toContain("tracking_number");
+    expect(fn).toContain("label_purchased_at");
+    expect(fn).toContain("recordActualShippingCost");
+  });
+
+  it("moves the order to Awaiting Carrier — NOT shipped", () => {
+    const fn = sync.slice(sync.indexOf("export async function applyTransactionCreated"));
+    expect(fn).toContain('canTransition(order.fulfillment_status, "label_purchased", "shippo")');
+    // The one thing it must never do on a purchase.
+    expect(fn).not.toContain('"shipped"');
+    expect(fn).not.toContain('"in_transit"');
+  });
+
+  it("sends no customer email on a label purchase", () => {
+    const fn = sync.slice(
+      sync.indexOf("export async function applyTransactionCreated"),
+      sync.indexOf("export async function backfillOrderShipment"),
+    );
+    expect(fn).not.toContain("sendEmail");
+    expect(fn).not.toContain("notifyCustomer");
+  });
+
+  it("rejects an unauthenticated webhook, and fails closed when unconfigured", () => {
+    // An unset secret must never mean "let everyone in" — that is how an order
+    // gets marked delivered by a stranger.
+    expect(route).toContain("SHIPPO_WEBHOOK_SECRET");
+    expect(route).toContain("timingSafeEqual");
+    expect(route).toContain("status: 503");
+  });
+
+  it("reads the secret from the query string, which is how Shippo sends it", () => {
+    expect(route).toContain('SECRET_QUERY_PARAM = "secret"');
+  });
+
+  it("points the owner at Shippo, and stops inviting a purchase once one exists", () => {
+    expect(card).toContain("Open in Shippo");
+    expect(card).toContain("Label already purchased.");
+    expect(card).toMatch(/Do not buy postage for this order again/);
+  });
+
+  it("offers no manual Mark Fulfilled — the webhook does that", () => {
+    for (const banned of ["Mark fulfilled", "Mark Fulfilled", "Mark shipped", "Mark Shipped"]) {
+      expect(card).not.toContain(banned);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE OWNER'S FIRST QUESTION IS "WHAT DO I HAVE TO SHIP?"
+// ---------------------------------------------------------------------------
+describe("the fulfillment screens read as work, not as states", () => {
+  it("calls the first queue Needs Fulfillment", () => {
+    expect(source("src/lib/fulfillment-buckets.ts")).toContain('label: "Needs Fulfillment"');
+  });
+
+  it("shows quantities large enough to read at the shelves", () => {
+    // This is picked standing up. The quantity used to be small grey text at the
+    // end of a row, which is how a x3 gets packed as a x1.
+    const page = source("src/app/admin/orders/[orderId]/page.tsx");
+    expect(page).toContain("text-xl font-semibold tabular-nums");
+    expect(page).toContain("unit{totalUnits === 1");
+  });
+
+  it("derives the unit total from the same rows it lists", () => {
+    const page = source("src/app/admin/orders/[orderId]/page.tsx");
+    expect(page).toContain("const totalUnits = rawOrderItems.reduce(");
+  });
+});

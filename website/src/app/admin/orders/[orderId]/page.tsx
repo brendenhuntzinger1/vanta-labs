@@ -90,6 +90,13 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
     quantity?: number | null;
   }>;
 
+  // Counted from the same rows the list renders, so the total above the list can
+  // never disagree with the lines under it.
+  const totalUnits = rawOrderItems.reduce(
+    (sum, item) => sum + Math.max(1, Number(item.quantity ?? 1)),
+    0,
+  );
+
   // SKUs live on `products`, never on the order line, so resolve them through
   // the same slug the parcel math parses out of order_items.product_id.
   const skuBySlug = new Map<string, string>();
@@ -178,12 +185,25 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
         {/* Items: what is in the box, and nothing else. Weights and SKUs moved
             out with the packing workstation -- they belong in Shippo. */}
         <section className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-4 sm:p-5">
-          <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-300">Items</h2>
+          {/* READ AT THE SHELVES, NOT AT A DESK.
+              The quantity was small grey text at the end of a row — which is
+              exactly how a x3 gets packed as a x1. It is now the largest thing
+              on the line, and the total is stated so the parcel can be counted
+              against a single number before it is sealed. */}
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-300">Items</h2>
+            <p className="text-sm text-zinc-400">
+              <span className="tabular-nums text-lg font-semibold text-white">{totalUnits}</span>{" "}
+              unit{totalUnits === 1 ? "" : "s"} to pack
+            </p>
+          </div>
           <ul className="mt-3 divide-y divide-white/5">
             {rawOrderItems.map((item, index) => (
-              <li key={`${String(item.id)}-${index}`} className="flex items-center justify-between gap-3 py-2 text-sm">
-                <span className="text-zinc-100">{String(item.product_name ?? item.product_id ?? "Item")}</span>
-                <span className="tabular-nums text-zinc-400">x{Math.max(1, Number(item.quantity ?? 1))}</span>
+              <li key={`${String(item.id)}-${index}`} className="flex items-center justify-between gap-4 py-3">
+                <span className="text-sm text-zinc-100">{String(item.product_name ?? item.product_id ?? "Item")}</span>
+                <span className="shrink-0 rounded-lg border border-white/12 bg-white/[0.04] px-3 py-1 text-xl font-semibold tabular-nums text-white">
+                  &times;{Math.max(1, Number(item.quantity ?? 1))}
+                </span>
               </li>
             ))}
             {rawOrderItems.length === 0 ? <li className="py-2 text-sm text-zinc-500">No items recorded.</li> : null}

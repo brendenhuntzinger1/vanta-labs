@@ -202,6 +202,43 @@ export function AdminOrderFulfillmentCard({
         </dl>
       ) : null}
 
+      {/* THE HANDOFF, ON THE SCREEN WHERE THE OWNER IS STANDING.
+          Vanta owns the order; Shippo buys and prints the label with Click to
+          Print. Once a label exists this stops inviting a purchase and says so
+          plainly — buying the same parcel twice in Shippo is the one mistake
+          here that costs real money, and Shippo cannot know Vanta already has
+          one. */}
+      {shippoOrderId ? (
+        <div className={`mt-4 rounded-xl border p-3 ${hasLabel ? "border-emerald-400/25 bg-emerald-400/[0.06]" : "border-cyan-400/25 bg-cyan-400/[0.06]"}`}>
+          {hasLabel ? (
+            <>
+              <p className="text-sm font-semibold text-emerald-100">Label already purchased.</p>
+              <p className="mt-1 text-[12px] leading-6 text-emerald-100/80">
+                In Shippo, use Click to Print only. Do not buy postage for this order again — it is
+                already paid for.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-semibold text-cyan-100">Buy and print this label in Shippo.</p>
+              <p className="mt-1 text-[12px] leading-6 text-cyan-100/80">
+                The order is already in Shippo with its address, parcel and Vanta order number — you
+                do not need to re-enter anything. Buy the label there, then Click to Print. Vanta
+                picks up the tracking and postage on its own and moves the order to Awaiting Carrier.
+              </p>
+            </>
+          )}
+          <a
+            href="https://apps.goshippo.com/orders"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="vl-btn-secondary mt-2.5 inline-flex px-4 py-2 text-xs"
+          >
+            Open in Shippo →
+          </a>
+        </div>
+      ) : null}
+
       {notice ? <p className="mt-3 text-[12px] text-zinc-300">{notice}</p> : null}
 
       <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:flex-wrap">

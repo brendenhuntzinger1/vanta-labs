@@ -60,8 +60,12 @@ export interface BucketDefinition {
 export const BUCKETS: readonly BucketDefinition[] = [
   {
     id: "ready",
-    label: "Ready to Fulfill",
-    description: "Paid, eligible, and waiting to be picked.",
+    // "Needs Fulfillment", not "Ready to Fulfill". The owner's question on
+    // opening this screen is "what do I have to ship?", and the answer should
+    // read as work outstanding rather than as a state the order is resting in.
+    // The id stays `ready` — every query, bucket and test keys off that.
+    label: "Needs Fulfillment",
+    description: "Paid and waiting to be shipped.",
     // `paid` is the pipeline's own post-payment state; `ready_to_fulfill` is
     // set when an operator claims it. Both mean "nothing has happened yet".
     statuses: ["paid", "ready_to_fulfill"],
