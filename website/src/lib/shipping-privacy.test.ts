@@ -164,3 +164,68 @@ describe("every Shippo shipment carries an explicit return address", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE INVARIANT ON THE REAL PURCHASE PATH.
+//
+// Testing the resolver in isolation proves a helper is correct. It does not
+// prove the money path uses it — which is exactly the gap that let this defect
+// ship, since the resolver was right the whole time and the caller dropped the
+// field.
+//
+// So this pins the chain that actually spends money:
+//
+//   purchaseLabelForOrder
+//     -> resolveSelectedRate          (a rate id, or a re-quote)
+//       -> quoteShipment              (the ONLY shipment whose rates are cached)
+//         -> createShipmentWithRates  (must carry address_return)
+//     -> purchaseLabel({ rate })      (buys THAT shipment's rate)
+//
+// The link that makes it airtight: a rate is only purchasable if it came from
+// quoteShipment, because quotedRates is module-private and cacheQuotedRates has
+// exactly one caller. order-sync creates shipments too, but its rates never
+// enter this cache — they exist for Shippo's own dashboard.
+// ---------------------------------------------------------------------------
+describe("the shipment whose rate is purchased always carried a return address", () => {
+  const service = readFileSync(resolve(process.cwd(), "src/lib/shippo/service.ts"), "utf8");
+
+  it("caches purchasable rates from exactly one place", () => {
+    // Two callers would mean a second shipment could feed the purchase path,
+    // and that one would need its own proof.
+    const calls = (service.match(/\n\s*cacheQuotedRates\(/g) ?? []).length;
+    expect(calls).toBe(1);
+  });
+
+  it("caches them immediately after the shipment that carries address_return", () => {
+    const creation = service.indexOf("const result = await createShipmentWithRates({");
+    const caching = service.indexOf("cacheQuotedRates(order.order_id");
+    expect(creation).toBeGreaterThan(-1);
+    expect(caching).toBeGreaterThan(creation);
+    // The return address is inside THAT call, not some other one.
+    const call = service.slice(creation, service.indexOf("});", creation));
+    expect(call).toContain("addressReturn: toShippoAddress(addresses.returnAddress)");
+  });
+
+  it("keeps the rate cache private, so no other module can seed it", () => {
+    expect(service).toContain("const quotedRates = new Map");
+    expect(service).not.toMatch(/export\s+const\s+quotedRates/);
+    const orderSync = readFileSync(resolve(process.cwd(), "src/lib/shippo/order-sync.ts"), "utf8");
+    expect(orderSync).not.toContain("cacheQuotedRates");
+    expect(orderSync).not.toContain("quotedRates");
+  });
+
+  it("buys by rate id, which binds the label to that shipment", () => {
+    const client = readFileSync(resolve(process.cwd(), "src/lib/shippo/client.ts"), "utf8");
+    expect(client).toContain("rate: rateId");
+  });
+
+  it("refuses to reach Shippo at all while the return address is missing", () => {
+    // The fail-closed gate sits BEFORE the shipment call, so a blocked
+    // configuration cannot produce a quote, cannot cache a rate, and therefore
+    // cannot buy a label.
+    const gate = service.indexOf("if (!addresses.canRequestRates)");
+    const creation = service.indexOf("const result = await createShipmentWithRates({");
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(creation);
+  });
+});
