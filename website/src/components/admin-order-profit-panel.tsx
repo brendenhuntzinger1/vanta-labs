@@ -18,6 +18,7 @@ export interface OrderProfitView {
   profit: number;
   marginPercent: number;
   profitStatus: "estimated" | "finalized";
+  processingFeeIsEstimate: boolean;
   hasEstimatedCost: boolean;
 }
 
@@ -109,7 +110,14 @@ export function AdminOrderProfitPanel({
             {profit.shippingCostIsEstimate ? "Pending label purchase" : money(-profit.shippingCost)}
           </dd>
         </div>
-        <ExpenseRow label="Payment processing" amount={profit.processingFee} />
+        {/* ALWAYS modelled from the configured rate — Veyra reports no settled
+            per-transaction fee back to this application. Saying so on the line
+            is the difference between a profit figure the owner can trust and one
+            that quietly presents a guess as a bank statement. */}
+        <ExpenseRow
+          label={profit.processingFeeIsEstimate ? "Payment processing (estimated)" : "Payment processing"}
+          amount={profit.processingFee}
+        />
         {profit.commission > 0 ? <ExpenseRow label="Ambassador commission" amount={profit.commission} /> : null}
         {profit.refund > 0 ? <ExpenseRow label="Refunds" amount={profit.refund} /> : null}
 

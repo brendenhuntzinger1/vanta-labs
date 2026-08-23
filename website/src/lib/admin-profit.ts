@@ -111,6 +111,11 @@ function profitForOrder(
     lines: isMembership ? [] : lines,
     commission,
     processingFee: processingFeeFor(order, config),
+    // ALWAYS an estimate: processingFeeFor() models the fee from
+    // config.processingFeePercent. Veyra reports no per-transaction fee back to
+    // this application, so there is no settled figure to use instead. Stated
+    // explicitly rather than left to the default so the reason is on the record.
+    processingFeeIsEstimate: true,
     refund: Math.max(0, Number(order.refund_amount ?? 0)),
     fallbackUnitCostCents: Math.round(config.worstCaseUnitCost * 100),
   });
