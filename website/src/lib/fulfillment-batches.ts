@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { bucketForOrder, exceptionsForOrder, type OrderBucketInput } from "@/lib/fulfillment-buckets";
+import { bucketForOrder, exceptionsForOrder, inPackingOrder, type OrderBucketInput } from "@/lib/fulfillment-buckets";
 
 // ---------------------------------------------------------------------------
 // BATCHES, PICKING AND PACKING.
@@ -357,11 +357,14 @@ export async function getNextToPack(batchId: string): Promise<PackingOrder | nul
   const orderIds = (members ?? []).map((m) => String(m.order_id));
   if (orderIds.length === 0) return null;
 
-  const { data: orders, error } = await supabaseAdmin
-    .from("orders")
-    .select("order_id, order_number, customer_name, city, state, country, payment_status, fulfillment_status, label_url, tracking_number, shippo_transaction_id, shipping_carrier, shipping_service, label_voided_at, paid_at")
-    .in("order_id", orderIds)
-    .order("paid_at", { ascending: true, nullsFirst: false });
+  // The SAME ordering the label sheet uses — from the same function, not a
+  // second copy of the clause. Page 1 must be parcel 1.
+  const { data: orders, error } = await inPackingOrder(
+    supabaseAdmin
+      .from("orders")
+      .select("order_id, order_number, customer_name, city, state, country, payment_status, fulfillment_status, label_url, tracking_number, shippo_transaction_id, shipping_carrier, shipping_service, label_voided_at, paid_at")
+      .in("order_id", orderIds),
+  );
   if (error) throw error;
 
   const live = (orders ?? []).filter((o) => String(o.payment_status ?? "") === "paid");

@@ -115,9 +115,21 @@ describe("label order matches packing order", () => {
   it("that ordering is identical to the packing bench's", () => {
     // If these two ever diverge, the printed sheet stops matching the queue and
     // the wrong label goes on the wrong parcel.
-    const ORDERING = `.order("paid_at", { ascending: true, nullsFirst: false })`;
-    expect(labels).toContain(ORDERING);
-    expect(batches).toContain(ORDERING);
+    //
+    // THIS ASSERTION USED TO COMPARE THE LITERAL ORDER BY CLAUSE IN BOTH FILES.
+    // That pinned the weaker mechanism: two separate queries kept in step by
+    // hand, which is what the implementation actually did. It also could not see
+    // the real hazard, because both copies were equally wrong — sorting on
+    // paid_at alone, with no tiebreaker, so equal timestamps returned in
+    // arbitrary and potentially DIFFERENT order to the two callers.
+    //
+    // Both now call one function. The assertion moved with the implementation
+    // rather than being deleted: it still fails if the sheet and the bench can
+    // diverge, and it now also fails if the tiebreaker goes.
+    expect(labels).toContain("inPackingOrder(");
+    expect(batches).toContain("inPackingOrder(");
+    expect(labels).not.toContain(`.order("paid_at"`);
+    expect(batches).not.toContain(`.order("paid_at"`);
   });
 
   it("a voided label is excluded from the printed sheet", () => {

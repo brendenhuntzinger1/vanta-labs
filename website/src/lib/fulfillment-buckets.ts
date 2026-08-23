@@ -173,6 +173,42 @@ export type ExceptionReason =
  * They are NOT thresholds the software derived; nothing in the data implies
  * them. Treat them as settings that happen to live in code today.
  */
+// ---------------------------------------------------------------------------
+// THE PACKING ORDER. ONE DEFINITION, BECAUSE THE COST OF TWO IS A MISDELIVERY.
+//
+// The label sheet and the packing bench must serve orders in exactly the same
+// sequence: page 1 goes on parcel 1. This was maintained by two separate
+// queries carrying the same ORDER BY, with a comment saying "both must stay in
+// step" — a convention, not a mechanism.
+//
+// Worse, that clause sorted on paid_at ALONE. SQL guarantees nothing about the
+// relative order of rows with equal sort keys, so two orders paid in the same
+// second — ordinary, and certain during a promotion — could come back in one
+// order for the label sheet and the other order for the bench. Nothing would
+// error. The labels would simply be swapped, and the first anyone would know is
+// two customers receiving each other's parcels.
+//
+// order_id is unique, so appending it makes the sequence total and therefore
+// deterministic: the same rows always come back in the same order, from any
+// query, on any connection.
+// ---------------------------------------------------------------------------
+export const PACKING_ORDER_COLUMN = "paid_at" as const;
+export const PACKING_ORDER_TIEBREAK = "order_id" as const;
+
+/**
+ * Apply the canonical packing order to a PostgREST query.
+ *
+ * Typed loosely on purpose: the two callers build different selects, and the
+ * point is that neither writes the clause itself.
+ */
+export function inPackingOrder<T extends {
+  order: (column: string, opts: { ascending: boolean; nullsFirst?: boolean }) => T;
+}>(query: T): T {
+  return query
+    .order(PACKING_ORDER_COLUMN, { ascending: true, nullsFirst: false })
+    .order(PACKING_ORDER_TIEBREAK, { ascending: true });
+}
+
 export const CARRIER_ACCEPTANCE_STALE_HOURS = 36;
 export const TRANSIT_STALE_DAYS = 10;
 

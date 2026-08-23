@@ -131,3 +131,67 @@ describe("one carrier event produces at most one customer email", () => {
     expect(service).toContain("await releaseWebhookClaim(eventKey)");
   });
 });
+
+// ---------------------------------------------------------------------------
+// LABEL PAGE N == PARCEL N.
+//
+// The most expensive thing this software can get wrong. A swapped pair does not
+// error, does not alert, and is discovered by two customers opening each
+// other's parcels — with their names and addresses on the labels.
+//
+// It was held together by two separate queries carrying the same ORDER BY and a
+// comment reading "both must stay in step". Two defects in that:
+//
+//   1. A CONVENTION, NOT A MECHANISM. Editing one query silently diverges the
+//      label sheet from the packing bench.
+//
+//   2. THE CLAUSE SORTED ON paid_at ALONE. SQL guarantees nothing about the
+//      relative order of rows with equal sort keys. Two orders paid in the same
+//      second — ordinary, and certain during a promotion — could come back in
+//      one order for the sheet and the other for the bench. order_id is unique,
+//      so appending it makes the sequence total and therefore repeatable.
+// ---------------------------------------------------------------------------
+describe("the label sheet and the packing bench cannot disagree", () => {
+  const labels = source("src/lib/fulfillment-labels.ts");
+  const batches = source("src/lib/fulfillment-batches.ts");
+  const buckets = source("src/lib/fulfillment-buckets.ts");
+
+  it("orders through one shared function, not two copies of a clause", () => {
+    expect(labels).toContain("inPackingOrder(");
+    expect(batches).toContain("inPackingOrder(");
+    expect(buckets).toContain("export function inPackingOrder");
+  });
+
+  it("leaves no hand-written packing ORDER BY anywhere", () => {
+    // The failure this prevents: someone adds a third reader of a batch and
+    // writes the clause again from memory.
+    for (const src of [labels, batches]) {
+      const handWritten = src.match(/\.order\("paid_at"/g) ?? [];
+      expect(handWritten).toHaveLength(0);
+    }
+  });
+
+  it("breaks ties on a unique column, so the sequence is deterministic", () => {
+    expect(buckets).toContain('PACKING_ORDER_TIEBREAK = "order_id"');
+    const fn = buckets.slice(buckets.indexOf("export function inPackingOrder"));
+    expect(fn).toContain("PACKING_ORDER_COLUMN");
+    expect(fn).toContain("PACKING_ORDER_TIEBREAK");
+  });
+
+  it("feeds the review, the purchase and the PDF from that one sequence", () => {
+    // Every stage reads batchOrdersInPackingOrder rather than re-querying, so
+    // no stage can sort independently.
+    for (const fn of ["reviewBatchLabels", "batchLabelUrls"]) {
+      const body = labels.slice(labels.indexOf(`export async function ${fn}`));
+      expect(body.slice(0, 400)).toContain("batchOrdersInPackingOrder(batchId)");
+    }
+  });
+
+  it("merges the PDF in that order and drops nothing silently", () => {
+    const print = source("src/app/api/admin/fulfillment/labels/print/route.ts");
+    expect(print).toContain("batchLabelUrls(batchId)");
+    // Skipped labels are counted in a header rather than quietly omitted, so
+    // page count mismatching parcel count is visible.
+    expect(print).toMatch(/X-Labels-Skipped/);
+  });
+});

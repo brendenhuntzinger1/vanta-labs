@@ -2,7 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getRatesForOrder, purchaseLabelForOrder } from "@/lib/shippo/service";
-import { bucketForOrder } from "@/lib/fulfillment-buckets";
+import { bucketForOrder, inPackingOrder } from "@/lib/fulfillment-buckets";
 
 // ---------------------------------------------------------------------------
 // BATCH LABELS: REVIEW FIRST, THEN SPEND.
@@ -88,12 +88,12 @@ export async function batchOrdersInPackingOrder(batchId: string): Promise<BatchO
   const orderIds = (members ?? []).map((m) => String(m.order_id));
   if (orderIds.length === 0) return [];
 
-  const { data, error } = await supabaseAdmin
-    .from("orders")
-    .select(ORDER_COLUMNS)
-    // Identical ordering to getNextToPack(). Both must stay in step.
-    .in("order_id", orderIds)
-    .order("paid_at", { ascending: true, nullsFirst: false });
+  const { data, error } = await inPackingOrder(
+    supabaseAdmin
+      .from("orders")
+      .select(ORDER_COLUMNS)
+      .in("order_id", orderIds),
+  );
   if (error) throw error;
   return (data ?? []) as unknown as BatchOrderRow[];
 }
