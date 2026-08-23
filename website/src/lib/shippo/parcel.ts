@@ -57,6 +57,20 @@ export const GRAMS_PER_OZ = 28.349523125;
 export const LIQUID_DENSITY_G_PER_ML = 1.0;
 
 /**
+ * The container of a liquid unit — vial, stopper, crimp and label — in grams.
+ *
+ * MEASURED, not assumed. Owner measurement recorded 2026-08: every 10 mL liquid
+ * vial weighs 1.06 oz complete. 1.06 oz is 30 g; the fluid inside is 10 g; so
+ * the container is 20 g.
+ *
+ * This replaces an earlier estimate that reused DEFAULT_UNIT_WEIGHT_OZ as the
+ * container allowance. That was wrong by construction — a 3 mL dry vial is not
+ * the same object as a 10 mL liquid one, and using it made an unweighed liquid
+ * resolve to 0.72 oz against a real 1.06 oz.
+ */
+export const LIQUID_VIAL_CONTAINER_G = 20;
+
+/**
  * Does this dose label denote a liquid, and if so how many millilitres?
  *
  * Liquids are the one category the dry-vial default cannot cover, because the
@@ -81,14 +95,19 @@ export function parseDoseVolumeMl(label: NumericLike): number | null {
 /**
  * Fallback weight for a LIQUID unit with no measured weight on file.
  *
- * = one vial (the existing dry-vial default, which is what the container is)
+ * = the measured container (LIQUID_VIAL_CONTAINER_G)
  * + the mass of the liquid it holds (volume x water density).
  *
- * INVENTS NOTHING. It composes a constant already in this file with a physical
- * one. A 10 mL vial resolves to 0.36 + gramsToOz(10) = 0.72 oz rather than the
- * 0.36 oz a dry vial gets — which is the defect this guards: a 10 mL liquid was
- * previously declared at the weight of its empty container, ignoring the ten
- * grams of fluid inside it.
+ * INVENTS NOTHING. Both terms are real: the container is measured, and water
+ * density is a physical constant. A 10 mL vial resolves to gramsToOz(10 + 20)
+ * = 1.06 oz — exactly the owner's measured figure — rather than the 0.36 oz a
+ * dry vial gets, which is the defect this guards: a 10 mL liquid was previously
+ * declared at the weight of the fluid alone, with a weightless vial.
+ *
+ * For a volume other than 10 mL the container term is an extrapolation, so this
+ * remains an ESTIMATE and is reported as one. It is what stops an unmeasured
+ * liquid from being declared at an impossible weight; it is not a substitute
+ * for a scale.
  *
  * This is still an ESTIMATE and is reported as one (`hasStoredWeight` is false
  * for these lines, exactly as before). It is not a substitute for putting the
@@ -102,7 +121,7 @@ export function parseDoseVolumeMl(label: NumericLike): number | null {
 export function liquidFallbackWeightOz(volumeMl: number): number {
   const ml = Number(volumeMl);
   if (!Number.isFinite(ml) || ml <= 0) return DEFAULT_UNIT_WEIGHT_OZ;
-  return roundHundredths(DEFAULT_UNIT_WEIGHT_OZ + gramsToOz(ml * LIQUID_DENSITY_G_PER_ML));
+  return gramsToOz(ml * LIQUID_DENSITY_G_PER_ML + LIQUID_VIAL_CONTAINER_G);
 }
 
 /**
