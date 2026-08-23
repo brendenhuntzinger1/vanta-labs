@@ -1234,3 +1234,74 @@ describe("PHASE 13 — staleness rules, isolated from the terminal rule", () => 
     expect(order(orderId)?.shipped_at).toBe(firstStamp);
   });
 });
+
+// ===========================================================================
+describe("PHASE 14 — a catalogue price that was never set is not a free product", () => {
+  // `products.price_cents` is `integer not null default 0` and the admin save
+  // path writes 0 for a missing price, so "published before the price was
+  // typed in" is the DEFAULT state, not an exotic one. An unparseable price
+  // ("TBD", a blank CSV cell) reaches the same place: Number("") is 0.
+  //
+  // This was reproduced as a live free-merchandise sale before the fix: the
+  // only thing refusing it was the margin guard, and lowering Control Center's
+  // worst-case unit cost — a REPORTING setting — unlocked it.
+  function seedUnpriced(priceCents: number, costCents: number) {
+    harness.db.seed("products", [{
+      id: "p-unpriced", slug: "unpriced-peptide", name: "Unpriced Peptide",
+      category: "Research Peptides", description: "d", short_description: "s",
+      price_cents: priceCents, product_cost_cents: costCents, stock_status: "In Stock",
+      inventory_quantity: 10, reserved_quantity: 0, track_inventory: true,
+      shipping_weight_oz: 0.4, is_active: true, is_enabled: true,
+      is_published: true, is_archived: false, position: 9,
+    }]);
+  }
+
+  /** The owner lowers the margin guard's worst-case cost assumption. */
+  function relaxMarginGuard() {
+    harness.db.seed("admin_audit_logs", [
+      { id: "ctl-wcu", action: "admin_control_upsert", target_table: "profit",
+        target_id: "worst_case_unit_cost", metadata: { value: 0 }, created_at: new Date().toISOString() },
+      { id: "ctl-spo", action: "admin_control_upsert", target_table: "profit",
+        target_id: "shipping_cost_per_order", metadata: { value: 0 }, created_at: new Date().toISOString() },
+    ]);
+  }
+
+  it("refuses checkout outright, even with the margin guard relaxed to zero", async () => {
+    seedUnpriced(0, 0);
+    relaxMarginGuard();
+
+    const { status, body } = await postCheckout(ALPHA, [{ productId: "unpriced-peptide", quantity: 3 }]);
+
+    expect(status).toBe(400);
+    expect(String(body.error)).toMatch(/invalid price/i);
+  });
+
+  it("writes no order and holds no stock for an unpriced product", async () => {
+    seedUnpriced(0, 0);
+    relaxMarginGuard();
+
+    await postCheckout(ALPHA, [{ productId: "unpriced-peptide", quantity: 3 }]);
+
+    expect(harness.db.rows("orders")).toHaveLength(0);
+    expect(harness.db.findOne("products", "slug", "unpriced-peptide")?.reserved_quantity).toBe(0);
+  });
+
+  it("refuses a price the catalogue could not parse at all", async () => {
+    // A CSV import with "TBD" in the price column lands as 0 the same way.
+    seedUnpriced(0, 1200);
+    relaxMarginGuard();
+
+    const { status } = await postCheckout(ALPHA, [{ productId: "unpriced-peptide", quantity: 1 }]);
+    expect(status).toBe(400);
+  });
+
+  it("still sells a normally-priced product with the same settings", async () => {
+    // The complement: this must refuse UNPRICED items, not break the store.
+    relaxMarginGuard();
+
+    const { status, body } = await postCheckout(ALPHA, [{ productId: ALPHA_SLUG, quantity: 3 }]);
+
+    expect(status).toBe(200);
+    expect(Number(body.total)).toBeCloseTo(ALPHA_TOTAL, 2);
+  });
+});

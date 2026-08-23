@@ -148,12 +148,34 @@ export interface QuoteResult {
   displayLineItems: QuoteDisplayLineItem[];
 }
 
-// Parse a display price string ("$44.99") to a number, rejecting malformed
-// values (e.g. multiple dots -> NaN) so a bad price can't silently produce a
-// NaN subtotal and a confusing "Altered total detected" rejection at checkout.
+// Parse a display price string ("$44.99") to a number, FAILING CLOSED on
+// anything that is not a real, positive price.
+//
+// The NaN/negative cases were already refused. Zero was not — and zero is not
+// an exotic input here, it is the DEFAULT: `products.price_cents` is
+// `integer not null default 0`, and the admin save path writes
+// `Math.max(0, Math.round(input.priceCents ?? 0))`, so a product published
+// before its price is typed in carries 0. An unparseable string ("TBD",
+// "call for price", an empty cell in a CSV import) strips to "" and
+// `Number("")` is also 0, so those landed in exactly the same place.
+//
+// Nothing downstream treated that as an error. The order priced the line at
+// $0.00 and the customer received real product for the cost of postage.
+//
+// The only thing that had been stopping it was the MARGIN GUARD, which charges
+// the order `profitSettings.worstCaseUnitCost` when no per-SKU cost is on file
+// and refuses a negative-profit order. That is an estimation control the owner
+// can edit in Control Center: setting worst-case unit cost to 0 — a change
+// about REPORTING — silently made every unpriced published product free.
+// Reproduced end-to-end before this fix.
+//
+// A purchasable line must have a price above zero. Free merchandise in this
+// store is expressed as a DISCOUNT on a priced line (bundle, Buy-3-Get-1,
+// coupon), never as a $0 catalogue price, and neither membership nor
+// replacement orders are priced through this function.
 function parseProductPrice(raw: string): number {
   const value = Number(String(raw).replace(/[^0-9.]/g, ""));
-  if (!Number.isFinite(value) || value < 0) {
+  if (!Number.isFinite(value) || value <= 0) {
     throw new Error("This product has an invalid price and can't be purchased right now.");
   }
   return value;
