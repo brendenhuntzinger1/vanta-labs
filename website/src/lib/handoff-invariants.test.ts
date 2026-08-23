@@ -289,3 +289,50 @@ describe("orders sharing a paid_at still have one definite order", () => {
     expect(buckets).toMatch(/equal sort keys/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// VANTA -> SHIPPO IDENTIFICATION.
+//
+// The launch model is: Vanta buys the postage, Shippo is the print station.
+// That makes one field load-bearing — the reference on the transaction, which
+// is how the owner finds the right label in Shippo's dashboard, and how a label
+// bought there resolves back to an order here.
+//
+// It was broken in both directions at once. The purchase wrote order_id; the
+// reader looked it up with .eq("order_number", metadata). Neither side was
+// wrong alone. The seam was.
+// ---------------------------------------------------------------------------
+describe("a Shippo transaction can be traced back to its Vanta order", () => {
+  const service = source("src/lib/shippo/service.ts");
+  const sync = source("src/lib/shippo/order-sync.ts");
+
+  it("stamps the transaction with the order NUMBER the owner reads", () => {
+    expect(service).toContain("metadata: text(order.order_number) ?? order.order_id");
+  });
+
+  it("resolves that reference back against the column it was written to", () => {
+    const fn = sync.slice(sync.indexOf("const metadata = String(data.metadata"));
+    expect(fn).toContain('["order_number", "order_id"]');
+  });
+
+  it("still accepts the historical id, so old transactions keep resolving", () => {
+    // Labels bought before the fix carry order_id. Matching only the new format
+    // would strand them.
+    const fn = sync.slice(sync.indexOf("const metadata = String(data.metadata"));
+    expect(fn).toContain('"order_id"');
+  });
+
+  it("keys idempotency on the immutable id, NOT the reference", () => {
+    // An order number could in principle be reissued. The key that prevents a
+    // second purchase must never move.
+    expect(service).toContain("idempotencyKey: `vanta-label-${order.order_id}`");
+  });
+
+  it("tells the owner where postage is bought and where it is only printed", () => {
+    const workstation = source("src/components/fulfillment-workstation.tsx");
+    expect(workstation).toMatch(/Click to Print only/i);
+    expect(workstation).toContain("Open Shippo to print");
+    // And keeps the Vanta PDF as a fallback that cannot spend.
+    expect(workstation).toMatch(/Fallback: print from Vanta/);
+  });
+});

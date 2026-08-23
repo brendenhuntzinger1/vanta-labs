@@ -999,10 +999,23 @@ describe("purchaseLabelForOrder — exactly once", () => {
     await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } });
 
     const [input] = purchaseLabel.mock.calls[0] as [{ idempotencyKey?: string; metadata?: string }];
-    // Keyed on the order, so even a defeated local claim cannot create a second
-    // transaction at Shippo.
+    // Keyed on the order ID, so even a defeated local claim cannot create a
+    // second transaction at Shippo. This stays on the immutable internal id —
+    // an order number could in principle be reissued, and the idempotency key
+    // must never move.
     expect(input.idempotencyKey).toBe(`vanta-label-${ORDER_ID}`);
-    expect(input.metadata).toBe(ORDER_ID);
+
+    // METADATA IS THE ORDER NUMBER, AND THIS ASSERTION USED TO DEMAND THE ID.
+    //
+    // It was pinning a real defect. resolveOrderFromShippo matches this field
+    // back with .eq("order_number", metadata), so sending the id meant that
+    // fallback could never resolve anything Vanta had purchased — writer and
+    // reader disagreed on the format, and each looked correct alone.
+    //
+    // It is also the string the owner reads in the Shippo dashboard when they
+    // go to print. VL-1001 identifies the order; order-3f8a… is noise.
+    expect(input.metadata).toBe(currentOrder().order_number);
+    expect(input.metadata).not.toBe(ORDER_ID);
   });
 
   it("refuses when a previous purchase's outcome is still unknown", async () => {

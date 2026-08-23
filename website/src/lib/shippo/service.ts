@@ -1086,7 +1086,19 @@ export async function purchaseLabelForOrder(
   // 4. BUY.
   const bought = await purchaseLabel({
     rate,
-    metadata: order.order_id,
+    // THE ORDER NUMBER, NOT THE INTERNAL ID.
+    //
+    // Two reasons, and the first was a live defect. resolveOrderFromShippo
+    // matches this field back with .eq("order_number", metadata) — so sending
+    // order_id meant that fallback could never match anything Vanta had
+    // bought. Writer and reader disagreed on the format and neither was wrong
+    // on its own.
+    //
+    // Second, this is the string the owner reads in the Shippo dashboard when
+    // they go to print. "VL-E8F4D52F" is the reference shown on the order in
+    // Vanta; "order-3f8a…" is forty-two characters of noise. Falls back to the
+    // id only when an order somehow has no number, which keeps it non-null.
+    metadata: text(order.order_number) ?? order.order_id,
     // Keyed on the ORDER, so a defeated local claim still cannot produce a
     // second transaction at Shippo.
     idempotencyKey: `vanta-label-${order.order_id}`,

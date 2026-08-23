@@ -210,13 +210,43 @@ export function FulfillmentOwnerGuide({
             </p>
           </div>
 
+          <div className="rounded-lg border border-cyan-400/25 bg-cyan-400/[0.06] p-3.5">
+            <p className="font-semibold text-cyan-100">Vanta buys. Shippo prints.</p>
+            <p className="mt-1 text-cyan-100/80">
+              You buy the postage here, then print in Shippo with Click to Print — the setup already
+              working with your thermal printer. Every shipment Vanta buys carries its Vanta order
+              number, so you can find the right one in Shippo without guessing.
+            </p>
+            <p className="mt-2 font-semibold text-rose-200">
+              Never buy the label again in Shippo. It is already paid for — buying there charges you
+              a second time for the same parcel.
+            </p>
+          </div>
+
           <div>
-            <p className="font-semibold text-white">What happens when you press Print</p>
+            <p className="font-semibold text-white">Fulfilling one order</p>
+            <ol className="mt-1 space-y-1 pl-5 text-zinc-400">
+              <li>Open the order and check the products and address.</li>
+              <li>Get shipping rates. This costs nothing.</li>
+              <li>Pick the service you want.</li>
+              <li>Buy the label here in Vanta.</li>
+              <li>Open Shippo and Click to Print.</li>
+              <li>Check the name on the label matches the order in front of you.</li>
+              <li>Pack it and hand it to the carrier.</li>
+            </ol>
+            <p className="mt-2 text-zinc-400">
+              Then nothing. Carrier scans move the order along and email the customer on their own.
+            </p>
+          </div>
+
+          <div>
+            <p className="font-semibold text-white">If Click to Print stops working</p>
             <p className="mt-1 text-zinc-400">
-              Vanta collects every label in the batch into one 4&times;6 PDF, in the same order as
-              your packing screen, and opens it in a new tab. You print it with your computer&apos;s
-              normal print dialog and choose your thermal printer. Vanta does not talk to your
-              printer directly.
+              <strong className="text-white">Do not buy another label.</strong> Vanta keeps its own
+              copy of every label you have paid for. Use{" "}
+              <strong className="text-white">Fallback: print from Vanta</strong> — it opens the same
+              purchased labels as one 4&times;6 PDF, printed through your computer&apos;s normal
+              print dialog. It never buys postage.
             </p>
           </div>
 

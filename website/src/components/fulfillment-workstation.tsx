@@ -496,6 +496,15 @@ export function FulfillmentWorkstation({
             Only step 2 &rarr; Purchase spends money. Printing and reprinting are always free —
             they open labels you have already bought.
           </p>
+          {/* THE HANDOFF, STATED WHERE THE OWNER IS STANDING.
+              Postage is bought here. Shippo is the print station. The one
+              mistake that costs real money is buying it a second time in
+              Shippo's own dashboard, so the boundary is named rather than
+              assumed. */}
+          <p className="mt-1 text-[11px] text-amber-300/80">
+            Postage is purchased here in Vanta. In Shippo, use Click to Print only — never buy
+            another label there.
+          </p>
         </section>
       ) : null}
 
@@ -567,6 +576,37 @@ export function FulfillmentWorkstation({
           ) : null}
 
           {/* PARTIAL FAILURE, REPORTED HONESTLY. Never "93 labels purchased". */}
+          {purchaseResult && purchaseResult.purchased > 0 ? (
+            <div className="mt-4 rounded-lg border border-cyan-400/25 bg-cyan-400/[0.06] p-3.5">
+              <p className="text-sm font-semibold text-cyan-100">
+                Labels bought. Print them in Shippo.
+              </p>
+              <p className="mt-1 text-xs leading-6 text-cyan-100/80">
+                Each shipment carries its Vanta order number, so you can find it without guessing.
+                Use Click to Print — the postage is already paid, and buying again in Shippo would
+                charge you twice.
+              </p>
+              <div className="mt-2.5 flex flex-wrap gap-2">
+                <a
+                  href="https://apps.goshippo.com/orders"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="vl-btn-primary inline-flex px-3 py-1 text-xs"
+                >
+                  Open Shippo to print →
+                </a>
+                <a
+                  href={`/api/admin/fulfillment/labels/print?batchId=${encodeURIComponent(activeBatch ?? "")}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Emergency fallback. Opens the same purchased labels as a 4x6 PDF. Never buys postage."
+                  className="vl-btn-secondary inline-flex px-3 py-1 text-xs"
+                >
+                  Fallback: print from Vanta · $0
+                </a>
+              </div>
+            </div>
+          ) : null}
           {purchaseResult ? (
             <div role="status" className="mt-4 rounded-lg border border-white/10 p-4">
               <p className="text-sm text-white">

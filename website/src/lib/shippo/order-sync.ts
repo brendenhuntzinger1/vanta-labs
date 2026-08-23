@@ -406,12 +406,19 @@ async function matchOrder(data: ShippoTransactionCreated): Promise<OrderRow | nu
   // but still uniquely ours, unlike a customer's name.
   const metadata = String(data.metadata ?? "").trim();
   if (metadata) {
-    const { data: row } = await supabaseAdmin
-      .from("orders")
-      .select(ORDER_COLUMNS)
-      .eq("order_number", metadata)
-      .maybeSingle<OrderRow>();
-    if (row) return row;
+    // Tries BOTH columns, because the field carries the order NUMBER now and
+    // historical transactions carry the internal id. Matching only one meant
+    // this fallback silently resolved nothing for every label Vanta had
+    // purchased — the writer sent one format and the reader looked up the
+    // other.
+    for (const column of ["order_number", "order_id"] as const) {
+      const { data: row } = await supabaseAdmin
+        .from("orders")
+        .select(ORDER_COLUMNS)
+        .eq(column, metadata)
+        .maybeSingle<OrderRow>();
+      if (row) return row;
+    }
   }
 
   return null;
