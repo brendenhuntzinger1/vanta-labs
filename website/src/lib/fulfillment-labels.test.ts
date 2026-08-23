@@ -146,7 +146,15 @@ describe("the merged label sheet", () => {
 
   it("requires an admin session before anything else", () => {
     const body = printRoute.slice(printRoute.indexOf("export async function GET"));
-    expect(body.indexOf("verifyAdminSessionFromRequest")).toBeLessThan(body.indexOf("batchLabelUrls"));
+    // Assert PRESENCE before ORDER. indexOf returns -1 when absent, and
+    // -1 is less than any real position -- so an order-only assertion goes
+    // GREEN when the auth check is deleted entirely, which is the failure
+    // this test exists to catch.
+    const authAt = body.indexOf("verifyAdminSessionFromRequest");
+    const workAt = body.indexOf("batchLabelUrls");
+    expect(authAt).toBeGreaterThan(-1);
+    expect(workAt).toBeGreaterThan(-1);
+    expect(authAt).toBeLessThan(workAt);
   });
 
   it("only fetches from Shippo's own label hosts", () => {

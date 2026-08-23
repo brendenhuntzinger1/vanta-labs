@@ -280,7 +280,13 @@ describe("orders sharing a paid_at still have one definite order", () => {
 
   it("applies the timestamp first and the tiebreak second", () => {
     const fn = buckets.slice(buckets.indexOf("export function inPackingOrder"));
-    expect(fn.indexOf("PACKING_ORDER_COLUMN")).toBeLessThan(fn.indexOf("PACKING_ORDER_TIEBREAK"));
+    // Presence first: if the timestamp sort were dropped from the helper,
+    // indexOf would return -1 and the order comparison alone would pass.
+    const columnAt = fn.indexOf("PACKING_ORDER_COLUMN");
+    const tiebreakAt = fn.indexOf("PACKING_ORDER_TIEBREAK");
+    expect(columnAt).toBeGreaterThan(-1);
+    expect(tiebreakAt).toBeGreaterThan(-1);
+    expect(columnAt).toBeLessThan(tiebreakAt);
   });
 
   it("records why, so the tiebreak is not removed as redundant", () => {

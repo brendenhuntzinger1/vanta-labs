@@ -184,7 +184,11 @@ describe("the bulk photograph degrades rather than breaking", () => {
     // The composition was the thing that read as "separate vials"; when a real
     // bulk shot is present it should not appear alongside it.
     const hero = page.slice(page.indexOf("hasBulkImage ? ("), page.indexOf("BENEFITS ─"));
-    expect(hero.indexOf("<Image")).toBeLessThan(hero.indexOf("WholesaleVialStack"));
+    // Presence first: a bare order comparison passes when <Image> is gone,
+    // because indexOf returns -1 and -1 precedes everything.
+    const imageAt = hero.indexOf("<Image");
+    expect(imageAt).toBeGreaterThan(-1);
+    expect(imageAt).toBeLessThan(hero.indexOf("WholesaleVialStack"));
   });
 
   it("describes the photograph for screen readers once, not twice", () => {
