@@ -81,9 +81,44 @@ export async function deleteCommissionTierRule(id: string) {
   }
 }
 
+export interface TierQualifyingRow {
+  created_at?: unknown;
+  payment_status?: unknown;
+  ineligible_reason?: unknown;
+  commission_amount?: unknown;
+  fraud_flag?: unknown;
+}
+
+// Exported so the exclusions can be tested directly. This predicate decides
+// how fast an ambassador escalates through the commission tiers, so every
+// row it wrongly admits raises the percent paid on every later order that
+// month. It is pure: month boundary is passed in rather than read from the
+// clock.
+export function qualifiesForMonthlyTierCount(row: TierQualifyingRow, monthStart: Date): boolean {
+  const status = String(row.payment_status ?? "").toLowerCase();
+  if (status === "reversed" || status === "voided" || status === "manual_review") {
+    return false;
+  }
+
+  // Only GENUINELY qualifying orders advance the performance tier. Orders that
+  // earned $0 — below the minimum qualifying subtotal, program paused, etc.
+  // (ineligible_reason set / commission_amount 0) — or that are FRAUD-FLAGGED
+  // (self-dealing) must not inflate the count and push the ambassador into a
+  // higher commission-percent tier.
+  if (row.ineligible_reason || Number(row.commission_amount ?? 0) <= 0 || row.fraud_flag === true) {
+    return false;
+  }
+
+  const createdAt = new Date(String(row.created_at));
+  return Number.isFinite(createdAt.getTime()) && createdAt >= monthStart;
+}
+
+export function monthStartUtc(now: Date): Date {
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+}
+
 async function getQualifyingMonthlySalesCount(ambassadorId: string): Promise<number> {
-  const now = new Date();
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const monthStart = monthStartUtc(new Date());
 
   const { data, error } = await supabaseAdmin
     .from("referral_orders")
@@ -95,24 +130,7 @@ async function getQualifyingMonthlySalesCount(ambassadorId: string): Promise<num
     throw error;
   }
 
-  return (data ?? []).filter((row) => {
-    const status = String(row.payment_status ?? "").toLowerCase();
-    if (status === "reversed" || status === "voided" || status === "manual_review") {
-      return false;
-    }
-
-    // Only GENUINELY qualifying orders advance the performance tier. Orders that
-    // earned $0 — below the minimum qualifying subtotal, program paused, etc.
-    // (ineligible_reason set / commission_amount 0) — or that are FRAUD-FLAGGED
-    // (self-dealing) must not inflate the count and push the ambassador into a
-    // higher commission-percent tier.
-    if (row.ineligible_reason || Number(row.commission_amount ?? 0) <= 0 || row.fraud_flag === true) {
-      return false;
-    }
-
-    const createdAt = new Date(String(row.created_at));
-    return Number.isFinite(createdAt.getTime()) && createdAt >= monthStart;
-  }).length;
+  return (data ?? []).filter((row) => qualifiesForMonthlyTierCount(row, monthStart)).length;
 }
 
 export interface EffectiveCommission {
