@@ -181,6 +181,13 @@ function FulfillmentCard({ row }: { row: FulfillmentRow }) {
           </label>
         </div>
 
+        {/* "Mark Delivered" is deliberately absent. order-pipeline.ts lists
+            "shippo" as the ONLY source permitted to write `delivered`, so this
+            button POSTed an action the server categorically refuses with 400 —
+            an owner control that could never perform what it advertised.
+            "Mark Shipped" stays: label_purchased → shipped from source "admin"
+            is a permitted transition, and it is the escape hatch for a parcel
+            handed to a courier without a Shippo label. */}
         <div className="mt-3 flex flex-col gap-2 sm:flex-row">
           <button
             type="button"
@@ -190,18 +197,11 @@ function FulfillmentCard({ row }: { row: FulfillmentRow }) {
           >
             {busy ? "Saving…" : "Mark Shipped"}
           </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => save("delivered")}
-            className="vl-btn-secondary w-full px-5 text-sm disabled:opacity-40 sm:w-auto"
-          >
-            Mark Delivered
-          </button>
         </div>
         <p className="mt-2 text-[11px] text-zinc-500">
           An order shipped on a Shippo label updates itself from the carrier&rsquo;s scans — in transit, out for
-          delivery and delivered all arrive on the tracking webhook. Only use these for a parcel Shippo never saw.
+          delivery and delivered all arrive on the tracking webhook. Only use this for a parcel Shippo never saw.
+          Delivery itself is always the carrier&rsquo;s to report; it cannot be set by hand.
         </p>
         {message ? <p className="mt-2 text-xs text-zinc-300">{message}</p> : null}
       </details>

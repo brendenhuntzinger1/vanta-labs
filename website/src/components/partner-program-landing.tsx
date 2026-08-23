@@ -413,7 +413,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
           <h2 className="vl2-serif mt-2 text-2xl text-white sm:text-3xl">Benefits</h2>
           <ul className="mt-5 space-y-3 text-sm leading-7 text-white/70">
             {[
-              "15% discount on all of your own purchases — active the whole time you're approved.",
+              "20% discount on all of your own purchases — active the whole time you're approved.",
               "A personal referral code that gives your audience 10% off.",
               "A 15% commission on every completed order placed with your code.",
               "A real-time dashboard: pending, approved, and paid commissions, referral orders, and total earnings.",

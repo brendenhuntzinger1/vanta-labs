@@ -517,7 +517,7 @@ export function ambassadorApprovedTemplate(input: {
   const name = escapeHtml(input.name);
   const code = input.referralCode ? escapeHtml(input.referralCode) : null;
   const commissionPct = Number.isFinite(input.commissionPercent) ? Number(input.commissionPercent) : 10;
-  const personalPct = Number.isFinite(input.personalDiscountPercent) ? Number(input.personalDiscountPercent) : 15;
+  const personalPct = Number.isFinite(input.personalDiscountPercent) ? Number(input.personalDiscountPercent) : 20;
   const referralPct = Number.isFinite(input.referralDiscountPercent) ? Number(input.referralDiscountPercent) : 10;
   const holdDays = Number.isFinite(input.holdDays) ? Number(input.holdDays) : 14;
 

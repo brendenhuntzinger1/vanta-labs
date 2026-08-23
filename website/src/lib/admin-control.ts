@@ -400,7 +400,11 @@ export interface SalesTaxSettings extends SalesTaxConfig {
 // Default customer discount for a valid ambassador referral code.
 export const DEFAULT_REFERRAL_DISCOUNT_PERCENT = 10;
 // Default personal discount an approved ambassador gets on their OWN purchases.
-export const DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT = 15;
+// Deliberately HIGHER than the 10% customer/referral discount above: this is
+// the ambassador's own benefit, not their audience's, and the two rates are
+// independent by design. Raising it does not change what a referred customer
+// pays and does not change commission.
+export const DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT = 20;
 // Starting commission rate for a new ambassador when no explicit per-ambassador
 // rate is set. Admins can raise (or lock) any individual ambassador's rate in
 // Admin → Partners.
@@ -482,7 +486,7 @@ function clampPercent(value: unknown, fallback: number): number {
 }
 
 // Ambassador/referral program controls (Control Center → Referral Program).
-// Defaults keep the program ON with a 10% customer discount, a 10% personal
+// Defaults keep the program ON with a 10% customer discount, a 20% personal
 // ambassador discount, a 10% default commission, and commissions running.
 export async function getReferralProgramConfig(): Promise<ReferralProgramConfig> {
   const fallback: ReferralProgramConfig = {

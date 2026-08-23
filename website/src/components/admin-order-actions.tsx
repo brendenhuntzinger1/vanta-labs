@@ -152,7 +152,10 @@ export function AdminOrderActions({
             <option value="processing">Processing</option>
             <option value="label_purchased">Label purchased</option>
             <option value="shipped">Shipped</option>
-            <option value="delivered">Delivered</option>
+            {/* Present so an already-delivered order displays correctly, but
+                DISABLED: only the "shippo" source may write `delivered`, so
+                choosing it here could only ever produce a 400. */}
+            <option value="delivered" disabled>Delivered (carrier-reported only)</option>
             <option value="cancelled">Cancelled</option>
           </select>
         </label>

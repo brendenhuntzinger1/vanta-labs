@@ -479,7 +479,7 @@ export function AdminControlCenterClient() {
             <div className="mt-3 space-y-3 text-sm">
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralEnabled} onChange={(e) => setReferralEnabled(e.target.checked)} /> Referral program enabled</label>
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralCommissionsPaused} onChange={(e) => setReferralCommissionsPaused(e.target.checked)} /> Pause new commissions (codes still give the customer discount)</label>
-              <label className="block text-zinc-300">Ambassador personal discount (% off their own orders)<input value={referralPersonalDiscount} onChange={(e) => setReferralPersonalDiscount(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="block text-zinc-300">Ambassador personal discount (% off their own orders)<input value={referralPersonalDiscount} onChange={(e) => setReferralPersonalDiscount(e.target.value)} placeholder="20" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="block text-zinc-300">Default commission rate (% when an ambassador has no custom rate)<input value={referralDefaultCommission} onChange={(e) => setReferralDefaultCommission(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
           </section>
