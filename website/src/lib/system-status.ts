@@ -184,6 +184,179 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
     blocksLaunch: false,
   });
 
+  // ---------------------------------------------------------------- DATA --
+  //
+  // Everything above answers "is the integration wired up?". These answer "is
+  // the DATA the store will trade on actually correct?" — the questions whose
+  // wrong answers cost money on day one rather than failing loudly.
+  //
+  // Nothing here prints a secret or an address. Credentials report only
+  // CONFIGURED / MISSING; the ship-from origin reports only CONFIGURED /
+  // INCOMPLETE and names the missing FIELDS, never their values.
+
+  // Published products a customer can see but cannot buy. Checkout refuses a
+  // non-positive price (quote-order.ts), so each of these is a storefront
+  // listing that dead-ends at the cart.
+  try {
+    const { data: published } = await supabaseAdmin
+      .from("products")
+      .select("name, slug, price_cents, product_cost_cents, track_inventory, inventory_quantity")
+      .eq("is_published", true)
+      .eq("is_archived", false);
+
+    const rows = (published ?? []) as Array<{
+      name: string | null; slug: string | null;
+      price_cents: number | null; product_cost_cents: number | null;
+      track_inventory: boolean | null; inventory_quantity: number | null;
+    }>;
+    const label = (row: { name: string | null; slug: string | null }) => row.name ?? row.slug ?? "unnamed";
+
+    const unpriced = rows.filter((row) => !(Number(row.price_cents ?? 0) > 0));
+    out.push({
+      key: "product_prices",
+      label: "Published products have a price",
+      level: unpriced.length === 0 ? "ok" : "error",
+      detail: unpriced.length === 0
+        ? `All ${rows.length} published products are priced`
+        : `${unpriced.length} published product(s) have no price and cannot be bought: ${unpriced.map(label).join(", ")}. Set a price or unpublish them.`,
+      blocksLaunch: true,
+    });
+
+    const untracked = rows.filter((row) => row.track_inventory !== true);
+    const trackedWithoutCount = rows.filter(
+      (row) => row.track_inventory === true && row.inventory_quantity == null,
+    );
+    const inventoryProblems = untracked.length + trackedWithoutCount.length;
+    out.push({
+      key: "product_inventory_data",
+      label: "Published products have stock numbers",
+      level: inventoryProblems === 0 ? "ok" : "warn",
+      detail: inventoryProblems === 0
+        ? `All ${rows.length} published products are stock-tracked with a count`
+        : `${inventoryProblems} published product(s) can oversell: ${[...untracked, ...trackedWithoutCount].map(label).join(", ")}. Turn on stock tracking and set a count.`,
+      blocksLaunch: false,
+    });
+
+    // COGS drives every profit figure. A missing cost does not break a sale, it
+    // makes the margin on that sale a guess — the profit report falls back to
+    // the worst-case assumption in Control Center.
+    const withoutCost = rows.filter((row) => !(Number(row.product_cost_cents ?? 0) > 0));
+    out.push({
+      key: "product_cogs",
+      label: "Published products have a unit cost (COGS)",
+      level: withoutCost.length === 0 ? "ok" : "warn",
+      detail: withoutCost.length === 0
+        ? `All ${rows.length} published products have a cost on file`
+        : `${withoutCost.length} product(s) have no unit cost, so their profit is estimated: ${withoutCost.map(label).join(", ")}.`,
+      blocksLaunch: false,
+    });
+  } catch {
+    out.push({
+      key: "product_prices",
+      label: "Published product data",
+      level: "warn",
+      detail: "Could not be checked — the products table did not answer.",
+      blocksLaunch: false,
+    });
+  }
+
+  // The two shipping addresses. NEITHER value is printed: the ship-from origin
+  // is a private address, and this screen is not the place it appears.
+  try {
+    const { getShippingAddresses } = await import("@/lib/shipping-origin");
+    const addresses = await getShippingAddresses();
+    out.push({
+      key: "shipping_origin",
+      label: "Ship-from address (private — never shown to customers)",
+      level: addresses.originValidation.isComplete ? "ok" : "error",
+      detail: addresses.originValidation.isComplete
+        ? "CONFIGURED"
+        : `INCOMPLETE — missing ${addresses.originValidation.missing.join(", ")}. Labels cannot be bought without it.`,
+      blocksLaunch: true,
+    });
+    out.push({
+      key: "return_address",
+      label: "Return address printed on parcels (your business identity)",
+      level: addresses.usesSeparateReturn ? "ok" : "error",
+      detail: addresses.usesSeparateReturn
+        ? "CONFIGURED — set separately from your ship-from address"
+        : `INCOMPLETE — ${addresses.blockedReason ?? "not set"}. Shipping is blocked until it is set, so your private address can never be printed by default.`,
+      blocksLaunch: true,
+    });
+  } catch {
+    out.push({
+      key: "shipping_origin",
+      label: "Shipping addresses",
+      level: "warn",
+      detail: "Could not be checked.",
+      blocksLaunch: false,
+    });
+  }
+
+  // Marketing email must carry a physical postal address to be lawful.
+  const postal = (process.env.MARKETING_POSTAL_ADDRESS ?? "").trim();
+  out.push({
+    key: "marketing_postal",
+    label: "Marketing email postal address",
+    level: postal ? "ok" : "warn",
+    detail: postal
+      ? "CONFIGURED"
+      : "MISSING — MARKETING_POSTAL_ADDRESS is required in bulk marketing email. Transactional receipts are unaffected.",
+    blocksLaunch: false,
+  });
+
+  // The Shippo webhook secret is what makes the tracking endpoint trustworthy.
+  const shippoWebhook = (process.env.SHIPPO_WEBHOOK_SECRET ?? "").trim();
+  out.push({
+    key: "shippo_webhook",
+    label: "Shippo webhook secret",
+    level: shippoWebhook ? "ok" : "error",
+    detail: shippoWebhook
+      ? "CONFIGURED — tracking updates are authenticated"
+      : "MISSING — the tracking webhook fails closed, so orders will never move past label purchased and no shipping or delivery email will send.",
+    blocksLaunch: true,
+  });
+
+  // The three ambassador rates, as the business logic actually resolves them,
+  // with their provenance. Displayed here because "20% because it is stored"
+  // and "20% because nothing is stored" are different facts.
+  try {
+    const { getReferralProgramConfig, getControlSnapshot, isControlCurrentViewAvailable } =
+      await import("@/lib/admin-control");
+    const [config, snapshot, viewReady] = await Promise.all([
+      getReferralProgramConfig(),
+      getControlSnapshot("referral"),
+      isControlCurrentViewAvailable(),
+    ]);
+    const stored = snapshot.referral ?? {};
+    const provenance = (key: string) => {
+      const value = stored[key];
+      return value === undefined || value === null || value === "" ? "default" : "saved";
+    };
+    out.push({
+      key: "ambassador_rates",
+      label: "Ambassador rates in force",
+      level: "ok",
+      detail:
+        `Personal discount ${config.personalDiscountPercent}% (${provenance("personal_discount_percent")}) · `
+        + `customer referral discount ${config.discountPercent}% (${provenance("discount_percent")}) · `
+        + `base commission ${config.defaultCommissionPercent}% (${provenance("default_commission_percent")}). `
+        + "These three are independent.",
+      blocksLaunch: false,
+    });
+    out.push({
+      key: "control_settings_view",
+      label: "Settings resolver",
+      level: viewReady ? "ok" : "warn",
+      detail: viewReady
+        ? "Current values resolved in the database — settings history cannot hide a saved value"
+        : "Running on the legacy 1,500-row window. Apply src/lib/sql/admin-control-current-view.sql so a long settings history cannot make a saved value read as blank.",
+      blocksLaunch: false,
+    });
+  } catch {
+    // A settings read failure is already visible through the sections above.
+  }
+
   // Supabase Auth SMTP can't be introspected from the server.
   out.push({
     key: "auth_email",

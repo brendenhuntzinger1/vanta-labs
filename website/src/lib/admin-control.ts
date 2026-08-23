@@ -51,15 +51,79 @@ function sanitizeKey(key: string) {
   return key.trim().toLowerCase().replace(/[^a-z0-9_-]/g, "");
 }
 
-export async function getControlSnapshot(section?: string) {
-  const normalizedSection = section ? sanitizeSection(section) : null;
+/**
+ * The database view that resolves the newest write per (section, key).
+ *
+ * Settings are stored append-only — every save INSERTs a row — so "the current
+ * value" is "the newest row for this key". Expressing that in PostgREST is not
+ * possible, so this reader used to approximate it: take the newest 1500 rows
+ * and keep the first occurrence of each key. That is correct only while the
+ * whole history fits in the window; past it, a key nobody has touched recently
+ * drops out and reads as ABSENT, which every caller turns into "use the code
+ * default". Reproduced: 1600 later writes made a stored `referral` section
+ * vanish from the unscoped snapshot while the value was really set.
+ *
+ * `admin_control_current` does the DISTINCT ON in the database, so the result
+ * is bounded by the number of distinct SETTINGS rather than by the number of
+ * historical WRITES, and no amount of history can hide a current value.
+ */
+const CONTROL_VIEW = "admin_control_current";
 
+/**
+ * The window the pre-view reader used, kept for the fallback below.
+ *
+ * Deliberately unchanged rather than raised: a bigger arbitrary number moves
+ * the cliff without removing it, and the view removes it.
+ */
+const CONTROL_HISTORY_WINDOW = 1500;
+
+/**
+ * True once the deployment is reading current values from the view.
+ *
+ * Surfaced on /admin/status so a database that has not had
+ * admin-control-current-view.sql applied is visible rather than silently
+ * running on the old approximation.
+ */
+export async function isControlCurrentViewAvailable(): Promise<boolean> {
+  try {
+    const { error } = await supabaseAdmin.from(CONTROL_VIEW).select("target_table").limit(1);
+    return !error;
+  } catch {
+    return false;
+  }
+}
+
+async function readControlRows(normalizedSection: string | null): Promise<ControlRow[]> {
+  // Preferred path: one row per key, straight from the view.
+  try {
+    let viewQuery = supabaseAdmin
+      .from(CONTROL_VIEW)
+      .select("id, target_table, target_id, metadata, created_at");
+    if (normalizedSection) {
+      viewQuery = viewQuery.eq("target_table", normalizedSection);
+    }
+    const { data, error } = await viewQuery;
+    // An EMPTY result is treated as inconclusive rather than as "no settings":
+    // a database without the view answers with an error, but a caller that has
+    // stubbed the client may simply answer with nothing, and reading that as
+    // "nothing is configured" would wipe the snapshot. Falling through costs
+    // one extra query only when there is genuinely nothing to read.
+    if (!error && data && data.length > 0) {
+      return data as ControlRow[];
+    }
+  } catch {
+    // Fall through — the view is optional at deploy time.
+  }
+
+  // Fallback for a database where the view has not been created yet. Identical
+  // to the historical behaviour, so deploying the code before the migration
+  // changes nothing; /admin/status reports that this path is in use.
   let query = supabaseAdmin
     .from("admin_audit_logs")
     .select("id, target_table, target_id, metadata, created_at")
     .eq("action", CONTROL_ACTION)
     .order("created_at", { ascending: false })
-    .limit(1500);
+    .limit(CONTROL_HISTORY_WINDOW);
 
   if (normalizedSection) {
     query = query.eq("target_table", normalizedSection);
@@ -69,8 +133,16 @@ export async function getControlSnapshot(section?: string) {
   if (error) {
     throw error;
   }
+  return (data ?? []) as ControlRow[];
+}
 
-  const rows = (data ?? []) as ControlRow[];
+export async function getControlSnapshot(section?: string) {
+  const normalizedSection = section ? sanitizeSection(section) : null;
+
+  // Newest-first, so "first occurrence of a key wins" resolves the current
+  // value on BOTH paths. The view already returns one row per key; the
+  // fallback returns history and relies on the ordering.
+  const rows = await readControlRows(normalizedSection);
   const result: Record<string, Record<string, unknown>> = {};
 
   for (const row of rows) {

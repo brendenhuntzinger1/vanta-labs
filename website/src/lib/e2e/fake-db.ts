@@ -99,8 +99,20 @@ export interface FakeDbFailure {
   message?: string;
 }
 
+/**
+ * The database view that resolves the newest control write per (section, key).
+ * Modelled here because it is the mechanism under test: a fake that answered
+ * from raw history would prove nothing about the fix.
+ */
+export const CONTROL_VIEW = "admin_control_current";
+
 export class FakeDb {
   readonly tables = new Map<string, Row[]>();
+  /**
+   * Set true to simulate a database where admin-control-current-view.sql has
+   * NOT been applied, so the reader's fallback path is exercised.
+   */
+  controlViewMissing = false;
   /** Every write, in order — the audit trail a crash test replays against. */
   readonly writeLog: Array<{ table: string; op: string; payload?: unknown }> = [];
   private failures: FakeDbFailure[] = [];
@@ -123,6 +135,28 @@ export class FakeDb {
   findOne(name: string, column: string, value: unknown): Row | null {
     const found = this.table(name).find((row) => String(row[column] ?? "") === String(value));
     return found ? { ...found } : null;
+  }
+
+  /**
+   * `select distinct on (target_table, target_id) ... order by created_at desc`
+   * — the newest control write per key, exactly as the SQL view computes it.
+   *
+   * Returns nothing when the view is simulated absent, which is how a database
+   * missing the migration behaves from the reader's point of view.
+   */
+  controlCurrentRows(): Row[] {
+    if (this.controlViewMissing) return [];
+    const newest = new Map<string, Row>();
+    for (const row of this.table("admin_audit_logs")) {
+      if (row.action !== "admin_control_upsert") continue;
+      if (row.target_table == null || row.target_id == null) continue;
+      const key = `${row.target_table}::${row.target_id}`;
+      const existing = newest.get(key);
+      if (!existing || String(row.created_at ?? "") > String(existing.created_at ?? "")) {
+        newest.set(key, row);
+      }
+    }
+    return [...newest.values()].map((row) => ({ ...row }));
   }
 
   /**
@@ -175,7 +209,13 @@ export class FakeDb {
       const run = () => {
         const failure = db.takeFailure(table, "select");
         if (failure) return { data: null, error: failure };
-        let rows = db.table(table).filter((row) => filters.every((f) => matches(row, f)));
+        if (table === CONTROL_VIEW && db.controlViewMissing) {
+          // Exactly how PostgREST answers a database that has not had
+          // admin-control-current-view.sql applied.
+          return { data: null, error: { code: "42P01", message: `relation "public.${CONTROL_VIEW}" does not exist` } };
+        }
+        const source = table === CONTROL_VIEW ? db.controlCurrentRows() : db.table(table);
+        let rows = source.filter((row) => filters.every((f) => matches(row, f)));
         if (orderColumn) {
           const column = orderColumn;
           rows = [...rows].sort((a, b) => {

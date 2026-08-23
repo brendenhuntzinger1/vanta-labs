@@ -7,6 +7,22 @@ import { US_STATE_TAX_TABLE } from "@/lib/sales-tax";
 
 type ControlSnapshot = Record<string, Record<string, unknown>>;
 
+/**
+ * The referral rates as the BUSINESS LOGIC resolves them, with the provenance
+ * of each. Declared at module scope rather than inline in the loader: writing
+ * `typeof referralEffective` inside the fetch made the loader read as though it
+ * depended on that state, which is not true and which the hooks lint rightly
+ * complains about.
+ */
+type ReferralEffective = {
+  personalDiscountPercent: number;
+  personalDiscountSource: string;
+  discountPercent: number;
+  discountSource: string;
+  defaultCommissionPercent: number;
+  defaultCommissionSource: string;
+};
+
 type SectionKey = "homepage" | "promotions" | "shipping" | "content" | "settings" | "security";
 
 const SECTION_LABELS: Record<SectionKey, string> = {
@@ -92,16 +108,32 @@ export function AdminControlCenterClient() {
   const [profitShippingEstimate, setProfitShippingEstimate] = useState("");
   const [profitFeeIncludesTax, setProfitFeeIncludesTax] = useState(true);
   const [profitCountTax, setProfitCountTax] = useState(true);
+  /**
+   * What the referral rates actually resolve to, straight from the same
+   * function checkout uses, plus whether each came from a stored value or the
+   * code default. Displayed rather than inferred: an input box showing "20"
+   * and an empty input box that means "20 by default" look different to the
+   * code and identical to a person.
+   */
+  const [referralEffective, setReferralEffective] = useState<ReferralEffective | null>(null);
 
   const loadSnapshot = async () => {
     const res = await fetch("/api/admin/control", { cache: "no-store" });
-    const json = await res.json() as { success: boolean; snapshot?: ControlSnapshot; error?: string };
+    const json = await res.json() as {
+      success: boolean;
+      snapshot?: ControlSnapshot;
+      effective?: { referral?: ReferralEffective | null };
+      error?: string;
+    };
     if (!res.ok || !json.success) {
       setMessage(json.error ?? "Unable to load settings");
       return;
     }
 
+    setReferralEffective(json.effective?.referral ?? null);
+
     const next = json.snapshot ?? {};
+    setReferralEffective(json.effective?.referral ?? null);
 
     const homepage = next.homepage ?? {};
     setHomepageHeroHeadline(String(homepage.hero_headline ?? ""));
@@ -475,7 +507,37 @@ export function AdminControlCenterClient() {
 
           <section className="vl-panel-soft rounded-2xl p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">Referral Program</h3>
-            <p className="mt-2 text-xs text-zinc-400">The customer referral discount stays 10%. These control the ambassador side. Per-ambassador commission rates are set on the Partners page.</p>
+            <p className="mt-2 text-xs text-zinc-400">
+              Three separate rates. What an ambassador saves on their OWN order, what their
+              customers save with their code, and what the ambassador EARNS are independent —
+              changing one never changes another. Per-ambassador commission rates are set on the
+              Partners page.
+            </p>
+
+            {/* What the rates actually resolve to, from the same function checkout and the
+                approval email use. An empty input box above can mean either "nothing stored,
+                using the default" or "stored as blank" — this line says which, so a rate that
+                looks wrong can be diagnosed without opening the database. */}
+            {referralEffective ? (
+              <dl className="mt-3 space-y-1.5 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs">
+                <p className="text-[10px] uppercase tracking-[0.18em] text-zinc-500">In force right now</p>
+                {[
+                  { label: "Ambassador personal discount (their own orders)", value: referralEffective.personalDiscountPercent, source: referralEffective.personalDiscountSource },
+                  { label: "Customer referral discount (their code)", value: referralEffective.discountPercent, source: referralEffective.discountSource },
+                  { label: "Base commission (what they earn)", value: referralEffective.defaultCommissionPercent, source: referralEffective.defaultCommissionSource },
+                ].map((row) => (
+                  <div key={row.label} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                    <dt className="text-zinc-400">{row.label}</dt>
+                    <dd className="font-semibold text-white">
+                      {row.value}%
+                      <span className={`ml-2 font-normal ${row.source === "stored" ? "text-amber-300" : "text-zinc-500"}`}>
+                        {row.source === "stored" ? "saved value" : "using the default"}
+                      </span>
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            ) : null}
             <div className="mt-3 space-y-3 text-sm">
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralEnabled} onChange={(e) => setReferralEnabled(e.target.checked)} /> Referral program enabled</label>
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralCommissionsPaused} onChange={(e) => setReferralCommissionsPaused(e.target.checked)} /> Pause new commissions (codes still give the customer discount)</label>

@@ -374,6 +374,34 @@ async function createDoseRows(productId: string, doses: DoseInput[]) {
   }
 }
 
+/**
+ * A published product must have a price a customer can actually be charged.
+ *
+ * `products.price_cents` is `integer not null default 0`, and every write path
+ * here coerces a missing price with `Math.max(0, Math.round(x ?? 0))` — so
+ * "saved before the price was typed in" produces 0 rather than an error. A
+ * published 0 reached checkout and was refused there (see parseProductPrice in
+ * quote-order.ts), which protects the money but shows the customer a product
+ * they cannot buy.
+ *
+ * So this is the FIRST of two independent gates, not a replacement for the
+ * second: the admin refuses to publish an unsellable product, and checkout
+ * still refuses to sell one if bad data reaches the database by any other
+ * route (a CSV import, a direct SQL edit, a restored backup).
+ *
+ * Unpublishing, archiving and saving a draft are all unaffected — a product
+ * with no price yet is a perfectly normal draft.
+ */
+export function assertPublishablePrice(priceCents: unknown, productName?: string | null): void {
+  const cents = Number(priceCents);
+  if (!Number.isFinite(cents) || cents <= 0) {
+    const named = productName ? `"${String(productName).trim()}"` : "This product";
+    throw new Error(
+      `${named} has no price, so it cannot be published — a customer would see it on the storefront and checkout would refuse the order. Set a price above $0.00 first.`,
+    );
+  }
+}
+
 export async function createAdminProduct(input: ProductCreateInput) {
   const slug = slugify(input.slug || input.name);
   if (!slug) {
@@ -387,6 +415,11 @@ export async function createAdminProduct(input: ProductCreateInput) {
   const inventoryQuantity = Math.max(0, Math.round(input.inventoryQuantity ?? 0));
   const stockStatus = normalizeStockStatus(input.stockStatus, inventoryQuantity);
 
+  const priceCents = Math.max(0, Math.round(input.priceCents ?? 0));
+  if (input.isPublished) {
+    assertPublishablePrice(priceCents, input.name);
+  }
+
   const { error } = await supabaseAdmin
     .from("products")
     .insert({
@@ -397,7 +430,7 @@ export async function createAdminProduct(input: ProductCreateInput) {
       short_description: input.shortDescription ?? null,
       long_description: input.longDescription ?? null,
       description: input.longDescription ?? input.shortDescription ?? null,
-      price_cents: Math.max(0, Math.round(input.priceCents ?? 0)),
+      price_cents: priceCents,
       compare_at_price_cents: Math.max(0, Math.round(input.compareAtPriceCents ?? 0)),
       sale_price_cents: Math.max(0, Math.round(input.salePriceCents ?? 0)),
       inventory_quantity: inventoryQuantity,
@@ -475,7 +508,7 @@ export async function updateAdminProduct(productId: string, input: ProductUpdate
   // Snapshot current costs BEFORE mutating so we can log what actually changed.
   const { data: beforeProduct } = await supabaseAdmin
     .from("products")
-    .select("name, product_cost_cents")
+    .select("name, product_cost_cents, price_cents")
     .eq("id", productId)
     .maybeSingle();
   const { data: beforeDoseRows } = await supabaseAdmin
@@ -533,6 +566,36 @@ export async function updateAdminProduct(productId: string, input: ProductUpdate
   if (input.minSellingPriceCents !== undefined) payload.min_selling_price_cents = input.minSellingPriceCents === null ? null : Math.max(0, Math.round(input.minSellingPriceCents));
   if (input.minProfitCents !== undefined) payload.min_profit_cents = input.minProfitCents === null ? null : Math.max(0, Math.round(input.minProfitCents));
   if (input.minProfitPercent !== undefined) payload.min_profit_percent = input.minProfitPercent === null ? null : Math.max(0, input.minProfitPercent);
+
+  // PUBLISHING is the gate, not saving. A draft with no price yet is normal;
+  // a PUBLISHED product with no price is one a customer can see and cannot buy.
+  //
+  // The price that matters is the one that will end up on the parent row after
+  // this save, so every source is considered: an explicit price in this update,
+  // the price already stored, and the doses — replaceProductDoses() copies the
+  // first dose's price onto the parent, so a dosed product whose parent price
+  // is still 0 is priced and must not be blocked.
+  if (input.isPublished === true) {
+    const doseRows = input.doses
+      ?? ((await supabaseAdmin
+        .from("product_doses")
+        .select("price_cents, sale_price_cents")
+        .eq("product_id", productId)).data ?? []).map((row) => ({
+          priceCents: Number((row as { price_cents?: unknown }).price_cents ?? 0),
+          salePriceCents: Number((row as { sale_price_cents?: unknown }).sale_price_cents ?? 0),
+        }));
+
+    const candidates = [
+      input.priceCents,
+      beforeProduct?.price_cents,
+      ...doseRows.flatMap((dose) => [dose.priceCents, dose.salePriceCents]),
+    ];
+    const best = candidates.reduce<number>((max, value) => {
+      const cents = Number(value);
+      return Number.isFinite(cents) && cents > max ? cents : max;
+    }, 0);
+    assertPublishablePrice(best, input.name ?? (beforeProduct?.name as string | undefined));
+  }
 
   const { error } = await supabaseAdmin.from("products").update(payload).eq("id", productId);
   if (error) {
@@ -690,6 +753,25 @@ export async function bulkUpdateAdminProducts(input: {
   const payload: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
+
+  // A bulk publish must obey the same rule as publishing one product, or the
+  // gate is only as strong as the slowest route through it. Refuses the WHOLE
+  // batch and names the offenders, rather than publishing some and silently
+  // skipping others.
+  if (input.action === "publish") {
+    const { data: pricing } = await supabaseAdmin
+      .from("products")
+      .select("id, name, price_cents")
+      .in("id", input.productIds);
+    const unpriced = ((pricing ?? []) as Array<{ id: string; name: string | null; price_cents: number | null }>)
+      .filter((row) => !(Number(row.price_cents ?? 0) > 0));
+    if (unpriced.length > 0) {
+      const names = unpriced.map((row) => (row.name ?? row.id)).join(", ");
+      throw new Error(
+        `Cannot publish — ${unpriced.length === 1 ? "this product has" : "these products have"} no price: ${names}. Set a price above $0.00 first.`,
+      );
+    }
+  }
 
   switch (input.action) {
     case "publish":

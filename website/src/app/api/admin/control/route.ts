@@ -1,7 +1,36 @@
 import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageSettings } from "@/lib/admin-roles";
-import { getControlSnapshot, upsertControlValue } from "@/lib/admin-control";
+import { getControlSnapshot, getReferralProgramConfig, upsertControlValue } from "@/lib/admin-control";
+
+/**
+ * What the referral rates ACTUALLY resolve to, and where each one comes from.
+ *
+ * Computed with getReferralProgramConfig() — the same function checkout and the
+ * approval email call — so the Control Center cannot display one number while
+ * the business logic uses another. `source` distinguishes a value the owner
+ * stored from the code default, because "20% because nothing is stored" and
+ * "20% because someone typed 20" look identical in an input box and are not the
+ * same fact when something looks wrong.
+ */
+async function referralEffective(snapshot: Record<string, Record<string, unknown>>) {
+  const stored = snapshot.referral ?? {};
+  const config = await getReferralProgramConfig();
+  const sourceOf = (key: string) => {
+    const value = stored[key];
+    // Blank is not "stored": the canonical rule treats it as "use the default",
+    // so reporting it as an override would be a lie in the owner's own words.
+    return value === undefined || value === null || value === "" ? "default" : "stored";
+  };
+  return {
+    personalDiscountPercent: config.personalDiscountPercent,
+    personalDiscountSource: sourceOf("personal_discount_percent"),
+    discountPercent: config.discountPercent,
+    discountSource: sourceOf("discount_percent"),
+    defaultCommissionPercent: config.defaultCommissionPercent,
+    defaultCommissionSource: sourceOf("default_commission_percent"),
+  };
+}
 
 // Sections that hold credentials — these are managed ONLY through
 // /api/admin/settings (which masks secrets on read and writes them carefully).
@@ -34,7 +63,8 @@ export async function GET(request: Request) {
     for (const secret of SECRET_SECTIONS) {
       delete (snapshot as Record<string, unknown>)[secret];
     }
-    return NextResponse.json({ success: true, snapshot });
+    const effective = { referral: await referralEffective(snapshot).catch(() => null) };
+    return NextResponse.json({ success: true, snapshot, effective });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to load control settings";
     return NextResponse.json({ success: false, error: message }, { status: 400 });
