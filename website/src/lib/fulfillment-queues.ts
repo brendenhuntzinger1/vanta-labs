@@ -39,7 +39,11 @@ const QUEUE_COLUMNS =
   "order_id, order_number, customer_name, customer_email, city, state, country, "
   + "payment_status, fulfillment_status, shippo_sync_status, shippo_sync_error, "
   + "tracking_number, shipping_carrier, label_url, shippo_transaction_id, "
-  + "label_purchase_claimed_at, paid_at, created_at";
+  + "label_purchase_claimed_at, paid_at, created_at, "
+  // The clocks for the two time-based exceptions. Without these selected, a
+  // parcel the carrier never scanned and a parcel that stopped moving both
+  // stay invisible — the rules exist but never see a timestamp to measure.
+  + "label_purchased_at, shipped_at, updated_at";
 
 export interface QueueOrder {
   orderId: string;
@@ -73,6 +77,10 @@ function toQueueOrder(row: Record<string, unknown>, batchId: string | null = nul
     shippo_sync_status: row.shippo_sync_status ? String(row.shippo_sync_status) : null,
     label_purchase_claimed_at: row.label_purchase_claimed_at ? String(row.label_purchase_claimed_at) : null,
     shippo_transaction_id: row.shippo_transaction_id ? String(row.shippo_transaction_id) : null,
+    // The staleness clocks.
+    label_purchased_at: row.label_purchased_at ? String(row.label_purchased_at) : null,
+    shipped_at: row.shipped_at ? String(row.shipped_at) : null,
+    updated_at: row.updated_at ? String(row.updated_at) : null,
   };
   const place = [row.city, row.state, row.country].filter(Boolean).join(", ");
   return {

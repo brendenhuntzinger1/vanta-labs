@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   ALL_CANONICAL_STATUSES,
   BUCKETS,
+  CARRIER_ACCEPTANCE_STALE_HOURS,
   EXCEPTION_REASONS,
+  TRANSIT_STALE_DAYS,
   EXCLUDED_STATUSES,
   bucketForOrder,
   bucketForStatus,
@@ -187,5 +189,126 @@ describe("operational shape", () => {
       expect(bucket.label.length).toBeGreaterThan(0);
       expect(bucket.description.length).toBeGreaterThan(0);
     }
+  });
+});
+
+// ===========================================================================
+// THE TWO SILENCES.
+//
+// Every other exception asks "is this state wrong?". These ask "has nothing
+// happened for too long?" — the failure mode a store only discovers when the
+// customer asks. A label the carrier never scanned and a parcel that stopped
+// moving are both invisible without them, because no status is incorrect.
+// ===========================================================================
+describe("stale shipments cannot stay invisible", () => {
+  const NOW = Date.parse("2026-08-23T12:00:00Z");
+  const hoursAgo = (h: number) => new Date(NOW - h * 3_600_000).toISOString();
+  const daysAgo = (d: number) => hoursAgo(d * 24);
+
+  const labelled = (purchasedAt: string) => ({
+    payment_status: "paid",
+    fulfillment_status: "label_purchased",
+    label_purchased_at: purchasedAt,
+  });
+
+  it("a label the carrier never scanned becomes an exception", () => {
+    expect(exceptionsForOrder(labelled(hoursAgo(CARRIER_ACCEPTANCE_STALE_HOURS + 1)), NOW))
+      .toContain("carrier_never_scanned");
+    expect(bucketForOrder(labelled(hoursAgo(CARRIER_ACCEPTANCE_STALE_HOURS + 1)), NOW))
+      .toBe("exceptions");
+  });
+
+  it("does NOT fire on a label bought an hour ago", () => {
+    // A parcel collected the same afternoon is the normal case, and a queue
+    // that cries wolf on it is a queue the operator learns to ignore.
+    expect(exceptionsForOrder(labelled(hoursAgo(1)), NOW)).toHaveLength(0);
+    expect(bucketForOrder(labelled(hoursAgo(1)), NOW)).toBe("awaiting_carrier");
+  });
+
+  it("does not fire one hour BEFORE the threshold, and does at it", () => {
+    expect(exceptionsForOrder(labelled(hoursAgo(CARRIER_ACCEPTANCE_STALE_HOURS - 1)), NOW)).toHaveLength(0);
+    expect(exceptionsForOrder(labelled(hoursAgo(CARRIER_ACCEPTANCE_STALE_HOURS)), NOW))
+      .toContain("carrier_never_scanned");
+  });
+
+  it("a parcel that stopped moving becomes an exception", () => {
+    const stalled = {
+      payment_status: "paid",
+      fulfillment_status: "in_transit",
+      updated_at: daysAgo(TRANSIT_STALE_DAYS + 1),
+    };
+    expect(exceptionsForOrder(stalled, NOW)).toContain("transit_stalled");
+    expect(bucketForOrder(stalled, NOW)).toBe("exceptions");
+  });
+
+  it("a parcel scanned yesterday is moving normally", () => {
+    const moving = {
+      payment_status: "paid",
+      fulfillment_status: "in_transit",
+      updated_at: daysAgo(1),
+    };
+    expect(exceptionsForOrder(moving, NOW)).toHaveLength(0);
+    expect(bucketForOrder(moving, NOW)).toBe("in_transit");
+  });
+
+  it("out for delivery can stall too", () => {
+    expect(exceptionsForOrder({
+      payment_status: "paid",
+      fulfillment_status: "out_for_delivery",
+      updated_at: daysAgo(TRANSIT_STALE_DAYS + 2),
+    }, NOW)).toContain("transit_stalled");
+  });
+
+  it("a DELIVERED order never goes stale — it arrived", () => {
+    expect(exceptionsForOrder({
+      payment_status: "paid",
+      fulfillment_status: "delivered",
+      updated_at: daysAgo(400),
+    }, NOW)).toHaveLength(0);
+  });
+
+  it("a missing timestamp does not read as 'just now'", () => {
+    // Returning 0 for an absent timestamp would make an order with no clock
+    // look permanently fresh and never age into an exception. It reports
+    // nothing instead, which is the honest answer.
+    expect(exceptionsForOrder({
+      payment_status: "paid",
+      fulfillment_status: "label_purchased",
+      label_purchased_at: null,
+    }, NOW)).toHaveLength(0);
+    expect(exceptionsForOrder({
+      payment_status: "paid",
+      fulfillment_status: "label_purchased",
+      label_purchased_at: "not-a-date",
+    }, NOW)).toHaveLength(0);
+  });
+
+  it("falls back to shipped_at when updated_at is absent", () => {
+    expect(exceptionsForOrder({
+      payment_status: "paid",
+      fulfillment_status: "in_transit",
+      shipped_at: daysAgo(TRANSIT_STALE_DAYS + 3),
+    }, NOW)).toContain("transit_stalled");
+  });
+
+  it("every reason has a definition an operator can read", () => {
+    for (const reason of ["carrier_never_scanned", "transit_stalled"] as const) {
+      const def = EXCEPTION_REASONS.find((r) => r.reason === reason);
+      expect(def, `${reason} has no definition`).toBeDefined();
+      expect(def!.label).not.toMatch(/_/);          // no snake_case leaking to the operator
+      expect(def!.action.length).toBeGreaterThan(20);
+      expect(def!.derivedFrom.length).toBeGreaterThan(10);
+    }
+  });
+
+  it("the thresholds are business configuration, and named as such", () => {
+    expect(CARRIER_ACCEPTANCE_STALE_HOURS).toBeGreaterThan(0);
+    expect(TRANSIT_STALE_DAYS).toBeGreaterThan(0);
+    // The action text quotes the live value, so moving the constant moves the
+    // words the operator reads — they can never drift apart.
+    expect(EXCEPTION_REASONS.find((r) => r.reason === "carrier_never_scanned")!.action)
+      .toContain(String(CARRIER_ACCEPTANCE_STALE_HOURS));
+    expect(EXCEPTION_REASONS.find((r) => r.reason === "transit_stalled")!.action)
+      .toContain(String(TRANSIT_STALE_DAYS));
   });
 });

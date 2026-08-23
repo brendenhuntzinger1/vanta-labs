@@ -64,11 +64,45 @@ export function normalizeOwnershipEmail(email?: string | null): string | null {
 }
 
 /**
+ * THE EMAIL AN ACCOUNT MAY CLAIM ORDERS WITH — OR NULL.
+ *
+ * Matching a guest order by its email address is how someone who checked out
+ * without an account still sees that order after signing up. It is also, on its
+ * own, an authorization rule that says: WHOEVER TYPES THIS ADDRESS OWNS THESE
+ * ORDERS. Guest orders carry the buyer's name, full shipping address, phone,
+ * line items, totals and live tracking.
+ *
+ * That rule is only safe while the account has PROVEN it controls the mailbox.
+ * The application was not checking: /api/auth/session establishes a session for
+ * any token Supabase issues and reads email_confirmed_at solely to decide
+ * whether to award signup points. So the entire guarantee rested on the
+ * Supabase project's "confirm email" setting — a dashboard toggle, outside this
+ * repository, that no test covers and that nothing here would notice being
+ * turned off. Auto-confirm is the default for a new project, and with it on,
+ * signing up as someone else's address hands over their order history.
+ *
+ * So the precondition is enforced here instead, where it is visible and
+ * testable. An unconfirmed account still sees every order carrying its
+ * customer_user_id — which is every order it has placed while signed in. What
+ * it cannot do is reach BACKWARDS to orders it has only named.
+ *
+ * Returns null for an unconfirmed (or emailless) user, which callers pass
+ * straight through as "match on account id alone".
+ */
+export function ownershipEmail(
+  user: { email?: string | null; email_confirmed_at?: string | null } | null | undefined,
+): string | null {
+  if (!user?.email_confirmed_at) return null;
+  return user.email ?? null;
+}
+
+/**
  * Build the ownership filter for an orders query.
  *
  * Matches on the account id first — it survives an email change and works for
  * accounts with no email — OR on the exact email, which is how orders placed
- * before customer_user_id was recorded are still found.
+ * before customer_user_id was recorded are still found. Callers must source
+ * that email from `ownershipEmail()`, never from the session user directly.
  */
 export function buildOrderOwnershipFilter(userId: string, email?: string | null): string {
   const safeUserId = String(userId).replace(/[^a-zA-Z0-9-]/g, "");

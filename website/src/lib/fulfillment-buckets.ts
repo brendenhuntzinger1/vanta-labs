@@ -148,7 +148,33 @@ export type ExceptionReason =
   | "shippo_error"
   | "shippo_blocked"
   | "returned"
-  | "label_claim_stranded";
+  | "label_claim_stranded"
+  | "carrier_never_scanned"
+  | "transit_stalled";
+
+/**
+ * STALENESS THRESHOLDS — BUSINESS CONFIGURATION, NOT PHYSICS.
+ *
+ * Every other exception answers "is this state wrong?". These two answer a
+ * harder question: "has nothing happened for too long?" A parcel that gets a
+ * label and is never scanned sits in Awaiting Carrier looking perfectly normal
+ * forever, because no status is wrong — the carrier simply never took it. That
+ * is the failure a store only notices when the customer asks.
+ *
+ * The numbers below are starting points chosen to be quiet rather than noisy,
+ * and the owner should move them once real carrier behaviour is known:
+ *
+ *   36h — a label bought Friday evening and collected Monday morning is normal.
+ *         Anything past a day and a half means the parcel is probably still on
+ *         the bench, or the carrier missed the pickup.
+ *   10d — domestic ground rarely exceeds a week. Ten days without a single new
+ *         scan usually means the parcel is genuinely lost, not slow.
+ *
+ * They are NOT thresholds the software derived; nothing in the data implies
+ * them. Treat them as settings that happen to live in code today.
+ */
+export const CARRIER_ACCEPTANCE_STALE_HOURS = 36;
+export const TRANSIT_STALE_DAYS = 10;
 
 export interface ExceptionDefinition {
   reason: ExceptionReason;
@@ -198,6 +224,22 @@ export const EXCEPTION_REASONS: readonly ExceptionDefinition[] = [
     label: "Label purchase never completed",
     action: "A label purchase started and never confirmed. Postage may have been charged \u2014 check Shippo before buying again.",
     derivedFrom: "label_purchase_claimed_at IS NOT NULL AND shippo_transaction_id IS NULL",
+  },
+  {
+    reason: "carrier_never_scanned",
+    label: "Label bought, carrier never scanned it",
+    action:
+      `No acceptance scan in ${CARRIER_ACCEPTANCE_STALE_HOURS} hours. The parcel is probably still on the bench, ` +
+      "or the carrier missed the pickup — check the shelf before telling the customer it is on its way.",
+    derivedFrom:
+      `fulfillment_status = 'label_purchased' AND label_purchased_at older than ${CARRIER_ACCEPTANCE_STALE_HOURS}h`,
+  },
+  {
+    reason: "transit_stalled",
+    label: "In transit, but not moving",
+    action:
+      `No carrier update in ${TRANSIT_STALE_DAYS} days. Open a trace with the carrier, and decide whether to reship.`,
+    derivedFrom: `fulfillment_status IN ('in_transit','out_for_delivery') AND last movement older than ${TRANSIT_STALE_DAYS}d`,
   },
 ];
 
@@ -261,6 +303,26 @@ export interface OrderBucketInput {
   shippo_sync_status?: string | null;
   label_purchase_claimed_at?: string | null;
   shippo_transaction_id?: string | null;
+  /** When postage was bought — the clock for carrier_never_scanned. */
+  label_purchased_at?: string | null;
+  /** Last carrier movement — the clock for transit_stalled. */
+  updated_at?: string | null;
+  shipped_at?: string | null;
+}
+
+/**
+ * Hours since an ISO timestamp, or null when it is absent or unparseable.
+ *
+ * Returns null rather than 0 for a missing timestamp on purpose: "we do not
+ * know when this happened" must never read as "it happened just now", or an
+ * order with no timestamp would look permanently fresh and never age into an
+ * exception.
+ */
+function hoursSince(iso: string | null | undefined, now: number): number | null {
+  if (!iso) return null;
+  const then = Date.parse(iso);
+  if (!Number.isFinite(then)) return null;
+  return (now - then) / 3_600_000;
 }
 
 /** Raw fulfillment values that mean "has not entered fulfillment yet". */
@@ -270,7 +332,7 @@ const PRE_FULFILLMENT_RAW = new Set(["pending", "pending_payment", "unpaid", "aw
  * Every exception this order is in, most urgent first. Empty means none.
  * Derived entirely from existing columns — no exception is ever persisted.
  */
-export function exceptionsForOrder(order: OrderBucketInput): ExceptionReason[] {
+export function exceptionsForOrder(order: OrderBucketInput, nowMs: number = Date.now()): ExceptionReason[] {
   const payment = String(order.payment_status ?? "").toLowerCase();
   const rawFulfillment = String(order.fulfillment_status ?? "").toLowerCase();
   const sync = String(order.shippo_sync_status ?? "").toLowerCase();
@@ -284,6 +346,24 @@ export function exceptionsForOrder(order: OrderBucketInput): ExceptionReason[] {
   if (normalizeLegacyStatus(rawFulfillment) === "returned") found.push("returned");
   if (order.label_purchase_claimed_at && !order.shippo_transaction_id) found.push("label_claim_stranded");
 
+  // THE TWO SILENCES. Everything above asks whether a state is wrong; these ask
+  // whether nothing has happened for too long. A parcel with a label the carrier
+  // never scanned, and a parcel that stopped moving, are both invisible without
+  // them — no status is incorrect, so no other rule fires.
+  const canonical = normalizeLegacyStatus(rawFulfillment);
+
+  if (canonical === "label_purchased") {
+    const waiting = hoursSince(order.label_purchased_at, nowMs);
+    if (waiting !== null && waiting >= CARRIER_ACCEPTANCE_STALE_HOURS) found.push("carrier_never_scanned");
+  }
+
+  if (canonical === "in_transit" || canonical === "out_for_delivery") {
+    // updated_at moves on every accepted carrier event, so it IS the last
+    // movement. shipped_at is the fallback for a row that predates that.
+    const idle = hoursSince(order.updated_at ?? order.shipped_at, nowMs);
+    if (idle !== null && idle >= TRANSIT_STALE_DAYS * 24) found.push("transit_stalled");
+  }
+
   return found;
 }
 
@@ -291,7 +371,7 @@ export function exceptionsForOrder(order: OrderBucketInput): ExceptionReason[] {
  * The single bucket this order belongs to, or null if it is documentedly
  * excluded from operational queues.
  */
-export function bucketForOrder(order: OrderBucketInput): BucketId | null | undefined {
-  if (exceptionsForOrder(order).length > 0) return "exceptions";
+export function bucketForOrder(order: OrderBucketInput, nowMs: number = Date.now()): BucketId | null | undefined {
+  if (exceptionsForOrder(order, nowMs).length > 0) return "exceptions";
   return bucketForStatus(order.fulfillment_status);
 }

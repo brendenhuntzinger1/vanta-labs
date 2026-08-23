@@ -3,6 +3,7 @@ import Image from "next/image";
 import { notFound, redirect } from "next/navigation";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { ownershipEmail } from "@/lib/order-ownership";
 import { getCustomerOrderDetail } from "@/lib/account-orders";
 import { isUnpaid } from "@/lib/order-status";
 import { OrderTracking } from "@/components/order-tracking";
@@ -32,7 +33,7 @@ export default async function OrderDetailPage({ params }: { params: Promise<{ or
   }
 
   const { orderId } = await params;
-  const order = await getCustomerOrderDetail(user.id, user.email, decodeURIComponent(orderId)).catch(() => null);
+  const order = await getCustomerOrderDetail(user.id, ownershipEmail(user), decodeURIComponent(orderId)).catch(() => null);
   if (!order) {
     notFound();
   }

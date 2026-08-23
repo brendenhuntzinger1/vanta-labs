@@ -1,5 +1,6 @@
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { ownershipEmail } from "@/lib/order-ownership";
 import { getCustomerOrderDetail } from "@/lib/account-orders";
 import { isUnpaid } from "@/lib/order-status";
 import { displayOrderReference } from "@/lib/order-reference";
@@ -19,7 +20,7 @@ export async function GET(_request: Request, context: { params: Promise<{ orderI
   }
 
   const { orderId } = await context.params;
-  const order = await getCustomerOrderDetail(user.id, user.email, decodeURIComponent(orderId)).catch(() => null);
+  const order = await getCustomerOrderDetail(user.id, ownershipEmail(user), decodeURIComponent(orderId)).catch(() => null);
   if (!order) {
     return new Response("Order not found", { status: 404 });
   }
