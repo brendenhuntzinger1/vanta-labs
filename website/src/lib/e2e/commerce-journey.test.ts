@@ -1305,3 +1305,185 @@ describe("PHASE 14 — a catalogue price that was never set is not a free produc
     expect(Number(body.total)).toBeCloseTo(ALPHA_TOTAL, 2);
   });
 });
+
+// ===========================================================================
+describe("PHASE 15 — three orders at once, and the apartment number", () => {
+  const GAMMA: Shopper = {
+    email: "gamma.buyer@example.test",
+    fullName: "Gamma Buyer",
+    address: "30 Gamma Court",
+    city: "Gammaford",
+    state: "CA",
+    postalCode: "90001",
+    country: "US",
+    phone: "555-0333",
+  };
+
+  it("carries the apartment line all the way to the Shippo label", async () => {
+    // Missing street2 means the parcel goes to the building, not the unit —
+    // and the customer's first contact with Vanta is a delivery that failed.
+    const { POST } = await import("@/app/api/checkout/create-session/route");
+    const body = checkoutBody({ ...GAMMA }, [{ productId: ALPHA_SLUG, quantity: 1 }]) as Record<string, unknown>;
+    (body.customer as Record<string, unknown>).address2 = "Apt 4B";
+    const response = await POST(new Request("https://vantalabsresearch.test/api/checkout/create-session", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.9" },
+      body: JSON.stringify(body),
+    }));
+    const created = await response.json() as Record<string, unknown>;
+    const orderId = String(created.orderId);
+
+    expect(order(orderId)?.shipping_address_2).toBe("Apt 4B");
+
+    await postPaymentWebhook(paymentSucceeded(orderId, Number(created.total), GAMMA.email), `g-${orderId}`);
+    await settle();
+
+    const push = harness.shippoCalls.find((call) => call.kind === "order")?.payload as Record<string, never>;
+    expect((push.to_address as unknown as Record<string, string>).street2).toBe("Apt 4B");
+  });
+
+  it("keeps ALPHA, BETA and GAMMA entirely separate through payment", async () => {
+    harness.nextShippoOrderId = "shippo_order_alpha";
+    const alpha = await buyAndPay(ALPHA, ALPHA_SLUG, 3, "a");
+    harness.nextShippoOrderId = "shippo_order_beta";
+    const beta = await buyAndPay(BETA, BETA_SLUG, 2, "b");
+    harness.nextShippoOrderId = "shippo_order_gamma";
+    const gamma = await buyAndPay(GAMMA, ALPHA_SLUG, 1, "g");
+
+    for (const [shopperOrder, shopper, qty, slug] of [
+      [alpha, ALPHA, 3, ALPHA_SLUG],
+      [beta, BETA, 2, BETA_SLUG],
+      [gamma, GAMMA, 1, ALPHA_SLUG],
+    ] as const) {
+      const row = order(shopperOrder.orderId);
+      expect(row?.customer_email).toBe(shopper.email);
+      expect(row?.shipping_address).toBe(shopper.address);
+      const items = harness.db.rows("order_items").filter((item) => item.order_id === shopperOrder.orderId);
+      expect(items).toHaveLength(1);
+      expect(items[0]?.product_id).toBe(slug);
+      expect(Number(items[0]?.quantity)).toBe(qty);
+    }
+
+    // ALPHA took 3 and GAMMA took 1 of the same product; BETA's is untouched.
+    expect(stock(ALPHA_SLUG)).toEqual({ onHand: 36, reserved: 0 });
+    expect(stock(BETA_SLUG)).toEqual({ onHand: 23, reserved: 0 });
+
+    // Each Shippo push carried its own id and its own destination.
+    const ids = harness.db.rows("orders").map((row) => row.shippo_order_id).filter(Boolean);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("each customer receives exactly one confirmation, naming their own order", async () => {
+    const alpha = await buyAndPay(ALPHA, ALPHA_SLUG, 3, "a");
+    const beta = await buyAndPay(BETA, BETA_SLUG, 2, "b");
+    const gamma = await buyAndPay(GAMMA, ALPHA_SLUG, 1, "g");
+
+    for (const [shopperOrder, shopper] of [[alpha, ALPHA], [beta, BETA], [gamma, GAMMA]] as const) {
+      const mail = emailsTo(shopper.email);
+      expect(mail).toHaveLength(1);
+      expect(mail[0].subject).toContain(String(order(shopperOrder.orderId)?.order_number));
+    }
+  });
+});
+
+// ===========================================================================
+describe("PHASE 16 — one hundred customers, constrained stock", () => {
+  it("sells exactly the units on the shelf and no more", async () => {
+    // 100 shoppers race for 40 units, two each. Only 20 can win.
+    harness.reset();
+    seedStore(harness.db, [{ ...PRODUCTS[0], inventory: 40 }]);
+
+    const attempts = Array.from({ length: 100 }, (_, index) => async () => {
+      const { status, body } = await postCheckout(
+        { ...ALPHA, email: `racer${index}@example.test` },
+        [{ productId: ALPHA_SLUG, quantity: 2 }],
+      );
+      return { status, body };
+    });
+    const results = await Promise.all(attempts.map((run) => run()));
+
+    const created = results.filter((result) => result.status === 200);
+    const refused = results.filter((result) => result.status !== 200);
+
+    expect(created).toHaveLength(20);
+    expect(refused).toHaveLength(80);
+    // Held, not oversold: 20 x 2 = 40, and never a negative number.
+    expect(stock(ALPHA_SLUG)).toEqual({ onHand: 40, reserved: 40 });
+  });
+
+  it("pays all one hundred winners without double-decrementing a unit", async () => {
+    harness.reset();
+    seedStore(harness.db, [{ ...PRODUCTS[0], inventory: 300 }]);
+
+    const orders = await Promise.all(Array.from({ length: 100 }, async (_, index) => {
+      const { body } = await postCheckout(
+        { ...ALPHA, email: `buyer${index}@example.test` },
+        [{ productId: ALPHA_SLUG, quantity: 2 }],
+      );
+      return { orderId: String(body.orderId), amount: Number(body.total), email: `buyer${index}@example.test` };
+    }));
+
+    // Every payment lands at once, and a third of them are delivered twice.
+    await Promise.all(orders.flatMap((entry, index) => {
+      const send = (suffix: string) =>
+        postPaymentWebhook(paymentSucceeded(entry.orderId, entry.amount, entry.email), `${entry.orderId}-${suffix}`);
+      return index % 3 === 0 ? [send("1"), send("2")] : [send("1")];
+    }));
+    await settle();
+
+    const paid = harness.db.rows("orders").filter((row) => row.payment_status === "paid");
+    expect(paid).toHaveLength(100);
+    // 300 - (100 x 2) = 100. A single double-decrement shows up here.
+    expect(stock(ALPHA_SLUG)).toEqual({ onHand: 100, reserved: 0 });
+    // One confirmation each — 100 emails, not 133.
+    expect(harness.emails).toHaveLength(100);
+  });
+
+  it("reconciles one hundred sales plus five replacements exactly", async () => {
+    harness.reset();
+    seedStore(harness.db, [{ ...PRODUCTS[0], inventory: 400 }]);
+
+    const orders = await Promise.all(Array.from({ length: 100 }, async (_, index) => {
+      const { body } = await postCheckout(
+        { ...ALPHA, email: `buyer${index}@example.test` },
+        [{ productId: ALPHA_SLUG, quantity: 3 }],
+      );
+      return { orderId: String(body.orderId), amount: Number(body.total), email: `buyer${index}@example.test` };
+    }));
+    await Promise.all(orders.map((entry) =>
+      postPaymentWebhook(paymentSucceeded(entry.orderId, entry.amount, entry.email), `${entry.orderId}-p`)));
+    await settle();
+
+    const { createReplacementOrder } = await import("@/lib/admin-replacements");
+    for (const entry of orders.slice(0, 5)) {
+      await createReplacementOrder({ originalOrderId: entry.orderId, reason: "damaged", requestId: `rq-${entry.orderId}` });
+    }
+
+    const { getOrderProfitMap } = await import("@/lib/admin-profit");
+    const all = harness.db.rows("orders").map((row) => String(row.order_id));
+    const profits = [...(await getOrderProfitMap(all)).values()];
+
+    const sales = profits.filter((entry) => entry.orderType !== "replacement");
+    const replacements = profits.filter((entry) => entry.orderType === "replacement");
+
+    // 100 sales, 105 outbound shipments.
+    expect(sales).toHaveLength(100);
+    expect(replacements).toHaveLength(5);
+    expect(sales.length + replacements.length).toBe(105);
+
+    // Revenue comes from the 100 sales only; the 5 reships add cost, never
+    // revenue, and never a $0 denominator to average order value.
+    const revenue = sales.reduce((sum, entry) => sum + entry.revenue, 0);
+    const replacementRevenue = replacements.reduce((sum, entry) => sum + entry.revenue, 0);
+    expect(replacementRevenue).toBe(0);
+    expect(revenue).toBeCloseTo(ALPHA_TOTAL * 100, 2);
+    expect(revenue / sales.length).toBeCloseTo(ALPHA_TOTAL, 2);
+
+    // Costs include all 105 shipments' COGS: 105 x 3 x $12.00.
+    const cogs = profits.reduce((sum, entry) => sum + entry.cogs, 0);
+    expect(cogs).toBeCloseTo(105 * 36, 2);
+
+    // 400 - (105 x 3) = 85 units left on the shelf.
+    expect(stock(ALPHA_SLUG).onHand).toBe(85);
+  });
+});
