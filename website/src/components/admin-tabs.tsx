@@ -50,8 +50,20 @@ const tabs: AdminTab[] = [
     match: (pathname) => pathname.startsWith("/admin/payments"),
   },
   {
+    // POINTS AT THE WORKSTATION, not /admin/fulfillment.
+    //
+    // The Workstation is the screen that runs the day — exceptions, then
+    // batch, pick, pack. It shipped with no link to it from anywhere in the
+    // application, so the only way to reach it was to type the URL, and this
+    // tab kept landing on the old per-order list. A feature nobody can
+    // navigate to has not shipped.
+    //
+    // The old page is still useful and still reachable: it is the place to
+    // search for ONE order by number, name, email or tracking. The Workstation
+    // links across to it. The match below covers both, so the tab stays lit
+    // whichever of the two you are on.
     label: "Fulfillment",
-    href: "/admin/fulfillment",
+    href: "/admin/fulfillment/workstation",
     match: (pathname) => pathname.startsWith("/admin/fulfillment"),
   },
   {

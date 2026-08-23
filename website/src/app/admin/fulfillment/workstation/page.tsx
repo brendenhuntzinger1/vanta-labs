@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
@@ -45,13 +46,27 @@ export default async function FulfillmentWorkstationPage() {
 
   return (
     <main className="mx-auto max-w-[1400px] px-4 py-8 sm:px-6 lg:px-10">
-      <header className="mb-8">
-        <p className="vl2-eyebrow">Fulfillment</p>
-        <h1 className="vl2-serif mt-1 text-2xl text-white sm:text-3xl">Workstation</h1>
-        <p className="mt-2 max-w-2xl text-sm text-zinc-400">
-          Every paid order has exactly one home below. Work the exceptions first, then batch
-          the rest and pick once per product instead of once per order.
-        </p>
+      <header className="mb-8 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="vl2-eyebrow">Fulfillment</p>
+          <h1 className="vl2-serif mt-1 text-2xl text-white sm:text-3xl">Workstation</h1>
+          <p className="mt-2 max-w-2xl text-sm text-zinc-400">
+            Every paid order has exactly one home below. Work the exceptions first, then batch
+            the rest and pick once per product instead of once per order.
+          </p>
+        </div>
+        {/*
+          The escape hatch to the other half of fulfillment. This board is
+          organised by what needs DOING; when a customer emails about one
+          specific order, the question is "where is order 1043" and the answer
+          lives in search. Linking both ways means neither page is a dead end.
+        */}
+        <Link
+          href="/admin/fulfillment"
+          className="vl-btn-secondary inline-flex shrink-0 px-4 py-2 text-xs"
+        >
+          Find one order →
+        </Link>
       </header>
 
       <FulfillmentWorkstation

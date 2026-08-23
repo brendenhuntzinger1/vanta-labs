@@ -43,14 +43,20 @@ export default async function AdminFulfillmentPage({
       <div className="mx-auto max-w-7xl">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-semibold sm:text-3xl">Fulfillment Queue</h1>
+            <h1 className="text-2xl font-semibold sm:text-3xl">Order Search</h1>
             <p className="mt-2 text-sm text-zinc-400">
-              {result.total} order{result.total === 1 ? "" : "s"} ready to pack and ship.
+              Find one order by number, name, email or tracking. To run the day&rsquo;s
+              fulfillment, use the Workstation.
             </p>
           </div>
-          <Link href="/admin/payments" className="vl-btn-secondary inline-flex px-4 py-2 text-xs">
-            ← Payment Verification
-          </Link>
+          <div className="flex flex-wrap items-center gap-2">
+            <Link href="/admin/fulfillment/workstation" className="vl-btn-primary inline-flex px-4 py-2 text-xs">
+              Open Workstation →
+            </Link>
+            <Link href="/admin/payments" className="vl-btn-secondary inline-flex px-4 py-2 text-xs">
+              ← Payment Verification
+            </Link>
+          </div>
         </div>
 
         <form method="GET" className="vl-panel mt-6 grid gap-3 rounded-2xl p-4 sm:grid-cols-4">
