@@ -3,6 +3,7 @@ import Image from "next/image";
 import { redirect } from "next/navigation";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { ownershipEmail } from "@/lib/order-ownership";
 import { getCustomerOrders, getCustomerPreferences, getDefaultCustomerAddress, getWishlistSlugs } from "@/lib/customer-account";
 import {
   checkAndAwardBirthdayBonus,
@@ -93,7 +94,7 @@ export default async function AccountDashboardPage() {
 
   const [orders, membership, perks, pointsBalance, pointsHistory, activeCoupons, pointsMultiplier, lifetimeSavings, defaultAddress, wishlistSlugs, bestSellerSlugs] =
     await Promise.all([
-      getCustomerOrders(user.id, user.email).catch(() => []),
+      getCustomerOrders(user.id, ownershipEmail(user)).catch(() => []),
       getCustomerMembership(user.id),
       getMembershipPerks(user.id),
       getPointsBalance(user.id).catch(() => 0),

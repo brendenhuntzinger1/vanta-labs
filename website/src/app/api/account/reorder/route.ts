@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { ownershipEmail } from "@/lib/order-ownership";
 import { getCatalogProductsBySlugs } from "@/lib/catalog";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { customerSafeMessage } from "@/lib/safe-error";
@@ -29,9 +30,13 @@ export async function POST(request: Request) {
     }
 
     // The order must belong to THIS account — by account id (survives email
-    // change / phone accounts) or by the current email for legacy rows.
+    // change / phone accounts) or by the current email for legacy rows. The
+    // email arm requires a CONFIRMED address: see ownershipEmail() for why
+    // claiming an order by naming its email address is an authorization rule,
+    // not a convenience.
+    const claimEmail = ownershipEmail(user);
     const ownsByUserId = order?.customer_user_id && String(order.customer_user_id) === user.id;
-    const ownsByEmail = user.email && String(order?.customer_email ?? "").toLowerCase() === user.email.toLowerCase();
+    const ownsByEmail = claimEmail && String(order?.customer_email ?? "").toLowerCase() === claimEmail.toLowerCase();
     if (!order || (!ownsByUserId && !ownsByEmail)) {
       return NextResponse.json({ success: false, error: "Order not found" }, { status: 404 });
     }

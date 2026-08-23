@@ -3,6 +3,7 @@ import Image from "next/image";
 import { redirect } from "next/navigation";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { ownershipEmail } from "@/lib/order-ownership";
 import { getCustomerOrdersDetailed } from "@/lib/account-orders";
 import { getOrderProgress, isUnpaid, statusLabel } from "@/lib/order-status";
 import { OrderTracking } from "@/components/order-tracking";
@@ -22,7 +23,7 @@ export default async function AccountOrdersPage() {
     redirect("/account/login");
   }
 
-  const orders = await getCustomerOrdersDetailed(user.id, user.email).catch(() => []);
+  const orders = await getCustomerOrdersDetailed(user.id, ownershipEmail(user)).catch(() => []);
 
   return (
     <div className="space-y-5">

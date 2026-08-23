@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { ownershipEmail } from "@/lib/order-ownership";
 import { getCustomerNotifications, type AccountNotification } from "@/lib/account-notifications";
 import { formatDisplayDate } from "@/lib/format-date";
 
@@ -48,7 +49,7 @@ export default async function AccountNotificationsPage() {
     redirect("/account/login");
   }
 
-  const notifications = await getCustomerNotifications(user.id, user.email).catch(() => []);
+  const notifications = await getCustomerNotifications(user.id, ownershipEmail(user)).catch(() => []);
 
   return (
     <div className="space-y-5">
