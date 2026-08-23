@@ -183,9 +183,13 @@ export function AdminShippingOriginClient({
           ) : (
             <p className="mt-2 text-[13px] text-zinc-500">Fill in the fields above to see this.</p>
           )}
+          {returnAddress.phone ? (
+            <p className="mt-2 font-mono text-[12px] text-zinc-400">{returnAddress.phone.trim()}</p>
+          ) : null}
           <p className="mt-3 text-[11px] text-zinc-500">
             Read the top line. It should be your business name — customers see this, not your account
-            name.
+            name. The phone is sent to the carrier with this address; whether it prints depends on the
+            carrier and service, so use a number you are willing to have on a parcel.
           </p>
         </div>
       </section>

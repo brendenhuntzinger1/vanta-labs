@@ -279,6 +279,20 @@ describe("the admin shows what will actually be printed", () => {
     }
   });
 
+  it("shows the phone too, since that is sent with the address", () => {
+    // The first version of this preview showed the address and omitted the
+    // phone — which is also sent, and is the field most likely to be a
+    // personal mobile typed in to satisfy a required marker.
+    const panel2 = readFileSync(
+      resolve(process.cwd(), "src/components/admin-shipping-origin-client.tsx"),
+      "utf8",
+    );
+    expect(panel2).toContain("returnAddress.phone");
+    // Stated honestly: sent to the carrier, printing is carrier-dependent. The
+    // code cannot promise what a carrier renders.
+    expect(panel2).toMatch(/whether it prints depends on the/);
+  });
+
   it("tells the owner what the top line is for", () => {
     // The whole point: the field that leaked is the one a form label makes
     // look internal.
