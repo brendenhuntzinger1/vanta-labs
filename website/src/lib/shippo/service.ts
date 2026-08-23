@@ -702,10 +702,11 @@ async function quoteShipment(order: OrderShippingRow): Promise<ServiceResult<Ord
 
   const addresses = await getShippingAddresses();
   if (!addresses.canRequestRates) {
-    return fail(
-      "origin_incomplete",
-      `The ship-from address is incomplete — add ${addresses.originValidation.missing.join(", ")} in Shipping settings before quoting rates.`,
-    );
+    // The reason now comes from the resolver, because there are two of them:
+    // an unusable ship-from address, and a missing customer-facing return
+    // address. Reporting the second as "ship-from incomplete" sent the owner
+    // to correct a field that was already right.
+    return fail("origin_incomplete", addresses.blockedReason ?? "Shipping addresses are not configured.");
   }
 
   const destination = orderDestinationAddress(order);
@@ -720,6 +721,15 @@ async function quoteShipment(order: OrderShippingRow): Promise<ServiceResult<Ord
   const result = await createShipmentWithRates({
     addressFrom: toShippoAddress(addresses.origin),
     addressTo: destination,
+    // THE FIELD WHOSE ABSENCE PRINTS THE ORIGIN ON EVERY PARCEL.
+    //
+    // Omitting address_return does not mean "no return address" — Shippo
+    // defaults it to address_from, and the rate bought from this shipment
+    // carries that onto the physical label. order-sync.ts passed it; this
+    // path, the one that actually buys the label, did not. So the ship-from
+    // address was printed on every parcel a customer opens, which for a home
+    // origin is the owner's residential address in a stranger's hands.
+    addressReturn: toShippoAddress(addresses.returnAddress),
     parcel: parcel.data.parcel,
   });
   if (!result.ok) return fromShippoFailure(result);

@@ -146,8 +146,13 @@ export interface ResolvedShippingAddresses {
   usesSeparateReturn: boolean;
   originValidation: AddressValidation;
   returnValidation: AddressValidation;
-  /** Rates can be requested — the origin alone gates this. */
+  /**
+   * Rates can be requested. Gated on BOTH addresses — see canRequestRates
+   * below for why the return address is not merely advisory.
+   */
   canRequestRates: boolean;
+  /** Why rates are blocked, in words an operator can act on. Null when fine. */
+  blockedReason: string | null;
 }
 
 /**
@@ -165,12 +170,37 @@ export async function getShippingAddresses(): Promise<ResolvedShippingAddresses>
   const returnValidation = validateAddress(configuredReturn);
   const usesSeparateReturn = !isAddressEmpty(configuredReturn) && returnValidation.isComplete;
 
+  // FAIL CLOSED. A missing return address used to fall back to the origin and
+  // carry on — the admin showed a warning and shipping worked, so the warning
+  // was the kind nobody reads twice. The cost of ignoring it is not a broken
+  // label: it is the owner's home address printed on every parcel, delivered
+  // to strangers, and unrecallable once posted.
+  //
+  // A privacy invariant that degrades to a warning is not an invariant. So an
+  // unconfigured or incomplete return address now BLOCKS quoting and therefore
+  // purchasing, with a message naming the missing fields.
+  //
+  // This deliberately costs an owner whose origin IS their business address a
+  // second entry of the same details. That is the right trade: retyping an
+  // address is recoverable, posting a home address to a customer is not.
+  const blockedReason = !originValidation.isComplete
+    ? `Ship-from address is incomplete — add ${originValidation.missing.join(", ")} in Shipping settings.`
+    : !usesSeparateReturn
+      ? isAddressEmpty(configuredReturn)
+        ? "No customer-facing return address is set. This is the address printed on every parcel, so it must be set deliberately rather than defaulting to your ship-from address."
+        : `The customer-facing return address is incomplete — add ${returnValidation.missing.join(", ")} in Shipping settings.`
+      : null;
+
   return {
     origin,
+    // Still the origin when unconfigured, so callers that legitimately need an
+    // address (diagnostics, admin preview) get a coherent object — but
+    // canRequestRates is false, so nothing reaches Shippo with it.
     returnAddress: usesSeparateReturn ? configuredReturn : origin,
     usesSeparateReturn,
     originValidation,
     returnValidation,
-    canRequestRates: originValidation.isComplete,
+    canRequestRates: blockedReason === null,
+    blockedReason,
   };
 }

@@ -195,7 +195,10 @@ export async function syncOrderToShippo(orderId: string): Promise<SyncOutcome> {
 
   const addresses = await getShippingAddresses();
   if (!addresses.canRequestRates) {
-    const reason = `Ship-from address incomplete: ${addresses.originValidation.missing.join(", ")}. Set it in admin → Settings.`;
+    // Two possible reasons now — an unusable ship-from address, or a missing
+    // customer-facing return address. Naming the wrong one sends the owner to
+    // fix a field that was already correct.
+    const reason = `${addresses.blockedReason ?? "Shipping addresses are not configured."} Set it in admin → Settings.`;
     await recordBlocked(reason);
     return { ok: false, reason, retryable: true };
   }
@@ -565,7 +568,7 @@ export async function backfillOrderShipment(orderId: string): Promise<SyncOutcom
   if (!addresses.canRequestRates) {
     return {
       ok: false,
-      reason: `Ship-from address incomplete: ${addresses.originValidation.missing.join(", ")}.`,
+      reason: addresses.blockedReason ?? "Shipping addresses are not configured.",
       retryable: true,
     };
   }
