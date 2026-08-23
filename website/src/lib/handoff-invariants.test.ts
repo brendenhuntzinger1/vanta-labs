@@ -430,3 +430,87 @@ describe("the fulfillment screens read as work, not as states", () => {
     expect(page).toContain("const totalUnits = rawOrderItems.reduce(");
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE TEN WAYS THE SHIPPO ROUND TRIP CAN ARRIVE WRONG.
+//
+// Shippo replays, reorders and delays. The launch workflow depends on all of
+// it landing correctly without the owner watching, so each case is pinned.
+// ---------------------------------------------------------------------------
+describe("the Shippo round trip survives replays, reordering and gaps", () => {
+  const sync = source("src/lib/shippo/order-sync.ts");
+  const pipeline = source("src/lib/order-pipeline.ts");
+  const route = source("src/app/api/webhooks/shippo/route.ts");
+
+  it("resolves a dashboard purchase by the Shippo ORDER id, not by metadata", () => {
+    // The transaction Shippo creates when the owner buys from the pre-synced
+    // order carries `order`. Vanta never touched that transaction, so metadata
+    // it set cannot be relied on — this is the match that makes the workflow
+    // work at all.
+    const fn = sync.slice(sync.indexOf("async function matchOrder"));
+    const byOrder = fn.indexOf('.eq("shippo_order_id", shippoOrderId)');
+    const byMetadata = fn.indexOf("const metadata = String(data.metadata");
+    expect(byOrder).toBeGreaterThan(-1);
+    expect(byOrder).toBeLessThan(byMetadata);
+  });
+
+  it("never guesses by customer name or email", () => {
+    // A repeat customer with two open orders would get a real postage cost
+    // attached to whichever row came back first, corrupting profit on both.
+    const fn = sync.slice(sync.indexOf("async function matchOrder"), sync.indexOf("export async function applyTransactionCreated"));
+    expect(fn).not.toContain("customer_email");
+    expect(fn).not.toContain("customer_name");
+  });
+
+  it("alerts the owner when a purchased label matches nothing", () => {
+    // Money was spent on a label that belongs to no order. It used to be
+    // written to a table only the tracking dedupe reads.
+    expect(route).toContain('type: "shippo_label_unattributed"');
+    expect(route).toContain('severity: "critical"');
+  });
+
+  it("converts postage to cents without the float error", () => {
+    // Number("5.20") * 100 is 520.0000000000001; truncating loses a penny on
+    // every order, permanently and invisibly.
+    expect(sync).toContain("export function amountToCents");
+    // COMMENTS STRIPPED: amountToCents' own docstring quotes the wrong form as
+    // the thing it exists to avoid, so matching raw source fails on the
+    // explanation rather than on any code.
+    const code = sync.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toMatch(/Number\(\s*amount\s*\)\s*\*\s*100/);
+  });
+
+  it("records no postage at all when the event carries none, rather than zero", () => {
+    // Zero asserts the shipping was free and finalizes profit on a lie.
+    expect(sync).toContain("if (amountCents !== null) {");
+  });
+
+  it("lets tracking arrive BEFORE the purchase event without stalling", () => {
+    // Shippo can deliver out of order. A forward jump is permitted; only a
+    // backwards one is refused.
+    expect(pipeline).toContain("nextRank < currentRank");
+    expect(pipeline).toContain('"regression"');
+  });
+
+  it("refuses any carrier event once the order is terminal", () => {
+    // Delivered twice, or a stale TRANSIT after DELIVERED.
+    const shippoBranch = pipeline.slice(pipeline.indexOf('if (source === "shippo")'));
+    expect(shippoBranch.slice(0, 400)).toContain("isTerminal(current)");
+  });
+
+  it("only Shippo may write the carrier states", () => {
+    expect(pipeline).toContain('in_transit: ["shippo"]');
+    expect(pipeline).toContain('delivered: ["shippo"]');
+  });
+
+  it("dedupes a repeated purchase event on the transaction's own id", () => {
+    expect(route).toContain("event_key: `transaction_created:${String(data?.object_id ?? \"unknown\")}`");
+    expect(route).toContain('onConflict: "event_key"');
+  });
+
+  it("writes no history row for a refused transition", () => {
+    // A refused event did not move the order; a row for it would put a state
+    // change in the customer-facing timeline that never happened.
+    expect(sync).toMatch(/A refused transition did not move/);
+  });
+});

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 
 import { applyTrackingUpdate } from "@/lib/shippo/service";
 import { applyTransactionCreated } from "@/lib/shippo/order-sync";
+import { recordSystemAlert } from "@/lib/monitoring";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { ShippoWebhookPayload } from "@/lib/shippo/types";
 
@@ -129,9 +130,36 @@ export async function POST(request: Request) {
           { onConflict: "event_key" },
         );
 
-      // A 200 even when unmatched: the event is recorded and redelivering it
-      // would not find an order either. The reconciliation queue is the fix,
-      // not a retry loop.
+      // AN UNMATCHED LABEL IS MONEY NOBODY IS WATCHING.
+      //
+      // The row above records it, and for a long time that was the whole story
+      // — but nothing reads that table except the tracking dedupe, so an
+      // unattributed purchase was invisible in practice. Writing to a table no
+      // one opens is the same as dropping it.
+      //
+      // It matters more now that buying in Shippo is the normal workflow. An
+      // unmatched transaction means postage was paid and cannot be attached to
+      // an order: the order stays in Needs Fulfillment, the cost never reaches
+      // profit, and the first sign is a customer asking where their parcel is.
+      if (!outcome.matched) {
+        await recordSystemAlert({
+          type: "shippo_label_unattributed",
+          severity: "critical",
+          message:
+            "A Shippo label was purchased that Vanta could not match to an order. The postage is not " +
+            "in any order's profit, and if this was a Vanta order it is still sitting in Needs " +
+            "Fulfillment. Open Shippo, find this transaction, and check which order it belongs to.",
+          context: {
+            shippo_transaction: String(data?.object_id ?? "") || null,
+            tracking_number: String(data?.tracking_number ?? "") || null,
+            reason: outcome.reason ?? "unmatched",
+          },
+        });
+      }
+
+      // A 200 even when unmatched: the event is recorded, the owner is alerted,
+      // and redelivering it would not find an order either. A retry loop is not
+      // the fix for a label that belongs to nothing.
       return NextResponse.json({ received: true, matched: outcome.matched, orderId: outcome.orderId });
     } catch (error) {
       console.error("Unexpected failure handling a Shippo transaction webhook", error);
