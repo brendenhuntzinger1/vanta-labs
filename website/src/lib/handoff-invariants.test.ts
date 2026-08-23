@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { BUCKETS, bucketForOrder } from "@/lib/fulfillment-buckets";
+import {
+  BUCKETS,
+  bucketForOrder,
+  inPackingOrder,
+  PACKING_ORDER_COLUMN,
+  PACKING_ORDER_TIEBREAK,
+} from "@/lib/fulfillment-buckets";
 import { normalizeLegacyStatus } from "@/lib/order-pipeline";
 
 // ---------------------------------------------------------------------------
@@ -278,9 +284,37 @@ describe("orders sharing a paid_at still have one definite order", () => {
     expect(buckets).toContain('PACKING_ORDER_TIEBREAK = "order_id"');
   });
 
+  it("actually sorts OLDEST FIRST, and only text-matching would miss it", () => {
+    // Behavioural, not textual: the helper is called with a recording stub, so
+    // the assertion is about what it DOES. A source-text test cannot tell
+    // ascending from descending, and newest-first would quietly make the
+    // longest-waiting customer wait longest of all.
+    const calls: Array<{ column: string; ascending: boolean; nullsFirst?: boolean }> = [];
+    const stub = {
+      order(column: string, opts: { ascending: boolean; nullsFirst?: boolean }) {
+        calls.push({ column, ...opts });
+        return stub;
+      },
+    };
+
+    inPackingOrder(stub);
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ column: PACKING_ORDER_COLUMN, ascending: true });
+    expect(calls[1]).toMatchObject({ column: PACKING_ORDER_TIEBREAK, ascending: true });
+    // A NULL paid_at must not jump the queue ahead of real paid orders.
+    expect(calls[0].nullsFirst).toBe(false);
+  });
+
   it("applies the timestamp first and the tiebreak second", () => {
     const fn = buckets.slice(buckets.indexOf("export function inPackingOrder"));
-    expect(fn.indexOf("PACKING_ORDER_COLUMN")).toBeLessThan(fn.indexOf("PACKING_ORDER_TIEBREAK"));
+    // Presence first: if the timestamp sort were dropped from the helper,
+    // indexOf would return -1 and the order comparison alone would pass.
+    const columnAt = fn.indexOf("PACKING_ORDER_COLUMN");
+    const tiebreakAt = fn.indexOf("PACKING_ORDER_TIEBREAK");
+    expect(columnAt).toBeGreaterThan(-1);
+    expect(tiebreakAt).toBeGreaterThan(-1);
+    expect(columnAt).toBeLessThan(tiebreakAt);
   });
 
   it("records why, so the tiebreak is not removed as redundant", () => {
