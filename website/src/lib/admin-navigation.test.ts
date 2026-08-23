@@ -303,3 +303,48 @@ describe("the Owner Guide is generated from the real definitions", () => {
     expect(guide).toMatch(/processor fee is an estimate/i);
   });
 });
+
+// ---------------------------------------------------------------------------
+// AN EXCEPTION NAMES AN ACTION. THE OPERATOR NEEDS A ROUTE TO IT.
+//
+// The Needs Attention queue exists to give three things: the problem in plain
+// English, the order, and a safe next action. It gave the first two.
+//
+// The order number was rendered as plain text, so "decide between reship and
+// refund" arrived with no way to open the order and decide. And both payment
+// reasons — "compare the charge before releasing it", "approve or reject it" —
+// name controls that live on the Payments tab, with nothing linking there. The
+// operator had to already know where those live and find the order again.
+//
+// Same shape as the Workstation itself: the capability existed, and nothing
+// connected the place you read the instruction to the place you carry it out.
+// ---------------------------------------------------------------------------
+describe("every exception can be acted on from where it is read", () => {
+  const workstation = source("src/components/fulfillment-workstation.tsx");
+  const exceptionBlock = workstation.slice(
+    workstation.indexOf("EXCEPTIONS, ABOVE EVERYTHING"),
+    workstation.indexOf("CANCELLED WITH A LABEL"),
+  );
+
+  it("makes the order number open the order", () => {
+    expect(exceptionBlock).toContain("/admin/orders/${encodeURIComponent(order.orderId)}");
+  });
+
+  it("routes the payment reasons to where approve and reject actually are", () => {
+    expect(exceptionBlock).toContain('order.exceptions.includes("payment_hold")');
+    expect(exceptionBlock).toContain('order.exceptions.includes("payment_review")');
+    expect(exceptionBlock).toContain('href="/admin/payments"');
+  });
+
+  it("keeps Retry sync on the two reasons whose guidance mentions retrying", () => {
+    // And only those: retrying is meaningless for a stale shipment, and
+    // actively wrong for an ambiguous label purchase.
+    expect(exceptionBlock).toContain('order.exceptions.includes("shippo_error")');
+    expect(exceptionBlock).toContain('order.exceptions.includes("shippo_blocked")');
+    expect(exceptionBlock).not.toContain('includes("label_claim_stranded") ? (');
+  });
+
+  it("shows the real failure text rather than naming a column to go and read", () => {
+    expect(exceptionBlock).toContain("order.shippoSyncError");
+  });
+});

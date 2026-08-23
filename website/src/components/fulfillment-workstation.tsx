@@ -1,5 +1,7 @@
 "use client";
 
+import Link from "next/link";
+
 import { useCallback, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -303,7 +305,17 @@ export function FulfillmentWorkstation({
             {exceptions.map((order) => (
               <li key={order.orderId} className="border-t border-white/5 pt-3">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-xs text-zinc-300">{order.orderNumber ?? order.orderId}</span>
+                  {/* A LINK, NOT A LABEL.
+                      Every reason here ends in something the operator has to
+                      DO, and the order was printed as plain text — so the
+                      instruction "decide between reship and refund" arrived
+                      with no way to open the order and decide. */}
+                  <Link
+                    href={`/admin/orders/${encodeURIComponent(order.orderId)}`}
+                    className="font-mono text-xs text-cyan-200 underline-offset-2 hover:underline"
+                  >
+                    {order.orderNumber ?? order.orderId}
+                  </Link>
                   <span className="text-xs text-zinc-500">{order.customerName}</span>
                   {order.exceptions.map((reason) => (
                     <Pill key={reason} tone="crit">{reasonMap.get(reason)?.label ?? reason}</Pill>
@@ -320,6 +332,20 @@ export function FulfillmentWorkstation({
                   <p className="mt-1 rounded bg-black/30 px-2 py-1 font-mono text-[11px] text-rose-200">
                     {order.shippoSyncError}
                   </p>
+                ) : null}
+                {/* THE PAYMENT ACTIONS LIVE ON ANOTHER TAB.
+                    Both payment reasons tell the operator to release, or to
+                    approve or reject — and those controls are on Payments, not
+                    here. Naming an action without a route to it is the same
+                    defect as a queue nobody can reach: the operator has to
+                    already know where it lives and find the order again. */}
+                {order.exceptions.includes("payment_hold") || order.exceptions.includes("payment_review") ? (
+                  <Link
+                    href="/admin/payments"
+                    className="vl-btn-secondary mt-2 mr-2 inline-flex px-3 py-1 text-xs"
+                  >
+                    Review payment →
+                  </Link>
                 ) : null}
                 {order.exceptions.includes("shippo_error") || order.exceptions.includes("shippo_blocked") ? (
                   <button
