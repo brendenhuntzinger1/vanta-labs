@@ -39,6 +39,15 @@ type ShippingOverlay = {
 };
 
 export interface OrderProfit extends OrderProfitResult {
+  /**
+   * `product`, `membership`, or `replacement`.
+   *
+   * A REPLACEMENT is a real shipment with real cost and NO revenue. Its costs
+   * belong in every total; the order itself is not a sale and must never be
+   * counted as one, or 100 sales plus 3 reships reports 103 orders and drags
+   * average order value down with three $0 denominators.
+   */
+  orderType: string | null;
   orderId: string;
   orderNumber: string | null;
   paidAt: string | null;
@@ -202,6 +211,7 @@ function toOrderProfit(order: OrderRecord, result: OrderProfitResult, overlay: S
     orderNumber: order.order_number ?? null,
     paidAt: order.paid_at ?? null,
     createdAt: order.created_at ?? null,
+    orderType: order.order_type ?? null,
     shippingCostSource: overlay?.source ?? null,
   };
 }
@@ -382,6 +392,8 @@ export interface ProfitDashboard {
     averageOrderValue: number;
     averageProfitPerOrder: number;
     orderCount: number;
+    /** Outbound reshipments — real cost, zero revenue, never counted as sales. */
+    replacementCount: number;
     totalProductCosts: number;
     totalProcessorFees: number;
     totalShippingRevenue: number;
@@ -420,14 +432,23 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
   let totalProcessorFees = 0;
   let totalShippingRevenue = 0;
   let totalShippingExpense = 0;
+  // SALES, not outbound shipments. See OrderProfit.orderType.
   let orderCount = 0;
+  let replacementCount = 0;
   let estimatedOrderCount = 0;
 
   for (const row of rows) {
     const eventTime = Date.parse(row.paidAt ?? row.createdAt ?? "");
     if (!Number.isFinite(eventTime)) continue;
 
-    orderCount += 1;
+    // A replacement's COSTS are counted below exactly like any other order's —
+    // the merchandise and the postage were really spent. Only the sale count
+    // excludes it, because no customer bought anything.
+    if (String(row.orderType ?? "").toLowerCase() === "replacement") {
+      replacementCount += 1;
+    } else {
+      orderCount += 1;
+    }
     profit.lifetime += row.profit;
     grossRevenue += row.grossRevenue;
     netProfit += row.profit;
@@ -464,6 +485,8 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
       averageOrderValue: orderCount > 0 ? round(grossRevenue / orderCount) : 0,
       averageProfitPerOrder: orderCount > 0 ? round(netProfit / orderCount) : 0,
       orderCount,
+      /** Outbound reshipments — real cost, zero revenue, never a sale. */
+      replacementCount,
       totalProductCosts: round(totalProductCosts),
       totalProcessorFees: round(totalProcessorFees),
       totalShippingRevenue: round(totalShippingRevenue),

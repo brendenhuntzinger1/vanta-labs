@@ -63,6 +63,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       reason?: string;
       items?: Array<{ itemId?: string | number; quantity?: number }>;
       shippingCostAmount?: number;
+      /** Idempotency key for send_replacement — one per confirmation dialog. */
+      requestId?: string;
     };
 
     const action = String(body.action ?? "");
@@ -472,6 +474,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       const replacement = await createReplacementOrder({
         originalOrderId: orderId,
         reason,
+        // The duplicate guard. One id per confirmation dialog, so a double-click
+        // or a retried fetch resolves to the SAME replacement instead of a
+        // second parcel with a second label and stock deducted twice.
+        requestId: typeof body.requestId === "string" ? body.requestId : null,
         note: typeof body.note === "string" ? body.note : null,
         selections: Array.isArray(body.items)
           ? body.items
