@@ -79,6 +79,33 @@ type AttestationId = (typeof ATTESTATIONS)[number]["id"];
 // checkout, account, membership, ambassador, legal — is gated.
 const STAFF_ONLY = ["/admin", "/vault"];
 
+// PAYING AND THE RECEIPT. The gate must not stand between a shopper and the
+// card form they were just sent to.
+//
+// Reproduced live: create-session writes the order row, then the checkout page
+// does window.location.assign() to /checkout/pay/<orderId>. That is a FULL
+// DOCUMENT LOAD, and the gate's only source of truth is in-memory state that
+// resets on every fresh document (deliberately — it is never remembered). So
+// the shopper filled in their address, pressed "Continue to secure payment",
+// and landed on the age gate. It reads as a failed payment. The cost is not
+// cosmetic: the order row already exists, so anyone who gives up there leaves
+// an orphaned awaiting_payment order, and anyone who goes back and resubmits
+// creates a second one.
+//
+// Exempting these routes removes NO age assurance. To reach any of them an
+// order must already exist, which means checkout's acknowledgements were
+// accepted — including "I confirm that I am 21 years of age or older and
+// legally permitted to purchase laboratory research materials", recorded
+// against the exact copy version shown. That is a stronger, durable record
+// than this gate produces; the gate stores nothing at all. Showing it again
+// here would add no evidence and no protection, only an interruption at the
+// single worst moment.
+//
+// Deliberately narrow, and deliberately NOT /checkout itself: the gate still
+// stands in front of browsing, the cart, and checkout, where a visitor has not
+// yet attested to anything.
+const PAYMENT_AND_RECEIPT = ["/checkout/pay", "/pay", "/order-confirmation"];
+
 // WHERE A VISITOR LANDS AFTER CLEARING THE GATE.
 //
 // The home page, unless they are standing on one of a fixed, hard-coded list of
@@ -176,9 +203,11 @@ function destinationAfterGate(pathname: string | null): string | null {
 export function AgeGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const isStaffArea = STAFF_ONLY.some(
-    (p) => pathname === p || pathname?.startsWith(`${p}/`),
-  );
+  const matches = (list: string[]) =>
+    list.some((p) => pathname === p || pathname?.startsWith(`${p}/`));
+  const isStaffArea = matches(STAFF_ONLY);
+  // Already attested at checkout, and the order exists. See PAYMENT_AND_RECEIPT.
+  const isPaymentOrReceipt = matches(PAYMENT_AND_RECEIPT);
   const [localVerified, setLocalVerified] = useState(false);
   const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
   const [showPrompt, setShowPrompt] = useState(false);
@@ -193,7 +222,7 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
   // The ONLY source of truth: in-memory state for this document. It starts
   // false on the server and on every fresh client load, so the gate is always
   // rendered first.
-  const isVerified = localVerified || isStaffArea;
+  const isVerified = localVerified || isStaffArea || isPaymentOrReceipt;
 
   const markVerified = () => {
     setLocalVerified(true);

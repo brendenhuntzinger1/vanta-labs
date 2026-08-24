@@ -56,10 +56,20 @@ describe("age verification is never remembered", () => {
   });
 
   it("holds the answer only in component state for this document", () => {
-    // The answer is component state plus the staff-area exemption below —
-    // never a stored value.
-    expect(gate).toMatch(/const isVerified = localVerified \|\| isStaffArea;/);
+    // The answer is component state plus the route exemptions below — never a
+    // stored value. Asserted as a RULE, not as one literal line: this used to
+    // pin the exact text `localVerified || isStaffArea`, so adding the
+    // payment-page exemption broke it without anything being wrong.
+    expect(gate).toMatch(/const isVerified = localVerified(\s*\|\|\s*is[A-Za-z]+)+;/);
     expect(gate).toMatch(/useState\(false\)/);
+    // The point of the rule: nothing WRITES it. The file does touch storage,
+    // but only to delete the legacy 30-day token a returning browser may still
+    // carry, so the assertion is about writes rather than mentions.
+    expect(gate).not.toMatch(/localStorage\.setItem|sessionStorage\.setItem|indexedDB/);
+    // The only cookie line clears the legacy value (max-age=0).
+    for (const line of gate.split("\n").filter((l) => l.includes("document.cookie"))) {
+      expect(line, `cookie write in the age gate: ${line.trim()}`).toMatch(/max-age=0/);
+    }
   });
 });
 
@@ -116,12 +126,21 @@ describe("the gate fails closed and locks the page behind it", () => {
     // mean re-attesting on every admin page load during order and inventory
     // work, for no protective benefit.
     expect(gate).toContain('const STAFF_ONLY = ["/admin", "/vault"];');
-    expect(gate).toMatch(/const isVerified = localVerified \|\| isStaffArea;/);
+    expect(gate).toMatch(/const isStaffArea = matches\(STAFF_ONLY\)/);
     // Nothing a shopper can reach may appear in that list.
     for (const shopper of ["/products", "/cart", "/checkout", "/account", "/membership", "/ambassador"]) {
       expect(gate, `${shopper} must never be exempt from the gate`)
         .not.toMatch(new RegExp(`STAFF_ONLY[^\\]]*${shopper}`));
     }
+    // There is exactly ONE other exemption, and it is the payment/receipt one.
+    // Its own rules live in age-gate-payment-routes.test.ts; what matters here
+    // is that a third list cannot appear unnoticed.
+    const exemptionLists = gate.match(/^const [A-Z_]+ = \[[^\]]*\];$/gm) ?? [];
+    const routeLists = exemptionLists.filter((line) => line.includes('"/'));
+    expect(
+      routeLists.length,
+      `unexpected route list in age-gate.tsx:\n${routeLists.join("\n")}`,
+    ).toBe(3); // STAFF_ONLY, PAYMENT_AND_RECEIPT, NEVER_A_DESTINATION
   });
 
   it("marks the overlay so the pre-paint CSS can find it", () => {
