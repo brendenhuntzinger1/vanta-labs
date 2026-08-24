@@ -1487,3 +1487,91 @@ describe("PHASE 16 — one hundred customers, constrained stock", () => {
     expect(stock(ALPHA_SLUG).onHand).toBe(85);
   });
 });
+
+// ===========================================================================
+describe("PHASE 17 — the Returns & Refunds acknowledgement is required", () => {
+  // Two lanes reach checkout — the card form and Apple Pay — and they used to
+  // validate acknowledgements with two separate copies of the same three
+  // checks. A statement added to one and forgotten in the other would let a
+  // wallet order through without a consent the card lane demanded, and nobody
+  // would notice until a dispute. They now share ONE validator; these tests
+  // hold that on the card lane, and express-checkout's own suite holds it on
+  // the wallet lane.
+  function body(overrides: Record<string, boolean>) {
+    const base = checkoutBody(ALPHA, [{ productId: ALPHA_SLUG, quantity: 1 }]) as Record<string, unknown>;
+    return {
+      ...base,
+      complianceAcknowledgements: {
+        ...(base.complianceAcknowledgements as Record<string, boolean>),
+        ...overrides,
+      },
+    };
+  }
+
+  async function post(payload: unknown) {
+    const { POST } = await import("@/app/api/checkout/create-session/route");
+    const response = await POST(new Request("https://vantalabsresearch.test/api/checkout/create-session", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.9" },
+      body: JSON.stringify(payload),
+    }));
+    return { status: response.status, body: await response.json() as Record<string, unknown> };
+  }
+
+  it("REFUSES checkout when the returns policy is not accepted", async () => {
+    const { status, body: result } = await post(body({ returnsPolicy: false }));
+
+    expect(status).toBe(400);
+    expect(String(result.error)).toMatch(/acknowledgements/i);
+    // Nothing was created and no stock was held on a refused checkout.
+    expect(harness.db.rows("orders")).toHaveLength(0);
+    expect(stock(ALPHA_SLUG)).toEqual({ onHand: 40, reserved: 0 });
+  });
+
+  it("REFUSES checkout when the field is missing entirely", async () => {
+    const payload = body({});
+    delete (payload.complianceAcknowledgements as Record<string, unknown>).returnsPolicy;
+
+    expect((await post(payload)).status).toBe(400);
+    expect(harness.db.rows("orders")).toHaveLength(0);
+  });
+
+  it("refuses a truthy stand-in — consent is `true`, not \"yes\"", async () => {
+    const payload = body({});
+    (payload.complianceAcknowledgements as Record<string, unknown>).returnsPolicy = "yes";
+
+    expect((await post(payload)).status).toBe(400);
+  });
+
+  it("still refuses when the OTHER three are missing", async () => {
+    // Adding a statement must not have weakened the ones already there.
+    for (const key of ["researchResponsibility", "researchCompliance", "ageLegalConfirmation"]) {
+      harness.reset();
+      seedStore(harness.db, PRODUCTS);
+      expect((await post(body({ [key]: false }))).status).toBe(400);
+    }
+  });
+
+  it("allows checkout when all four are accepted, at the same total", async () => {
+    const { status, body: result } = await post(body({}));
+
+    expect(status).toBe(200);
+    // The acknowledgement is consent, not pricing: it must not move a cent.
+    const row = order(String(result.orderId));
+    expect(Number(row?.subtotal)).toBeCloseTo(44.99, 2);
+  });
+
+  it("keeps the same requirement for the wallet lane's validator", async () => {
+    const { hasAllAcknowledgements } = await import("@/lib/express-wallet");
+    const complete = {
+      researchResponsibility: true,
+      researchCompliance: true,
+      ageLegalConfirmation: true,
+      returnsPolicy: true,
+    };
+    expect(hasAllAcknowledgements(complete)).toBe(true);
+    expect(hasAllAcknowledgements({ ...complete, returnsPolicy: false })).toBe(false);
+    const missing = Object.fromEntries(Object.entries(complete).filter(([k]) => k !== "returnsPolicy"));
+    expect(hasAllAcknowledgements(missing)).toBe(false);
+  });
+});

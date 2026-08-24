@@ -227,6 +227,53 @@ export function orderConfirmationTemplate(input: {
   };
 }
 
+/**
+ * Sent AFTER the owner has already sent the money externally and recorded it.
+ *
+ * Deliberately does not say "returned to your original payment method" — that
+ * is the one sentence that would be false. Vanta's software never moves money
+ * on this path; the owner reimburses the customer directly through the method
+ * they agreed, and this message confirms it has been done. Naming the method
+ * here would put the owner's payment handles in a forwardable email for no
+ * benefit to the customer, so it says only that it has been processed.
+ */
+export function reimbursementRecordedTemplate(input: {
+  customerName: string;
+  orderId: string;
+  amount: number;
+  supportEmail?: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.customerName || "there");
+  const support = input.supportEmail ? escapeHtml(input.supportEmail) : null;
+  const orderRef = escapeHtml(input.orderId);
+  return {
+    subject: `Reimbursement processed - ${input.orderId}`,
+    html: renderLayout({
+      preheader: `Your reimbursement of ${money(input.amount)} for order ${input.orderId} has been processed.`,
+      titleHtml: "Your reimbursement has been processed",
+      bodyHtml: `
+        <p>Hi ${name},</p>
+        <p>Your reimbursement for order <strong>${orderRef}</strong> has been processed by Vanta Labs.</p>
+        <table role="presentation" width="100%" style="margin-top:12px;font-size:14px;">
+          <tr><td style="padding:10px 0 2px;border-top:1px solid rgba(255,255,255,0.1);color:#ffffff;font-weight:700;">Amount</td><td style="padding:10px 0 2px;border-top:1px solid rgba(255,255,255,0.1);text-align:right;color:#ffffff;font-weight:700;">${money(input.amount)}</td></tr>
+        </table>
+        ${support ? `<p style="margin-top:16px;color:#a1a1aa;">Any questions? Contact us at ${support}.</p>` : ""}
+      `,
+    }),
+    text: toText([
+      `Hi ${input.customerName || "there"},`,
+      "",
+      `Your reimbursement for order ${input.orderId} has been processed by Vanta Labs.`,
+      "",
+      `Amount: ${money(input.amount)}`,
+      "",
+      support ? `Questions? Contact ${input.supportEmail}.` : null,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 export function refundConfirmationTemplate(input: {
   customerName: string;
   orderId: string;

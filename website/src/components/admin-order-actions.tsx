@@ -37,6 +37,8 @@ export function AdminOrderActions({
   const [carrier, setCarrier] = useState(initialCarrier ?? "");
   const [estimatedDelivery, setEstimatedDelivery] = useState(initialEstimatedDelivery ? initialEstimatedDelivery.slice(0, 10) : "");
   const [refundInput, setRefundInput] = useState("");
+  const [reimbursementMethod, setReimbursementMethod] = useState("zelle");
+  const [reimbursementNote, setReimbursementNote] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   // Replacement panel state: which items (and how many of each) to reship.
@@ -120,8 +122,12 @@ export function AdminOrderActions({
     const confirmLabel = parsedAmount ? money(parsedAmount) : `the remaining ${money(remaining)}`;
     void runAction(
       "refund",
-      `Record a refund of ${confirmLabel} for this order?\n\nNO MONEY WILL BE SENT. This updates Vanta's records only — you must issue the actual refund in your payment processor.`,
-      parsedAmount ? { refundAmount: parsedAmount } : {},
+      `Record that you have ALREADY reimbursed this customer ${confirmLabel}?\n\nVANTA WILL NOT SEND ANY MONEY. This records the payment you made yourself and emails the customer to confirm it. Only continue if the money has already left your account.`,
+      {
+        ...(parsedAmount ? { refundAmount: parsedAmount } : {}),
+        reimbursementMethod,
+        note: reimbursementNote.trim() || undefined,
+      },
     );
   };
 
@@ -180,37 +186,64 @@ export function AdminOrderActions({
       {message ? <p className="mt-3 text-sm text-zinc-300">{message}</p> : null}
 
       <div className="mt-6 border-t border-white/10 pt-4">
-        <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Record a refund</p>
+        <p className="text-xs uppercase tracking-[0.22em] text-zinc-500">Record manual reimbursement</p>
         <p className="mt-1 text-xs text-zinc-500">
-          Replacements are the standard remedy. Use this only when a refund is unavoidable — a dispute, or a
-          customer who will not accept a reship.
+          For a return you have already settled: the customer emailed, you authorised the return, the sealed product
+          came back, you inspected it, and you have <em>already sent them the money</em>.
         </p>
         <p className="mt-2 text-sm text-zinc-300">
-          Paid {money(amountPaid)} • Refunded {money(refundAmount)} • Remaining refundable {money(remaining)}
+          Paid {money(amountPaid)} • Reimbursed {money(refundAmount)} • Remaining {money(remaining)}
         </p>
-        {/* This was grey 12px helper text -- the least prominent styling on the
-            page, carrying the most consequential fact on it. Someone skimming
-            reads "Refund", clicks, and believes the customer has their money. */}
+        {/* The most consequential sentence on the page gets the most prominent
+            styling on it. Someone skimming must not read "reimbursement",
+            click, and believe Vanta paid the customer. */}
         <p className="mt-2 rounded-lg border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
-          <strong>This does not send money.</strong> There is no refund integration with the payment processor, so this
-          only records the refund in Vanta. Issue the actual refund in your processor, then tell the customer — they are
-          not emailed by this action.
+          <strong>Recording this does not send money.</strong> Use it only after you have already reimbursed the
+          customer yourself. Vanta records the payment you made and emails the customer to confirm it — nothing here
+          moves funds, and the payment processor is not involved.
+        </p>
+        <p className="mt-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-[13px] text-zinc-400">
+          Returned stock is <strong>not</strong> added back automatically. If the vial came back sealed and saleable,
+          adjust the count yourself in Inventory.
         </p>
         {canRefund ? (
           remaining > 0 ? (
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              <input
-                value={refundInput}
-                onChange={(e) => setRefundInput(e.target.value)}
-                placeholder={`Full remaining (${money(remaining)})`}
-                className="vl-input w-48 px-3 py-2 text-sm"
-              />
+            <div className="mt-3 space-y-3">
+              <div className="grid gap-3 sm:grid-cols-3">
+                <label className="text-sm text-zinc-300">Amount
+                  <input
+                    value={refundInput}
+                    onChange={(e) => setRefundInput(e.target.value)}
+                    placeholder={`Full remaining (${money(remaining)})`}
+                    className="vl-input mt-1 w-full px-3 py-2 text-sm"
+                  />
+                </label>
+                <label className="text-sm text-zinc-300">How you sent it
+                  <select
+                    value={reimbursementMethod}
+                    onChange={(e) => setReimbursementMethod(e.target.value)}
+                    className="vl-input mt-1 w-full px-3 py-2 text-sm"
+                  >
+                    <option value="zelle">Zelle</option>
+                    <option value="cashapp">Cash App</option>
+                    <option value="other">Other</option>
+                  </select>
+                </label>
+                <label className="text-sm text-zinc-300">Internal note (optional)
+                  <input
+                    value={reimbursementNote}
+                    onChange={(e) => setReimbursementNote(e.target.value)}
+                    placeholder="Seal intact, inspected 24 Aug"
+                    className="vl-input mt-1 w-full px-3 py-2 text-sm"
+                  />
+                </label>
+              </div>
               <button type="button" disabled={saving} onClick={handleRefund} className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60">
-                Issue refund
+                {saving ? "Recording…" : "Record manual reimbursement"}
               </button>
             </div>
           ) : (
-            <p className="mt-3 text-sm text-emerald-300">Fully refunded.</p>
+            <p className="mt-3 text-sm text-emerald-300">Fully reimbursed.</p>
           )
         ) : (
           <p className="mt-3 text-sm text-zinc-500">Your role does not have permission to issue refunds.</p>

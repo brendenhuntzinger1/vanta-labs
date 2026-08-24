@@ -24,7 +24,7 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
   {
     q: "What is your return policy?",
-    a: "Products are sold for laboratory and research use only. See our Return & Refund policy for full details, or reach out below and we'll help.",
+    a: "Products are sold for laboratory and research use only. See our Returns & Refunds policy for full details, or reach out below and we'll help.",
   },
 ];
 

@@ -3,63 +3,110 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { providerSettlesRefunds } from "@/lib/payment-provider";
+import { reimbursementRecordedTemplate } from "@/lib/email/templates";
 
 // ---------------------------------------------------------------------------
-// The refund button does not send money.
+// NOBODY IS EVER TOLD MONEY MOVED WHEN IT DID NOT.
 //
-// LivePaymentProvider.refundPayment() is a no-op: there is no refund
-// integration with the processor. Everything else about a refund is real --
-// the order is marked refunded, commission is reversed, stock is restocked --
-// which is exactly what makes it dangerous. It looks completed from every
-// angle except the customer's bank account.
+// That invariant has not changed. What changed is which side of it this action
+// sits on.
 //
-// The email was the harm. "Your refund has been processed" tells someone to
-// expect money that is not coming; they wait, nothing arrives, and the next
-// thing that happens is a chargeback -- which costs more than the refund would
-// have and is reported against the merchant account.
+// It used to be a "refund" button that recorded a refund nobody had sent, so
+// the guard was: do not email. Announcing a refund that is not coming makes the
+// customer wait, then charge back — which costs more than the refund and is
+// reported against the merchant account.
 //
-// These tests fail the moment that email can be sent again without settlement.
+// It is now a record of a reimbursement the owner has ALREADY sent by hand at
+// the end of a manual return. The money genuinely moved before this ran, so the
+// email is correct to send — provided it says what actually happened. The
+// dangerous sentence is no longer "we refunded you"; it is "we returned it to
+// your original payment method", which was never true and now never appears.
+//
+// The processor is not contacted at all. The behavioural proof lives in
+// e2e/manual-reimbursement.test.ts, which watches a live provider object and
+// asserts refundPayment is never called. What this file adds is a structural
+// guard against that call being reintroduced, and a check on the words the
+// customer and the owner actually read.
 // ---------------------------------------------------------------------------
 
 const SRC = join(process.cwd(), "src");
 const route = readFileSync(join(SRC, "app/api/admin/orders/[orderId]/route.ts"), "utf8");
+/** Comments EXPLAIN why the provider call was removed; prose is not a call. */
+const routeCode = route.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
 const actions = readFileSync(join(SRC, "components/admin-order-actions.tsx"), "utf8");
 
-describe("refunds tell the truth", () => {
-  it("reports that the processor does not settle refunds", () => {
-    // When a real integration lands this flips, and the email gate below opens
-    // on its own. Until then it must be honest.
+describe("the processor is not involved", () => {
+  it("still reports that the processor does not settle refunds", () => {
+    // If a real card-refund integration ever lands, it is a DIFFERENT action.
+    // This one records money the owner sent outside the processor.
     expect(providerSettlesRefunds()).toBe(false);
   });
 
-  it("gates the customer refund email on money actually having moved", () => {
-    expect(route).toContain("providerRefunded");
-    expect(route).toContain("if (order.customer_email && providerRefunded)");
+  it("the admin order route contains no call to a provider refund", () => {
+    // Structural backstop for the behavioural test. A reintroduced call would
+    // pay a returning customer twice the moment a real integration exists.
+    expect(routeCode).not.toMatch(/refundPayment\s*\(/);
+    expect(routeCode).not.toMatch(/getPaymentProvider\s*\(/);
+  });
+});
+
+describe("what the customer is told", () => {
+  const rendered = reimbursementRecordedTemplate({
+    customerName: "A Customer",
+    orderId: "VL-TEST0001",
+    amount: 50,
+    supportEmail: "support@vantalabsresearch.com",
   });
 
-  it("never sends that email unconditionally", () => {
-    // The original bug, in one line: the send was guarded only on an address
-    // existing, so every recorded refund announced itself as processed.
-    expect(route).not.toContain("if (order.customer_email) {\n        const refundEmail");
+  it("says the reimbursement was processed, and names the order", () => {
+    expect(rendered.subject).toMatch(/reimbursement/i);
+    expect(rendered.html).toContain("VL-TEST0001");
+    expect(rendered.text).toContain("$50.00");
   });
 
-  it("tells the admin in the response that no money was sent", () => {
-    expect(route).toContain("NO money has been sent");
-    expect(route).toContain("customerNotified");
+  it("NEVER claims the money went back to a card", () => {
+    // The one sentence that would be false. It is also the sentence a customer
+    // would act on — waiting for a statement line that never appears.
+    for (const lie of [/original payment method/i, /back to your card/i, /business days/i, /statement/i]) {
+      expect(rendered.html).not.toMatch(lie);
+      expect(rendered.text).not.toMatch(lie);
+    }
   });
 
-  it("records in the audit log whether money moved", () => {
-    const auditBlock = route.slice(route.indexOf('action: "order_refund"'));
-    expect(auditBlock.slice(0, 600)).toContain("providerRefunded");
+  it("names no payment processor and no payment handle", () => {
+    const everything = `${rendered.html}${rendered.text}`;
+    expect(everything).not.toMatch(/veyra/i);
+    expect(everything).not.toMatch(/zelle|cash ?app/i);
+  });
+});
+
+describe("what the owner is told", () => {
+  it("states prominently that recording does not send money", () => {
+    expect(actions).toMatch(/does not send money/i);
+    // In the amber callout, not the page's smallest grey text.
+    expect(actions).toMatch(/border-amber-300\/40[\s\S]{0,400}does not send money/i);
   });
 
-  // The fact was previously rendered in the page's smallest, greyest text.
-  it("states it prominently in the admin, not as helper text", () => {
-    expect(actions).toContain("This does not send money.");
-    expect(actions).not.toMatch(/text-xs text-zinc-500">\s*Updates this order/);
+  it("says so again in the confirmation prompt, in capitals", () => {
+    expect(actions).toContain("VANTA WILL NOT SEND ANY MONEY");
   });
 
-  it("says so again in the confirmation prompt", () => {
-    expect(actions).toContain("NO MONEY WILL BE SENT");
+  it("tells the owner returned stock is not restocked automatically", () => {
+    expect(actions).toMatch(/not.{0,40}added back automatically/i);
+  });
+
+  it("labels the action as recording, never as sending", () => {
+    expect(actions).toContain("Record manual reimbursement");
+    // "Issue refund" reads as an instruction to the software to pay someone.
+    expect(actions).not.toContain("Issue refund");
+  });
+});
+
+describe("the audit trail", () => {
+  it("records how the money was sent, and that Vanta did not send it", () => {
+    const auditBlock = route.slice(route.indexOf('action: "order_refund"'), route.indexOf('action: "order_refund"') + 900);
+    expect(auditBlock).toContain("reimbursementMethod");
+    expect(auditBlock).toContain("providerRefunded");
+    expect(auditBlock).toContain("performedBy");
   });
 });

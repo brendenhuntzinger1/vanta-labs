@@ -37,7 +37,16 @@ const REQUIRED_CONFIRMATIONS = [
     title: "Age & Legal Confirmation *",
     body: "I confirm that I am 21 years of age or older and legally permitted to purchase laboratory research materials.",
   },
+  {
+    key: "returnsPolicy" as const,
+    short: "Returns & Refunds Policy",
+    title: "Returns & Refunds Policy *",
+    body: "I acknowledge and accept the Returns & Refunds Policy. Standard returns must be requested within 14 days of delivery, and products must remain unused and unopened with the original factory cap/seal intact. Contact support before sending anything back.",
+    policyHref: "/legal/refund",
+  },
 ];
+
+type AcknowledgementKey = (typeof REQUIRED_CONFIRMATIONS)[number]["key"];
 
 // A gentle tap on supported devices (Android/Chrome). No-op on iOS Safari and
 // anywhere Vibration isn't available — never throws, never blocks.
@@ -67,11 +76,12 @@ export function CartDrawer() {
   const router = useRouter();
   const [referralInput, setReferralInput] = useState("");
   const [couponInput, setCouponInput] = useState("");
-  const [acknowledgements, setAcknowledgements] = useState({
-    researchResponsibility: false,
-    researchCompliance: false,
-    ageLegalConfirmation: false,
-  });
+  // Derived from REQUIRED_CONFIRMATIONS so a statement added to that list is
+  // automatically required here too — the list is the single source of truth
+  // for what a shopper must accept, and the server enforces the same set.
+  const [acknowledgements, setAcknowledgements] = useState<Record<AcknowledgementKey, boolean>>(
+    () => Object.fromEntries(REQUIRED_CONFIRMATIONS.map((item) => [item.key, false])) as Record<AcknowledgementKey, boolean>,
+  );
   // Collapsible sections — everything the majority of shoppers don't need stays
   // out of the way until asked for. Legal detail, protection detail, and the
   // code fields are each one tap from view.
@@ -598,7 +608,21 @@ export function CartDrawer() {
                           </button>
                         </label>
                         <Collapse open={Boolean(openLegal[item.key])}>
-                          <p className="pl-8 pr-1 pt-2 text-xs leading-relaxed text-zinc-500">{item.body}</p>
+                          <p className="pl-8 pr-1 pt-2 text-xs leading-relaxed text-zinc-500">
+                            {item.body}
+                            {"policyHref" in item && item.policyHref ? (
+                              <>
+                                {" "}
+                                <Link
+                                  href={item.policyHref}
+                                  onClick={closeCart}
+                                  className="vl-focus-ring text-[color:var(--accent-gold)] underline underline-offset-2"
+                                >
+                                  Read the full policy
+                                </Link>
+                              </>
+                            ) : null}
+                          </p>
                         </Collapse>
                       </div>
                     ))}

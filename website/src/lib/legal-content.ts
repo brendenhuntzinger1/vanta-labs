@@ -151,18 +151,41 @@ Shipping Protection is an optional, store-backed service — not third-party ins
 For lost, delayed, or damaged shipments, contact ${email} with your order number.`,
   },
   refund: {
-    title: "Return & Refund Policy",
-    body: `## Research materials
-Due to the nature of these materials, returns are limited and may not be accepted once shipped. Eligibility is handled case by case.
+    title: "Returns & Refunds",
+    body: `Clear, straightforward support when something is wrong with your order.
 
-## Damaged or incorrect orders
-If your order arrives damaged or incorrect, contact ${email} within a reasonable time with your order number and photos, and we'll make it right.
+## Contact us before sending anything back
+Please do not mail a product back before contacting us. Email ${email} with your order number, the name or email on the order, the product involved, and the reason for the return. If your return is approved, we'll reply with return instructions.
+
+A product mailed back without prior authorization is not an approved return.
+
+## Standard returns
+To be eligible for a standard return, a product must:
+
+- have its return requested within **14 days of delivery**
+- be unused and unopened
+- retain its **original factory cap/seal, fully intact**
+- be in its original condition
+
+Products that have been opened, used, punctured, reconstituted, altered, or that have had the factory seal removed or broken are not eligible for a standard return.
+
+Customers are responsible for return shipping on ordinary returns.
+
+Once an approved return is received and inspected, Vanta Labs will arrange the applicable reimbursement with you.
+
+## Damaged, missing or incorrect items
+This is separate from a standard return, and the sealed-product requirement does not apply.
+
+If your order arrives damaged or broken, is missing an item, or contains the wrong item, email ${email} promptly with your order number and photographs where applicable. We'll make it right.
+
+## Cancellations
+If you need to cancel, email ${email} as soon as possible. We can usually cancel an order before it has been packed and a shipping label has been purchased. Once an order is on its way to the carrier we can no longer cancel it, and it is handled as a return or a delivery issue instead.
 
 ## Memberships
-Membership charges are non-refundable. Annual memberships are non-refundable; you keep access for the remainder of your paid term and can cancel anytime to stop auto-renewal.
+Membership charges are non-refundable. You keep access for the remainder of your paid term and can cancel anytime to stop auto-renewal.
 
-## How to request
-Email ${email} with your order number and reason. Approved refunds are issued to the original payment method where possible.`,
+## Questions
+Email ${email} and we'll help.`,
   },
   cookies: {
     title: "Cookie Policy",

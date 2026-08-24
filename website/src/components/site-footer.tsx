@@ -18,7 +18,7 @@ const FOOTER_COLUMNS = {
     { label: "Privacy Policy", href: "/legal/privacy" },
     { label: "Terms of Service", href: "/legal/terms" },
     { label: "Shipping Policy", href: "/legal/shipping" },
-    { label: "Return & Refund", href: "/legal/refund" },
+    { label: "Returns & Refunds", href: "/legal/refund" },
     { label: "Cookie Policy", href: "/legal/cookies" },
   ],
 };

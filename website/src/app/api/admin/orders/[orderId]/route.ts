@@ -7,12 +7,12 @@ import { buildCarrierTrackingUrl } from "@/lib/tracking-url";
 import { getSiteUrl } from "@/lib/env";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
-import { deliveryConfirmationTemplate, orderConfirmationTemplate, refundConfirmationTemplate, replacementOrderTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
+import { enqueueFailedEmail } from "@/lib/email/retry-queue";
+import { getBusinessSettings } from "@/lib/admin-control";
+import { deliveryConfirmationTemplate, orderConfirmationTemplate, reimbursementRecordedTemplate, replacementOrderTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { createReplacementOrder } from "@/lib/admin-replacements";
 import { syncOrderToShippo } from "@/lib/shippo/order-sync";
-import { providerSettlesRefunds, getPaymentProvider } from "@/lib/payment-provider";
 import { updateCommissionOnRefund } from "@/lib/payment-webhook";
-import { restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
 import { restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
 import { revokeMembershipForRefund } from "@/lib/membership-billing";
 import { refundStoreCreditForOrder } from "@/lib/store-credit";
@@ -65,6 +65,8 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       shippingCostAmount?: number;
       /** Idempotency key for send_replacement — one per confirmation dialog. */
       requestId?: string;
+    /** How the owner already sent the money: zelle | cashapp | other. */
+    reimbursementMethod?: string;
     };
 
     const action = String(body.action ?? "");
@@ -306,24 +308,41 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       const newRefundTotal = roundMoney(alreadyRefunded + requestedAmount);
       const isFullRefund = newRefundTotal >= amountPaid;
 
-      // NO MONEY MOVES HERE. LivePaymentProvider.refundPayment() is a no-op
-      // stub -- the processor has no refund integration. This call is kept so
-      // the seam exists for when one is added, but it must never be mistaken
-      // for a settlement: everything below records the refund in Vanta's own
-      // books, and the money itself has to be sent from the processor by hand.
-      let providerRefunded = false;
-      try {
-        const provider = getPaymentProvider();
-        if (order.payment_id) {
-          await provider.refundPayment(String(order.payment_id));
-          providerRefunded = providerSettlesRefunds();
-        }
-      } catch {
-        // Best-effort. A failure changes nothing today, because success does
-        // not move money either.
-      }
+      // HOW the owner sent it, from a fixed list. Free text is not accepted so
+      // nobody can paste an account number or a handle into the audit trail.
+      const REIMBURSEMENT_METHODS = ["zelle", "cashapp", "other"] as const;
+      const rawMethod = String(body.reimbursementMethod ?? "other").toLowerCase();
+      const reimbursementMethod = REIMBURSEMENT_METHODS.find((m) => m === rawMethod) ?? "other";
 
-      const { error } = await supabaseAdmin
+      // THE PAYMENT PROCESSOR IS NOT CONTACTED. AT ALL.
+      //
+      // This used to call provider.refundPayment() "so the seam exists". The
+      // seam is a liability on this path: the money for a manual return has
+      // ALREADY been sent by the owner, by hand, outside the processor. Asking
+      // the processor to refund the same order would, the moment a real refund
+      // integration is wired up behind that method, pay the customer a second
+      // time — and the code doing it would look deliberate.
+      //
+      // A future card-refund flow is a DIFFERENT action, not this one. Recording
+      // a manual reimbursement never touches an external payment API, and the
+      // test that proves it watches a live provider object rather than deleting
+      // it, so "we never call it" cannot be confused with "it isn't there".
+      const providerRefunded = false;
+
+      // COMPARE-AND-SET: the write only lands while refund_amount is still the
+      // value this request read. A double-click, a second tab, a retried fetch
+      // and two admins clicking at once all read the SAME `alreadyRefunded`, so
+      // exactly one of them matches and the rest update ZERO rows and stop.
+      //
+      // Recording a reimbursement twice would double-deduct revenue, double-
+      // reverse the ambassador's commission and email the customer twice for
+      // one payment — and unlike a card refund there is no processor-side
+      // record to reconcile it against afterwards.
+      //
+      // `alreadyRefunded` is compared as the raw stored value rather than the
+      // rounded one so the filter matches what is actually in the column.
+      const priorRefundValue = order.refund_amount ?? null;
+      const claimBuilder = supabaseAdmin
         .from("orders")
         .update({
           payment_status: isFullRefund ? "refunded" : "partially_refunded",
@@ -332,8 +351,23 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
           updated_at: now,
         })
         .eq("order_id", orderId);
+      // NULL and 0 are different filters in SQL, and getting it wrong here does
+      // not fail loudly — it silently matches nothing, so NO reimbursement
+      // could ever be recorded. The column is `not null default 0` in the
+      // migration, but an order row written before that migration (or by any
+      // path that never set it) can still hold NULL, so both are handled.
+      const { data: claimed, error } = await (priorRefundValue === null
+        ? claimBuilder.is("refund_amount", null)
+        : claimBuilder.eq("refund_amount", priorRefundValue)
+      ).select("id");
       if (error) {
         throw error;
+      }
+      if (!claimed || claimed.length === 0) {
+        return NextResponse.json({
+          success: false,
+          error: "This reimbursement was already recorded. Reload the order to see the current total.",
+        }, { status: 409 });
       }
 
       // Reduce the ambassador commission in proportion to how much of the
@@ -382,40 +416,57 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         } catch {
           // Best-effort; never block the refund.
         }
-        // Return the committed stock to the catalog on a full refund of a
-        // physical order (membership orders hold no inventory).
-        try {
-          // Share the SAME atomic restock claim as the webhook path so an admin
-          // refund racing the processor's refund webhook (or a double-click)
-          // restocks exactly once — never twice.
-          if (String(order.order_type ?? "product") !== "membership" && await claimInventoryRestock(orderId)) {
-            await restockInventoryForOrder(
-              (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
-            );
-          }
-        } catch {
-          // Best-effort; never block the refund.
-        }
+        // INVENTORY IS NOT RESTOCKED HERE, DELIBERATELY.
+        //
+        // This action records a reimbursement the owner has ALREADY sent by
+        // hand, at the end of a manual return: the customer emailed, the return
+        // was authorised, a vial came back, and it was inspected. Whether that
+        // vial is sellable again is a physical judgement about a physical
+        // object — seal intact, stored correctly, still in date — and nothing
+        // in this request knows the answer.
+        //
+        // Restocking on the strength of a money record would put a vial that
+        // may have spent a week in a mailbox back on the shelf automatically,
+        // and the next customer would buy it. Phantom stock also oversells:
+        // the unit is countable but not shippable.
+        //
+        // So the safe direction is to leave stock alone. The owner adjusts the
+        // count in admin → Inventory if, and only if, the returned unit is
+        // genuinely resaleable — an explicit, audited act.
+        //
+        // The processor-driven refund/chargeback path in payment-webhook.ts is
+        // UNCHANGED and still restocks behind claimInventoryRestock(): that one
+        // covers an order the customer never received (a failed or cancelled
+        // order whose goods never left), which is a different situation.
       }
 
-      // The customer is told only when money has ACTUALLY been sent.
+      // The customer is told because the owner has ALREADY sent the money.
       //
-      // This email says "Your refund has been processed". Sending it while the
-      // processor integration is a stub tells a customer to expect money that
-      // is not coming: they wait, nothing arrives, and the next thing that
-      // happens is a chargeback -- which costs more than the refund and is
-      // reported against the merchant account.
+      // This is the one path where announcing it is safe: the workflow is
+      // "reimburse the customer externally, THEN record it here", so by the
+      // time this runs the payment has happened. The wording says the
+      // reimbursement was processed — never that it went back to their card,
+      // which would be false and is how a customer ends up waiting for money
+      // that is not coming and filing a chargeback instead.
       //
-      // Vanta's own records are still updated above, because the owner needs
-      // them; announcing it is a separate act, and it waits for the money.
-      if (order.customer_email && providerRefunded) {
-        const refundEmail = refundConfirmationTemplate({
+      // Sent exactly once because it is inside the branch that WON the
+      // compare-and-set above: a duplicate request never reaches this line.
+      let customerNotified = false;
+      if (order.customer_email) {
+        const reimbursementEmail = reimbursementRecordedTemplate({
           customerName: String(order.customer_name ?? ""),
           orderId: String(order.order_number ?? orderId),
-          refundAmount: requestedAmount,
-          isFullRefund,
+          amount: requestedAmount,
+          supportEmail: (await getBusinessSettings().catch(() => null))?.supportEmail,
         });
-        void sendEmail({ to: String(order.customer_email), ...refundEmail });
+        const sent = await sendEmail({ to: String(order.customer_email), ...reimbursementEmail });
+        customerNotified = sent.success;
+        if (!sent.success) {
+          await enqueueFailedEmail(
+            { to: String(order.customer_email), subject: reimbursementEmail.subject, html: reimbursementEmail.html, text: reimbursementEmail.text },
+            sent.error,
+          );
+        }
       }
 
       const { error: auditError } = await supabaseAdmin
@@ -429,7 +480,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
             newRefundTotal,
             isFullRefund,
             note: body.note ?? null,
-            // Whether money actually left. False today for every refund.
+            // How the owner actually sent the money, for the audit trail. The
+            // METHOD is recorded; no handle, account or credential is.
+            reimbursementMethod: reimbursementMethod,
+            customerNotified,
+            // Vanta never moves money on this path. Kept as an explicit false
+            // so the audit row says so rather than leaving it to be inferred.
             providerRefunded,
             performedAt: now,
             performedBy: session.username,
@@ -450,10 +506,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         refundAmount: newRefundTotal,
         isFullRefund,
         providerRefunded,
-        customerNotified: providerRefunded,
-        message: providerRefunded
-          ? "Refund issued and the customer has been emailed."
-          : "Recorded in Vanta only — NO money has been sent. Issue this refund in your payment processor, then tell the customer.",
+        customerNotified,
+        message: customerNotified
+          ? "Reimbursement recorded. Vanta did not send any money — the customer has been emailed to confirm the payment you already made."
+          : "Reimbursement recorded. Vanta did not send any money. The confirmation email could not be sent and has been queued for retry.",
       });
     }
 

@@ -117,16 +117,28 @@ describe("secretsMatch", () => {
 });
 
 describe("hasAllAcknowledgements", () => {
-  it("requires all three, strictly true", () => {
-    expect(
-      hasAllAcknowledgements({ researchResponsibility: true, researchCompliance: true, ageLegalConfirmation: true }),
-    ).toBe(true);
-    expect(
-      hasAllAcknowledgements({ researchResponsibility: true, researchCompliance: true, ageLegalConfirmation: false }),
-    ).toBe(false);
+  it("requires EVERY statement, strictly true", () => {
+    // Four now: the Returns & Refunds acknowledgement joined the three research
+    // and age statements. The card lane calls this same function, so a
+    // statement can never be required in one lane and forgotten in the other.
+    const all = {
+      researchResponsibility: true,
+      researchCompliance: true,
+      ageLegalConfirmation: true,
+      returnsPolicy: true,
+    };
+    expect(hasAllAcknowledgements(all)).toBe(true);
+
+    // Dropping ANY single one refuses the wallet session.
+    for (const key of Object.keys(all)) {
+      expect(hasAllAcknowledgements({ ...all, [key]: false })).toBe(false);
+      const missing = Object.fromEntries(Object.entries(all).filter(([k]) => k !== key));
+      expect(hasAllAcknowledgements(missing)).toBe(false);
+    }
+
     // Truthy is not true — a "1" or "yes" must not pass for a legal consent.
     expect(
-      hasAllAcknowledgements({ researchResponsibility: 1, researchCompliance: "yes", ageLegalConfirmation: true }),
+      hasAllAcknowledgements({ ...all, researchResponsibility: 1, researchCompliance: "yes" }),
     ).toBe(false);
     expect(hasAllAcknowledgements(null)).toBe(false);
     expect(hasAllAcknowledgements("true")).toBe(false);

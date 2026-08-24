@@ -6,25 +6,19 @@ import { createCheckoutSession, sanitizeCustomerInput } from "@/lib/payment-serv
 import { recordMarketingOptIn } from "@/lib/marketing-broadcast";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { hasAllAcknowledgements } from "@/lib/express-wallet";
 import { isCheckoutOpen } from "@/lib/payment-provider";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { customerSafeMessage } from "@/lib/safe-error";
 import { getRequestIpAddress } from "@/lib/admin-auth";
 import type { CustomerInput } from "@/lib/payment-types";
 
-function hasRequiredAcknowledgements(value: unknown) {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-
-  const acknowledgements = value as Record<string, unknown>;
-
-  return (
-    acknowledgements.researchResponsibility === true &&
-    acknowledgements.researchCompliance === true &&
-    acknowledgements.ageLegalConfirmation === true
-  );
-}
+// The card lane and the wallet lane MUST enforce the identical set. This used
+// to be a private copy of the same three checks, so adding a fourth statement
+// meant remembering to edit two files — and an order created through Apple Pay
+// without an acknowledgement the card lane required would be invisible until a
+// dispute. One function, both lanes.
+const hasRequiredAcknowledgements = hasAllAcknowledgements;
 
 export async function POST(request: Request) {
   try {

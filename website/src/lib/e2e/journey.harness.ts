@@ -205,6 +205,9 @@ export function checkoutBody(shopper: Shopper, items: Array<{ productId: string;
       researchResponsibility: true,
       researchCompliance: true,
       ageLegalConfirmation: true,
+      // Returns & Refunds. Required by BOTH lanes; the card lane and the wallet
+      // lane share one validator so they cannot drift apart.
+      returnsPolicy: true,
     },
   };
 }

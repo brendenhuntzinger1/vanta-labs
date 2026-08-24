@@ -35,12 +35,22 @@ export const EXPRESS_SESSION_MINUTES = 15;
  * Bumped whenever the acknowledgement wording changes, so a stored consent
  * stays attributable to the exact text the shopper was shown.
  */
-export const COMPLIANCE_COPY_VERSION = "2026-08-01";
+// Bumped when the shopper is shown different consent text. The Returns &
+// Refunds acknowledgement was added on this date, so an order stamped with the
+// earlier version was agreed under three statements, not four.
+export const COMPLIANCE_COPY_VERSION = "2026-08-24";
 
 export interface ComplianceAcknowledgements {
   researchResponsibility: boolean;
   researchCompliance: boolean;
   ageLegalConfirmation: boolean;
+  /**
+   * Returns & Refunds Policy — the 14-day window, the intact factory seal, and
+   * the requirement to contact support BEFORE sending anything back. Recorded
+   * with the others because a return dispute turns on what the shopper agreed
+   * to at the moment of purchase.
+   */
+  returnsPolicy: boolean;
 }
 
 // Strictly `true`, never merely truthy: this is a legal consent record, and a
@@ -51,7 +61,8 @@ export function hasAllAcknowledgements(value: unknown): value is ComplianceAckno
   return (
     ack.researchResponsibility === true &&
     ack.researchCompliance === true &&
-    ack.ageLegalConfirmation === true
+    ack.ageLegalConfirmation === true &&
+    ack.returnsPolicy === true
   );
 }
 

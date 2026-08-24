@@ -8,6 +8,7 @@ import {
   isApplePlatform,
   isRegisteredApplePayHost,
 } from "@/lib/express-checkout";
+import type { ComplianceAcknowledgements } from "@/lib/express-wallet";
 import { readAttributionForCheckout } from "@/lib/attribution-client";
 
 // -------------------------------------------------------------------------
@@ -148,14 +149,12 @@ const toSheetLineItem = (item: ServerLineItem): ApplePayLineItem => ({
 });
 
 export interface ExpressApplePayButtonProps {
-  /** All three required confirmations ticked. Nothing server-side happens
-   *  before this is true — the compliance gate is also the session-mint gate. */
+  /** EVERY required confirmation ticked. Nothing server-side happens before
+   *  this is true — the compliance gate is also the session-mint gate. */
   acknowledged: boolean;
-  acknowledgements: {
-    researchResponsibility: boolean;
-    researchCompliance: boolean;
-    ageLegalConfirmation: boolean;
-  };
+  /** The shared shape, so the wallet lane cannot fall behind the card lane when
+   *  a statement is added. The server re-checks it either way. */
+  acknowledgements: ComplianceAcknowledgements;
   onUnavailable?: () => void;
 }
 
