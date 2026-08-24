@@ -247,3 +247,89 @@ describe("a commission only accrues when the ambassador and the program are live
     expect(String(row!.ineligible_reason)).toMatch(/minimum qualifying order/i);
   });
 });
+
+// ===========================================================================
+// The CHECKOUT-side referral guards. The webhook guards above decide what the
+// ambassador is paid; these decide what the CUSTOMER pays, so an unqualifying
+// cart getting 10% off is a straight loss even when no commission accrues.
+// Sabotaging the minimum-order check in quote-order left the suite green, so
+// none of this was covered by behaviour either.
+describe("checkout refuses a referral code that should not apply", () => {
+  async function checkoutWithCode(code: string, quantity: number) {
+    const { POST } = await import("@/app/api/checkout/create-session/route");
+    const body = checkoutBody(BUYER, [{ productId: SLUG, quantity }]) as Record<string, unknown>;
+    body.referralCode = code;
+    const response = await POST(new Request("https://vantalabsresearch.test/api/checkout/create-session", {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-forwarded-for": "203.0.113.9" },
+      body: JSON.stringify(body),
+    }));
+    return { status: response.status, body: await response.json() as Record<string, unknown> };
+  }
+
+  it("BASELINE: a qualifying cart with a live code is accepted and discounted", async () => {
+    seedAmbassador("approved");
+    const result = await checkoutWithCode(CODE, 2);
+    expect(result.status, JSON.stringify(result.body)).toBe(200);
+
+    const order = (harness.db.tables.get("orders") ?? [])[0];
+    expect(Number(order.discount_amount)).toBeGreaterThan(0);
+    expect(String(order.referral_code)).toBe(CODE);
+  });
+
+  it("refuses a cart below the minimum qualifying subtotal", async () => {
+    harness.reset();
+    seedStore(harness.db, [
+      { slug: SLUG, name: "Alpha Peptide 10mg", priceCents: 1000, inventory: 40, unitCostCents: 200, weightOz: 0.4 },
+    ]);
+    seedAmbassador("approved");
+
+    const result = await checkoutWithCode(CODE, 1);
+    expect(result.status).toBe(400);
+    expect(String(result.body.error)).toMatch(/minimum merchandise subtotal/i);
+    // and nothing was created at a discount it did not qualify for
+    expect(harness.db.tables.get("orders") ?? []).toHaveLength(0);
+  });
+
+  // A stale or unknown code is DROPPED, not rejected: quote-order swallows the
+  // lookup error deliberately so a code that went bad after the shopper applied
+  // it cannot hard-block a legitimate sale. The invariant that matters is
+  // therefore not "the order is refused" but "no undeserved discount is given
+  // and no attribution is recorded".
+  for (const [label, status] of [
+    ["not approved", "disabled"],
+    ["still pending", "pending"],
+    ["rejected", "rejected"],
+  ]) {
+    it(`drops a code whose ambassador is ${label} — sale completes at FULL price`, async () => {
+      seedAmbassador(status);
+      const result = await checkoutWithCode(CODE, 2);
+      expect(result.status).toBe(200);
+
+      const order = (harness.db.tables.get("orders") ?? [])[0];
+      expect(Number(order.discount_amount ?? 0)).toBe(0);
+      expect(order.referral_code ?? null).toBeNull();
+      expect(order.ambassador_id ?? null).toBeNull();
+    });
+  }
+
+  it("drops a code that does not exist — sale completes at FULL price", async () => {
+    seedAmbassador("approved");
+    const result = await checkoutWithCode("NOSUCHCODE", 2);
+    expect(result.status).toBe(200);
+
+    const order = (harness.db.tables.get("orders") ?? [])[0];
+    expect(Number(order.discount_amount ?? 0)).toBe(0);
+    expect(order.referral_code ?? null).toBeNull();
+    expect(order.ambassador_id ?? null).toBeNull();
+  });
+
+  it("refuses the ambassador's own code on their own order", async () => {
+    harness.db.seed("ambassadors", [
+      { id: AMBASSADOR_ID, status: "approved", customer_discount_percent: null, referral_code: CODE, email: BUYER.email },
+    ]);
+    const result = await checkoutWithCode(CODE, 2);
+    expect(result.status).toBe(400);
+    expect(String(result.body.error)).toMatch(/your own referral code/i);
+  });
+});
