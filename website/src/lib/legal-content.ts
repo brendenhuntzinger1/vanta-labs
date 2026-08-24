@@ -117,7 +117,7 @@ We may accept or decline any order. Prices, fees, and availability may change wi
 Orders ship after payment is verified. Delivery times are estimates. Risk of loss passes to you on delivery to the carrier.
 
 ## Returns & refunds
-See our Returns & Refunds Policy. Memberships are non-refundable.
+See our Return & Reimbursement Policy. Memberships are non-refundable.
 
 ## Limitation of liability
 To the maximum extent permitted by law, the seller is not liable for indirect, incidental, or consequential damages arising from the use or misuse of any product.
@@ -151,7 +151,7 @@ Shipping Protection is an optional, store-backed service — not third-party ins
 For lost, delayed, or damaged shipments, contact ${email} with your order number.`,
   },
   refund: {
-    title: "Returns & Refunds",
+    title: "Return & Reimbursement Policy",
     body: `Clear, straightforward support when something is wrong with your order.
 
 ## Contact us before sending anything back

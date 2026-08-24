@@ -1489,7 +1489,7 @@ describe("PHASE 16 — one hundred customers, constrained stock", () => {
 });
 
 // ===========================================================================
-describe("PHASE 17 — the Returns & Refunds acknowledgement is required", () => {
+describe("PHASE 17 — the Return & Reimbursement acknowledgement is required", () => {
   // Two lanes reach checkout — the card form and Apple Pay — and they used to
   // validate acknowledgements with two separate copies of the same three
   // checks. A statement added to one and forgotten in the other would let a
