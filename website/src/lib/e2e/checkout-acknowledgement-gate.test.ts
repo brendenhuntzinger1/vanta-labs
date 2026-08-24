@@ -114,8 +114,10 @@ describe("the server is the authority on the acknowledgements", () => {
     expect(String(result.body.error ?? "")).not.toMatch(/acknowledgement/i);
   });
 
-  it("REGRESSION f57a3e5: the pre-fix card-lane payload is refused", async () => {
-    // Exactly what /checkout posted between 32d97c8 and f57a3e5.
+  it("REGRESSION f57a3e5: the retired three-key payload is refused", async () => {
+    // Exactly what /checkout posted between 32d97c8 and f57a3e5, and now also
+    // what a stale client cached before the 4->2 consolidation would send.
+    // Either way it omits the returns statement, so it must not buy anything.
     const result = await checkout({
       researchResponsibility: true,
       researchCompliance: true,
@@ -183,7 +185,7 @@ describe("the server is the authority on the acknowledgements", () => {
   });
 
   it("refuses without sending any email", async () => {
-    await checkout({ ...ALL_TRUE, ageLegalConfirmation: false });
+    await checkout({ ...ALL_TRUE, researchCompliance: false });
     expect(harness.emails).toHaveLength(0);
   });
 });

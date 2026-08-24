@@ -117,19 +117,14 @@ describe("secretsMatch", () => {
 });
 
 describe("hasAllAcknowledgements", () => {
-  it("requires EVERY statement, strictly true", () => {
-    // Four now: the Returns & Refunds acknowledgement joined the three research
-    // and age statements. The card lane calls this same function, so a
-    // statement can never be required in one lane and forgotten in the other.
-    const all = {
-      researchResponsibility: true,
-      researchCompliance: true,
-      ageLegalConfirmation: true,
-      returnsPolicy: true,
-    };
+  it("requires BOTH statements, strictly true", () => {
+    // Two now: the three research/compliance statements were consolidated into
+    // one on 2026-08-25. The card lane calls this same function, so a statement
+    // can never be required in one lane and forgotten in the other.
+    const all = { researchCompliance: true, returnsPolicy: true };
     expect(hasAllAcknowledgements(all)).toBe(true);
 
-    // Dropping ANY single one refuses the wallet session.
+    // Dropping either one refuses the wallet session.
     for (const key of Object.keys(all)) {
       expect(hasAllAcknowledgements({ ...all, [key]: false })).toBe(false);
       const missing = Object.fromEntries(Object.entries(all).filter(([k]) => k !== key));
@@ -137,10 +132,20 @@ describe("hasAllAcknowledgements", () => {
     }
 
     // Truthy is not true — a "1" or "yes" must not pass for a legal consent.
+    // This matters MORE now the boxes render pre-ticked: the default lives in
+    // the UI and grants the server nothing.
+    for (const impostor of [1, "yes", "true", {}, []]) {
+      expect(hasAllAcknowledgements({ ...all, researchCompliance: impostor })).toBe(false);
+      expect(hasAllAcknowledgements({ ...all, returnsPolicy: impostor })).toBe(false);
+    }
+
+    // The retired keys must not resurrect the old contract: sending only the
+    // three old statements is exactly what broke card checkout before.
     expect(
-      hasAllAcknowledgements({ ...all, researchResponsibility: 1, researchCompliance: "yes" }),
+      hasAllAcknowledgements({
+        researchResponsibility: true,
+        ageLegalConfirmation: true,
+      }),
     ).toBe(false);
-    expect(hasAllAcknowledgements(null)).toBe(false);
-    expect(hasAllAcknowledgements("true")).toBe(false);
   });
 });

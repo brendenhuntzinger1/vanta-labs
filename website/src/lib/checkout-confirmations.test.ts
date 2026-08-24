@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
   REQUIRED_CONFIRMATIONS,
-  emptyAcknowledgements,
+  defaultAcknowledgements,
   type AcknowledgementKey,
 } from "./checkout-confirmations";
 import { hasAllAcknowledgements } from "./express-wallet";
@@ -63,37 +63,86 @@ describe("the two checkout lanes ask for exactly what the server requires", () =
   });
 });
 
-describe("affirmative consent", () => {
-  it("every statement starts unticked in both lanes", () => {
-    const empty = emptyAcknowledgements();
-    expect(Object.keys(empty).sort()).toEqual(
+describe("the default state is a decision, not an accident", () => {
+  // These used to assert the OPPOSITE — that every box started unticked. That
+  // was a product requirement, not a technical one, and the owner overrode it
+  // in writing on 2026-08-24 after being shown the trade. Rewritten rather
+  // than deleted, so the rule the code actually follows is the rule the tests
+  // actually check.
+  it("every statement starts TICKED in both lanes", () => {
+    const initial = defaultAcknowledgements();
+    expect(Object.keys(initial).sort()).toEqual(
       REQUIRED_CONFIRMATIONS.map((i) => i.key).sort(),
     );
-    expect(Object.values(empty).every((v) => v === false)).toBe(true);
-    expect(hasAllAcknowledgements(empty)).toBe(false);
+    expect(Object.values(initial).every((v) => v === true)).toBe(true);
+    // Pre-ticked is only legitimate if the pre-ticked value is one the server
+    // would genuinely accept. If these ever disagree the UI is lying.
+    expect(hasAllAcknowledgements(initial)).toBe(true);
   });
 
-  it("neither lane seeds a ticked box", () => {
+  it("both lanes seed from the SAME default — neither hardcodes it", () => {
     for (const file of [CARD_LANE, EXPRESS_LANE]) {
       const src = read(file);
-      expect(src).toContain("useState<");
-      expect(src).toContain("emptyAcknowledgements");
-      expect(src, `${file} must not default a statement to true`).not.toMatch(
-        /(researchResponsibility|researchCompliance|ageLegalConfirmation|returnsPolicy):\s*true/,
+      expect(src).toContain("defaultAcknowledgements");
+      // A lane writing its own literal is how the two drift apart again.
+      expect(src, `${file} must not hardcode the default`).not.toMatch(
+        /(researchCompliance|returnsPolicy):\s*(true|false)/,
       );
     }
   });
 
-  it("the returns statement links to the returns policy", () => {
-    const returns = REQUIRED_CONFIRMATIONS.find((i) => i.key === "returnsPolicy");
-    expect(returns?.policyHref).toBe("/legal/refund");
-    for (const file of [CARD_LANE, EXPRESS_LANE]) {
-      expect(read(file)).toContain("item.policyHref");
+  it("the customer can still untick — the default is not a fiction", () => {
+    // The control is real precisely because the server refuses the unticked
+    // value. If this ever passes, the checkbox is decorative.
+    for (const item of REQUIRED_CONFIRMATIONS) {
+      expect(
+        hasAllAcknowledgements({ ...defaultAcknowledgements(), [item.key]: false }),
+        `unticking "${item.key}" must still be refused by the server`,
+      ).toBe(false);
     }
   });
 
-  it("the statements stay separate — never merged into one box", () => {
-    expect(REQUIRED_CONFIRMATIONS).toHaveLength(4);
-    expect(new Set(REQUIRED_CONFIRMATIONS.map((i) => i.key)).size).toBe(4);
+  it("neither lane disables or hides the checkbox", () => {
+    for (const file of [CARD_LANE, EXPRESS_LANE]) {
+      const src = read(file);
+      const row = src.slice(src.indexOf("REQUIRED_CONFIRMATIONS.map("));
+      const input = row.slice(row.indexOf('type="checkbox"'), row.indexOf('type="checkbox"') + 400);
+      expect(input, `${file} must not disable the acknowledgement input`).not.toMatch(/disabled/);
+      expect(input, `${file} must not make it read-only`).not.toMatch(/readOnly/);
+    }
+  });
+
+  it("each statement links the document it incorporates by reference", () => {
+    const research = REQUIRED_CONFIRMATIONS.find((i) => i.key === "researchCompliance");
+    const returns = REQUIRED_CONFIRMATIONS.find((i) => i.key === "returnsPolicy");
+    expect(research?.policyHref).toBe("/legal/research-disclaimer");
+    expect(returns?.policyHref).toBe("/legal/refund");
+    // The link must NAME the document — "Read the full policy" beside a merged
+    // statement does not tell the shopper what they are agreeing to.
+    expect(research?.policyLabel).toMatch(/Research & Compliance Terms/);
+    expect(returns?.policyLabel).toMatch(/Return & Reimbursement Policy/);
+    for (const file of [CARD_LANE, EXPRESS_LANE]) {
+      expect(read(file)).toContain("item.policyLabel");
+    }
+  });
+
+  it("the merged statement keeps the assertions that carry the weight", () => {
+    // Three statements became one. These are the ones that must survive that
+    // merge for a research-peptide store; the rest are incorporated by the
+    // linked Research Disclaimer.
+    const body = REQUIRED_CONFIRMATIONS.find((i) => i.key === "researchCompliance")!.body;
+    expect(body).toMatch(/21 or older/i);
+    expect(body).toMatch(/legally permitted/i);
+    expect(body).toMatch(/laboratory research only/i);
+    expect(body).toMatch(/not for human or veterinary use/i);
+  });
+
+  it("the two statements stay separate from each other", () => {
+    expect(REQUIRED_CONFIRMATIONS).toHaveLength(2);
+    expect(new Set(REQUIRED_CONFIRMATIONS.map((i) => i.key)).size).toBe(2);
+    // Merging the returns statement into the research one would bury a
+    // commercial term inside a compliance attestation.
+    const research = REQUIRED_CONFIRMATIONS.find((i) => i.key === "researchCompliance")!;
+    expect(research.body).not.toMatch(/return|refund|reimbursement/i);
   });
 });

@@ -34,36 +34,47 @@ export const EXPRESS_SESSION_MINUTES = 15;
 /**
  * Bumped whenever the acknowledgement wording changes, so a stored consent
  * stays attributable to the exact text the shopper was shown.
+ *
+ * 2026-08-25 consolidated the three research/compliance statements into ONE
+ * and made both remaining boxes start ticked. A consent stamped with an
+ * earlier version was agreed under different wording AND under a different
+ * default, so the version is what distinguishes them — never assume an older
+ * record means the same thing this one does.
  */
-// Bumped when the shopper is shown different consent text. The Returns &
-// Refunds acknowledgement was added on this date, so an order stamped with the
-// earlier version was agreed under three statements, not four.
-export const COMPLIANCE_COPY_VERSION = "2026-08-24";
+export const COMPLIANCE_COPY_VERSION = "2026-08-25";
 
+/**
+ * The two statements a purchase requires. Their wording, and the fact that
+ * they render pre-ticked, live in @/lib/checkout-confirmations — this is the
+ * shape the server validates.
+ */
 export interface ComplianceAcknowledgements {
-  researchResponsibility: boolean;
-  researchCompliance: boolean;
-  ageLegalConfirmation: boolean;
   /**
-   * Returns & Refunds Policy — the 14-day window, the intact factory seal, and
-   * the requirement to contact support BEFORE sending anything back. Recorded
-   * with the others because a return dispute turns on what the shopper agreed
-   * to at the moment of purchase.
+   * Research & Compliance — 21+, legally permitted, laboratory research only,
+   * NOT for human or veterinary use, and the Research Disclaimer incorporated
+   * by reference. Consolidated from three separate statements.
+   */
+  researchCompliance: boolean;
+  /**
+   * Return & Reimbursement Policy — the 14-day window, the intact factory
+   * seal, and the requirement to contact support BEFORE sending anything back.
+   * Recorded because a return dispute turns on what the shopper agreed to at
+   * the moment of purchase.
    */
   returnsPolicy: boolean;
 }
 
 // Strictly `true`, never merely truthy: this is a legal consent record, and a
 // "1" or "yes" arriving from a crafted request must not stand in for a tick.
+//
+// This matters MORE now that the boxes render pre-ticked, not less. The
+// default lives in the UI; it grants the server nothing. A shopper who unticks
+// a box submits `false` and is refused here, so the control the shopper is
+// offered is real rather than decorative.
 export function hasAllAcknowledgements(value: unknown): value is ComplianceAcknowledgements {
   if (!value || typeof value !== "object") return false;
   const ack = value as Record<string, unknown>;
-  return (
-    ack.researchResponsibility === true &&
-    ack.researchCompliance === true &&
-    ack.ageLegalConfirmation === true &&
-    ack.returnsPolicy === true
-  );
+  return ack.researchCompliance === true && ack.returnsPolicy === true;
 }
 
 /** The partial contact Apple exposes BEFORE authorization (address redacted). */

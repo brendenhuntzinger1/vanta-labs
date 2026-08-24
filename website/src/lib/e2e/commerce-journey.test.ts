@@ -1543,16 +1543,16 @@ describe("PHASE 17 — the Returns & Refunds acknowledgement is required", () =>
     expect((await post(payload)).status).toBe(400);
   });
 
-  it("still refuses when the OTHER three are missing", async () => {
-    // Adding a statement must not have weakened the ones already there.
-    for (const key of ["researchResponsibility", "researchCompliance", "ageLegalConfirmation"]) {
+  it("still refuses when the research statement is missing", async () => {
+    // Consolidating three statements into one must not have weakened it.
+    for (const key of ["researchCompliance"]) {
       harness.reset();
       seedStore(harness.db, PRODUCTS);
       expect((await post(body({ [key]: false }))).status).toBe(400);
     }
   });
 
-  it("allows checkout when all four are accepted, at the same total", async () => {
+  it("allows checkout when both are accepted, at the same total", async () => {
     const { status, body: result } = await post(body({}));
 
     expect(status).toBe(200);
@@ -1564,9 +1564,7 @@ describe("PHASE 17 — the Returns & Refunds acknowledgement is required", () =>
   it("keeps the same requirement for the wallet lane's validator", async () => {
     const { hasAllAcknowledgements } = await import("@/lib/express-wallet");
     const complete = {
-      researchResponsibility: true,
       researchCompliance: true,
-      ageLegalConfirmation: true,
       returnsPolicy: true,
     };
     expect(hasAllAcknowledgements(complete)).toBe(true);

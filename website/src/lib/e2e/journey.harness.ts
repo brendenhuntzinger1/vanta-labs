@@ -201,12 +201,12 @@ export function checkoutBody(shopper: Shopper, items: Array<{ productId: string;
     items: items.map((item) => ({ id: item.productId, quantity: item.quantity })),
     customer: { ...shopper },
     paymentMethod: "card",
+    // The TWO acknowledgements a purchase requires. Both lanes share one
+    // validator, so a statement cannot be required in one and forgotten in the
+    // other. They render pre-ticked; this fixture matches what an untouched
+    // checkout actually submits.
     complianceAcknowledgements: {
-      researchResponsibility: true,
       researchCompliance: true,
-      ageLegalConfirmation: true,
-      // Returns & Refunds. Required by BOTH lanes; the card lane and the wallet
-      // lane share one validator so they cannot drift apart.
       returnsPolicy: true,
     },
   };

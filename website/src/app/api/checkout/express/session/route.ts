@@ -29,7 +29,7 @@ export const dynamic = "force-dynamic";
 
 // Arms the Apple Pay sheet.
 //
-// Runs ONLY after the shopper has ticked all three required confirmations, so
+// Runs ONLY after the shopper has both required confirmations ticked, so
 // this is not one session per drawer open — the compliance gate doubles as the
 // session-mint gate, at zero UX cost (the button is disabled until then
 // anyway). No orders row and no inventory hold is created here: at this point

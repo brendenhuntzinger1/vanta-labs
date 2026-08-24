@@ -15,7 +15,7 @@ import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
 import { FULFILMENT_DETAIL } from "@/lib/trust-claims";
 import {
   REQUIRED_CONFIRMATIONS,
-  emptyAcknowledgements,
+  defaultAcknowledgements,
   type AcknowledgementKey,
 } from "@/lib/checkout-confirmations";
 
@@ -51,7 +51,7 @@ export function CartDrawer() {
   // automatically required here too — the list is the single source of truth
   // for what a shopper must accept, and the server enforces the same set.
   const [acknowledgements, setAcknowledgements] =
-    useState<Record<AcknowledgementKey, boolean>>(emptyAcknowledgements);
+    useState<Record<AcknowledgementKey, boolean>>(defaultAcknowledgements);
   // Collapsible sections — everything the majority of shoppers don't need stays
   // out of the way until asked for. Legal detail, protection detail, and the
   // code fields are each one tap from view.
@@ -588,7 +588,7 @@ export function CartDrawer() {
                                   onClick={closeCart}
                                   className="vl-focus-ring text-[color:var(--accent-gold)] underline underline-offset-2"
                                 >
-                                  Read the full policy
+                                  {item.policyLabel ?? "Read the full policy"}
                                 </Link>
                               </>
                             ) : null}

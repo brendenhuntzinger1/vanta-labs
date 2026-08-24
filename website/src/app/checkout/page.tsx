@@ -13,7 +13,7 @@ import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
 import {
   REQUIRED_CONFIRMATIONS,
-  emptyAcknowledgements,
+  defaultAcknowledgements,
   type AcknowledgementKey,
 } from "@/lib/checkout-confirmations";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
@@ -246,7 +246,7 @@ export default function CheckoutPage() {
   } = useCart();
 
   const [acknowledgements, setAcknowledgements] =
-    useState<ComplianceAcknowledgements>(emptyAcknowledgements);
+    useState<ComplianceAcknowledgements>(defaultAcknowledgements);
   const [checkoutMessage, setCheckoutMessage] = useState<string | null>(null);
   const [checkoutState, setCheckoutState] = useState<"idle" | "loading" | "success">("idle");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1120,7 +1120,7 @@ export default function CheckoutPage() {
             </div>
 
             {/* Required confirmations — compact rows, full legal text on demand */}
-            <CheckoutSection innerRef={confirmationsRef} step="04" title="Required confirmations" subtitle="All are required to place a research order.">
+            <CheckoutSection innerRef={confirmationsRef} step="04" title="Required confirmations" subtitle="Both are required to place a research order. Untick either one to withhold it.">
               <div className="overflow-hidden rounded-xl border border-white/[0.06]">
                 <div className="flex items-center justify-between bg-white/[0.02] px-4 py-2.5">
                   <span className="text-[11px] text-white/40">Confirm to continue</span>
@@ -1160,7 +1160,7 @@ export default function CheckoutPage() {
                                 rel="noopener noreferrer"
                                 className="text-[color:var(--accent-gold)] underline underline-offset-2"
                               >
-                                Read the full policy
+                                {item.policyLabel ?? "Read the full policy"}
                               </a>
                             </>
                           ) : null}
