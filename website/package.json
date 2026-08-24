@@ -12,6 +12,7 @@
   "dependencies": {
     "@basis-theory/basis-theory-js": "^4.30.2",
     "@basis-theory/basis-theory-react": "^1.32.5",
+    "@sentry/nextjs": "^10.71.0",
     "@supabase/supabase-js": "^2.110.7",
     "@vercel/analytics": "^2.0.1",
     "next": "16.2.10",

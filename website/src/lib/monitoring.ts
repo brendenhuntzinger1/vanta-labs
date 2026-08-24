@@ -32,6 +32,29 @@ export async function recordSystemAlert(input: {
     // Table not migrated / transient — still try to email on critical below.
   }
 
+  // Forward to Sentry as well. This is the ONLY place webhook, cron and
+  // fulfillment failures can reach it: those handlers catch their own errors
+  // and return a JSON response so the sender retries rather than sees a 500,
+  // which means Next.js never sees a throw and instrumentation.ts's
+  // onRequestError never fires for them. They all call recordSystemAlert, so
+  // hooking it once here covers them without touching a single handler.
+  //
+  // Best-effort and silent: an alerting path must never break the flow it is
+  // reporting on. The context is scrubbed by beforeSend like any other event.
+  try {
+    const { sentryEnabled } = await import("@/lib/sentry-init");
+    if (sentryEnabled()) {
+      const Sentry = await import("@sentry/nextjs");
+      Sentry.captureMessage(`${input.type}: ${input.message}`, {
+        level: input.severity === "critical" ? "error" : input.severity,
+        tags: { alert_type: input.type, source: "system_alert" },
+        extra: input.context ?? {},
+      });
+    }
+  } catch {
+    // Never throw from the alerting path.
+  }
+
   if (input.severity === "critical") {
     try {
       const recipient = process.env.ALERT_EMAIL?.trim() || (await getBusinessSettings()).supportEmail;

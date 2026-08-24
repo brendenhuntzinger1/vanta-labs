@@ -1,9 +1,20 @@
 "use client";
 
+import { useEffect } from "react";
+
 // Catches a crash in the ROOT layout itself (which the per-page error.tsx
 // cannot). It must render its own <html>/<body>. Kept intentionally minimal
 // and dependency-free so it works even when the app shell is broken.
-export default function GlobalError({ reset }: { error: Error & { digest?: string }; reset: () => void }) {
+export default function GlobalError({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
+  // A crash in the ROOT layout never reaches a server handler, so this is the
+  // only place it can be reported from. Fire-and-forget: this component must
+  // still render if Sentry is absent or fails.
+  useEffect(() => {
+    import("@sentry/nextjs")
+      .then((Sentry) => Sentry.captureException(error))
+      .catch(() => {});
+  }, [error]);
+
   return (
     <html lang="en">
       <body style={{ margin: 0, background: "#0b0b0b", color: "#f4f4f4", fontFamily: "system-ui, -apple-system, Segoe UI, Roboto, sans-serif" }}>
