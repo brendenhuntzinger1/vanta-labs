@@ -142,12 +142,18 @@ describe("the server is the authority on the acknowledgements", () => {
     }
   });
 
-  it("refuses a truthy stand-in — only a real tick counts", async () => {
+  it("refuses a truthy stand-in for ANY statement — only a real tick counts", async () => {
     // A crafted request could send "1", "yes", or 1. This is a legal consent
-    // record; nothing but boolean true may satisfy it.
-    for (const impostor of ["true", "yes", "1", 1, {}, []]) {
-      const result = await checkout({ ...ALL_TRUE, returnsPolicy: impostor });
-      expect(result.status, `"${JSON.stringify(impostor)}" must not pass for a tick`).toBe(400);
+    // record; nothing but boolean true may satisfy it. Checked for EVERY key:
+    // testing one key let a sabotage that weakened a different key stay green.
+    for (const key of ALL_KEYS) {
+      for (const impostor of ["true", "yes", "1", 1, {}, []]) {
+        const result = await checkout({ ...ALL_TRUE, [key]: impostor });
+        expect(
+          result.status,
+          `${key}=${JSON.stringify(impostor)} must not pass for a tick`,
+        ).toBe(400);
+      }
     }
   });
 

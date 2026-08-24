@@ -462,6 +462,98 @@ describe("only the right people can record one", () => {
 
     expect(status).toBe(200);
   });
+
+  // The two guards below sit on the same route and the same role check, and
+  // both move real money — a replacement ships free goods, and a payment-status
+  // override rewrites what the books say was collected. Neither had a test: a
+  // sabotage sweep removed each authorization check in turn and the whole suite
+  // stayed green, so the guards were correct but unproven.
+  it("refuses a staff account sending a REPLACEMENT — this ships free goods", async () => {
+    const { orderId } = await deliveredOrder();
+    session.mockResolvedValue({ username: "packer", role: "staff" });
+
+    const { PATCH } = await import("@/app/api/admin/orders/[orderId]/route");
+    const response = await PATCH(new Request(`https://vantalabsresearch.test/api/admin/orders/${orderId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "send_replacement", replacementReason: "damaged", idempotencyKey: "rp-staff-1" }),
+    }), { params: Promise.resolve({ orderId }) });
+
+    expect(response.status).toBe(403);
+    // and no replacement order materialised
+    expect(harness.db.rows("orders").filter((row) => String(row.order_id).includes("-rp-"))).toHaveLength(0);
+  });
+
+  it("allows a manager to send a replacement", async () => {
+    const { orderId } = await deliveredOrder();
+    session.mockResolvedValue({ username: "manager", role: "manager" });
+
+    const { PATCH } = await import("@/app/api/admin/orders/[orderId]/route");
+    const response = await PATCH(new Request(`https://vantalabsresearch.test/api/admin/orders/${orderId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "send_replacement", replacementReason: "damaged", idempotencyKey: "rp-mgr-1" }),
+    }), { params: Promise.resolve({ orderId }) });
+
+    // Not a 403 is the point — whatever else this route decides is elsewhere's
+    // business, but it must not be refused for authorization.
+    expect(response.status).not.toBe(403);
+  });
+
+  it("refuses a staff account OVERRIDING payment status — this rewrites the books", async () => {
+    const { orderId } = await deliveredOrder();
+    session.mockResolvedValue({ username: "packer", role: "staff" });
+    const before = order(orderId)?.payment_status;
+
+    const { PATCH } = await import("@/app/api/admin/orders/[orderId]/route");
+    const response = await PATCH(new Request(`https://vantalabsresearch.test/api/admin/orders/${orderId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      // A NON-money status on purpose: "paid"/"refunded"/"partially_refunded"
+      // are rejected for EVERY role by a second guard below the role check, so
+      // using one of those could not tell an authorization failure from that
+      // blanket rejection.
+      body: JSON.stringify({ action: "update_status", paymentStatus: "pending" }),
+    }), { params: Promise.resolve({ orderId }) });
+
+    expect(response.status).toBe(403);
+    expect(order(orderId)?.payment_status).toBe(before);
+  });
+
+  it("allows a manager to change a non-money payment status", async () => {
+    const { orderId } = await deliveredOrder();
+    session.mockResolvedValue({ username: "manager", role: "manager" });
+
+    const { PATCH } = await import("@/app/api/admin/orders/[orderId]/route");
+    const response = await PATCH(new Request(`https://vantalabsresearch.test/api/admin/orders/${orderId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ action: "update_status", paymentStatus: "pending" }),
+    }), { params: Promise.resolve({ orderId }) });
+
+    expect(response.status).not.toBe(403);
+  });
+
+  it("NOBODY may set a money status here, not even a super admin", async () => {
+    // Defence in depth behind the role gate: these transitions must run their
+    // dedicated flows (commissions, points, emails), so the column may never be
+    // written directly regardless of who is asking.
+    for (const status of ["paid", "refunded", "partially_refunded"]) {
+      const { orderId } = await deliveredOrder();
+      session.mockResolvedValue({ username: "owner", role: "super_admin" });
+      const before = order(orderId)?.payment_status;
+
+      const { PATCH } = await import("@/app/api/admin/orders/[orderId]/route");
+      const response = await PATCH(new Request(`https://vantalabsresearch.test/api/admin/orders/${orderId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ action: "update_status", paymentStatus: status }),
+      }), { params: Promise.resolve({ orderId }) });
+
+      expect(response.status, `${status} must be refused`).toBe(400);
+      expect(order(orderId)?.payment_status).toBe(before);
+    }
+  });
 });
 
 // ===========================================================================
