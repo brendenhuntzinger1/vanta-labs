@@ -1,4 +1,4 @@
-import { DEFAULT_DISCOUNT_PERCENT, DEFAULT_COMMISSION_PERCENT } from "@/lib/referral-config";
+import { DEFAULT_DISCOUNT_PERCENT } from "@/lib/referral-config";
 
 export interface ReferralRecord {
   id: string;
@@ -25,7 +25,12 @@ export function calculateDiscountAmount(subtotal: number, discountPercent: numbe
   return Math.round(subtotal * (discountPercent / 100) * 100) / 100;
 }
 
-export function calculateCommissionAmount(total: number, commissionPercent: number = DEFAULT_COMMISSION_PERCENT) {
+// The percent is REQUIRED. It used to default to a DEFAULT_COMMISSION_PERCENT
+// of 15, which contradicted the real default the store pays (10, from the
+// Control Center via admin-control). Nothing in production ever hit that
+// default, so it was not a live defect — it was a trap waiting for the first
+// caller who omitted the argument.
+export function calculateCommissionAmount(total: number, commissionPercent: number) {
   return Math.round(total * (commissionPercent / 100) * 100) / 100;
 }
 

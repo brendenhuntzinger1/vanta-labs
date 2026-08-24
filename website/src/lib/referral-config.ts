@@ -1,5 +1,8 @@
 export const DEFAULT_DISCOUNT_PERCENT = 10 as const;
-export const DEFAULT_COMMISSION_PERCENT = 15 as const;
+// NOTE: there is deliberately no DEFAULT_COMMISSION_PERCENT here. The one
+// source of truth for the commission rate is the Control Center, read through
+// admin-control's DEFAULT_AMBASSADOR_COMMISSION_PERCENT (10). A second
+// constant here said 15 and disagreed with it.
 export const DEFAULT_REFERRAL_CODE_PREFIX = "VANTA";
 
 // Admin-configurable via src/lib/ambassador-settings.ts (falls back to
