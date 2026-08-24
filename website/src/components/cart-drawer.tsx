@@ -13,40 +13,11 @@ import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { ExpressApplePayButton } from "@/components/express-apple-pay-button";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
 import { FULFILMENT_DETAIL } from "@/lib/trust-claims";
-
-// Byte-identical to the copy on /checkout. This wording is legally
-// load-bearing: reuse it verbatim, never reword it, never merge the three into
-// one, never pre-tick a box. `short` is a display-only label for the compact
-// row; the full `body` remains one tap away behind "View details".
-const REQUIRED_CONFIRMATIONS = [
-  {
-    key: "researchResponsibility" as const,
-    short: "Research responsibility",
-    title: "Research Responsibility Statement *",
-    body: "The purchaser assumes full responsibility for the proper handling, storage, and use of these laboratory materials. The seller provides products solely as research reference materials and does not provide medical or dosing guidance.",
-  },
-  {
-    key: "researchCompliance" as const,
-    short: "Research & compliance agreement",
-    title: "Research & Compliance Agreement *",
-    body: "I acknowledge that the products sold on this website are intended strictly for laboratory research purposes. I confirm that I am purchasing these materials for legitimate research use and not for human or veterinary use. I understand these products are not drugs, dietary supplements, or medical products, and no instructions for preparation, dosage, or administration are provided by the seller.",
-  },
-  {
-    key: "ageLegalConfirmation" as const,
-    short: "I am 21+ and legally permitted",
-    title: "Age & Legal Confirmation *",
-    body: "I confirm that I am 21 years of age or older and legally permitted to purchase laboratory research materials.",
-  },
-  {
-    key: "returnsPolicy" as const,
-    short: "Returns & Refunds Policy",
-    title: "Returns & Refunds Policy *",
-    body: "I acknowledge and accept the Returns & Refunds Policy. Standard returns must be requested within 14 days of delivery, and products must remain unused and unopened with the original factory cap/seal intact. Contact support before sending anything back.",
-    policyHref: "/legal/refund",
-  },
-];
-
-type AcknowledgementKey = (typeof REQUIRED_CONFIRMATIONS)[number]["key"];
+import {
+  REQUIRED_CONFIRMATIONS,
+  emptyAcknowledgements,
+  type AcknowledgementKey,
+} from "@/lib/checkout-confirmations";
 
 // A gentle tap on supported devices (Android/Chrome). No-op on iOS Safari and
 // anywhere Vibration isn't available — never throws, never blocks.
@@ -79,9 +50,8 @@ export function CartDrawer() {
   // Derived from REQUIRED_CONFIRMATIONS so a statement added to that list is
   // automatically required here too — the list is the single source of truth
   // for what a shopper must accept, and the server enforces the same set.
-  const [acknowledgements, setAcknowledgements] = useState<Record<AcknowledgementKey, boolean>>(
-    () => Object.fromEntries(REQUIRED_CONFIRMATIONS.map((item) => [item.key, false])) as Record<AcknowledgementKey, boolean>,
-  );
+  const [acknowledgements, setAcknowledgements] =
+    useState<Record<AcknowledgementKey, boolean>>(emptyAcknowledgements);
   // Collapsible sections — everything the majority of shoppers don't need stays
   // out of the way until asked for. Legal detail, protection detail, and the
   // code fields are each one tap from view.
@@ -610,7 +580,7 @@ export function CartDrawer() {
                         <Collapse open={Boolean(openLegal[item.key])}>
                           <p className="pl-8 pr-1 pt-2 text-xs leading-relaxed text-zinc-500">
                             {item.body}
-                            {"policyHref" in item && item.policyHref ? (
+                            {item.policyHref ? (
                               <>
                                 {" "}
                                 <Link

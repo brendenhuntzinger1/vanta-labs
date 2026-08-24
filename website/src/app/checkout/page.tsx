@@ -11,6 +11,11 @@ import { resolveSalesTax } from "@/lib/sales-tax";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
+import {
+  REQUIRED_CONFIRMATIONS,
+  emptyAcknowledgements,
+  type AcknowledgementKey,
+} from "@/lib/checkout-confirmations";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ManualPaymentInstructions } from "@/components/manual-payment-instructions";
 import { PaymentMethodPicker } from "@/components/payment-method-picker";
@@ -75,29 +80,6 @@ const US_STATE_OPTIONS = [
   "WI", "WY", "DC", "PR",
 ];
 
-// Verbatim, legally load-bearing copy. `short` is a display label for the
-// compact row; the full `body` stays one tap away behind "View details".
-const REQUIRED_CONFIRMATIONS = [
-  {
-    key: "researchResponsibility" as const,
-    short: "Research responsibility",
-    title: "Research Responsibility Statement *",
-    body: "The purchaser assumes full responsibility for the proper handling, storage, and use of these laboratory materials. The seller provides products solely as research reference materials and does not provide medical or dosing guidance.",
-  },
-  {
-    key: "researchCompliance" as const,
-    short: "Research & compliance agreement",
-    title: "Research & Compliance Agreement *",
-    body: "I acknowledge that the products sold on this website are intended strictly for laboratory research purposes. I confirm that I am purchasing these materials for legitimate research use and not for human or veterinary use. I understand these products are not drugs, dietary supplements, or medical products, and no instructions for preparation, dosage, or administration are provided by the seller.",
-  },
-  {
-    key: "ageLegalConfirmation" as const,
-    short: "I am 21+ and legally permitted",
-    title: "Age & Legal Confirmation *",
-    body: "I confirm that I am 21 years of age or older and legally permitted to purchase laboratory research materials.",
-  },
-];
-
 function isUnitedStates(country: string) {
   return ["united states", "usa", "us", "u.s.", "u.s.a."].includes(country.trim().toLowerCase());
 }
@@ -121,11 +103,7 @@ function postalCodeError(value: string, country: string): string | null {
   return null;
 }
 
-type ComplianceAcknowledgements = {
-  researchResponsibility: boolean;
-  researchCompliance: boolean;
-  ageLegalConfirmation: boolean;
-};
+type ComplianceAcknowledgements = Record<AcknowledgementKey, boolean>;
 
 type CreatedManualOrder = {
   orderId: string;
@@ -267,11 +245,8 @@ export default function CheckoutPage() {
     shippingProtectionFee,
   } = useCart();
 
-  const [acknowledgements, setAcknowledgements] = useState<ComplianceAcknowledgements>({
-    researchResponsibility: false,
-    researchCompliance: false,
-    ageLegalConfirmation: false,
-  });
+  const [acknowledgements, setAcknowledgements] =
+    useState<ComplianceAcknowledgements>(emptyAcknowledgements);
   const [checkoutMessage, setCheckoutMessage] = useState<string | null>(null);
   const [checkoutState, setCheckoutState] = useState<"idle" | "loading" | "success">("idle");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1145,7 +1120,7 @@ export default function CheckoutPage() {
             </div>
 
             {/* Required confirmations — compact rows, full legal text on demand */}
-            <CheckoutSection innerRef={confirmationsRef} step="04" title="Required confirmations" subtitle="All three are required to place a research order.">
+            <CheckoutSection innerRef={confirmationsRef} step="04" title="Required confirmations" subtitle="All are required to place a research order.">
               <div className="overflow-hidden rounded-xl border border-white/[0.06]">
                 <div className="flex items-center justify-between bg-white/[0.02] px-4 py-2.5">
                   <span className="text-[11px] text-white/40">Confirm to continue</span>
@@ -1174,7 +1149,22 @@ export default function CheckoutPage() {
                         </button>
                       </label>
                       <Collapse open={Boolean(openLegal[item.key])}>
-                        <p className="pl-8 pr-1 pt-2 text-xs leading-relaxed text-white/40">{item.body}</p>
+                        <p className="pl-8 pr-1 pt-2 text-xs leading-relaxed text-white/40">
+                          {item.body}
+                          {item.policyHref ? (
+                            <>
+                              {" "}
+                              <a
+                                href={item.policyHref}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[color:var(--accent-gold)] underline underline-offset-2"
+                              >
+                                Read the full policy
+                              </a>
+                            </>
+                          ) : null}
+                        </p>
                       </Collapse>
                     </div>
                   ))}
