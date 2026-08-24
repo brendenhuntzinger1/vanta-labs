@@ -115,6 +115,13 @@ export class FakeDb {
   controlViewMissing = false;
   /** Every write, in order — the audit trail a crash test replays against. */
   readonly writeLog: Array<{ table: string; op: string; payload?: unknown }> = [];
+  /**
+   * Rows actually handed back by each select, in order. Lets a test assert how
+   * much a read COSTS without timing it: a wall-clock ratio is flaky on a busy
+   * machine, while "how many rows did this touch" is exactly the property a
+   * full-scan regression would change, and it is deterministic.
+   */
+  readonly readLog: Array<{ table: string; rows: number }> = [];
   private failures: FakeDbFailure[] = [];
   private idCounter = 0;
 
@@ -234,6 +241,7 @@ export class FakeDb {
           }
           return copy;
         });
+        db.readLog.push({ table, rows: projected.length });
         return { data: projected, error: null };
       };
 

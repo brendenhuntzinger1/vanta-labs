@@ -173,23 +173,35 @@ describe("scale", () => {
     expect(snapshot.referral?.personal_discount_percent).toBe(20);
   });
 
-  it("costs about the same at 10 writes as at 10,000", async () => {
-    // Not a latency benchmark — a shape check. Reading a hundred-fold larger
-    // history must not cost a hundred-fold more, which is what a full scan
-    // would do.
-    const time = async (size: number) => {
+  it("reads a bounded number of rows however long the history gets", async () => {
+    // This used to be a wall-clock ratio (large < small * 25) and it was
+    // FLAKY: reproduced failing at 87ms vs a 79ms budget simply by running
+    // four other suites alongside it. A busy CI runner would have failed the
+    // build for no defect.
+    //
+    // So measure the thing the ratio was standing in for. A full scan's cost
+    // IS the row count it drags back, and the fake db records exactly that.
+    // Deterministic, and it fails for the real reason rather than for load.
+    const rowsRead = async (size: number) => {
       harness.reset();
       seedHistory(size);
       const { getControlSnapshot } = await import("@/lib/admin-control");
-      const started = performance.now();
-      for (let i = 0; i < 5; i += 1) await getControlSnapshot();
-      return performance.now() - started;
+      harness.db.readLog.length = 0;
+      await getControlSnapshot();
+      return Math.max(0, ...harness.db.readLog.map((entry) => entry.rows));
     };
 
-    const small = await time(10);
-    const large = await time(10_000);
+    // Both sizes saturate the same 40 rotating homepage keys, so the DISTINCT
+    // setting count is identical and only the history depth differs — which is
+    // the whole variable under test.
+    const small = await rowsRead(2_000);
+    const large = await rowsRead(50_000);
 
-    expect(large).toBeLessThan(Math.max(small, 1) * 25);
+    // 25x the history, not one extra row read.
+    expect(large).toBe(small);
+    // And the bound is the number of distinct SETTINGS (8 + 40), not the
+    // 50,000 writes behind them.
+    expect(large).toBe(48);
   });
 });
 
