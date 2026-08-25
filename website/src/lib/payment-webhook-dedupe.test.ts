@@ -356,3 +356,41 @@ describe("a SECOND, DIFFERENT success event for the same order", () => {
     expect(state.flipsApplied).toBe(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// The coupon was the one side-effect this file mocked but never asserted on.
+// redeemCoupon increments redemptions_count, so a second redemption burns a use
+// of a limited code for one charge — and a one-time code becomes unusable for
+// the customer who was actually given it. The order above carries SAVE10, so
+// the coverage cost nothing but the assertions.
+// ---------------------------------------------------------------------------
+describe("one charge burns one coupon redemption", () => {
+  it("redeems the code once on the first delivery", async () => {
+    await deliver("evt-1");
+    expect(sideEffects.coupon).toHaveBeenCalledTimes(1);
+    expect(sideEffects.coupon).toHaveBeenCalledWith("SAVE10");
+  });
+
+  it("a redelivery of the same event does not redeem again", async () => {
+    await deliver("evt-1");
+    await deliver("evt-1");
+    expect(sideEffects.coupon).toHaveBeenCalledTimes(1);
+  });
+
+  it("nor does a second, DIFFERENT success event for the same order", async () => {
+    await deliver("evt-1");
+    await deliver("evt-2");
+    expect(sideEffects.coupon).toHaveBeenCalledTimes(1);
+  });
+
+  it("three racing deliveries still burn exactly one", async () => {
+    await Promise.all([deliver("evt-1"), deliver("evt-1"), deliver("evt-1")]);
+    expect(sideEffects.coupon).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unsigned delivery burns nothing", async () => {
+    state.signatureValid = false;
+    await expect(deliver("evt-1")).rejects.toThrow(/signature/i);
+    expect(sideEffects.coupon).not.toHaveBeenCalled();
+  });
+});
