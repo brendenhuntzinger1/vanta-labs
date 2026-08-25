@@ -408,11 +408,55 @@ via `console.warn` — 202 passed, 1 skipped — so CI cannot report a false pas
 warning at `partner-portal.ts:461`, present in `HEAD` before this change and
 left alone as an unrelated edit).
 
-**STATUS: repaired in the repository, NOT yet applied to production.** Applying
-it is a `CREATE OR REPLACE FUNCTION` against the live database — a production
-schema mutation on a SECURITY DEFINER identity function. Awaiting explicit
-approval. Revert path is exact: re-apply
-`BASELINE-live-functions-2026-08-25.sql`.
+**STATUS: APPLIED TO PRODUCTION AND VERIFIED THERE.** `PRODUCTION-PROVEN`.
+
+Applied 2026-08-25 with the owner's explicit approval, as Supabase migration
+`partner_application_adopts_pre_added_ambassador`, matching how the three
+earlier affiliate repairs were applied.
+
+Before / after:
+
+| | value |
+|---|---|
+| `md5(prosrc)` before | `23d162500976785aa426c1fc10c0e04f` (1756 bytes) |
+| `md5(prosrc)` after | `0c177eff4e03b6a7d2b57927846c0c47` |
+| adoption path present | yes |
+| `partners` / `ambassadors` row counts | 7 / 7 — unchanged |
+
+**Behavioural verification in production, persisting nothing.** The probe ran
+inside a `DO` block that ends in `RAISE EXCEPTION`, so every write rolled back.
+It exercised the real tables, real constraints and real defaults — not the local
+replica:
+
+```
+start p=7 a=7
+A=PASS(already-claimed guard raised)
+B: adopted=true id_match=t code=AUDITPROBEPRE comm=17.50 disc=12.50
+   twin=t phone=555-0199 p=8 a=8
+```
+
+| Check | Result |
+|---|---|
+| A — an ambassador another account already claimed is NOT handed over (used a **real** existing ambassador's email with a different auth id) | raised, no hand-over |
+| B — adoption fires for a pre-added ambassador | `adopted=true` |
+| Returns the pre-added id, not a newly minted one | `id_match=t` |
+| Admin's issued referral code survives (applicant asked for `AUDITPROBENEW`) | `AUDITPROBEPRE` |
+| Admin's commission survives (`10` was passed in) | `17.50` |
+| Customer discount survives | `12.50` |
+| `partners` twin created, same id, auth claimed | `twin=t` |
+| Applicant's own details filled in | `555-0199` |
+| Case-insensitive identity match (email passed UPPERCASE) | matched |
+
+**Rollback confirmed clean:** `partners=7, ambassadors=7`, **0** probe rows in
+either table, **0** probe auth claims, 4 ambassadors still inheriting the
+program default (unchanged), **7 converged pairs** — the same-id invariant
+holds.
+
+**No regression in production referral behaviour** after the change:
+`MIZZY → 15`, `BRUTUS → null`, `ELIJAH-AB78AE → {valid:false}`,
+`NONEXISTENT → {valid:false}` — identical to the pre-change readings.
+
+Revert path is exact: re-apply `BASELINE-live-functions-2026-08-25.sql`.
 
 *Still owed:* browser-level proof of the full pre-add → sign-up → apply journey
 (Phase 6), which needs the fix applied to a preview or the local dev database.
@@ -437,6 +481,26 @@ Captured verbatim into `src/lib/sql/BASELINE-live-functions-2026-08-25.sql`
 (with `validate_referral_code`, which *was* already reproducible). `CREATE OR
 REPLACE` makes re-applying a no-op when production already matches, so it is a
 reviewable baseline rather than a migration to run blindly.
+
+**Refinement after applying F-009's repair.** `supabase_migrations` is not
+empty — it holds four migrations, all applied 2026-08-25:
+
+| version | name |
+|---|---|
+| 20260825003037 | `rpc_execute_lockdown` |
+| 20260825204855 | `referral_code_returns_customer_discount` |
+| 20260825214916 | `partner_application_atomic_creation` |
+| 20260825215051 | `affiliate_balances_server_side_aggregate` |
+
+So the mechanism exists and was used; what failed is that **the SQL was never
+committed to the repository**. The migration history lives only in the database.
+That is a narrower and more fixable problem than "no migration system", and it
+means Phase 5's reconciliation should diff `supabase_migrations` contents against
+`src/lib/sql/` rather than trying to reconstruct intent from 116 loose files.
+
+F-009's own repair was applied the same way
+(`partner_application_adopts_pre_added_ambassador`) **and** committed to the
+repo, so it does not extend the drift.
 
 This is a concrete instance of A1. The wider reconciliation — every table,
 column, index, constraint, policy and trigger — is still owed in Phase 5.
@@ -484,7 +548,7 @@ Issues found:
 | 1 | 15% discount displayed as 10% | **Server side PASS.** `validate_referral_code('MIZZY')` returns `customer_discount_percent: 15`; NULL passes through un-coerced for inheritors. Cart calls the same `resolveAmbassadorCustomerDiscount` as the server. **Browser proof still owed.** | `DATABASE-PROVEN` + `SOURCE-INSPECTED` |
 | 2 | Mystery $100 affiliate minimum | Not yet assessed. `DEFAULT_MINIMUM_QUALIFYING_ORDER` exists; `/api/catalog/promotions` swallows a settings failure with `.catch(() => ({ minimumQualifyingOrder: DEFAULT }))` — a silent fallback to watch. | `NOT VERIFIED` |
 | 3 | 0% commission approval email | Not yet assessed. | `NOT VERIFIED` |
-| 4 | Brutus/Paul duplicate identity | **FAIL → REPAIRED (repo).** Reproduced in an isolated replica; convergence implemented; 7 behavioural tests red→green with 4 negative controls. Production apply pending approval. | `BEHAVIORAL-TEST-PROVEN` |
+| 4 | Brutus/Paul duplicate identity | **FAIL → REPAIRED & LIVE.** Reproduced in an isolated replica; convergence implemented; 7 behavioural tests red→green with 4 negative controls; applied to production and proven there by a rolled-back probe. Browser proof still owed. | `PRODUCTION-PROVEN` |
 | 5 | Elijah status drift | **PASS (behavioural).** `validate_referral_code('ELIJAH-AB78AE')` → `{valid:false}` because the RPC filters `status='approved'`. Both tables show `info_requested`. | `DATABASE-PROVEN` |
 | 6 | Affiliate money chain | Not yet assessed. `commissions`, `payouts`, `partner_payouts`, `referral_orders` are all **0 rows** — no production money has ever flowed, so all proof must be behavioural. | `NOT VERIFIED` |
 | 7 | Affiliate balance row-cap | `affiliate_balances()` RPC exists (server-side aggregation, SECURITY DEFINER) — the structural fix is present. Not yet proven above the row cap. | `SOURCE-INSPECTED` |
@@ -545,14 +609,14 @@ affiliate balance queries) **cannot be reproduced with production data** — Pha
 | 1 — System map | 🔄 IN PROGRESS (6 of 10 subsystem mappers complete) |
 | 2 — Production data integrity | 🔄 PARTIAL (11 findings) |
 | 5 — Migrations / schema reconciliation | 🔄 STARTED — 3 missing functions captured (F-011); full table/policy diff still owed |
-| 6 — Affiliate / ambassador | 🔄 F-009 repaired in repo, awaiting production apply + browser proof |
+| 6 — Affiliate / ambassador | 🔄 F-009 repaired, applied to production and verified there; browser proof of the end-to-end journey still owed |
 | 3, 4, 7–21 | ⬜ NOT STARTED |
 
 ## Repairs made
 
 | Finding | Repair | Tests | Production |
 |---|---|---|---|
-| F-009 | `src/lib/sql/partner-identity-convergence.sql` + adoption handling in `src/lib/partner-portal.ts` | 7 integration (real Postgres) + 6 app-layer; 4 negative controls | **not applied — awaiting approval** |
+| F-009 | `src/lib/sql/partner-identity-convergence.sql` + adoption handling in `src/lib/partner-portal.ts` | 7 integration (real Postgres) + 6 app-layer; 4 negative controls | **APPLIED & VERIFIED** — migration `partner_application_adopts_pre_added_ambassador`; production probe passed on all 9 checks and rolled back clean |
 | F-011 | `src/lib/sql/BASELINE-live-functions-2026-08-25.sql` (verbatim capture) | n/a — baseline | no change; documents current state |
 
 ## Running the database-backed tests
