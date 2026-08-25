@@ -155,6 +155,26 @@ function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+/**
+ * The first candidate that is a real percentage, falling back to 0 only when
+ * every one is absent.
+ *
+ * numeric(5,2) arrives from postgres as the STRING "15.00", so a plain
+ * `?? fallback` keeps it (good) but a truthiness check on Number() would drop a
+ * deliberate 0 (bad). Both cases matter here: 0 is a legitimate configured rate
+ * an owner may set, while null/undefined/"" means "not configured, look
+ * further". Number("") is 0, which is exactly the confusion to avoid.
+ */
+function firstFinitePercent(candidates: Array<number | string | null | undefined>): number {
+  for (const candidate of candidates) {
+    if (candidate === null || candidate === undefined) continue;
+    if (typeof candidate === "string" && candidate.trim() === "") continue;
+    const value = Number(candidate);
+    if (Number.isFinite(value)) return value;
+  }
+  return 0;
+}
+
 function isMissingRelationError(error: unknown, relationName: string) {
   if (!error || typeof error !== "object") {
     return false;
@@ -218,17 +238,43 @@ async function sendPartnerStatusEmail(input: {
   return result.success;
 }
 
+// TELLING AN AMBASSADOR THEY EARN 0% IS WORSE THAN NOT WRITING.
+//
+// commissionPercent used to be a required number and the one call site passed
+// `input.commissionPercent ?? 0` — the rate typed in THAT admin request. Assign
+// a referral code without re-entering the rate in the same submission and it is
+// undefined, so the email told an approved ambassador they earn 0% commission
+// while the database held their real rate. It happened: MIZZY was emailed 0%
+// with 15.00 stored on both ambassadors and partners.
+//
+// The rate is resolved HERE rather than at the call site, for the same reason
+// the approval email resolves it inside sendPartnerStatusEmail: a caller that
+// forgets cannot reintroduce a hole, and there is no longer any way to express
+// "email them zero" by omission. An explicit 0 is still honoured — an owner may
+// genuinely run a 0% ambassador — but silence now means "look it up".
 async function sendReferralCodeAssignedEmail(input: {
   to: string;
   name: string;
   referralCode: string;
-  commissionPercent: number;
+  /** The rate just written, if the same request set one. */
+  commissionPercent?: number | null;
+  /** The ambassador's stored rate, used when this request did not set one. */
+  storedCommissionPercent?: number | null;
 }) {
+  // Program default last: it is what a brand-new ambassador is actually paid
+  // when no per-ambassador rate has been set, and it is what the approval email
+  // already falls back to. Reaching it means neither rate exists.
+  const resolvedPercent = firstFinitePercent([
+    input.commissionPercent,
+    input.storedCommissionPercent,
+    (await getReferralProgramConfig().catch(() => null))?.defaultCommissionPercent,
+  ]);
+
   const template = referralCodeAssignedTemplate({
     name: input.name,
     referralCode: input.referralCode,
     referralLink: `${getSiteUrl()}/r/${input.referralCode}`,
-    commissionPercent: input.commissionPercent,
+    commissionPercent: resolvedPercent,
   });
 
   const result = await sendEmail({ to: input.to, ...template });
@@ -1563,7 +1609,10 @@ export async function updatePartnerStatus(input: {
         to: existingPartner.email,
         name: existingPartner.name,
         referralCode: finalReferralCode,
-        commissionPercent: input.commissionPercent ?? 0,
+        // The rate this request set, if any — otherwise the one already stored,
+        // which is what checkout will actually pay them. Never a bare 0.
+        commissionPercent: input.commissionPercent,
+        storedCommissionPercent: existingPartner.commission_percent,
       });
     } catch {
       // Non-critical notification; the referral code change itself already succeeded above.
