@@ -1,0 +1,6 @@
+# Playwright MCP scratch output — page snapshots, console logs, traces written
+# by the browser server during a session. Development artefacts, never source.
+.playwright-mcp/
+test-results/
+
+node_modules/
