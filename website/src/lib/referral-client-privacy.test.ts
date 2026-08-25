@@ -53,9 +53,28 @@ function allKeys(value: unknown, path = "", acc: string[] = []): string[] {
 }
 
 describe("what a referral lookup hands back to the browser", () => {
-  it("returns the code, the ambassador id and the name — and nothing else", async () => {
+  /**
+   * The contract widened by exactly one field, deliberately.
+   *
+   * It used to be code + id + name and nothing else, which read as the safest
+   * possible payload and was in fact the cause of a customer-facing defect: with
+   * no rate available, the cart applied the program-wide default to everyone, so
+   * a 15% ambassador's customers were offered 10% while checkout charged 15%.
+   *
+   * customer_discount_percent is the shopper's OWN discount — they see it the
+   * instant the code applies, and the server charges it. The line that matters
+   * for privacy is the ambassador's PAY, and commission stays out; the two tests
+   * below still enforce that, on both the RPC and the legacy fallback path.
+   */
+  it("returns the code, the id, the name and the customer's own discount — and nothing else", async () => {
     rpc.mockResolvedValue({
-      data: { valid: true, referral_code: "SARAH10", ambassador_id: "amb-1", ambassador_name: "Sarah" },
+      data: {
+        valid: true,
+        referral_code: "SARAH10",
+        ambassador_id: "amb-1",
+        ambassador_name: "Sarah",
+        customer_discount_percent: 15,
+      },
       error: null,
     });
 
@@ -64,6 +83,23 @@ describe("what a referral lookup hands back to the browser", () => {
       referralCode: "SARAH10",
       ambassadorId: "amb-1",
       ambassadorName: "Sarah",
+      customerDiscountPercent: 15,
+    });
+  });
+
+  it("carries no rate at all when the ambassador has no override", async () => {
+    rpc.mockResolvedValue({
+      data: { valid: true, referral_code: "SARAH10", ambassador_id: "amb-1", ambassador_name: "Sarah" },
+      error: null,
+    });
+
+    const result = await validateReferralCodeClient("sarah10");
+    // null, never 0 — 0 is a real configured rate and would mean "no discount".
+    expect(result).toEqual({
+      referralCode: "SARAH10",
+      ambassadorId: "amb-1",
+      ambassadorName: "Sarah",
+      customerDiscountPercent: null,
     });
   });
 

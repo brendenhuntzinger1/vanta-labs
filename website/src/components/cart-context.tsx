@@ -13,6 +13,7 @@ import { DEFAULT_SALES_TAX_CONFIG, type SalesTaxConfig } from "@/lib/sales-tax";
 import type { MembershipTierSummary } from "@/lib/member-pricing";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { resolveCartDiscount } from "@/lib/discount-resolution";
+import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 
 type CouponDetails = {
   code: string;
@@ -567,7 +568,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
         setReferralDetails({
           code: validatedReferral.referralCode,
-          customerDiscountPercent: referralDiscountPercent,
+          // HER rate, resolved against the program default by the same function
+          // the server uses. This used to be the program-wide number alone,
+          // which is how a 15% ambassador's customers were offered 10%.
+          customerDiscountPercent: resolveAmbassadorCustomerDiscount(
+            validatedReferral.customerDiscountPercent,
+            referralDiscountPercent,
+          ),
           ambassadorName: validatedReferral.ambassadorName,
           ambassadorId: validatedReferral.ambassadorId,
         });
@@ -701,13 +708,26 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       return { type: "buy3get1" as const, amount: buy3Get1FreeDiscount };
     }
     if (referralDetails && isReferralValid(referralDetails)) {
-      // Use the LIVE admin-configured percent (not a value snapshotted into
-      // referralDetails at apply-time) so the preview can never drift from the
-      // server's charge even if config finished loading after the code was set.
-      return { type: "referral" as const, amount: discountBase * (referralDiscountPercent / 100) };
+      // THE AMBASSADOR'S OWN RATE, resolved when the code was applied by the
+      // same resolveAmbassadorCustomerDiscount the server uses, with the live
+      // program default as the fallback for anyone who has no override.
+      //
+      // This used to read the program-wide percent directly, on the reasoning
+      // that a live value cannot go stale. It cannot — but it was never her
+      // number: a 15% ambassador's customers were quoted the program's 10%
+      // while checkout charged 15%.
+      //
+      // Below the minimum qualifying order the server does not discount, it
+      // THROWS (quote-order.ts). Offering a discount here that checkout will
+      // refuse outright is worse than showing none, so the referral simply does
+      // not compete until the basket qualifies.
+      if (subtotal < referralMinimumOrder) {
+        return null;
+      }
+      return { type: "referral" as const, amount: discountBase * (referralDetails.customerDiscountPercent / 100) };
     }
     return null;
-  }, [buy3Get1FreeDiscount, referralDetails, discountBase, referralDiscountPercent]);
+  }, [buy3Get1FreeDiscount, referralDetails, discountBase, subtotal, referralMinimumOrder]);
 
   // The elite "Exclusive Buy In Bulk Savings" benefit cannot stack with
   // anything else - it competes with whatever the customer would otherwise
@@ -1066,9 +1086,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      const appliedPercent = resolveAmbassadorCustomerDiscount(
+        validatedReferral.customerDiscountPercent,
+        referralDiscountPercent,
+      );
+
       const details: ReferralCode = {
         code: validatedReferral.referralCode,
-        customerDiscountPercent: referralDiscountPercent,
+        customerDiscountPercent: appliedPercent,
         ambassadorName: validatedReferral.ambassadorName,
         ambassadorId: validatedReferral.ambassadorId,
       };
@@ -1076,7 +1101,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       setReferralDetails(details);
       setReferralCode(validatedReferral.referralCode);
       setReferralError(null);
-      setReferralSuccess(`Referral code applied — ${referralDiscountPercent}% off.`);
+      // Quote the rate actually applied, not the program default — the two
+      // differ for every ambassador with an override.
+      setReferralSuccess(`Referral code applied — ${appliedPercent}% off.`);
       setCouponCode(null);
       setCouponDetails(null);
       setCouponError(null);
