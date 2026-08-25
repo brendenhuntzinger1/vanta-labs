@@ -34,3 +34,22 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## MCP server + DevTools
+
+This repository includes a development MCP server scaffold:
+
+- `GET/POST /api/mcp/contexts` and `GET/PATCH/DELETE /api/mcp/contexts/:contextId`
+- `GET/POST /api/mcp/events` for MCP request/response event logging
+- `GET /api/mcp/ws` for WebSocket capability metadata (upgrade path for MCP bridge integrations)
+
+Chrome DevTools extension source lives in:
+
+- `devtools/mcp-extension`
+
+To load it in Chrome:
+
+1. Open `chrome://extensions`
+2. Enable **Developer mode**
+3. Click **Load unpacked**
+4. Select the `website/devtools/mcp-extension` directory

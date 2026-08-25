@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>MCP Context</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: ui-sans-serif, system-ui, sans-serif;
+        background: #0b1020;
+        color: #e7ecff;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.75rem 1rem;
+        border-bottom: 1px solid #29314f;
+      }
+      button {
+        border: 1px solid #4d5a8f;
+        background: #192347;
+        color: #dbe4ff;
+        border-radius: 4px;
+        padding: 0.35rem 0.6rem;
+        cursor: pointer;
+      }
+      #events {
+        padding: 0;
+        margin: 0;
+        list-style: none;
+      }
+      li {
+        border-bottom: 1px solid #1f2845;
+        padding: 0.7rem 1rem;
+      }
+      .meta {
+        font-size: 12px;
+        opacity: 0.8;
+        margin-bottom: 0.25rem;
+      }
+      pre {
+        margin: 0;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>MCP Traffic</strong>
+      <button id="refresh" type="button">Refresh</button>
+    </header>
+    <ul id="events"></ul>
+    <script src="panel.js" type="module"></script>
+  </body>
+</html>
