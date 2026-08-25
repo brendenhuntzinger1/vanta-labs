@@ -66,7 +66,41 @@ historical defect in the audit brief. Test *quality* is audited in Phase 15.
 
 ---
 
-## Phase 1 — System map — IN PROGRESS
+## Phase 1 — System map — COMPLETE
+
+**Full map: [`PHASE1-SYSTEM-MAP.md`](./PHASE1-SYSTEM-MAP.md)** — ten subsystems,
+their real data flows, sources of truth, state machines, and **159 recorded
+risks (20 P0 · 53 P1 · 68 P2 · 18 P3)**.
+
+Everything in that file is `SOURCE-INSPECTED` — hypotheses from reading code,
+**none reproduced**. It is a prioritised work queue, not a defect register. Each
+entry carries a `prove:` line naming the specific test that would confirm or
+refute it. Findings only move into this ledger's register once reproduced.
+
+Three leads there bear directly on the historical defects in the brief:
+
+- **`createPartnerInvite` (partner-portal.ts:1370) is still the non-atomic
+  two-insert pattern that produced BRUTUS.** F-009 fixed the *self-service*
+  application path; the *admin invite* path was not covered by that repair and
+  still writes `partners` then `ambassadors` as separate statements. This is the
+  highest-priority thing to reproduce next.
+- **`resolveReferralCode` (used by `/r/[code]`) resolves a wider set of codes
+  than checkout honours** — it falls back to `partners` and to aliases, while
+  checkout validates against `ambassadors` only. A partners-only code would set
+  the cookie and record a click, then be silently dropped at checkout. That is
+  the same *shape* as the historical "$100 minimum" defect: attribution and
+  checkout disagreeing about what is valid.
+- **`fetchAuthoritativeRates` returns an empty map on ANY error**, silently
+  reverting every displayed rate to the `partners` copy — a silent fallback on a
+  money-adjacent display.
+
+**Good news on historical defect #2:** the mapper reports `minimum_qualifying_order`
+**is** now enforced on both paths and at both layers — `quoteOrder` throws below
+it, `ensureCommissionRecord` re-checks with the pre-discount subtotal, and the
+cart suppresses the referral candidate client-side. Still to be behaviourally
+confirmed, but the structural repair is present.
+
+
 
 ### Scale
 
@@ -804,7 +838,7 @@ every visitor while `coa_records` is empty and no product carries a COA URL**
 | Phase | Status |
 |---|---|
 | 0 — Tooling & environment | ✅ COMPLETE |
-| 1 — System map | 🔄 IN PROGRESS (6 of 10 subsystem mappers complete) |
+| 1 — System map | ✅ COMPLETE — see PHASE1-SYSTEM-MAP.md (159 risks catalogued, none reproduced) |
 | 2 — Production data integrity | 🔄 PARTIAL (11 findings) |
 | 5 — Migrations / schema reconciliation | 🔄 STARTED — 3 missing functions captured (F-011); full table/policy diff still owed |
 | 6 — Affiliate / ambassador | 🔄 F-009 repaired, applied to production and verified there; browser proof of the end-to-end journey still owed |
