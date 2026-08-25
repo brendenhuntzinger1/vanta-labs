@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter } from "next/navigation";
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { detectInAppBrowser } from "@/lib/in-app-browser";
 import { TRUST_POINTS } from "@/lib/trust-claims";
 
@@ -23,26 +23,31 @@ export function useAccessGranted() {
 }
 
 // -----------------------------------------------------------------------------
-// AGE VERIFICATION IS NEVER REMEMBERED.
+// ONCE PER VISIT. NOT ONCE PER PAGE, AND NOT FOR EVER.
 //
-// This gate used to persist confirmation for 30 days in localStorage
-// ("vanta-labs-age-verified") with a cookie mirror ("vl_age_verified"), and an
-// inline script in the root layout read them before first paint. A returning
-// visitor therefore reached the storefront without being asked again — and a
-// shared or previously-used device carried one person's attestation to the next.
+// This has been wrong in both directions, and the middle is the requirement.
 //
-// That persistence is now GONE. Confirmation lives only in React state for the
-// life of the loaded document:
+//   TOO LONG — it once persisted for 30 days in localStorage
+//   ("vanta-labs-age-verified") with a cookie mirror ("vl_age_verified"). A
+//   visitor months later was never asked again, and a shared device carried one
+//   person's attestation to the next. Removed, correctly.
 //
-//   * a fresh load, a refresh, a new tab, a reopened browser, a direct link to
-//     ANY storefront route -> the gate is shown;
-//   * client-side navigation within one visit -> the state survives, so a
-//     visitor is not re-asked while browsing;
-//   * being signed in grants nothing. Authentication and age attestation are
-//     separate, and no account, profile or session can satisfy this gate.
+//   TOO SHORT — it was then held only in React state for the life of ONE
+//   document. Client-side navigation kept it; anything that loaded a new
+//   document did not. Checkout hands off to the payment page with
+//   window.location.assign(), so a real customer pressed BACK from payment and
+//   met the gate again mid-purchase. Route exemptions were added for the routes
+//   someone thought of, and /checkout was not one of them — which is the tell
+//   that exemptions were treating a symptom.
 //
-// There is deliberately no storage read anywhere below. Adding one back would
-// reintroduce exactly the behaviour this removes.
+//   NOW — sessionStorage, read through useSyncExternalStore. It survives
+//   refresh, full-document navigation, back/forward and the payment round trip,
+//   and it is gone when the tab closes, so the next visit is asked again.
+//   Being signed in still grants nothing: authentication and age attestation
+//   are separate, and no account or session can satisfy this gate.
+//
+// The route exemptions below remain as defence in depth. They are no longer
+// what carries a shopper through checkout.
 // -----------------------------------------------------------------------------
 
 // Each statement is acknowledged individually: a single combined tick is one
@@ -200,15 +205,121 @@ function destinationAfterGate(pathname: string | null): string | null {
   return null;
 }
 
+/**
+ * Where "yes, I confirmed" lives for the rest of this visit.
+ *
+ * sessionStorage, deliberately, and neither of the two neighbouring choices:
+ *
+ *   IN MEMORY ONLY — what this was. It survives client-side navigation and
+ *   nothing else. checkout hands off to the payment page with
+ *   window.location.assign(), which is a whole new document, so pressing BACK
+ *   from payment produced a fresh document with the flag gone and the gate
+ *   back up. A real customer hit exactly that mid-purchase. Route exemptions
+ *   papered over the routes we thought of; /checkout was not one of them.
+ *
+ *   localStorage / a dated cookie — what it was before that, and why it was
+ *   ripped out: a 30-day token means a returning visitor months later is never
+ *   asked again, which is not what an age attestation is for.
+ *
+ * sessionStorage is the shape of the actual requirement: one confirmation per
+ * visit. It survives refresh, full-document navigation, back/forward and the
+ * payment round trip, and it is gone when the tab is closed, so the next visit
+ * asks again.
+ */
+const AGE_SESSION_KEY = "vl-age-confirmed-session";
+
+/**
+ * Whether THIS document should consider the visitor past the gate.
+ *
+ * Pulled out as a pure function on purpose. The defect a real customer found
+ * was not in any rendered markup — it was that a NEW DOCUMENT started with no
+ * knowledge of a confirmation the visitor had already given, and the only test
+ * covering it asserted the source text of a route list, which cannot express
+ * "a fresh document in the same visit". This signature can: `confirmedInMemory`
+ * is what a fresh document has (false), `sessionConfirmed` is what it can
+ * recover, and the two together are the whole rule.
+ */
+export function isVerifiedForDocument(input: {
+  /** React state — false on every fresh document, by construction. */
+  confirmedInMemory: boolean;
+  /** Recovered from sessionStorage: did this VISIT already confirm? */
+  sessionConfirmed: boolean;
+  pathname: string | null;
+}): boolean {
+  const { confirmedInMemory, sessionConfirmed, pathname } = input;
+  const matches = (list: string[]) =>
+    list.some((p) => pathname === p || pathname?.startsWith(`${p}/`));
+  // Route exemptions remain, as defence in depth — but they are no longer what
+  // carries a shopper through checkout. The session is.
+  return confirmedInMemory || sessionConfirmed || matches(STAFF_ONLY) || matches(PAYMENT_AND_RECEIPT);
+}
+
+function readSessionConfirmation(): boolean {
+  try {
+    return window.sessionStorage.getItem(AGE_SESSION_KEY) === "true";
+  } catch {
+    // Private mode, disabled storage, a webview that throws on access. The gate
+    // simply shows again — the failure mode stays "ask", never "let through".
+    return false;
+  }
+}
+
+function writeSessionConfirmation(confirmed: boolean): void {
+  try {
+    if (confirmed) window.sessionStorage.setItem(AGE_SESSION_KEY, "true");
+    else window.sessionStorage.removeItem(AGE_SESSION_KEY);
+  } catch {
+    /* Nothing depends on this succeeding; in-memory state still carries the page. */
+  }
+}
+
+/**
+ * The visit's confirmation, as an external store.
+ *
+ * sessionStorage is state React does not own, and the server cannot see it —
+ * so it is exactly what useSyncExternalStore is for. Reading it during render
+ * would be a hydration mismatch; reading it in an effect and calling setState
+ * is a cascading render. This is the third option: React subscribes, the server
+ * snapshot is always false (so SSR always renders the gate), and the client
+ * snapshot is the truth for this visit.
+ */
+let sessionSnapshotCache: boolean | null = null;
+const sessionListeners = new Set<() => void>();
+
+function subscribeToSessionConfirmation(onChange: () => void): () => void {
+  sessionListeners.add(onChange);
+  return () => sessionListeners.delete(onChange);
+}
+
+/** Must return a STABLE value between changes or React re-renders forever. */
+function sessionConfirmationSnapshot(): boolean {
+  if (sessionSnapshotCache === null) sessionSnapshotCache = readSessionConfirmation();
+  return sessionSnapshotCache;
+}
+
+/** The server has no sessionStorage: always unconfirmed, so SSR shows the gate. */
+function sessionConfirmationServerSnapshot(): boolean {
+  return false;
+}
+
+function setSessionConfirmation(confirmed: boolean): void {
+  writeSessionConfirmation(confirmed);
+  sessionSnapshotCache = confirmed;
+  for (const listener of sessionListeners) listener();
+}
+
 export function AgeGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const matches = (list: string[]) =>
-    list.some((p) => pathname === p || pathname?.startsWith(`${p}/`));
-  const isStaffArea = matches(STAFF_ONLY);
-  // Already attested at checkout, and the order exists. See PAYMENT_AND_RECEIPT.
-  const isPaymentOrReceipt = matches(PAYMENT_AND_RECEIPT);
   const [localVerified, setLocalVerified] = useState(false);
+  // What this VISIT already confirmed. Separate from localVerified because they
+  // answer different questions: one is "did they confirm in this document", the
+  // other "did they confirm in this visit".
+  const sessionConfirmed = useSyncExternalStore(
+    subscribeToSessionConfirmation,
+    sessionConfirmationSnapshot,
+    sessionConfirmationServerSnapshot,
+  );
   const [confirmed, setConfirmed] = useState<Record<string, boolean>>({});
   const [showPrompt, setShowPrompt] = useState(false);
   const agreed = ATTESTATIONS.every((a) => confirmed[a.id]);
@@ -222,10 +333,19 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
   // The ONLY source of truth: in-memory state for this document. It starts
   // false on the server and on every fresh client load, so the gate is always
   // rendered first.
-  const isVerified = localVerified || isStaffArea || isPaymentOrReceipt;
+  const isVerified = isVerifiedForDocument({
+    confirmedInMemory: localVerified,
+    sessionConfirmed,
+    pathname,
+  });
 
+  // The confirmation given earlier in this visit is already in `sessionConfirmed`
+  // above; the inline script in app/layout.tsx flips the html attribute before
+  // the first paint, so the CSS keeps the overlay hidden and there is no flash
+  // of the gate on the way back from payment.
   const markVerified = () => {
     setLocalVerified(true);
+    setSessionConfirmation(true);
   };
 
   const handleEnter = () => {
@@ -260,10 +380,11 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
   };
 
   const handleExit = () => {
-    // Nothing to clear — nothing was ever stored. Also clears any flag left in
-    // a returning visitor's browser by the previous persisted implementation,
-    // so an old 30-day token cannot outlive this change.
+    // End the visit's confirmation, and also clear any flag left in a returning
+    // visitor's browser by the previous persisted implementation, so an old
+    // 30-day token cannot outlive this change.
     setLocalVerified(false);
+    setSessionConfirmation(false);
     try {
       window.localStorage.removeItem("vanta-labs-age-verified");
       document.cookie = "vl_age_verified=; path=/; max-age=0; samesite=lax";

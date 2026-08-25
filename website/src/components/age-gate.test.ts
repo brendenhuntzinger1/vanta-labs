@@ -14,21 +14,32 @@ const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 // attestation to whoever picked it up next. The owner reported reaching the
 // store with no gate at all, which is exactly that behaviour working as built.
 //
-// Age verification is no longer persisted anywhere. These rules exist so it
-// cannot quietly come back.
+// Age verification is scoped to ONE VISIT. These rules exist so it can never
+// creep back to "for ever" (a 30-day token on a shared device) and never
+// regress to "every document" (which put the gate in front of a customer
+// pressing BACK from the payment page, mid-purchase).
 // ---------------------------------------------------------------------------
 
-describe("age verification is never remembered", () => {
+describe("age verification lasts one visit — not for ever, not one page", () => {
   const gate = read("src/components/age-gate.tsx");
   const layout = read("src/app/layout.tsx");
 
-  it("never READS a stored answer from anywhere", () => {
-    // The whole class of bypass: any read of a previous session's answer.
+  it("never reads an answer that could OUTLIVE the visit", () => {
+    // The bypass that mattered: a previous visit's answer, on a device that may
+    // have changed hands. sessionStorage cannot do that — it dies with the tab.
     expect(gate).not.toMatch(/localStorage\.getItem/);
-    expect(gate).not.toMatch(/sessionStorage/);
     // The only permitted cookie reference is the removal on exit, below.
     expect(gate).not.toMatch(/document\.cookie\.split/);
-    expect(gate).not.toMatch(/useSyncExternalStore/);
+  });
+
+  it("remembers the answer for THIS visit, in session-scoped storage", () => {
+    // The customer-found defect: confirmation held only in React state was lost
+    // by any full-document navigation, so BACK from the payment page showed the
+    // gate again. Behaviour is proven by the browser suite; this pins the
+    // mechanism so it cannot silently revert to per-document state.
+    expect(gate).toMatch(/sessionStorage\.getItem\(AGE_SESSION_KEY\)/);
+    expect(gate).toMatch(/sessionStorage\.setItem\(AGE_SESSION_KEY/);
+    expect(gate).toMatch(/useSyncExternalStore/);
   });
 
   it("never WRITES an answer that could outlive the page", () => {
@@ -55,17 +66,16 @@ describe("age verification is never remembered", () => {
     expect(gate).toMatch(/vl_age_verified=; path=\/; max-age=0/);
   });
 
-  it("holds the answer only in component state for this document", () => {
-    // The answer is component state plus the route exemptions below — never a
-    // stored value. Asserted as a RULE, not as one literal line: this used to
-    // pin the exact text `localVerified || isStaffArea`, so adding the
-    // payment-page exemption broke it without anything being wrong.
-    expect(gate).toMatch(/const isVerified = localVerified(\s*\|\|\s*is[A-Za-z]+)+;/);
-    expect(gate).toMatch(/useState\(false\)/);
-    // The point of the rule: nothing WRITES it. The file does touch storage,
-    // but only to delete the legacy 30-day token a returning browser may still
-    // carry, so the assertion is about writes rather than mentions.
-    expect(gate).not.toMatch(/localStorage\.setItem|sessionStorage\.setItem|indexedDB/);
+  it("resolves the answer through one shared rule, not a hand-rolled expression", () => {
+    // The decision lives in isVerifiedForDocument, which the browser suite
+    // drives directly across simulated document boundaries. Pinning the call
+    // rather than an inline boolean is what let the old test pass while the
+    // real behaviour was broken.
+    expect(gate).toMatch(/const isVerified = isVerifiedForDocument\(/);
+    expect(gate).toMatch(/confirmedInMemory: localVerified/);
+    expect(gate).toMatch(/sessionConfirmed,/);
+    // Nothing may write an answer that outlives the visit.
+    expect(gate).not.toMatch(/localStorage\.setItem|indexedDB/);
     // The only cookie line clears the legacy value (max-age=0).
     for (const line of gate.split("\n").filter((l) => l.includes("document.cookie"))) {
       expect(line, `cookie write in the age gate: ${line.trim()}`).toMatch(/max-age=0/);
@@ -122,11 +132,10 @@ describe("the gate fails closed and locks the page behind it", () => {
 
   it("exempts the staff areas, and ONLY the staff areas", () => {
     // /admin and /vault are behind authentication and are not customer facing.
-    // Since confirmation is no longer remembered for anyone, gating them would
-    // mean re-attesting on every admin page load during order and inventory
-    // work, for no protective benefit.
+    // Gating them would mean re-attesting during order and inventory work for
+    // no protective benefit — /admin is already behind authentication.
     expect(gate).toContain('const STAFF_ONLY = ["/admin", "/vault"];');
-    expect(gate).toMatch(/const isStaffArea = matches\(STAFF_ONLY\)/);
+    expect(gate).toMatch(/matches\(STAFF_ONLY\)/);
     // Nothing a shopper can reach may appear in that list.
     for (const shopper of ["/products", "/cart", "/checkout", "/account", "/membership", "/ambassador"]) {
       expect(gate, `${shopper} must never be exempt from the gate`)

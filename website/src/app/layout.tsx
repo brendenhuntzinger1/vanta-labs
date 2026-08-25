@@ -160,14 +160,36 @@ export default async function RootLayout({
       // attribute, so the storefront behind the gate is inert from the very
       // first paint rather than from hydration.
       //
-      // The age-gate component flips this to "true" once, in memory, after all
-      // four attestations are confirmed. Nothing persists it.
+      // The age-gate component flips this to "true" once the four attestations
+      // are confirmed, and records that confirmation in sessionStorage so it
+      // survives the full-document navigations a checkout makes. The inline
+      // script at the top of <body> restores it before paint on later documents
+      // in the same visit; a NEW visit has no key and is asked again.
       data-age-verified="false"
       // The attribute above is updated client-side on confirmation, so the DOM
       // legitimately diverges from the server's output here.
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
+        {/* Restore this visit's age confirmation BEFORE the first paint.
+
+            The attribute above is server-rendered "false" and the CSS keys the
+            overlay off it, so without this the gate would flash on every
+            full-document navigation within a visit — which is what pressing
+            BACK from the payment page does. React cannot do this job: it only
+            learns what is in sessionStorage after hydration, which is already
+            too late to avoid the flash.
+
+            Fail-closed by construction. Any throw, any missing key, any browser
+            that refuses storage leaves the attribute exactly as the server
+            wrote it, and the gate stays up. Nothing here can open the store —
+            it can only restore a confirmation this visit already gave. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html:
+              'try{if(sessionStorage.getItem("vl-age-confirmed-session")==="true"){document.documentElement.setAttribute("data-age-verified","true")}}catch(e){}',
+          }}
+        />
         {/* Site-wide Organization + WebSite structured data for brand/knowledge
             panel eligibility. Rendered server-side so crawlers always see it. */}
         <script

@@ -3,7 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getShippingAddresses } from "@/lib/shipping-origin";
 import { recordActualShippingCost } from "@/lib/admin-profit";
-import { createShipmentWithRates, createShippoOrder } from "@/lib/shippo/client";
+import { createShipmentWithRates, createShippoOrder, getTransaction } from "@/lib/shippo/client";
 import { isShippoConfigured } from "@/lib/shippo/config";
 import { buildOrderParcel, toCountryCode } from "@/lib/shippo/service";
 import type { ShippoAddress, ShippoOrderLineItem, ShippoTransactionCreated } from "@/lib/shippo/types";
@@ -382,6 +382,40 @@ export function amountToCents(amount: string | null | undefined): number | null 
   return Number.isFinite(value) ? value : null;
 }
 
+export interface LabelFacts {
+  amountCents: number | null;
+  carrier: string | null;
+  service: string | null;
+  trackingNumber: string | null;
+  labelUrl: string | null;
+}
+
+/**
+ * The facts about a bought label, read from either shape Shippo sends.
+ *
+ * `rate` arrives expanded on some responses and as a bare object_id string on
+ * others. Reading `.amount` off the string form yields undefined, which is how
+ * three real orders ended up marked "label purchased" with no recorded cost and
+ * a profit line permanently stuck on ESTIMATED. One reader, both shapes, so a
+ * caller cannot accidentally handle only the convenient one.
+ */
+export function labelFactsFrom(source: {
+  tracking_number?: string | null;
+  label_url?: string | null;
+  rate?: string | { amount?: string | null; provider?: string | null; servicelevel?: { name?: string | null } | null } | null;
+}): LabelFacts {
+  const text = (value: unknown) => String(value ?? "").trim() || null;
+  // A string rate is an ID, not a price. It carries no cost information at all.
+  const rate = source.rate && typeof source.rate === "object" ? source.rate : null;
+  return {
+    amountCents: amountToCents(rate?.amount),
+    carrier: text(rate?.provider),
+    service: text(rate?.servicelevel?.name),
+    trackingNumber: text(source.tracking_number),
+    labelUrl: text(source.label_url),
+  };
+}
+
 /**
  * Find the Vanta order a purchased label belongs to.
  *
@@ -447,12 +481,42 @@ export async function applyTransactionCreated(
     return { matched: false, orderId: null, reason: "no_matching_order" };
   }
 
-  const amountCents = amountToCents(data.rate?.amount);
-  const trackingNumber = String(data.tracking_number ?? "").trim() || null;
-  const carrier = String(data.rate?.provider ?? "").trim() || null;
-  const service = String(data.rate?.servicelevel?.name ?? "").trim() || null;
   const transactionId = String(data.object_id ?? "").trim() || null;
-  const labelUrl = String(data.label_url ?? "").trim() || null;
+
+  // WHAT THE LABEL COST, FROM WHICHEVER SHAPE ARRIVED.
+  //
+  // Shippo sends `rate` expanded on some responses and as a bare object_id
+  // string on others. This read only ever handled the expanded form, so a label
+  // bought in Shippo's dashboard produced amount/provider/servicelevel all
+  // undefined — while the status move in the same UPDATE succeeded. The order
+  // showed "label purchased" with "Actual shipping: Pending label purchase" and
+  // an ESTIMATED profit that could never finalise.
+  //
+  // When the webhook is thin, ask Shippo for the transaction itself. That is
+  // the authoritative record of what was actually spent, and it is the only way
+  // to recover a cost the webhook never carried.
+  let facts = labelFactsFrom(data);
+  if (transactionId && (facts.amountCents === null || !facts.carrier || !facts.trackingNumber)) {
+    const fetched = await getTransaction(transactionId);
+    if (fetched.ok) {
+      const expanded = labelFactsFrom(fetched.data);
+      // Prefer anything the webhook already gave us; fill only the gaps.
+      facts = {
+        amountCents: facts.amountCents ?? expanded.amountCents,
+        carrier: facts.carrier ?? expanded.carrier,
+        service: facts.service ?? expanded.service,
+        trackingNumber: facts.trackingNumber ?? expanded.trackingNumber,
+        labelUrl: facts.labelUrl ?? expanded.labelUrl,
+      };
+    } else {
+      // Not fatal: the status move and whatever the webhook did carry are still
+      // worth writing. The cost stays NULL, which is what makes the admin show
+      // "Pending" rather than a wrong number.
+      console.error("Unable to read the Shippo transaction for cost recovery", transactionId, fetched.message);
+    }
+  }
+
+  const { amountCents, carrier, service, trackingNumber, labelUrl } = facts;
   const now = new Date().toISOString();
 
   // THE STATUS MOVE IS SEPARATE FROM THE LABEL FACTS, AND ONLY THE MOVE IS
@@ -482,10 +546,15 @@ export async function applyTransactionCreated(
     .from("orders")
     .update({
       shippo_transaction_id: transactionId,
-      tracking_number: trackingNumber,
-      shipping_carrier: carrier,
-      shipping_service: service,
-      label_url: labelUrl,
+      // Each written only when we actually have it. These used to be
+      // unconditional, so a second, thinner delivery of the same event — or a
+      // replay Shippo sent without the expanded rate — overwrote a good
+      // tracking number and carrier with null. A fact we already hold is never
+      // worth less than the absence of one.
+      ...(trackingNumber !== null ? { tracking_number: trackingNumber } : {}),
+      ...(carrier !== null ? { shipping_carrier: carrier } : {}),
+      ...(service !== null ? { shipping_service: service } : {}),
+      ...(labelUrl !== null ? { label_url: labelUrl } : {}),
       label_purchased_at: now,
       // Written only when Shippo gave a readable amount. A label with no usable
       // price must leave this NULL so the admin shows "Pending" and the owner

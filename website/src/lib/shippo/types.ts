@@ -283,12 +283,30 @@ export interface ShippoTransactionCreated {
   label_url?: string | null;
   /** Present when the label was bought against a Shippo Order. */
   order?: string | null;
-  rate?: {
-    object_id?: string | null;
-    amount?: string | null;
-    currency?: string | null;
-    provider?: string | null;
-    servicelevel?: { name?: string | null; token?: string | null } | null;
-  } | null;
+  /**
+   * EITHER the expanded rate OR just its object_id — exactly like
+   * ShippoTransaction.rate above, and for the same reason: which one arrives
+   * depends on how the label was bought.
+   *
+   * This was typed as the object alone, so `data.rate?.amount` compiled
+   * cleanly and silently produced undefined whenever Shippo sent the string
+   * form. A label bought from Shippo's own dashboard came through with no
+   * cost, no carrier and no service, the order still moved to
+   * `label_purchased`, and the profit line stayed "ESTIMATED" for ever. Three
+   * real orders reached that state before anyone noticed.
+   *
+   * Typing the truth is what makes the narrow read a compile error rather than
+   * a silent null.
+   */
+  rate?:
+    | string
+    | {
+        object_id?: string | null;
+        amount?: string | null;
+        currency?: string | null;
+        provider?: string | null;
+        servicelevel?: { name?: string | null; token?: string | null } | null;
+      }
+    | null;
   metadata?: string | null;
 }

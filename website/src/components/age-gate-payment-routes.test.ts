@@ -16,10 +16,12 @@ import path from "node:path";
 // document load resets the gate's in-memory state (which is never persisted,
 // on purpose). Both halves are correct; the handoff was not.
 //
-// These assert the route lists directly, because the alternative — mounting
-// the gate in jsdom and driving usePathname — tests the harness more than the
-// rule. The browser reproduction above is what proves the behaviour; this is
-// what stops it coming back.
+// These assert the route lists directly. That was ONCE the whole test, and it
+// was not enough: a real customer still met the gate pressing BACK from the
+// payment page, because the exemptions covered /checkout/pay but the state was
+// lost on any full-document navigation and /checkout was never exempt. The
+// behaviour is now proven in a real browser across real page loads; these
+// remain only to stop the route lists themselves being edited away.
 // ---------------------------------------------------------------------------
 
 const GATE = path.join(__dirname, "age-gate.tsx");
@@ -55,8 +57,8 @@ describe("routes the age gate must not block", () => {
 
   it("the exemption is actually wired into the verified check", () => {
     // A list nothing reads would leave the defect in place while looking fixed.
-    expect(source).toMatch(/const isPaymentOrReceipt = matches\(PAYMENT_AND_RECEIPT\)/);
-    expect(source).toMatch(/isVerified = localVerified \|\| isStaffArea \|\| isPaymentOrReceipt/);
+    expect(source).toMatch(/matches\(PAYMENT_AND_RECEIPT\)/);
+    expect(source).toMatch(/const isVerified = isVerifiedForDocument\(/);
   });
 });
 

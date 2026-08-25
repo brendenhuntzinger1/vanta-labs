@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // On-site card entry. Veyra's documented integration is "create a session
 // server-side and mount the iframe" — the shopper never leaves this domain and
@@ -11,9 +11,33 @@ import { useEffect, useRef, useState } from "react";
 // anything this component observes. onSuccess here only moves the shopper along;
 // if the browser is closed the instant the charge lands, the webhook still
 // settles the order.
+//
+// WHY THERE IS ALSO A POLL
+//
+// The first real production purchase proved that onSuccess cannot be the only
+// way out. The charge succeeded, the webhook settled the order, and the shopper
+// sat on the processor's "Processing…" until they refreshed by hand — at which
+// point the freshly mounted iframe showed "Payment complete". The order had been
+// paid the entire time. The browser simply never learned it, because the single
+// path to completion was an event that did not arrive.
+//
+// So the page now asks our own server the one question that matters — "is this
+// order paid?" — from the moment it mounts. That covers the callback never
+// firing, the tab being suspended mid-payment (routine on iOS), a dropped
+// network, and the shopper reloading after paying. Whichever answer arrives
+// first wins; both lead to the same place.
 
 const SCRIPT_SRC = "https://veyragate.com/v1/checkout.js";
 const SCRIPT_ID = "secure-card-entry-js";
+
+/** How often to ask our own server whether the order has settled. */
+const POLL_MS = 2500;
+/**
+ * How long to wait before telling the shopper what to do. Not a timeout — the
+ * poll continues. It exists so "Processing…" can never be an indefinite,
+ * unexplained state, which is what makes a customer pay twice.
+ */
+const REASSURE_AFTER_MS = 25_000;
 
 type MountHandle = { destroy?: () => void };
 
@@ -69,8 +93,39 @@ export default function VeyraCheckout({
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<MountHandle | null>(null);
+  // Navigation happens exactly once, whichever signal gets there first.
+  const settledRef = useRef(false);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [message, setMessage] = useState<string | null>(null);
+  const [reassure, setReassure] = useState(false);
+
+  const goToConfirmation = useCallback(
+    (returnUrl?: string) => {
+      if (settledRef.current) return;
+      settledRef.current = true;
+      window.location.assign(returnUrl || `/order-confirmation/${orderId}`);
+    },
+    [orderId],
+  );
+
+  /**
+   * Ask our own server whether the order is paid. Deliberately silent on
+   * failure: a dropped request during payment is expected on mobile data and
+   * must never produce an error the shopper can misread as a failed charge.
+   */
+  const checkOrderStatus = useCallback(async () => {
+    if (settledRef.current) return;
+    try {
+      const response = await fetch(`/api/checkout/order-status/${encodeURIComponent(orderId)}`, {
+        cache: "no-store",
+      });
+      if (!response.ok) return;
+      const data = (await response.json()) as { paid?: boolean };
+      if (data?.paid) goToConfirmation();
+    } catch {
+      // Keep polling. The next tick may succeed.
+    }
+  }, [orderId, goToConfirmation]);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,9 +139,9 @@ export default function VeyraCheckout({
             if (!cancelled) setStatus("ready");
           },
           onSuccess: (event) => {
-            // The webhook is what actually marks the order paid; this only sends
-            // the shopper to their confirmation.
-            window.location.assign(event?.return_url || `/order-confirmation/${orderId}`);
+            // The fast path when it works. The poll is what covers it when it
+            // does not.
+            goToConfirmation(event?.return_url);
           },
           onError: () => {
             if (cancelled) return;
@@ -119,7 +174,35 @@ export default function VeyraCheckout({
         // Unmounting must never throw during navigation.
       }
     };
-  }, [sessionId, orderId]);
+  }, [sessionId, orderId, goToConfirmation]);
+
+  // The settlement watch, independent of the iframe entirely.
+  useEffect(() => {
+    // Immediately, because this also catches the shopper who already paid and
+    // then reloaded: they must land on their receipt, never on a card form that
+    // invites a second payment.
+    void checkOrderStatus();
+
+    const poll = window.setInterval(() => void checkOrderStatus(), POLL_MS);
+    const reassureTimer = window.setTimeout(() => setReassure(true), REASSURE_AFTER_MS);
+
+    // iOS Safari freezes timers in a backgrounded tab, and a 3DS step or a
+    // wallet sheet backgrounds it routinely. Re-ask the moment we are visible
+    // again rather than waiting for a timer that was never running.
+    const recheck = () => {
+      if (document.visibilityState === "visible") void checkOrderStatus();
+    };
+    document.addEventListener("visibilitychange", recheck);
+    // Back/forward restores from the bfcache without remounting React.
+    window.addEventListener("pageshow", recheck);
+
+    return () => {
+      window.clearInterval(poll);
+      window.clearTimeout(reassureTimer);
+      document.removeEventListener("visibilitychange", recheck);
+      window.removeEventListener("pageshow", recheck);
+    };
+  }, [checkOrderStatus]);
 
   return (
     <div className="w-full">
@@ -134,6 +217,21 @@ export default function VeyraCheckout({
       {/* The processor replaces this node's contents with the card iframe.
           The id is intentionally generic — it is visible in page source. */}
       <div ref={containerRef} id="secure-card-entry" className="min-h-[420px] w-full" />
+      {reassure && status !== "error" && (
+        // Shown only if this is taking longer than a payment normally does. It
+        // never suggests paying again: at this point we do not know whether the
+        // card has been charged, and "try again" is the one instruction that
+        // could take money twice.
+        <div
+          role="status"
+          className="mt-4 border border-white/15 bg-white/[0.03] px-4 py-3 text-sm text-white/70"
+        >
+          Still confirming your payment with your bank. Please keep this page open — you&rsquo;ll be
+          taken to your receipt automatically as soon as it clears.{" "}
+          <strong className="text-white/90">Don&rsquo;t pay again</strong>; if you&rsquo;ve already
+          been charged, this page will find it.
+        </div>
+      )}
     </div>
   );
 }
