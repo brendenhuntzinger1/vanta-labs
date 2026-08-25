@@ -86,6 +86,50 @@ function isSensitiveKey(key: string): boolean {
   return SENSITIVE_KEY_FRAGMENTS.some((fragment) => lower.includes(fragment));
 }
 
+/**
+ * DIAGNOSTIC FIELDS THAT MUST SURVIVE THE "name" RULE.
+ *
+ * `name` is in SENSITIVE_KEY_FRAGMENTS because real payloads carry
+ * customerName, recipient_name, billing_full_name — and substring matching is
+ * what catches them. The cost was that Sentry's own standard contexts were
+ * being destroyed too: browser.name became "[redacted]", so every event said
+ * an unknown browser on an unknown OS. That is the exact context you need to
+ * read a checkout bug, and losing it is how "it only breaks in one browser"
+ * stays unanswerable.
+ *
+ * Fixed with an allowlist of EXACT PATHS rather than by weakening the rule.
+ * Loosening "name" to a whole-key match would let customer_name through the
+ * moment someone names a field that way; an exact path cannot widen by
+ * accident.
+ *
+ * device.name IS DELIBERATELY ABSENT. Browser, OS and runtime names are
+ * software identifiers. A device NAME is whatever the owner typed, and on iOS
+ * that is routinely "Brenden's iPhone" — a real person's name, which is
+ * precisely what this module exists to remove. device.family/model/brand are
+ * the model identifiers and are safe.
+ */
+const DIAGNOSTIC_PATH_ALLOWLIST = new Set([
+  "contexts.browser.name",
+  "contexts.browser.version",
+  "contexts.os.name",
+  "contexts.os.version",
+  "contexts.os.kernel_version",
+  "contexts.runtime.name",
+  "contexts.runtime.version",
+  "contexts.device.family",
+  "contexts.device.model",
+  "contexts.device.brand",
+  "contexts.device.arch",
+  // Our own application's identity, not anyone's.
+  "contexts.app.app_name",
+  "contexts.app.app_version",
+  "contexts.app.app_build",
+]);
+
+function isAllowedDiagnosticPath(path: string): boolean {
+  return DIAGNOSTIC_PATH_ALLOWLIST.has(path);
+}
+
 const REDACTED = "[redacted]";
 
 /** Text patterns that identify a person regardless of which field they sit in. */
@@ -140,15 +184,27 @@ export function scrubUrl(value: string): string {
  * Depth-limited because a Sentry event can carry cyclic or very deep objects
  * and this runs on every event in the request path.
  */
-export function scrubValue(value: unknown, depth = 0): unknown {
+export function scrubValue(value: unknown, depth = 0, path = ""): unknown {
   if (depth > 6) return REDACTED;
   if (typeof value === "string") return scrubText(value);
   if (value === null || typeof value !== "object") return value;
-  if (Array.isArray(value)) return value.slice(0, 50).map((item) => scrubValue(item, depth + 1));
+  if (Array.isArray(value)) {
+    // Index is deliberately not part of the path: an allowlisted field is
+    // allowlisted wherever it sits, and paths like contexts.foo.3.name would
+    // never match anything anyway.
+    return value.slice(0, 50).map((item) => scrubValue(item, depth + 1, path));
+  }
 
   const out: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = isSensitiveKey(key) ? REDACTED : scrubValue(item, depth + 1);
+    const childPath = path ? `${path}.${key}` : key;
+    // The allowlist is checked FIRST and only ever admits exact, known paths.
+    // Everything else falls through to the substring rule unchanged.
+    if (isAllowedDiagnosticPath(childPath)) {
+      out[key] = scrubValue(item, depth + 1, childPath);
+      continue;
+    }
+    out[key] = isSensitiveKey(key) ? REDACTED : scrubValue(item, depth + 1, childPath);
   }
   return out;
 }
@@ -216,7 +272,10 @@ export function scrubEvent<T extends ScrubbableEvent>(event: T): T {
 
   // 4. Anything we attached ourselves.
   if (event.extra) event.extra = scrubValue(event.extra) as Record<string, unknown>;
-  if (event.contexts) event.contexts = scrubValue(event.contexts) as Record<string, unknown>;
+  // Rooted at "contexts" so paths match DIAGNOSTIC_PATH_ALLOWLIST. `extra` is
+  // deliberately NOT rooted: it is whatever the application attached, and
+  // nothing in it is allowlisted.
+  if (event.contexts) event.contexts = scrubValue(event.contexts, 0, "contexts") as Record<string, unknown>;
 
   // 5. Breadcrumbs are the richest accidental source: fetch URLs and console
   //    lines both routinely contain an order id or an email.
