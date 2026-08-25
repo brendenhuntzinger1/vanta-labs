@@ -1,7 +1,16 @@
 -- =============================================================================
 -- Purchase send-ledger — idempotency for server-side conversion reporting.
 --
--- NOT YET APPLIED. Additive, isolated, no FK into commerce.
+-- APPLIED to production 2026-08-25. Additive, isolated, no FK into commerce.
+--
+-- Applied because the second real production order proved the gap is live, not
+-- theoretical: PostgREST answered 404 for this table at 03:36:17.067 (the
+-- lookup the route makes before deciding whether to send), so `alreadySent` was
+-- always false, and the shopper's back-navigation re-sent the server-side
+-- TikTok and Reddit conversions 27 seconds after the first send.
+--
+-- Verified after applying: RLS on, zero policies, and `set role anon` sees 0
+-- rows with a probe row present. Only service_role reads it.
 --
 -- TikTok dedups identical (event_source_id, event, event_id) for 48 hours. The
 -- confirmation URL is an unguessable bearer token but it can circulate, and a

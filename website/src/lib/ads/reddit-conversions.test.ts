@@ -52,8 +52,15 @@ describe("the envelope matches Reddit's own sample", () => {
     expect(event.type).toEqual({ tracking_type: "Purchase" });
   });
 
-  it("declares the action source", () => {
-    expect(event.action_source).toBe("website");
+  it("declares the action source in the casing Reddit accepts", () => {
+    // This assertion used to read `toBe("website")` and passed on every run
+    // while production rejected 100% of conversions with
+    // "action_source: invalid action_source: website". It was testing what the
+    // code did, not what Reddit requires, so it locked the bug in place. The
+    // casing is the whole point of the assertion — a lowercased value fails the
+    // batch outright and nothing is reported.
+    expect(event.action_source).toBe("WEBSITE");
+    expect(event.action_source).not.toBe(String(event.action_source).toLowerCase());
   });
 });
 

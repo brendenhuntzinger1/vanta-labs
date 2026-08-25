@@ -24,6 +24,22 @@ import { emitRedditEvent, type RedditEvent } from "@/lib/ads/reddit-events";
  * nothing further. The event id is derived from the order too, so a future
  * server-side Events API call for the same purchase collapses into one
  * conversion rather than doubling it.
+ *
+ * THE GUARD HAS TO SIT BEFORE THE FETCH, NOT AFTER IT.
+ *
+ * It used to be a `useRef` alone, which survives a re-render but dies with the
+ * component — and `/api/ads/purchase-event/[orderId]` is not a read. It sends
+ * the server-side TikTok and Reddit conversions as a side effect of being
+ * asked. So every fresh mount re-sent them, and a fresh mount is not exotic:
+ * on the second real production order the shopper went to /account/login and
+ * came back, and the conversions went out twice, 27 seconds apart (03:36:16
+ * and 03:36:43). TikTok's own 48-hour dedup on the shared event id absorbed it
+ * that time; a link reopened later would not be absorbed.
+ *
+ * So the localStorage key this doc comment always claimed is now checked here,
+ * before the request, and marked as soon as the order comes back paid. The ref
+ * stays as the in-flight guard for the case localStorage cannot answer for
+ * (private mode, storage blocked) and for two mounts in the same tick.
  */
 export function TikTokPurchaseEvent({
   orderId,
@@ -37,6 +53,14 @@ export function TikTokPurchaseEvent({
 
   const attempt = useCallback(async () => {
     if (settled.current || !orderId) return;
+    // Survives the unmount/remount a back button causes, which the ref does
+    // not. Keyed on the order so a different order is unaffected.
+    const store = browserFiredStore();
+    const requestKey = `purchase-request:${orderId}`;
+    if (store.has(requestKey)) {
+      settled.current = true;
+      return;
+    }
     // Gate on consent itself, not on whether the SDK loaded.
     //
     // Checking `window.ttq` conflated the two: an ad blocker that stops
@@ -61,6 +85,11 @@ export function TikTokPurchaseEvent({
       if (!body?.event) return; // not paid — nothing to report, and that is correct
 
       settled.current = true;
+      // Marked only once the order came back PAID. An unpaid order must stay
+      // askable: the confirmation page opens while the webhook is still
+      // landing, and marking here on a "not yet" would permanently suppress
+      // the conversion for a purchase that settles a second later.
+      store.mark(requestKey);
       // The browser leg is best-effort: if the SDK was blocked, ttq?.track is
       // a no-op and the server leg above already reported the conversion.
       // Identify before tracking, so the conversion carries the match keys.

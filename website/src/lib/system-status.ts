@@ -461,9 +461,14 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
     out.push({
       key: "error_reporting",
       label: "Error reporting (Sentry)",
-      level: dsn.state === "ok" ? "ok" : dsn.state === "missing" ? "not_configured" : "error",
+      level: dsn.state === "ok" ? (dsn.browser ? "ok" : "warn") : dsn.state === "missing" ? "not_configured" : "error",
       detail: dsn.state === "ok"
-        ? `Reporting to project ${dsn.projectId} at ${dsn.host} — ${tags}`
+        ? dsn.browser
+          ? `Server AND browser reporting to project ${dsn.projectId} at ${dsn.host} — ${tags}`
+          : // Stated separately because the failure is silent and reads like
+            // health: the server reports, every browser reports nothing, and an
+            // empty Sentry looks like an error-free site rather than a blind one.
+            `SERVER ONLY — reporting to project ${dsn.projectId} at ${dsn.host} (${tags}), but NEXT_PUBLIC_SENTRY_DSN is unset, so no browser ever reports. Only NEXT_PUBLIC_ variables reach client bundles; SENTRY_DSN alone leaves the browser silent. Set NEXT_PUBLIC_SENTRY_DSN in Vercel and redeploy.`
         : dsn.state === "missing"
           ? "No DSN set, so nothing is reported. Set NEXT_PUBLIC_SENTRY_DSN (and SENTRY_DSN) in Vercel and redeploy."
           : `The configured DSN is unusable (${dsn.reason}) — NOTHING is being reported. Check the DSN value in Vercel: it must be the full https://…@…ingest.…sentry.io/<id> URL, not the variable's name.`,

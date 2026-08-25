@@ -122,7 +122,21 @@ export function buildRedditConversionPayload(input: {
           // Milliseconds, per the console sample. Seconds would land in 1970 and
           // be silently dropped as older than seven days.
           event_at: input.occurredAt.getTime(),
-          action_source: "website",
+          // UPPERCASE because Reddit's enum is case-sensitive and this field
+          // was the one transcription error in the cURL sample above. It cost
+          // every conversion this integration has ever tried to report:
+          //
+          //   HTTP 400 — "There were 1 invalid conversion events. None were
+          //   processed." field "$.data.events[0].action_source",
+          //   "action_source: invalid action_source: website"
+          //
+          // Both attempts on the second real production order were rejected
+          // with exactly that (03:36:16 and 03:36:43), and every attempt before
+          // them too. Reddit rejects the batch outright, so this was never a
+          // partial degradation — the server-side leg reported nothing, ever,
+          // while the TikTok leg beside it succeeded and made the failure easy
+          // to miss.
+          action_source: "WEBSITE",
           type: { tracking_type: event.name },
           ...(user.clickId ? { click_id: String(user.clickId) } : {}),
           ...(Object.keys(userPayload).length > 0 ? { user: userPayload } : {}),

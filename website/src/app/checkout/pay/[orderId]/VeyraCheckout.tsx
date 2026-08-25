@@ -33,11 +33,34 @@ const SCRIPT_ID = "secure-card-entry-js";
 /** How often to ask our own server whether the order has settled. */
 const POLL_MS = 2500;
 /**
- * How long to wait before telling the shopper what to do. Not a timeout — the
- * poll continues. It exists so "Processing…" can never be an indefinite,
+ * How long the page stays open before it says anything. Not a timeout — the
+ * poll continues either way. It exists so a wait can never be an indefinite,
  * unexplained state, which is what makes a customer pay twice.
+ *
+ * WHY IT IS THIS LONG, AND WHY IT SAYS WHAT IT SAYS
+ *
+ * This was 25 seconds, and it fired from the moment the component mounted.
+ * The second real production order shows what that means. The page mounted at
+ * 03:35:27.8; the notice appeared at 03:35:52.8; the payment did not reach our
+ * webhook until 03:36:15.1. For twenty-two seconds the shopper was told
+ * "still confirming your payment with your bank" while they were, on the
+ * evidence, still typing their card number. That is worse than silence: it
+ * describes a state the shopper is not in, on the one screen where being
+ * confused costs money.
+ *
+ * The root problem is that we cannot see the moment they press Pay. The card
+ * form is a cross-origin iframe and its only outbound signals are onReady,
+ * onError, onCancel and an onSuccess that has not fired on either real
+ * purchase. So the honest position is that between mount and settlement we do
+ * not know whether a payment is in flight, and the copy must be true in both
+ * cases — it can reassure, and it can say "don't pay twice", but it must not
+ * assert that a charge is being confirmed.
+ *
+ * Sixty seconds is set against real card entry, not a guess: on the order
+ * above, mount to webhook — iframe load, typing, authorisation, dispatch — was
+ * 47 seconds in total.
  */
-const REASSURE_AFTER_MS = 25_000;
+const REASSURE_AFTER_MS = 60_000;
 
 type MountHandle = { destroy?: () => void };
 
@@ -218,18 +241,22 @@ export default function VeyraCheckout({
           The id is intentionally generic — it is visible in page source. */}
       <div ref={containerRef} id="secure-card-entry" className="min-h-[420px] w-full" />
       {reassure && status !== "error" && (
-        // Shown only if this is taking longer than a payment normally does. It
-        // never suggests paying again: at this point we do not know whether the
-        // card has been charged, and "try again" is the one instruction that
-        // could take money twice.
+        // Deliberately says nothing about whether a payment is in flight — we
+        // cannot see inside the card form, so we do not know. Every clause here
+        // is true both for someone still filling the form in and for someone
+        // whose charge is mid-authorisation. It never suggests paying again:
+        // "try again" is the one instruction that could take money twice.
         <div
           role="status"
+          aria-live="polite"
           className="mt-4 border border-white/15 bg-white/[0.03] px-4 py-3 text-sm text-white/70"
         >
-          Still confirming your payment with your bank. Please keep this page open — you&rsquo;ll be
-          taken to your receipt automatically as soon as it clears.{" "}
-          <strong className="text-white/90">Don&rsquo;t pay again</strong>; if you&rsquo;ve already
-          been charged, this page will find it.
+          Take your time — this page stays open as long as you need.{" "}
+          <strong className="text-white/90">
+            If you&rsquo;ve already submitted your card, don&rsquo;t submit it again
+          </strong>{" "}
+          — we&rsquo;re watching for the payment and will take you straight to your receipt the
+          moment it clears.
         </div>
       )}
     </div>

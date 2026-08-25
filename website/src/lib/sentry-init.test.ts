@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { sentryDsnState, sentryEnabled } from "@/lib/sentry-init";
+import { browserSentryConfigured, sentryDsnState, sentryEnabled } from "@/lib/sentry-init";
 
 /**
  * Regression cover for a real production failure.
@@ -39,8 +39,36 @@ describe("sentryDsnState", () => {
       state: "ok",
       host: "o4511968099565568.ingest.us.sentry.io",
       projectId: "4511968494878720",
+      browser: true,
     });
     expect(JSON.stringify(state)).not.toContain("c8cf41da5ce5cac4b59f624acfb69935");
+  });
+
+  /**
+   * The silent half-configuration.
+   *
+   * Only NEXT_PUBLIC_ variables are inlined into client bundles, so SENTRY_DSN
+   * on its own arms the server and leaves every browser reporting nothing —
+   * with no error anywhere. An empty Sentry then reads as an error-free site
+   * rather than a half-blind one, which is precisely how "the shopper's phone
+   * reported nothing" could be mistaken for good news.
+   */
+  it("says the DSN is server-only when NEXT_PUBLIC_SENTRY_DSN is unset", () => {
+    process.env.SENTRY_DSN = REAL;
+    delete process.env.NEXT_PUBLIC_SENTRY_DSN;
+    const state = sentryDsnState();
+    expect(state.state).toBe("ok");
+    // Server-side reporting is on...
+    expect(sentryEnabled()).toBe(true);
+    // ...and the browser is not, which is the distinction that matters.
+    expect(state).toMatchObject({ browser: false });
+    expect(browserSentryConfigured()).toBe(false);
+  });
+
+  it("says the DSN reaches the browser when NEXT_PUBLIC_SENTRY_DSN is set", () => {
+    process.env.NEXT_PUBLIC_SENTRY_DSN = REAL;
+    expect(browserSentryConfigured()).toBe(true);
+    expect(sentryDsnState()).toMatchObject({ browser: true });
   });
 
   it("rejects the exact value production shipped: the variable's own name", () => {

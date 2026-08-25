@@ -117,7 +117,27 @@ export function sentryEnabled(): boolean {
 export type SentryDsnState =
   | { state: "missing" }
   | { state: "invalid"; reason: string }
-  | { state: "ok"; host: string; projectId: string };
+  | { state: "ok"; host: string; projectId: string; browser: boolean };
+
+/**
+ * Is the BROWSER reporting, or only the server?
+ *
+ * `sentryDsn()` accepts either variable, which is right for the server and a
+ * trap for the client: only `NEXT_PUBLIC_`-prefixed variables are inlined into
+ * client bundles, so with `SENTRY_DSN` alone `sentryEnabled()` is true on the
+ * server, false in the browser, and instrumentation-client.ts silently never
+ * calls init. Nothing errors. Sentry simply receives nothing from any browser,
+ * and "no browser errors" reads exactly like "no browser problems".
+ *
+ * That distinction is not academic. After the second real production purchase
+ * the question was whether the shopper's phone had reported anything, and the
+ * answer — Sentry held nothing from that session — is only reassuring if the
+ * browser leg was actually armed. This makes it answerable from a status
+ * screen instead of from a browser we may not be able to reach.
+ */
+export function browserSentryConfigured(): boolean {
+  return Boolean(process.env.NEXT_PUBLIC_SENTRY_DSN?.trim());
+}
 
 /**
  * Whether the configured DSN is one Sentry will actually accept — decided
@@ -152,5 +172,5 @@ export function sentryDsnState(): SentryDsnState {
   const projectId = url.pathname.replace(/^\/+/, "").replace(/\/+$/, "");
   if (!/^\d+$/.test(projectId)) return { state: "invalid", reason: "no project id" };
 
-  return { state: "ok", host: url.host, projectId };
+  return { state: "ok", host: url.host, projectId, browser: browserSentryConfigured() };
 }
