@@ -96,15 +96,38 @@ describe("a rate edit does not re-send the approval email", () => {
 // red banner that looks like a mere UI complaint.
 // ---------------------------------------------------------------------------
 describe("a rate edit writes only the rate", () => {
-  it("omits status from the payload unless it changed", () => {
-    expect(portal).toContain("const updatePayload: Record<string, unknown> = {\n    updated_at: new Date().toISOString(),\n  };");
-    expect(portal).toContain("if (statusChanged) {\n    updatePayload.status = input.status;\n  }");
+  // ---------------------------------------------------------------------
+  // THE WORKAROUND ABOVE IS OBSOLETE, AND IT LEFT REAL DRIFT BEHIND.
+  //
+  // Omitting status was the right fix for a constraint MISMATCH: ambassadors
+  // rejected "info_requested" while partners accepted it, so a save on such an
+  // ambassador raised 23514. Both check constraints now carry the identical
+  // five-value vocabulary, verified against production:
+  //
+  //   ambassadors_status_check  CHECK (status = ANY (ARRAY['pending','approved',
+  //   partners_status_check                'disabled','rejected','info_requested']))
+  //
+  // and a rolled-back probe confirmed ambassadors accepts info_requested today.
+  //
+  // The cost of keeping the workaround was ELIJAH-AB78AE: partners said
+  // info_requested, ambassadors said approved, and because statusChanged is
+  // computed against PARTNERS the gate then read "no change" and never wrote
+  // the mirror. Their code kept resolving and they kept qualifying for
+  // commission. Three admin saves could not repair it, because each one saw no
+  // change to make.
+  //
+  // Status is now written on every save so the two tables converge. The tests
+  // below assert the ENDS the gate was protecting — no re-sent approval email,
+  // no rewritten timestamps, ambassadors written first — rather than the means,
+  // which is what quietly stopped being necessary.
+  // ---------------------------------------------------------------------
+  it("writes status on every save, so the two tables cannot stay diverged", () => {
+    expect(portal).toContain("updatePayload.status = input.status;");
+    expect(portal).not.toContain("if (statusChanged) {\n    updatePayload.status = input.status;\n  }");
   });
 
-  // The old payload always carried status, which is what reached the
-  // constraint on every save.
-  it("no longer hardcodes status into the payload", () => {
-    expect(portal).not.toContain("const updatePayload: Record<string, unknown> = {\n    status: input.status,");
+  it("still gates the EMAIL on a real transition, not on the write", () => {
+    expect(portal).toContain('if (statusChanged && (input.status === "approved" || input.status === "rejected")');
   });
 
   // Approval timestamps are status side effects and follow the same rule.

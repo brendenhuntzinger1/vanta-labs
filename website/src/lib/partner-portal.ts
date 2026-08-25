@@ -496,42 +496,43 @@ export async function createPartnerApplication(input: {
     .then((cfg) => Number(cfg.defaultCommissionPercent))
     .catch(() => 15);
 
-  const partnerInsert = await supabaseAdmin
-    .from("partners")
-    .insert({
-      id: partnerId,
-      name: input.name,
-      email: input.email,
-      referral_code: referralCode,
-      status: "pending",
-      commission_percent: defaultCommission,
-      auth_user_id: input.authUserId,
-      invited_at: now,
-      updated_at: now,
-      ...applicantFields,
-    });
+  // BOTH ROWS OR NEITHER.
+  //
+  // These used to be two sequential inserts: partners, then ambassadors. The
+  // first commits on its own, so a failure of the second — or a process death
+  // between them — left an applicant with a partners row and no ambassadors
+  // row. Every referral read uses ambassadors, so their code silently never
+  // resolved: approved in the admin, dead link in the wild. BRUTUS has been in
+  // exactly that state since 2026-08-02.
+  //
+  // create_partner_application does both inside one plpgsql body, which is one
+  // transaction. It is also idempotent by auth user: a retry or double-submit
+  // returns the existing partner untouched rather than minting a second
+  // identity or overwriting rates an admin has since configured.
+  const { data: created, error: createError } = await supabaseAdmin.rpc("create_partner_application", {
+    p_id: partnerId,
+    p_auth_user_id: input.authUserId,
+    p_name: input.name,
+    p_email: input.email,
+    p_referral_code: referralCode,
+    p_commission_percent: defaultCommission,
+    p_applicant: applicantFields,
+  });
 
-  if (partnerInsert.error) {
-    assertNoSupabaseError("partners.insert(create application)", partnerInsert.error);
+  if (createError) {
+    assertNoSupabaseError("rpc(create_partner_application)", createError);
   }
 
-  const ambassadorInsert = await supabaseAdmin
-    .from("ambassadors")
-    .insert({
-      id: partnerId,
-      name: input.name,
-      email: input.email,
-      referral_code: referralCode,
-      status: "pending",
-      commission_percent: defaultCommission,
-      auth_user_id: input.authUserId,
-      invited_at: now,
-      updated_at: now,
-      ...applicantFields,
-    });
+  const createdRow = (created ?? {}) as { partner_id?: string; status?: string; referral_code?: string; created?: boolean };
 
-  if (ambassadorInsert.error) {
-    assertNoSupabaseError("ambassadors.insert(create application mirror)", ambassadorInsert.error);
+  // An application that already existed is returned as-is, so the caller sees
+  // the same shape as the early-return above and nothing downstream re-notifies.
+  if (createdRow.created === false) {
+    return {
+      partnerId: String(createdRow.partner_id ?? partnerId),
+      status: String(createdRow.status ?? "pending"),
+      referralCode: String(createdRow.referral_code ?? referralCode),
+    };
   }
 
   try {
@@ -794,31 +795,44 @@ export interface PayoutQueue {
 // their chosen payout method + handle. `readyCount` drives the "N ambassadors
 // ready for payout" notification badge.
 export async function getPayoutQueue(): Promise<PayoutQueue> {
-  const [{ data: rows, error }, ambassadorSettings] = await Promise.all([
-    supabaseAdmin
-      .from("referral_orders")
-      .select("ambassador_id, commission_amount, approved_for_payout_at")
-      .eq("payment_status", "approved_for_payout"),
+  // AGGREGATED IN THE DATABASE, NOT HERE.
+  //
+  // This used to select every approved_for_payout row and sum them in JS. That
+  // is right only while the row count stays under the project's db-max-rows:
+  // above it PostgREST returns a truncated page with no error and no signal,
+  // and the owner is shown LESS affiliate liability than they actually owe.
+  // Silently under-reporting what you owe someone is the worst direction for
+  // this particular number to be wrong in.
+  //
+  // affiliate_balances() returns ONE ROW PER PARTNER whatever the commission
+  // count behind it, so a cap cannot bite until there are more partners than
+  // the cap — and it computes pending, approved, paid and lifetime in the same
+  // pass, from the same rows, with the same excluded-status rule as ledger.ts.
+  const [{ data: balanceRows, error }, ambassadorSettings] = await Promise.all([
+    supabaseAdmin.rpc("affiliate_balances"),
     getAmbassadorProgramSettings(),
   ]);
 
   if (error) {
-    assertNoSupabaseError("referral_orders.select(payout queue)", error);
+    assertNoSupabaseError("rpc(affiliate_balances)", error);
   }
 
   const minimum = ambassadorSettings.minimumPayoutThreshold;
   const byPartner = new Map<string, { amount: number; count: number; earliest: string | null }>();
-  for (const row of rows ?? []) {
-    const id = String(row.ambassador_id);
+  for (const row of (balanceRows ?? []) as Array<{
+    ambassador_id: string; approved_amount: number | string;
+    approved_count: number | string; earliest_approved_at: string | null;
+  }>) {
+    const id = String(row.ambassador_id ?? "");
     if (!id) continue;
-    const agg = byPartner.get(id) ?? { amount: 0, count: 0, earliest: null };
-    agg.amount += Number(row.commission_amount ?? 0);
-    agg.count += 1;
-    const at = row.approved_for_payout_at ? String(row.approved_for_payout_at) : null;
-    if (at && (!agg.earliest || at < agg.earliest)) {
-      agg.earliest = at;
-    }
-    byPartner.set(id, agg);
+    const amount = Number(row.approved_amount ?? 0);
+    // A partner with nothing approved is not in the queue at all.
+    if (!(amount > 0)) continue;
+    byPartner.set(id, {
+      amount,
+      count: Number(row.approved_count ?? 0),
+      earliest: row.earliest_approved_at ? String(row.earliest_approved_at) : null,
+    });
   }
 
   const partnerIds = Array.from(byPartner.keys());
@@ -1486,9 +1500,25 @@ export async function updatePartnerStatus(input: {
     updated_at: new Date().toISOString(),
   };
 
-  if (statusChanged) {
-    updatePayload.status = input.status;
-  }
+  // ALWAYS write the status, even when it looks unchanged.
+  //
+  // This was gated on statusChanged, which is computed by comparing against
+  // PARTNERS alone. The payload is then written to ambassadors AND partners, so
+  // the moment the two tables disagree the gate reads "no change" from the
+  // mirror and omits status entirely — and ambassadors, the table the MONEY
+  // reads, keeps whatever stale value it had. Saving again cannot repair it,
+  // because the comparison still sees no change.
+  //
+  // ELIJAH-AB78AE is that state in production: partners says info_requested,
+  // ambassadors says approved, so the code still resolves for shoppers and the
+  // commission gate still passes. An ambassador the owner put on hold stayed
+  // live, and three separate admin saves could not bring them back in line.
+  //
+  // Writing it unconditionally converges the two tables on every save. The
+  // SIDE EFFECTS stay gated on statusChanged exactly as before — the approval
+  // email, approved_at and disabled_at all still fire only on a real
+  // transition, which is what stopped a rate edit re-sending an approval.
+  updatePayload.status = input.status;
 
   // Same rule for the approval timestamps: only on a real transition into
   // approved. A rate edit on an already-approved ambassador used to re-clear
