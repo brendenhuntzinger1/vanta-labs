@@ -41,11 +41,29 @@ function maskEmail(email: string) {
 export default async function OrderConfirmationPage({ params }: { params: Promise<{ orderId: string }> }) {
   const { orderId } = await params;
 
-  const { data: order } = await supabaseAdmin
-    .from("orders")
-    .select("order_id, order_number, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, amount_paid, payment_status, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
-    .eq("order_id", orderId)
-    .maybeSingle();
+  // THREE INDEPENDENT ROUND TRIPS, RUN AS ONE.
+  //
+  // These used to be awaited in series: the order, then the payment-method
+  // config, then the session. Only their USE depends on the order — neither of
+  // the other two needs it — so the receipt was paying three sequential network
+  // latencies to render, on the screen a customer reaches straight after paying.
+  //
+  // A missing order now costs two wasted lookups before the 404. That is the
+  // right trade: an unguessable order id that resolves to nothing is rare, and
+  // every real customer gets the faster receipt.
+  const [orderResult, paymentMethods, user] = await Promise.all([
+    supabaseAdmin
+      .from("orders")
+      .select("order_id, order_number, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, shipping_protection_fee, amount_paid, payment_status, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
+      .eq("order_id", orderId)
+      .maybeSingle(),
+    // Each keeps the failure behaviour it had when it was awaited alone: a
+    // config that cannot load means "treat as card", and no session means guest.
+    getPaymentMethodsConfig().catch(() => null),
+    getAuthenticatedUser().catch(() => null),
+  ]);
+
+  const order = orderResult.data;
 
   if (!order) {
     notFound();
@@ -67,23 +85,23 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
     handling: Number(order.handling_fee ?? 0),
     tax: Number(order.tax_amount ?? 0),
     discount: Number(order.discount_amount ?? 0),
+    // Recorded, so the receipt names it instead of inferring it from what is
+    // left over. 0 on orders written before the column existed, which keeps the
+    // old residual behaviour for exactly those.
+    shippingProtection: Number(order.shipping_protection_fee ?? 0),
     itemsTotal: items.reduce((running, item) => running + Number(item.line_total ?? 0), 0),
   });
 
   // A card order that's not paid yet is almost always mid-webhook-confirmation
   // (the customer just paid); only a MANUAL method genuinely still owes payment.
   let isManual = false;
-  try {
-    const methods = await getPaymentMethodsConfig();
-    const method = getPaymentMethodById(methods, order.payment_method ? String(order.payment_method) : null);
+  if (paymentMethods) {
+    const method = getPaymentMethodById(paymentMethods, order.payment_method ? String(order.payment_method) : null);
     isManual = Boolean(method && isManualPaymentMethod(method));
-  } catch {
-    /* treat as card */
   }
 
   // Only signed-in customers can use the account orders view; a guest who checked
   // out with just their email has no account to land on.
-  const user = await getAuthenticatedUser().catch(() => null);
   const isCustomer = Boolean(user && detectRoleFromUser(user) === "customer");
 
   return (
