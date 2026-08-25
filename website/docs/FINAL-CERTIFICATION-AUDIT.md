@@ -188,8 +188,8 @@ a comment naming the original defect. So the frontend no longer hardcodes 10.
 `customer_discount_percent`, and that a real browser shows 15% for a 15%
 ambassador. Requires `BROWSER-PROVEN` evidence in Phase 6.
 
-### F-005 — Pending-payment orders older than 24h; Sentry alert count disagrees
-**Grade:** `DATABASE-PROVEN` + `PRODUCTION-PROVEN` · **Severity:** P2 (provisional) · **Status:** OPEN
+### F-005 — RESOLVED: the alert was right, my first reading was wrong
+**Grade:** `DATABASE-PROVEN` + `SOURCE-INSPECTED` · **Severity:** none · **Status:** NOT A DEFECT
 
 Sentry `VANTA-LABS-2` (first seen 2026-08-25, ~41 min before observation):
 > `express_reconcile_backlog: 1 express order(s) have been pending at the processor for over 24h — typically an abandoned 3DS challenge. They hold inventory and will never settle on their own`
@@ -208,14 +208,32 @@ The 4 `pending_payment` orders are **20.5h, 25.4h, 384.4h (16 days), and 531.1h
 `express_checkout_intents` has exactly 1 `open` row, created ~50 min ago — under
 24h.
 
-So the alert's count (1) matches neither the >24h pending orders (3) nor the open
-express intents by age (0). Either the alert queries a different population than
-its wording implies, or its threshold/joins are wrong. A misleading operational
-alert is itself a defect.
+I first compared the alert's count against **all** pending orders and concluded
+it disagreed. It does not. `src/lib/express-reconcile.ts:95` selects candidates
+as:
 
-*Next:* read the `express_reconcile_backlog` alert source in Phase 14; determine
-the intended population; confirm whether the two 16-/22-day orders hold
-inventory reservations.
+```
+payment_status = 'pending_payment'  AND  payment_id IS NOT NULL  AND  created_at < cutoff
+```
+
+and `stale` counts those older than `RECONCILE_STALE_MS` (24h). Against the live
+rows:
+
+| order | pending | payment_id | age | in candidate set | stale |
+|---|---|---|---|---|---|
+| VL-9D8CA974 | yes | yes | 20.5h | yes | no (<24h) |
+| VL-0716175A | yes | yes | 25.4h | yes | **yes** |
+| VL-DCA0FAD5 | yes | **no** | 384h | no | no |
+| VL-64F8EDE4 | yes | **no** | 531h | no | no |
+
+`stale = 1`, exactly what the alert reported. Having a `payment_id` means a
+processor session was actually created, which is the only population worth
+chasing — an order that never reached the processor has nothing to reconcile.
+The wording "express order(s)" is slightly loose (it means "orders with a live
+processor session"), but the count is correct and the alert is doing its job.
+
+Recorded in full because the wrong version of this finding was in the ledger
+first, and a later reviewer should not resurrect it.
 
 ### F-006 — Zero COAs exist, but the storefront advertises COA documentation
 **Grade:** `DATABASE-PROVEN` · **Severity:** P1 (provisional) · **Status:** OPEN
@@ -235,8 +253,8 @@ in these tables), or the claim is currently unsubstantiated.
 *Next:* Phase 5 must find what `/coa-library` actually renders and where COA
 files come from before this is graded.
 
-### F-007 — Affiliate marketing figures vs empty commission ledger
-**Grade:** `DATABASE-PROVEN` · **Severity:** P2 (provisional) · **Status:** OPEN
+### F-007 — Affiliate marketing figures are a deliberate pre-launch floor
+**Grade:** `DATABASE-PROVEN` + `SOURCE-INSPECTED` · **Severity:** P3 — owner decision, not a defect · **Status:** FOR YOUR REVIEW
 
 `partner_program_stats` holds display figures:
 
@@ -250,12 +268,40 @@ files come from before this is graded.
 Meanwhile `commissions` = **0 rows**, `payouts` = **0 rows**,
 `partner_payouts` = **0 rows**, `referral_orders` = **0 rows**.
 
-The suffix `_base` suggests these are deliberate baseline/seed numbers for the
-recruitment page. That may be intended marketing. It needs to be checked against
-how the ambassador page presents them — a figure shown as money actually paid to
-partners, when no commission has ever been recorded, is a misleading claim.
+`src/lib/partner-portal.ts:657` documents this explicitly: the baseline is
+"set once, e.g. before launch, to avoid showing a discouraging '$0 everything'
+to prospective partners" and is a **floor that real activity builds on**, not a
+static override:
 
-*Next:* Phase 6 — read the `/ambassador` page rendering of these keys.
+```
+totalCommissionsPaid     = baseline + real total
+averagePartnerEarnings   = baseline + real average
+topPartnerPayout         = MAX(baseline, real top)
+averageApprovalTimeHours = real average once ANY real approval exists
+```
+
+So it is intentional, documented, and does not hide real growth. **Not a code
+defect.**
+
+It is still a claims question only you can answer: with `commissions`,
+`payouts`, `partner_payouts` and `referral_orders` all at **0 rows**, the
+recruitment page currently tells prospective ambassadors the program has paid
+out **$22,638** and that partners average **$1,918**, when the real figures are
+zero. That is a business decision about seeded numbers, not a bug, and it is
+flagged here rather than "fixed" because changing it is your call.
+
+### F-012 — Orders that never reached the processor are never retired
+**Grade:** `DATABASE-PROVEN` · **Severity:** P3 · **Status:** OPEN
+
+The express reconciler only considers orders with a `payment_id` (F-005). Two
+production orders — **384h (16 days)** and **531h (22 days)** old — sit in
+`pending_payment` with **no** `payment_id`, so nothing will ever move them. They
+are invisible to the reconciler and to the stale alert.
+
+Impact is limited: `inventory_reservations` currently holds **0 active** rows,
+so they are not holding stock. But they inflate any "pending orders" figure an
+operator looks at, indefinitely. Worth a cleanup path that retires orders which
+never reached the processor after some age.
 
 ### F-008 — Order-status drift on one canceled order
 **Grade:** `DATABASE-PROVEN` · **Severity:** P3 · **Status:** OPEN
@@ -622,7 +668,71 @@ It is correct and reusable, but unreachable from here, so it bought nothing.
 Connectivity should have been tested first. The project is free and idle; delete
 it or keep it for an environment that does have egress.
 
-**To get browser evidence for data-driven flows, one of these must happen:**
+**RESOLUTION CHOSEN BY THE OWNER: allowlist the harness host (option 1).**
+
+### Exactly what to change
+
+At [claude.ai/code](https://claude.ai/code), in the row above the message box,
+click the **cloud icon** showing the current environment's name (`vanta`). There
+is no settings page or direct URL for this selector. Hover the `vanta`
+environment and click the **settings gear** on the right. In the dialog:
+
+1. Set **Network access** to **Custom**.
+2. In **Allowed domains**, one per line, add:
+
+```text
+snnezhxvssochqpqsjcm.supabase.co
+```
+
+3. Tick **"Also include default list of common package managers"** — otherwise
+   npm, GitHub and the rest stop working and the session cannot even install
+   dependencies.
+4. Save.
+
+**Then start a NEW session.** Running sessions copy their environment once at
+startup and never re-read it, so the session that requested this change cannot
+benefit from it. That is why this ledger exists.
+
+### Why only that one host
+
+`snnezhxvssochqpqsjcm.supabase.co` is the **isolated audit harness**. Its REST,
+Auth, Realtime and Storage endpoints are all on that single hostname, so one
+line covers everything `supabase-js` needs.
+
+**Deliberately NOT allowlisted, and it should stay that way:**
+
+| Host | Why it stays blocked |
+|---|---|
+| `mlpimwgkwuqpsvsrlpqv.supabase.co` | the **production** database. Leaving it blocked means a locally running app physically cannot touch production data, no matter what a stray `.env` says. Production stays reachable read-only through the Supabase MCP tools, which is all the audit needs. |
+| `api.resend.com`, `api.sendgrid.com` | email providers. Blocked means a test flow **cannot** send mail to a real customer. |
+| `api.goshippo.com` | blocked means no test can buy a real shipping label. |
+| `veyragate.com` | the payment processor. Blocked means no test can create a real charge. |
+| `business-api.tiktok.com`, `ads-api.reddit.com`, `sc-static.net` | ad pixels; blocked keeps synthetic traffic out of real ad reporting. |
+
+Do **not** add `*.supabase.co` — that wildcard would re-open production.
+
+Optional, only if membership card-entry UI needs browser proof later:
+`js.basistheory.com` (the PCI iframe for card fields). Everything else in the
+storefront works without it.
+
+### After the allowlist lands, in the new session
+
+1. Verify: `curl -o /dev/null -w '%{http_code}' https://snnezhxvssochqpqsjcm.supabase.co/rest/v1/` — expect **401**, not `000`. A 401 means the host is reachable and the request merely lacks a key; `000` means still blocked.
+2. `website/.env.local` already exists (gitignored) pointing at the harness. It sets `EMAIL_ENABLED=false` and uses the anon key for both client and server, so RLS is enforced rather than bypassed.
+3. `cd website && npm ci && npm run build && npm run start` — **not** `npm run dev`. Dev's HMR socket is blocked in this sandbox and Fast Refresh resets React state mid-test (see the age-gate note above).
+4. Harness data already seeded: 4 products (including the parent-zero/dose-stocked shape F-001 turns on, and an all-doses-zero control), 4 ambassadors (`MIZZYPROBE` explicit 15%, `BRUTUSPROBE` inheriting NULL, `HOLDPROBE` info_requested, `PREADDPROBE` pre-added with no auth account for F-009), and one membership tier.
+5. Resume from the phase table at the bottom of this file. Nothing needs redoing.
+
+**The harness project must not be deleted** — the owner asked for it to be kept.
+
+**One caveat to carry forward:** the harness runs the app with the **anon** key
+because this session cannot mint a service-role key. Production runs
+service-role, which bypasses RLS. So a page that works in production may fail on
+the harness purely because a public SELECT policy is missing. Treat any such
+failure as a **finding to investigate**, not a harness artefact — but confirm
+which it is before reporting it.
+
+**Alternatives, now moot:**
 
 1. Allowlist `*.supabase.co` (and ideally the production domain) in the cloud
    environment's network policy. Cheapest by far, and re-enables the harness
@@ -668,9 +778,9 @@ every visitor while `coa_records` is empty and no product carries a COA URL**
 
 ## Open questions carried forward
 
-1. Where do COA files actually live, if `coa_records` is empty? (F-006)
-2. What population does `express_reconcile_backlog` actually count? (F-005)
-3. Does `validate_referral_code` return `customer_discount_percent`? (F-004)
+1. Where do COA files actually live, if `coa_records` is empty? (F-006) — still open
+2. ~~What population does `express_reconcile_backlog` count?~~ **ANSWERED** — orders with a live processor session; the alert is correct (F-005)
+3. ~~Does `validate_referral_code` return `customer_discount_percent`?~~ **ANSWERED** — yes, verified in production (F-004)
 4. Is `minimum_qualifying_order` still 100, and enforced on both the manual-code
    and referral-link paths?
 5. Does the repo SQL match live schema? (A1)
