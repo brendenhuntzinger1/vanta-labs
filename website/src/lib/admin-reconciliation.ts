@@ -38,14 +38,59 @@ function roundMoney(value: number) {
 }
 
 export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
-  const { data, error } = await supabaseAdmin
-    .from("orders")
-    .select("order_id, customer_email, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, refund_amount, payment_status, paid_at, created_at")
-    .order("created_at", { ascending: false })
-    .limit(2000);
+  const BASE_COLUMNS =
+    "order_id, customer_email, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, refund_amount, payment_status, paid_at, created_at";
 
+  // Typed explicitly because the column list is chosen at runtime, which defeats
+  // supabase-js's inference from a literal select string.
+  type ReconciliationRow = {
+    order_id: string;
+    customer_email: string | null;
+    subtotal: number | null;
+    shipping_amount: number | null;
+    discount_amount: number | null;
+    tax_amount: number | null;
+    card_processing_fee: number | null;
+    store_credit_redeemed_cents: number | null;
+    points_redeemed: number | null;
+    amount_paid: number | null;
+    refund_amount: number | null;
+    payment_status: string | null;
+    paid_at: string | null;
+    created_at: string;
+    shipping_protection_fee?: number | null;
+  };
+
+  const read = async (columns: string) => {
+    const result = await supabaseAdmin
+      .from("orders")
+      .select(columns)
+      .order("created_at", { ascending: false })
+      .limit(2000);
+    return {
+      data: result.data as unknown as ReconciliationRow[] | null,
+      error: result.error,
+    };
+  };
+
+  // Ask for the protection fee, and fall back to the original column set if the
+  // migration has not been applied — the same degradation insertOrderRow uses.
+  // Reconciliation reporting an error is worse than reconciliation reporting
+  // slightly softer results, and this is the screen an operator opens when they
+  // already suspect something is wrong.
+  let { data, error } = await read(`${BASE_COLUMNS}, shipping_protection_fee`);
+  let protectionColumnPresent = true;
   if (error) {
-    throw error;
+    const message = String(error.message ?? "").toLowerCase();
+    const missingColumn =
+      error.code === "PGRST204" ||
+      message.includes("shipping_protection_fee") ||
+      message.includes("does not exist") ||
+      message.includes("schema cache");
+    if (!missingColumn) throw error;
+    protectionColumnPresent = false;
+    ({ data, error } = await read(BASE_COLUMNS));
+    if (error) throw error;
   }
 
   const flags: ReconciliationFlag[] = [];
@@ -64,11 +109,18 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
     const amountPaid = roundMoney(Number(order.amount_paid ?? 0));
     const refundAmount = roundMoney(Number(order.refund_amount ?? 0));
     // expectedOrderTotal + isTotalMismatch are pure and unit-tested in
-    // reconciliation-math.test.ts. The shipping-protection fee is folded into
-    // amount_paid but not stored, so an order that paid up to this order's
-    // protection fee (a % of its subtotal) above expected is still reconciled.
-    const expectedTotal = expectedOrderTotal({ subtotal, shipping, tax, cardFee, discount, storeCredit, pointsDollars });
-    const maxProtection = maxShippingProtectionFee(subtotal);
+    // reconciliation-math.test.ts.
+    //
+    // With orders.shipping_protection_fee recorded, the fee goes INTO the
+    // expected total and the allowance drops to zero — the check is exact to
+    // the cent. Only a row from before that column existed still gets the old
+    // "anything up to the maximum possible fee is fine" band, which could not
+    // distinguish a protection fee from an overcharge of the same size.
+    const shippingProtection = protectionColumnPresent
+      ? roundMoney(Number(order.shipping_protection_fee ?? 0))
+      : 0;
+    const expectedTotal = expectedOrderTotal({ subtotal, shipping, tax, cardFee, discount, storeCredit, pointsDollars, shippingProtection });
+    const maxProtection = protectionColumnPresent ? 0 : maxShippingProtectionFee(subtotal);
     const paymentStatus = String(order.payment_status ?? "");
     const createdAt = String(order.created_at);
 
@@ -77,7 +129,7 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
         orderId,
         customerEmail,
         type: "total_mismatch",
-        detail: `Expected $${expectedTotal.toFixed(2)}${amountPaid > expectedTotal ? ` (+ up to $${maxProtection.toFixed(2)} protection)` : ""}, recorded $${amountPaid.toFixed(2)}`,
+        detail: `Expected $${expectedTotal.toFixed(2)}${maxProtection > 0 && amountPaid > expectedTotal ? ` (+ up to $${maxProtection.toFixed(2)} unrecorded protection)` : ""}, recorded $${amountPaid.toFixed(2)}`,
         createdAt,
       });
     }

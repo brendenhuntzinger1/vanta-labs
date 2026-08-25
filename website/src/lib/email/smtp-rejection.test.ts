@@ -80,7 +80,9 @@ describe("a recipient the server refused is NOT a successful send", () => {
 describe("a genuinely delivered message still succeeds", () => {
   it("succeeds when the address is accepted", async () => {
     sendMail.mockResolvedValueOnce({ accepted: ["customer@example.com"], rejected: [], response: "250 OK" });
-    expect(await provider().send(MESSAGE)).toEqual({ success: true });
+    // The result now also names the backend and carries nodemailer's
+    // Message-ID, which is what ties this send to the sending server's logs.
+    expect(await provider().send(MESSAGE)).toMatchObject({ success: true, provider: "smtp" });
   });
 
   it("succeeds when the transport returns no arrays at all", async () => {

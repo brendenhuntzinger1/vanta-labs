@@ -273,6 +273,11 @@ export async function POST(request: Request) {
     shippingAmount: lockedShippingCents / 100,
     taxAmount: lockedTaxCents / 100,
     discountAmount: quoteA.discountAmount,
+    // From quoteA, the same quote every other money field on this row comes
+    // from. The wallet lane carries the shopper's choice on the intent row
+    // (express_checkout_intents.shipping_protection), which is what quoteA was
+    // built with.
+    shippingProtectionFee: quoteA.shippingProtectionFee,
     bulkDiscountTier: quoteA.bulkDiscountTier,
     priority: quoteA.isPriorityOrder,
     amountPaid: expectedCents / 100,

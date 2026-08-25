@@ -3,6 +3,7 @@ import { getPaymentProvider } from "@/lib/payment-provider";
 import type { OrderStatus } from "@/lib/payment-types";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
+import { sendOrderEmailOnce } from "@/lib/email/order-email-once";
 import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { commissionEarnedTemplate, orderConfirmationTemplate, refundConfirmationTemplate } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
@@ -1098,8 +1099,16 @@ export async function finalizeManualPayment(
         cardProcessingFee: Number(order.card_processing_fee ?? 0),
         total: amountPaid,
       });
-      const emailResult = await sendEmail({ to: String(order.customer_email), ...template });
-      if (!emailResult.success) {
+      // Send-once + audited. Returns without sending if a confirmation for this
+      // order is already recorded, which is what makes a replayed manual
+      // approval safe independently of the caller's own guards.
+      const emailResult = await sendOrderEmailOnce({
+        orderId,
+        kind: "order_confirmation",
+        to: String(order.customer_email),
+        template,
+      });
+      if (emailResult.attempted && !emailResult.sent) {
         console.error("Order confirmation email not sent for order", orderId, emailResult.error);
         await enqueueFailedEmail({ to: String(order.customer_email), subject: template.subject, html: template.html, text: template.text }, emailResult.error);
       }
@@ -1593,8 +1602,17 @@ export async function processPaymentWebhook(payload: string, signature: string, 
             cardProcessingFee: Number(orderRecord?.card_processing_fee ?? 0),
             total: amountPaid,
           });
-          const emailResult = await sendEmail({ to: buyerEmail, ...template });
-          if (!emailResult.success) {
+          // Send-once + audited. The paid_side_effects_at claim above already
+          // stops a duplicate delivery reaching this line; this is the second,
+          // independent guarantee, enforced by a unique index rather than by
+          // this function remembering to check.
+          const emailResult = await sendOrderEmailOnce({
+            orderId,
+            kind: "order_confirmation",
+            to: buyerEmail,
+            template,
+          });
+          if (emailResult.attempted && !emailResult.sent) {
             // Never throw (order is already paid), but make a silent miss visible
             // and queue it for durable retry by the sweep.
             console.error("Order confirmation email not sent for order", orderId, emailResult.error);

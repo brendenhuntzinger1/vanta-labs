@@ -216,6 +216,9 @@ export async function createCheckoutSession(
    shippingAmount: shipping,
    taxAmount,
    discountAmount,
+   // Straight from the quote that produced `finalTotal`, so the stored fee and
+   // the charged total can never disagree.
+   shippingProtectionFee: quote.shippingProtectionFee,
    bulkDiscountTier,
    priority: isPriorityOrder,
    amountPaid: finalTotal,

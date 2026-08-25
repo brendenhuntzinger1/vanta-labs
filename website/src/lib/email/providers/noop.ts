@@ -9,6 +9,6 @@ export class NoopEmailProvider implements EmailProvider {
       `[email] No provider configured for EMAIL_PROVIDER="${process.env.EMAIL_PROVIDER ?? ""}". ` +
         `Not sent: "${message.subject}" to ${message.to}.`,
     );
-    return { success: false, error: "No email provider configured." };
+    return { success: false, provider: "none", error: "No email provider configured." };
   }
 }

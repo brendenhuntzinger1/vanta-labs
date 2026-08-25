@@ -911,6 +911,15 @@ export interface OrderRowInput {
   shippingAmount: number;
   taxAmount: number;
   discountAmount: number;
+  /**
+   * The Shipping Protection add-on, in dollars. Part of amountPaid.
+   *
+   * It has to be passed in rather than recomputed here from `subtotal`: the fee
+   * is only charged when the shopper leaves the box ticked, and this function
+   * has no way to know whether they did. Recomputing would silently charge
+   * every order for protection in the books that did not pay for it.
+   */
+  shippingProtectionFee: number;
   bulkDiscountTier: string | null;
   priority: boolean;
   amountPaid: number;
@@ -993,6 +1002,11 @@ export function buildOrderRow(input: OrderRowInput): OrderRowDraft {
     // report can group collections by state without re-deriving rates.
     tax_rate_percent: input.taxRatePercent,
     tax_state: input.taxState,
+    // Charged, and now recorded. It was folded into amount_paid and stored
+    // nowhere, so an order could not reproduce its own total and reconciliation
+    // had to tolerate an unexplained overage up to the maximum possible fee —
+    // a band too wide to tell a protection fee from a real overcharge.
+    shipping_protection_fee: input.shippingProtectionFee,
     ...(input.extraColumns ?? {}),
   };
 
@@ -1018,7 +1032,7 @@ export async function insertOrderRow(draft: OrderRowDraft): Promise<OrderInsertO
   }
   if (insertError) {
     const message = String(insertError.message ?? "").toLowerCase();
-    const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state") || message.includes("idempotency_key") || message.includes("billing_") || message.includes("checkout_channel") || message.includes("attributed_");
+    const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state") || message.includes("idempotency_key") || message.includes("billing_") || message.includes("checkout_channel") || message.includes("attributed_") || message.includes("shipping_protection_fee");
     const looksLikeMissingColumn = message.includes("does not exist")
       || message.includes("schema cache")
       || message.includes("could not find")

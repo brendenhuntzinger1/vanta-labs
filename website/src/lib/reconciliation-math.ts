@@ -6,11 +6,13 @@ function round2(v: number) {
   return Math.round(v * 100) / 100;
 }
 
-// Protection is folded into amount_paid but not stored as its own column, so a
-// fully-reconciled order can legitimately be up to the protection fee above the
-// component-derived expected total. The fee is a percentage of the merchandise
-// subtotal (see shipping-protection.ts), so the allowance is computed per order
-// from its subtotal rather than a flat cap.
+// LEGACY ALLOWANCE. Protection used to be folded into amount_paid and stored in
+// no column, so a fully-reconciled order could sit up to its protection fee
+// above the component-derived total and there was no way to tell that overage
+// from a real one. orders.shipping_protection_fee now records it, so a row that
+// has the fee is checked EXACTLY (callers pass an allowance of 0) and this
+// remains only for rows predating the column — where a wide band is still
+// better than a false alarm on every protected order.
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 
 export function maxShippingProtectionFee(subtotal: number): number {
@@ -25,19 +27,34 @@ export interface ExpectedTotalComponents {
   discount: number;
   storeCredit: number; // dollars
   pointsDollars: number; // dollars
+  /**
+   * The recorded Shipping Protection fee, in dollars. Optional and defaulting
+   * to 0 so a caller reading a row from before the column existed behaves
+   * exactly as it did before — those callers pass a non-zero allowance to
+   * isTotalMismatch instead.
+   */
+  shippingProtection?: number;
 }
 
-// Mirrors payment-service's amount_paid formula (merchandise − discount + tax +
-// card fee, less store credit and points), EXCLUDING the shipping-protection
-// fee which isn't stored separately.
+// Mirrors quote-order's amount_paid formula exactly: merchandise − discount +
+// tax + card fee, less store credit and points, PLUS the shipping-protection
+// fee. Protection is the only term added after the rest, which is why an order
+// missing it was always short by exactly that amount.
 export function expectedOrderTotal(c: ExpectedTotalComponents): number {
-  return round2(c.subtotal + c.tax + c.cardFee + c.shipping - c.discount - c.storeCredit - c.pointsDollars);
+  return round2(
+    c.subtotal + c.tax + c.cardFee + c.shipping
+      - c.discount - c.storeCredit - c.pointsDollars
+      + (c.shippingProtection ?? 0),
+  );
 }
 
-// A TRUE mismatch is either underpayment, or an overage beyond the order's max
-// protection fee. An order that paid between expectedTotal and expectedTotal +
-// maxProtectionFee is reconciled (the difference is the protection fee).
-// Callers pass maxShippingProtectionFee(order.subtotal).
+// A TRUE mismatch is either underpayment, or an overage beyond the allowance.
+//
+// Pass 0 for maxProtectionFee when the order's protection fee is recorded and
+// already folded into expectedTotal — that is the normal case now, and it makes
+// the check exact to the cent. Pass maxShippingProtectionFee(order.subtotal)
+// only for a row that predates orders.shipping_protection_fee, where the fee is
+// genuinely unknown.
 export function isTotalMismatch(
   amountPaid: number,
   expectedTotal: number,

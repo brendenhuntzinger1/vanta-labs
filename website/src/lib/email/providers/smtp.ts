@@ -79,9 +79,12 @@ export class SmtpEmailProvider implements EmailProvider {
         };
       }
 
-      return { success: true };
+      // nodemailer's Message-ID, the value that appears in the recipient's
+      // headers and in the sending server's own logs.
+      const messageId = typeof info?.messageId === "string" ? info.messageId : undefined;
+      return { success: true, provider: "smtp", providerMessageId: messageId };
     } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : "SMTP send failed" };
+      return { success: false, provider: "smtp", error: error instanceof Error ? error.message : "SMTP send failed" };
     }
   }
 }

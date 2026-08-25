@@ -46,12 +46,22 @@ export class SendgridEmailProvider implements EmailProvider {
 
       if (!response.ok) {
         const body = await response.text().catch(() => "");
-        return { success: false, error: `SendGrid API error (${response.status}): ${body.slice(0, 300)}` };
+        return { success: false, provider: "sendgrid", error: `SendGrid API error (${response.status}): ${body.slice(0, 300)}` };
       }
 
-      return { success: true };
+      // SendGrid returns 202 with an empty body; the handle lives in a header.
+      // Read defensively: the message id is a nicety, and a Response without a
+      // usable headers bag must never turn an accepted 202 into a reported
+      // failure. That inversion is exactly what a missing-headers stub caused.
+      let providerMessageId: string | undefined;
+      try {
+        providerMessageId = response.headers?.get?.("x-message-id") ?? undefined;
+      } catch {
+        /* accepted, id unavailable */
+      }
+      return { success: true, provider: "sendgrid", providerMessageId };
     } catch (error) {
-      return { success: false, error: error instanceof Error ? error.message : "SendGrid send failed" };
+      return { success: false, provider: "sendgrid", error: error instanceof Error ? error.message : "SendGrid send failed" };
     }
   }
 }

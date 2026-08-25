@@ -10,7 +10,7 @@ import { isPaidOrderStatus, isEarnedCommission } from "@/lib/ledger";
 // tax_amount is carried for display (never profit); the actual/estimated
 // shipping columns drive the estimate→exact reconciliation.
 const ORDER_FIELDS =
-  "order_id, order_number, order_type, subtotal, discount_amount, shipping_amount, tax_amount, refund_amount, amount_paid, payment_method, payment_status, paid_at, created_at";
+  "order_id, order_number, order_type, subtotal, discount_amount, shipping_amount, tax_amount, refund_amount, amount_paid, payment_method, payment_status, paid_at, created_at, shipping_protection_fee, card_processing_fee, store_credit_redeemed_cents, points_redeemed";
 
 type OrderRecord = {
   order_id: string;
@@ -22,6 +22,10 @@ type OrderRecord = {
   tax_amount: number | null;
   refund_amount: number | null;
   amount_paid: number | null;
+  shipping_protection_fee?: number | null;
+  card_processing_fee?: number | null;
+  store_credit_redeemed_cents?: number | null;
+  points_redeemed?: number | null;
   payment_method: string | null;
   payment_status: string | null;
   paid_at: string | null;
@@ -92,7 +96,26 @@ function profitForOrder(
   // shipping-protection add-on and any card surcharge. Derived as the residual
   // of what the customer actually paid (bounded ≥ 0; store-credit / points
   // redemption simply make it 0).
-  const additionalRevenue = Math.max(0, amountPaid - merch - shippingRevenue - taxCollected);
+  //
+  // PREFER THE RECORDED FEE. The residual is what the customer paid beyond
+  // merchandise, shipping and tax, which expands to
+  //     cardFee + protection − storeCredit − points
+  // so on an order with no redemption it already equals protection + cardFee
+  // exactly. Reading the recorded columns instead of subtracting makes that
+  // robust rather than incidental, and lets the breakdown name the two parts.
+  //
+  // On an order that DID redeem store credit or points the residual is smaller
+  // by the redemption and the clamp can drive it to zero, losing real
+  // protection revenue. Whether a redemption should reduce revenue or be an
+  // expense line is an accounting policy this codebase has never stated, so the
+  // residual is kept verbatim there — this change must not silently pick a
+  // side. (No order in the system has redeemed either today.)
+  const redeemed =
+    Number(order.store_credit_redeemed_cents ?? 0) > 0 || Number(order.points_redeemed ?? 0) > 0;
+  const recordedProtection = Math.max(0, Number(order.shipping_protection_fee ?? 0));
+  const cardSurcharge = Math.max(0, Number(order.card_processing_fee ?? 0));
+  const residualAdditional = Math.max(0, amountPaid - merch - shippingRevenue - taxCollected);
+  const additionalRevenue = redeemed ? residualAdditional : Math.round((recordedProtection + cardSurcharge) * 100) / 100;
 
   // Memberships are pure revenue: they have no product cost and never ship, so
   // they must not carry COGS (the worst-case fallback) or a shipping cost.
