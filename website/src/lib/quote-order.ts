@@ -709,7 +709,20 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       // (admin-configurable, same figure used in profit reports). Previously 0,
       // which let a free-shipping / thin-margin order pass the break-even floor
       // yet finalize at a real cash loss equal to the shipping cost.
-      shippingCost: profitSettings.shippingCostPerOrder,
+      //
+      // EXCEPT with no address. In "address_optional" mode `shipping` above is
+      // 0 by construction — the destination is unknown, so the fee the shopper
+      // will pay is not knowable yet. Charging the shipping COST against
+      // revenue that excludes the shipping FEE compares two different orders
+      // and makes every thin-margin cart look like a loss: GHRP-2 at $39.99
+      // against a $33 cost cleared the card lane by $11.59 and was refused by
+      // the wallet lane at -$2.21, so the Apple Pay button silently vanished on
+      // an order the store was happy to take. Credit neither or charge both.
+      //
+      // Nothing is let through by this: express/authorize re-quotes in "full"
+      // mode with the real address, and THAT is the authoritative guard. An
+      // order that genuinely loses money on goods alone still fails here.
+      shippingCost: destinationKnown ? profitSettings.shippingCostPerOrder : 0,
       handlingCollected: 0,
       // Effective rate actually applied to this destination (0 when the
       // order ships to a non-nexus state). Tax stays pass-through in the
