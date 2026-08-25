@@ -20,6 +20,37 @@ export interface IntegrationStatus {
   blocksLaunch: boolean;
 }
 
+/** What a shopper is actually charged per unit: the sale price when one is set,
+ *  otherwise the list price. Mirrors the catalogue and the profit report. */
+export function effectiveUnitPriceCents(row: {
+  price_cents: number | null;
+  sale_price_cents: number | null;
+}): number {
+  return Number(row.sale_price_cents) > 0 ? Number(row.sale_price_cents) : Number(row.price_cents ?? 0);
+}
+
+/**
+ * Published products a shopper cannot actually buy.
+ *
+ * The profit guard in quoteOrder() refuses any order it cannot complete above
+ * the floor, and it prices the WHOLE cart — so one line that costs more than it
+ * sells for can refuse the entire order, in the card lane and the wallet lane
+ * alike. The shopper is told "This order can't be completed at a profitable
+ * price", which reads as a site fault rather than a price they can avoid.
+ *
+ * Rows with no cost on file are NOT flagged: an unknown cost is the "no COGS"
+ * check's business, and guessing here would cry wolf on every unpriced import.
+ */
+export function findProductsPricedBelowCost<
+  T extends { price_cents: number | null; sale_price_cents: number | null; product_cost_cents: number | null },
+>(rows: T[]): T[] {
+  return rows.filter((row) => {
+    const cost = Number(row.product_cost_cents ?? 0);
+    const price = effectiveUnitPriceCents(row);
+    return cost > 0 && price > 0 && price <= cost;
+  });
+}
+
 function safeMockMode(): boolean {
   try {
     return isMockPaymentMode();
@@ -200,13 +231,13 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
   try {
     const { data: published } = await supabaseAdmin
       .from("products")
-      .select("id, name, slug, price_cents, product_cost_cents, track_inventory, inventory_quantity")
+      .select("id, name, slug, price_cents, sale_price_cents, product_cost_cents, track_inventory, inventory_quantity")
       .eq("is_published", true)
       .eq("is_archived", false);
 
     const rows = (published ?? []) as Array<{
       id: string; name: string | null; slug: string | null;
-      price_cents: number | null; product_cost_cents: number | null;
+      price_cents: number | null; sale_price_cents: number | null; product_cost_cents: number | null;
       track_inventory: boolean | null; inventory_quantity: number | null;
     }>;
     const label = (row: { name: string | null; slug: string | null }) => row.name ?? row.slug ?? "unnamed";
@@ -277,6 +308,25 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
         ? `All ${rows.length} published products have a cost on file`
         : `${withoutCost.length} product(s) have no unit cost, so their profit is estimated: ${withoutCost.map(label).join(", ")}.`,
       blocksLaunch: false,
+    });
+
+    /**
+     * Nothing else catches a below-cost product. "Has a price" passes (there is
+     * one) and "has a unit cost" passes (there is one); it is the RELATIONSHIP
+     * between them that is wrong — which is exactly what a swapped price and
+     * cost looks like, and it silently refuses every cart containing the item.
+     */
+    const belowCost = findProductsPricedBelowCost(rows);
+    out.push({
+      key: "product_sellable_margin",
+      label: "Published products can be sold at a profit",
+      level: belowCost.length === 0 ? "ok" : "error",
+      detail: belowCost.length === 0
+        ? `All ${rows.length} published products price above their cost`
+        : `${belowCost.length} published product(s) cost at least as much as they sell for, so checkout refuses any cart containing them: ${belowCost
+            .map((row) => `${label(row)} (sells ${(effectiveUnitPriceCents(row) / 100).toFixed(2)}, costs ${(Number(row.product_cost_cents) / 100).toFixed(2)})`)
+            .join(", ")}. Correct the price or the cost — a swapped pair looks exactly like this — or unpublish them.`,
+      blocksLaunch: true,
     });
   } catch {
     out.push({
@@ -393,6 +443,33 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
     detail: "Configured in Supabase — verify with a live password-reset test (can't be auto-checked here)",
     blocksLaunch: false,
   });
+
+  /**
+   * Error reporting, checked here because Sentry cannot report that Sentry is
+   * down. A DSN that Sentry refuses leaves the server reporting nothing at all,
+   * and the only evidence is one line in the platform log that nobody reads.
+   * Production has already run a deployment in exactly that state.
+   *
+   * Prints the host and project id, never the key.
+   */
+  {
+    const { sentryDsnState } = await import("@/lib/sentry-init");
+    const { sentryEnvironment, sentryRelease } = await import("@/lib/sentry-privacy");
+    const dsn = sentryDsnState();
+    const release = sentryRelease();
+    const tags = `environment "${sentryEnvironment()}"${release ? `, release ${release.slice(0, 7)}` : ", NO release tag"}`;
+    out.push({
+      key: "error_reporting",
+      label: "Error reporting (Sentry)",
+      level: dsn.state === "ok" ? "ok" : dsn.state === "missing" ? "not_configured" : "error",
+      detail: dsn.state === "ok"
+        ? `Reporting to project ${dsn.projectId} at ${dsn.host} — ${tags}`
+        : dsn.state === "missing"
+          ? "No DSN set, so nothing is reported. Set NEXT_PUBLIC_SENTRY_DSN (and SENTRY_DSN) in Vercel and redeploy."
+          : `The configured DSN is unusable (${dsn.reason}) — NOTHING is being reported. Check the DSN value in Vercel: it must be the full https://…@…ingest.…sentry.io/<id> URL, not the variable's name.`,
+      blocksLaunch: false,
+    });
+  }
 
   return out;
 }

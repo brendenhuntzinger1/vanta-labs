@@ -113,3 +113,44 @@ export function baseSentryOptions(): SentryInitOptions & { dsn: string } {
 export function sentryEnabled(): boolean {
   return Boolean(sentryDsn());
 }
+
+export type SentryDsnState =
+  | { state: "missing" }
+  | { state: "invalid"; reason: string }
+  | { state: "ok"; host: string; projectId: string };
+
+/**
+ * Whether the configured DSN is one Sentry will actually accept — decided
+ * WITHOUT calling Sentry.init, so this can be asked from a status screen
+ * without arming a second client.
+ *
+ * This exists because of a real production failure. Vercel briefly held the
+ * literal string "SENTRY_DSN" as the value of the DSN variable — the variable's
+ * own NAME pasted into its value box. Sentry.init threw `Invalid Sentry Dsn:
+ * SENTRY_DSN` on eight routes, server-side reporting was off for that whole
+ * deployment, and the only trace was a line in the platform log. Sentry itself
+ * cannot report that Sentry is down, so something else has to be able to say so.
+ *
+ * Never returns the public key, only the parts that identify WHICH project is
+ * configured.
+ */
+export function sentryDsnState(): SentryDsnState {
+  const dsn = sentryDsn();
+  if (!dsn) return { state: "missing" };
+
+  let url: URL;
+  try {
+    url = new URL(dsn);
+  } catch {
+    return { state: "invalid", reason: "not a URL" };
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") {
+    return { state: "invalid", reason: "not an http(s) URL" };
+  }
+  // Sentry's own shape: https://<publicKey>@<host>/<projectId>
+  if (!url.username) return { state: "invalid", reason: "no public key" };
+  const projectId = url.pathname.replace(/^\/+/, "").replace(/\/+$/, "");
+  if (!/^\d+$/.test(projectId)) return { state: "invalid", reason: "no project id" };
+
+  return { state: "ok", host: url.host, projectId };
+}

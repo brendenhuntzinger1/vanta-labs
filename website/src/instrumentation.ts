@@ -14,8 +14,19 @@ export async function register() {
   const { sentryEnabled, baseSentryOptions } = await import("@/lib/sentry-init");
   if (!sentryEnabled()) return;
 
-  const Sentry = await import("@sentry/nextjs");
-  Sentry.init(baseSentryOptions());
+  // register() must COMPLETE before the server accepts requests, so nothing in
+  // here may throw. A malformed DSN makes Sentry.init throw — production has
+  // already seen it, when the DSN variable briefly held its own name as its
+  // value ("Invalid Sentry Dsn: SENTRY_DSN", eight routes, one deployment).
+  // The browser side has always been wrapped; this is the same guarantee for
+  // the server. The failure is not swallowed silently: it is logged, and
+  // /admin/status reports the DSN as unusable via sentryDsnState().
+  try {
+    const Sentry = await import("@sentry/nextjs");
+    Sentry.init(baseSentryOptions());
+  } catch (error) {
+    console.error("[sentry] server init failed — server-side error reporting is OFF", error);
+  }
 }
 
 export const onRequestError: Instrumentation.onRequestError = async (err, request, context) => {
