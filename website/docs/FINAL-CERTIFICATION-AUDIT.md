@@ -318,6 +318,129 @@ email + NULL `auth_user_id`, then run the apply path — and confirm the rollbac
 `auth_user_id IS NULL`, adopting the existing row rather than minting a new
 identity). **Do not repair before reproduction.**
 
+### F-009 — REPRODUCED AND REPAIRED (repo); production apply pending approval
+
+**Reproduction (`BEHAVIORAL-TEST-PROVEN`).** Built a throwaway PostgreSQL 16.13
+locally and loaded a faithful replica: table DDL and constraints dumped from
+production `information_schema`, and the `create_partner_application` body
+dumped verbatim via `pg_get_functiondef()`. Constraints verified identical to
+production before running anything. **Production was never touched.**
+
+Result — exactly as predicted:
+
+```
+=== admin pre-adds an ambassador (email known, no auth account) ===
+ambassadors | 1
+partners    | 0
+
+--- app layer: SELECT partners WHERE auth_user_id = <her new uid> ---
+app_layer_match_rows | 0        <- no match, so it calls the RPC
+
+--- RPC ---
+ERROR:  duplicate key value violates unique constraint "ambassadors_email_key"
+DETAIL: Key (email)=(paula@example.test) already exists.
+
+=== STATE AFTER ===
+ambassadors | 1
+partners    | 0                 <- rolled back cleanly: atomicity works
+partner_visible | NO - she has no partners row
+
+=== RETRY ===
+ERROR:  duplicate key value violates unique constraint "ambassadors_email_key"
+```
+
+The applicant is permanently blocked, and retrying never converges.
+
+**Intended behaviour** (from the audit brief): recognise the identity, no
+duplicate partner, no orphan, **no unique-email failure**, referral code works,
+configured rates survive.
+
+**Regression tests — RED before the fix.** `src/lib/partner-identity-convergence.test.ts`
+runs the **real plpgsql** against a real Postgres. Before the repair:
+
+```
+Tests  5 failed | 2 passed (7)
+error: duplicate key value violates unique constraint "ambassadors_email_key"   (x5)
+```
+
+The 2 that already passed are guard rails for behaviour the fix must not break
+(a genuinely new applicant; an identity another account already claimed).
+
+A fake RPC cannot prove this. The existing `affiliate-integrity.test.ts` models
+the RPC in memory and does **not** model `UNIQUE(email)`, so it reports success
+on the exact input that fails in production. That is how this survived 3566
+green tests — recorded for the Phase 15 test-quality report.
+
+**The repair** — `src/lib/sql/partner-identity-convergence.sql`. When no
+`partners` row matches `auth_user_id`, look for an ambassador with the same
+email (case-insensitive) that no account has claimed, and **adopt** it: claim
+the row for this auth user and ensure its `partners` twin exists with the same
+id. Nothing the admin configured is overwritten — not the referral code (which
+may be in circulation), the commission rate, the customer discount, or the
+status. If another account already claimed that email, it raises rather than
+merging two people's identities.
+
+A second, smaller repair in `src/lib/partner-portal.ts`: the RPC now returns
+`adopted: true`, and adoption is treated as a **first** application, not a silent
+re-submission. Without this the applicant would submit the form, see success,
+and receive no confirmation, while the owner was never told the person they
+pre-added had signed up. The function also now answers with the identity the
+RPC settled on rather than the ids it generated locally — otherwise an adopted
+applicant would be told their referral code is `PAULA2` when the live code is
+`PAULA`.
+
+**GREEN after the fix:** `Tests 7 passed (7)`.
+
+**Negative controls (mutation tests) — each lands on exactly the right test:**
+
+| Mutation | Result |
+|---|---|
+| A: neuter the already-claimed-by-another-account guard | only *"does NOT hand over an identity that another account already claimed"* fails |
+| B: let adoption overwrite the admin's referral code | only *"preserves the rates and referral code the admin configured"* fails |
+| C: treat adoption as a silent re-submission (pre-fix behaviour) | the 3 notification tests fail |
+| D: answer with the locally generated identity | the 2 identity tests fail |
+| restored | all green |
+
+**Verification:** full suite **203 files / 3579 tests passing** with the database
+present (was 201/3566). Without a database the 7 convergence tests skip *loudly*
+via `console.warn` — 202 passed, 1 skipped — so CI cannot report a false pass.
+`tsc --noEmit` exit 0. `eslint` 0 errors (one pre-existing unused-variable
+warning at `partner-portal.ts:461`, present in `HEAD` before this change and
+left alone as an unrelated edit).
+
+**STATUS: repaired in the repository, NOT yet applied to production.** Applying
+it is a `CREATE OR REPLACE FUNCTION` against the live database — a production
+schema mutation on a SECURITY DEFINER identity function. Awaiting explicit
+approval. Revert path is exact: re-apply
+`BASELINE-live-functions-2026-08-25.sql`.
+
+*Still owed:* browser-level proof of the full pre-add → sign-up → apply journey
+(Phase 6), which needs the fix applied to a preview or the local dev database.
+
+### F-011 — Three safety-critical database functions exist only in production
+**Grade:** `DATABASE-PROVEN` · **Severity:** P1 · **Status:** BASELINE CAPTURED
+
+Reconciling live schema against the repository (as required before any DB
+change) found that **no repository SQL file defines**:
+
+| Function | What it protects |
+|---|---|
+| `create_partner_application` | atomic partner+ambassador creation — the BRUTUS orphan fix |
+| `affiliate_balances` | server-side aggregation of amounts owed — the row-cap truncation fix |
+| `rls_auto_enable` | event trigger enabling RLS on every new public table — why coverage is 68/68 |
+
+All three are repairs for defects found in live data. Had the database been
+rebuilt from this repository, **all three protections would have vanished
+silently** and the defects they fix would have returned.
+
+Captured verbatim into `src/lib/sql/BASELINE-live-functions-2026-08-25.sql`
+(with `validate_referral_code`, which *was* already reproducible). `CREATE OR
+REPLACE` makes re-applying a no-op when production already matches, so it is a
+reviewable baseline rather than a migration to run blindly.
+
+This is a concrete instance of A1. The wider reconciliation — every table,
+column, index, constraint, policy and trigger — is still owed in Phase 5.
+
 ### F-010 — RLS posture: 68/68 enabled, but four issues worth noting
 **Grade:** `DATABASE-PROVEN` · **Severity:** mixed (P2/P3) · **Status:** OPEN
 
@@ -361,7 +484,7 @@ Issues found:
 | 1 | 15% discount displayed as 10% | **Server side PASS.** `validate_referral_code('MIZZY')` returns `customer_discount_percent: 15`; NULL passes through un-coerced for inheritors. Cart calls the same `resolveAmbassadorCustomerDiscount` as the server. **Browser proof still owed.** | `DATABASE-PROVEN` + `SOURCE-INSPECTED` |
 | 2 | Mystery $100 affiliate minimum | Not yet assessed. `DEFAULT_MINIMUM_QUALIFYING_ORDER` exists; `/api/catalog/promotions` swallows a settings failure with `.catch(() => ({ minimumQualifyingOrder: DEFAULT }))` — a silent fallback to watch. | `NOT VERIFIED` |
 | 3 | 0% commission approval email | Not yet assessed. | `NOT VERIFIED` |
-| 4 | Brutus/Paul duplicate identity | **PARTIAL FAIL — see F-009.** Atomicity fixed; identity convergence not. | `DATABASE-PROVEN` + `SOURCE-INSPECTED` |
+| 4 | Brutus/Paul duplicate identity | **FAIL → REPAIRED (repo).** Reproduced in an isolated replica; convergence implemented; 7 behavioural tests red→green with 4 negative controls. Production apply pending approval. | `BEHAVIORAL-TEST-PROVEN` |
 | 5 | Elijah status drift | **PASS (behavioural).** `validate_referral_code('ELIJAH-AB78AE')` → `{valid:false}` because the RPC filters `status='approved'`. Both tables show `info_requested`. | `DATABASE-PROVEN` |
 | 6 | Affiliate money chain | Not yet assessed. `commissions`, `payouts`, `partner_payouts`, `referral_orders` are all **0 rows** — no production money has ever flowed, so all proof must be behavioural. | `NOT VERIFIED` |
 | 7 | Affiliate balance row-cap | `affiliate_balances()` RPC exists (server-side aggregation, SECURITY DEFINER) — the structural fix is present. Not yet proven above the row cap. | `SOURCE-INSPECTED` |
@@ -419,6 +542,24 @@ affiliate balance queries) **cannot be reproduced with production data** — Pha
 | Phase | Status |
 |---|---|
 | 0 — Tooling & environment | ✅ COMPLETE |
-| 1 — System map | 🔄 IN PROGRESS |
-| 2 — Production data integrity | 🔄 PARTIAL (8 findings) |
-| 3–21 | ⬜ NOT STARTED |
+| 1 — System map | 🔄 IN PROGRESS (6 of 10 subsystem mappers complete) |
+| 2 — Production data integrity | 🔄 PARTIAL (11 findings) |
+| 5 — Migrations / schema reconciliation | 🔄 STARTED — 3 missing functions captured (F-011); full table/policy diff still owed |
+| 6 — Affiliate / ambassador | 🔄 F-009 repaired in repo, awaiting production apply + browser proof |
+| 3, 4, 7–21 | ⬜ NOT STARTED |
+
+## Repairs made
+
+| Finding | Repair | Tests | Production |
+|---|---|---|---|
+| F-009 | `src/lib/sql/partner-identity-convergence.sql` + adoption handling in `src/lib/partner-portal.ts` | 7 integration (real Postgres) + 6 app-layer; 4 negative controls | **not applied — awaiting approval** |
+| F-011 | `src/lib/sql/BASELINE-live-functions-2026-08-25.sql` (verbatim capture) | n/a — baseline | no change; documents current state |
+
+## Running the database-backed tests
+
+    /usr/lib/postgresql/16/bin/initdb -D /tmp/vantapg -A trust -U postgres
+    /usr/lib/postgresql/16/bin/pg_ctl -D /tmp/vantapg -o '-p 55432 -k /tmp' start
+    VANTA_TEST_DATABASE_URL=postgres://postgres@localhost:55432/postgres npm run test
+
+Without `VANTA_TEST_DATABASE_URL` the convergence suite skips and says so on
+stderr. It is not silently green.
