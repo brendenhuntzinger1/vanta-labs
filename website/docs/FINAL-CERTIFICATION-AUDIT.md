@@ -752,7 +752,25 @@ storefront works without it.
 ### After the allowlist lands, in the new session
 
 1. Verify: `curl -o /dev/null -w '%{http_code}' https://snnezhxvssochqpqsjcm.supabase.co/rest/v1/` — expect **401**, not `000`. A 401 means the host is reachable and the request merely lacks a key; `000` means still blocked.
-2. `website/.env.local` already exists (gitignored) pointing at the harness. It sets `EMAIL_ENABLED=false` and uses the anon key for both client and server, so RLS is enforced rather than bypassed.
+2. **Recreate `website/.env.local` — it is gitignored, so a fresh container will NOT have it.** Get the harness anon key with the Supabase MCP tool `get_publishable_keys` for project `snnezhxvssochqpqsjcm`, then write:
+
+   ```
+   NEXT_PUBLIC_SITE_URL=http://127.0.0.1:3000
+   NEXT_PUBLIC_SUPABASE_URL=https://snnezhxvssochqpqsjcm.supabase.co
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=<anon key>
+   SUPABASE_SERVICE_ROLE_KEY=<anon key>     # deliberate - see caveat below
+   SUPABASE_URL=https://snnezhxvssochqpqsjcm.supabase.co
+   SUPABASE_ANON_KEY=<anon key>
+   EMAIL_ENABLED=false
+   EMAIL_PROVIDER=none
+   NEXT_PUBLIC_ENABLE_ANALYTICS=false
+   CHECKOUT_ENABLED=true
+   PAYMENT_PROVIDER=mock
+   NEXT_PUBLIC_EXPRESS_CHECKOUT_ENABLED=false
+   ```
+
+   `EMAIL_ENABLED=false` and `PAYMENT_PROVIDER=mock` are load-bearing: they keep
+   a synthetic test from mailing a real person or touching a real processor.
 3. `cd website && npm ci && npm run build && npm run start` — **not** `npm run dev`. Dev's HMR socket is blocked in this sandbox and Fast Refresh resets React state mid-test (see the age-gate note above).
 4. Harness data already seeded: 4 products (including the parent-zero/dose-stocked shape F-001 turns on, and an all-doses-zero control), 4 ambassadors (`MIZZYPROBE` explicit 15%, `BRUTUSPROBE` inheriting NULL, `HOLDPROBE` info_requested, `PREADDPROBE` pre-added with no auth account for F-009), and one membership tier.
 5. Resume from the phase table at the bottom of this file. Nothing needs redoing.
