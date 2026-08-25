@@ -135,6 +135,13 @@ stock.
 *Next:* Phase 5 must (a) find every stock-resolution path, (b) browser-prove a
 parent-zero/dose-stocked product renders In Stock and is purchasable.
 
+*Blocked:* (b) cannot be done in this session — see E-001. Note also that the
+parent rows carry `stock_status = 'In Stock'` **as text** while
+`inventory_quantity = 0`, so display may key off the text column rather than the
+quantity. If so, F-001 may be a non-defect at display level while hiding the
+inverse risk: a product showing In Stock when every dose is actually zero. Both
+readings remain unproven.
+
 ### F-002 — Partner/ambassador tables currently converged
 **Grade:** `DATABASE-PROVEN` · **Severity:** informational · **Status:** PASS (data)
 
@@ -578,6 +585,87 @@ affiliate balance queries) **cannot be reproduced with production data** — Pha
 
 ---
 
+## Environment constraints discovered (Phase 3) — READ THIS FIRST
+
+### E-001 — This session's network policy forbids the app from reaching ANY database
+**Grade:** `PRODUCTION-PROVEN` (measured) · **Impact:** blocks Phases 3, 13, 18, 20 as originally scoped
+
+The environment's egress proxy answers **403 to CONNECT** for every
+non-allowlisted host. Measured:
+
+| Host | Result |
+|---|---|
+| `www.vantalabsresearch.com` | 403 CONNECT denied |
+| `vanta-labs-*.vercel.app` (preview) | 403 CONNECT denied |
+| `mlpimwgkwuqpsvsrlpqv.supabase.co` (production DB) | 403 CONNECT denied |
+| `snnezhxvssochqpqsjcm.supabase.co` (audit harness DB) | 403 CONNECT denied |
+| `example.com` (control) | 403 CONNECT denied |
+| `github.com` | reachable |
+
+The Supabase **MCP tools** work because they tunnel through Anthropic's MCP
+proxy, not direct egress. The Next.js app gets no such tunnel. So:
+
+- **Production and Vercel previews cannot be browser-tested from this session.**
+- **A locally running app cannot reach any Supabase project**, production or
+  throwaway. `/api/catalog/products` returns `{"success":false}` and the
+  storefront renders "We couldn't load the catalog".
+
+What still works: everything database-side through Supabase MCP; everything
+repo-side; behavioural tests against a **local** Postgres over a direct socket
+(this is how F-009 was proven); and browser testing of anything that does not
+need data.
+
+**A dead end I walked into:** an isolated Supabase project
+(`vanta-audit-harness`, `snnezhxvssochqpqsjcm`, free tier) was created and
+seeded with the production schema shape before this constraint was measured.
+It is correct and reusable, but unreachable from here, so it bought nothing.
+Connectivity should have been tested first. The project is free and idle; delete
+it or keep it for an environment that does have egress.
+
+**To get browser evidence for data-driven flows, one of these must happen:**
+
+1. Allowlist `*.supabase.co` (and ideally the production domain) in the cloud
+   environment's network policy. Cheapest by far, and re-enables the harness
+   immediately.
+2. Build a local PostgREST-compatible shim so `supabase-js` talks to the local
+   Postgres over `127.0.0.1`. The repo's `.gitignore` carries an entry for
+   `.pgrst-shim.mjs` — "local test-rig stub (Postgres shim used by the audit
+   harness)" — so a previous session built exactly this, but it was never
+   committed and is gone. It would have to be rebuilt.
+3. Accept that stock display, referral discount in the cart, cart, and checkout
+   stay `NOT VERIFIED` at browser level in the final report.
+
+### Browser results that DID land
+
+**Age gate — `BROWSER-PROVEN`, PASS.** Against a production build
+(`npm run build && npm start`) at `127.0.0.1:3000`:
+
+- Renders as a modal dialog over the catalog with four separate attestations
+  (age 21+, organisation, research-use-only, terms).
+- With 1 of 4 confirmed, both entry buttons stay `disabled`.
+- With 4 of 4 confirmed, "Continue as guest" and "Create account / Sign in"
+  both become enabled; clicking through dismisses the gate.
+- "I am under 21 — exit" is always enabled.
+- Policy links are outside the clickable row — a deliberate fix, commented in
+  `age-gate.tsx`, for webviews where `target="_blank"` navigates in place.
+
+**A dev-mode artefact, NOT a defect — recorded so nobody re-raises it.** Under
+`npm run dev` the four boxes could read 4/4 checked while both buttons stayed
+disabled, which looks exactly like a P0 un-passable gate. It is not. The
+sandbox blocks the HMR WebSocket, Next dev retries continuously, and the
+resulting Fast Refresh resets the component's `confirmed` state; a later read
+showed all four boxes back to unchecked. The checkboxes are controlled
+(`checked={Boolean(confirmed[id])}`), so DOM-checked-but-disabled is only ever a
+transient mid-update state. On a production build the gate behaves correctly.
+**Do not browser-test this app under `npm run dev` in this environment.**
+
+**Trust claims rendered to customers** (`BROWSER-PROVEN`, catalog header):
+"SAME-DAY FULFILLMENT · PUBLISHED COAS · ≥99% PURITY · FAST CUSTOMER SUPPORT ·
+SECURE CHECKOUT", plus the age gate's "Third-Party Tested · COA Documented ·
+Encrypted Checkout". **"PUBLISHED COAS" and "COA Documented" are asserted to
+every visitor while `coa_records` is empty and no product carries a COA URL**
+— see F-006. That pairing is now evidenced at both ends.
+
 ## Open questions carried forward
 
 1. Where do COA files actually live, if `coa_records` is empty? (F-006)
@@ -610,7 +698,8 @@ affiliate balance queries) **cannot be reproduced with production data** — Pha
 | 2 — Production data integrity | 🔄 PARTIAL (11 findings) |
 | 5 — Migrations / schema reconciliation | 🔄 STARTED — 3 missing functions captured (F-011); full table/policy diff still owed |
 | 6 — Affiliate / ambassador | 🔄 F-009 repaired, applied to production and verified there; browser proof of the end-to-end journey still owed |
-| 3, 4, 7–21 | ⬜ NOT STARTED |
+| 3 — Customer journey | 🔄 BLOCKED for data-driven flows by E-001; age gate PASS, trust claims captured |
+| 4, 7–21 | ⬜ NOT STARTED |
 
 ## Repairs made
 
