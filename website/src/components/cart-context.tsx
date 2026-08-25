@@ -12,7 +12,7 @@ import { calculateShipping, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from 
 import { DEFAULT_SALES_TAX_CONFIG, type SalesTaxConfig } from "@/lib/sales-tax";
 import type { MembershipTierSummary } from "@/lib/member-pricing";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
-import { resolveBestDiscount } from "@/lib/discount-resolution";
+import { resolveCartDiscount } from "@/lib/discount-resolution";
 
 type CouponDetails = {
   code: string;
@@ -602,7 +602,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   );
   const quantityBundleSavings = bundleStacking ? 0 : Math.round(Math.max(0, fullSubtotal - subtotal) * 100) / 100;
   const discountBase = bundleStacking ? subtotal : fullSubtotal;
-  const competeWithBundle = (raw: number) => Math.max(0, Math.round((raw - quantityBundleSavings) * 100) / 100);
 
   // Abandoned-cart-recovery tracking: fires a debounced snapshot only for a
   // SIGNED-IN shopper. /api/cart/track is auth-gated and always sources the
@@ -681,7 +680,23 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // Whichever of buy3get1 / referral / coupon the customer is actually
   // eligible for under the existing (unchanged) mutual-exclusivity rules
   // between those three.
-  const preBulkDiscount = useMemo(() => {
+  // BUNDLE OR REFERRAL — but the coupon is NOT part of this choice.
+  //
+  // This used to end `return { type: "coupon", amount: couponDiscountAmount }`,
+  // which made the coupon the third rung of a priority chain: a Buy-3-Get-1
+  // bundle short-circuited above it and the coupon never competed at all.
+  // resolveCustomerDiscount, which decides what the CARD is charged, pushes
+  // bundleDiscount and couponDiscount into the candidate list together and
+  // takes the larger. So a $20 free item plus a $50 coupon showed $20 off in
+  // the cart and charged $50 off — the shopper paying less than the page said,
+  // and the "best discount applied" line naming the wrong one.
+  //
+  // Bundle-over-referral IS correct and stays: the server suppresses the
+  // referral bucket outright when a bundle is present
+  // (`!isBundle && hasReferral`), because the free item is the whole discount.
+  // Only the coupon was wrongly excluded, so only the coupon moves out — into
+  // its own candidate below, where it competes exactly as it does server-side.
+  const promoDiscount = useMemo(() => {
     if (buy3Get1FreeDiscount > 0) {
       return { type: "buy3get1" as const, amount: buy3Get1FreeDiscount };
     }
@@ -691,8 +706,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       // server's charge even if config finished loading after the code was set.
       return { type: "referral" as const, amount: discountBase * (referralDiscountPercent / 100) };
     }
-    return { type: "coupon" as const, amount: couponDiscountAmount };
-  }, [buy3Get1FreeDiscount, referralDetails, discountBase, couponDiscountAmount, referralDiscountPercent]);
+    return null;
+  }, [buy3Get1FreeDiscount, referralDetails, discountBase, referralDiscountPercent]);
 
   // The elite "Exclusive Buy In Bulk Savings" benefit cannot stack with
   // anything else - it competes with whatever the customer would otherwise
@@ -715,21 +730,27 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [ambassadorDiscountPercent, discountBase],
   );
 
-  // Every candidate competes for what it saves BEYOND the bundle pricing
-  // already in the subtotal (competeWithBundle is a no-op when stacking is
-  // enabled or the cart has no bundle savings) — one discount, best wins.
-  const bestDiscount = useMemo(
-    () => resolveBestDiscount([
-      { type: "bulk_savings", amount: competeWithBundle(bulkSavingsResult.amount) },
-      { type: "member_pricing", amount: competeWithBundle(memberPricingAmount) },
-      { type: "ambassador_personal", amount: competeWithBundle(ambassadorPersonalAmount) },
-      { type: preBulkDiscount.type, amount: competeWithBundle(preBulkDiscount.amount) },
-    ]),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- competeWithBundle derives from quantityBundleSavings
-    [bulkSavingsResult.amount, memberPricingAmount, ambassadorPersonalAmount, preBulkDiscount, quantityBundleSavings],
+  // One discount, best wins — each competing for what it saves BEYOND the
+  // bundle pricing already in the subtotal.
+  //
+  // Assembled in lib/discount-resolution.ts, not here. It used to live inline,
+  // which is precisely why it could drift from the server without any test
+  // noticing: nothing can import a candidate list built inside a component.
+  const cartDiscount = useMemo(
+    () => resolveCartDiscount({
+      subtotal,
+      quantityBundleSavings,
+      bulkSavingsAmount: bulkSavingsResult.amount,
+      memberPricingAmount,
+      ambassadorPersonalAmount,
+      couponDiscountAmount,
+      promo: promoDiscount,
+    }),
+    [subtotal, quantityBundleSavings, bulkSavingsResult.amount, memberPricingAmount, ambassadorPersonalAmount, couponDiscountAmount, promoDiscount],
   );
 
-  const discountAmount = Math.min(subtotal, bestDiscount?.amount ?? 0);
+  const bestDiscount = cartDiscount.best;
+  const discountAmount = cartDiscount.amount;
 
   // Customer-facing name for the applied discount, and the "we picked the
   // best one for you" note shown when an entered code lost to something

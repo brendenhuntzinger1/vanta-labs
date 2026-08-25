@@ -1,56 +1,43 @@
 import { describe, expect, it } from "vitest";
 
-import { resolveBestDiscount, type DiscountType } from "@/lib/discount-resolution";
+import { resolveCartDiscount, type DiscountType } from "@/lib/discount-resolution";
 import { resolveCustomerDiscount, type OrderInputs } from "@/lib/profit-engine";
 
 // ---------------------------------------------------------------------------
 // THE PRICE IN THE CART HAS TO BE THE PRICE ON THE CARD.
 //
-// Two different functions decide which single discount wins:
+// Two functions decide which single discount wins:
 //
-//   cart-context.tsx  -> resolveBestDiscount   (what the shopper is shown)
+//   cart-context.tsx  -> resolveCartDiscount     (what the shopper is shown)
 //   quote-order.ts    -> resolveCustomerDiscount (what the card is charged)
 //
-// discount-resolution.ts opens with "shared by the client cart preview and the
-// server checkout total so both always agree on which single discount is
-// actually applied". The server does not call it. Nothing tested that claim,
-// and the two are assembled differently:
+// discount-resolution.ts opened by claiming it was "shared by the client cart
+// preview and the server checkout total so both always agree". The server never
+// called it, nothing tested the claim, and the two had drifted.
 //
-//   THE CART builds a PRIORITY CHAIN. buy3get1 wins outright; failing that a
-//   valid referral; failing that the coupon. Exactly one of those three ever
-//   becomes a candidate, alongside bulk / member / ambassador-personal.
+// THE DEFECT. The cart built a PRIORITY CHAIN — buy3get1 wins outright, failing
+// that a valid referral, failing that the coupon — so exactly one of the three
+// ever competed. The server is handed bundleDiscount and couponDiscount
+// together and lets both into the candidate list. On a $300 cart with a $20
+// free item and a $50 coupon the cart showed $20 off while the card was charged
+// $50 off: the shopper paying less than the page said, and the "best discount
+// applied" line naming the wrong one.
 //
-//   THE SERVER lets them COMPETE. bundleDiscount and couponDiscount are passed
-//   in together and both enter the candidate list (referral is suppressed when
-//   a bundle is present, matching the cart).
+// THE FIX. The cart's candidate assembly was lifted out of the component into
+// resolveCartDiscount, and the coupon competes on its own footing instead of
+// behind the promo. Bundle-over-referral STAYS, because the server suppresses
+// the referral bucket outright when a bundle is present.
 //
-// Same inputs, two shapes. This file feeds both the same scenarios and checks
-// they land on the same number.
+// Why it had to move rather than just be corrected in place: the assembly lived
+// inline in a React component, so nothing could import it, so nothing could
+// test it — which is exactly how it drifted. The first version of this file
+// restated that chain by hand and passed while the real cart was wrong. A
+// mirrored copy cannot catch a change in the original. Both sides of the
+// comparison below now run production code.
 //
-// WHAT IT FOUND, AND WHY NOTHING WAS CHANGED. They diverge on exactly one
-// combination: a Buy-3-Get-1 bundle AND a coupon worth more than the free item.
-// The cart's chain stops at buy3get1 so the coupon never competes; the server
-// picks the larger. On a $300 cart with a $20 free item and a $50 coupon the
-// cart shows $20 off and the card is charged $50 off — the shopper is charged
-// LESS than displayed, never more, so no one is overcharged.
-//
-// Both preconditions are currently OFF in production, independently:
-//   promotions.buy_3_get_1_enabled = false   (set by the owner 2026-08-23)
-//   all 335 active coupons expired on or before 2026-08-06; none is live
-// and no order in the store's history has ever carried a coupon code.
-//
-// So it is unreachable today, and the fix would mean changing how the live
-// checkout assembles and LABELS discounts (preBulkDiscount also feeds
-// appliedDiscountLabel and autoBestDiscountApplied) for every shopper, to
-// correct a display that currently cannot happen and errs in the customer's
-// favour. That is more risk than the defect carries. It is left alone,
-// deliberately, and pinned here instead: the moment someone enables
-// Buy-3-Get-1 and issues a live coupon, this file says so out loud.
-//
-// The cart's candidate ASSEMBLY is inline in a React component and cannot be
-// imported, so buildCartCandidates below restates that chain. It is the one
-// mirrored thing in this file and it is marked as such — every discount AMOUNT
-// on both sides comes from the real functions.
+// Referral and coupon are still excluded from the same scenario on purpose:
+// applying either clears the other in cart state (cart-context.tsx), so a
+// combination the UI cannot produce would prove nothing.
 // ---------------------------------------------------------------------------
 
 const ALL = new Set(["coupon", "referral", "bundle", "membership"] as const);
@@ -97,29 +84,29 @@ function serverAmount(s: Scenario): number {
 }
 
 /**
- * MIRRORED, deliberately: cart-context.tsx assembles these inline inside a
- * component. The chain, competeWithBundle and the subtotal cap are copied from
- * lines 684-732 of that file. resolveBestDiscount itself is the real one.
+ * The REAL cart resolver. No longer a mirror: resolveCartDiscount is the exact
+ * function cart-context.tsx calls, so a change to the cart's assembly changes
+ * this test's result too. That is the whole point — the previous version of
+ * this file restated the cart's chain by hand and therefore could not have
+ * caught the divergence it was written to police.
  */
 function cartAmount(s: Scenario): number {
-  const alreadyGranted = s.quantityBundleSavings ?? 0;
-  const base = s.subtotal + alreadyGranted;
-  const compete = (raw: number) => Math.max(0, round(raw - alreadyGranted));
-
-  const preBulk: { type: DiscountType; amount: number } =
+  const promo: { type: DiscountType; amount: number } | null =
     (s.buy3Get1 ?? 0) > 0
       ? { type: "buy3get1", amount: s.buy3Get1 ?? 0 }
       : s.referralPercent
-        ? { type: "referral", amount: base * (s.referralPercent / 100) }
-        : { type: "coupon", amount: s.couponDiscount ?? 0 };
+        ? { type: "referral", amount: (s.subtotal + (s.quantityBundleSavings ?? 0)) * (s.referralPercent / 100) }
+        : null;
 
-  const best = resolveBestDiscount([
-    { type: "bulk_savings", amount: compete(s.bulkSavings ?? 0) },
-    { type: "member_pricing", amount: compete(s.memberPercent ? base * (s.memberPercent / 100) : 0) },
-    { type: "ambassador_personal", amount: compete(s.personalDiscount ?? 0) },
-    { type: preBulk.type, amount: compete(preBulk.amount) },
-  ]);
-  return round(Math.min(s.subtotal, best?.amount ?? 0));
+  return resolveCartDiscount({
+    subtotal: s.subtotal,
+    quantityBundleSavings: s.quantityBundleSavings ?? 0,
+    bulkSavingsAmount: s.bulkSavings ?? 0,
+    memberPricingAmount: s.memberPercent ? (s.subtotal + (s.quantityBundleSavings ?? 0)) * (s.memberPercent / 100) : 0,
+    ambassadorPersonalAmount: s.personalDiscount ?? 0,
+    couponDiscountAmount: s.couponDiscount ?? 0,
+    promo,
+  }).amount;
 }
 
 // Referral and coupon are mutually exclusive in cart state — applying either
@@ -164,29 +151,41 @@ describe("what the shopper is shown is what the card is charged", () => {
   });
 });
 
-describe("the one combination they do NOT agree on", () => {
+describe("the combination they used to disagree on", () => {
   /**
-   * Kept as an explicit, named exception rather than deleted, so the gap is a
-   * fact in the suite instead of a silence. If a change ever makes these agree,
-   * this test fails and the exception should be removed — that is the intended
-   * direction.
+   * THE DEFECT, now the regression test. The cart put the coupon on the third
+   * rung of a priority chain that a Buy-3-Get-1 bundle short-circuited, so the
+   * coupon never competed; the server let both compete and took the larger. A
+   * $300 cart with a $20 free item and a $50 coupon showed $20 off and charged
+   * $50 off.
    */
   const BUNDLE_PLUS_BIGGER_COUPON: Scenario = { name: "x", subtotal: 300, buy3Get1: 20, couponDiscount: 50 };
 
-  it("a bundle plus a larger coupon: the card is charged less than the cart shows", () => {
-    expect(cartAmount(BUNDLE_PLUS_BIGGER_COUPON)).toBe(20);
+  it("a bundle plus a larger coupon now shows what the card is charged", () => {
+    expect(cartAmount(BUNDLE_PLUS_BIGGER_COUPON)).toBe(50);
     expect(serverAmount(BUNDLE_PLUS_BIGGER_COUPON)).toBe(50);
   });
 
-  it("errs in the customer's favour — never the other way", () => {
+  it("agrees at every coupon value either side of the free item", () => {
     for (const coupon of [1, 19.99, 20, 20.01, 50, 200, 500]) {
       const scenario: Scenario = { name: "x", subtotal: 300, buy3Get1: 20, couponDiscount: coupon };
-      expect(serverAmount(scenario)).toBeGreaterThanOrEqual(cartAmount(scenario));
+      expect(cartAmount(scenario)).toBe(serverAmount(scenario));
     }
   });
 
-  it("agrees again as soon as the free item is worth more than the coupon", () => {
+  it("still lets the bundle win when the free item is worth more", () => {
     const scenario: Scenario = { name: "x", subtotal: 300, buy3Get1: 60, couponDiscount: 25 };
+    expect(cartAmount(scenario)).toBe(60);
+    expect(serverAmount(scenario)).toBe(60);
+  });
+
+  /**
+   * A bundle must still suppress the REFERRAL, which the server does outright
+   * via `!isBundle && hasReferral`. Only the coupon moved out of the chain.
+   */
+  it("a bundle still suppresses a referral", () => {
+    const scenario: Scenario = { name: "x", subtotal: 300, buy3Get1: 60, referralPercent: 10 };
+    expect(cartAmount(scenario)).toBe(60);
     expect(cartAmount(scenario)).toBe(serverAmount(scenario));
   });
 });
