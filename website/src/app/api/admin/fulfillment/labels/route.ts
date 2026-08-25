@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { batchLabelUrls, purchaseBatchLabels, reviewBatchLabels } from "@/lib/fulfillment-labels";
+import { labelPurchasingEnabled, PURCHASING_DISABLED_MESSAGE } from "@/lib/shippo/service";
 
 // ---------------------------------------------------------------------------
 // GET  /api/admin/fulfillment/labels?batchId=…            review — SPENDS NOTHING
@@ -90,6 +91,19 @@ export async function POST(request: Request) {
         error: `Buy at most ${MAX_ORDERS_PER_PURCHASE} labels per request. Send the batch in chunks.`,
       },
       { status: 400 },
+    );
+  }
+
+  // POLICY FIRST, BEFORE ANY PER-ORDER WORK.
+  //
+  // purchaseLabelForOrder refuses each line anyway — that is the real guard,
+  // and it sits at the money boundary so every caller inherits it. Answering
+  // here as well means a stray call gets ONE clear sentence instead of N
+  // identical per-line refusals, and the batch loop never starts.
+  if (!labelPurchasingEnabled()) {
+    return NextResponse.json(
+      { success: false, error: PURCHASING_DISABLED_MESSAGE },
+      { status: 403 },
     );
   }
 

@@ -47,8 +47,28 @@ describe("the confirmed price is the charged price", () => {
     expect(labels).toContain("rateId: cheapest.object_id ?? null");
   });
 
-  it("the workstation sends the rate id with every order it buys", () => {
-    expect(workstation).toContain("orderId: l.orderId, rateId: l.rateId");
+  /**
+   * REPLACED, NOT DELETED.
+   *
+   * This used to assert the workstation sent the reviewed rate id with every
+   * order it bought. The workstation no longer buys anything: Vanta does not
+   * purchase postage, Shippo does, and the batch spend control is gone. An
+   * assertion about how it buys is now meaningless, so the property worth
+   * pinning is the opposite one — that the owner-facing screen has no path to
+   * a purchase at all.
+   *
+   * The real guard is in purchaseLabelForOrder, at the money boundary, proven
+   * behaviourally in shippo/service.test.ts. This is the UI half: no button,
+   * no fetch, nothing to mis-click.
+   */
+  it("the workstation offers NO way to buy postage", () => {
+    expect(workstation).not.toContain("confirmSpend");
+    expect(workstation).not.toContain("purchaseLabels");
+    expect(workstation).not.toMatch(/method:\s*"POST"[^}]*fulfillment\/labels/);
+  });
+
+  it("the workstation still sends the owner to Shippo to buy", () => {
+    expect(workstation).toContain("apps.goshippo.com");
   });
 
   it("the route accepts the {orderId, rateId} pair form", () => {

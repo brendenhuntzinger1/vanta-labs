@@ -17,6 +17,10 @@ import type { ShippoServiceErrorCode } from "@/lib/shippo/service";
 // ---------------------------------------------------------------------------
 
 const STATUS_BY_CODE: Record<ShippoServiceErrorCode, number> = {
+  // Refused by policy, not by input. Vanta does not buy postage; a retry of the
+  // same request will never succeed while that is true, so it must not look
+  // retryable the way a 409 or 502 does.
+  purchasing_disabled: 403,
   order_not_found: 404,
   not_shippable: 400,
   origin_incomplete: 400,

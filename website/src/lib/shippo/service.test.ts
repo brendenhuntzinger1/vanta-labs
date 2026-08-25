@@ -356,6 +356,12 @@ function goodShipment() {
 
 
 beforeEach(() => {
+  // Vanta does not buy postage in production — labels are bought in Shippo and
+  // synced back, so purchaseLabelForOrder refuses unless explicitly enabled.
+  // These suites exercise the purchase MECHANICS (exactly-once, the claim, the
+  // confirmed rate), which only mean anything with purchasing on. The default
+  // refusal has its own suite below.
+  process.env.SHIPPO_ALLOW_LABEL_PURCHASE = "true";
   resetTables();
   clearQuotedRateCache();
   vi.clearAllMocks();
@@ -874,6 +880,56 @@ describe("package presets", () => {
 // certainty is impossible, the required behaviour is to STOP and surface an
 // exception — never to guess by trying again.
 // ===========================================================================
+/**
+ * THE STANDING RULE, PROVEN AT THE MONEY BOUNDARY.
+ *
+ * Vanta does not buy postage — labels are purchased in Shippo and synced back.
+ * Every other suite in this file sets SHIPPO_ALLOW_LABEL_PURCHASE=true because
+ * it is testing purchase MECHANICS. This one removes it, which is the shape
+ * production actually runs in, and proves nothing reaches Shippo.
+ *
+ * Asserting the refusal alone would be too weak: what matters is that no HTTP
+ * call to /transactions/ is made and no claim is left behind for a human to
+ * clear.
+ */
+describe("purchaseLabelForOrder — Vanta does not buy postage", () => {
+  const KEY = "SHIPPO_ALLOW_LABEL_PURCHASE";
+
+  it("refuses, spends nothing, and takes no claim", async () => {
+    delete process.env[KEY];
+    purchaseLabel.mockResolvedValue({
+      ok: true,
+      data: { transactionId: "txn_should_not_happen", labelUrl: "https://x", trackingNumber: "1Z", rate: null },
+    });
+
+    const seeded = seedOrder();
+
+    const result = await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true }, actor: "owner" });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe("purchasing_disabled");
+    // The whole point: no money left the account.
+    expect(purchaseLabel).not.toHaveBeenCalled();
+    // And no claim was taken, so nobody has to clear a stuck row by hand.
+    expect(seeded.label_purchase_claimed_at ?? null).toBeNull();
+  });
+
+  it("still hands back a label the order ALREADY has, so printing keeps working", async () => {
+    delete process.env[KEY];
+    seedOrder({
+      shippo_transaction_id: "txn_existing",
+      label_url: "https://label.goshippo.com/existing.pdf",
+      tracking_number: "1Z-EXISTING",
+    });
+
+    const result = await purchaseLabelForOrder({ orderId: ORDER_ID, selection: { cheapest: true } });
+
+    expect(result.ok).toBe(true);
+    expect(purchaseLabel).not.toHaveBeenCalled();
+  });
+});
+
 describe("purchaseLabelForOrder — exactly once", () => {
   /** A successful Shippo purchase. */
   function shippoSucceeds(overrides: Record<string, unknown> = {}) {

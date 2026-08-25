@@ -38,7 +38,7 @@ export async function validateReferralCodeClient(code: string) {
 
     const { data: ambassador, error: fallbackError } = await supabase
       .from("ambassadors")
-      .select("id, name, referral_code, commission_percent, status")
+      .select("id, name, referral_code, status")
       .eq("referral_code", normalizedCode)
       .maybeSingle();
 
@@ -54,7 +54,6 @@ export async function validateReferralCodeClient(code: string) {
       referralCode: String(ambassador.referral_code ?? normalizedCode).toUpperCase(),
       ambassadorId: String(ambassador.id),
       ambassadorName: String(ambassador.name ?? "Ambassador"),
-      commissionPercent: Number(ambassador.commission_percent ?? 0),
     };
   }
 
@@ -66,6 +65,5 @@ export async function validateReferralCodeClient(code: string) {
     referralCode: data.referral_code,
     ambassadorId: data.ambassador_id,
     ambassadorName: data.ambassador_name,
-    commissionPercent: data.commission_percent,
   };
 }

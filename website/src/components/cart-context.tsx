@@ -570,7 +570,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
           customerDiscountPercent: referralDiscountPercent,
           ambassadorName: validatedReferral.ambassadorName,
           ambassadorId: validatedReferral.ambassadorId,
-          commissionPercent: validatedReferral.commissionPercent,
         });
       } catch {
         if (!cancelled) {
@@ -1051,7 +1050,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         customerDiscountPercent: referralDiscountPercent,
         ambassadorName: validatedReferral.ambassadorName,
         ambassadorId: validatedReferral.ambassadorId,
-        commissionPercent: validatedReferral.commissionPercent,
       };
 
       setReferralDetails(details);

@@ -362,12 +362,25 @@ describe("a Shippo transaction can be traced back to its Vanta order", () => {
     expect(service).toContain("idempotencyKey: `vanta-label-${order.order_id}`");
   });
 
-  it("tells the owner where postage is bought and where it is only printed", () => {
+  it("tells the owner postage is bought in Shippo, and Vanta syncs it back", () => {
     const workstation = source("src/components/fulfillment-workstation.tsx");
-    expect(workstation).toMatch(/Click to Print only/i);
-    expect(workstation).toContain("Open Shippo to print");
-    // And keeps the Vanta PDF as a fallback that cannot spend.
-    expect(workstation).toMatch(/Fallback: print from Vanta/);
+
+    // THIS ASSERTION USED TO SAY THE OPPOSITE. It required the screen to read
+    // "Click to Print only — never buy another label there", because postage
+    // was bought in Vanta and Shippo was the print station. That is no longer
+    // how the business runs: labels are purchased in Shippo and sync back. An
+    // instruction that is backwards is worse than no instruction, so the test
+    // that pinned the backwards one had to move with it.
+    expect(workstation).toMatch(/Buy postage in Shippo/i);
+    expect(workstation).toMatch(/Buy these labels in Shippo/i);
+    expect(workstation).toContain("apps.goshippo.com");
+
+    // The old direction must not survive anywhere on the screen.
+    expect(workstation).not.toMatch(/Click to Print only/i);
+    expect(workstation).not.toMatch(/Postage is purchased here in Vanta/i);
+
+    // Printing an EXISTING label stays, and stays free.
+    expect(workstation).toMatch(/Print labels already bought/i);
   });
 });
 

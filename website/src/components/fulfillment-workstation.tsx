@@ -9,7 +9,7 @@ import type { BucketCount, QueueOrder } from "@/lib/fulfillment-queues";
 import type { BucketId } from "@/lib/fulfillment-buckets";
 import type { ExceptionDefinition } from "@/lib/fulfillment-buckets";
 import type { FulfillmentBatch, PackingOrder, PickList } from "@/lib/fulfillment-batches";
-import type { BatchPurchaseResult, LabelReview } from "@/lib/fulfillment-labels";
+import type { LabelReview } from "@/lib/fulfillment-labels";
 
 // ---------------------------------------------------------------------------
 // THE WORKSTATION.
@@ -26,8 +26,6 @@ import type { BatchPurchaseResult, LabelReview } from "@/lib/fulfillment-labels"
 //      happens only after the operator has seen the total and confirmed it.
 // ---------------------------------------------------------------------------
 
-/** Orders per purchase request. Keeps each POST short and gives live progress. */
-const PURCHASE_CHUNK = 10;
 
 function money(cents: number | null | undefined): string {
   if (cents === null || cents === undefined) return "—";
@@ -95,9 +93,6 @@ export function FulfillmentWorkstation({
   const [packing, setPacking] = useState<PackingOrder | null>(null);
   const [activeBatch, setActiveBatch] = useState<string | null>(openBatches[0]?.id ?? null);
   const [review, setReview] = useState<LabelReview | null>(null);
-  const [confirming, setConfirming] = useState(false);
-  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
-  const [purchaseResult, setPurchaseResult] = useState<BatchPurchaseResult | null>(null);
 
   const reasonMap = useMemo(
     () => new Map(exceptionReasons.map((r) => [r.reason, r])),
@@ -127,7 +122,7 @@ export function FulfillmentWorkstation({
   }, []);
 
   const createBatch = async () => {
-    setBusy(true); setMessage(null); setRejections([]); setReview(null); setPurchaseResult(null);
+    setBusy(true); setMessage(null); setRejections([]); setReview(null);
     try {
       const body = await call("/api/admin/fulfillment/batches", {
         method: "POST",
@@ -168,7 +163,7 @@ export function FulfillmentWorkstation({
 
   /** Quote everything. A GET — SPENDS NOTHING. */
   const loadReview = async (batchId: string) => {
-    setBusy(true); setMessage(null); setPurchaseResult(null); setConfirming(false);
+    setBusy(true); setMessage(null);
     try {
       const body = await call(`/api/admin/fulfillment/labels?batchId=${batchId}`);
       if (!body.success) { setMessage(String(body.error ?? "Could not review labels.")); return; }
@@ -178,56 +173,6 @@ export function FulfillmentWorkstation({
     } finally { setBusy(false); }
   };
 
-  /**
-   * BUY. Reached only from the confirmation panel, and only for the orders the
-   * review marked ready — never the whole batch, and never a line the operator
-   * did not see priced.
-   */
-  const purchaseLabels = async () => {
-    if (!review || !activeBatch) return;
-    // Carry the reviewed rate with each order so the purchase buys the rate
-    // that was priced on screen, not a fresh quote taken seconds later.
-    const targets = review.lines
-      .filter((l) => l.readiness === "ready")
-      .map((l) => ({ orderId: l.orderId, rateId: l.rateId }));
-    if (targets.length === 0) return;
-
-    setBusy(true); setConfirming(false); setMessage(null);
-    setProgress({ done: 0, total: targets.length });
-
-    const merged: BatchPurchaseResult = {
-      purchased: 0, alreadyHadOne: 0, failed: 0, needsVerification: 0, spentCents: 0, lines: [],
-    };
-
-    try {
-      // Chunked so no single request runs long and the operator sees progress.
-      // Sequential: a failure in one chunk must not race ahead into the next.
-      for (let i = 0; i < targets.length; i += PURCHASE_CHUNK) {
-        const chunk = targets.slice(i, i + PURCHASE_CHUNK);
-        const body = await call("/api/admin/fulfillment/labels", {
-          method: "POST",
-          body: JSON.stringify({ batchId: activeBatch, orderIds: chunk, confirmSpend: true }),
-        });
-        if (!body.success) {
-          setMessage(String(body.error ?? "The purchase stopped. Review before trying again."));
-          break;
-        }
-        const result = body.result as BatchPurchaseResult;
-        merged.purchased += result.purchased;
-        merged.alreadyHadOne += result.alreadyHadOne;
-        merged.failed += result.failed;
-        merged.needsVerification += result.needsVerification;
-        merged.spentCents += result.spentCents;
-        merged.lines.push(...result.lines);
-        setProgress({ done: Math.min(i + PURCHASE_CHUNK, targets.length), total: targets.length });
-      }
-      setPurchaseResult(merged);
-      // Re-quote so the panel reflects what is now bought.
-      const refreshed = await call(`/api/admin/fulfillment/labels?batchId=${activeBatch}`);
-      if (refreshed.success) setReview((refreshed.review as LabelReview) ?? null);
-      router.refresh();
-    } finally { setBusy(false); setProgress(null); }
-  };
 
   /**
    * Verified → the order moves to `packed` through the canonical pipeline, and
@@ -469,7 +414,7 @@ export function FulfillmentWorkstation({
                 </button>
                 <button type="button" disabled={busy} onClick={() => loadReview(batch.id)}
                   className="vl-btn-secondary px-3 py-1 text-xs disabled:opacity-50">
-                  2 · Review labels
+                  2 · Check postage
                 </button>
                 {/* THE MONEY BOUNDARY, STATED ON THE CONTROL ITSELF.
                     Purchase spends. Print does not, ever — the print route
@@ -480,10 +425,10 @@ export function FulfillmentWorkstation({
                   href={`/api/admin/fulfillment/labels/print?batchId=${encodeURIComponent(batch.id)}`}
                   target="_blank"
                   rel="noreferrer"
-                  title="Opens the purchased labels as one 4x6 PDF. Printing and reprinting never buy postage."
+                  title="Opens labels already bought in Shippo as one 4x6 PDF. Printing never buys postage."
                   className="vl-btn-secondary px-3 py-1 text-xs"
                 >
-                  3 · Print purchased labels · $0
+                  3 · Print labels bought in Shippo · $0
                 </a>
                 <button type="button" disabled={busy} onClick={() => { setActiveBatch(batch.id); loadNext(batch.id); }}
                   className="vl-btn-primary px-3 py-1 text-xs disabled:opacity-50">
@@ -493,17 +438,21 @@ export function FulfillmentWorkstation({
             ))}
           </ul>
           <p className="mt-3 text-[11px] text-zinc-500">
-            Only step 2 &rarr; Purchase spends money. Printing and reprinting are always free —
-            they open labels you have already bought.
+            Nothing on this screen spends money. Postage is bought in Shippo; every button here
+            only reads, quotes or prints.
           </p>
           {/* THE HANDOFF, STATED WHERE THE OWNER IS STANDING.
               Postage is bought here. Shippo is the print station. The one
               mistake that costs real money is buying it a second time in
               Shippo's own dashboard, so the boundary is named rather than
               assumed. */}
+          {/* THE HANDOFF, STATED WHERE THE OWNER IS STANDING. This paragraph
+              used to say the opposite — that postage was bought in Vanta and
+              Shippo was print-only. That is no longer how the business runs,
+              and an instruction that is backwards is worse than none. */}
           <p className="mt-1 text-[11px] text-amber-300/80">
-            Postage is purchased here in Vanta. In Shippo, use Click to Print only — never buy
-            another label there.
+            Buy postage in Shippo. Vanta syncs each label back automatically with its tracking
+            number and real carrier cost — there is nothing to enter here afterwards.
           </p>
         </section>
       ) : null}
@@ -532,112 +481,47 @@ export function FulfillmentWorkstation({
             </ul>
           ) : null}
 
-          {/* THE CONFIRMATION. The financial consequence is stated plainly and
-              the operator has to click a second, differently-labelled button. */}
+          {/* THE HANDOFF.
+              Vanta does not buy postage — labels are purchased in Shippo and
+              sync back here with their tracking number and real carrier cost.
+              This panel used to be a spend button; what replaced it is the one
+              thing the operator now needs, which is a way to get to Shippo with
+              the right orders in hand. The figures below are ESTIMATES from a
+              quote, not a charge: nothing on this screen moves money. */}
           {review.readyCount > 0 ? (
-            <div className="mt-5 rounded-lg border border-white/10 bg-white/[0.02] p-4">
-              {!confirming ? (
-                <button
-                  type="button"
-                  disabled={busy}
-                  onClick={() => setConfirming(true)}
-                  className="vl-btn-primary px-4 py-2 text-xs disabled:opacity-50"
-                >
-                  Purchase {review.readyCount} label{review.readyCount === 1 ? "" : "s"} · {money(review.estimatedTotalCents)}
-                </button>
-              ) : (
-                <div role="alertdialog" aria-label="Confirm postage purchase">
-                  <p className="text-sm text-white">
-                    You are about to buy <strong>{review.readyCount}</strong> shipping label
-                    {review.readyCount === 1 ? "" : "s"} through Shippo for approximately{" "}
-                    <strong>{money(review.estimatedTotalCents)}</strong>.
-                  </p>
-                  <p className="mt-1 text-xs text-zinc-400">
-                    This spends real money. Postage is only refundable by voiding each label.
-                  </p>
-                  <div className="mt-3 flex gap-2">
-                    <button type="button" disabled={busy} onClick={purchaseLabels}
-                      className="vl-btn-primary px-4 py-2 text-xs disabled:opacity-50">
-                      Yes — buy {review.readyCount} label{review.readyCount === 1 ? "" : "s"}
-                    </button>
-                    <button type="button" disabled={busy} onClick={() => setConfirming(false)}
-                      className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-50">
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-              {progress ? (
-                <p className="mt-3 font-mono text-xs text-zinc-300" role="status">
-                  Buying {progress.done} / {progress.total}…
-                </p>
-              ) : null}
-            </div>
-          ) : null}
-
-          {/* PARTIAL FAILURE, REPORTED HONESTLY. Never "93 labels purchased". */}
-          {purchaseResult && purchaseResult.purchased > 0 ? (
-            <div className="mt-4 rounded-lg border border-cyan-400/25 bg-cyan-400/[0.06] p-3.5">
-              <p className="text-sm font-semibold text-cyan-100">
-                Labels bought. Print them in Shippo.
+            <div className="mt-5 rounded-lg border border-amber-300/25 bg-amber-300/[0.05] p-4">
+              <p className="text-sm text-white">
+                <strong>{review.readyCount}</strong> order{review.readyCount === 1 ? " is" : "s are"} ready for postage
+                — around <strong>{money(review.estimatedTotalCents)}</strong> estimated.
               </p>
-              <p className="mt-1 text-xs leading-6 text-cyan-100/80">
-                Each shipment carries its Vanta order number, so you can find it without guessing.
-                Use Click to Print — the postage is already paid, and buying again in Shippo would
-                charge you twice.
+              <p className="mt-1 text-xs leading-6 text-zinc-400">
+                Buy these in Shippo. Each shipment carries its Vanta order number, so you can find
+                them without guessing. Vanta picks up the label automatically and records the
+                tracking number and the real carrier cost against the order — you do not need to
+                enter anything here afterwards.
               </p>
-              <div className="mt-2.5 flex flex-wrap gap-2">
+              <div className="mt-3 flex flex-wrap gap-2">
                 <a
                   href="https://apps.goshippo.com/orders"
                   target="_blank"
                   rel="noreferrer"
-                  className="vl-btn-primary inline-flex px-3 py-1 text-xs"
+                  className="vl-btn-primary inline-flex px-4 py-2 text-xs"
                 >
-                  Open Shippo to print →
+                  Buy these labels in Shippo &rarr;
                 </a>
                 <a
                   href={`/api/admin/fulfillment/labels/print?batchId=${encodeURIComponent(activeBatch ?? "")}`}
                   target="_blank"
                   rel="noreferrer"
-                  title="Emergency fallback. Opens the same purchased labels as a 4x6 PDF. Never buys postage."
-                  className="vl-btn-secondary inline-flex px-3 py-1 text-xs"
+                  title="Opens labels already bought as one 4x6 PDF. Never buys postage."
+                  className="vl-btn-secondary inline-flex px-4 py-2 text-xs"
                 >
-                  Fallback: print from Vanta · $0
+                  Print labels already bought &middot; $0
                 </a>
               </div>
             </div>
           ) : null}
-          {purchaseResult ? (
-            <div role="status" className="mt-4 rounded-lg border border-white/10 p-4">
-              <p className="text-sm text-white">
-                {purchaseResult.purchased} purchased · {money(purchaseResult.spentCents)} spent
-              </p>
-              <ul className="mt-1 space-y-0.5 text-xs text-zinc-400">
-                {purchaseResult.alreadyHadOne > 0 ? <li>{purchaseResult.alreadyHadOne} already had a label — no charge.</li> : null}
-                {purchaseResult.failed > 0 ? <li className="text-amber-300">{purchaseResult.failed} failed — nothing was charged for these.</li> : null}
-                {purchaseResult.needsVerification > 0 ? (
-                  <li className="text-rose-300">
-                    {purchaseResult.needsVerification} need verification — postage may have been charged. Do not retry.
-                  </li>
-                ) : null}
-              </ul>
-              {purchaseResult.lines.filter((l) => l.outcome !== "purchased" && l.outcome !== "already_had_one").length > 0 ? (
-                <ul className="mt-3 space-y-1 border-t border-white/5 pt-2">
-                  {purchaseResult.lines
-                    .filter((l) => l.outcome !== "purchased" && l.outcome !== "already_had_one")
-                    .map((line) => (
-                      <li key={line.orderId} className="text-xs text-zinc-400">
-                        <span className="font-mono text-zinc-300">{line.orderNumber ?? line.orderId}</span>{" "}
-                        <Pill tone={line.outcome === "needs_verification" ? "crit" : "warn"}>
-                          {line.outcome === "needs_verification" ? "verify" : "failed"}
-                        </Pill>{" "}
-                        {line.message}
-                      </li>
-                    ))}
-                </ul>
-              ) : null}
-            </div>
-          ) : null}
+
         </section>
       ) : null}
 

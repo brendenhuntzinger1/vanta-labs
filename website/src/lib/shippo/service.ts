@@ -91,7 +91,12 @@ export type ShippoServiceErrorCode =
   /** A database write failed. */
   | "db_error"
   /** The caller passed something unusable. */
-  | "invalid_request";
+  | "invalid_request"
+  /**
+   * BUYING POSTAGE FROM VANTA IS TURNED OFF. Labels are purchased in Shippo.
+   * Nothing was bought and no claim was taken. Retrying will not help.
+   */
+  | "purchasing_disabled";
 
 export interface ShippoServiceFailure {
   ok: false;
@@ -1041,6 +1046,35 @@ async function claimLabelPurchase(orderId: string): Promise<"won" | "lost" | "er
  * NEVER call this from a webhook, a render, a queue entry or an automatic
  * retry. It is reachable only from an authenticated admin action.
  */
+/**
+ * Is this store allowed to spend money on postage?
+ *
+ * VANTA DOES NOT BUY LABELS. They are purchased directly in Shippo, and Vanta
+ * syncs the result back. This is the standing business rule, so the default —
+ * the variable unset — is REFUSE.
+ *
+ * It is an environment variable rather than an admin setting on purpose. An
+ * admin toggle is one mis-click away from a batch of postage nobody meant to
+ * buy, and the whole point of this gate is that the owner-facing workflow
+ * cannot spend by accident. Turning it back on is a deployment decision.
+ *
+ * Checked here, in the one function in this application that spends money,
+ * rather than in the two routes that currently reach it. Route-level guards
+ * protect the routes that exist today; this protects the next caller too.
+ */
+/**
+ * What an operator sees if they reach a control that used to buy postage.
+ *
+ * It has to say where labels actually come from now. A bare "forbidden" sends
+ * them hunting for a broken feature instead of opening Shippo.
+ */
+export const PURCHASING_DISABLED_MESSAGE =
+  "Vanta does not buy postage. Purchase this label in Shippo \u2014 it will sync back here automatically with its tracking number and real carrier cost.";
+
+export function labelPurchasingEnabled(): boolean {
+  return String(process.env.SHIPPO_ALLOW_LABEL_PURCHASE ?? "").trim().toLowerCase() === "true";
+}
+
 export async function purchaseLabelForOrder(
   request: PurchaseLabelRequest,
 ): Promise<ServiceResult<OrderLabel>> {
@@ -1052,6 +1086,17 @@ export async function purchaseLabelForOrder(
   // 1. ALREADY BOUGHT.
   const existing = labelFromOrder(loaded.data, true);
   if (existing) return { ok: true, data: existing };
+
+  // 1b. POLICY GATE — placed exactly here, and the position is the point.
+  //
+  // AFTER the already-bought check, so an order that already has a label still
+  // returns it: reprinting and batch printing read through this function and
+  // must keep working. BEFORE rate resolution and before the claim, so a
+  // refusal spends nothing, contacts Shippo about nothing, and leaves no
+  // label_purchase_claimed_at behind for someone to clear by hand.
+  if (!labelPurchasingEnabled()) {
+    return fail("purchasing_disabled", PURCHASING_DISABLED_MESSAGE);
+  }
 
   const notShippable = assertShippable(loaded.data);
   if (notShippable) return notShippable;
