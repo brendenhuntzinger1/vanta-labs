@@ -63,7 +63,18 @@
 -- ===========================================================================
 
 alter default privileges in schema public
-  revoke execute on functions from anon, authenticated;
+do $rpc_lockdown$
+begin
+  -- Guarded so this file also runs against a throwaway Postgres: anon,
+  -- authenticated and service_role are Supabase-managed roles that do not exist
+  -- in a bare cluster. Without this, a database-backed test executing this file
+  -- dies on the grant rather than on whatever it was testing.
+  if exists (select 1 from pg_roles where rolname='anon') then
+    execute $q$revoke execute on functions from anon, authenticated;$q$;
+  end if;
+end
+$rpc_lockdown$;
+
 
 -- Belt and braces for the sweep half: re-close anything that drifted open since
 -- 20260825003037, leaving the one deliberately client-callable function alone.

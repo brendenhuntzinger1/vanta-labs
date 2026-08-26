@@ -196,5 +196,18 @@ $function$;
 -- rpc-security-posture.test.ts fails the build if a new function arrives here
 -- without one of these lines.
 -- ---------------------------------------------------------------------------
-revoke all on function public.create_partner_application(uuid, uuid, text, text, text, numeric, jsonb) from public, anon, authenticated;
-grant execute on function public.create_partner_application(uuid, uuid, text, text, text, numeric, jsonb) to service_role;
+do $rpc_lockdown$
+begin
+  -- Guarded so this file also runs against a throwaway Postgres: anon,
+  -- authenticated and service_role are Supabase-managed roles that do not exist
+  -- in a bare cluster. Without this, a database-backed test executing this file
+  -- dies on the grant rather than on whatever it was testing.
+  if exists (select 1 from pg_roles where rolname='anon') then
+    execute $q$revoke all on function public.create_partner_application(uuid, uuid, text, text, text, numeric, jsonb) from public, anon, authenticated;$q$;
+  end if;
+  if exists (select 1 from pg_roles where rolname='service_role') then
+    execute $q$grant execute on function public.create_partner_application(uuid, uuid, text, text, text, numeric, jsonb) to service_role;$q$;
+  end if;
+end
+$rpc_lockdown$;
+

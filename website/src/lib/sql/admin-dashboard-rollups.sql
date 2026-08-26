@@ -93,8 +93,21 @@ $$;
 -- to service_role (the key the app uses).
 revoke all on function public.admin_revenue_summary(timestamptz) from public;
 revoke all on function public.admin_revenue_by_method() from public;
-grant execute on function public.admin_revenue_summary(timestamptz) to service_role;
-grant execute on function public.admin_revenue_by_method() to service_role;
+do $rpc_lockdown$
+begin
+  -- Guarded so this file also runs against a throwaway Postgres: anon,
+  -- authenticated and service_role are Supabase-managed roles that do not exist
+  -- in a bare cluster. Without this, a database-backed test executing this file
+  -- dies on the grant rather than on whatever it was testing.
+  if exists (select 1 from pg_roles where rolname='service_role') then
+    execute $q$grant execute on function public.admin_revenue_summary(timestamptz) to service_role;$q$;
+  end if;
+  if exists (select 1 from pg_roles where rolname='service_role') then
+    execute $q$grant execute on function public.admin_revenue_by_method() to service_role;$q$;
+  end if;
+end
+$rpc_lockdown$;
+
 
 -- ---------------------------------------------------------------------------
 -- Customer rollup (mirrors src/lib/admin-customers.ts aggregateCustomers).
@@ -165,7 +178,18 @@ as $$
 $$;
 
 revoke all on function public.admin_customer_rollup(text, int, int) from public;
-grant execute on function public.admin_customer_rollup(text, int, int) to service_role;
+do $rpc_lockdown$
+begin
+  -- Guarded so this file also runs against a throwaway Postgres: anon,
+  -- authenticated and service_role are Supabase-managed roles that do not exist
+  -- in a bare cluster. Without this, a database-backed test executing this file
+  -- dies on the grant rather than on whatever it was testing.
+  if exists (select 1 from pg_roles where rolname='service_role') then
+    execute $q$grant execute on function public.admin_customer_rollup(text, int, int) to service_role;$q$;
+  end if;
+end
+$rpc_lockdown$;
+
 
 -- ---------------------------------------------------------------------------
 -- Operations summary customer counts + live sales (mirrors partner-portal.ts
@@ -218,7 +242,18 @@ as $$
 $$;
 
 revoke all on function public.admin_ops_summary(timestamptz, timestamptz) from public;
-grant execute on function public.admin_ops_summary(timestamptz, timestamptz) to service_role;
+do $rpc_lockdown$
+begin
+  -- Guarded so this file also runs against a throwaway Postgres: anon,
+  -- authenticated and service_role are Supabase-managed roles that do not exist
+  -- in a bare cluster. Without this, a database-backed test executing this file
+  -- dies on the grant rather than on whatever it was testing.
+  if exists (select 1 from pg_roles where rolname='service_role') then
+    execute $q$grant execute on function public.admin_ops_summary(timestamptz, timestamptz) to service_role;$q$;
+  end if;
+end
+$rpc_lockdown$;
+
 
 -- ---------------------------------------------------------------------------
 -- Total outstanding points (mirrors admin-membership.ts getMembershipAnalytics
@@ -235,7 +270,18 @@ as $$
 $$;
 
 revoke all on function public.admin_points_outstanding() from public;
-grant execute on function public.admin_points_outstanding() to service_role;
+do $rpc_lockdown$
+begin
+  -- Guarded so this file also runs against a throwaway Postgres: anon,
+  -- authenticated and service_role are Supabase-managed roles that do not exist
+  -- in a bare cluster. Without this, a database-backed test executing this file
+  -- dies on the grant rather than on whatever it was testing.
+  if exists (select 1 from pg_roles where rolname='service_role') then
+    execute $q$grant execute on function public.admin_points_outstanding() to service_role;$q$;
+  end if;
+end
+$rpc_lockdown$;
+
 
 -- ---------------------------------------------------------------------------
 -- Bulk-savings tier stats (mirrors admin-membership.ts getBulkSavingsStats).
@@ -262,7 +308,18 @@ as $$
 $$;
 
 revoke all on function public.admin_bulk_savings_stats() from public;
-grant execute on function public.admin_bulk_savings_stats() to service_role;
+do $rpc_lockdown$
+begin
+  -- Guarded so this file also runs against a throwaway Postgres: anon,
+  -- authenticated and service_role are Supabase-managed roles that do not exist
+  -- in a bare cluster. Without this, a database-backed test executing this file
+  -- dies on the grant rather than on whatever it was testing.
+  if exists (select 1 from pg_roles where rolname='service_role') then
+    execute $q$grant execute on function public.admin_bulk_savings_stats() to service_role;$q$;
+  end if;
+end
+$rpc_lockdown$;
+
 
 -- ---------------------------------------------------------------------------
 -- Supporting indexes for the aggregations above. IF NOT EXISTS = safe re-run.

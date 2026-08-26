@@ -79,11 +79,9 @@ function functionsCreatedBy(source: string): string[] {
     // The body runs to the next `create function` or the end of the file; the
     // `security definer` clause always precedes the body.
     re.lastIndex = match.index + match[0].length;
-    const next = source.slice(match.index).search(/create\s+(?:or\s+replace\s+)?function/i, 1);
     const rest = source.slice(match.index + match[0].length);
     const head = rest.slice(0, Math.min(rest.length, 1200));
     if (/security\s+definer/i.test(head)) found.push(match[1].toLowerCase());
-    void next;
   }
   return found;
 }
