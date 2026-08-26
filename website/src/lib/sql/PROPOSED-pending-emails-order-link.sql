@@ -1,4 +1,12 @@
--- PROPOSAL — NOT APPLIED. Owner approval required (audit Rule 4).
+-- PROPOSAL — NOT APPLIED. **ON HOLD BY OWNER DECISION, 2026-08-26.**
+--
+-- DO NOT APPLY THIS TONIGHT. The owner held it explicitly: six audit sessions are
+-- running in parallel against this database, and C-02 is not urgent because the
+-- duplicate it causes requires a transactional send to fail first (production has
+-- never recorded one — pending_emails has zero rows ever inserted). Block M
+-- decides with the full picture.
+--
+-- Owner approval required regardless (audit Rule 4).
 --
 -- Block C finding C-02: the pending_emails sweep delivers a receipt and never
 -- closes out the order_email_log row, so the send-once slot stays free and the

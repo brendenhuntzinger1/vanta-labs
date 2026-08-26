@@ -1,11 +1,37 @@
 # Block C — Email
 
+> ## ⚠️ READ FIRST — BLOCK M: THIS BRANCH COMMITS 9 DELIBERATELY FAILING TESTS
+>
+> **A red suite on this branch is not a broken merge. It is this block's evidence.**
+>
+> ```
+> npx vitest run  →  Tests  9 failed | 3577 passed | 7 skipped (3593)
+> ```
+>
+> All 9 failures are in the three test files added by this block, and every one of
+> them is asserting the CORRECT behaviour against code that is currently WRONG:
+>
+> | File | Failures | Finding | Goes green when |
+> |---|---|---|---|
+> | `src/lib/approval-email-commission-rate.test.ts` | 4 | C-01 | A+B fixes `updatePartnerStatus` |
+> | `src/lib/email/order-email-sweep-duplicate.test.ts` | 3 | C-02 | the sweep closes the send-once slot |
+> | `src/lib/email/cart-recovery-coupon-leak.test.ts` | 2 | C-06 | the reservation survives a failed send |
+>
+> They are **not** skipped, `.todo`'d or `it.fails`-inverted, because any of those
+> would hide a P0 from the consolidation regression run. **Do not "fix" them by
+> changing the assertions.** Each one turning green is the acceptance criterion for
+> its finding. No pre-existing test was changed, broken, or made to pass — the
+> other 3577 pass, typecheck is clean, lint reports no new warnings.
+>
+> The fixes for C-01 and C-06 live in files owned by other blocks (Rule 3), which
+> is why this block filed evidence rather than patches.
+
 Session branch: `claude/block-ab-audit-zuuyuz` (reassigned to block C mid-session).
 Scope: `src/lib/email/**`, `email/templates`, `retry-queue.ts`, and the email
 call sites in other files (recorded CROSS-BLOCK per Rule 3, not edited).
 
 **No real email was sent at any point.** Every test in this block mocks
-`@/lib/email/send`; nothing reached a provider.
+`@/lib/email/send`; nothing reached a provider. Production was read, never written.
 
 ---
 
@@ -182,9 +208,13 @@ Two further consequences fall out of the same gap:
 
 Two parts. The code change is small; it depends on the schema change.
 
-1. **Schema (needs owner approval — Rule 4).**
-   `website/src/lib/sql/PROPOSED-pending-emails-order-link.sql`, written but
-   **not applied**: nullable `order_id` and `email_kind` columns on
+1. **Schema — WRITTEN, NOT APPLIED, AND ON HOLD.**
+   `website/src/lib/sql/PROPOSED-pending-emails-order-link.sql`. **The owner held
+   this on 2026-08-26: do not apply it tonight.** Six sessions are running against
+   this database in parallel, and C-02 is not urgent — the duplicate requires a
+   transactional send to fail first, and production has never recorded one
+   (`pending_emails`, zero rows ever inserted). **Block M decides with the full
+   picture.** The file stays proposed. Its content: nullable `order_id` and `email_kind` columns on
    `pending_emails`, plus a partial index. The existing comment defends
    `pending_emails` being self-contained — that argument applies to the subject
    and body, which stay self-contained; it does not require the order link to be
@@ -378,14 +408,80 @@ inherits the same one-way guarantee.
 
 ---
 
-## C-06 — Every failed send mints another live, redeemable coupon
+## C-06 — A failed send re-arms the cart-recovery stage, so it re-mints and re-sends every 30 minutes
 
 | | |
 |---|---|
-| **Severity** | P1 (money) |
-| **Evidence grade** | A — reproduced by test |
+| **Severity** | **P1 — LAUNCH BLOCKER (deliverability and customer trust).** Re-graded; see below. |
+| **Evidence grade** | A — reproduced by test **and** confirmed against production |
 | **Status** | `CONFIRMED — CROSS-BLOCK (cart-recovery.ts)` |
 | **Regression test** | `website/src/lib/email/cart-recovery-coupon-leak.test.ts` (2 of 3 RED) |
+
+### Severity: re-graded from "money leak" to "launch blocker for deliverability"
+
+**This was originally filed as a money leak. That grading was wrong, and the
+correction matters to the verdict.** The owner checked the 335 minted rows
+against production and this block then verified them independently:
+
+```sql
+cart_recovery_coupons  335      redeemed        0
+still_live             0        distinct_recipients  3
+first_minted  2026-07-21 23:56  last_minted  2026-08-04 23:30
+```
+
+Every one of the 335 is **expired, unredeemed, 5%-only, bound to a single
+`assigned_email`, and carries a random `SAVE-<10 hex>` code**. Nobody received
+them — email was off, which is *why* they were minted. There is **no money
+exposure and nothing to remediate in the data.** Three shoppers' addresses, ~112
+junk rows each.
+
+**The exposure is entirely prospective, and it is about email volume, not money.**
+The failure the rollback re-arms is not only "the provider is down" — it is *any*
+`success: false` from `sendMarketingEmail`. Three regimes:
+
+| Regime | Reservation | Result |
+|---|---|---|
+| **Email off** (Jul 21 – Aug 25, the state that produced the 335) | deleted every sweep | junk coupons, **no email** |
+| **Email on and delivering** (production today) | survives | one coupon, one email — bug dormant |
+| **Email on, send reports failure** | deleted every sweep | **re-mint AND re-attempt, every 30 min for up to 96 h** |
+
+The third regime is the launch risk. At one sweep per 30 minutes across a 96-hour
+window that is **up to ~192 attempts against one shopper for one cart**. Whether
+those 192 attempts *arrive* depends on why the send reported failure:
+
+- **Provider false negative** — Resend accepts the message and the call then times
+  out or fails to parse. The mail is delivered and the reservation is deleted:
+  the shopper receives the same recovery email every 30 minutes, up to ~192 times.
+  This is the reputational worst case, and it is the one the owner identified.
+- **Rate limiting (HTTP 429)** — plausible at launch traffic, since the sweep
+  loops serially over carts *and* stages *and* shares the provider with the
+  campaign sweep. Partial delivery, and a fresh coupon per rejected attempt.
+- **Unsubscribed recipient** — `sendMarketingEmail` returns
+  `{ success: false, suppressed: true }` for anyone in `email_suppressions`
+  (`marketing.ts:26`). `reserveAndSendStage` does not distinguish suppression
+  from failure, so it deletes the reservation and re-mints on **every** sweep,
+  **for ever**, for a person who explicitly opted out. No mail is delivered (the
+  suppression works), but a shopper who unsubscribes silently becomes a permanent
+  coupon-minting loop. `email_suppressions` is currently empty — this one arms
+  itself the first time anybody unsubscribes.
+
+So: not a money leak, and not a "someday" bug either. It is a
+**deliverability-and-trust blocker that goes live the moment email is on and any
+send reports failure** — which, at launch, is when sends are most likely to fail.
+The spam damages sender reputation for the domain that also carries receipts and
+password resets.
+
+### Production scale of the historical firing
+
+```
+abandoned_cart_emails   n_tup_ins 3021   rows now 27
+```
+
+**2,994 reservation rows were inserted and then deleted** — that is the rollback
+path in `reserveAndSendStage` firing 2,994 times against production. The 335
+coupons are the subset of those attempts that reached a coupon-minting stage
+(t24h/t72h; t30m and t12h mint nothing). The mechanism is not theoretical and its
+production firing count is known.
 
 ### Reproduction
 
@@ -414,12 +510,15 @@ The guard (`hasSentStage`) reads `abandoned_cart_emails`. But
 reservation. So on every failed send the guard is wiped and the next pass mints
 again. The two fixes cancel each other out.
 
-This is not an edge case. **Email is disabled by default** and `NoopEmailProvider`
-returns `success: false`, so "the send fails" is the application's shipped state.
-The sweep runs every 30 minutes and scans carts up to 96h old, so a single
-abandoned cart with email off produces on the order of **140 live coupon rows** —
-each `active: true`, `discount_type: 'percent'`, `max_redemptions: 1`,
-`assigned_email` set to a real shopper. They are redeemable.
+This is not an edge case, and note carefully that it is **not** gated on email
+being disabled. Any `success: false` re-arms the stage — a provider outage, a
+rate limit, a timeout after acceptance, or an unsubscribed recipient. The sweep
+runs every 30 minutes and scans carts up to 96 hours old, so one cart in that
+state is up to **~192 mint-and-attempt cycles**. The coupon rows are real
+(`active: true`, `discount_type: 'percent'`, `max_redemptions: 1`,
+`assigned_email` set), but as the re-grading above establishes, the rows are not
+the harm — the repeated sending is. Historical production firing: **2,994**
+reservation insert-then-delete cycles, 335 coupons, 0 redemptions.
 
 ### The wider defect underneath it
 
@@ -802,7 +901,7 @@ panel, or state plainly there that account email is a separate channel.
 | C-03 | P1 | CONFIRMED, fix CROSS-BLOCK | inspection |
 | C-04 | P1 | CONFIRMED, fix CROSS-BLOCK | inspection ×3 sites |
 | C-05 | P1 | CONFIRMED, fix CROSS-BLOCK | inspection |
-| C-06 | P1 (money) | CONFIRMED, fix CROSS-BLOCK | test, RED ×2 |
+| C-06 | **P1 — launch blocker** (deliverability/trust, NOT money) | CONFIRMED, fix CROSS-BLOCK | test, RED ×2 + production |
 | C-07 | P1 (tests) | CONFIRMED, handed to block E | direct hit |
 | C-08 | P1 | CONFIRMED, 21 sites | enumerated |
 | C-09 | P2 | CONFIRMED, fix CROSS-BLOCK | inspection |
@@ -822,32 +921,181 @@ committed test or provable from the source as it stands.
 these findings' subject matter; the three added here mock the provider and capture
 every message. Nothing was written to production.
 
-## What block C did NOT verify
+## Production verification — all six open reads, answered
 
-- **The live provider.** Whether `admin_control.email.enabled` is currently true,
-  and which provider is configured, was not read. If it is SendGrid or SMTP, the
-  Resend `Idempotency-Key` path is inert and `order_email_log` is the sole
-  duplicate guard — which C-02 shows is one-way. Needs a production read.
-- **Whether `order-email-log.sql` is applied in production.** `sendOrderEmailOnce`
-  treats a missing table as "send anyway, unlogged", and `isMissingTable` matches
-  any error containing "does not exist" or "schema cache" — so an absent table
-  removes the only send-once guarantee with no alert at all. Needs a production
-  read.
-- **Live `pending_emails` rows at `status='failed'`**, and `order_email_log` rows
-  at `failed` whose orders were nonetheless delivered by the sweep. Each of the
-  first is a customer who got nothing; each of the second is an order exposed to a
-  duplicate receipt on any replay.
-- **Whether `MARKETING_POSTAL_ADDRESS` is set.** If blank, `marketingBlockedReason()`
-  blocks campaigns and automations — but cart recovery, coupon broadcast,
-  back-in-stock and membership welcome/win-back all call `sendMarketingEmail`
-  **without** that gate and would still send non-CAN-SPAM-compliant mail.
-- **`notification_queue` consumption.** Nothing outside `updatePartnerStatus`'s
-  inline mark-as-sent appears to consume rows of kind
-  `partner_application_approved`/`rejected`; unsent rows may simply accumulate
-  into `getAdminOperationsSummary`'s pending count.
-- **Browser verification.** Block C is server-side; no customer-facing email UI
-  was driven. The admin email settings screen and the communications panel
-  (C-12) would benefit from it and are left to blocks G+H.
+Read-only against production (`mlpimwgkwuqpsvsrlpqv`) on 2026-08-26. **Nothing was
+written. No migration was applied. No email was sent.**
+
+### 1. Is `order-email-log.sql` applied in production? — **YES, and correctly**
+
+This was the urgent one, because `sendOrderEmailOnce` treats a missing table as
+"send anyway, unlogged" and `isMissingTable()` matches any error containing
+`does not exist` or `schema cache` — an absent table would have removed the only
+send-once guarantee with no alert at all.
+
+```
+to_regclass('public.order_email_log')  →  order_email_log
+order_email_log_one_live  →  CREATE UNIQUE INDEX ... ON public.order_email_log
+                             USING btree (order_id, kind)
+                             WHERE (status = ANY (ARRAY['sending','sent']))
+```
+
+The table **and** its partial unique index are both present, exactly as designed.
+**The send-once guarantee is real in production.** This closes the block's most
+urgent unknown as good news.
+
+### 2. Is email enabled, and which provider? — **ENABLED. Resend. This corrects a stated premise.**
+
+```
+admin_control 'email':  enabled = true      (set 2026-08-25 02:38 UTC)
+                        provider = resend
+                        resend_api_key = SET (36 chars)
+                        from = orders@vantalabsresearch.com
+```
+
+**Email is ON in production and has been since 2026-08-25 02:38 UTC.** The working
+assumption in the C-06 discussion — "email ships disabled" — is true of the *code
+default* and of the period that minted the 335 coupons, but it is **not** true of
+production as it stands today. Two consequences:
+
+- **C-06's third regime is live now, not at launch.** The bug is dormant only for
+  as long as every Resend call succeeds. It arms on the first failure.
+- Provider is **Resend**, which *does* honour `Idempotency-Key`. That is the good
+  case for C-02: the primary `sendOrderEmailOnce` path passes
+  `order_confirmation:<orderId>`, so Resend would collapse a genuine duplicate —
+  **but the retry sweep passes no key at all**, so the specific duplicate C-02
+  describes is exactly the one the provider cannot collapse.
+
+Credential values were deliberately not read; only their presence and length.
+Plaintext credentials living in `admin_audit_logs` rows is block I's finding, and
+this block did nothing to disturb it.
+
+### 3. Live `pending_emails` rows at `status='failed'`? — **None. And the queue has never once been used.**
+
+```
+pending_emails:  0 rows now,  n_tup_ins = 0  (zero rows EVER inserted)
+```
+
+No customer is currently sitting behind an undelivered receipt. But the second
+number is the interesting one, and it is an **anomaly this block could not fully
+resolve**:
+
+Four paid orders with a customer email were processed while email was disabled
+(VL-E8F4D52F Aug 2, VL-8847B157 Aug 3, VL-EA5529EF Aug 7, VL-8D132452 Aug 25
+02:13 — all with `paid_side_effects_at` claimed). Under the code as written, each
+should have hit `sendOrderEmailOnce` → `success:false` → `enqueueFailedEmail` →
+a `pending_emails` row. Zero were ever written. Meanwhile:
+
+```
+order_email_log:  0 rows now,  n_tup_ins = 4   ← four rows inserted, then DELETED
+```
+
+The schema is not the explanation — `pending_emails`' columns match
+`enqueueFailedEmail`'s insert payload exactly (`to_email`, `subject`, `html`,
+`text_body`, `reply_to`, `attempts`, `status`, `last_error`, `next_attempt_at`),
+with no NOT NULL column the payload omits, so the insert would succeed.
+
+Three candidate explanations, **not distinguished by the evidence available**:
+(a) `order_email_log` was created after those orders were paid (its OID, 21468, is
+the highest of any table checked, so it is the most recently created), and the 4
+inserts came from the two Aug 25 orders; (b) something deleted rows from both
+tables during earlier audit work; (c) those confirmation blocks did not run.
+
+**For block M / the owner:** this is flagged as an unexplained gap, not as a
+defect. It deserves an answer before launch, because "the durable retry queue has
+never captured a single failure" and "the durable retry queue has never been
+needed" look identical from here, and only one of them is reassuring. The one
+thing that IS established: the queue is schema-compatible and would accept a row.
+
+### 4. Is `MARKETING_POSTAL_ADDRESS` set? — **Yes**
+
+```
+marketing_postal_address = "30929 Mirada Blvd / po box 331 / San Antonio FL / 33576"
+```
+
+So `marketingBlockedReason()` does **not** block campaigns or the automation
+sweep. The related hazard stands unchanged and is now the live configuration:
+cart recovery, coupon broadcast, back-in-stock and membership welcome/win-back all
+call `sendMarketingEmail` **without** that gate, so they were never protected by
+it either way. `marketing_from` is empty, so marketing mail currently sends from
+the same `orders@` identity that carries receipts and password resets — which is
+precisely the reputation coupling `resolveMarketingFrom` exists to avoid, and it
+compounds C-06's spam scenario.
+
+### 5. Is `notification_queue` accumulating? — **Yes, 5 rows, and one kind is never consumed**
+
+```
+pending / partner_application_received   4
+pending / partner_application_rejected   1
+sent    / partner_application_approved  19
+sent    / partner_application_received   6
+sent    / partner_application_rejected   3
+```
+
+`updatePartnerStatus` only ever marks `approved`/`rejected` rows sent, and only
+when the send succeeds. `partner_application_received` has no consumer that marks
+it — 4 of its 10 rows are stuck `pending` and will stay there, inflating
+`getAdminOperationsSummary`'s pending count for ever. The single stuck
+`rejected` row is a send that failed and was correctly left for retry — except
+nothing retries `notification_queue`.
+
+`CROSS-BLOCK: notification_queue has no consumer. Either drain it or stop writing to it — a queue nobody reads is a metric that only grows.`
+
+### 6. Do `partners` and `ambassadors` commission rates disagree? — **No. Not for anyone.**
+
+```
+BRUTUS          approved        10.00 / 10.00
+ELIJAH-AB78AE   info_requested  10.00 / 10.00
+ELOA            approved        15.00 / 15.00
+FLAVIAROSSETTI  approved        15.00 / 15.00
+MIZZY           approved        15.00 / 15.00
+SMOKE           approved        15.00 / 15.00
+ZAIN            approved        20.00 / 20.00
+```
+
+All seven agree. **This partially downgrades C-01 and it is worth being precise
+about which half.**
+
+- The **wrong-table** half of C-01 has **no current victim**. The two named
+  historical drift cases (ELIJAH-AB78AE, MIZZY) have converged, so reading the
+  mirror instead of the authoritative table happens to return the right number
+  today. **No historical remediation is needed** — nobody currently holds a rate
+  that contradicts what they were emailed.
+- The **stale-read** half is undiminished and is the launch-relevant one. It does
+  not depend on drift at all: `existingPartner.commission_percent` is read
+  **before** the update and `input.commissionPercent` is never passed, so
+  *approving an ambassador and setting their rate in the same admin action emails
+  the old value* — every time, for every future approval, on a database with no
+  drift whatsoever. Three of the four failing assertions in C-01's regression test
+  cover exactly this case.
+
+C-01 therefore stays **P0 for correctness of future approvals**, with the
+historical-damage assessment closed at zero. Recruiting ambassadors is a launch
+activity, so this fires on the first approval after go-live.
+
+### Also established, unprompted
+
+- `email_send_log`: 30 rows, **all `sent`, none `failed`** — so C-09's permanent-skip
+  exposure is currently **zero** recipients, and C-10's race has not yet bitten.
+  Both remain latent, and both arm on the first failed marketing send.
+- `email_suppressions`: **0 rows** — so C-06's unsubscribe-loop variant is not yet
+  live. It arms the first time anyone clicks unsubscribe.
+- RLS is enabled with **zero policies** on `order_email_log`, `pending_emails`,
+  `email_send_log` and `abandoned_cart_emails`. Server writes use the service role
+  and bypass RLS, so this is not breaking anything — but a table with RLS on and
+  no policy is indistinguishable from a table nobody has thought about.
+  `CROSS-BLOCK: block I — confirm these four are intentionally service-role-only.`
+
+## What block C still has NOT verified
+
+- **Browser verification.** Block C is server-side; no customer-facing email UI was
+  driven. The admin email settings screen and the communications panel (C-12) are
+  left to blocks G+H.
+- **A live end-to-end send.** Correctly so — the block's standing instruction is
+  never to send a real email, and production email is enabled, which makes any
+  send a real one. The Resend dashboard would settle whether deliveries are
+  actually landing; that is an owner action, not an audit action.
+- **The `pending_emails` / `order_email_log` row-count anomaly** in read 3 above.
 
 ## Verification of this block's own work
 
