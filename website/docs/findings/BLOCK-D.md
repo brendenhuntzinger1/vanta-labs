@@ -307,3 +307,74 @@ stopped applying once the code path changed.
   be safe under either shape.
 - The dose merge (D-04) is ordered so no interleaving leaves a product unsellable,
   but it is still multiple statements rather than one transaction.
+
+---
+
+### D-07 — Bac Water is the one sellable unit in the catalogue with no oversell protection
+**Grade:** `DATABASE-PROVEN` · **Severity:** P1 · **Status:** OPEN — needs an owner decision, not a code fix
+
+**Evidence provenance:** queried against production by the owner, 2026-08-26, and
+recorded here. This session ran no network and did not observe it directly.
+
+Bacteriostatic Water (`bacteriostatic-water`, 10mL, the **default** dose) has
+`track_inventory = false` on **both the dose and the parent row**, displays
+"In Stock" with 39 units, and was last updated 2026-08-25.
+
+It is the **only unprotected sellable unit out of 49**. Everything else in the
+catalogue is tracked. So the storefront shows a stock number that nothing
+enforces, on what is very likely the highest-volume line in the catalogue —
+nearly every peptide order includes bac water.
+
+Concretely: `reserve_inventory` holds nothing for this dose, so concurrent
+checkouts cannot be prevented from overselling it, and the 39 on display will not
+decrement the way a customer or the owner would reasonably expect.
+
+**Whether this is a defect is the owner's call, and is deliberately not decided
+here.** Some shops treat bac water as effectively unlimited and turn tracking off
+on purpose. If that is the intent, the honest fix is to stop displaying a
+specific number for it rather than to switch tracking back on. If it is not the
+intent, one `UPDATE` restores protection.
+
+**Why it belongs in Block D.** It is a live demonstration of D-04's blast radius.
+Whatever set this flag — a deliberate choice or an ordinary product Save under the
+old `replaceProductDoses` — the point stands that before D-04's fix, *any* Save on
+*any* product silently disarmed that product's protection the same way, with no
+audit trail and nothing in the UI to show it had happened. D-04 closes the
+mechanism. D-07 is the one row currently in that state.
+
+**Not verified:** which of the two caused it. `product_doses` carries no column
+recording who last wrote `track_inventory`, and `admin_audit_logs` was not queried
+for this session. Consolidation could settle it by checking whether the
+2026-08-25 update coincides with a `replace_doses` call.
+
+---
+
+### CROSS-BLOCK (I) — `src/lib/admin-products.ts` is edited by both blocks
+
+**Files:** `website/src/lib/admin-products.ts`
+**Other branch:** `claude/block-ab-audit-6fogsm` (Block I — admin + security)
+
+| Branch | Lines changed | Region |
+|---|---|---|
+| Block D (this branch) | 104 | `createDoseRows` (~l.343) and `replaceProductDoses` (~l.991) |
+| Block I | 23 | `uploadProductImageToStorage` (~l.1061) — image type sniffing and a size cap |
+
+`git merge-tree` reports the file as "changed in both", which is true at file
+level. **The hunks do not overlap.** A real three-way merge of the two branches
+was run and returns **exit 0 with zero conflict markers**:
+
+```
+git merge-tree --write-tree HEAD origin/claude/block-ab-audit-6fogsm
+→ 730771f65f9a4b8c9fffa09af6b65aaa8c327a6b   (exit 0, 0 conflicts)
+```
+
+So this is a mechanical merge, not a semantic collision: the two changes touch
+different functions with no shared state, and **both should survive**. Under Rule
+3 the earlier-lettered block wins a genuine conflict, but no arbitration is
+actually needed here.
+
+**What consolidation should still do:** re-run the merge at final HEAD rather than
+trusting this result — either branch may move — and confirm both changes are
+present afterwards, since a clean auto-merge is exactly the case where a silently
+dropped hunk would go unnoticed. The two anchors to check for are
+`editableDoseValues` (Block D) and `sniffImageType` (Block I).
