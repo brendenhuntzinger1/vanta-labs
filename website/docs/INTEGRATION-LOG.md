@@ -2475,9 +2475,9 @@ Not the working tree. A fresh `git clone` of the branch into `/tmp/cleanco`,
 
 | gate | before Block N | after Block N |
 |---|---|---|
-| test files | 259 passed | **263 passed** |
-| tests | 4141 passed | **4174 passed** |
-| duration | 55.10s | 46.65s |
+| test files | 259 passed | **264 passed** |
+| tests | 4141 passed | **4179 passed** |
+| duration | 55.10s | 48.76s |
 | `tsc --noEmit` | clean | **clean** |
 | `eslint` | 0 errors | **0 errors**, 42 warnings across 28 files |
 | `next build` | — | **✓ compiled in 27.3s, 105/105 static pages** |
@@ -2490,7 +2490,7 @@ none is in a file Block N created or touched — checked by name, not assumed.
 fourteen dead proofs once passed this gate (F-014), so the throwaway cluster
 from `scripts/start-test-postgres.sh` was up for every run recorded here.
 
-**Net new coverage:** +4 test files, +33 tests.
+**Net new coverage:** +5 test files, +38 tests.
 
 - `commission-accrual-recovery.test.ts` — models production's real
   `referral_orders` CHECK and applies the migration mid-test
@@ -2500,6 +2500,8 @@ from `scripts/start-test-postgres.sh` was up for every run recorded here.
   surface asked to agree, expectation derived from the ledger
 - `sql/bulk-savings-rollup-executed.test.ts` — executes the shipped SQL against
   a real Postgres instead of grepping it
+- `cancel-restocks-every-path.test.ts` — drives the real writer and the real bulk
+  action, asserting on the stock rather than on a call site
 
 ## BLOCK N — DOCUMENTATION CORRECTED
 
