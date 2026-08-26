@@ -459,7 +459,7 @@ export interface PurchasedLabel {
 }
 
 /** The postage actually charged, when the transaction came back with an expanded rate. */
-function settledCentsFromTransaction(rate: ShippoTransaction["rate"]): number | null {
+export function settledCentsFromTransaction(rate: ShippoTransaction["rate"]): number | null {
   if (!rate || typeof rate === "string") return null;
   const cents = parseAmountToCents(rate.amount);
   return cents !== null && cents > 0 ? cents : null;

@@ -1267,11 +1267,22 @@ export async function purchaseLabelForOrder(
       status: transition.next,
     });
   }
-  await recordActualShippingCost({
+  // The return value used to be discarded, so a failed cost write left the
+  // order silently on the flat estimate. Log it here; the repair sweep
+  // (shipping-cost-repair.ts) is what actually recovers it, because it looks
+  // for the absence this failure creates.
+  const costRecorded = await recordActualShippingCost({
     orderId: order.order_id,
     amountCents: label.postageCostCents,
     source: "shippo",
   });
+  if (!costRecorded.ok) {
+    console.error(
+      "Unable to record actual shipping cost for order",
+      order.order_id,
+      costRecorded.error,
+    );
+  }
 
   return {
     ok: true,
