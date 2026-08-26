@@ -1,8 +1,11 @@
 -- I-07 — remove anonymous EXECUTE on public.create_partner_invite.
 --
--- NOT YET APPLIED. Running this is a production DDL change and needs the
--- owner's approval (audit Rule 4). It is written out here so the fix is ready
--- to run the moment that approval is given.
+-- APPLIED TO PRODUCTION 2026-08-26, on the owner's explicit approval.
+-- Recorded in supabase_migrations.schema_migrations as
+--   version 20260826014217, name `revoke_anon_create_partner_invite`
+-- and committed here under the same version so the database and the repository
+-- carry the same history. See F-009 in the ledger: the drift is not that the
+-- migration mechanism is missing, it is that applied SQL was never committed.
 --
 -- WHY
 --

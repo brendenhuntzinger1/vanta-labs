@@ -851,8 +851,9 @@ imagery? Left unchanged rather than guessed at.
 
 ## I-07 — `create_partner_invite` is an unauthenticated, RLS-bypassing write into the affiliate money tables, reachable by anyone with the public anon key
 
-**Grade:** `DATABASE-PROVEN` · **Severity:** **P0** · **Status:** OPEN —
-revoke written and ready, **blocked on the owner (Rule 4)**
+**Grade:** `DATABASE-PROVEN` · **Severity:** **P0** · **Status:** ✅ **REMEDIATED
+IN PRODUCTION 2026-08-26**, on the owner's explicit approval, and independently
+verified below. **Recurrence is NOT yet prevented — see I-11.**
 
 Found by asking Supabase's own security advisor rather than by reading source,
 which is why nothing in the source-level passes caught it: **the function does
@@ -974,9 +975,11 @@ with EXECUTE for `anon` or `authenticated`:
 
 Two functions, one defect. No others are reachable.
 
-### Fix — written, deliberately NOT applied
+### Remediation applied
 
-`website/src/lib/sql/revoke-anon-create-partner-invite.sql`:
+Owner approved immediate remediation. The **smallest safe fix** was applied —
+grants only. The function body is unchanged and the partner system was not
+redesigned.
 
 ```sql
 revoke execute on function public.create_partner_invite(
@@ -984,21 +987,80 @@ revoke execute on function public.create_partner_invite(
 ) from anon, authenticated, public;
 ```
 
-Server-side callers are unaffected either way — the service-role key bypasses
-grants entirely.
+Recorded in `supabase_migrations.schema_migrations` as version
+**`20260826014217`**, name `revoke_anon_create_partner_invite`, and committed to
+the repository at
+`website/src/lib/sql/migrations-applied/20260826014217_revoke_anon_create_partner_invite.sql`
+under the same version — so the database and Git now carry the same history.
+(F-009 established that the drift is not a missing migration mechanism; it is
+applied SQL never being committed.)
 
-**`OWNER DECISION NEEDED:` this is the most urgent item in Block I.** Applying
-it is a production DDL change, which Rule 4 reserves to the owner. Recommended
-order:
+### Independent verification
 
-1. Run the revoke (zero application risk — nothing calls the function).
-2. Then decide whether to `drop function` outright. Revoke is reversible and
-   sufficient; the drop is the tidy-up.
-3. Separately, audit `partners` / `ambassadors` for rows this could already
-   have created. `created_by`, unexpected `referral_code` values and rows with
-   no matching application are the tells. Current counts (7 and 7, fully
-   converged per `F-002`) suggest nothing has been injected, but that is
-   inference, not proof.
+A **pre-change fingerprint** was taken before the migration so "unchanged" could
+be proven rather than asserted.
+
+**1 — anon can no longer execute it. 2 — authenticated cannot either.**
+
+| function | sec_definer | anon | authenticated | service_role |
+|---|---|---|---|---|
+| `create_partner_invite` | t | **false** | **false** | true |
+
+**3 — service/admin functionality that legitimately needs it still works.**
+`service_role` retains EXECUTE, and the service-role key bypasses grants
+regardless. Every RPC the application actually calls was enumerated from source
+(`.rpc("…")`) and checked: `create_partner_application`, `affiliate_balances`,
+`admin_partner_rollups`, `admin_revenue_summary`, `admin_revenue_by_method`,
+`admin_ops_summary`, `admin_customer_rollup`, `admin_points_outstanding`,
+`admin_bulk_savings_stats`, `redeem_coupon`, `reserve_inventory`,
+`release_inventory_for_order`, `finalize_inventory_for_order`,
+`expire_stale_reservations`, `validate_referral_code` — **all
+`service_role_exec = true`.** Nothing the app calls lost access.
+
+**4, 5 — the 7 partners/ambassadors are unchanged**, including referral codes,
+commission rates, payout data and statuses. MD5 over
+`id | referral_code | status | commission_percent | customer_discount_percent |
+auth_user_id | payout_method | payout_handle | created_by`, ordered by id:
+
+| table | rows before → after | fingerprint before | fingerprint after |
+|---|---|---|---|
+| `partners` | 7 → 7 | `8ab973923c30af89bdc720e6c6cd5b42` | `8ab973923c30af89bdc720e6c6cd5b42` |
+| `ambassadors` | 7 → 7 | `8ab973923c30af89bdc720e6c6cd5b42` | `8ab973923c30af89bdc720e6c6cd5b42` |
+| `commissions` | 0 → 0 | `d41d8cd9…` (empty) | `d41d8cd9…` (empty) |
+
+Identical byte-for-byte. Incidentally, `partners` and `ambassadors` producing the
+**same** fingerprint independently re-confirms F-002's convergence claim across
+all nine of those columns.
+
+**6 — normal affiliate application/invite flows still work.** The application
+path is `create_partner_application`, a *different* function, which the app calls
+through the service-role client. It was **already** `anon=false,
+authenticated=false, service_role=true` before this change and is untouched by
+it. The invite path (`create_partner_invite`) likewise keeps `service_role`
+EXECUTE, so an admin-initiated invite through the server is unaffected — only
+the anonymous internet door closed.
+
+**7 — no other SECURITY DEFINER partner/admin RPC has the same exposure.**
+Enumerated, not sampled:
+
+```sql
+select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+where n.nspname='public' and p.prokind='f' and p.prosecdef
+  and (has_function_privilege('anon', p.oid,'EXECUTE')
+       or has_function_privilege('authenticated', p.oid,'EXECUTE'));
+-- → 1
+```
+
+Exactly **one** SECURITY DEFINER function remains reachable by anon or
+authenticated: `validate_referral_code`, which is intended and analysed above.
+Every `admin_*` RPC, `affiliate_balances`, `create_partner_application` and all
+inventory/coupon RPCs are `anon=false, authenticated=false`. The only other
+anon-reachable functions are `current_auth_role`, `current_auth_uid` and
+`current_auth_email`, which are SECURITY **INVOKER** and return only the
+caller's own JWT claims.
+
+A repeatable version of this check is committed at
+`website/src/lib/sql/rpc-exposure-drift-check.sql` with the expected output.
 
 **CROSS-BLOCK:** `partners` / `ambassadors` are Block A+B's tables. This is
 filed here because it is a missing-authorization defect on an internet-reachable
@@ -1438,6 +1500,135 @@ traversal no — and is listed under Not verified.
 
 ---
 
+## I-11 — The RPC lockdown is a point-in-time sweep, and the mechanism that re-opened it is still armed
+
+**Grade:** `DATABASE-PROVEN` · **Severity:** **P1** · **Status:** OPEN —
+**this is what actually prevents I-07 recurring**
+
+I-07's revoke closes today's hole. It does not stop the next one.
+
+Reading `supabase_migrations.schema_migrations` shows how the hole appeared in
+the first place. `20260825003037 rpc_execute_lockdown` did exactly the right
+thing — looped every SECURITY DEFINER function in `public`, allow-listed one,
+revoked EXECUTE from `public, anon, authenticated` — and its own comment names
+the trap it was closing:
+
+> *"Supabase's ALTER DEFAULT PRIVILEGES grants EXECUTE to anon and
+> authenticated on every function created in this schema, so the existing
+> `revoke ... from public` hardening never closed the hole: an explicit role
+> grant is untouched by revoking the PUBLIC pseudo-role."*
+
+The sweep removed the **grants**. It did not remove the **default privilege**
+that creates them. So every function created after it starts life granted to
+anon and authenticated again:
+
+| version | creates a function | carries its own revoke | outcome |
+|---|---|---|---|
+| `20260825003037` `rpc_execute_lockdown` | — | the sweep | closed everything |
+| `20260825204855` `referral_code_returns_customer_discount` | yes | no | fine — `validate_referral_code` is allow-listed |
+| `20260825214916` `partner_application_atomic_creation` | yes | **yes** | safe |
+| `20260825215051` `affiliate_balances_server_side_aggregate` | yes | **yes** | safe |
+| `20260825231628` `partner_application_adopts_pre_added_ambassador` | yes | no | safe by luck — `CREATE OR REPLACE` preserves an existing function's ACL |
+| `20260826002258` `partner_invite_atomic_and_convergent` | yes | **no** | **created `create_partner_invite` brand-new → took the defaults → I-07** |
+
+Two authors remembered to revoke, two did not. The one that mattered created a
+**genuinely new** function, so there was no prior ACL to inherit and the default
+privilege applied. `create_partner_invite` was created at **00:22:58 on
+2026-08-26** — roughly six hours before this audit found it.
+
+That is the whole mechanism, and it is unchanged. **The next brand-new SECURITY
+DEFINER function in `public` will be world-executable on creation**, and whether
+that is caught depends on the next author remembering a `revoke` line.
+
+### Fix — NOT applied, needs the owner
+
+Beyond the approved scope of "revoke anon access to `create_partner_invite`", so
+it was deliberately not applied.
+
+```sql
+-- 1. Stop new functions being granted in the first place.
+alter default privileges in schema public
+  revoke execute on functions from anon, authenticated;
+
+-- 2. Re-run the 20260825003037 sweep, since step 1 only affects functions
+--    created after it, and only those created by the role that runs it.
+```
+
+**`OWNER DECISION NEEDED.`** Step 1 alone is one statement and removes the
+recurrence class. A repeatable detector is committed meanwhile at
+`website/src/lib/sql/rpc-exposure-drift-check.sql`, with the expected four-row
+output recorded, to be run after any migration that creates a function.
+
+---
+
+## I-12 — CROSS-BLOCK (Block D): `adjust_inventory_on_sale` does not exist in production, so paid orders never decrement stock
+
+**Grade:** `DATABASE-PROVEN` · **Severity:** **P0 for Block D** ·
+**Status:** OPEN — **not mine to fix, reported in full**
+
+Found while verifying that no application RPC lost access during the I-07
+remediation. Every `.rpc("…")` name in the source was checked against
+`pg_proc`. One does not exist.
+
+```sql
+select n.nspname, p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+where p.proname ilike '%adjust_inventory%' or p.proname ilike '%inventory_on_sale%';
+-- → 0 rows, in ANY schema
+```
+
+`src/lib/inventory-fulfillment.ts:66` calls it on the paid path:
+
+```ts
+const { error } = await supabaseAdmin.rpc("adjust_inventory_on_sale", {
+  p_slug: adjustment.slug, p_variant_id: adjustment.variantId, p_qty: signedQty,
+});
+if (error) { throw error; }
+```
+
+and `decrementInventoryForOrder` swallows the throw:
+
+```ts
+try { await applyInventoryDelta(adjustment, -adjustment.quantity); }
+catch (error) { console.error("Unable to decrement inventory for", adjustment, error); }
+```
+
+So on **every paid order**, the decrement fails with a missing-function error,
+is logged, and the order proceeds. Stock never moves. That is precisely the
+overselling the module's own header says the RPC exists to prevent:
+
+> *"All of it goes through one atomic RPC so concurrent orders for the last unit
+> of a product can never oversell — see `adjust_inventory_on_sale` in
+> deploy-run-once.sql"*
+
+It **is** defined in the repository at `src/lib/sql/deploy-run-once.sql:941`,
+with `grant execute … to service_role` at `:977`. It simply is not in the
+database.
+
+Scoped precisely — this is not "the file never ran". `deploy-run-once.sql`
+defines three functions and two of them are present:
+
+| function | in production |
+|---|---|
+| `redeem_coupon` | ✅ |
+| `validate_referral_code` | ✅ |
+| `adjust_inventory_on_sale` | ❌ |
+
+A targeted gap, not a wholesale one. `restockInventoryForOrder` uses the same
+helper, so the refund path is equally inert — which at least means stock does
+not drift in one direction only.
+
+**Not fixed here.** `inventory-*.ts` is Block D's under Rule 3, and creating the
+function is production DDL needing the owner under Rule 4. Block D should also
+note this makes any inventory concurrency test that passes against production
+suspect: there is nothing to race.
+
+**`OWNER DECISION NEEDED`** (via Block D): apply the
+`adjust_inventory_on_sale` definition from `deploy-run-once.sql:941-977`, then
+re-verify. Until then, treat storefront stock counts as not decrementing on
+sale.
+
+---
+
 ## Status
 
 | Id | Severity | Evidence | Fixed |
@@ -1449,10 +1640,12 @@ traversal no — and is listed under Not verified.
 | I-05 | **P1** (raised) | `BEHAVIORAL-TEST-PROVEN` + `DATABASE-PROVEN` | **Fixed & tested** |
 | I-05b | — | `SOURCE-INSPECTED` | **PASS** — customer-facing proof upload already correct |
 | I-06 | P3 | `DATABASE-PROVEN` | No — owner decision (accept GIFs or not) |
-| **I-07** | **P0** | `DATABASE-PROVEN` | **No — revoke written, blocked on owner (Rule 4)** |
+| **I-07** | **P0** | `DATABASE-PROVEN` | ✅ **REMEDIATED IN PRODUCTION & VERIFIED** (2026-08-26) |
 | I-08 | P1 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** |
 | I-09 | P3 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** |
 | I-10 | P3 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** |
+| **I-11** | **P1** | `DATABASE-PROVEN` | **No — owner. This is what stops I-07 recurring** |
+| **I-12** | **P0 (Block D)** | `DATABASE-PROVEN` | **No — CROSS-BLOCK, paid orders never decrement stock** |
 
 I-01, I-03, I-04 and I-05 are proven and fixed, each with negative controls
 recorded above. I-02 is corrected and recorded as a latent risk with no code
@@ -1467,9 +1660,15 @@ hard enough to break.
 Full suite after I-10: **212 files / 3664 tests passed**, 1 file / 7 tests
 skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
 
-**The single most urgent item in this block is I-07**, and it is the one thing
-here that code cannot close: revoking anonymous EXECUTE on
-`create_partner_invite` is production DDL and belongs to the owner.
+**I-07 is remediated in production and independently verified** (grants, data
+fingerprints, app-RPC access, and a full re-enumeration of the anon-reachable
+SECURITY DEFINER surface).
+
+The two most urgent remaining items are **I-11** — the default privilege that
+created I-07 is still armed, so the next new SECURITY DEFINER function is
+exposed on creation — and **I-12**, a Block D P0 found during that verification:
+`adjust_inventory_on_sale` does not exist in production, so paid orders never
+decrement stock.
 
 **CROSS-BLOCK:** `src/app/api/catalog/back-in-stock/route.ts` sits under
 `api/catalog/`. Block D owns `catalog.ts` (the library), not this route, so the
