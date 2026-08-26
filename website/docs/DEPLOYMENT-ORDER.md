@@ -209,11 +209,22 @@ where n.nspname='public' and p.prosecdef
 
 ---
 
-## STEP 5b — drop the duplicate rate-limit index (OPTIONAL, but free)
+## STEP 5b — drop the duplicate rate-limit index (RUN THIS BEFORE THE DEPLOY)
+
+**Reclassified from OPTIONAL by review finding 6.** The reviewer's point stands:
+this block is what made "every insert" mean every checkout, referral click and
+login attempt, and shipping that against a table carrying two byte-identical
+indexes is paying the new cost twice on the hottest write path in the app. The
+denied-bucket memo added under finding 6 bounds the amplification for buckets
+already over their limit, but every ALLOWED request still writes — so the
+duplicate index is still paid on all legitimate traffic.
+
+It remains fully reversible and zero-blast-radius; what changed is the ordering,
+not the risk.
 
 | | |
 |---|---|
-| **Apply** | the `drop index` below |
+| **Apply** | the `drop index` below, BEFORE deploying this block |
 | **Why** | `rate_limit_hits` carries **two byte-identical indexes** on `(bucket, created_at DESC)`. Every insert maintains both. This block's rate-limiter rewrite made that table take **one insert per throttled request** — the hottest write path in the app — so the redundant one is paid for on every checkout, referral click and login attempt. |
 | **Rollback** | recreate it (below). Fully reversible. |
 | **Blast radius** | None. The remaining index has the identical definition, so no query plan loses its access path. |

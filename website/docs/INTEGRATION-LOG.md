@@ -2401,3 +2401,69 @@ SQL bug leaves `ledger-sql-parity` fully green — 5 passed, nothing caught. Tha
 is what it was doing before today.
 
 **GATE.** 263 files / 4170 tests green. Lint and `tsc` clean.
+
+## N-06 (P2) — the rate limiter was a write amplifier, and user buckets self-locked
+
+**FOUND.** Insert-before-count is the correct fix for the burst hole and the
+off-by-one is right — both stand. Two consequences the comments did not reach:
+
+**(a) Write amplification.** Every throttled request became an unconditional
+INSERT plus a COUNT. Under exactly the abuse this exists to stop, the limiter
+writes hard against the database the storefront depends on. `analytics-ip` alone
+allows 600/min/IP and `analytics:${sessionId}` mints unbounded distinct buckets;
+cleanup is a 1%-sampled DELETE.
+
+**(b) Self-perpetuating lockout.** The window is TRAILING and a denied request
+still recorded a hit, so a bucket under continuous traffic could never drain —
+every refusal pushed a fresh row into the very window being measured. Defensible
+for an IP. Not for `partner-application:${user.id}` or
+`referral-code-change:${user.id}`, where a partner who trips their own limit
+stays locked out for as long as anything keeps hitting it.
+
+**FIXED — one mechanism answers both.** A bucket observed over its limit is
+memoised as denied until the window it was already told to wait, and while
+memoised is refused with **no insert and no count**. That bounds the writes and
+lets the trailing window actually drain.
+
+- It enforces the promise already returned as `retryAfterSeconds` rather than
+  inventing a new penalty.
+- **Safe by direction:** the memo can only ever cause a DENY, never an allow. A
+  stale entry costs an abuser a few seconds; it can never let one through.
+- Per-instance, evaporating on cold start — degrading to the database-backed
+  behaviour rather than to something wrong.
+- **Capped at 10,000 buckets** with expiry-first then oldest-first eviction.
+  `analytics:${sessionId}` mints unbounded buckets, and a memo that never evicts
+  would be a memory leak — a worse bug than the one it fixes.
+
+**The burst guarantee is untouched.** All 50 requests in a concurrent burst still
+record, because they are in flight before any of them has learned the limit is
+blown. The memo only short-circuits requests arriving AFTER the bucket is known
+to be over — sustained abuse, not a burst. Noted in the burst test itself so the
+next reader does not have to re-derive it.
+
+**MUTATIONS:**
+
+| mutation | test that caught it |
+|---|---|
+| memo never expires (permanent lockout) | *RELEASES the bucket once the window has passed* |
+| memo allows instead of denies | *still denies every one of those requests* + *RELEASES* |
+| pruning removed (unbounded memo) | *does not let the memo grow without bound* |
+| back to `>= limit` (the original off-by-one) | *allows exactly `limit` requests and then denies* |
+
+The lockout test was WEAK on first writing — it emptied the hit store by hand,
+sidestepping the exact mechanism under test. Rewritten to drive traffic every 5
+seconds throughout the window under controlled time, and verified to FAIL with
+the memo removed. Fourth surviving-or-weak control across six findings; the
+pattern is consistent enough to be worth naming: **write the mutation first, and
+if it survives, suspect the test before the code.**
+
+**STEP 5b RECLASSIFIED — now RUN BEFORE THE DEPLOY, not optional.** The
+reviewer's point stands: this block is what made "every insert" mean every
+checkout, referral click and login attempt, against a table carrying two
+byte-identical indexes. The memo bounds amplification for buckets already over
+their limit, but every ALLOWED request still writes, so the duplicate index is
+paid on all legitimate traffic. Still fully reversible and zero blast radius —
+the ordering changed, not the risk. **Not applied here:** it is production DDL,
+and the standing rule is to ask every time.
+
+**GATE.** 263 files / 4174 tests green. Lint and `tsc` clean.

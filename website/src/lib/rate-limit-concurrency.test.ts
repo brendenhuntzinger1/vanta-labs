@@ -80,7 +80,7 @@ vi.mock("@/lib/supabase-server", () => {
   return { supabaseAdmin: { from } };
 });
 
-const { checkRateLimit, __resetRateLimitAlertThrottle } = await import("@/lib/rate-limit");
+const { checkRateLimit, __resetRateLimitAlertThrottle, __deniedBucketMemoSize } = await import("@/lib/rate-limit");
 
 beforeEach(() => {
   store.hits = [];
@@ -89,6 +89,7 @@ beforeEach(() => {
   store.throwOnAccess = false;
   store.alerts = [];
   __resetRateLimitAlertThrottle();
+  vi.useRealTimers();
   // The cleanup sampler must not fire during a measurement.
   vi.spyOn(Math, "random").mockReturnValue(0.5);
 });
@@ -142,9 +143,88 @@ describe("the limit holds under a CONCURRENT burst — K-15b", () => {
   it("every request in the burst is counted, allowed or not", async () => {
     await Promise.all(Array.from({ length: 50 }, () => checkRateLimit("coupon:burst2", 5, 60)));
 
-    // Recording first is what makes the count truthful. A denied request still
-    // costs a row — the deliberate trade, and the safe direction.
+    // Recording first is what makes the count truthful. Within a single burst
+    // every request costs a row — the deliberate trade, and the safe direction.
+    //
+    // Still exactly 50 after review finding 6: the denied-bucket memo cannot
+    // help here, because all 50 are in flight before any of them has learned the
+    // limit is blown. It only short-circuits requests that arrive AFTER the
+    // bucket is known to be over — which is the sustained-abuse case, not this
+    // one. The burst guarantee is untouched.
     expect(store.hits.filter((h) => h.bucket === "coupon:burst2")).toHaveLength(50);
+  });
+});
+
+describe("a denied bucket must not keep writing — review finding 6", () => {
+  it("stops inserting once the bucket is known to be over its limit", async () => {
+    // (a) WRITE AMPLIFICATION. Recording before counting is the correct fix for
+    // the burst hole, but it made every request an unconditional INSERT — and
+    // under exactly the abuse this exists to stop, that turns the limiter into a
+    // write amplifier against the storefront's own database. analytics-ip alone
+    // allows 600/min/IP.
+    for (let i = 0; i < 5; i += 1) await checkRateLimit("abuse:1.2.3.4", 5, 60);
+    const afterLimit = store.hits.length;
+
+    for (let i = 0; i < 500; i += 1) await checkRateLimit("abuse:1.2.3.4", 5, 60);
+
+    // One more insert crosses the limit and is what DISCOVERS it. Everything
+    // after that is answered without touching the table.
+    expect(store.hits.length - afterLimit).toBeLessThanOrEqual(1);
+  });
+
+  it("still denies every one of those requests", async () => {
+    // Not writing must never mean not throttling.
+    for (let i = 0; i < 6; i += 1) await checkRateLimit("abuse:deny", 5, 60);
+
+    const results = [];
+    for (let i = 0; i < 20; i += 1) results.push(await checkRateLimit("abuse:deny", 5, 60));
+
+    expect(results.every((r) => r.allowed === false)).toBe(true);
+    expect(results.every((r) => r.retryAfterSeconds === 60)).toBe(true);
+  });
+
+  it("RELEASES the bucket once the window has passed, instead of locking it out forever", async () => {
+    // (b) SELF-PERPETUATING LOCKOUT. The window is TRAILING and a denied request
+    // used to record a hit, so a bucket under continuous traffic could never
+    // drain: every refusal pushed a fresh row into the very window being
+    // measured. Fine for an IP; not fine for partner-application:${user.id} or
+    // referral-code-change:${user.id}, where a partner who trips their own limit
+    // stays locked out for as long as anything keeps hitting it.
+    //
+    // Reproduced honestly: traffic continues THROUGHOUT the window rather than
+    // the store being emptied by hand. Clearing store.hits would sidestep the
+    // exact mechanism under test.
+    vi.useFakeTimers();
+    const start = new Date("2026-08-26T12:00:00.000Z");
+    vi.setSystemTime(start);
+
+    const BUCKET = "partner-application:user-1";
+    for (let i = 0; i < 4; i += 1) await checkRateLimit(BUCKET, 3, 60);
+    expect((await checkRateLimit(BUCKET, 3, 60)).allowed).toBe(false);
+
+    // Somebody keeps hitting it every 5 seconds for the whole window. Under the
+    // old behaviour each of these inserted, so the trailing window never emptied.
+    for (let step = 1; step <= 12; step += 1) {
+      vi.setSystemTime(new Date(start.getTime() + step * 5_000));
+      await checkRateLimit(BUCKET, 3, 60);
+    }
+
+    // One second past the window that the original four hits occupied.
+    vi.setSystemTime(new Date(start.getTime() + 61_000));
+
+    expect((await checkRateLimit(BUCKET, 3, 60)).allowed).toBe(true);
+    vi.useRealTimers();
+  });
+
+  it("does not let the memo of denied buckets grow without bound", async () => {
+    // analytics:${sessionId} mints an unbounded number of distinct buckets. A
+    // per-bucket memo that never evicts is a memory leak on a long-lived
+    // instance, which would be a worse bug than the one it fixes.
+    for (let i = 0; i < 12_000; i += 1) {
+      await checkRateLimit(`analytics:session-${i}`, 0, 60);
+    }
+
+    expect(__deniedBucketMemoSize()).toBeLessThanOrEqual(10_000);
   });
 });
 
