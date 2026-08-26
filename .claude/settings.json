@@ -1,7 +1,6 @@
 {
   "enableAllProjectMcpServers": true,
   "permissions": {
-    "defaultMode": "bypassPermissions",
     "allow": [
       "mcp__Supabase__execute_sql",
       "mcp__Supabase__list_tables",
