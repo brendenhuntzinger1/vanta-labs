@@ -141,9 +141,18 @@ vi.mock("@/lib/supabase-server", () => {
           return b;
         },
         update: (payload: Row) => ({
-          eq: async (c: string, v: unknown) => {
-            for (const [k, r] of store) if (r[c] === v) store.set(k, { ...r, ...payload });
-            return { error: null };
+          // .eq() stays awaitable AND accepts a trailing .select(), because a
+          // caller that needs to know whether the write matched ANY row has to
+          // ask for the rows back — a zero-row update is not an error.
+          eq: (c: string, v: unknown) => {
+            const matched: Row[] = [];
+            for (const [k, r] of store) {
+              if (r[c] === v) { const next = { ...r, ...payload }; store.set(k, next); matched.push(next); }
+            }
+            return {
+              select: async () => ({ data: matched, error: null }),
+              then: (res: (v: unknown) => unknown) => Promise.resolve(res({ data: matched, error: null })),
+            };
           },
         }),
       };
@@ -172,7 +181,10 @@ vi.mock("@/lib/supabase-server", () => {
     const noop: Record<string, unknown> = {
       select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }), limit: async () => ({ data: [], error: null }), in: () => ({ then: (r: (v: unknown) => unknown) => Promise.resolve(r({ data: [], error: null })) }) }), in: () => ({ then: (r: (v: unknown) => unknown) => Promise.resolve(r({ data: [], error: null })) }) }),
       insert: () => ({ select: () => ({ single: async () => ({ data: { id: "x" }, error: null }) }), then: (r: (v: unknown) => unknown) => Promise.resolve(r({ error: null })) }),
-      update: () => ({ eq: async () => ({ error: null }), in: async () => ({ error: null }) }),
+      update: () => ({
+        eq: () => ({ select: async () => ({ data: [], error: null }), then: (r: (v: unknown) => unknown) => Promise.resolve(r({ error: null })) }),
+        in: () => ({ select: async () => ({ data: [], error: null }), then: (r: (v: unknown) => unknown) => Promise.resolve(r({ error: null })) }),
+      }),
       delete: () => ({ eq: async () => ({ error: null }) }),
     };
     return noop;

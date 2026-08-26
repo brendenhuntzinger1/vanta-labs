@@ -912,6 +912,61 @@ email promising a rate nobody holds.
    models the row and lets the write land. **This is a concrete, named instance
    of the Phase 15 "mock-shape drift" P0.**
 
+### F-018 — Approving an ambassador with no `ambassadors` row reported success for a write that touched nothing
+**Grade:** `BEHAVIORAL-TEST-PROVEN` (real Postgres) · **Severity:** P0 · **Status:** REPAIRED IN REPO — application code only
+
+`updatePartnerStatus` checked existence on **`partners` alone**, then updated both
+tables with `.eq("id", …)`. A PostgREST update matching **zero rows is not an
+error**, so `assertNoSupabaseError` passed and the route returned 200.
+
+The owner got a success toast and the applicant got an approval email, while
+`ambassadors` — the table checkout and commission accrual read — was never
+touched, so the referral code still resolved to nothing at checkout. The audit
+log recorded `target_table: 'ambassadors'` for a write that hit no rows.
+
+Reproduced against real Postgres, because the defect is entirely a fact about
+what a zero-row UPDATE returns; a fake that reports "updated" regardless cannot
+show it.
+
+**Repair.** Ask for the rows back (`.select("id")`) and fail when none matched,
+*before* the `partners` mirror is written — which also keeps the promise the
+existing comment already made: if the money side does not take the write,
+nothing is written anywhere and the owner sees an honest error.
+
+**RED → GREEN:** the 2 no-op tests fail before, pass after. Mutation A (drop the
+guard) fails exactly those 2 and nothing else.
+
+### F-019 — Accrual and payout release were gated by different tables
+**Grade:** `BEHAVIORAL-TEST-PROVEN` (real Postgres) · **Severity:** P0 · **Status:** REPAIRED IN REPO — application code only
+
+`autoApproveEligibleCommissions` gated on `ambassadors.status`;
+`markCommissionsPaid` gated on `partners.status`. Two halves of one money
+pipeline asking two different tables about the same person. Both directions of
+drift were reproduced:
+
+| Drift | Result before the repair |
+|---|---|
+| `ambassadors` approved, `partners` disabled | the sweep advanced the commission to `approved_for_payout`, and the payout gate then refused it — **money accrued that nothing could ever release** |
+| `partners` approved, `ambassadors` disabled | accrual blocked, but the payout gate let a release run for someone the **money table** said was disabled |
+
+ELIJAH-AB78AE is documented in the brief as exactly this drift in production.
+
+**Repair.** Both gates now require **both tables to say approved**. This can only
+ever *hold* money, never release it early — the safe direction to be wrong in,
+and the same direction `getPayoutQueue`'s own header argues for. The error
+message names both statuses when they disagree, so an operator can see the drift
+instead of guessing.
+
+**Negative controls:** reverting the payout gate to `partners` only fails exactly
+the mirror-image test; reverting the accrual gate to `ambassadors` only fails
+exactly the accrual test. Guard rails (both approved → payout releases $60;
+both rows present → approval works normally) stay green throughout.
+
+*Note:* this makes the repaired state stricter. If an ambassador is currently
+approved in only one table, their commissions will now hold rather than move.
+Production is converged today (F-002: 7/7 matching pairs), so nothing is held by
+this change right now.
+
 ### F-011 — Three safety-critical database functions exist only in production
 **Grade:** `DATABASE-PROVEN` · **Severity:** P1 · **Status:** BASELINE CAPTURED
 
@@ -1000,7 +1055,7 @@ Issues found:
 | 2 | Mystery $100 affiliate minimum | Not yet assessed. `DEFAULT_MINIMUM_QUALIFYING_ORDER` exists; `/api/catalog/promotions` swallows a settings failure with `.catch(() => ({ minimumQualifyingOrder: DEFAULT }))` — a silent fallback to watch. | `NOT VERIFIED` |
 | 3 | 0% commission approval email | **FAIL → REPAIRED (repo).** The referral-code email was fixed; the APPROVAL email still passed the pre-update `partners` copy, so approving and rate-setting in one action emailed the old number, and a `partners`-0 / `ambassadors`-real drift emailed "0%". 6 tests red→green, 3 negative controls. Two false passes found and fixed, one of them in the test named "THE TEST THAT WOULD HAVE CAUGHT IT". | `BEHAVIORAL-TEST-PROVEN` |
 | 4 | Brutus/Paul duplicate identity | **TWO DOORS. Self-service (F-009): REPAIRED & LIVE** — reproduced in a replica, 7 tests red→green, 4 negative controls, applied to production and proven there by a rolled-back probe. **Admin invite (F-013): REPRODUCED & REPAIRED IN REPO, not yet applied to production** — the same orphan, and it silently defeats the F-009 repair; 7 tests red→green, 5 negative controls. Browser proof still owed for both. | `PRODUCTION-PROVEN` (F-009) + `BEHAVIORAL-TEST-PROVEN` (F-013) |
-| 5 | Elijah status drift | **PASS (behavioural).** `validate_referral_code('ELIJAH-AB78AE')` → `{valid:false}` because the RPC filters `status='approved'`. Both tables show `info_requested`. | `DATABASE-PROVEN` |
+| 5 | Elijah status drift | **PASS in data, FAIL in mechanism → REPAIRED.** The code path was still there: accrual gated on `ambassadors.status`, payout on `partners.status`, so drift half-broke the pipeline in either direction (F-019). Both gates now require both tables to agree. And `updatePartnerStatus` silently no-opped on a missing `ambassadors` row (F-018). | `BEHAVIORAL-TEST-PROVEN` |
 | 6 | Affiliate money chain | Not yet assessed. `commissions`, `payouts`, `partner_payouts`, `referral_orders` are all **0 rows** — no production money has ever flowed, so all proof must be behavioural. | `NOT VERIFIED` |
 | 7 | Affiliate balance row-cap | `affiliate_balances()` RPC exists (server-side aggregation, SECURITY DEFINER) — the structural fix is present. Not yet proven above the row cap. | `SOURCE-INSPECTED` |
 

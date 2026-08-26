@@ -121,14 +121,21 @@ vi.mock("@/lib/supabase-server", () => {
           }),
         }),
         update: (payload: Record<string, unknown>) => ({
-          eq: async () => {
+          eq: () => {
             state.writes.push({ table: "ambassadors", payload });
             // And the write lands, so a read AFTER the update sees the new rate
             // -- which is the whole point of reading it after the update.
             if ("commission_percent" in payload) {
               state.storedCommission = payload.commission_percent as string | number | null;
             }
-            return { error: null };
+            // The row exists in this scenario, so the write matched it. A caller
+            // asking .select("id") is checking exactly that: an update matching
+            // zero rows is not an error, so it has to look.
+            const matched = [{ id: PARTNER_ID }];
+            return {
+              select: async () => ({ data: matched, error: null }),
+              then: (res: (v: unknown) => unknown) => Promise.resolve(res({ data: matched, error: null })),
+            };
           },
         }),
       };

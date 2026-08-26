@@ -341,12 +341,28 @@ export async function autoApproveEligibleCommissions() {
   const ambassadorIds = Array.from(
     new Set(pendingRows.map((row) => row.ambassador_id).filter(Boolean)),
   );
-  const { data: ambassadorRows, error: ambassadorError } = ambassadorIds.length
-    ? await supabaseAdmin.from("ambassadors").select("id, status").in("id", ambassadorIds)
-    : { data: [], error: null };
+  // BOTH tables must say approved — the same rule markCommissionsPaid applies
+  // before releasing a payout. Gating accrual on `ambassadors` alone while the
+  // payout gate read `partners` let commissions advance to approved_for_payout
+  // for someone the payout gate would then refuse forever.
+  const [
+    { data: ambassadorRows, error: ambassadorError },
+    { data: partnerStatusRows, error: partnerStatusError },
+  ] = ambassadorIds.length
+    ? await Promise.all([
+      supabaseAdmin.from("ambassadors").select("id, status").in("id", ambassadorIds),
+      supabaseAdmin.from("partners").select("id, status").in("id", ambassadorIds),
+    ])
+    : [{ data: [], error: null }, { data: [], error: null }];
   assertNoSupabaseError("ambassadors.select(auto approve status)", ambassadorError);
+  assertNoSupabaseError("partners.select(auto approve status)", partnerStatusError);
+  const approvedInPartners = new Set(
+    (partnerStatusRows ?? []).filter((row) => row.status === "approved").map((row) => row.id),
+  );
   const approvedAmbassadorIds = new Set(
-    (ambassadorRows ?? []).filter((row) => row.status === "approved").map((row) => row.id),
+    (ambassadorRows ?? [])
+      .filter((row) => row.status === "approved" && approvedInPartners.has(row.id))
+      .map((row) => row.id),
   );
 
   const orderIds = pendingRows.map((row) => row.order_id).filter(Boolean);
@@ -1639,11 +1655,27 @@ export async function updatePartnerStatus(input: {
   // is written anywhere and the owner sees an honest error. If the partners
   // mirror then fails, the rate that governs money is already correct and only
   // a display copy is stale -- the safe direction to fail in.
-  const { error: ambassadorUpdateError } = await supabaseAdmin
+  const { data: ambassadorUpdated, error: ambassadorUpdateError } = await supabaseAdmin
     .from("ambassadors")
     .update(updatePayload)
-    .eq("id", input.partnerId);
+    .eq("id", input.partnerId)
+    .select("id");
   assertNoSupabaseError("ambassadors.update(authoritative rates)", ambassadorUpdateError);
+
+  // A write that matched NOTHING is not success.
+  //
+  // Existence was checked on `partners` alone, and an update matching zero rows
+  // is not an error in PostgREST — so approving someone with no `ambassadors`
+  // row returned 200, sent them an approval email, and wrote an audit row
+  // naming a table it never touched, while their referral code still resolved
+  // to nothing at checkout. Failing here also keeps the promise the comment
+  // above makes: if the money side does not take the write, nothing is written
+  // anywhere and the owner sees an honest error.
+  if (!ambassadorUpdated || ambassadorUpdated.length === 0) {
+    throw new Error(
+      "This ambassador has no record in the ambassadors table, which is what checkout and commission accrual read. Nothing was changed. Their identity needs repairing before their status can be set.",
+    );
+  }
 
   const { error: partnerUpdateError } = await supabaseAdmin
     .from("partners")
@@ -1832,14 +1864,26 @@ export async function markCommissionsPaid(input: {
   // Commissions that reached approved_for_payout before the ambassador was
   // disabled (e.g. for fraud) must be held until an admin re-approves them —
   // otherwise a disabled ambassador keeps getting paid off their old balance.
-  const { data: partnerStatusRow } = await supabaseAdmin
-    .from("partners")
-    .select("status")
-    .eq("id", input.partnerId)
-    .maybeSingle();
+  // BOTH tables must say approved.
+  //
+  // Accrual gates on `ambassadors.status` and this gate used to read
+  // `partners.status`, so the two halves of the pipeline could disagree about
+  // the same person. Either direction of drift half-broke it: approved in
+  // ambassadors but disabled in partners accrued commissions that could never
+  // be released, and the mirror image left the payout button live for someone
+  // the money table said was disabled. Requiring both to agree can only ever
+  // HOLD money, never release it early — the safe direction to be wrong in.
+  const [{ data: partnerStatusRow }, { data: ambassadorStatusRow }] = await Promise.all([
+    supabaseAdmin.from("partners").select("status").eq("id", input.partnerId).maybeSingle(),
+    supabaseAdmin.from("ambassadors").select("status").eq("id", input.partnerId).maybeSingle(),
+  ]);
   const partnerStatus = String(partnerStatusRow?.status ?? "").toLowerCase();
-  if (partnerStatus !== "approved") {
-    throw new Error(`This ambassador is not currently approved (status: ${partnerStatus || "unknown"}). Re-approve them before releasing a payout, or handle the held balance manually.`);
+  const ambassadorStatus = String(ambassadorStatusRow?.status ?? "").toLowerCase();
+  if (partnerStatus !== "approved" || ambassadorStatus !== "approved") {
+    const reported = partnerStatus === ambassadorStatus
+      ? (partnerStatus || "unknown")
+      : `partners: ${partnerStatus || "missing"}, ambassadors: ${ambassadorStatus || "missing"}`;
+    throw new Error(`This ambassador is not currently approved (status: ${reported}). Re-approve them before releasing a payout, or handle the held balance manually.`);
   }
 
   const { data: pendingRows, error: pendingError } = await supabaseAdmin
