@@ -6,6 +6,7 @@ import { invalidateCatalogCache } from "@/lib/catalog-cache";
 import type { Product, ProductBadge, ProductDose, ProductFaqItem, ProductImage } from "@/lib/catalog-types";
 import { parseProductFaq } from "@/lib/product-faq";
 import { resolveProductImage } from "@/lib/product-image";
+import { imageExtensionFor, MAX_PRODUCT_IMAGE_BYTES, sniffImageType } from "@/lib/image-upload-safety";
 
 export type AdminProductStatusFilter = "all" | "published" | "draft" | "archived" | "disabled";
 
@@ -1060,16 +1061,34 @@ export async function uploadProductImageToStorage(input: {
   file: File;
   makePrimary?: boolean;
 }) {
-  const bucket = await ensureProductImageBucket();
-  const extension = (input.file.name.split(".").pop() ?? "png").toLowerCase().replace(/[^a-z0-9]/g, "");
-  const fileName = `${input.productId}/${Date.now()}-${randomUUID()}.${extension || "png"}`;
+  // Validated HERE rather than in the route, because there are two routes into
+  // this function and only one of them checked anything:
+  //   POST  /api/admin/upload-image          checked the CLIENT-DECLARED type
+  //   PATCH /api/admin/products/[productId]  checked nothing at all
+  // A check in the helper is a check both inherit.
+  if (input.file.size > MAX_PRODUCT_IMAGE_BYTES) {
+    throw new Error("Image must be 8 MB or smaller.");
+  }
 
   const bytes = await input.file.arrayBuffer();
+
+  // The bytes decide the type. `file.type` is the Content-Type the client wrote
+  // into its own multipart part -- it is a claim, not evidence -- and this
+  // bucket is PUBLIC, with the resulting URL attached to a product.
+  const sniffed = sniffImageType(new Uint8Array(bytes));
+  if (!sniffed) {
+    throw new Error("That file doesn't look like an image.");
+  }
+
+  const bucket = await ensureProductImageBucket();
+  // Extension from the SNIFFED type, never from the client's filename.
+  const fileName = `${input.productId}/${Date.now()}-${randomUUID()}.${imageExtensionFor(sniffed)}`;
+
   const { error } = await supabaseAdmin.storage
     .from(bucket)
     .upload(fileName, Buffer.from(bytes), {
       upsert: false,
-      contentType: input.file.type || "application/octet-stream",
+      contentType: sniffed,
     });
 
   if (error) {

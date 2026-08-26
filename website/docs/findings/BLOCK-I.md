@@ -530,7 +530,8 @@ Recording rather than editing; consolidation should assign it.
 
 ## I-05 — Product image upload trusts a client-supplied MIME type and a client-supplied extension, into a public bucket — and a second route skips even that
 
-**Grade:** `SOURCE-INSPECTED` · **Severity:** P2 · **Status:** OPEN
+**Grade:** `BEHAVIORAL-TEST-PROVEN` + `DATABASE-PROVEN` (bucket config) ·
+**Severity:** P1 (raised from P2 — see below) · **Status:** FIXED
 
 All five upload endpoints were checked. The COA path is the reference
 implementation and it is correct (`src/lib/admin-coa.ts:234-257`): size cap,
@@ -564,20 +565,152 @@ check and no size check at all** — not even the forgeable `file.type`
 allow-list, not the 8 MB cap. Two doors to one storage writer, one of them
 weaker.
 
-### Severity
+### Raised to P1 by the reproduction
 
-Both routes require `canManageProducts` (manager+), so this is not
-externally reachable — it is defence-in-depth, and P2 rather than P0 for that
-reason. What it costs: arbitrary bytes under an arbitrary extension, publicly
-served, permanently, from a company-branded origin, with no content validation
-and no way to tell from the record what was actually stored.
+I filed this P2 on the reasoning that both routes need `canManageProducts`.
+Running it changed one fact: through the `products/[productId]` path, the stored
+`contentType` came back as **`text/html`**.
 
-### Fix (proposed — not yet applied)
+```
+× stores the contentType the BYTES say, not the one the client declared
+    AssertionError: expected 'text/html' to be 'image/png'
+```
 
-Reuse the sniffer that already exists rather than writing a second one: sniff
-the bytes in `uploadProductImageToStorage`, reject anything that is not a real
-image, derive both the extension and the stored `contentType` from the sniffed
-type, and apply the 8 MB cap inside the helper so both entry points inherit it.
+That is not "an unvalidated blob in a bucket", it is an attacker-chosen document
+served as HTML from a public URL the storefront links to. Still manager-gated,
+so not externally reachable — but the consequence of one compromised or
+malicious manager account is stored content served as HTML, not a broken image.
+P1.
+
+### What the live bucket does and does not save you from
+
+Verified read-only against production `storage.buckets`:
+
+| bucket | public | size limit | allowed mime types |
+|---|---|---|---|
+| `product-images` | **true** | 10 MB | `image/png`, `image/jpeg`, `image/webp`, `image/avif` |
+| `coa-documents` | false | 20 MB | `application/pdf`, `image/png`, `image/jpeg`, `image/webp` |
+| `payment-proofs` | false | *none* | *none* |
+
+Two things follow:
+
+1. Supabase enforces `allowed_mime_types` against the **declared** content type
+   — the same client-controlled value — so it is not an independent check. It
+   would have blocked `text/html`, but only because the client volunteered it;
+   declaring `image/png` while uploading HTML passes both.
+2. `image/gif` is in the route's allow-list and **not** in the bucket's. A GIF
+   upload was always going to fail at storage. Recorded separately as I-06.
+
+`payment-proofs` having no limits at all looked alarming and is not: see the
+PASS in I-05b.
+
+### I-05b — the customer-facing upload is already correct (PASS)
+
+`POST /api/checkout/submit-payment` is unauthenticated (order-UUID capability
+URL) and accepts a file, which makes it the highest-risk upload in the system.
+It is also the one that was done properly (`src/lib/payment-proof-storage.ts`):
+rate limited via the hardened resolver, 8 MB cap, declared-type allow-list,
+**magic-byte sniff**, extension and `contentType` both from the sniffed type,
+private bucket, signed URLs with a 1-hour TTL. No defect. Recorded because a
+"no limits" bucket row is misleading on its own — the limits are in the code.
+
+### Fix applied
+
+The bytes decide the type, in the helper both routes funnel through.
+
+There were already **two** correct sniffers and one missing one — the same
+divergence pattern as I-03's three IP resolvers:
+
+| location | status before |
+|---|---|
+| `payment-proof-storage.ts` `detectImageType` | correct, private, customer-facing |
+| `coa-format.ts` `sniffCoaFileType` | correct, exported, own allow-list (+PDF) |
+| `admin-products.ts` | **nothing** — public bucket |
+
+New `src/lib/image-upload-safety.ts` is now the one image sniffer.
+`uploadProductImageToStorage` sniffs, rejects a non-image, derives the extension
+*and* the stored `contentType` from the sniffed type, and enforces the 8 MB cap
+**inside the helper** so the route that checks nothing inherits it.
+`payment-proof-storage.ts` delegates to the shared sniffer instead of keeping a
+second copy — behaviour-preserving, because its declared-type allow-list still
+runs first and still excludes AVIF, so the wider shared sniffer cannot widen
+that gate. COA keeps its own: its allow-list includes PDF and excludes
+GIF/AVIF, and merging two different allow-lists into one function would make
+each caller's contract less obvious.
+
+Brand checks matter and are tested: `RIFF` alone is also WAV and AVI, and
+`ftyp` alone is also MP4 and HEIC, so both require the brand at offset 8.
+
+### Reproduction and verification
+
+Before the fix — red for the right reason, HTML, SVG and a Windows executable
+all stored, the `.html` extension honoured, `text/html` recorded:
+
+```
+× rejects an HTML payload declared as image/png       promise resolved instead of rejecting
+× rejects an SVG declared as image/png                promise resolved instead of rejecting
+× rejects an executable declared as image/webp        promise resolved instead of rejecting
+× never lets the client's filename choose the stored extension
+      expected 'p1/1787…-….html' to match /\.png$/
+× stores the contentType the BYTES say                expected 'text/html' to be 'image/png'
+× caps size in the helper                             promise resolved instead of rejecting
+   Tests  6 failed | 1 passed (7)
+```
+
+The 1 that passed is "still accepts a genuine image" — the control that stops
+the fix being "reject everything".
+
+After: **24 passed (24)** across both suites. Full suite **207 files / 3624
+tests passed**, 1 file / 7 skipped, zero regressions — including the existing
+`payment-proof-storage.test.ts`, which is what proves the delegation changed no
+behaviour there. `tsc --noEmit` clean, eslint clean.
+
+### Negative controls
+
+| # | Mutation | Result |
+|---|---|---|
+| P1 | Sniff, but fall back to the declared type when null | 3 failed |
+| P2 | Extension back from the client filename | 1 failed |
+| P3 | `contentType` back from the client | 1 failed |
+| P4 | Drop the size cap from the helper | 1 failed |
+| P5 | Accept any `RIFF` as WEBP (drop the brand check) | 1 failed |
+| P6 | Accept any `ftyp` as AVIF (drop the brand check) | 1 failed |
+| P7 | Drop the minimum-length guard | **24 passed — NOT CAUGHT** |
+
+**P7 exposed a gap in my own test.** The "too short" cases (`[0x89,0x50]`,
+empty) return null with or without the guard, so they never exercised it. The
+input that does is a 4-byte `GIF8` — a complete GIF signature in fewer than 12
+bytes, which without the guard classifies as a real image. Added, plus a
+3-byte JPEG prefix; P7 re-run and now **1 failed** — caught.
+
+---
+
+## I-06 — the product-image route advertises GIF and the bucket rejects it
+
+**Grade:** `DATABASE-PROVEN` · **Severity:** P3 · **Status:** OPEN — needs a
+product decision, not a patch
+
+`POST /api/admin/upload-image` accepts `image/gif` (`route.ts:8`) and
+`ensureProductImageBucket` creates the bucket with
+`allowedMimeTypes: ["image/png", "image/jpeg", "image/webp", "image/avif"]`
+(`admin-products.ts:1045-1049`) — no GIF. Production confirms the live bucket
+carries exactly those four.
+
+So a GIF has always been accepted by the route and then rejected by storage,
+surfacing as the route's generic `"Upload failed."` 500. After the I-05 fix the
+same thing happens one step later: the sniff correctly returns `image/gif` and
+Supabase refuses the content type.
+
+Both ways of fixing it are one line, and which one is right is not a security
+question:
+
+- **Drop `image/gif` from the route's allow-list** — matches what the system
+  actually does, and tells the operator honestly at the point of upload.
+- **Add `image/gif` to the bucket** — a production storage change, so Rule 4
+  applies.
+
+**`OWNER DECISION NEEDED:`** should the store accept animated GIFs as product
+imagery? Left unchanged rather than guessed at.
 
 ---
 
@@ -589,14 +722,16 @@ type, and apply the 8 MB cap inside the helper so both entry points inherit it.
 | I-02 | P1 | `SOURCE-INSPECTED` | No — fix proposed, CROSS-BLOCK with D |
 | I-03 | P1 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** (incl. I-03b, found by the test) |
 | I-04 | P2 | `SOURCE-INSPECTED` | No — fix proposed, CROSS-BLOCK unassigned |
-| I-05 | P2 | `SOURCE-INSPECTED` | No — fix proposed |
+| I-05 | **P1** (raised) | `BEHAVIORAL-TEST-PROVEN` + `DATABASE-PROVEN` | **Fixed & tested** |
+| I-05b | — | `SOURCE-INSPECTED` | **PASS** — customer-facing proof upload already correct |
+| I-06 | P3 | `DATABASE-PROVEN` | No — owner decision (accept GIFs or not) |
 
-I-01 and I-03 are proven and fixed, with negative controls recorded above.
-I-02, I-04 and I-05 remain `SOURCE-INSPECTED`: per the execution plan's
+I-01, I-03 and I-05 are proven and fixed, with negative controls recorded
+above. I-02 and I-04 remain `SOURCE-INSPECTED`: per the execution plan's
 step 3, a finding is not proven until a test fails for the right reason. Their
 tests and fixes follow.
 
-Full suite after I-03: **205 files / 3600 tests passed**, 1 file / 7 tests
+Full suite after I-05: **207 files / 3624 tests passed**, 1 file / 7 tests
 skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
 
 **CROSS-BLOCK:** `src/app/api/catalog/back-in-stock/route.ts` sits under
