@@ -646,3 +646,123 @@ Two things unblock it, and both are the owner's to give:
    record lands in `main` without promoting code.
 
 Say which, and the merge takes minutes.
+
+---
+
+# MIGRATION RUN LOG — 2026-08-26
+
+## STEP 0 — **NO RESTORE POINT EXISTS. PROCEEDING ANYWAY, BY OWNER DECISION.**
+
+Recorded verbatim, unsoftened, because it changes the risk of every step below.
+
+**Confirmed from the Supabase dashboard by the owner:** the project
+`mlpimwgkwuqpsvsrlpqv` is on the **FREE plan**. The free tier provides **no daily
+backups and no point-in-time recovery**. **There is no restore point, and none
+can be created without upgrading the plan.**
+
+**The owner's decision, in his words:** *"I have decided to proceed without one."*
+
+What that means concretely, stated plainly rather than reassuringly:
+
+- `DEPLOYMENT-ORDER.md` Step 0 says a snapshot "is the rollback for everything
+  below" and "**ABORT if** no restore point exists". **We are knowingly running
+  against that instruction.**
+- Every step below has a written, dry-run rollback. Those cover the failure modes
+  that were *predicted*. **Nothing covers an unpredicted one.** If a rollback
+  itself misbehaves, there is no floor to fall back to — recovery would be by
+  hand, from whatever state was captured beforehand.
+- This is why the run was tightened at the owner's instruction: the current state
+  each step would change is captured into this log **and committed before the
+  step runs**, so a manual reconstruction is possible without a database
+  snapshot.
+
+Partial mitigation, measured — not offered as a substitute:
+
+```sql
+select name, setting from pg_settings where name in ('archive_mode','archive_command','wal_level');
+archive_mode     on
+archive_command  /usr/bin/admin-mgr wal-push %p >> /var/log/wal-g/wal-push.log 2>&1
+wal_level        logical
+```
+
+WAL archiving is running. **This does not constitute a restore point** — WAL
+segments are only usable when replayed onto a base backup, and the free plan
+retains none. It is recorded so nobody later mistakes it for a backup.
+
+**ACCEPTED RISK — OWNER DECISION — NO RESTORE POINT.**
+
+---
+
+## Pre-Step-1 answer: the live `coupons.storefront_headline` error
+
+Production is logging, on currently-deployed code:
+
+```
+42703  column coupons.storefront_headline does not exist
+400    GET /rest/v1/coupons
+```
+
+**Does the branch fix it? NO — it inherits it, byte for byte.**
+`storefront-offers.ts` is **identical** at `9aea901` and at `eb80a55` (lines 56,
+81, 139 unchanged). Deploying changes nothing about this.
+
+**Is it in the fix register under a finding id? NO.** `storefront_headline`
+appears in **no** findings document, no block report, and no register entry.
+Grepped across all of `website/docs/`. **It is a new finding.**
+
+**What it breaks for a customer: nothing.** This is a deliberate
+graceful-degradation ladder, not a failure. `publicCoupons()` tries three
+column-sets widest-first and drops to the next on error:
+
+```
+tier 1  … is_private, member_scope, storefront_headline, storefront_priority   <-- 42703 here
+tier 2  … is_private, member_scope                                             <-- SUCCEEDS
+tier 3  … (base columns only)
+```
+
+Only if **all three** fail does it throw. Verified against production: every
+tier-2 column exists (`is_private`, `member_scope` both present);
+`storefront_headline` and `storefront_priority` are the only two absent. **Tier 2
+succeeds, so the offers bar renders correctly** using the generated headline and
+the default priority of 10.
+
+**What it actually costs:**
+
+1. **Observability damage — the real cost.** One 400 + one `42703` per offers-bar
+   render, permanently, in Sentry and the Postgres logs. A by-design probe is
+   indistinguishable from a genuine missing-column error at a glance, so this
+   trains everyone to ignore exactly the error class that *is* load-bearing
+   elsewhere in this audit (`inventory_restocked_at` fails with the same 42703).
+2. **An inert feature.** Operators cannot override an offer headline or its
+   ordering. The fallback is the *generated* headline, which the code notes
+   "cannot drift" from the discount — so the default is arguably the safer one.
+
+**Does it block the deploy? NO.** It is pre-existing, unchanged by this branch,
+customer-invisible, and closed by an additive migration
+(`sql/coupon-storefront-fields.sql`) that can run at any time. Filed as
+**PLB-04** in `POST-LAUNCH-BACKLOG.md`. It should be closed soon — not because it
+breaks anything, but because a permanently-red error is how a real one hides.
+
+---
+
+## STEP 1 — pre-state capture (committed BEFORE the step runs)
+
+Exact current state, for manual reconstruction if the rollback misbehaves:
+
+```
+constraint name : referral_orders_payment_status_check
+definition      : CHECK ((payment_status = ANY (ARRAY['paid'::text, 'refunded'::text, 'partially_refunded'::text])))
+column default  : 'paid'::text
+rows in table   : 0
+constraint count matching payment_status : 1
+```
+
+**Manual reconstruction, if ever needed:**
+```sql
+alter table public.referral_orders drop constraint if exists referral_orders_payment_status_check;
+alter table public.referral_orders add constraint referral_orders_payment_status_check
+  check (payment_status = any (array['paid','refunded','partially_refunded']));
+alter table public.referral_orders alter column payment_status set default 'paid';
+```
+
+Zero rows, so no data can be lost by any outcome of this step.
