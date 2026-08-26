@@ -52,7 +52,10 @@ const state: {
   billingEvents: Array<Record<string, unknown>>;
   updates: Array<{ filters: Array<[string, string, unknown]>; payload: Record<string, unknown> }>;
   paidEventRows: Array<Record<string, unknown>>;
-} = { memberships: [], billingEvents: [], updates: [], paidEventRows: [] };
+  // K-03: lets a test make ONE customer_memberships update fail, which is the
+  // condition under which a successful charge leaves the row still due.
+  failNextMembershipUpdate: boolean;
+} = { memberships: [], billingEvents: [], updates: [], paidEventRows: [], failNextMembershipUpdate: false };
 
 const { chargeCard, cancelVeyra, updateVeyraCard, sendEmail } = vi.hoisted(() => ({
   chargeCard: vi.fn(async (_input: Record<string, unknown>): Promise<{ success: boolean; chargeId?: string; error?: string }> => ({ success: true, chargeId: "ch_1" })),
@@ -111,12 +114,20 @@ vi.mock("@/lib/supabase-server", () => {
             eq(c: string, v: unknown) { filters.push(["eq", c, v]); return b; },
             is(c: string, v: unknown) { filters.push(["is", c, v]); return b; },
             async select() {
+              if (state.failNextMembershipUpdate) {
+                state.failNextMembershipUpdate = false;
+                return { data: null, error: { message: "membership update failed" } };
+              }
               const rows = state.memberships.filter((m) => matches(m, filters));
               state.updates.push({ filters, payload });
               for (const row of rows) Object.assign(row, payload);
               return { data: rows.map((r) => ({ user_id: r.user_id })), error: null };
             },
-            then(resolve: (v: { data: unknown; error: null }) => unknown) {
+            then(resolve: (v: { data: unknown; error: unknown }) => unknown) {
+              if (state.failNextMembershipUpdate) {
+                state.failNextMembershipUpdate = false;
+                return Promise.resolve({ data: null, error: { message: "membership update failed" } }).then(resolve);
+              }
               const rows = state.memberships.filter((m) => matches(m, filters));
               state.updates.push({ filters, payload });
               for (const row of rows) Object.assign(row, payload);
@@ -227,6 +238,7 @@ beforeEach(() => {
   state.billingEvents = [];
   state.updates = [];
   state.paidEventRows = [];
+  state.failNextMembershipUpdate = false;
 });
 
 // =========================================================================
@@ -566,5 +578,152 @@ describe("updating the payment method", () => {
 
     expect(updateVeyraCard).not.toHaveBeenCalled();
     expect(state.memberships[0].payment_method_ref).toBe("pm_new");
+  });
+});
+
+// =========================================================================
+// K-03 — the renewal double-charge
+//
+// Two defects that are each survivable alone and compose into charging a
+// member's card twice for one month.
+//
+//   1. The idempotency key was `renewal-<user>-<tier>-<today in UTC>`. It
+//      identifies WHEN THE SWEEP RAN, not WHICH RENEWAL it is paying for. Two
+//      attempts at the same renewal minutes apart across UTC midnight carry
+//      DIFFERENT keys, so the processor's idempotency — the last thing
+//      standing between a retry and a second charge — does not fire.
+//
+//   2. The post-charge write that advances next_billing_at was issued with no
+//      error check. If it fails, the card has been charged and the schedule
+//      still says the member is due, so the next sweep picks the same row up
+//      again.
+//
+// Together: charge succeeds → schedule write fails silently → next sweep
+// re-attempts → if the clock has crossed UTC midnight, a different key → the
+// member is charged twice and nothing in the system says so.
+//
+// The fix keys idempotency to the PERIOD BEING BILLED (the row's own
+// next_billing_at), which is stable no matter when or how often the sweep
+// retries it, and checks the schedule write so a charge that moved money
+// without advancing the schedule raises a critical alert instead of passing
+// in silence.
+// =========================================================================
+
+describe("K-03 — a renewal is charged once per period, not once per sweep", () => {
+  const dueRow = (overrides: Partial<MembershipRow> = {}) =>
+    membership({
+      status: "active",
+      intro_status: "completed",
+      next_billing_at: new Date(Date.now() - DAY).toISOString(),
+      ...overrides,
+    });
+
+  it("keys idempotency to the period being billed, not to today's date", async () => {
+    state.memberships = [dueRow({ next_billing_at: "2026-03-01T00:00:00.000Z" })];
+    const { runMembershipBillingSweep } = await mod();
+
+    await runMembershipBillingSweep();
+
+    const key = String((chargeCard.mock.calls[0]?.[0] ?? {}).idempotencyKey ?? "");
+    // The period it is paying for must appear in the key...
+    expect(key).toContain("2026-03-01");
+    // ...and the day the sweep happens to run must NOT, or two attempts either
+    // side of UTC midnight are two different keys for one renewal.
+    expect(key).not.toContain(new Date().toISOString().slice(0, 10));
+  });
+
+  it("produces the SAME key when the same renewal is retried across UTC midnight", async () => {
+    // The exact double-charge window: the schedule write failed, so the row is
+    // still due, and the retry lands on the NEXT UTC day.
+    //
+    // The clock is moved deliberately. Without that this test passes for the
+    // wrong reason -- two sweeps in the same test run land on the same real
+    // date, so the old date-keyed implementation would satisfy it too, and it
+    // would only ever fail for a suite that happened to run at midnight.
+    const { runMembershipBillingSweep } = await mod();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-03-05T23:59:30.000Z"));
+      state.memberships = [dueRow({ next_billing_at: "2026-03-01T00:00:00.000Z" })];
+      await runMembershipBillingSweep();
+      const first = String((chargeCard.mock.calls[0]?.[0] ?? {}).idempotencyKey ?? "");
+
+      // 90 seconds later, and a different UTC date.
+      vi.setSystemTime(new Date("2026-03-06T00:01:00.000Z"));
+      state.memberships = [dueRow({ next_billing_at: "2026-03-01T00:00:00.000Z" })];
+      chargeCard.mockClear();
+      await runMembershipBillingSweep();
+      const second = String((chargeCard.mock.calls[0]?.[0] ?? {}).idempotencyKey ?? "");
+
+      expect(first).not.toBe("");
+      expect(second).toBe(first);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("gives two DIFFERENT periods two different keys", async () => {
+    // The guard against over-correcting into a key so stable that next month's
+    // legitimate renewal is deduped away and the member is never charged again.
+    state.memberships = [dueRow({ next_billing_at: "2026-03-01T00:00:00.000Z" })];
+    const { runMembershipBillingSweep } = await mod();
+    await runMembershipBillingSweep();
+    const march = String((chargeCard.mock.calls[0]?.[0] ?? {}).idempotencyKey ?? "");
+
+    state.memberships = [dueRow({ next_billing_at: "2026-04-01T00:00:00.000Z" })];
+    chargeCard.mockClear();
+    await runMembershipBillingSweep();
+    const april = String((chargeCard.mock.calls[0]?.[0] ?? {}).idempotencyKey ?? "");
+
+    expect(april).not.toBe(march);
+  });
+
+  it("still gives two different members due in the same period different keys", async () => {
+    // Deliberately NOT "...and two different tiers". `customer_memberships`
+    // has user_id as its PRIMARY KEY, so a user holds at most one membership,
+    // and a tier change goes through startMembershipSignup's upsert which
+    // rewrites next_billing_at. Two tiers for one user in one period is
+    // therefore unreachable, and a test asserting it would be inventing a
+    // requirement rather than pinning one. See the equivalent-mutant note for
+    // K-03 in the integration log.
+    state.memberships = [
+      dueRow({ user_id: "user-a", next_billing_at: "2026-03-01T00:00:00.000Z" }),
+      dueRow({ user_id: "user-b", next_billing_at: "2026-03-01T00:00:00.000Z" }),
+    ];
+    const { runMembershipBillingSweep } = await mod();
+
+    await runMembershipBillingSweep();
+
+    const keys = chargeCard.mock.calls.map((c) => String((c[0] as Record<string, unknown>).idempotencyKey ?? ""));
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it("raises a critical alert when money moved but the schedule did not advance", async () => {
+    // Charge succeeds, the write that would stop the row being re-billed fails.
+    // Silence here is what turns one bad write into a second charge.
+    const { recordSystemAlert } = await import("@/lib/monitoring");
+    state.memberships = [dueRow({ next_billing_at: "2026-03-01T00:00:00.000Z" })];
+    state.failNextMembershipUpdate = true;
+    const { runMembershipBillingSweep } = await mod();
+
+    await runMembershipBillingSweep();
+
+    expect(recordSystemAlert).toHaveBeenCalled();
+    const alert = (recordSystemAlert as unknown as { mock: { calls: Array<[Record<string, unknown>]> } }).mock.calls
+      .map((c) => c[0])
+      .find((a) => String(a.severity) === "critical");
+    expect(alert, "a charge that did not advance the schedule must be critical").toBeDefined();
+    expect(JSON.stringify(alert)).toContain("user-1");
+  });
+
+  it("does not alert on the ordinary path where the schedule advances", async () => {
+    const { recordSystemAlert } = await import("@/lib/monitoring");
+    state.memberships = [dueRow({ next_billing_at: "2026-03-01T00:00:00.000Z" })];
+    const { runMembershipBillingSweep } = await mod();
+
+    await runMembershipBillingSweep();
+
+    expect(recordSystemAlert).not.toHaveBeenCalled();
   });
 });

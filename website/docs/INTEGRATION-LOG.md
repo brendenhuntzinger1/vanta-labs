@@ -1674,3 +1674,87 @@ that cannot say when it failed to look is worse than none, and this one says it.
   correct. The warning is a harness-only artefact. Production also carries only
   903 audit rows (805 control writes, 114 distinct settings) — well inside the
   1,500 window it would need to exceed for the legacy path to misread anyway.
+
+### 6.6 K-03 (P1) — the renewal double-charge
+
+Two defects, each survivable alone, that compose into charging a member's card
+twice for one month.
+
+**Defect 1 — the idempotency key identified the sweep, not the renewal.**
+
+```ts
+idempotencyKey: `renewal-${row.user_id}-${tier.id}-${now.toISOString().slice(0, 10)}`
+```
+
+`now` is when the sweep ran. Two attempts at the *same* renewal ninety seconds
+apart either side of UTC midnight carry **different keys**, so the processor's
+idempotency — the last thing standing between a retry and a second charge —
+never fires.
+
+**Defect 2 — the post-charge write was unchecked.**
+
+```ts
+await supabaseAdmin.from("customer_memberships").update({ next_billing_at: ... })
+```
+
+No error check. If it fails, the money has moved and the schedule still says
+the member is due, so the next sweep picks the same row up again.
+
+**Composed:** charge succeeds → schedule write fails silently → next sweep
+re-attempts → if the clock has crossed UTC midnight, a different key → **the
+member is charged twice and nothing in the system says so.**
+
+**Fix.** Key on the *period being billed* (`row.next_billing_at`), which is
+stable across every retry no matter when the sweep runs and still changes next
+month. Route both post-charge writes through one `advanceScheduleAfterCharge`
+helper that checks the error and raises a `membership_schedule_not_advanced`
+critical alert. The first-month-remainder charge got the same helper: its key
+was already period-stable so it cannot double-charge, but a silent failure
+strands a member mid-conversion.
+
+Both are needed and neither substitutes for the other — the key stops the
+retry becoming a second charge, the alert stops the underlying breakage going
+unnoticed while the key quietly absorbs it.
+
+**Tests** — 6 added to `membership-billing-real.test.ts`, reusing its existing
+fake rather than duplicating it, plus a `failNextMembershipUpdate` hook.
+
+One test initially **passed for the wrong reason** and was corrected: two
+sweeps inside one test run land on the same real date, so the old date-keyed
+code satisfied it too, and it would only ever have failed for a suite that
+happened to run at midnight. Rewritten with `vi.setSystemTime` to actually
+cross UTC midnight, it then failed with the defect stated plainly:
+
+```
+expected 'renewal-user-1-tier-1-2026-03-06' to be 'renewal-user-1-tier-1-2026-03-05'
+```
+
+Two keys, one renewal, ninety seconds apart.
+
+**Mutation testing** — 5 mutations, 4 killed:
+
+| # | Mutation | Result |
+|---|---|---|
+| 1 | Revert the key to today's UTC date | ☠ 3 tests |
+| 2 | Make the key constant per member (over-stable) | ☠ 2 tests — guards against deduping next month's legitimate renewal |
+| 3 | Delete the critical alert | ☠ *raises a critical alert when money moved…* |
+| 4 | Ignore the update error | ☠ same test |
+| 5 | Drop `tier.id` from the key | **SURVIVED — equivalent mutant** |
+
+**Mutation 5 is reported as equivalent, with the proof, rather than papered
+over with a test.** `customer_memberships` has `user_id` as its **PRIMARY KEY**
+(verified against production: `CREATE UNIQUE INDEX customer_memberships_pkey
+… btree (user_id)`), so a user holds at most one membership row. A tier change
+runs through `startMembershipSignup`'s `upsert(..., { onConflict: "user_id" })`,
+which rewrites `next_billing_at`. Two tiers for one user inside one period is
+therefore structurally unreachable, and `tier.id` cannot change the key's
+discriminating power. It is kept because it is free, self-documenting, and
+survives a future schema that allows more than one membership per user.
+
+A test of mine over-claimed here and was corrected rather than left standing:
+it was named *"still distinguishes two different members and two different
+tiers"* while only ever varying the user. Renamed to what it actually proves,
+with the unreachability written into it.
+
+Evidence grade: **BEHAVIORAL-TEST-PROVEN** (the sweep really executes),
+schema claim **DATABASE-PROVEN** against production.

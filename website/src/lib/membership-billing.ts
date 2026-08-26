@@ -1270,6 +1270,41 @@ export async function updatePaymentMethod(userId: string, paymentMethodRef: stri
   if (error) throw error;
 }
 
+// A charge succeeded and the row must now be moved off "due". If that write
+// fails the money has already moved, so this is never a silent path: the
+// schedule still says the member owes for a period they have paid, and the
+// next sweep will pick the same row up again.
+//
+// The idempotency key below is what stops that re-attempt becoming a second
+// charge, and this alert is what stops the underlying breakage going unnoticed
+// while the key quietly absorbs it. Both are needed; neither substitutes for
+// the other.
+async function advanceScheduleAfterCharge(
+  userId: string,
+  payload: Record<string, unknown>,
+  context: { tierId: string; amountCents: number; eventType: string; providerChargeId?: string },
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("customer_memberships")
+    .update(payload)
+    .eq("user_id", userId);
+  if (!error) return;
+
+  console.error("Charged a member but could not advance their billing schedule", userId, error);
+  try {
+    await recordSystemAlert({
+      type: "membership_schedule_not_advanced",
+      severity: "critical",
+      message:
+        `Charged ${userId} ${(context.amountCents / 100).toFixed(2)} for ${context.eventType} ` +
+        "but could not advance next_billing_at. The member reads as still due and will be re-attempted.",
+      context: { userId, ...context, error: error.message ?? String(error) },
+    });
+  } catch {
+    // The alert is best-effort; the console line above is the floor.
+  }
+}
+
 interface DueMembershipRow {
   user_id: string;
   tier_id: string;
@@ -1434,9 +1469,13 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
 
       if (chargeResult.success) {
         const nextBillingAt = new Date(now.getTime() + 30 * ONE_DAY_MS);
-        await supabaseAdmin
-          .from("customer_memberships")
-          .update({
+        // Same exposure as the renewal below: this write is what moves the row
+        // off "due". Its idempotency key is already period-stable, so a failure
+        // here does not double-charge — but it does strand the member mid-
+        // conversion, and that must not happen quietly.
+        await advanceScheduleAfterCharge(
+          row.user_id,
+          {
             intro_status: "converted",
             status: "active",
             next_billing_at: nextBillingAt.toISOString(),
@@ -1444,8 +1483,9 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
             renews_at: nextBillingAt.toISOString(),
             renewal_reminder_sent_at: null,
             updated_at: now.toISOString(),
-          })
-          .eq("user_id", row.user_id);
+          },
+          { tierId: tier.id, amountCents, eventType: "first_month_remainder", providerChargeId: chargeResult.providerChargeId },
+        );
 
         await recordBillingEvent({ userId: row.user_id, tierId: tier.id, eventType: "first_month_remainder", amountCents, status: "succeeded", providerChargeId: chargeResult.providerChargeId });
 
@@ -1592,21 +1632,35 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
         amountCents,
         currency: "usd",
         description: `${tier.name} - monthly renewal`,
-        idempotencyKey: `renewal-${row.user_id}-${tier.id}-${now.toISOString().slice(0, 10)}`,
+        // KEYED TO THE PERIOD BEING BILLED, NOT TO THE DAY THE SWEEP RAN.
+        //
+        // This was `now.toISOString().slice(0, 10)` — today's UTC date. That
+        // identifies WHEN the attempt happened rather than WHICH renewal it
+        // pays for, so two attempts at the same renewal ninety seconds apart
+        // either side of UTC midnight carried two different keys, and the
+        // processor's idempotency — the last thing between a retry and a
+        // second charge — did not fire.
+        //
+        // The row's own next_billing_at is the period. It is stable across
+        // every retry of that renewal no matter when the sweep runs, and it
+        // still changes next month, so a legitimate later renewal is not
+        // deduped away.
+        idempotencyKey: `renewal-${row.user_id}-${tier.id}-${row.next_billing_at ?? "unscheduled"}`,
       });
 
       if (chargeResult.success) {
         const nextBillingAt = new Date(now.getTime() + 30 * ONE_DAY_MS);
-        await supabaseAdmin
-          .from("customer_memberships")
-          .update({
+        await advanceScheduleAfterCharge(
+          row.user_id,
+          {
             next_billing_at: nextBillingAt.toISOString(),
             next_billing_amount_cents: tier.monthly_price_cents,
             renews_at: nextBillingAt.toISOString(),
             renewal_reminder_sent_at: null,
             updated_at: now.toISOString(),
-          })
-          .eq("user_id", row.user_id);
+          },
+          { tierId: tier.id, amountCents, eventType: "renewal", providerChargeId: chargeResult.providerChargeId },
+        );
 
         await recordBillingEvent({ userId: row.user_id, tierId: tier.id, eventType: "renewal", amountCents, status: "succeeded", providerChargeId: chargeResult.providerChargeId });
 
