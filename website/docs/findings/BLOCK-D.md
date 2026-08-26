@@ -142,3 +142,56 @@ now lives in `transaction-created-dedupe.test.ts`, which drives the real handler
   The map is typed `Record<ShippoServiceErrorCode, number>`, so omitting it fails
   the build for every block. Type-forced companion edit only; no change to admin
   auth, capability gates or IDOR surface, which is what Block I actually owns.
+
+---
+
+### D-04 — Saving a product edit switches off its oversell protection and discards live reservations
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P0 · **Status:** FIXED (repo)
+
+**Reproduction.** `src/lib/dose-replacement-preserves-inventory.test.ts`. Seed one
+dose with `track_inventory=true, reserved_quantity=2, incoming_quantity=25,
+low_stock_threshold=20, shipping_weight_oz=3`, then call `replaceProductDoses`
+with the payload the editor round-trips (the same dose, same id). Before the fix
+all five columns came back at their schema defaults; 5 of 8 assertions failed.
+
+**Root cause.** `admin-products.ts` issued `DELETE FROM product_doses WHERE
+product_id = ?` and then re-inserted from the payload. `DoseInput` has **no field
+for any of those five columns** — they are server-side operational state owned by
+checkout, the reservation sweeper and the receiving flow — so an editor payload
+could only ever reset them. One ordinary "Save" in the product editor therefore:
+
+- flipped `track_inventory` to `false`, so `reserve_inventory` stops holding
+  stock for that dose and it can be **oversold without limit**
+- reset `reserved_quantity` to 0, discarding the holds on every checkout in
+  flight while their `inventory_reservations` rows stayed `'active'`
+- lost `shipping_weight_oz`, so the parcel is quoted at the fallback weight
+- minted a **new uuid** when the payload omitted an id, orphaning every
+  `order_items` `"slug::doseId"` and every reservation pointing at the old row
+
+The delete was also not transactional with the insert: a failure in between left
+the product with zero doses and the storefront falling back to the stale parent
+row — which per ledger F-001 is `inventory_quantity = 0` for 86% of the catalog.
+
+**Fix.** Merge instead of replace. Existing doses are `UPDATE`d in place with the
+editable columns only (extracted into `editableDoseValues`, shared with the insert
+path so the two cannot drift), keeping their ids and their operational state.
+Genuinely new doses are inserted. The doses the admin actually removed are
+deleted **last**, once the writes that keep the product sellable have succeeded —
+so a part-way failure leaves the product over-supplied rather than empty.
+
+A dose is matched by id, and failing that by `slug_suffix`: an id-less payload is
+far more likely to be the same 5mg dose round-tripped than a brand new one. This
+directly answers the open question in `PHASE1-SYSTEM-MAP.md:552` — the editor's
+payload shape is still unverified because **no caller of `action: "replace_doses"`
+exists in `src/`** (only the route handler at
+`src/app/api/admin/products/[productId]/route.ts:92`), so the id-less case is now
+handled safely rather than assumed away.
+
+**Tests.** 8 tests, 5 confirmed failing before the fix. They cover each preserved
+column, that the admin's actual edit still applies, id stability, slug matching
+for an id-less payload, genuine dose removal, and that a failed write never
+empties the product.
+
+**Residual risk (`NOT VERIFIED`):** the merge is still several statements rather
+than one transaction. It is now ordered so that no interleaving leaves the product
+unsellable, but a true fix is an RPC. Recorded rather than claimed as solved.
