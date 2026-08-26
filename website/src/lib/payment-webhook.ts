@@ -1257,11 +1257,28 @@ export async function finalizeManualPayment(
     // expired hold, or pre-migration order) fall back to the legacy atomic
     // decrement so tracked stock still moves. The atomic order claim above
     // guarantees this runs exactly once per order, so no double-decrement.
-    const fin = await finalizeInventoryForOrder(orderId);
-    if (fin.degraded || fin.finalized === 0) {
-      await decrementInventoryForOrder(
-        (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
-      );
+    //
+    // OBSERVABILITY ONLY, deliberately still throws: log + alert, then
+    // re-throw. This block must keep propagating the way it always did — out
+    // of finalizeManualPayment, past the paid_side_effects_at latch write
+    // below (which stays NULL, as the comment above that write requires) and
+    // out to the route handler. Swallowing the error here would let the
+    // latch get written on a failed decrement, which is exactly the invented
+    // -stock direction the latch is designed never to guess in. This only
+    // adds a log line and a critical alert where previously there was
+    // neither — see task 6 fix round 1.
+    try {
+      const fin = await finalizeInventoryForOrder(orderId);
+      if (fin.degraded || fin.finalized === 0) {
+        await decrementInventoryForOrder(
+          (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+        );
+      }
+    } catch (inventoryError) {
+      console.error("Unable to decrement inventory for order", orderId, inventoryError);
+      await recordSystemAlert(unsafeEffectAlert("inventory_decrement", orderId, inventoryError))
+        .catch(() => {});
+      throw inventoryError;
     }
     // Same deferred push as the card path. An admin waiting on an approval
     // click deserves the same protection from a slow third party as a shopper
