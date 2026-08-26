@@ -446,3 +446,206 @@ one that must be correct.
   `:1521`. The renewal emails are correct; only the internal key is not. Good
   evidence the `format-date.ts` repair was applied deliberately here and merely
   missed cart recovery (K-01).
+
+---
+
+## K-04 — The affiliate link records IP, user agent and campaign parameters and sets a 30-day identifier before consent is asked, contradicting three specific promises in the store's own published policies
+
+**Grade:** `SOURCE-INSPECTED` (complete chain, every step quoted) · **Severity:** P1
+· **Status:** OPEN
+**Area:** legal/policy × privacy
+
+### Why this is a defect and not a preference
+
+The audit standard's step 2 says intended behaviour comes from *authoritative*
+evidence, including **the owner's stated business rules**. Here the owner's rule
+is published, in writing, on the storefront, and it is falsifiable. This finding
+is the code contradicting the store's own Cookie Policy and Privacy Policy — not
+a view about what consent ought to look like.
+
+### What the store promises
+
+`src/lib/legal-content.ts`, the `cookies` default body:
+
+> **Essential** — cart contents, checkout state, login sessions, and your age
+> confirmation. These are always on; the store cannot work without them.
+
+> **Analytics — only if you accept.** A random visitor and session identifier
+> stored in your browser, **any campaign parameters from the link you arrived
+> through**, and Vercel Analytics…
+
+> Choosing Decline on the banner **stops all non-essential storage; nothing in
+> the analytics category is created.**
+
+`src/lib/legal-content.ts`, the `privacy` default body:
+
+> If you accept analytics (see below), we also generate a random visitor and
+> session identifier stored in your browser, and **record any campaign parameters
+> present in the link you arrived through (for example utm_source, utm_medium,
+> utm_campaign…)**
+
+> Analytics is off until you accept it. **If you decline, no analytics identifiers
+> are created and no analytics events are sent.**
+
+### What the code does
+
+`src/app/r/[code]/route.ts` — the affiliate/ambassador entry point, and the
+highest-traffic acquisition path the store has:
+
+```ts
+const ipAddress = getRequestIpAddress(request);
+…
+await Promise.all([
+  supabaseAdmin.from("partner_clicks").insert({
+    …
+    utm_source:   url.searchParams.get("utm_source"),
+    utm_medium:   url.searchParams.get("utm_medium"),
+    utm_campaign: url.searchParams.get("utm_campaign"),
+    referrer:     request.headers.get("referer"),
+    user_agent:   request.headers.get("user-agent"),
+    ip_address:   ipAddress,
+  }),
+  supabaseAdmin.from("referrals").insert({ /* the same six fields again */ }),
+]);
+
+response.cookies.set(REFERRAL_COOKIE_NAME, resolved.currentCode, {
+  path: "/", maxAge: REFERRAL_COOKIE_MAX_AGE /* 30 days */,
+  sameSite: "lax", secure: …, httpOnly: false,
+});
+```
+
+There is **no consent check on this route**. Three promises broken:
+
+1. **"any campaign parameters from the link you arrived through" — only if you
+   accept.** `utm_source`, `utm_medium` and `utm_campaign` are read off the
+   arriving link and written to two tables, unconditionally. Both policies name
+   these exact parameters as the accept-gated category.
+2. **`vl_referral_code` is a 30-day browser identifier that is not on the
+   essential list.** The Cookie Policy enumerates essential as cart, checkout,
+   login and age confirmation. An affiliate-attribution cookie is none of those.
+   `httpOnly: false` means any script on the page can read it too.
+3. **The raw IP address is stored in the store's own database.** The Privacy
+   Policy's "Information we collect" says "limited technical data such as device
+   type, pages viewed, and referring website" — IP is mentioned only as something
+   *TikTok and Snap* receive, never as something the store itself retains.
+
+### The ordering makes Decline unable to help
+
+This is not "a check was forgotten". The consent decision is
+**structurally invisible to the server**:
+
+- `src/components/cookie-consent.tsx:47` — `dismiss()` writes
+  `window.localStorage.setItem(STORAGE_KEY, choice)` and dispatches a browser
+  event. That is the *entire* persistence.
+- A repo-wide grep for a server-side read of the consent value returns nothing:
+  every one of the six `vl_cookie_consent` references is a browser component
+  (`consented-analytics`, `reddit-pixel`, `tiktok-pixel`, `snap-pixel`,
+  `cookie-consent`, `tracking-health-browser`). `localStorage` does not travel
+  with a request, so **no route handler can read consent, ever.**
+
+So the sequence for a visitor who will decline is:
+
+1. Ambassador shares `…/r/BRUTUS`.
+2. The visitor clicks. Before a single pixel of the site renders, the redirect
+   handler writes their IP, UA, referrer and UTM parameters to `partner_clicks`
+   **and** `referrals`, and sets a 30-day cookie.
+3. They land on `/products` and see the banner **for the first time**.
+4. They press **Decline**. `dismiss("declined")` writes one localStorage key.
+   It does not clear `vl_referral_code` — and could not delete the two database
+   rows even if it tried, because there is no server call on that path.
+
+The banner's own comment states the standard it believes it meets — *"nothing
+loads before a choice is made"* (`cookie-consent.tsx:73`). On the affiliate path
+that is already untrue by the time the banner mounts.
+
+### Impact
+
+The store's published Privacy Policy and Cookie Policy are, as written, false for
+every visitor who arrives through an ambassador link — which is the traffic the
+affiliate programme exists to generate. For a business whose differentiator is
+compliance posture, a demonstrably inaccurate privacy disclosure is the expensive
+kind of exposure: it is self-documenting, it is in the store's own words, and the
+contradicting code is four lines of a public route.
+
+Secondary: `vl_referral_code` is `httpOnly: false` with a 30-day life, so the
+ambassador attribution a customer carries is readable and writable by any script
+that runs on the page.
+
+### Reproduction (browser, no database needed for steps 1–4)
+
+1. Clear site data. In DevTools → Application, confirm no `vl_referral_code`
+   cookie and no `vl_cookie_consent` key.
+2. Navigate directly to `/r/<a live code>?utm_source=probe&utm_campaign=probe`.
+3. Before touching the banner, read Application → Cookies:
+   **`vl_referral_code` is already set**, `HttpOnly` unchecked, expiry ~30 days.
+4. Press **Decline**. Re-read cookies: `vl_referral_code` is **still there**.
+   `localStorage["vl_cookie_consent"]` reads `"declined"`.
+5. With database access: `select ip_address, user_agent, referrer, utm_source,
+   utm_campaign, created_at from partner_clicks order by created_at desc limit 1;`
+   and the same against `referrals` → two rows carrying the IP and the campaign
+   parameters, written before consent was asked and surviving the decline.
+
+### Smallest safe root-cause fix
+
+The root cause is that consent lives somewhere the server cannot see it. Two
+parts, and part (a) is the one that matters:
+
+**(a) Make consent server-readable.** Have `dismiss()` also set a first-party
+cookie (`vl_cookie_consent`, `httpOnly: false` so the existing browser
+components keep working unchanged, `sameSite: "lax"`, 12 months). Then
+`/r/[code]` — and any future server route with the same question — can read it.
+
+**(b) Split the route's two jobs by what they actually are.** Attribution
+(`vl_referral_code` and the ambassador credit) is arguably contractual rather than
+analytic; the *telemetry* (`ip_address`, `user_agent`, `referrer`, and the three
+UTM columns) plainly is not. Gate the telemetry columns on the consent cookie and
+write the click row with them NULL when consent is absent or declined — the
+ambassador still gets their click credit, which is the business purpose, and the
+promise is kept.
+
+Whichever way (b) is decided, **the policy text and the code must be made to say
+the same thing.** If the owner wants attribution to be unconditional, that is a
+legitimate product decision — but then the Cookie Policy's essential list must name
+`vl_referral_code`, and the Privacy Policy must stop conditioning campaign-parameter
+capture on acceptance. Silence is the only option that is not available.
+
+### Regression test to write
+
+A route-level test asserting that with no consent cookie, the `partner_clicks`
+insert payload has `ip_address`, `user_agent`, `referrer`, `utm_*` all null, and
+with `vl_cookie_consent=accepted` they are populated. Negative control: remove
+the gate and confirm the first assertion fails on the populated `ip_address`, not
+on a missing table.
+
+Plus a **source-text test** — this codebase already uses that pattern (the banner
+comment describes the pixel-naming source test that caught a copy regression).
+Assert that every identifier the code sets as a cookie appears somewhere in the
+`cookies` policy default. That makes the two artefacts fail together in future.
+
+### CROSS-BLOCK
+
+- `src/app/r/[code]/route.ts` — **Block A+B.** This is the affiliate lane. The
+  same file already carries A+B's known non-transactional double-write defect
+  (`partner_clicks` and `referrals` in one `Promise.all`, no transaction). A+B
+  should apply both changes in one pass rather than two sessions touching it.
+- `src/components/cookie-consent.tsx` — unowned; the consent-cookie change (a)
+  can land here.
+- `src/lib/legal-content.ts` — unowned, Block K's. Whichever way (b) resolves,
+  the policy text edit belongs to this file.
+
+### Also checked, and clear — the browser-side gating is genuinely correct
+
+Worth recording as a negative control, because it makes the gap above sharper
+rather than looking like a general slackness:
+
+- `src/components/site-analytics-tracker.tsx:73` and `:141` — both entry points
+  early-return unless `localStorage["vl_cookie_consent"] === "accepted"`.
+- `tiktok-pixel.tsx:25`, `snap-pixel.tsx:38`, `reddit-pixel.tsx:48`,
+  `consented-analytics.tsx:21` — all gate on the same key. None loads pre-consent.
+- `cookie-consent.tsx:16-22` — if `localStorage` throws, the banner does not
+  render and no choice is stored, so consent is never `"accepted"` and every
+  pixel stays off. **Fails closed**, correctly.
+- Accept and Decline carry equal visual weight and the policy is one tap away.
+
+The browser half of this system was built carefully. The server half was never
+told the decision exists.
