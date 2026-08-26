@@ -80,30 +80,40 @@ disappears because the audit got long — which the brief explicitly warns about
 
 ## Honest summary
 
-Of 44 tracked items (21 phases + 23 requirements):
+Counted from the tables above — **45 tracked rows** (phases 0–21, plus the 23
+cross-cutting requirements):
 
-- **✅ 5 complete**
-- **🟨 24 partially covered** — leads exist, nothing reproduced
-- **🔒 6 blocked** on the network allowlist
-- **⬜ 9 not started**
+| | Count | Meaning |
+|---|---|---|
+| ✅ | **4** | Complete, with evidence |
+| 🟨 | **26** | Partially covered. **Four of these — affiliate (6), emails (8), test quality (15), concurrency (16) — now carry defects that were reproduced and repaired.** The other 22 are mapped hypotheses only. |
+| 🔒 | **7** | Blocked: the network allowlist never took effect, so no browser test needing data can run |
+| ⬜ | **8** | Not started |
+
+**41 of 45 rows are not certified.** That is the honest state, and it is why the
+verdict is 🟡 GO WITH CONDITIONS rather than 🟢 — see
+[`FINAL-CERTIFICATION-REPORT.md`](./FINAL-CERTIFICATION-REPORT.md).
+
+Every 🟨, 🔒 and ⬜ row above states its reason in the Notes column, which
+satisfies "explicitly NOT VERIFIED with a stated reason". It does **not** satisfy
+"✅ with evidence", and the two must not be confused.
 
 The map means the *unknown* work is now mostly *known* work, which is the
 expensive part. But "mapped" is not "verified", and nothing in the 🟨 column
-counts as evidence yet.
+counts as evidence unless a finding ID is named against it.
 
-### The nine untouched items, and whether they matter for launch
+### The eight untouched items, and whether they matter
 
 | Item | Launch-critical? |
 |---|---|
 | Multi-tab / multi-session | **Yes** — two tabs racing one cart is a real oversell/double-charge path |
 | Time / date / timezone | **Yes** — coupon and membership expiry boundaries decide who gets charged what |
-| Concurrency / idempotency (Phase 16) | **Yes** — this is where duplicate charges and double commissions live |
 | Cross-system collisions (Phase 17) | **Yes** — the brief's own point: individually-correct systems that break together |
+| Final certification (21) / zero-regression gate (23) | By definition, last |
 | File / image / upload safety | Only if the admin uploads untrusted files |
 | Backup / recovery | Not for launch, but before scale |
 | SEO / crawlability | No — revenue-relevant, not correctness-relevant |
-| Accessibility | Not for launch correctness; is a legal/ethical exposure |
-| Zero-regression gate | Final step, by definition |
 
-**The four "Yes" rows are the biggest remaining risk to a launch decision**, and
-none of them has been started. They are all reproducible without a browser.
+Concurrency (Phase 16) was on this list at the start of the session. It is now
+🟨 with a reproduced and repaired P0 (F-016). The other three "Yes" rows remain
+untouched, and all three are reproducible without a browser.
