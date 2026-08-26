@@ -641,7 +641,7 @@ export function AdminControlCenterClient() {
           <p className="mt-2 text-sm text-zinc-400">Use these modules for customer history, low-stock visibility, and sales insights. Additional controls can be layered into this center without code changes.</p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Link href="/admin/orders" className="vl-btn-secondary px-4 py-2 text-xs">Orders</Link>
-            <Link href="/admin/products" className="vl-btn-secondary px-4 py-2 text-xs">Inventory</Link>
+            <Link href="/admin/inventory" className="vl-btn-secondary px-4 py-2 text-xs">Inventory</Link>
             <Link href="/admin/partners" className="vl-btn-secondary px-4 py-2 text-xs">Partner Analytics</Link>
           </div>
         </div>
