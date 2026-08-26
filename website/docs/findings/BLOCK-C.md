@@ -494,3 +494,357 @@ mutation-tested while this file is in place — mutating the code under test wil
 not fail a test that is calling a stub. Auditing which existing suites are
 silently hollowed by these eleven mocks is squarely block E's mandate and is
 handed over rather than done here.
+
+---
+
+## C-08 — 21 of 36 `sendEmail` call sites throw the result away, so most email failures are invisible
+
+| | |
+|---|---|
+| **Severity** | P1 |
+| **Evidence grade** | A — enumerated across the tree |
+| **Status** | `CONFIRMED — mixed ownership, see list` |
+
+### Evidence
+
+```
+$ grep -rn "await sendEmail(" src --include=*.ts --include=*.tsx | grep -v test | wc -l
+36
+$ grep -rn "^\s*await sendEmail(" src ... | wc -l          # result discarded
+21
+```
+
+`sendEmail` never throws — it returns `{ success: false, error }`. A call whose
+result is not read therefore cannot fail, cannot be logged, cannot be queued and
+cannot raise an alert. 58% of send sites are in that state, including:
+
+| Call site | What is lost |
+|---|---|
+| `lib/monitoring.ts:63` | **The critical-alert email itself.** An alert that fails to send is silent, and this is the mechanism that would report it. |
+| `lib/payment-webhook.ts:830` | "You earned a commission" — the ambassador is never told, and nothing records that they weren't. |
+| `lib/payment-webhook.ts:1746` | Refund confirmation (see C-05). |
+| `lib/membership-billing.ts` ×8 | Every membership receipt, reminder and win-back. Money was charged; the receipt may never have arrived. |
+| `app/api/checkout/submit-payment/route.ts:109` | Order confirmation on the manual-payment path, plus the owner's "new payment to verify" alert at :124. |
+| `lib/partner-portal.ts:556, 577, 1933` | Ambassador application received, owner alert, payout notice. |
+| `app/api/admin/orders/[orderId]/route.ts:262, 595` | Shipping update and replacement-shipped notices. |
+
+The two admin *resend* routes are the exception that proves the rule — they read
+the result and return HTTP 500 on failure. Everything on the automatic paths does
+not.
+
+### Fix
+
+`CROSS-BLOCK: 21 call sites across payment-webhook.ts, membership-billing.ts, monitoring.ts, partner-portal.ts and four route files — read the result; enqueueFailedEmail (transactional) or log the failure (alerts).`
+
+Structural alternative, in block C's own files: make the discard impossible.
+Marking `EmailSendResult` as a must-use type is not available in TypeScript, but
+a thin `sendTransactionalEmail()` wrapper that queues on failure — the thing
+`payment-webhook.ts:1737` already *believes* `sendEmail` does — would convert
+every one of these sites into a correct one by construction.
+
+---
+
+## C-09 — The coupon broadcast counts a FAILED send as "already sent"
+
+| | |
+|---|---|
+| **Severity** | P2 |
+| **Evidence grade** | A — provable by inspection, against a fix already applied elsewhere |
+| **Status** | `CONFIRMED — CROSS-BLOCK (src/lib/marketing-broadcast.ts)` |
+
+### Evidence
+
+`src/lib/marketing-broadcast.ts:125-138` builds its dedupe set with **no status
+filter**:
+
+```ts
+.from("email_send_log")
+.select("recipient_email")
+.eq("campaign_type", "coupon_announcement")
+.eq("reference_id", input.coupon.id);
+```
+
+`sendMarketingEmail` writes rows with `status: 'failed'` as well as `'sent'`
+(`email/marketing.ts:68`) — deliberately, and the reason is written down there:
+
+> a row that doesn't say whether the send succeeded turns a transient provider
+> failure into a permanent one: the recipient looks done and is never retried.
+
+`automations.ts:92` applies the corresponding `.neq("status", "failed")` filter,
+with its own comment saying the same thing. This path never got it. So a
+recipient whose send failed on the first click is reported as `skipped` on every
+subsequent click and never receives the announcement — permanently, silently.
+
+Second defect in the same function: the entire audience is walked **serially,
+inline, inside one admin HTTP request** (:141-171). `campaign-sender.ts`'s header
+describes that exact design as the killed-partway-through problem its batching
+replaces — yet `/api/admin/coupons/[couponId]/announce` still does it. A large
+list hits the serverless timeout with no resumable state, and because of the
+first defect, the recipients it got to are the only ones it will ever get to.
+
+### Fix
+
+`CROSS-BLOCK: src/lib/marketing-broadcast.ts:128 — add .neq("status", "failed"), matching automations.ts:92.`
+`CROSS-BLOCK: src/lib/marketing-broadcast.ts:141 — route the broadcast through campaign-sender.ts's claim/batch machinery instead of a serial inline loop.`
+
+---
+
+## C-10 — Automation dedupe is a read-then-write against a table with no unique constraint
+
+| | |
+|---|---|
+| **Severity** | P2 |
+| **Evidence grade** | A — the absent index is confirmed across all four schema files |
+| **Status** | `CONFIRMED — block C owns marketing.ts; the index is a schema change (Rule 4)` |
+
+### Evidence
+
+`loadAlreadySent()` (`automations.ts:81`) reads `email_send_log`.
+`sendMarketingEmail()` (`marketing.ts:61-72`) inserts the row **after** the
+provider call, inside `try { ... } catch { /* Non-fatal. */ }`.
+
+`email_send_log` has no unique constraint — `deploy-run-once.sql:779-781`,
+`membership-billing.sql:102-104` and `email-campaigns.sql:222` create only
+plain indexes on `reference_id`, `(campaign_type, sent_at)`, `recipient_email`
+and `(campaign_id, status)`.
+
+So if the insert fails, or the process dies between provider acceptance and the
+insert, the recipient stays eligible and receives the same welcome / win-back on
+the next 30-minute sweep — indefinitely. `sendOrderEmailOnce` claims **before**
+sending for precisely this reason; the marketing path does not, and has no index
+that would let it.
+
+### Fix
+
+Two options, and the cheaper one is worse:
+
+1. **Claim before sending** (mirrors `sendOrderEmailOnce`): insert the
+   `email_send_log` row with `status: 'sending'` first, update it to
+   `sent`/`failed` after. Requires a unique index on
+   `(campaign_type, reference_id, recipient_email)` to be worth anything —
+   **schema change, owner approval (Rule 4)**.
+2. Retry the insert on failure. Narrows the window; does not close it, and does
+   nothing about the process dying.
+
+Option 1 is the one to take, and it composes with C-02: both are the same
+claim-before-send discipline, applied to the two halves of the email system that
+currently disagree about it.
+
+---
+
+## C-11 — Two admin "resend" paths bypass the send-once machinery entirely
+
+| | |
+|---|---|
+| **Severity** | P2 |
+| **Evidence grade** | A |
+| **Status** | `CONFIRMED — CROSS-BLOCK (block I owns src/app/api/admin/**)` |
+
+`POST /api/admin/orders/[orderId] {action:'resend_confirmation'}` (:657) and
+`POST /api/admin/payments/[orderId] {action:'resend_email'}` (:147) both render
+`orderConfirmationTemplate` and call raw `sendEmail` — no `idempotencyKey`, no
+`order_email_log` row, no rate limit. An admin double-click sends two receipts;
+`order_email_log` still shows exactly one row from the original webhook send; the
+audit row records `payment_resend_email` with no outcome.
+
+`order-email-once.ts` claims its index "makes a duplicate impossible regardless
+of who asks". These two callers are the counterexample, alongside the sweep in
+C-02.
+
+To their credit, both **do** read the result and return HTTP 500 on failure —
+the only two send sites in the app that do (C-08). The fix is to keep that and
+route through `sendOrderEmailOnce`, treating `already_sent` as a
+"resend anyway, and record it" case rather than a skip: a deliberate operator
+resend is legitimate, it just has to leave a trace.
+
+`CROSS-BLOCK: src/app/api/admin/orders/[orderId]/route.ts:657 and src/app/api/admin/payments/[orderId]/route.ts:147 — record admin resends in order_email_log.`
+
+---
+
+## C-12 — The communications panel ignores the proof it already has, and its retry button resends the wrong mail
+
+| | |
+|---|---|
+| **Severity** | P2 |
+| **Evidence grade** | A |
+| **Status** | `CONFIRMED — CROSS-BLOCK (order-communications.ts); the retry half is block C's own file` |
+
+Two defects, one screen.
+
+**1. It reports "no failure recorded" where it could report proven delivery.**
+`order-communications.ts:162`:
+
+> `// Deliberately not "Sent". Nothing writes a row on success, so this is the strongest true statement available.`
+
+That was true before `order_email_log` existed. It now writes `status: 'sent'`
+with a `provider`, a `provider_message_id` and a `completed_at`. The panel simply
+never reads that table. The strongest true statement available is much stronger
+than the one being made — and this is the screen an operator uses to answer
+"did the customer get their receipt?" during a chargeback.
+
+**2. The retry button resends mail the operator did not ask for.**
+`retry-queue.ts:120-124` selects `pending_emails where subject ilike '%<orderNumber>%'`
+limit 20 — every queued email whose subject mentions that order: confirmation,
+shipping, delivery and refund, all re-sent on one click. It also cross-matches any
+order number that is a substring of another. `VL-<hex>` makes that unlikely rather
+than impossible, and the substring risk is a property of the join, not of the
+alphabet.
+
+**3. Related:** `IN_CARRIER_NETWORK` is defined **twice, differently** —
+`shippo/service.ts:1596` `{shipped, in_transit, out_for_delivery}` decides
+whether a shipping email is *sent*; `order-communications.ts:100` adds
+`delivered` and decides whether the panel says one was *due*. A parcel that goes
+label → delivered in one scan correctly gets only the delivery email, and the
+panel reports the shipping email as due and unproven. Same name, same concept,
+two answers.
+
+`CROSS-BLOCK: src/lib/order-communications.ts — read order_email_log for confirmation state, and import IN_CARRIER_NETWORK from shippo/service.ts instead of redefining it.`
+Fix in block C's own file: `retryPendingEmailsForOrder` should take the specific
+`pending_emails` row id the operator clicked, not a subject substring. This
+becomes trivial once C-02's `order_id` column exists.
+
+---
+
+## C-13 — Resuming a stopped campaign mails nobody and reports a full audience
+
+| | |
+|---|---|
+| **Severity** | P3 |
+| **Evidence grade** | A |
+| **Status** | `CONFIRMED — CROSS-BLOCK (campaign-sender.ts / send route)` |
+
+The stop route moves `pending`/`claiming` recipients to `cancelled`
+(`stop/route.ts:68`). The send route then accepts `paused` as a re-sendable state
+(`send/route.ts:87, :116`), and `queueCampaign` upserts with
+`ignoreDuplicates: true` against the unique `(campaign_id, email)` index
+(`campaign-sender.ts:99`) — so the `cancelled` rows are **not** returned to
+`pending`. The campaign flips to `sending`, `recipient_count` is overwritten with
+the **full** audience size (:110), nothing is claimable, and the batch marks the
+campaign `sent`.
+
+Net effect: the dashboard shows 20 recipients against 3 actual sends, and the 17
+people the operator paused for still never hear from the campaign they were
+explicitly re-sent.
+
+`CROSS-BLOCK: src/lib/email/campaign-sender.ts:87-113 — on re-queue, return 'cancelled' rows to 'pending' rather than relying on ignoreDuplicates, and set recipient_count from what is actually claimable.`
+
+---
+
+## C-14 — Membership receipts have no claim, unlike the reminders beside them
+
+| | |
+|---|---|
+| **Severity** | P3 |
+| **Evidence grade** | A |
+| **Status** | `CONFIRMED — CROSS-BLOCK (membership-billing.ts)` |
+
+Steps 1 and 4 of `runMembershipBillingSweep` claim atomically before sending —
+`.is("first_month_reminder_sent_at", null)` then a conditional update to `now`
+(:1270-1284), and the same shape for `renewal_reminder_sent_at` (:1434).
+
+Steps 2 and 5 — the **receipts** — do not. They select due rows, call `chargeCard`
+with an idempotency key, and on success write the membership row, insert a
+`membership_billing_events` row, and send a receipt (:1330-1362, :1485-1525).
+Step 3's cancellation win-back has no claim either.
+
+The provider's idempotency key protects the **money**. It does not stop two
+overlapping sweeps from both seeing `success`, both inserting a billing event and
+both emailing "Receipt: $X charged" for one charge. `Promise.allSettled` across
+the sweep's jobs plus a manual invocation is enough to overlap.
+
+Both of those receipt sends also discard their `sendEmail` result (C-08), so the
+opposite failure — a receipt for money that *was* taken never arriving — is
+equally silent.
+
+`CROSS-BLOCK: src/lib/membership-billing.ts:1330 and :1485 — claim the row before charging, matching steps 1 and 4.`
+
+---
+
+## C-15 — Auth email is a separate, unmonitored channel, and the settings file says otherwise
+
+| | |
+|---|---|
+| **Severity** | P3 |
+| **Evidence grade** | A |
+| **Status** | `CONFIRMED — documentation/monitoring gap, no code fix in this block` |
+
+`emailVerificationTemplate` and `passwordResetTemplate` exist in `templates.ts`
+with **zero** non-template references. The real magic-link, password-reset and
+partner-invite mail is sent by Supabase Auth's own SMTP:
+
+- `components/account-auth-form.tsx:311` — `signInWithOtp`
+- `components/account-forgot-password-form.tsx:34` — `resetPasswordForEmail`
+- `lib/partner-portal.ts:1373` — `auth.admin.inviteUserByEmail`
+
+Those sends are invisible to `EMAIL_ENABLED`, to the admin settings "ready"
+indicator, to `pending_emails`, to `order_email_log` and to every alert in this
+app, and they carry a different From and DKIM domain than the transactional
+identity. Meanwhile `email/settings.ts:19` lists "password resets, account
+verification" among what flows through `sendEmail()`, and :48 and :62 repeat it.
+
+Consequences worth the owner knowing before launch: turning email off in admin
+does **not** turn off password resets (good, and undocumented); the admin "email
+is ready" indicator says nothing about whether customers can actually recover
+their accounts (bad); and nobody is alerted if Supabase's SMTP fails.
+
+`CROSS-BLOCK: src/lib/email/settings.ts:19 — correct the claim.`
+Recommended beyond that: surface Supabase Auth SMTP status in the same admin
+panel, or state plainly there that account email is a separate channel.
+
+---
+
+# Block C summary
+
+| Id | Severity | Status | Evidence |
+|---|---|---|---|
+| C-01 | P0 | CONFIRMED, fix CROSS-BLOCK | test, RED ×4 |
+| C-02 | P0 | CONFIRMED, fix needs migration approval | test, RED ×3 |
+| C-03 | P1 | CONFIRMED, fix CROSS-BLOCK | inspection |
+| C-04 | P1 | CONFIRMED, fix CROSS-BLOCK | inspection ×3 sites |
+| C-05 | P1 | CONFIRMED, fix CROSS-BLOCK | inspection |
+| C-06 | P1 (money) | CONFIRMED, fix CROSS-BLOCK | test, RED ×2 |
+| C-07 | P1 (tests) | CONFIRMED, handed to block E | direct hit |
+| C-08 | P1 | CONFIRMED, 21 sites | enumerated |
+| C-09 | P2 | CONFIRMED, fix CROSS-BLOCK | inspection |
+| C-10 | P2 | CONFIRMED, needs index (Rule 4) | inspection + schema |
+| C-11 | P2 | CONFIRMED, fix CROSS-BLOCK | inspection |
+| C-12 | P2 | CONFIRMED, fix part CROSS-BLOCK | inspection |
+| C-13 | P3 | CONFIRMED, fix CROSS-BLOCK | inspection |
+| C-14 | P3 | CONFIRMED, fix CROSS-BLOCK | inspection |
+| C-15 | P3 | CONFIRMED, docs/monitoring | inspection |
+
+**Nothing in this block was graded on evidence it does not have.** C-04 is graded
+B because the two-email sequence was established by reading three call sites, not
+by driving a parcel end to end; everything else marked A is either reproduced by a
+committed test or provable from the source as it stands.
+
+**No real email was sent at any point in this block.** Nine test files exist for
+these findings' subject matter; the three added here mock the provider and capture
+every message. Nothing was written to production.
+
+## What block C did NOT verify
+
+- **The live provider.** Whether `admin_control.email.enabled` is currently true,
+  and which provider is configured, was not read. If it is SendGrid or SMTP, the
+  Resend `Idempotency-Key` path is inert and `order_email_log` is the sole
+  duplicate guard — which C-02 shows is one-way. Needs a production read.
+- **Whether `order-email-log.sql` is applied in production.** `sendOrderEmailOnce`
+  treats a missing table as "send anyway, unlogged", and `isMissingTable` matches
+  any error containing "does not exist" or "schema cache" — so an absent table
+  removes the only send-once guarantee with no alert at all. Needs a production
+  read.
+- **Live `pending_emails` rows at `status='failed'`**, and `order_email_log` rows
+  at `failed` whose orders were nonetheless delivered by the sweep. Each of the
+  first is a customer who got nothing; each of the second is an order exposed to a
+  duplicate receipt on any replay.
+- **Whether `MARKETING_POSTAL_ADDRESS` is set.** If blank, `marketingBlockedReason()`
+  blocks campaigns and automations — but cart recovery, coupon broadcast,
+  back-in-stock and membership welcome/win-back all call `sendMarketingEmail`
+  **without** that gate and would still send non-CAN-SPAM-compliant mail.
+- **`notification_queue` consumption.** Nothing outside `updatePartnerStatus`'s
+  inline mark-as-sent appears to consume rows of kind
+  `partner_application_approved`/`rejected`; unsent rows may simply accumulate
+  into `getAdminOperationsSummary`'s pending count.
+- **Browser verification.** Block C is server-side; no customer-facing email UI
+  was driven. The admin email settings screen and the communications panel
+  (C-12) would benefit from it and are left to blocks G+H.
