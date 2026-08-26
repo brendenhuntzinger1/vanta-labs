@@ -25,8 +25,12 @@ import "server-only";
  */
 const PAGE_SIZE = 1000;
 
-/** Guard against an unbounded loop if a server ever ignores `range`. */
-const MAX_PAGES = 1000;
+// (There was a MAX_PAGES page-count guard here, for "a server that ignores
+// `range`". It went with readAllRows. The bounded pager cannot loop forever
+// without it: every iteration pushes the rows it received, so `rows.length`
+// grows on any non-empty response and `maxRows` terminates the loop. A page
+// budget on top of a row budget was a second ceiling that could never be the
+// binding one.)
 
 // ---------------------------------------------------------------------------
 // ONE PAGER, AND WHY THE OTHER ONE IS GONE.
