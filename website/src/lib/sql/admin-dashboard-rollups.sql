@@ -285,7 +285,19 @@ $rpc_lockdown$;
 
 -- ---------------------------------------------------------------------------
 -- Bulk-savings tier stats (mirrors admin-membership.ts getBulkSavingsStats).
--- Revenue in cents = sum(round(amount_paid * 100)) per tier, matching the JS.
+--
+-- REVIEW FINDING 5. This function summed GROSS amount_paid with NO
+-- payment_status filter at all, so every pending_payment, canceled, failed and
+-- fully-refunded order with a bulk tier counted as bulk-savings revenue, and a
+-- free replacement reship counted as an order. On a six-order basket worth $350
+-- it reported $1,015.00 across 6 orders. The JS fallback did exactly the same,
+-- so the two "agreed" while both were wrong — and this file's own header claims
+-- every function mirrors its JS "EXACTLY (same status filters, same
+-- net-of-refund revenue ... same order_type exclusions)".
+--
+-- Now identical in shape to admin_revenue_by_method above: the ledger's revenue
+-- statuses, replacements excluded, refunds netted off. Revenue is still returned
+-- in CENTS because that is what getBulkSavingsStats consumes.
 -- ---------------------------------------------------------------------------
 create or replace function public.admin_bulk_savings_stats()
 returns table (
@@ -301,9 +313,11 @@ as $$
   select
     bulk_discount_tier as tier,
     count(*) as orders,
-    coalesce(sum(round(coalesce(amount_paid, 0) * 100)), 0) as revenue_cents
+    coalesce(sum(round(greatest(0, coalesce(amount_paid, 0) - coalesce(refund_amount, 0)), 2) * 100), 0) as revenue_cents
   from public.orders
   where bulk_discount_tier is not null
+    and payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
+    and coalesce(order_type, 'product') <> 'replacement'
   group by bulk_discount_tier;
 $$;
 

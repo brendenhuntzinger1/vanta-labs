@@ -25,6 +25,31 @@ import { PAID_ORDER_STATUSES, REVENUE_ORDER_STATUSES } from "@/lib/ledger";
 const SQL_PATH = path.resolve(__dirname, "sql/admin-dashboard-rollups.sql");
 const sql = readFileSync(SQL_PATH, "utf8");
 
+/**
+ * Every `sum( ... )` expression in the source, matched by BALANCED PARENS.
+ *
+ * A regex cannot do this. `sum(...[^)]*)` stops at the first `)`, so any nested
+ * call hides the rest of the expression from it — which is exactly how the
+ * gross-sum assertion below came to inspect nothing at all.
+ */
+function sumExpressions(source: string): string[] {
+  const found: string[] = [];
+  const lowered = source.toLowerCase();
+  for (let i = lowered.indexOf("sum("); i >= 0; i = lowered.indexOf("sum(", i + 1)) {
+    // Skip an identifier that merely ENDS in "sum", e.g. checksum(.
+    if (i > 0 && /[a-z0-9_]/.test(lowered[i - 1])) continue;
+    let depth = 0;
+    for (let j = i + 3; j < source.length; j += 1) {
+      if (source[j] === "(") depth += 1;
+      else if (source[j] === ")") {
+        depth -= 1;
+        if (depth === 0) { found.push(source.slice(i, j + 1)); break; }
+      }
+    }
+  }
+  return found;
+}
+
 /** Every `payment_status in (...)` list in the file, as sets of statuses. */
 function statusFilters(source: string): string[][] {
   const filters: string[][] = [];
@@ -78,7 +103,37 @@ describe("ledger revenue statuses vs the SQL rollups", () => {
   it("no revenue aggregation sums gross amount_paid without subtracting refunds", () => {
     // A $200 order refunded by $50 is $150. Every place the SQL sums
     // amount_paid for a revenue figure must net the refund off first.
-    const grossSums = sql.match(/sum\(\s*coalesce\(amount_paid[^)]*\)\s*\)/gi) ?? [];
-    expect(grossSums).toEqual([]);
+    //
+    // THIS ASSERTION USED TO BE A PLACEBO (review finding 5). It read:
+    //
+    //   sql.match(/sum\(\s*coalesce\(amount_paid[^)]*\)\s*\)/gi)
+    //
+    // which requires `coalesce` to sit IMMEDIATELY inside `sum(`. It returned
+    // ZERO matches against the shipped file while
+    // `sum(round(coalesce(amount_paid, 0) * 100))` sat in
+    // admin_bulk_savings_stats doing exactly what it claimed to forbid. One
+    // intervening call — or any table alias — defeated it completely.
+    //
+    // Now it finds every `sum(...)` mentioning amount_paid, however nested, and
+    // requires refund_amount inside the SAME expression.
+    //
+    // A textual check is still the WEAKER half of this guard. The strong half is
+    // sql/bulk-savings-rollup-executed.test.ts, which executes the shipped
+    // definition against a real Postgres and compares it to the ledger.
+    for (const expression of sumExpressions(sql)) {
+      if (!expression.includes("amount_paid")) continue;
+      expect(expression, `gross revenue sum: ${expression}`).toContain("refund_amount");
+    }
+  });
+
+  it("finds the sums it is asserting on, and would see a nested one", () => {
+    // Guards the guard. The previous version passed on an empty match list,
+    // which is indistinguishable from "the regex has gone blind".
+    const sums = sumExpressions(sql).filter((expression) => expression.includes("amount_paid"));
+    expect(sums.length).toBeGreaterThanOrEqual(4);
+
+    // The exact shape that used to slip through, proved detectable.
+    const nested = sumExpressions("select coalesce(sum(round(coalesce(amount_paid, 0) * 100)), 0) as x");
+    expect(nested).toContain("sum(round(coalesce(amount_paid, 0) * 100))");
   });
 });

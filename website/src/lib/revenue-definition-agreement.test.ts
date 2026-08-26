@@ -58,6 +58,7 @@ const BASKET = [
   // Never-paid orders carry no paid_at. getRevenueWindowMetrics unions a
   // paid_at-window query with an `is(paid_at, null)` one, and the two are
   // disjoint only if this is modelled.
+  bulk_discount_tier: "5_percent",
   paid_at: row.payment_status === "pending_payment" ? null : "2026-08-26T00:00:00.000Z",
   created_at: "2026-08-26T00:00:00.000Z",
   attributed_campaign_id: "campaign-1",
@@ -199,6 +200,18 @@ describe("every revenue surface agrees with the ledger", () => {
     // nothing to revenue but silently inflates the denominator of any
     // revenue-per-order figure derived from it.
     expect(campaign?.orders).toBe(LEDGER_SALES);
+  });
+
+  it("bulk-savings tier stats, on the JS fallback production actually runs", async () => {
+    // The RPC is mocked as unmigrated above, which is production's real state —
+    // so this is the path that serves the dashboard today. It summed GROSS
+    // amount_paid over EVERY status, and the RPC did the same, so the two
+    // "agreed" while both reported roughly three times the truth.
+    const { getBulkSavingsStats } = await import("@/lib/admin-membership");
+    const stats = await getBulkSavingsStats();
+
+    expect(stats.tier5PercentRevenueCents).toBe(Math.round(LEDGER_REVENUE * 100));
+    expect(stats.tier5PercentOrders).toBe(LEDGER_SALES);
   });
 
   it("best-sellers counts units from sales only", async () => {

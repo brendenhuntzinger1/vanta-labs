@@ -2332,3 +2332,72 @@ Third surviving mutation across three findings, same lesson each time: a
 mutation control only proves something when the case that needs the code exists.
 
 **GATE.** 262 files / 4165 tests green. Lint and `tsc` clean.
+
+## N-05 (P2) — a textual assertion blind to the one defect in the file it guarded
+
+**FOUND.** `ledger-sql-parity.test.ts` carried this, written as a behavioural
+guarantee rather than a lint:
+
+```js
+const grossSums = sql.match(/sum\(\s*coalesce\(amount_paid[^)]*\)\s*\)/gi) ?? [];
+expect(grossSums).toEqual([]);
+```
+
+The regex requires `coalesce` to sit IMMEDIATELY inside `sum(`. Measured against
+the shipped file: **0 matches**. Meanwhile line 304 read
+
+```sql
+coalesce(sum(round(coalesce(amount_paid, 0) * 100)), 0) as revenue_cents
+```
+
+One intervening `round(` — or any table alias — defeated it completely. It
+passed on an empty match list, which is indistinguishable from a blind regex.
+
+**AND WHAT IT COULD NOT SEE WAS REAL.** `admin_bulk_savings_stats` summed GROSS
+`amount_paid` with **no `payment_status` filter at all**: every
+`pending_payment`, `canceled`, `failed` and fully-refunded order with a bulk tier
+counted as bulk-savings revenue, and a free replacement reship counted as an
+order. On a six-order basket worth **$350.00** it reported **$1,015.00 across 6
+orders** — nearly 3×. The JS fallback did the same, so the two paths "agreed"
+while both were wrong, and the file's own header claims every function mirrors
+its JS "EXACTLY (same status filters, same net-of-refund revenue ... same
+order_type exclusions)".
+
+Pre-existing — this branch only changed the function's GRANT. The false
+assurance is what is new, and allowlisting the defect the fixed test found would
+merely have built a second placebo on top of the first.
+
+**FIXED, three parts.**
+
+1. **The SQL**, now identical in shape to `admin_revenue_by_method` beside it:
+   ledger revenue statuses, replacements excluded, refunds netted.
+2. **The JS fallback** in `admin-membership.ts` — the path production runs
+   TODAY, since the RPC is unmigrated — brought to the same rule via
+   `isRevenueOrderStatus` / `isSaleOrder` / `netOrderRevenue`.
+3. **The assertion**, rewritten to scan BALANCED PARENS instead of a regex.
+   `[^)]*` cannot survive nesting, and that is exactly how it went blind. It now
+   finds every `sum(...)` mentioning `amount_paid` however deeply nested and
+   requires `refund_amount` in the same expression, plus a guard-the-guard case
+   asserting the precise shape that used to slip through is now detectable.
+
+**THE REAL ANSWER TO A TEXTUAL PLACEBO IS NOT A BETTER REGEX.**
+`sql/bulk-savings-rollup-executed.test.ts` slices the shipped `create or replace`
+out of the migration file that actually deploys and **executes it against a real
+Postgres**, comparing the result to a ledger-derived expectation. The textual
+check is now explicitly labelled the weaker half of the guard.
+
+**MUTATIONS:**
+
+| mutation | test that caught it |
+|---|---|
+| revert the SQL to the gross, unfiltered sum | fixed textual assertion **+** both executed tests |
+| keep netting, drop the status filter | both executed tests |
+| keep netting + status, drop the replacement exclusion | both executed tests |
+| JS fallback drops the status filter | *bulk-savings tier stats, on the JS fallback* |
+| JS fallback sums gross again | *bulk-savings tier stats, on the JS fallback* |
+
+**The placebo proved directly:** restoring the ORIGINAL regex *and* reverting the
+SQL bug leaves `ledger-sql-parity` fully green — 5 passed, nothing caught. That
+is what it was doing before today.
+
+**GATE.** 263 files / 4170 tests green. Lint and `tsc` clean.
