@@ -1307,17 +1307,24 @@ query (`:31`).
 UTC month rollover is **7:00 PM America/New_York / 4:00 PM Pacific** on the last
 day of the month.
 
-### Evidence — probe (from the parallel investigation, re-derived here)
+### Evidence — probe against the real exported function, run in this session
 
 ```
-startOfCurrentMonthIso @ 2026-01-31T23:55Z = 2026-01-01T00:00:00.000Z
-startOfCurrentMonthIso @ 2026-02-01T00:05Z = 2026-02-01T00:00:00.000Z
-2026-02-01T00:05Z is local ET: Saturday, January 31, 2026 at 7:05 PM
-grant period_month @ Jan 31 = 2026-01 | @ Feb 1 = 2026-02  => two grants ~10 min apart
+$ TZ=UTC npx vitest run scratchpad/k-credit.test.ts
+  startOfCurrentMonthIso @ 2026-01-31T23:55:00.000Z = 2026-01-01T00:00:00.000Z
+  startOfCurrentMonthIso @ 2026-02-01T00:05:00.000Z = 2026-02-01T00:00:00.000Z
+  2026-02-01T00:05:00.000Z is local ET: Saturday, January 31, 2026 at 7:05 PM
+  grant period_month @ Jan 31 = 2026-01 | @ Feb 1 = 2026-02
+  window moves at Saturday, January 31, 2026 at 7:00 PM  (ET)
+  window moves at Saturday, January 31, 2026 at 4:00 PM  (PT)
+
+ Test Files  1 passed (1)   Tests  2 passed (2)
 ```
 
 Two sweep ticks ten minutes apart, both at ~7 PM ET on January 31 from the
-customer's point of view, land in different month buckets.
+customer's point of view, land in different month buckets. The window moves at
+**7:00 PM Eastern / 4:00 PM Pacific**, with five and eight hours of the
+customer's own month still to run.
 
 ### Two consequences
 
@@ -3823,10 +3830,16 @@ a reason. Nothing below is graded higher than its evidence.
 | **Third-party degraded mode** | ✅ | K-13, K-15, K-19. Every dependency classified fail-open/fail-closed; all 11 outbound `fetch` sites tabulated for timeouts. | **`NOT VERIFIED`: retry semantics on non-idempotent operations.** Timeouts were swept; retry-of-a-charge was not traced end to end. |
 | **Background jobs / cron** | 🟨 | K-13, K-14, and K-03's missing claim. Cadence-vs-semantics, failure visibility, maintenance blast radius, the heartbeat gap. | **`NOT VERIFIED`: the per-job bounds/claims table for all 13.** Partially covered via the Phase 1 map, but not independently re-derived here. `retryPendingEmails` **was** independently re-verified — see K-23, which also corrects the map twice. Specifically **not** re-verified: the Shippo sweeps' head-of-line blocking, and `runAutomationSweep` paging the whole orders table. **These are real and already documented in `PHASE1-SYSTEM-MAP.md`; they are unconfirmed only in the sense that this block did not independently reproduce them.** |
 
-**Honest summary:** 21 findings, 6 with runnable probes (`BEHAVIORAL-TEST-PROVEN`),
-15 `SOURCE-INSPECTED`. **Zero `DATABASE-PROVEN` or `BROWSER-PROVEN`** — this block
-had no network and no database, which is the stated ceiling on its evidence, not
-an omission. Nine findings are P1.
+**Honest summary:** 23 findings — **14 P1, 8 P2, 1 P3**. Ten carry a probe that
+was run in this session (`BEHAVIORAL-TEST-PROVEN`); thirteen are
+`SOURCE-INSPECTED`, quoting every line they rest on. **Zero `DATABASE-PROVEN` or
+`BROWSER-PROVEN`** — this block had no network and no database, which is the
+stated ceiling on its evidence, not an omission.
+
+Two further entries carry no id because they are **not defects**: the API-route
+orphan investigation, and the negative controls folded into K-11, K-16, K-18,
+K-21 and K-22. They are recorded so the next session does not re-derive the same
+false starts.
 
 One Phase 1 lead was **disproved** in writing (the Buy-3-Get-1 client/server
 rounding divergence, K-11) and one was **corrected** (the map's prediction that a
@@ -3885,6 +3898,13 @@ Where a parallel investigation surfaced a lead, it was **re-verified against the
 source in this session before being written up** — twice that produced a sharper
 result than the lead (K-05's zero-hour margin, K-07's boundary identity with the
 reminder window), and the sharper version is what is recorded.
+
+One grade was corrected during a self-audit of this file: **K-09** originally
+quoted a probe run elsewhere rather than one run here, which does not meet the
+standard for `BEHAVIORAL-TEST-PROVEN`. The probe was re-run against the real
+exported `startOfCurrentMonthIso` and the output replaced. If you find another
+like it, downgrade it — a grade may not rest on evidence this file did not
+produce.
 
 `website/scratchpad/*.test.ts` is gitignored so audit probes never join the
 203-file suite. If you add probes, keep them there.
@@ -4267,6 +4287,43 @@ describe("resolveCartDiscount float behaviour", () => {
     expect(resolveCartDiscount({ ...base, couponDiscountAmount: 999 }).amount).toBe(500);
     console.log("  negative candidate ->", resolveBestDiscount([{ type: "coupon", amount: -5 }]));
     expect(resolveBestDiscount([{ type: "coupon", amount: -5 }])).toBeNull();
+  });
+});
+```
+
+### K-09 — store-credit month boundary
+
+```ts
+import { describe, it, expect } from "vitest";
+import { startOfCurrentMonthIso } from "@/lib/store-credit";
+
+// store-credit.ts:10-12, transcribed verbatim (not exported).
+const currentPeriodMonth = (now: Date) =>
+  `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+
+const inET = (iso: string) =>
+  new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", dateStyle: "full", timeStyle: "short" })
+    .format(new Date(iso));
+
+describe("store credit month boundary (store-credit.ts:10-22)", () => {
+  it("rolls over at 7 PM Eastern on the last day of the month", () => {
+    const before = "2026-01-31T23:55:00.000Z";
+    const after  = "2026-02-01T00:05:00.000Z";
+    console.log(`  startOfCurrentMonthIso @ ${before} = ${startOfCurrentMonthIso(new Date(before))}`);
+    console.log(`  startOfCurrentMonthIso @ ${after} = ${startOfCurrentMonthIso(new Date(after))}`);
+    console.log(`  ${after} is local ET: ${inET(after)}`);
+    console.log(`  grant period_month @ Jan 31 = ${currentPeriodMonth(new Date(before))} | @ Feb 1 = ${currentPeriodMonth(new Date(after))}`);
+    expect(startOfCurrentMonthIso(new Date(before))).toBe("2026-01-01T00:00:00.000Z");
+    expect(startOfCurrentMonthIso(new Date(after))).toBe("2026-02-01T00:00:00.000Z");
+    expect(currentPeriodMonth(new Date(before))).not.toBe(currentPeriodMonth(new Date(after)));
+  });
+
+  it("the customer's own month still has 5 hours left when the window moves", () => {
+    const rollover = "2026-02-01T00:00:00.000Z";
+    console.log(`  window moves at ${inET(rollover)}  (ET)`);
+    console.log(`  window moves at ${new Intl.DateTimeFormat("en-US",{timeZone:"America/Los_Angeles",dateStyle:"full",timeStyle:"short"}).format(new Date(rollover))}  (PT)`);
+    const etHour = Number(new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",hour:"numeric",hour12:false}).format(new Date(rollover)));
+    expect(etHour).toBe(19);   // 7 PM
   });
 });
 ```
