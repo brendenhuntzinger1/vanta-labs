@@ -33,6 +33,7 @@ pasted verbatim.
 | K-08 | P2 | `BEHAVIORAL-TEST-PROVEN` | The birthday bonus is decided in UTC, so a Pacific member who opens their account on their birthday never gets it |
 | K-09 | P2 | `BEHAVIORAL-TEST-PROVEN` | Store credit is granted and spent on UTC calendar months, so it dies at 7 PM ET on the last day |
 | K-10 | P3 | `BEHAVIORAL-TEST-PROVEN` | The storefront offers bar says "Ends tonight" for a coupon that expires that morning, and for one a year away |
+| K-11 | P2 | `BEHAVIORAL-TEST-PROVEN` | `dollarsToPoints` floors a float, so 4.6% of points redemptions debit one point less than the discount given |
 
 ---
 
@@ -1437,6 +1438,178 @@ storefront copy.
 
 ---
 
+---
+
+## K-11 — `dollarsToPoints` floors a float, so 4.6% of points redemptions debit the customer one point less than the discount they received
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P2 · **Status:** OPEN
+**Area:** money and numeric precision
+
+### What is wrong
+
+`src/lib/points-math.ts` has one rounding helper serving two callers that need
+opposite behaviour:
+
+```ts
+function roundPoints(value: number) {
+  return Math.max(0, Math.floor(value));
+}
+
+export function calculateEarnedPoints(chargeableAmount: number, pointsPerDollar: number, eventMultiplier: number) {
+  return roundPoints(chargeableAmount * pointsPerDollar * eventMultiplier);   // floor is CORRECT here
+}
+
+export function dollarsToPoints(dollars: number) {
+  return roundPoints(dollars * POINTS_PER_DOLLAR_REDEMPTION);                 // floor is WRONG here
+}
+```
+
+For **earning**, `Math.floor` is right: you should not grant a fractional point
+upward, and the input is a genuinely fractional product.
+
+For **redeeming**, the input is already an exact two-decimal money amount — it
+came out of `roundMoney` one line earlier. `dollars * 100` should be an integer,
+and the only reason it is not is IEEE-754: `0.29 * 100` is
+`28.999999999999996`. `Math.floor` then turns that into **28**.
+
+### Evidence — probe, run in this session
+
+```
+$ node points.mjs
+(1) dollarsToPoints(x) !== cents(x) for 4586 of the first 100000 cent amounts
+    first 12: $0.29: want 29 got 28  $0.57: want 57 got 56  $0.58: want 58 got 57
+              $1.13: want 113 got 112  $1.14: want 114 got 113  $1.15: want 115 got 114
+              $1.16: want 116 got 115  $2.01: want 201 got 200  $2.03: want 203 got 202
+              $2.05: want 205 got 204  $2.07: want 207 got 206  $2.26: want 226 got 225
+(2) points -> dollars -> points loses a point for 4586 of the first 100000 balances
+    first 12: 29->28  57->56  58->57  113->112  114->113  115->114  116->115
+              201->200  203->202  205->204  207->206  226->225
+(3) worked example - customer redeems points on a small order
+    total $0.29   discount $0.29   debited 28     fair 29     <-- MISMATCH, store eats 0.01
+    total $1.13   discount $1.13   debited 112    fair 113    <-- MISMATCH, store eats 0.01
+    total $4.58   discount $4.58   debited 458    fair 458
+    total $8.23   discount $8.23   debited 823    fair 823
+    total $12.29  discount $12.29  debited 1229   fair 1229
+```
+
+**4,586 of the first 100,000 amounts — 4.6%.** Not a rare edge; a fixed 1-in-22
+rate across the whole money range.
+
+### The chain that makes it a ledger defect, not just a rounding wobble
+
+```
+quote-order.ts:768   const requestedDollars   = pointsToDollars(requestedPoints);       // Math.round
+quote-order.ts:769   pointsDiscountAmount     = roundMoney(Math.min(requestedDollars, totalAfterCredit));
+quote-order.ts:770   pointsRedeemed           = dollarsToPoints(pointsDiscountAmount);  // Math.floor  <-- here
+quote-order.ts:978   points_redeemed: input.pointsRedeemed,                             // written to the order
+payment-webhook.ts:1061-1063
+                     const pointsRedeemed = Number(order.points_redeemed ?? 0);
+                     if (pointsRedeemed > 0) await redeemPoints(customerUserId, pointsRedeemed, orderId);
+```
+
+`pointsToDollars` uses `Math.round`; `dollarsToPoints` uses `Math.floor`. The
+round trip is asymmetric by construction, and the floor is the leg that touches
+the customer's balance.
+
+So for 4.6% of redemptions the order row permanently records a discount of
+`$X.YZ` alongside a `points_redeemed` worth `$X.YZ − 0.01`, and the points ledger
+is debited the smaller figure.
+
+### Impact
+
+Two things, and the second is the one that matters:
+
+1. **Money**: one cent per affected redemption, always in the customer's favour
+   (the debit is floored, never ceiled). Immaterial per order; a systematic,
+   one-directional leak in aggregate.
+2. **Reconciliation**: `orders.points_redeemed` and the points component of
+   `orders.discount_amount` disagree for 4.6% of orders that redeem points. Any
+   surface that re-derives one from the other — and block F is auditing exactly
+   that class of re-derivation — will flag them as mismatched forever, with no
+   defect to find, because the defect is upstream in a shared helper.
+
+Also worth stating plainly: the customer both **earns** floored and **redeems**
+floored. The floor is correct on the earning leg, so the two do not cancel; they
+compound in opposite directions for the two parties.
+
+### Reproduction
+
+Pure, no database needed:
+
+```js
+const roundMoney = (v) => Math.round(v * 100) / 100;
+const dollarsToPoints = (d) => Math.max(0, Math.floor(d * 100));
+dollarsToPoints(roundMoney(0.29))   // 28, not 29
+```
+
+End-to-end: place an order whose `totalAfterCredit` is `$1.13` and redeem more
+points than the total is worth, then compare `orders.discount_amount` against
+`orders.points_redeemed` and the `points_ledger` debit for that order.
+
+### Smallest safe root-cause fix
+
+Give redemption its own rounding, because its input is already exact:
+
+```ts
+export function dollarsToPoints(dollars: number) {
+  // The input is an exact 2dp money amount from roundMoney, so `* 100` is an
+  // integer in every case except IEEE-754 representation (0.29 * 100 is
+  // 28.999999999999996). Round, do not floor: flooring silently debits a point
+  // less than the discount granted, for 4.6% of amounts.
+  return Math.max(0, Math.round(dollars * POINTS_PER_DOLLAR_REDEMPTION));
+}
+```
+
+Leave `calculateEarnedPoints` on `roundPoints`/`Math.floor` — floor is correct
+there, and the two callers wanting different behaviour from one helper is the
+actual root cause. Splitting them is the fix; changing `roundPoints` itself would
+break earning.
+
+### Regression test to write
+
+Assert `dollarsToPoints(roundMoney(c / 100)) === c` for every integer `c` in
+`1..100000`. That is the invariant, it is cheap to check exhaustively, and it
+fails today on 4,586 values. Negative control: restore `Math.floor` and confirm
+it fails on exactly those, starting at `$0.29`.
+
+Add the mirror assertion for `calculateEarnedPoints` so a later "make them
+consistent" refactor cannot quietly ceil the earning leg.
+
+### CROSS-BLOCK
+
+- `src/lib/quote-order.ts:768-770` — **shared file**, no change required; the fix
+  is entirely inside `src/lib/points-math.ts`, which no block owns.
+- `src/lib/payment-webhook.ts:1061-1063` — **Block A+B**, no change required; it
+  reads the corrected value.
+- **Block F** should be told this exists before they chase
+  `points_redeemed` vs `discount_amount` mismatches as a reporting defect. It is
+  not; it is upstream.
+
+### Also checked, and clear
+
+- `calculateCardProcessingFee` (`src/lib/payment-methods.ts:116-124`) — wraps the
+  product in `roundMoney`. Correct.
+- `src/lib/bundle-pricing.ts` — `roundMoney` on every unit price and line total,
+  and `toRate` (`:71-78`) carries the blank guard K-06 found missing elsewhere.
+  This module is a model for the rest. Correct.
+- **The client/server Buy-3-Get-1 rounding divergence flagged as a P1 lead in the
+  Phase 1 map does not reach the customer.** `src/lib/quote-order.ts:250` wraps
+  the sum in `roundMoney` and `src/components/cart-context.tsx:164` does not, so
+  the two genuinely differ — but only by a float epsilon, and the anti-tamper
+  guard at `quote-order.ts:782-786` compares with a full **one-cent** tolerance
+  (`Number(input.expectedTotal) < expectedTotal - 0.01`), which an epsilon cannot
+  cross. The client value is displayed through `Intl.NumberFormat`, which rounds
+  to 2dp for display. **Downgraded: not a defect.** The *real* divergence in that
+  pair is the price source — the client expands `item.price` from the
+  localStorage snapshot while the server resolves the live catalog price
+  including dose `salePrice` — which is a stale-state issue belonging to
+  **Block G+H** (browser) and **Block D** (discounts), not a rounding one.
+- `numeric(12,2)` headroom: the per-line cap is 99 units (`quote-order.ts`) with a
+  500-unit order ceiling, so no realistic order approaches the
+  `9,999,999,999.99` column limit. No overflow path found.
+
+---
+
 # Appendix A — probe sources
 
 The probes below produced the verbatim output quoted in the findings above. They
@@ -1727,3 +1900,43 @@ console.log("same cron tick that sends the final email.");
 ```
 
 ---
+
+### K-11 — points/dollars precision
+
+```js
+const POINTS_PER_DOLLAR_REDEMPTION = 100;
+const roundPoints = (v) => Math.max(0, Math.floor(v));
+const pointsToDollars = (p) => Math.round((p / POINTS_PER_DOLLAR_REDEMPTION) * 100) / 100;
+const dollarsToPoints = (d) => roundPoints(d * POINTS_PER_DOLLAR_REDEMPTION);
+const roundMoney = (v) => Math.round(v * 100) / 100;
+
+// (1) dollarsToPoints on an ordinary 2dp money value
+let lost = [];
+for (let c = 1; c <= 100000; c++) {
+  const dollars = roundMoney(c / 100);          // a real money amount, e.g. 0.29
+  if (dollarsToPoints(dollars) !== c) lost.push([dollars, c, dollarsToPoints(dollars)]);
+}
+console.log(`(1) dollarsToPoints(x) !== cents(x) for ${lost.length} of the first 100000 cent amounts`);
+console.log("    first 12:", lost.slice(0, 12).map(([d, want, got]) => `$${d}: want ${want} got ${got}`).join("  "));
+
+// (2) the round trip quote-order.ts:768-770 actually performs
+let rt = [];
+for (let p = 1; p <= 100000; p++) {
+  const requestedDollars = pointsToDollars(p);
+  const amount = roundMoney(Math.min(requestedDollars, 9999));   // total not binding
+  if (dollarsToPoints(amount) !== p) rt.push([p, dollarsToPoints(amount)]);
+}
+console.log(`(2) points -> dollars -> points loses a point for ${rt.length} of the first 100000 balances`);
+console.log("    first 12:", rt.slice(0, 12).map(([p, g]) => `${p}->${g}`).join("  "));
+
+// (3) the clamped case: the order total, not the balance, decides
+console.log("(3) worked example - customer redeems points on a small order");
+for (const total of [0.29, 1.13, 4.58, 8.23, 12.29]) {
+  const requestedPoints = 100000;
+  const requestedDollars = pointsToDollars(requestedPoints);
+  const pointsDiscountAmount = roundMoney(Math.min(requestedDollars, total));
+  const pointsRedeemed = dollarsToPoints(pointsDiscountAmount);
+  const fair = Math.round(pointsDiscountAmount * 100);
+  console.log(`    total $${String(total).padEnd(6)} discount $${String(pointsDiscountAmount).padEnd(6)} debited ${String(pointsRedeemed).padEnd(6)} fair ${String(fair).padEnd(6)} ${pointsRedeemed !== fair ? "<-- MISMATCH, store eats " + ((fair - pointsRedeemed) / 100).toFixed(2) : ""}`);
+}
+```
