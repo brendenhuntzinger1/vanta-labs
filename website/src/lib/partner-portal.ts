@@ -523,16 +523,32 @@ export async function createPartnerApplication(input: {
     assertNoSupabaseError("rpc(create_partner_application)", createError);
   }
 
-  const createdRow = (created ?? {}) as { partner_id?: string; status?: string; referral_code?: string; created?: boolean };
+  const createdRow = (created ?? {}) as {
+    partner_id?: string; status?: string; referral_code?: string;
+    created?: boolean; adopted?: boolean;
+  };
+
+  // Always answer with the identity the FUNCTION settled on, never the ids this
+  // function generated. When an admin pre-added this person, the surviving row
+  // is theirs: its id, its status, and the referral code the admin issued —
+  // which may already be in circulation. Returning the locally generated ones
+  // would tell the applicant their code is something it is not.
+  const resolved = {
+    partnerId: String(createdRow.partner_id ?? partnerId),
+    status: String(createdRow.status ?? "pending"),
+    referralCode: String(createdRow.referral_code ?? referralCode),
+  };
 
   // An application that already existed is returned as-is, so the caller sees
   // the same shape as the early-return above and nothing downstream re-notifies.
-  if (createdRow.created === false) {
-    return {
-      partnerId: String(createdRow.partner_id ?? partnerId),
-      status: String(createdRow.status ?? "pending"),
-      referralCode: String(createdRow.referral_code ?? referralCode),
-    };
+  //
+  // Adoption is NOT that case. The row existed only because an admin pre-added
+  // this person; they have just completed their first application, so it
+  // notifies like any other. A later re-submit cannot double-send: by then they
+  // have a partners row and the early return at the top of this function
+  // short-circuits before the RPC is ever reached.
+  if (createdRow.created === false && !createdRow.adopted) {
+    return resolved;
   }
 
   try {
@@ -546,7 +562,7 @@ export async function createPartnerApplication(input: {
   // new application is never missed. Best-effort — never blocks the application.
   try {
     const applicationQueueRowId = await enqueueNotification("partner_application_received", input.email, {
-      partnerId,
+      partnerId: resolved.partnerId,
       name: input.name,
       email: input.email,
     });
@@ -577,11 +593,7 @@ export async function createPartnerApplication(input: {
     // Admin alert is best-effort; the application itself already succeeded.
   }
 
-  return {
-    partnerId,
-    status: "pending",
-    referralCode,
-  };
+  return resolved;
 }
 
 export async function getPartnerProgramStats(): Promise<PartnerProgramStats> {
