@@ -25,6 +25,9 @@ pasted verbatim.
 |---|---|---|---|
 | K-01 | P2 | `BEHAVIORAL-TEST-PROVEN` | Cart-recovery emails state the coupon's expiry in UTC, so a West Coast customer is told they have 7 hours they do not have |
 | K-02 | P2 | `SOURCE-INSPECTED` | Both cart-recovery email templates hardcode "5% off" while the discount percent is admin-configurable |
+| K-03 | P1 | `BEHAVIORAL-TEST-PROVEN` | The membership renewal charge's only double-charge guard is keyed to the UTC calendar date, and the post-charge state write is unchecked |
+| K-04 | P1 | `SOURCE-INSPECTED` | The affiliate link records IP, UA and campaign parameters and sets a 30-day identifier before consent is asked, contradicting three published promises |
+| K-05 | P1 | `BEHAVIORAL-TEST-PROVEN` | The 72h "last chance" recovery email ships a dead coupon code, and prints the literal string `SEE PREVIOUS EMAIL` |
 
 ---
 
@@ -649,3 +652,148 @@ rather than looking like a general slackness:
 
 The browser half of this system was built carefully. The server half was never
 told the decision exists.
+
+---
+
+## K-05 — The 72h "last chance" recovery email ships a dead coupon code, and the code it prints is the literal string `SEE PREVIOUS EMAIL`
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P1 · **Status:** OPEN
+**Area:** time/date boundaries × background jobs
+
+### What is wrong
+
+`src/lib/cart-recovery.ts:316-321`, the final stage of the abandoned-cart sequence:
+
+```ts
+if (config.t72hEnabled && elapsedMs >= 72 * HOUR_MS) {
+  const alreadyHasCoupon = await hasSentStage(row.id, "t24h");
+  const coupon = alreadyHasCoupon ? null : await mintCartRecoveryCoupon(…);
+
+  if (alreadyHasCoupon || coupon) {
+    const couponForEmail = coupon ?? { code: "SEE PREVIOUS EMAIL", expiresAt: new Date(now + config.couponExpirationHours * HOUR_MS).toISOString() };
+```
+
+When the t24h stage already ran — the normal path — the t72h stage deliberately
+does not mint a second code. That much is right: one cart, one code. But instead
+of *loading* the code it is referring to, it **invents a placeholder**:
+
+- **The code becomes the literal string `"SEE PREVIOUS EMAIL"`**, rendered
+  straight into the template as if it were a coupon:
+  `Use code <strong>${escapeHtml(input.couponCode)}</strong> for 5% off`
+  (`src/lib/email/templates.ts:1141`). The customer is shown
+  **"Use code SEE PREVIOUS EMAIL"**.
+- **The expiry is fabricated from the sweep's clock**, `now + couponExpirationHours`,
+  with no reference to the coupon row that actually exists. The email states an
+  expiry that no coupon in the database has.
+
+### The default configuration puts the real coupon's death on the exact tick that sends this email
+
+This is the part that turns an ugly placeholder into a broken flow. Three
+independent numbers line up:
+
+- the t24h stage fires at `elapsedMs >= 24h` (`cart-recovery.ts:286`)
+- the t72h stage fires at `elapsedMs >= 72h` (`cart-recovery.ts:316`) — **48h later**
+- `couponExpirationHours` defaults to **48** (`src/lib/admin-control.ts:249`)
+
+and the sweep runs on a fixed `*/30 * * * *` schedule (`website/vercel.json`), so
+both stages land on cron ticks exactly 48h apart. Mint + 48h **is** the t72h tick.
+
+### Evidence — probe, run in this session
+
+```
+$ node t72.mjs
+cart first_seen_at         2026-08-20T09:07:00.000Z
+t24h mail + coupon minted  2026-08-21T09:30:00.000Z
+  real coupons.ends_at     2026-08-23T09:30:00.000Z
+t72h 'last chance' mail    2026-08-23T09:30:00.000Z
+  email says expires       2026-08-25T09:30:00.000Z
+  email says code is       "SEE PREVIOUS EMAIL"
+
+real coupon still alive when the last-chance mail is sent? false (margin: 0h)
+overstatement in the email: 48 hours
+```
+
+The gate that rejects it is real: `src/lib/coupons.ts:157` —
+`if (data.ends_at && new Date(data.ends_at).getTime() < now) throw new Error("This coupon has expired")`.
+
+The margin is zero, not negative, so whether the code is dead *at* the send
+instant or dies seconds later depends on where each cart sits in the sweep's
+loop. It is a coin flip with no upside: every recipient's code is dead well
+before anyone opens a marketing email, and the mail they are reading promises
+them another 48 hours.
+
+### Scope — when this does and does not bite
+
+| `couponExpirationHours` | real code at the t72h send | email claims |
+|---|---|---|
+| 24 | dead for 24h already | +24h |
+| **48 (default)** | **dies on this exact tick** | **+48h** |
+| 72 | alive, 24h left | +72h — still false |
+
+The fabricated expiry is wrong at every setting. The *dead code* is what the
+default produces.
+
+The bug needs `t24hEnabled` true (the default). If the t24h stage is disabled, or
+its send failed — `reserveAndSendStage` deletes its reservation row on failure
+(`cart-recovery.ts:215-218`) — then `hasSentStage` is false, a fresh coupon is
+minted, and the t72h email is correct. So the defect is confined to the happy
+path, which is nearly every cart.
+
+### Impact
+
+The last and highest-intent stage of the recovery sequence is dead on arrival.
+Every recipient who acts on it either types `SEE PREVIOUS EMAIL` into the coupon
+box, or digs out the real `SAVE-…` code from 48 hours earlier and gets
+*"This coupon has expired"* at checkout. The store paid to track the cart and
+send four emails and cannot honour the offer in the last one.
+
+The stated expiry is also a written, dated promise in a transactional email that
+the store will refuse. Combined with K-02 (the same two templates advertise a
+hardcoded "5% off" regardless of the configured discount), every substantive
+claim in this email — the code, the discount and the deadline — can be wrong at
+the same time.
+
+### Reproduction
+
+1. Defaults: `t24hEnabled`, `t72hEnabled` true, `couponExpirationHours` 48
+   (`src/lib/admin-control.ts:243-250`).
+2. Seed `abandoned_carts` with `status='active'` and
+   `first_seen_at = now() - interval '73 hours'`, one item, a real email.
+3. `curl -H "Authorization: Bearer $CRON_SECRET" /api/cron/sweep`.
+4. Read the delivered t72h mail: the code reads **SEE PREVIOUS EMAIL** and the
+   expiry is ~48h in the future.
+5. `select code, ends_at from coupons where source='cart_recovery' and assigned_email='…';`
+   → `ends_at` is ~48h **earlier** than the email's date, or absent entirely if
+   step 2 skipped the t24h send.
+6. Apply that `SAVE-…` code at checkout → *"This coupon has expired"*.
+
+### Smallest safe root-cause fix
+
+Load the coupon instead of inventing it. `reserveAndSendStage` already threads a
+`coupon_id` (`input.couponId ?? null`) into `abandoned_cart_emails`; the t24h call
+site simply does not pass it. Pass it there, then in the t72h branch read that row
+back and use its real `code` and `ends_at`.
+
+If the loaded coupon has already expired — which under the default config it
+always has — mint a fresh code for the final email rather than pointing at a dead
+one. That is what the customer is being promised, and it costs one INSERT.
+
+**Never synthesise an expiry the database does not hold.** The placeholder string
+`"SEE PREVIOUS EMAIL"` should not survive the fix in any branch; if no coupon can
+be resolved, send the stage without a coupon block at all.
+
+### Regression test to write
+
+Drive `runAbandonedCartSweep` against a stubbed Supabase with one cart at
+`first_seen_at = now - 73h` and an existing t24h `abandoned_cart_emails` row, and
+assert the rendered t72h body contains the real `SAVE-…` code and an expiry
+strictly in the future. Negative control: restore the
+`?? { code: "SEE PREVIOUS EMAIL", … }` fallback and confirm the test fails on the
+literal string — not on a missing stub.
+
+### CROSS-BLOCK
+
+- `src/lib/email/templates.ts:1127-1147` — **Block C.** Carrying the real
+  `discountPercent` through (K-02) needs a template-signature change here. The
+  expiry fix itself does not require it.
+- `src/lib/cart-recovery.ts` is unowned; the fix lands there.
