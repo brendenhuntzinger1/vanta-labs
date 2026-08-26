@@ -1835,3 +1835,32 @@ forever — went unnoticed.
 Both gaps were closed and re-run rather than being written up as equivalent.
 Evidence grade: **BEHAVIORAL-TEST-PROVEN**; policy text **SOURCE-INSPECTED**
 from the rendered page.
+
+### 6.8 WORKLIST-2 re-verified against the MERGED tree
+
+The open list was built from nine unmerged branches. Several entries describe
+defects another block had already fixed on its own branch — so the first job
+was to stop treating pre-merge status as current, and re-check each by its
+**symptom** rather than by its label.
+
+Grepping for finding IDs was tried and **rejected as a signal**: `C-03` appears
+nowhere in `src/` and is nonetheless fully fixed, while `C-15` matches 31 files
+for unrelated reasons. Every verdict below comes from reading the code that
+would carry the defect.
+
+| ID | Verdict | Evidence |
+|---|---|---|
+| **C-03** admin shipping-email branch dead / wrong template | ✅ **CLOSED by merge** | The branch is live, gated on `statusTransitioned \|\| trackingAddedOrChanged`, selects `deliveryConfirmationTemplate` for delivered and `shippingUpdateTemplate` otherwise, and quotes `order_number` rather than the internal `order-<uuid>` |
+| **C-07** `vitest.setup.ts` globally stubs subsystems | ✅ **CLOSED by merge** | The file is now 77 lines and mocks **nothing**. Nine of the eleven stubs were deleted after measuring that each changed the result by zero tests; two moved into the suites that need them |
+| **D-06** `startMembershipSignup` untestable | ✅ **CLOSED by merge** | `membership-signup-behaviour.test.ts`, **15 tests, all green**, exercising the real function |
+| **F-A-13** degraded insert blanks the tax jurisdiction | ✅ **CLOSED by merge** | `tax_state`/`tax_rate_percent` are in `ORDER_INTEGRITY_COLUMNS`, the peel is per-column, and losing one raises `order_integrity_column_missing` at **critical**. Covered by *"KEEPS the sales-tax audit trail when it degrades"* and *"never drops a guard column SILENTLY"* — 12 tests green |
+| **G-03** orphan order on provider failure | ✅ **FIXED this session** | §6.3 — browser-reproduced, fixed, 5/5 mutations killed, browser-re-verified |
+| **K-03** renewal double-charge | ✅ **FIXED this session** | §6.6 — 4/5 mutations killed, 5th reported equivalent with proof |
+| **K-04** affiliate link tracks before consent | ✅ **FIXED this session** | §6.7 — 7/7 mutations killed over two rounds |
+| **C-08** `sendEmail` results discarded | ⚠️ **PARTIALLY open — measured, not guessed** | 41 call sites; **37 awaited**, but only **14** inspect the result. The remainder is a systemic hardening task across many files, not one defect, and a sweeping late-audit refactor is exactly what the "smallest root-cause fix" rule exists to prevent. Reported with the number rather than closed |
+| **K-02** cart-recovery templates hardcode "5% off" | ⚠️ **OPEN — confirmed still present** | `templates.ts` hardcodes the literal "5% off" in the subject, preheader, title, body and text of the cart-recovery email while the discount is admin-configurable. A P2 that misstates a discount to a customer |
+| **K-06** hand-copied numeric config guards | ⚠️ **OPEN — confirmed still present** | `admin-control.ts` has 5 `Number.isFinite` guards against 8+ bare `Number(...)` reads; `discountPercent` and `couponExpirationHours` (cart-recovery coupon money) are among the unguarded |
+
+The remaining WORKLIST-2 entries are carried into the certification with their
+evidence grade, not silently dropped. **No entry is marked closed on the
+strength of a label.**
