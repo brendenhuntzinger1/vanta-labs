@@ -1,4 +1,4 @@
-# Block E — Test quality
+# Block E-A — Test quality (session `claude/block-ab-audit-zuuyuz`)
 
 Session branch: `claude/block-ab-audit-zuuyuz` (this session ran block C, then
 block E). Scope per the assignment table: `*.test.ts` and the test harness.
@@ -10,7 +10,7 @@ block E). Scope per the assignment table: `*.test.ts` and the test harness.
 
 ---
 
-## E-01 — `vitest.setup.ts` stubbed eleven modules for every suite; nine were load-bearing for nothing
+## E-A-01 — `vitest.setup.ts` stubbed eleven modules for every suite; nine were load-bearing for nothing
 
 | | |
 |---|---|
@@ -126,7 +126,7 @@ cannot fail a test whose `sendEmail` always returns `{ success: true }`.
 
 ---
 
-## E-02 — Mutation testing the six flagged clusters: 14 mutants, 2 real survivors, both closed
+## E-A-02 — Mutation testing the six flagged clusters: 14 mutants, 2 real survivors, both closed
 
 | | |
 |---|---|
