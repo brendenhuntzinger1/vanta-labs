@@ -34,8 +34,22 @@ Five defects, confirmed against production data:
   one-time correction of figures that were wrong when captured, not a new mutable-cost policy.
 - No repricing. Nothing here touches `price_cents`.
 - No change to `count_sales_tax_as_profit`, the free-shipping threshold, or the tax nexus list.
-  FIN-03 (tax collection disabled) is **out of scope** and remains open.
 - No RLS, grant, or auth work — that belongs to the other audit lanes.
+
+### FIN-03 (sales tax) — OUT OF SCOPE, OWNED BY ANOTHER LANE, STILL OPEN
+
+Sales tax collection is switched off store-wide (`tax.nexus_states` is blank), including Florida, where
+the business is physically located. Two paid Florida orders collected $0.00.
+
+This is **deliberately excluded** from this implementation — the tax/configuration audit lane owns it.
+It must NOT disappear from the final report on that account. It remains an **unresolved, high-priority
+production and compliance finding**, and every report this lane produces carries it forward as open and
+externally owned until that lane closes it.
+
+### §C3 (financial-ledger unique indexes) — DEFERRED BY THE OWNER
+
+Not implemented while other audit sessions are active, because it is a schema change to live financial
+ledgers. Carried as a **recommended hardening follow-up** (see §C3).
 
 ---
 
@@ -125,35 +139,62 @@ Mirrors the existing, proven pattern: `pending_emails` + `src/lib/email/retry-qu
 backoff, `MAX_ATTEMPTS = 5`, drained by `/api/cron/sweep` every 30 minutes (`vercel.json`). No second
 mechanism is invented.
 
-**C1. Table `pending_financial_effects`**
+**C1. AMENDED 2026-08-26 — absence-based repair, not an outbox.**
 
-```
-id             uuid pk
-order_id       text not null
-effect_kind    text not null
-payload        jsonb not null default '{}'
-attempts       integer not null default 0
-last_error     text
-next_attempt_at timestamptz not null default now()
-status         text not null default 'pending'   -- pending | succeeded | failed
-created_at     timestamptz not null default now()
-updated_at     timestamptz not null default now()
-unique (order_id, effect_kind) where status = 'pending'
-```
+The original design specified a `pending_financial_effects` table with enqueue wiring in each catch block.
+Superseded during planning: `src/lib/commission-accrual-repair.ts` already implements a better pattern for
+this exact problem, is already registered in the cron, and is already running every 30 minutes.
 
-The partial unique index prevents an effect double-enqueueing for one order.
+Why absence detection wins here:
+
+- **No migration.** `orders` is already the durable record. The whole fix is code, so it lands inside
+  Phase 1 rather than behind the Phase 2 wall.
+- **Repairs the existing backlog**, not just failures after deploy — which matters, because the commission
+  ledger is empty from precisely this bug.
+- **Idempotent by construction.** The sweep looks for ABSENCE, so a second run finds nothing to do. No
+  enqueue can be lost between the failure and the record of it.
+
+Each sweep mirrors `repairMissingCommissionAccruals`: bounded lookback and limit, oldest first, read
+candidates → read what already exists → set-difference → repair loop, `{scanned, repaired, failed}`,
+a critical `recordSystemAlert` naming the unrecovered orders, and a throw on read error ("a sweep that
+cannot read is not a sweep that found nothing").
+
+**Absence conditions:**
+
+| effect | absence condition |
+|---|---|
+| commission accrual | **already implemented** — `repairMissingCommissionAccruals` |
+| shipping cost | `label_purchased_at` not null, `shippo_transaction_id` not null, `actual_shipping_cost_cents` null |
+| refund amount | `payment_status='refunded'`, `refund_amount = 0` |
+| `reverseOrderPoints` | refunded, `points_earned > 0`, no `points_ledger` row `(order_id, 'order_refund_reversal')` |
+| `restoreRedeemedPoints` | refunded, `points_redeemed > 0`, no `points_ledger` row `(order_id, 'order_refund_points_restore')` |
+| `refundStoreCreditForOrder` | refunded, `store_credit_redeemed_cents > 0`, no `store_credit_ledger` row `(order_id, 'membership_redemption_refund')` |
+
+The four refund-triggered effects share one scan over refunded orders rather than four separate sweeps.
+
+**Two new modules:** `src/lib/shipping-cost-repair.ts` and `src/lib/refund-effect-repair.ts`, each
+registered as a job in `src/app/api/cron/sweep/route.ts`.
+
+**DEPLOYMENT IS A PHASE 2 DECISION.** These sweeps are pure code, but once deployed they write to
+production on their schedule. They are built and tested behind the wall; the deploy call is the owner's,
+separately.
+
+**Absence detection does NOT rescue the five alert-only effects.** Check-then-act is not atomic, and those
+five have no convergence guard if two sweeps overlap — unlike the six, which do. They need the uniqueness
+constraints in §C3, which is deferred. They stay alert-only.
 
 **C2. Retry is only safe for an idempotent effect.** Audited each one against its implementation:
 
-**Auto-retry — guarded, verified idempotent:**
+**Auto-retry — guarded, verified idempotent.** Idempotency is asserted for the WHOLE effect — primary
+write plus every downstream ledger entry, email, counter and notification — not for the primary write
+alone.
 
-| effect | guard |
+| effect | guard, including downstream |
 |---|---|
-| `ensureCommissionRecord` | refuses to regress a non-`pending` commission (`payment-webhook.ts:769`) |
-| `finalizeInventoryForOrder` | acts only on `status='active'` reservations |
-| `recordActualShippingCost` | fixed-value UPDATE; audit insert guarded by A5 |
-| refund-amount recording | fixed-value UPDATE |
-| `reverseOrderPoints` | existing-row guard on `order_id` (`membership.ts:412`) |
+| `ensureCommissionRecord` | refuses to regress a non-`pending` commission; a retry after a successful insert takes the UPDATE branch, which never reaches `notifyAmbassadorOfNewCommission`, so no second email. `commissions` mirror is an upsert on `order_id`. |
+| `recordActualShippingCost` | fixed-value UPDATE. The `order_shipping_cost_audit` insert is unconditional and WOULD duplicate — retry-safe only once A5 lands. Conditional on A5. |
+| refund-amount recording | fixed-value UPDATE, no downstream |
+| `reverseOrderPoints` | `(order_id, reason='order_refund_reversal')` existing-row guard; its only downstream, `recordPointsLedgerEntry`, sits behind that guard (`membership.ts:427-437`) |
 | `restoreRedeemedPoints` | guard on `(order_id, reason)` (`membership.ts:470-472`) |
 | `refundStoreCreditForOrder` | explicit already-refunded guard (`store-credit.ts:142-149`) |
 
@@ -161,35 +202,42 @@ The partial unique index prevents an effect double-enqueueing for one order.
 
 | effect | why |
 |---|---|
+| inventory decrement (composite) | `finalizeInventoryForOrder` alone IS idempotent (acts only on `active` reservations). But the caught block falls through to `decrementInventoryForOrder` whenever `fin.degraded \|\| fin.finalized === 0` — an unguarded loop of `applyInventoryDelta(-qty)` with no order-scoped claim (`inventory-fulfillment.ts:79-90`). That fallback fires in exactly the case worth retrying (an expired hold), so a retry double-decrements. The RESTOCK direction has an exactly-once latch (`inventory_restocked_at`); the DECREMENT direction has none. Making this retry-safe needs a per-order decrement claim — a schema change, deferred with §C3. |
 | `recordPointsLedgerEntry` (`order_earn`) | bare `INSERT`, no `(order_id, reason)` guard (`membership.ts:356`) |
 | `redeemStoreCredit` | bare insert, no guard (`store-credit.ts:115`) |
 | `redeemCoupon` | unconditional atomic increment, and no order linkage exists to guard on |
 | `activatePaidMembership` | upserts the membership idempotently, but then calls `recordBillingEvent({eventType:"renewal"})` as a bare INSERT (`membership-billing.ts:306`) — a retry duplicates a renewal in the billing ledger and re-sends the welcome email. It also recomputes `renews_at` from `now()`, shifting the period by the retry delay. |
 
-These four raise a critical alert and appear in the admin queue, but are never auto-retried. None can
-double-charge a customer; they fail in the direction of a benefit not being applied, or a duplicated
-ledger row, which is why they are held for a human.
+These five raise a critical alert and appear in the admin queue, but are never auto-retried.
 
-> An earlier draft placed `activatePaidMembership` in the auto-retry bucket on the strength of a
-> duplicate-purchase guard that turned out to belong to `createMembershipCheckoutSession`, a different
-> function. Verified against the implementation and moved.
+Final split: **6 auto-retry, 5 alert-only.**
 
-**C3. Optional, called out rather than smuggled in.** Adding a partial unique index on
-`points_ledger(order_id, reason)` and `store_credit_ledger(order_id, reason)` would move two of those three
-into the auto-retry bucket. It is a schema change on financial ledgers and needs its own approval; it is
-**not** included by default. `redeemCoupon` cannot be fixed this way — it would need a
+> Two effects were moved OUT of the auto-retry bucket during spec review, both for the same reason — the
+> primary write was idempotent but a downstream effect was not:
+>
+> - `activatePaidMembership` — credited with a duplicate-purchase guard that actually belongs to
+>   `createMembershipCheckoutSession`. Its real path upserts the membership idempotently, then calls
+>   `recordBillingEvent({eventType:"renewal"})` as a bare INSERT.
+> - inventory decrement — `finalizeInventoryForOrder` is guarded, but the composite block's legacy
+>   fallback is not.
+>
+> This is the criterion the owner set: an operation is retryable only when every downstream side effect,
+> ledger entry, email, counter and notification is also proven idempotent.
+
+**C3. DEFERRED — NOT IN THIS IMPLEMENTATION.** Adding a partial unique index on
+`points_ledger(order_id, reason)` and `store_credit_ledger(order_id, reason)` would move two alert-only
+effects into the auto-retry bucket, and a per-order decrement claim would move a third (inventory). These
+are schema changes to live financial ledgers and the owner has explicitly deferred them while other audit
+sessions are active. Recorded as **recommended hardening follow-up**; not implemented here. `redeemCoupon` cannot be fixed this way — it would need a
 `coupon_redemptions(order_id, code)` table, which is a separate piece of work.
 
-**C4. Wiring.** Each `catch` block keeps its `console.error` and adds `enqueueFinancialEffect(...)` for an
-auto-retry effect, or `recordSystemAlert({severity: 'critical'})` for an alert-only one. The side-effect
-claim latch is unchanged — the outbox, not the latch, is what makes the effect eventually happen.
+**C4. Alert-only wiring.** The five unsafe effects keep their `console.error` and gain a critical
+`recordSystemAlert` so the failure is durable and operator-visible instead of living in a serverless log.
+The side-effect claim latch is unchanged.
 
-**C5. Drain.** `/api/cron/sweep` gains a financial-effects pass: claim due rows with
-`FOR UPDATE SKIP LOCKED`, re-run the effect, mark `succeeded`, or increment `attempts` with backoff. At
-`attempts >= 5`, set `failed` and raise a critical alert.
-
-**C6. Admin surface.** A "Needs attention" list of `failed` and long-`pending` rows, so an exhausted effect
-is visible without reading logs.
+**C5. Cron registration.** Two entries added to the keyed `JOBS` registry in
+`src/app/api/cron/sweep/route.ts`. The registry is keyed, not positional, so adding jobs cannot mislabel
+existing ones.
 
 ---
 
@@ -227,15 +275,28 @@ desktop. Nothing else here is customer-facing.
 
 ---
 
-## F. Sequencing and risk
+## F. Sequencing — HARD WALL BEFORE PRODUCTION
 
-1. Code + tests, verified locally. Nothing touches production.
-2. Report the idempotency buckets and test results to the owner.
-3. Schema additions (`pending_financial_effects`, `order_cost_restatements`, archive tables).
-4. Production data writes **only on the owner's go-ahead**, each preceded by a read-back, each reversible:
-   parent-cost NULLs → cost restatement → 3PL archive+delete → shipping backfill.
-5. Notify the other two audit sessions before step 4 — they are reading this database and a cost change
-   mid-audit would confuse their results.
+**Phase 1 — permitted now (this branch only):** code changes, tests, and migration//backfill SQL written
+to files but NOT executed.
+
+**Phase 2 — BLOCKED pending separate explicit approval.** Nothing in this list may run until the owner
+approves it after reviewing exact affected-row counts:
+
+- any production data write (parent-cost NULLs, cost restatement, cerebrolysin/pinealon NULLs)
+- any migration (`pending_financial_effects`, `order_cost_restatements`, archive tables)
+- any destructive or archive operation (the 198 `fulfillment_*` rows)
+- any financial-ledger modification
+- any configuration change (including D1, persisting the 8% fee)
+- the shipping backfill (A1, A4)
+
+At the Phase 1 / Phase 2 boundary the owner receives: code changes, tests added, mutation controls, exact
+full-suite results, the 6 auto-retry effects with proof of idempotency, the 5 alert-only effects with the
+exact reason each is unsafe, proposed production changes with exact affected-row counts, a
+rollback/recovery plan, anything still unverified, and confirmation that no production data, schema or
+configuration was changed.
+
+The other two audit sessions are notified before any Phase 2 step — they are reading this database.
 
 **Primary risk:** a retry of an effect wrongly believed idempotent. Mitigated by C2's per-effect audit, by
 the run-twice tests in §E, and by defaulting to alert-only whenever idempotency is not provable.
