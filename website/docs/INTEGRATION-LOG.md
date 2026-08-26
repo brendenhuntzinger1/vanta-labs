@@ -2224,3 +2224,47 @@ change — assertions migrated to the new semantics, and
 distinguishable from `already_claimed`, which is the entire point.
 
 **GATE.** 261 files / 4155 tests green. Lint and `tsc` clean.
+
+## N-03 (P1) — a new dose stole `is_default` and `position` — regression from K-xx
+
+**FOUND.** `editableDoseValues` derives `position` and `is_default`
+POSITIONALLY: from the index, and from whether any SIBLING already claims to be
+default. `replaceProductDoses` passes the full-array index on the UPDATE branch,
+but new doses went through `createDoseRows(productId, inserts)`, which re-mapped
+over `inserts` — re-indexing the subset from zero and narrowing the sibling
+check to it.
+
+Add a 20mg to a product whose 5mg is default: the new dose is alone in
+`inserts`, sees `index === 0` and no sibling claiming default, and is written
+with `position: 0, is_default: true`. Two rows now claim default, and the
+storefront's pre-selected dose and the price on the product card both follow it.
+
+**This is a regression the merge-not-delete refactor introduced.** Before it,
+`createDoseRows` always received the full list.
+
+**FIXED.** The index travels WITH the dose (`Array<{ dose, index }>`), and the
+full list is passed separately as `allDoses`. Both arguments are load-bearing and
+independently so — which the mutations proved.
+
+**TEST.** Four cases added to `dose-replacement-preserves-inventory.test.ts`. The
+existing suite covered create-from-empty (where `inserts === doses` and the
+indices coincide) and update-in-place (which never reaches this branch), so
+nothing exercised the one shape that breaks: adding a dose to a product that
+already has one.
+
+**MUTATIONS:**
+
+| mutation | test that caught it |
+|---|---|
+| re-index inserts from zero | *puts a NEW dose after the existing ones* |
+| scope the sibling-default check to the inserted subset | *does not let a new dose inserted FIRST steal default* |
+| make `is_default` unconditional on index 0 | *still lets the admin promote a new dose to default* |
+
+The second mutation SURVIVED the first time. The index guard masks the sibling
+check in every case EXCEPT a new dose landing at index 0 of the full list — a new
+2mg added in front of the 5mg — and nothing tested that. The `allDoses` argument
+was effectively unproven until the case was added. Recorded because it is the
+same lesson as N-02's surviving mutation: a passing mutation control is only
+evidence when the case that needs the code actually exists.
+
+**GATE.** 261 files / 4159 tests green. Lint and `tsc` clean.

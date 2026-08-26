@@ -215,6 +215,83 @@ describe("saving a product edit", () => {
     expect(state.doses[0]?.track_inventory).toBe(true);
   });
 
+  // -------------------------------------------------------------------------
+  // REVIEW FINDING 3 (P1) — a regression this refactor introduced.
+  //
+  // editableDoseValues() derives is_default and position POSITIONALLY, from the
+  // index and from whether any sibling claims to be default. replaceProductDoses
+  // passes the full-array index on the UPDATE branch, but new doses go through
+  // createDoseRows(productId, inserts), which re-maps over `inserts` — so both
+  // the index and the `doses` closure are scoped to that subset.
+  //
+  // Before the merge-not-delete refactor, createDoseRows always received the
+  // FULL list, so both fields were correct. Nothing caught the change because
+  // every existing case is either create-from-empty (where inserts === doses and
+  // the indices coincide) or update-in-place (which never reaches this branch).
+  // -------------------------------------------------------------------------
+  it("does not let a NEW dose steal is_default from the existing one", async () => {
+    // A three-dose product whose 5mg is the default; the admin adds a 20mg.
+    state.doses.push({ ...seedDose(), id: "dose-10mg", label: "10mg", slug_suffix: "10mg", is_default: false, position: 1 });
+    state.doses.push({ ...seedDose(), id: "dose-15mg", label: "15mg", slug_suffix: "15mg", is_default: false, position: 2 });
+
+    await replace([
+      editorPayload(),
+      { id: "dose-10mg", label: "10mg", slugSuffix: "10mg", priceCents: 9000, inventoryQuantity: 10 },
+      { id: "dose-15mg", label: "15mg", slugSuffix: "15mg", priceCents: 12000, inventoryQuantity: 10 },
+      { label: "20mg", slugSuffix: "20mg", priceCents: 15000, inventoryQuantity: 10 },
+    ]);
+
+    const added = state.doses.find((d) => d.slug_suffix === "20mg");
+    const original = state.doses.find((d) => d.id === DOSE_ID);
+
+    // Alone in `inserts`, the new dose saw index 0 and no sibling claiming
+    // default, so it elected itself. The storefront's pre-selected dose and the
+    // price on the product card both follow is_default.
+    expect(added?.is_default).toBe(false);
+    expect(original?.is_default).toBe(true);
+    expect(state.doses.filter((d) => d.is_default)).toHaveLength(1);
+  });
+
+  it("does not let a new dose inserted FIRST steal default from an existing one", async () => {
+    // The index guard alone does not cover this: a new 2mg added at the front of
+    // the list genuinely IS index 0, so the only thing standing between it and
+    // is_default is the sibling check seeing the 5mg's claim. That check has to
+    // look at the admin's whole list, not just the doses being inserted.
+    await replace([
+      { label: "2mg", slugSuffix: "2mg", priceCents: 3000, inventoryQuantity: 10 },
+      editorPayload(),
+    ]);
+
+    expect(state.doses.find((d) => d.slug_suffix === "2mg")?.is_default).toBe(false);
+    expect(state.doses.find((d) => d.id === DOSE_ID)?.is_default).toBe(true);
+    expect(state.doses.filter((d) => d.is_default)).toHaveLength(1);
+  });
+
+  it("puts a NEW dose after the existing ones, not in front of them", async () => {
+    state.doses.push({ ...seedDose(), id: "dose-10mg", label: "10mg", slug_suffix: "10mg", is_default: false, position: 1 });
+
+    await replace([
+      editorPayload(),
+      { id: "dose-10mg", label: "10mg", slugSuffix: "10mg", priceCents: 9000, inventoryQuantity: 10 },
+      { label: "20mg", slugSuffix: "20mg", priceCents: 15000, inventoryQuantity: 10 },
+    ]);
+
+    // Third in the admin's list is third on the storefront. Scoped to `inserts`
+    // it took position 0 and jumped the queue.
+    expect(state.doses.find((d) => d.slug_suffix === "20mg")?.position).toBe(2);
+  });
+
+  it("still lets the admin promote a new dose to default when they ask for it", async () => {
+    // The positional default is a fallback, not an override.
+    await replace([
+      editorPayload({ isDefault: false }),
+      { label: "20mg", slugSuffix: "20mg", priceCents: 15000, inventoryQuantity: 10, isDefault: true },
+    ]);
+
+    expect(state.doses.find((d) => d.slug_suffix === "20mg")?.is_default).toBe(true);
+    expect(state.doses.find((d) => d.id === DOSE_ID)?.is_default).toBe(false);
+  });
+
   it("removes a dose the admin genuinely deleted", async () => {
     state.doses.push({ ...seedDose(), id: "dose-10mg-0002", label: "10mg", slug_suffix: "10mg", is_default: false, position: 1 });
     await replace([editorPayload()]);

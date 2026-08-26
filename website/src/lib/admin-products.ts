@@ -373,15 +373,35 @@ function editableDoseValues(dose: DoseInput, index: number, doses: DoseInput[]) 
   };
 }
 
-async function createDoseRows(productId: string, doses: DoseInput[]) {
-  if (doses.length === 0) {
+/**
+ * Insert new dose rows.
+ *
+ * TAKES THE INDEX FROM THE CALLER, and takes `allDoses` separately, because
+ * `editableDoseValues` derives `position` and `is_default` POSITIONALLY — from
+ * the index, and from whether any SIBLING already claims to be the default.
+ * Both questions are about the admin's whole list, not about the subset being
+ * inserted.
+ *
+ * This used to re-map over whatever array it was handed, which was correct while
+ * that array was always the full list. Once replaceProductDoses started passing
+ * only the NEW doses, a dose added to an existing product found itself alone at
+ * index 0 with no sibling claiming default — so it took `position: 0` and
+ * elected itself `is_default`, moving the storefront's pre-selected dose and the
+ * price shown on the product card (review finding 3).
+ */
+async function createDoseRows(
+  productId: string,
+  entries: Array<{ dose: DoseInput; index: number }>,
+  allDoses: DoseInput[],
+) {
+  if (entries.length === 0) {
     return;
   }
 
-  const rows = doses.map((dose, index) => ({
+  const rows = entries.map(({ dose, index }) => ({
     id: dose.id ?? randomUUID(),
     product_id: productId,
-    ...editableDoseValues(dose, index, doses),
+    ...editableDoseValues(dose, index, allDoses),
     created_at: new Date().toISOString(),
   }));
 
@@ -1047,7 +1067,10 @@ export async function replaceProductDoses(productId: string, doses: DoseInput[])
 
   const claimed = new Set<string>();
   const updates: Array<{ id: string; values: ReturnType<typeof editableDoseValues> }> = [];
-  const inserts: DoseInput[] = [];
+  // The index travels WITH the dose. `position` and `is_default` are derived
+  // from where a dose sits in the admin's whole list, so a subset must not be
+  // re-indexed from zero (review finding 3).
+  const inserts: Array<{ dose: DoseInput; index: number }> = [];
 
   doses.forEach((dose, index) => {
     const slug = dose.slugSuffix.trim();
@@ -1059,7 +1082,7 @@ export async function replaceProductDoses(productId: string, doses: DoseInput[])
       claimed.add(match.id);
       updates.push({ id: match.id, values: editableDoseValues(dose, index, doses) });
     } else {
-      inserts.push(dose);
+      inserts.push({ dose, index });
     }
   });
 
@@ -1073,7 +1096,7 @@ export async function replaceProductDoses(productId: string, doses: DoseInput[])
     }
   }
 
-  await createDoseRows(productId, inserts);
+  await createDoseRows(productId, inserts, doses);
 
   // Last, and only now: the doses the admin genuinely removed. Doing this after
   // the writes means a failure above leaves the product over-supplied with
