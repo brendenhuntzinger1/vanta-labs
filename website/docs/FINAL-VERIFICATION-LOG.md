@@ -241,3 +241,280 @@ the first time. No previous session in this audit had run them.
 **Action owed regardless of the merge:** the three silent skips must print a
 banner like the other six. A financial-reporting suite that disappears without
 a word is how 36 assertions go missing while the run reports success.
+
+---
+
+## PART 2 — THE UNREAD PRODUCTION CODE, READ
+
+602 lines of production code across 14 files (measured; Block N said 566).
+Read highest-risk first, as an independent reviewer, arguing with each claim.
+
+### `commission-accrual-repair.ts` (+148/−0) — the hardest read. **HOLDS.**
+
+Three adversarial questions were put to it.
+
+**Can it double-pay?** No, and for a stronger reason than the file gives.
+`referral_orders` carries `referral_orders_order_id_key UNIQUE (order_id)`
+(verified in production). The sweep selects on the ABSENCE of a row, so a repeat
+run is a no-op; and in the one genuine race — the live webhook accruing while a
+sweep runs on the same order — the second insert is refused by the unique key,
+counted as `failed`, and alerted. It cannot produce two commission rows. The
+file's own justification (idempotent by absence) is true but not sufficient on
+its own; the unique key is what actually closes it, and the file does not say so.
+
+**Can it accrue for a refunded order?** No. `referral_orders` rows are **never
+deleted** anywhere in the repository — grepped across all writers
+(`ambassador-commission.ts`, `admin-ambassadors.ts`, `payment-webhook.ts`,
+`partner-portal.ts`, `commission-accrual-repair.ts`); refunds move
+`payment_status`, they do not remove the row. So there is no resurrection path:
+a reversed commission stays present and the sweep skips it.
+
+**Does it reproduce the live rule, or a second one?** This is the question that
+would have made it a new N-04, and it is the one the file does not prove. It
+does reproduce it, exactly. All three lanes compute the same two inputs:
+
+```
+payment-webhook.ts:1458  (card)    commissionableSubtotal = subtotal − discount_amount
+payment-webhook.ts:1049  (manual)  commissionableSubtotal = subtotal − discount_amount
+payment-webhook.ts:631   (repair)  commissionableSubtotal = subtotal − discount_amount
+```
+
+and all three route through the single `ensureCommissionRecord`. **Verified, not
+assumed.**
+
+### `payment-webhook.ts` (+127/−20) — the latch placement. **CORRECT.**
+
+`paid_side_effects_at` is stamped **last**, after `finalizeInventoryForOrder`,
+guarded `.is("paid_side_effects_at", null)`. The reasoning in the docblock is
+sound and I agree with it: the latch must mean "the stock moved", not "the stock
+is about to move". A crash between the decrement and the latch leaves the latch
+NULL and a later cancel under-restocks — a recoverable shortage. The opposite
+placement would let a cancel restock units that were never removed, inventing
+stock. The failure direction chosen is the conservative one.
+
+Wrapping the manual lane's accrual and analytics in `try/catch` is right and
+minimal: everything below them (coupon redemption, points, confirmation email,
+membership activation, `finalizeInventoryForOrder`) was previously destroyed by
+one throw behind a single-use claim, and the commission is no longer lost by
+catching because the repair sweep re-derives it.
+
+### `shippo/service.ts` (+61/−0) — restock at the chokepoint. **HOLDS, and I tested the claim rather than the code.**
+
+The load-bearing claim is "this is the ONLY writer". I enumerated every write of
+`fulfillment_status` in `app/` and `lib/`. Two functions write a computed
+`transition.next`:
+
+- `setOrderFulfillmentStatus` (service.ts:1999) — the chokepoint. Three callers:
+  `route.ts:162` (dropdown), `route.ts:623` (Cancel button),
+  `admin-orders.ts:241` (bulk). All three cancel paths go through it.
+- the Shippo tracking webhook (service.ts:1873) — **cannot** produce `cancelled`.
+  `TRACKING_STATUS_MAP` (order-pipeline.ts:492) maps only to
+  `label_purchased | in_transit | out_for_delivery | delivered | returned`, and
+  `mapShippoTrackingStatus` returns null for anything undocumented.
+
+Every other `fulfillment_status` write is a literal (`pending`,
+`awaiting_fulfillment`, `fulfilled`, `label_purchased`). **There is no fourth
+cancel path.** The chokepoint claim is true by exhaustion, not by comment.
+
+`label_purchased → cancelled` raises `cancellation_after_label_purchase` and
+does **not** restock. Correct: postage is spent and the parcel may be with the
+carrier, so restocking would invent units.
+
+### `rate-limit.ts` (+74/−2) — per-instance denied-bucket memo. **HOLDS.**
+
+Bounded at `MAX_DENIED_BUCKETS = 10_000` with expiry-first eviction then
+insertion-order eviction, so it cannot grow without limit in a warm lambda. The
+short-circuit returns the same `retryAfterSeconds` the database would, and the
+memo entry is deleted as soon as the window passes.
+
+### `inventory-fulfillment.ts` — the tri-state claim. **CORRECT, AND IT MATTERS TODAY.**
+
+`claimInventoryRestock` now returns `claimed | already_claimed | unavailable`.
+Verified against production:
+
+```sql
+select column_name from information_schema.columns
+where table_name='orders' and column_name='inventory_restocked_at';
+-- 0 rows
+```
+
+**`orders.inventory_restocked_at` does not exist in production.** So today every
+call returns `unavailable`, the cancel path raises a **critical**
+`cancellation_inventory_unresolved` alert, and returns `{action:"unavailable"}`
+rather than the old lie of `already_returned`. That is the honest behaviour, and
+it makes `sql/add-inventory-restock-claim.sql` a **deploy blocker**, not an
+optional step: without it, every cancellation on the live store returns no stock
+and pages a human.
+
+### The four cross-module claims I was asked to check myself
+
+| claim | verdict |
+|---|---|
+| `shippo/config.ts:49` — "every money-spending path checks this" | **CONFIRMED FALSE.** `isShippoLive()` appears exactly once in the repository — its own definition. **Zero callers.** |
+| `admin-tax-report.ts:77` ↔ `admin-profit.ts:88` | **CONFIRMED NOT IDENTICAL** — see below. |
+| `payment-mock.ts:6` | **Comment is misleading as filed.** The module is pure and imports no DB, so "re-reads identity from the DB" is not literally true of this file; but the substantive half is: a mock envelope is built from an order the mock already looked up, a live envelope is not, and the `payment_id` join and `isRecognisedMoneyEvent` guard have no mock coverage. The grading consequence stands: **a passing mock payment does not certify the live callback.** |
+| `cart-recovery.ts:268` | Not independently re-verified this session. Left OUTSTANDING as filed. |
+
+#### The tax pair — a confirmed, still-open divergence
+
+```
+admin-tax-report.refundedTaxFor          admin-profit.refundedTaxPortion
+  tax==0 || refund==0                      taxCollected<=0 || refund<=0
+    -> status=='refunded' ? tax : 0          -> 0                        <-- DIFFERS
+  paid<=0  -> tax                          amountPaid<=0 -> taxCollected
+  else min(tax, tax*min(1,refund/paid))    else  (identical formula)
+```
+
+For an order marked `refunded` with **no** `refund_amount` and non-zero tax, the
+filing report counts the **whole** tax as refunded and the profit report counts
+**zero**. The two reports disagree about the same refund — exactly what both
+comments claim is impossible, each naming the other as the source of truth.
+
+**Reachability, measured against production:**
+
+```sql
+select payment_status, count(*) ... from orders group by payment_status;
+paid 6 | canceled 5 | pending_payment 4
+```
+
+**Zero refunded rows exist.** The divergence is real and still open, but
+**latent**: it cannot be producing a wrong filing today. Severity P2, and both
+comments must be corrected whichever way it is resolved.
+
+### A counting error in the register written to correct counting errors
+
+`INTEGRATION-LOG.md` → "BLOCK N — CROSS-MODULE CLAIM REGISTER (the full 28, not
+a summary)" states 28 claims and heads a section "OUTSTANDING — P2 (18)".
+Counted programmatically:
+
+```
+  6  Fixed in Block N (6)
+  2  OUTSTANDING — P1 (2)
+ 16  OUTSTANDING — P2 (18)     <-- header says 18, table has 16
+  2  OUTSTANDING — P3 (2)
+ 26  TOTAL ROWS                <-- heading says 28
+```
+
+**Two claims are named in the totals and absent from the register.** The
+outstanding count is therefore **20 listed, 22 asserted**. This is the fourth
+counting error in this audit's own reporting, and it is in the document written
+specifically to stop them. It does not change any verdict; it does mean the
+register is not yet the complete inventory it says it is.
+
+---
+
+## PART 3 — DUPLICATE AND CONFLICTING CODE
+
+Findings, by the rule the prompt asked to be traced. Not consolidated — reported.
+
+| rule | implementations | agree? |
+|---|---|---|
+| revenue | `ledger.isRevenueOrderStatus`, used by `admin-analytics.ts:56`, `admin-email.ts:123`, `admin-profit.ts:328`, `admin-membership.ts:689`, `best-sellers.ts:43` | **YES — converged by N-04.** Previously zero call sites with five surfaces using three rules. Verified: the hand-written second implementation in `admin-profit.ts` is gone and replaced by the import. |
+| a cancelled order / restock | single chokepoint `setOrderFulfillmentStatus`; 3 callers | **YES — by construction.** Exhaustively verified above; no fourth writer. |
+| refunded tax | `admin-tax-report.refundedTaxFor`, `admin-profit.refundedTaxPortion` | **NO — confirmed divergent, latent.** |
+| commissionable subtotal | 3 lanes in `payment-webhook.ts` (1458, 1049, 631) | **YES — identical formula, one shared writer.** |
+| paid order | `paid_side_effects_at` now written by both lanes | **YES — converged by N-02.** |
+
+**Dead code, confirmed:** `isShippoLive()` — defined, exported, **zero callers**,
+sitting under a comment claiming every money-spending path calls it. Same shape
+as the `isRevenueOrderStatus` defect (N-04) that was just fixed. It is the next
+one of these to close.
+
+**Duplicate SQL constraints, checked against PRODUCTION, not the .sql files:**
+`pc_ro_ps` — the duplicate that silently defeated a by-name constraint drop on
+the harness — **does not exist in production** (`select count(*) from
+pg_constraint where conname='pc_ro_ps'` → 0). Production carries only
+`referral_orders_payment_status_check`. The drop-by-rule loop in
+`referral-orders-commission-lifecycle.sql` is still the right way to write it.
+
+**Migrations in source with no live counterpart** — at least three, verified:
+`referral-orders-commission-lifecycle.sql` (the CHECK is still narrow),
+`add-inventory-restock-claim.sql` (`orders.inventory_restocked_at` absent),
+`pending-emails-order-link` (`pending_emails.order_id` absent).
+
+**No commit from any block branch was lost** (Part 1.4) — so no block silently
+reverted another at the commit level.
+
+---
+
+## PART 4b — TEST-THE-TESTS: NINE REAL MUTATIONS, NINE CAUGHT
+
+Not a review of the tests — the production code was actually broken, the suite
+run, and the code restored. Working tree verified clean afterwards.
+
+| # | mutation (production code) | suite | result |
+|---|---|---|---|
+| M1 | `claimInventoryRestock` returns `already_claimed` instead of `unavailable` — collapses the tri-state back into the original defect | `inventory-restock-claim.test.ts` | **2 failed** ✔ |
+| M2 | delete the `returnInventoryForCancelledOrder` call at the chokepoint | `cancel-restocks-every-path.test.ts` | **3 failed** ✔ |
+| M3 | `LABEL_BOUGHT_STATUSES` guard forced false — a post-label cancel restocks instead of alerting | `cancel-restocks-every-path.test.ts` | **2 failed** ✔ |
+| M4 | repair sweep drops its "already accrued" filter — would re-accrue every order | `commission-accrual-recovery.test.ts` | **1 failed** ✔ |
+| M5 | repair sweep counts a failed accrual as repaired | `commission-accrual-recovery.test.ts` | **1 failed** ✔ |
+| M6 | manual lane never stamps `paid_side_effects_at` | `manual-payment-cancellation-inventory.test.ts` | **4 failed** ✔ |
+| M7 | `isRevenueOrderStatus` narrowed to `paid` only | `revenue-definition-agreement.test.ts` | **1 failed** ✔ |
+| M8 | rate limiter never short-circuits a denied bucket | `rate-limit-concurrency.test.ts` | **2 failed** ✔ |
+| M9 | rate-limiter memo never evicts — unbounded growth | `rate-limit-concurrency.test.ts` | **1 failed** ✔ |
+
+**9 applied, 9 caught, 0 survivors.** These are the money and inventory
+assertions specifically. No placebo was found among Block N's new tests: every
+one of them fails for the right reason when the defect it names is reintroduced.
+This is the strongest evidence in this report, and it contradicts the prior
+expectation that more placebos were waiting in this diff.
+
+Two intended mutations did not apply because the pattern did not exist in the
+file; they are reported as NOT RUN rather than as passes.
+
+---
+
+## PART 4c — THE PURCHASE: **NOT INDEPENDENTLY RE-VERIFIED THIS SESSION**
+
+Stated plainly rather than upgraded. This session did **not** drive a purchase
+through a browser against a production build. `INTEGRATION-LOG.md` §6.1 records
+Block M doing exactly that against the harness, screen against database at each
+step, on code contained in this branch, and §6.2 records a defect only the
+browser found. That evidence is real and it is on this tree — but it is Block
+M's, not an independent repetition, and I am not relabelling it as mine.
+
+What this session did prove that bears on the same paths:
+`npm run build` is green (105/105 pages) and the nine database-gated suites,
+including `inventory-return-path`, run and pass against a real Postgres.
+
+---
+
+## PART 4d — THE THREE RECENT REPAIRS
+
+**(i) A failed commission accrual is recoverable.** Verified by reading
+(`commission-accrual-repair.ts` holds under all three adversarial questions
+above) and by mutation (M4, M5 both caught). Nothing below the accrual is lost
+any more: the throw is caught on the manual lane and `finalizeInventoryForOrder`
+now runs regardless. **VERIFIED (code + test).**
+
+**(ii) All three cancel paths restock.** Verified by exhausting the writer set,
+not by trusting the chokepoint comment — there is no fourth path, and the
+tracking webhook provably cannot reach `cancelled`. M2 and M3 confirm the tests
+catch removal of the restock and inversion of the post-label guard.
+**VERIFIED (code + test).** Not browser-proven on all three admin surfaces.
+
+**(iii) `claimInventoryRestock` distinguishes the three outcomes.** Verified in
+code and by mutation M1, and the production reality — the column is absent —
+is confirmed by direct query. **VERIFIED, and it raises a deploy blocker.**
+
+---
+
+## PART 4e — GRADES, HONESTLY
+
+| area | grade |
+|---|---|
+| Merge safety, ancestry, no lost commits | **PROVEN** (git, this session) |
+| main auto-deploys on push | **PROVEN** (Vercel deployment record, this session) |
+| Production schema drift (3 unapplied migrations) | **DATABASE-PROVEN** (this session) |
+| Full gate: lint / tsc / tests / build | **PROVEN** (this session) |
+| The 78 previously-skipped money-path suites | **DATABASE-PROVEN** (this session, real Postgres 16) |
+| Block N's new tests are not placebos | **PROVEN** by 9/9 mutation controls (this session) |
+| Commission repair correctness | **PROVEN** by read + mutation; **NOT** exercised against a live processor |
+| Cancel restock on all three paths | **PROVEN** in code and test; **NOT** browser-proven |
+| Order creation through the UI | **BROWSER-PROVEN by Block M** — not repeated here |
+| Anything after the processor | **HARNESS-PROVEN by Block M** — not repeated here |
+| Real card entry, live VeyraGate callback, signed-in flows, RLS, realtime | **NOT VERIFIED** |
+
+The harness has no GoTrue and no RLS, and per `payment-mock.ts` a passing mock
+payment does not certify the live callback. No grade has been laundered upward.
