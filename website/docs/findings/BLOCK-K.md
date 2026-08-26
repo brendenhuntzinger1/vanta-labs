@@ -3890,6 +3890,146 @@ are running concurrently. It is one line of work for block M, before the gate.
 
 ---
 
+---
+
+# FIX LOG — what was repaired, and how it was proven
+
+Six findings were repaired in this session under RED → root cause → minimal fix →
+GREEN → mutation control → regression. Everything else remains a finding.
+
+| id | was | now | evidence |
+|---|---|---|---|
+| **K-16** | P1 OPEN | ✅ **FIXED** | `src/lib/ads/ads-environment.ts` — one deny-by-default chokepoint. 46 tests; 10 mutations |
+| **K-05** | P1 OPEN | ✅ **FIXED** | `resolveLastChanceCoupon` loads the real coupon or mints a live one. 7 tests; 5 mutations |
+| **K-07** | P1 OPEN | ✅ **FIXED** | `skipUsedThisPaidPeriod`, one rule across UI + server + ledger. 29 tests; 5 mutations |
+| **K-17** | P1 OPEN | ✅ **FIXED** | `returnInventoryForCancelledOrder`. 8 tests; 5 mutations |
+| **K-21** | P1 OPEN | ✅ **FIXED** | `trustPoints(evidence)` — claims gated on evidence. 18 tests; 4 mutations |
+| **K-25** | *(new)* P1 | ✅ **FIXED** | Shipping protection no longer pre-ticked. 3 tests; 1 mutation |
+| **K-01** | P2 OPEN | ✅ **FIXED** (as part of K-05) | both cart-recovery stages now render the expiry through `formatDisplayDate` |
+
+**Suite: 3683 passed / 7 skipped** (baseline 3572 — **+111 tests**, no regressions).
+`tsc --noEmit` clean. `eslint` 0 errors. `next build` clean.
+
+### K-25 — Shipping protection was pre-ticked against the store's own Shipping Policy
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P1 · **Status:** ✅ FIXED
+
+The published Shipping Policy (`src/lib/legal-content.ts`, `shipping` body) says
+verbatim: Shipping Protection *"is off by default and **never pre-selected**."*
+
+`src/components/cart-context.tsx:846` was
+`useState(true)` — pre-ticked on every cart, adding `shipping_protection_fee` to
+the total unless the shopper noticed and unticked it.
+
+A specific negative promise, published, contradicted by the code, on a control
+that takes the customer's money. The code was moved to match the policy, because
+the published promise is the conservative position and needs no owner decision to
+be safe. The test asserts **both halves** — the default and the policy sentence —
+so neither can be changed without the other.
+
+### Three mutations that PASSED, and what each taught
+
+A mutation that survives is the only one that teaches anything. All three were
+fixed by strengthening the test, not by weakening the mutation.
+
+| # | mutation | why it survived | fix |
+|---|---|---|---|
+| **M9** | move the ads gate *after* the token check | the ordering test set a token, so both orderings produced the same string | unset the token — the case that distinguishes them — and add the positive control that the token check still fires |
+| **M16** | delete K-07's ledger guard entirely | after a *local* skip `next_billing_at` is always ≥ now+30d, so the arithmetic guard alone sufficed and the new guard looked decorative | added the **Veyra** case: there the advance is whatever Veyra returns, so a near-term date re-satisfies the arithmetic and only the ledger can refuse |
+| **M27** | re-add the hero COA claim | a backup-path collision had clobbered the file under test | unique backup names; caught by reading `git diff --stat` |
+
+---
+
+# DISPROVEN — do not resurrect these
+
+Recorded explicitly so the master audit does not re-open them. Each was
+investigated to a conclusion and found **not to be a defect**.
+
+| lead | source | verdict |
+|---|---|---|
+| Client/server **Buy-3-Get-1 rounding divergence** | Phase 1 map, P1 | **DISPROVEN.** The divergence is real (`quote-order.ts:250` rounds, `cart-context.tsx:164` does not) but it is a float epsilon, and the anti-tamper guard compares with a full **one-cent** tolerance (`quote-order.ts:782-786`). It cannot reach a customer. The *real* issue in that pair is the price source — localStorage snapshot vs live catalogue — which belongs to **G+H** and **D**. |
+| NaN `couponExpirationHours` **fails silently** | Phase 1 map | **CORRECTED.** It does not reach the insert: `.toISOString()` throws a `RangeError` first, the job rejects, and `Promise.allSettled` raises a **critical** `cron_sweep_failed` alert. Worse blast radius, *better* visibility. |
+| `referrals` is **read by other surfaces** | Phase 1 map sources-of-truth | **CORRECTED.** Nothing reads it. The framing as a *divergence* risk is wrong; the real issue is a duplicate store of raw PII that buys nothing (K-20). |
+| `resolveCartDiscount` **float comparison** | Block K's own open item | **DISPROVEN.** `compete()` rounds to cents *before* any comparison, so a sub-cent difference cannot decide which discount applies. Clamping and negative rejection also verified. |
+| Two **orphaned money-spending** Shippo endpoints | Block K's own route sweep | **NOT A DEFECT.** `purchaseLabelForOrder` carries a policy gate one level below the route, `SHIPPO_ALLOW_LABEL_PURCHASE` defaults off, and the refusal tells the operator to buy in Shippo. Superseded duplicates, not an orphan. |
+| `partner_program_stats` **read with no writer** | Block K's own table sweep | **NOT A DEFECT.** A deliberate manually-populated override table with admin-write RLS — almost certainly the mechanism behind ledger F-007. |
+| Payment **kill switches are loose** | implied by the map's "dangerous defaults" framing | **DISPROVEN.** Both mock providers hard-stop in production with no escape hatch; `ALLOW_MOCK_PAYMENTS` is gone from live code with a source-text test asserting it; `isCheckoutOpen()` defaults closed and gates both lanes. |
+| `isMembershipActive` **boundary arithmetic** | Block K's own timezone sweep | **NOT A DEFECT.** Instant comparison, `Number.isFinite` guard, documented 3-day grace. Correct. |
+| `coa-format.ts` **unpinned date formatting** | looked identical to K-01 | **NOT A DEFECT.** Constructs and formats in the same ambient zone, so the round trip is stable in any zone. |
+| `retryPendingEmails` **dies silently at max attempts** | Phase 1 map | **CORRECTED.** It raises `recordSystemAlert({ type: "email_undeliverable" })` naming subject and recipient. The *missing claim* (K-23) is real; the silence is not. |
+
+---
+
+# NEW FINDINGS from the closing sweep — verified before acceptance
+
+Eighteen further findings were produced by parallel investigation of the items
+this block had left `NOT VERIFIED`. **Each was re-checked against the source here
+before being recorded.** The two highest-value are quoted in full because they are
+filing artefacts.
+
+### K-26 — The sales-tax report's "Taxable Sales" omits the shipping that was taxed
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **P2** · **CROSS-BLOCK: Block F**
+
+`src/lib/sales-tax.ts:214` taxes `taxable + (rule.shippingTaxable ? shipping : 0)`.
+The report re-derives the base as
+`roundMoney(Math.max(0, subtotal - discount_amount))` (`admin-tax-report.ts:89`),
+and `shipping_amount` **is not in its select list** (`:60`), so it cannot include
+it. Verified in this session by reading both.
+
+The CSV prints Rate %, Taxable Sales and Tax Collected side by side, and in the
+28 shipping-taxable jurisdictions those three do not satisfy
+`base × rate = tax`. On a $150 TX order with the $15 fee: taxed base $165 at
+8.2% = $13.53, printed base $150 → implied rate 9.02%. Every state return asks
+for both figures on the same form and reconciles them.
+
+*Fix:* persist `resolveSalesTax`'s own `taxableBase` (already computed and
+returned) rather than re-deriving it, with a fallback for existing rows.
+
+### K-27 — Every partially-refunded order is dropped from the sales-tax report
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **P2** · **CROSS-BLOCK: Block F**
+
+`admin-tax-report.ts:77-80`:
+```ts
+const paid = PAID_ORDER_STATUSES.has(status);   // {"paid","completed","succeeded"}
+const refunded = status === "refunded";
+if (!paid && !refunded) continue;
+```
+`"partially_refunded"` is in neither set, so the row is **discarded** — not
+partially credited. The tax is untouched by a partial refund and mostly still in
+the store's pocket, and the state sees neither the sale nor the tax. Verified
+here against `ledger.ts:21` and the refund writers.
+
+### The remaining sixteen, by area
+
+**Sweep bounds** (all CONFIRMED by the investigation, consistent with the Phase 1 map):
+Shippo's two sweeps take the oldest 20 with no exclusion of permanently-blocked
+rows; a single Shippo timeout removes a paid order from every automatic retry
+silently; `runAutomationSweep` is the only email job with neither a time budget
+nor a pre-send claim; three unbounded full-table scans run every 30 minutes.
+**CROSS-BLOCK: D** (shippo), **C** (automations).
+
+**Legal/policy:** four surfaces state the free-shipping threshold and domestic
+rate from hardcoded constants that can drift from `getShippingConfig`; nothing at
+the label-purchase money boundary checks the order is paid (an unpaid order is
+bucketed ready-to-fulfil); the Shipping Policy advertises international shipping
+without stating who pays duties. **Block K / D.**
+
+**Dead code:** `orders.shipping_protection_fee` is charged but not selected by
+`account-orders.ts`, so the customer's own order view and invoice cannot show it
+(this is the fourth order-total surface that does not add up); the customer
+referral programme has a redeemer and no issuer — `getOrCreateReferralCode` is
+dead; the label-purchase claim's release action has no caller; a five-column
+per-order profitability snapshot and a generated column nothing reads;
+three mounted-nowhere components, one keeping a public API route alive;
+`handling_fee` confirmed a dead column rather than a pending feature; and a
+fourteen-module ad-intelligence subsystem under `src/lib/ads` reachable from no
+entry point.
+
+**Config:** the Control Center's sales-tax rate-override box is unvalidated on
+every path and a malformed value is silently discarded. **CROSS-BLOCK: I.**
+
+---
+
 # Block K — coverage and handoff
 
 ## Coverage against the seven assigned areas
