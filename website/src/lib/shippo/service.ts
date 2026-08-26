@@ -1454,7 +1454,8 @@ export async function voidLabelForOrder(
 
   await reverseRecordedShippingCost(order.order_id, actor);
 
-  if (transition.ok) {
+  // Only claim the transition happened if the guarded write actually applied it.
+  if (transition.ok && voidStatusApplied) {
     await recordStatusHistory(transition.history);
     await upsertShipment({
       orderId: order.order_id,
@@ -1469,7 +1470,7 @@ export async function voidLabelForOrder(
     data: voidedLabel(
       result.data.pending,
       false,
-      transition.ok ? transition.next : String(order.fulfillment_status ?? ""),
+      transition.ok && voidStatusApplied ? transition.next : String(order.fulfillment_status ?? ""),
     ),
   };
 }

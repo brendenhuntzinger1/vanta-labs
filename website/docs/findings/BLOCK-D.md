@@ -195,3 +195,115 @@ empties the product.
 **Residual risk (`NOT VERIFIED`):** the merge is still several statements rather
 than one transaction. It is now ordered so that no interleaving leaves the product
 unsellable, but a true fix is an RPC. Recorded rather than claimed as solved.
+
+---
+
+### D-05 — A membership upgrade moves the perks but not the price; Veyra keeps charging the old tier forever
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P0 · **Status:** FIXED (repo)
+
+**Reproduction.** `src/lib/membership-tier-change-repricing.test.ts`. An active
+member on a $29 tier is upgraded to a $99 tier. Before the fix no call reached
+Veyra at all, the local row moved to the new tier, and a `tier_change` event was
+written as `succeeded`.
+
+**Root cause.** `membership-billing.ts:526` (`startMembershipSignup`) handles an
+upgrade/downgrade by updating `tier_id` and `next_billing_amount_cents` in
+`customer_memberships`, recording the event, reconciling store credit, and
+returning. Veyra owns the subscription and the amount it charges. So:
+
+- an **upgrade undercharges forever** — the member gets the $99 perks at $29
+- a **downgrade overcharges forever** — the member keeps paying $99
+- every subsequent `membership.renewed` webhook carries the stale amount
+
+`veyra-membership.ts`'s own comment records the endpoint list, verified
+2026-08-03: *cancel / skip_cycle / change / card / retention*. The `change`
+endpoint existed the whole time and simply had no wrapper.
+
+This is the identical failure shape that file's header calls out in red for
+pause, cancel and card updates — "local-only state for a subscription somebody
+else owns". Those three were found and fixed. The tier change was missed.
+
+**Fix.** New wrapper `changeVeyraMembershipPlan` (`veyra-membership.ts`) posting
+to `/{id}/change` with `amount_cents` and `interval`, following the same
+conventions as `startVeyraMembership`. The tier-change branch calls it **first**
+and only writes the local row if it succeeds; on refusal the member is left
+exactly where they were, the attempt is recorded as `status: "failed"`, and the
+caller gets `success: false`. Granting new-tier perks while the old price is
+still what gets charged is precisely the bug, so a partial application is refused
+rather than half-applied.
+
+A member with **no `veyra_membership_id`** (charged once, nothing at the
+processor — the state the ledger already documents as sold to a real account) has
+no ongoing subscription billing them, so the local change stands on its own and
+no processor call is made. Covered by its own test.
+
+**Tests.** 4 tests, 3 confirmed failing before the fix.
+
+**Residual risk (`NOT VERIFIED`):** the exact request/response shape of Veyra's
+`change` endpoint is taken from the conventions of `startVeyraMembership` and the
+sibling lifecycle wrappers. It is **not** verified against the live processor —
+this block used no network. Consolidation should treat the payload shape as
+`SOURCE-INSPECTED` and confirm it before release.
+
+---
+
+### D-06 — `startMembershipSignup` is globally mocked out, so nothing in the repo can test it
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P1 · **Status:** OPEN (recorded, not fixed)
+
+`vitest.setup.ts:119` replaces the whole `@/lib/membership-billing` module with
+two stubs (`activateAnnualMembership`, `createAnnualMembershipManualOrder`).
+Every other export — `startMembershipSignup` among them — is simply absent from
+the mock, so any test that imports it gets:
+
+```
+Error: [vitest] No "startMembershipSignup" export is defined on the
+"@/lib/membership-billing" mock.
+```
+
+`startMembershipSignup` is the function that takes membership money. It had
+**zero behavioural coverage**, and D-05 sat inside it undetected. The only
+mention anywhere in the suite is a comment in `membership-lifecycle.test.ts:147`
+describing behaviour no test exercises.
+
+D-05's test works around this with a local `vi.unmock`. That is a patch, not the
+fix: the global stub still hides the rest of the module from every other test.
+
+**CROSS-BLOCK (E, and whoever owns `vitest.setup.ts`):** the global mock should be
+narrowed to the two functions that need stubbing, or replaced with per-test mocks.
+`vitest.setup.ts` is shared by every block, so per Rule 3 this session did not
+edit it. Worth auditing the other 20+ global `vi.mock` calls in that file for the
+same effect — a module-wide stub silently removes everything it does not re-export.
+
+---
+
+## Block D verification
+
+Run at the end of the block, on the merged result of all five findings:
+
+| Check | Result |
+|---|---|
+| `npx vitest run` | **206 files, 3590 tests, 0 failures** (1 file, 7 tests skipped — pre-existing) |
+| `npx tsc --noEmit` | clean |
+| `npm run lint` | 0 errors, 38 warnings (all pre-existing; the one this block introduced was fixed) |
+| `npm run build` | succeeds |
+| Browser | **NOT RUN** — Block D is a no-network block per the assignments table |
+
+18 new tests across 4 files; **15 were confirmed to fail before their fix** and
+were checked to fail *for the right reason*. The 3 that did not were kept as
+controls on behaviour the fix must not change.
+
+Two tests were caught being unable to fail and corrected before use: one asserting
+on `r.status` where the column is `to_status`, and one whose failure injection
+stopped applying once the code path changed.
+
+### What this block does NOT claim
+
+- No finding here is graded above `BEHAVIORAL-TEST-PROVEN`. Nothing was observed
+  against production, a preview, a browser or the live database.
+- The Veyra `change` payload shape (D-05) is inferred from sibling wrappers, not
+  verified against the processor.
+- The `replace_doses` editor payload (D-04) still has **no caller in `src/`**, so
+  the shape the admin UI actually sends remains unverified; the fix is written to
+  be safe under either shape.
+- The dose merge (D-04) is ordered so no interleaving leaves a product unsellable,
+  but it is still multiple statements rather than one transaction.
