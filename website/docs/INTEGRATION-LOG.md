@@ -820,3 +820,113 @@ moves the **count** and not the **money**.
 
 `handling_fee` was also added to two fixtures' schemas, because production has it
 and a fixture that does not model production is how M-02 hid.
+
+## 4.1 M-01 — the ambassador commission P0, and why the proposed fix was wrong
+
+**Block G+H's `G-01` is real and is the most valuable defect in this audit: no
+paid referral order has ever written a commission, and the failure is silent.**
+Its stated root cause and its proposed fix were both incomplete.
+
+### Reproduced against production — rolled-back `DO` block, nothing persisted
+
+Four arms, running the payload `payment-webhook.ts:684-745` actually sends:
+
+```
+ARM1 the payload as written today      -> 23502  original_subtotal not-null
+ARM2 same payload, payment_status=paid -> 23502  original_subtotal not-null
+ARM3 + original_subtotal + customer_discount -> INSERTED
+ARM4 then advance to approved_for_payout     -> 23514  check constraint
+```
+
+**Three defects stacked on one insert:**
+
+1. `original_subtotal` and `customer_discount` are **NOT NULL in production with
+   no default**, and the application never sent either. The insert dies here —
+   one step **before** the CHECK that Block G+H reported.
+2. `payment_status: "pending"` is refused by
+   `referral_orders_payment_status_check`, which admits only
+   `paid | refunded | partially_refunded`.
+3. **The lifecycle cannot advance even after a successful insert.**
+   `approved_for_payout` is refused by the same CHECK.
+
+**ARM2 is the important one: Block G+H's one-line fix does not work.** And had it
+worked, it would have been worse than the bug — a row accrued straight to `'paid'`
+skips the hold period, is invisible to `autoApproveEligibleCommissions` (which
+selects `pending`) and to `markCommissionsPaid` (which selects
+`approved_for_payout`). Money state wrong instead of money missing.
+
+### Which side is authoritative
+
+All three repository definitions of this table — `deploy-run-once.sql`,
+`orders-schema.sql`, `partner-system-repair.sql` — declare
+`payment_status text not null default 'pending'` with **no CHECK**, beside
+`approved_for_payout_at`, `commission_paid_at` and `reversed_at`. Those three
+timestamps only make sense if this column is the **commission lifecycle**.
+
+The narrow CHECK appears in **no repository file**. It is production-only drift,
+the same class as ledger `F-011`. So the constraint moves and the code does not.
+
+### The fix, both halves
+
+**Code** (`payment-webhook.ts`) — send the two missing columns, derived from
+values already in hand:
+
+```ts
+const customerDiscountAmount = roundMoney(Math.max(0, qualifyingSubtotal - commissionableSubtotal));
+…
+original_subtotal: qualifyingSubtotal,
+customer_discount: customerDiscountAmount,
+```
+
+On Block G+H's real browser order that is `131.10 − 117.30 = 13.80` — exactly the
+`Ambassador code EXPLICIT15 −$13.80` line the shopper saw.
+
+**Schema** — `src/lib/sql/referral-orders-commission-lifecycle.sql`, with
+`ROLLBACK-referral-orders-commission-lifecycle.sql` beside it. **Staged, not
+applied.** See `DEPLOYMENT-ORDER.md`.
+
+### The test that was passing because its fake was more permissive than the database
+
+`ambassador-commission-lifecycle.test.ts` drives the **real** webhook and already
+modelled production's UNIQUE keys — its own header argues at length for exactly
+that. It did **not** model the NOT NULL columns or the CHECK, so all 20 of its
+commission tests were green while production refused every accrual.
+
+The double now enforces production's real constraints, quoted verbatim from its
+catalog. **Adding that enforcement turned 12 of 20 tests RED for the right
+reason**, and the code fix turns them green. Three new assertions were added.
+
+| mutation | result |
+|---|---|
+| stop sending `original_subtotal` | **18 failures** |
+| stop sending `customer_discount` | **18 failures** |
+| accrue straight to `'paid'` (the originally proposed fix) | **1 failure** |
+| drop the negative clamp on `customer_discount` | **survived — EQUIVALENT MUTANT, reported as such.** Both call sites derive `commissionableSubtotal = max(0, subtotal − discountAmount)` from the same `subtotal` they pass as `qualifyingSubtotal`, so the clamp is unreachable by construction today. It is kept as defence against a future caller, because the database would refuse a negative. The invariant `original_subtotal >= amount_paid` **is** asserted. |
+
+### The migration, proven on the harness before being staged
+
+Production's `referral_orders` shape was rebuilt verbatim on the harness project
+(`snnezhxvssochqpqsjcm`) and the migration run against it inside a rolled-back
+block:
+
+```
+BEFORE accrual(pending):        23514 rejected          ← the defect, reproduced
+AFTER  accrual(pending):        INSERTED
+AFTER  advance -> approved_for_payout: OK
+AFTER  advance -> paid:                OK
+AFTER  advance -> reversed:            OK
+AFTER  garbage value:           23514 correctly refused  ← still load-bearing
+AFTER  negative discount:       23514 correctly refused  ← other checks intact
+ROLLBACK with a pending row:    23514 refused — correct, the owner must decide
+```
+
+The rollback **failing** while a live `pending` row exists is deliberate and is
+the safe behaviour: reverting would otherwise orphan real accrued commissions,
+and what happens to them is the owner's decision, not a migration's.
+
+### Recorded, not fixed
+
+`referral_orders.payout_status` (CHECK `unpaid|paid|void`) exists in production
+and **nothing in the application ever reads or writes it.** The lifecycle lives
+on `payment_status` instead. Converging the two is a real change to money code
+and is a follow-up, not something to smuggle into a constraint fix.

@@ -195,7 +195,63 @@ vi.mock("@/lib/supabase-server", () => {
   });
 
   /** A table with a real UNIQUE(order_id), matching production's index. */
-  function keyedTable(store: Map<string, CommissionRow>, onInsert: () => void, onUpsert: () => void) {
+  /**
+   * Production's `referral_orders` constraints, read from its catalog this
+   * session (information_schema.columns + pg_constraint):
+   *
+   *   ambassador_id / referral_code / original_subtotal / customer_discount /
+   *   amount_paid / commission_amount            NOT NULL, no default
+   *   referral_orders_original_subtotal_check    CHECK (original_subtotal >= 0)
+   *   referral_orders_customer_discount_check    CHECK (customer_discount >= 0)
+   *   referral_orders_amount_paid_check          CHECK (amount_paid >= 0)
+   *   referral_orders_commission_amount_check    CHECK (commission_amount >= 0)
+   *   referral_orders_payment_status_check        see below
+   *
+   * The unique key was already modelled here. These were not, and that is why
+   * this suite stayed green while production refused every single accrual: the
+   * insert fails on `original_subtotal` before it ever reaches the CHECK that
+   * Block G+H reported. Verified against production with a rolled-back DO block.
+   */
+  const RO_NOT_NULL = [
+    "order_id", "ambassador_id", "referral_code",
+    "original_subtotal", "customer_discount", "amount_paid", "commission_amount",
+  ];
+  const RO_NON_NEGATIVE = ["original_subtotal", "customer_discount", "amount_paid", "commission_amount"];
+  /**
+   * The lifecycle the repo declares (three table definitions, all
+   * `default 'pending'`, alongside approved_for_payout_at / commission_paid_at /
+   * reversed_at) and the whole application implements. Production's CHECK is
+   * currently narrower; src/lib/sql/referral-orders-commission-lifecycle.sql
+   * widens it to exactly this set.
+   */
+  const RO_PAYMENT_STATUS = new Set([
+    "pending", "approved_for_payout", "paid", "reversed", "voided",
+    "refunded", "partially_refunded",
+  ]);
+
+  function violatesReferralOrderConstraints(row: CommissionRow) {
+    for (const column of RO_NOT_NULL) {
+      if (row[column] === undefined || row[column] === null) {
+        return { code: "23502", message: `null value in column "${column}" of relation "referral_orders" violates not-null constraint` };
+      }
+    }
+    for (const column of RO_NON_NEGATIVE) {
+      if (Number(row[column]) < 0) {
+        return { code: "23514", message: `new row for relation "referral_orders" violates check constraint "referral_orders_${column}_check"` };
+      }
+    }
+    if (!RO_PAYMENT_STATUS.has(String(row.payment_status ?? ""))) {
+      return { code: "23514", message: `new row for relation "referral_orders" violates check constraint "referral_orders_payment_status_check"` };
+    }
+    return null;
+  }
+
+  function keyedTable(
+    store: Map<string, CommissionRow>,
+    onInsert: () => void,
+    onUpsert: () => void,
+    enforceRow?: (row: CommissionRow) => { code: string; message: string } | null,
+  ) {
     return {
       select: () => {
         const filters: Record<string, unknown> = {};
@@ -223,6 +279,15 @@ vi.mock("@/lib/supabase-server", () => {
       insert(row: CommissionRow) {
         onInsert();
         const key = String(row.order_id);
+        const violation = enforceRow?.(row) ?? null;
+        if (violation) {
+          const rejected: Record<string, unknown> = {
+            select() { return rejected; },
+            async single() { return { data: null, error: violation }; },
+            then(resolve: (v: unknown) => unknown) { return Promise.resolve(resolve({ data: null, error: violation })); },
+          };
+          return rejected;
+        }
         const duplicate = store.has(key);
         if (!duplicate) store.set(key, { id: `${key}-c`, ...row });
         const envelope = duplicate
@@ -339,7 +404,12 @@ vi.mock("@/lib/supabase-server", () => {
     }
 
     if (table === "referral_orders") {
-      return keyedTable(state.referralOrders, () => { state.referralInserts += 1; }, () => {});
+      return keyedTable(
+        state.referralOrders,
+        () => { state.referralInserts += 1; },
+        () => {},
+        violatesReferralOrderConstraints,
+      );
     }
     if (table === "commissions") {
       return keyedTable(state.commissions, () => {}, () => { state.commissionUpserts += 1; });
@@ -433,6 +503,46 @@ describe("one paid order, one commission", () => {
     expect(commission()!.referral_code).toBe("ELIJAH-AB78AE");
     expect(commission()!.status).toBe("pending");
     expect(commission()!.ineligible_reason).toBeNull();
+  });
+
+  /**
+   * M-01. These two columns are NOT NULL in production with no default, and the
+   * accrual never sent either — so every insert was refused with 23502 before it
+   * could reach the payment_status CHECK that Block G+H reported. This suite was
+   * green throughout, because its own double was more permissive than the
+   * database. It is not any more.
+   */
+  it("records the subtotal checkout gated on, and the discount in dollars", async () => {
+    await deliver("evt-1");
+
+    const row = [...state.referralOrders.values()][0];
+    // $200 cart, $40 referral discount -> $160 commissionable.
+    expect(Number(row.original_subtotal)).toBeCloseTo(200, 2);
+    expect(Number(row.customer_discount)).toBeCloseTo(40, 2);
+    // The dollars off and the RATE are different facts, stored separately.
+    // `customer_discount` is what the shopper saved; `customer_discount_percent`
+    // is the rate that produced it, frozen at order time.
+    expect(row.customer_discount).not.toBe(row.customer_discount_percent);
+  });
+
+  it("never records a negative discount, whatever order the subtotals arrive in", async () => {
+    // referral_orders_customer_discount_check refuses a negative, so a caller
+    // whose qualifying subtotal is the SMALLER of the two must clamp, not throw.
+    await deliver("evt-1");
+
+    const row = [...state.referralOrders.values()][0];
+    expect(Number(row.customer_discount)).toBeGreaterThanOrEqual(0);
+    expect(Number(row.original_subtotal)).toBeGreaterThanOrEqual(Number(row.amount_paid));
+  });
+
+  it("accrues at 'pending' so both the hold period and the payout gate can see it", async () => {
+    await deliver("evt-1");
+
+    // autoApproveEligibleCommissions selects `pending`; markCommissionsPaid
+    // selects `approved_for_payout`. Accruing straight to 'paid' — the fix
+    // originally proposed for this defect — would skip the hold period and be
+    // invisible to both, which is money state wrong rather than money missing.
+    expect([...state.referralOrders.values()][0].payment_status).toBe("pending");
   });
 
   it("commissions the discounted merchandise only — never shipping or tax", async () => {

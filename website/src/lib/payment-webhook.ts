@@ -682,6 +682,16 @@ async function ensureCommissionRecord(input: {
     throw commissionLookupError;
   }
 
+  // The dollars the referral took off, derived from the two subtotals already
+  // in hand: what checkout gated on, less what is commissionable. On the order
+  // Block G+H drove through the browser that is 131.10 - 117.30 = 13.80, which
+  // is the "Ambassador code EXPLICIT15 -$13.80" line the shopper actually saw.
+  //
+  // Clamped at zero. qualifyingSubtotal falls back to commissionableSubtotal, so
+  // a caller passing a smaller one would otherwise produce a negative — and
+  // referral_orders_customer_discount_check refuses that.
+  const customerDiscountAmount = roundMoney(Math.max(0, qualifyingSubtotal - commissionableSubtotal));
+
   const basePayload = {
     order_id: input.orderId,
     ambassador_id: input.ambassadorId,
@@ -689,6 +699,13 @@ async function ensureCommissionRecord(input: {
     commission_percent: commissionPercent,
     customer_discount_percent: customerDiscountPercent,
     commission_amount: commissionAmount,
+    // NOT NULL in production, with no default, and never sent until now — so
+    // EVERY accrual insert was refused with 23502 before it could even reach the
+    // payment_status CHECK. Zero commissions exist in production as a result.
+    // original_subtotal is the pre-discount merchandise subtotal, the same
+    // number the minimum-qualifying-order check uses.
+    original_subtotal: qualifyingSubtotal,
+    customer_discount: customerDiscountAmount,
     amount_paid: commissionableSubtotal,
     payment_id: null,
     payment_status: "pending",
