@@ -1684,6 +1684,123 @@ updated.** This is an owner decision, not an engineering bug.
 
 ---
 
+### LIVE-038 — the cookie banner works, and the pixels are unverifiable by design
+
+**Status:** PROVEN WORKING (consent) · NOT VERIFIABLE (pixels)
+
+Both banner buttons were clicked on production and the result measured across a
+navigation:
+
+| Choice | first-party analytics identifiers created | third-party hosts contacted |
+|---|---|---|
+| **Decline** | **none** — storage is `vanta-labs-cart`, `vanta-labs-cart-session-id`, `vl_recently_viewed`, `vl_cookie_consent` only | Sentry only |
+| **Accept** | `vl_analytics_visitor_id`, `vl_analytics_session_id`, `vl_attribution` | Sentry only |
+
+`vl_cookie_consent` is stored as a cookie with a one-year expiry and the banner
+does not return. **Decline genuinely creates no analytics identifiers** — exactly
+what `/legal/cookies` promises.
+
+**No TikTok, Snap or Reddit request was made even after Accept — and that is
+correct behaviour, not a defect.** `src/lib/ads/ads-environment.ts:145`:
+
+```js
+// The one rule that fires on production. Playwright, Puppeteer and Selenium all
+// set navigator.webdriver, so a QA pass against the live site — which the audit
+// plan explicitly contemplates — records nothing in the ad account.
+if (environment.webdriver === true) return { allowed: false, reason: "automated_browser" };
+```
+
+The store deliberately refuses ad reporting to automated browsers, specifically
+so an inspection like this one cannot pollute the ad account. **It worked.**
+
+**Consequence for this report:** whether the three advertising pixels actually
+fire for a real visitor who accepts is **NOT VERIFIED and not verifiable with
+this instrument.** It would need a real browser session, or the admin
+`/api/ads/tracking-health` endpoint (401 without credentials). Given the store
+advertises on TikTok, Snapchat and Reddit, confirming the pixels fire for real
+traffic is worth doing by hand.
+
+**Minor, related:** Sentry is contacted **before** the banner is answered, and
+`/legal/cookies` does not mention it in any of its three categories. Arguably
+essential error monitoring; still undisclosed. P3.
+
+---
+
 ## 3. COVERAGE COUNTS
 
-_(final tally at the end)_
+Exact, measured, and deliberately unflattering where relevant.
+
+### Routes
+
+| | Count |
+|---|---|
+| **Distinct production URLs loaded in a real browser** | **66** |
+| — of which product pages | 36 (all published slugs, each at 390×844) |
+| — legal pages | 6 |
+| — research pages | 5 (hub + 4 articles) |
+| — other customer pages | 17 |
+| — non-page (`sitemap.xml`, `robots.txt`) | 2 |
+| **Negative checks (must 404 / must not attribute)** | **11** (8 unpublished/archived slugs, 2 bad dynamic slugs, 1 random order id) |
+| **Unauthenticated API GETs probed** | **35** |
+| **Harness URLs driven transactionally** | 9 |
+| **Routes NOT VERIFIED** | **43 page routes + ~108 API routes** |
+
+**NOT VERIFIED, with reasons:**
+
+| Routes | Count | Why |
+|---|---|---|
+| `/account/**` | 15 | account creation and sign-in are prohibited writes; no credentials supplied |
+| `/admin/**`, `/vault` interior | 24 | `/vault` needs username + password + 6-digit passcode; none supplied. Login door seen; every screen behind it unseen |
+| `/partner/dashboard` | 1 | partner auth |
+| `/pay/[orderId]`, `/checkout/pay/[orderId]`, `/order-confirmation/[orderId]` | 3 | need a real production order. The pay page was driven on the harness |
+| `/pay/mock/[orderId]` | 1 | inert in production by design (mock lockout) |
+| `/membership/[tierSlug]/subscribe` | 1 | not loaded; ends in a write |
+| API routes | ~108 | every POST/PATCH/DELETE is a write |
+
+### Everything else
+
+| | Count |
+|---|---|
+| **Viewport configurations** | **5** — 320×568, 390×844, 820×1180, 1440×900, 1920×1080 |
+| **Customer journeys completed** | **6** — Stranger, Mobile customer, Returning customer, Ambassador's customer, Researcher, Owner (**partial** — database only, no admin UI) |
+| **Playwright scenario runs** | **33** (25 against production, 8 against the harness) |
+| **Parameterised cases inside those runs** | **≈140** — 36 product pages, 9 categories, 5 sorts, 4 searches, 7 referral codes, 5 cart quantities across the referral minimum, 5 US/CA address permutations, 3 consent states, 2 banner choices, 4 affiliate edges, 2 concurrent buyers, 5 dose switches, back/forward/second-tab/refresh sequences |
+| **Interactive controls exercised** | **≈120** distinct controls — 4 age-gate checkboxes + 3 buttons, 3 FAQ accordions, search open/type/submit/clear, cart drawer open/close, wishlist, 10 category options, 5 sort options, 2 filter toggles, clear-all, 36 add-to-cart buttons, dose selectors, quantity tiers, BAC-water upsell (add and dismiss), cart +/−/remove, referral apply/clear, 17 checkout fields, 5 checkboxes, 2 selects, 2 cookie-banner buttons |
+| **Console errors observed** | **1 recurring class** — `GET /api/account/me` → 401 on every anonymous page load (LIVE-008); plus 1 extra on `/vault` (`/api/admin/auth/session` 401) and 1 on `/partner/pending` (`/api/partner/me` 401). **Zero uncaught page errors anywhere.** |
+| **Failed network requests** | **~1,900** across the session, of which **all but ~40 were Next.js `?_rsc=` prefetch aborts** (LIVE-009). The genuine 4xx are the 401s above. **No 5xx was seen on production at any point.** |
+| **Broken images** | **0**, after scrolling. Unscrolled measurements report 3–11 per page; that is lazy-loading, verified by re-measuring the same pages after a scroll (4/5 → 0/5, 6/7 → 0/7). |
+| **Horizontal scroll** | **0 pages**, at every viewport including 320×568 |
+
+---
+
+## 4. ROUTE STATUS — every customer-facing route accounted for
+
+| Route | Status |
+|---|---|
+| `/` | **PROVEN WORKING** |
+| `/products` | **PROVEN WORKING** — filters/sorts/search all verified; **DEFECT** LIVE-028 (state lost on Back), LIVE-029 (purity sort), LIVE-030 (dead In Stock toggle) |
+| `/products/[slug]` ×36 | **PROVEN WORKING** — 36/36 HTTP 200, buyable, prices match DB; **DEFECT** LIVE-003/004/005 |
+| `/cart` | **PROVEN WORKING**; **DEFECT** AFF-03, AFF-04, LIVE-013 |
+| `/cart/restore` | **PARTIALLY VERIFIED** — missing-id state correct; a real recovery link not exercised (would need a tracked cart) |
+| `/checkout` | **PARTIALLY VERIFIED** on production (form, totals, tax, Canada, validation state); **submission NOT VERIFIED there** — completed on the harness |
+| `/checkout/pay/[orderId]` | **HARNESS-PROVEN** (order created, status polling read-only); **NOT VERIFIED** on production |
+| `/pay/[orderId]`, `/pay/mock/[orderId]` | **NOT VERIFIED** — real order required / inert by design |
+| `/order-confirmation/[orderId]` | **NOT VERIFIED** — random id correctly 404s; no real order opened |
+| `/coa-library` | **PROVEN WORKING** — and the honest surface (§LIVE-001) |
+| `/research`, `/research/[slug]` ×4 | **PROVEN WORKING** |
+| `/legal/[slug]` ×6 | **PROVEN WORKING**; **DEFECT** LIVE-018 (raw Markdown, 4 of 6), LIVE-019 |
+| `/membership` | **PROVEN WORKING**; **DEFECT** LIVE-021 (intro offer invisible) |
+| `/membership/[tierSlug]/subscribe` | **NOT VERIFIED** |
+| `/ambassador`, `/partner` | **PROVEN WORKING** as pages; **DEFECT** AFF-06, LIVE-016, LIVE-017 |
+| `/partner/login` | **PROVEN WORKING** — redirects to `/account/login` |
+| `/partner/pending` | **PROVEN WORKING** |
+| `/partner/dashboard` | **NOT VERIFIED** — partner auth |
+| `/login` | **DEFECT** LIVE-022 — orphaned second partner sign-in; whether it authenticates NOT VERIFIED |
+| `/account/login`, `/account/forgot-password` | **PARTIALLY VERIFIED** — render correctly; submitting is a write |
+| `/account/**` (13 more) | **NOT VERIFIED** — auth |
+| `/contact`, `/wholesale` | **PARTIALLY VERIFIED** — forms render and are labelled; submitting is a write |
+| `/maintenance` | **PROVEN WORKING** |
+| `/vault` | **PARTIALLY VERIFIED** — login door renders; **DEFECT** LIVE-023 (22.8 s) |
+| `/admin/**` ×24 | **NOT VERIFIED** — no credentials. Numbers reconciled via SQL instead (§2i) |
+| `/r/[code]` | **PARTIALLY VERIFIED** — invalid code 307s with no write (production); valid-code behaviour **HARNESS-PROVEN** (§2l) |
+| `/sitemap.xml`, `/robots.txt` | **PROVEN WORKING** |
