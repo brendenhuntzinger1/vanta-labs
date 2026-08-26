@@ -298,26 +298,38 @@ async function validateReferralCode(
 /**
  * Per-line COGS in cents, or null when no cost is on record.
  *
- * DELIBERATELY NEVER FALLS BACK TO THE PARENT PRODUCT COST.
- * `products.product_cost_cents` holds costs inherited from EvoLabs, the former
- * third-party fulfilment provider, superseded by the per-vial landed costs in
- * sql/product-cogs.sql. On 36 of 38 published products the parent figure is
- * 1.4x-6.8x the true dose cost. Substituting it does not make COGS more
- * accurate; it makes a wrong number look like a known one.
+ * Three cases:
+ * 1. HAS dose rows, dose cost present → use dose cost
+ * 2. HAS dose rows, dose cost absent → return null (never use stale parent cost)
+ * 3. NO dose rows → use parent cost (it is authoritative for dose-less products)
  *
- * Returning null instead makes computeOrderProfit set `hasEstimatedCost`, so
- * the order reports COGS as ESTIMATED. A visible estimate beats a confident
- * wrong number.
+ * The parent cost (`products.product_cost_cents`) holds costs inherited from
+ * EvoLabs, the former third-party fulfilment provider, superseded by per-vial
+ * landed costs in sql/product-cogs.sql. The parent is SET ONLY FOR PRODUCTS THAT
+ * HAVE NO DOSE ROWS AT ALL (per product-cogs.sql). On 36 of 38 published
+ * products with doses, the parent figure is 1.4x-6.8x the true dose cost.
+ *
+ * Returning null for missing dose costs (when doses exist) makes computeOrderProfit
+ * set `hasEstimatedCost`, so the order reports COGS as ESTIMATED. A visible
+ * estimate beats a confident wrong number.
  */
 export function resolveUnitCostCents(
   slug: string,
   variantId: string | undefined,
   unitCostByDoseId: Map<string, number>,
-  _unitCostBySlug: Map<string, number>,
+  unitCostBySlug: Map<string, number>,
+  slugsWithDoses: Set<string>,
 ): number | null {
   const doseCost = variantId ? unitCostByDoseId.get(variantId) : undefined;
   if (doseCost && doseCost > 0) return Math.round(doseCost * 100);
-  return null;
+  // HAS doses but no cost on the chosen one: refuse to substitute. The parent
+  // figure here is an inherited EvoLabs seed cost, 1.4x-6.8x the true landed
+  // cost, and a confident wrong number is worse than a visible estimate.
+  if (slugsWithDoses.has(slug)) return null;
+  // NO doses at all: the parent cost is the ONLY cost this product has, and
+  // product-cogs.sql sets it for exactly this case. Using it is correct.
+  const slugCost = unitCostBySlug.get(slug);
+  return slugCost && slugCost > 0 ? Math.round(slugCost * 100) : null;
 }
 
 export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
@@ -381,10 +393,12 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     .in("slug", requestedSlugs);
   const unitCostBySlug = new Map<string, number>();
   const unitCostByDoseId = new Map<string, number>();
+  const slugsWithDoses = new Set<string>();
   for (const row of (costRows ?? []) as Array<{ slug: string; product_cost_cents: number | null; product_doses: Array<{ id: string; product_cost_cents: number | null }> | null }>) {
     const productCostCents = Number(row.product_cost_cents ?? 0);
     if (productCostCents > 0) unitCostBySlug.set(String(row.slug), productCostCents / 100);
     for (const dose of row.product_doses ?? []) {
+      slugsWithDoses.add(String(row.slug));
       const doseCostCents = Number(dose.product_cost_cents ?? 0);
       if (doseCostCents > 0) unitCostByDoseId.set(String(dose.id), doseCostCents / 100);
     }
@@ -847,6 +861,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       line.product.variantId,
       unitCostByDoseId,
       unitCostBySlug,
+      slugsWithDoses,
     );
 
   // The labelled breakdown a wallet sheet renders VERBATIM. Built here, on the
