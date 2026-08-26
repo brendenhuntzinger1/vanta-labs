@@ -1970,3 +1970,66 @@ The checkout form **correctly refused** to submit while the ZIP field held
 *"Please complete all required fields before placing your order."* That is the
 validation doing its job on a malformed postal code, and it is recorded as a
 pass, not a finding.
+
+### 7.1 A defect the dead-code sweep found, and the tests that were pinning it
+
+Not looked for. Found while checking the diff for stray files before writing
+the certification.
+
+`website/website/scratchpad/k-ends.test.ts` — a **nested `website/website/`
+path** that should never have been committed — was being **collected by vitest
+and counted among the passing suites**. Its three tests read:
+
+```ts
+it("says 'Ends tonight' for a coupon that dies at 9am", ...)          // passes
+it("says 'Ends tonight' for a coupon a FULL YEAR away", ...)          // passes
+```
+
+They were written to *demonstrate* a defect. By living in the suite they
+**pinned** it: anyone fixing `endsLabel` would have broken three green tests
+and reasonably concluded they were the ones in the wrong.
+
+**The defect.** `endsLabel` decided "is this today?" by comparing two rendered
+short dates:
+
+```ts
+formatDisplayDate(end, "short") === formatDisplayDate(now, "short")
+```
+
+`short` is `{ month: "short", day: "numeric" }` — **no year**. So 3 September
+2027 renders `"Sep 3"`, 3 September 2026 renders `"Sep 3"`, they compare equal,
+and **a promotion twelve months away is advertised to every visitor as ending
+tonight.** False urgency on a storefront banner is a customer-trust problem
+before it is anything else.
+
+A second, smaller falsehood in the same sentence: an offer expiring at **9am**
+is not ending "tonight" — the existing suite even had a case describing a **4pm**
+expiry that way.
+
+**Fix.** Compare `"medium"`, which is the same pinned business zone plus the
+year, and say **"Ends today"** — true for every same-day expiry, morning or
+evening, without giving up the urgency.
+
+**Tests** — 9 new in `src/lib/storefront-offer-ends-label.test.ts`, red first,
+the headline one reading `expected 'Ends tonight' to be 'Ends Sep 3'`.
+Mutations: 4 applied, **4 killed** (revert to year-less compare; always claim
+same-day; never claim same-day; drop the already-ended guard).
+
+**Two existing tests were edited, and that is declared rather than done
+quietly.** `storefront-offers.test.ts` asserted the literal `"Ends tonight"`
+for two genuinely same-day cases. Their intent — *a same-day expiry gets the
+same-day label*, and *the day question is asked in the business zone* — is
+untouched; only the expected string changed, with the reason written into each.
+
+**The scratch file is deleted** (from git and disk). Before deletion it failed
+against the corrected code, which is the proof it had been pinning the bug:
+
+```
+FAIL website/scratchpad/k-ends.test.ts > says 'Ends tonight' for a coupon a FULL YEAR away
+```
+
+**Gate re-run after all of the above: 259 files, 4141 tests, 0 failed, 0
+skipped.**
+
+The lesson worth keeping: a test file in a path nobody looks at is still a test
+file, and a green suite is only as honest as the assertions inside it.

@@ -69,7 +69,7 @@ export function discountHeadline(discountType: "percent" | "fixed", discountValu
 }
 
 /**
- * "Ends tonight" / "Ends Aug 25" / null.
+ * "Ends today" / "Ends Aug 25" / null.
  *
  * Deliberately coarse. A live countdown is only honest when the promotion ends
  * at a timestamp the server enforces to the second, and coupons here end on a
@@ -85,11 +85,21 @@ export function endsLabel(endsAt: string | null, now: Date = new Date()): string
 
   // "Today" HAS TO BE ASKED IN THE BUSINESS ZONE, not the machine's.
   // getDate() on a Vercel server answers in UTC, so between 8pm and midnight
-  // Eastern the server would call tomorrow "tonight" while the shopper's
-  // browser said otherwise — a wrong claim AND a hydration mismatch, which is
-  // exactly the pair of bugs format-date.ts was written to end. Comparing the
-  // rendered day strings uses that same pinned zone for both sides.
-  if (formatDisplayDate(end, "short") === formatDisplayDate(now, "short")) return "Ends tonight";
+  // Eastern the server would call tomorrow "today" while the shopper's browser
+  // said otherwise — a wrong claim AND a hydration mismatch, which is exactly
+  // the pair of bugs format-date.ts was written to end. Comparing the rendered
+  // day strings uses that same pinned zone for both sides.
+  //
+  // COMPARE A STYLE THAT CARRIES THE YEAR. This was "short", which is
+  // `{ month: "short", day: "numeric" }` and has no year in it — so 3 September
+  // 2027 rendered "Sep 3", 3 September 2026 rendered "Sep 3", they compared
+  // equal, and a promotion TWELVE MONTHS AWAY was advertised to every visitor
+  // as ending today. "medium" is the same pinned zone plus the year.
+  //
+  // The word is "today", not "tonight", because an offer expiring at 9am is not
+  // ending tonight — and "today" is true for every same-day expiry, morning or
+  // evening, without giving up the urgency.
+  if (formatDisplayDate(end, "medium") === formatDisplayDate(now, "medium")) return "Ends today";
 
   const label = formatDisplayDate(endsAt, "short");
   return label ? `Ends ${label}` : null;

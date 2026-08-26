@@ -64,16 +64,22 @@ describe("expiry is only ever stated from a real timestamp", () => {
     expect(endsLabel("2026-08-22T11:59:00Z", now)).toBeNull();
   });
 
-  it("says 'ends tonight' only on the offer's own last day", () => {
+  it("says 'ends today' only on the offer's own last day", () => {
     // 2026-08-22T20:00Z is 4pm Eastern on the 22nd; "now" is 10am Eastern.
+    //
+    // The expected string was "Ends tonight" until the year-blind comparison in
+    // endsLabel was fixed (see storefront-offer-ends-label.test.ts). This case
+    // is itself why the word changed: the offer ends at 4pm, which is not
+    // tonight. What this test asserts — that a same-day expiry gets the
+    // same-day label — is unchanged.
     const now = new Date("2026-08-22T14:00:00Z");
-    expect(endsLabel("2026-08-22T20:00:00Z", now)).toBe("Ends tonight");
+    expect(endsLabel("2026-08-22T20:00:00Z", now)).toBe("Ends today");
   });
 
   it("names the date when the offer runs past today", () => {
     const now = new Date("2026-08-22T14:00:00Z");
     expect(endsLabel("2026-08-25T20:00:00Z", now)).toMatch(/^Ends /);
-    expect(endsLabel("2026-08-25T20:00:00Z", now)).not.toBe("Ends tonight");
+    expect(endsLabel("2026-08-25T20:00:00Z", now)).not.toBe("Ends today");
   });
 
   it("asks 'is it today' in the business timezone, not the server's", () => {
@@ -81,7 +87,7 @@ describe("expiry is only ever stated from a real timestamp", () => {
     // shopper, already tomorrow for a UTC server. Getting this wrong both
     // states the wrong day and hydrates differently in the browser.
     const now = new Date("2026-08-23T01:00:00Z"); // 9pm ET on the 22nd
-    expect(endsLabel("2026-08-23T02:00:00Z", now)).toBe("Ends tonight");
+    expect(endsLabel("2026-08-23T02:00:00Z", now)).toBe("Ends today");
   });
 });
 
