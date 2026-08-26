@@ -26,9 +26,10 @@ Finding ids are namespaced `I-nn` per Rule 2. Cross-block items are marked
 
 ---
 
-## I-01 — Payment-processor and email provider secrets are written to `admin_audit_logs` in plaintext and rendered by the audit-log viewer
+## I-01 — Email provider secrets are stored plaintext in `admin_audit_logs` and rendered by the audit-log viewer
 
-**Grade:** `SOURCE-INSPECTED` · **Severity:** P0 · **Status:** OPEN
+**Grade:** `DATABASE-PROVEN` (leak) + `BEHAVIORAL-TEST-PROVEN` (fix) ·
+**Severity:** P0 · **Status:** FIXED at the read boundary; **rotation still owed**
 
 ### What happens
 
@@ -95,6 +96,46 @@ The masking is intentional and documented in the route's own comment. The audit
 log defeats it. The same operator who cannot read the current key through the
 settings screen can read it — and every previous one — through the audit log.
 
+### Confirmed against production, read-only
+
+Counted rows and value **lengths** only — no secret value was read, printed or
+stored anywhere in this audit:
+
+```sql
+select target_table, target_id, count(*) as rows_written,
+       count(*) filter (where coalesce(length(metadata->>'value'),0) > 0) as nonempty,
+       max(coalesce(length(metadata->>'value'),0)) as max_len
+from public.admin_audit_logs
+where action = 'admin_control_upsert'
+  and (target_id in ('smtp_password','resend_api_key','sendgrid_api_key','secret_key','webhook_secret')
+       or target_table = 'payment_processor')
+group by 1,2;
+```
+
+| section | key | rows | non-empty | max value length | first write |
+|---|---|---|---|---|---|
+| `email` | `resend_api_key` | 2 | **2** | 36 | 2026-07-21 |
+| `email` | `smtp_password` | 1 | **1** | 19 | 2026-07-21 |
+| `fulfillment` | `webhook_secret` | 1 | **1** | 64 | 2026-07-30 |
+| `payment_processor` | `publishable_key` | 12 | 0 | 0 | 2026-07-21 |
+| `payment_processor` | `provider` / `enabled` / `display_name` | 12 each | — | — | 2026-07-21 |
+
+Three live secrets are in the table today. A 36-character `resend_api_key` is
+the length of a real Resend key; a 64-character `fulfillment/webhook_secret` is
+a full hex signing secret.
+
+Two things this narrows:
+
+- **`payment_processor/secret_key` and `payment_processor/webhook_secret` have
+  no rows at all.** The processor secret was never saved through this path, so
+  the card-payment credential is not exposed here. That is the single biggest
+  reason this is P0-with-a-bounded-blast-radius rather than P0-critical.
+- **`fulfillment/webhook_secret` exists anyway.** The settings route's own
+  comment (`route.ts:100-105`) says fulfillment deliberately accepts no
+  credentials, webhook secret included. The row predates that decision
+  (2026-07-30) and was never cleaned up — the comment describes the code, not
+  the table.
+
 ### Blast radius
 
 1. **Retention.** Rotating a leaked processor key does not remove the leaked
@@ -104,10 +145,26 @@ settings screen can read it — and every previous one — through the audit log
    payment and email credentials: the Supabase console, a database backup, a
    read-replica, an analytics export, a support engineer with table access.
    None of those are in the settings screen's threat model.
-3. **Realtime broadcast.** `src/components/admin-control-center-client.tsx:227`
-   subscribes to `postgres_changes` on `admin_audit_logs` for `event: "*"`. Any
-   session subscribed to that channel is on the delivery path for rows carrying
-   secrets.
+3. **Realtime broadcast — checked, and it is closed.**
+   `src/components/admin-control-center-client.tsx:227` subscribes to
+   `postgres_changes` on `admin_audit_logs` with the **anon key**, which would
+   put secret-carrying rows on a websocket reachable by anyone holding
+   `NEXT_PUBLIC_SUPABASE_ANON_KEY`. Verified in production that it is not:
+
+   | check | result |
+   |---|---|
+   | `pg_class.relrowsecurity` on `admin_audit_logs` | `true` |
+   | policies | 2 (`admin_audit_logs_admin_only` SELECT, `..._insert_admin` INSERT) |
+   | policy predicate | `current_auth_role() = 'admin'` |
+   | `current_auth_role()` | `select auth.jwt() ->> 'role'` |
+
+   A Supabase JWT's `role` claim is `anon` or `authenticated`, never `admin`, so
+   the policy is effectively deny-all for both — correct, if misleadingly named.
+   The service-role key bypasses RLS, which is how the server still reads it.
+   **Negative control for this claim:** the same query shows
+   `rls_enabled = true` on `admin_credentials`, `admin_sessions` and
+   `admin_login_attempts`, so the result is not an artefact of querying the
+   wrong catalogue.
 
 ### Root cause
 
@@ -116,30 +173,107 @@ sensitivity, and it doubles as the audit writer. One function is being asked to
 do two jobs with opposite requirements: config storage must keep the value,
 audit history must not.
 
-### Fix (proposed — not yet applied)
+### Why the obvious fix is the wrong one
 
-Two independent changes, because either alone leaves a hole:
+The first instinct — stop writing the value — breaks the store. This table is
+**not only** an audit log: `admin_control_current` is a `DISTINCT ON` view over
+its `admin_control_upsert` rows, and `getControlSnapshot` reads
+`metadata.value` back to configure email sending and the payment processor
+(`admin-control.ts`, CONTROL_VIEW comment at :52-66). Redacting at the write
+takes email delivery offline.
 
-1. **At the write.** Never persist a sensitive value into the audit metadata.
-   Store a redaction marker plus a non-reversible fingerprint (`sha256` prefix)
-   so an operator can still answer "did the key change?" without the key.
-2. **At the render.** Deny-list by default in `summarizeMetadata` — print
-   `value` only for sections/keys known non-sensitive, or suppress `value`
-   outright for `admin_control_upsert`. Defence in depth: rows written before
-   the fix are still in the table.
+That is the actual root cause, stated plainly: **one table is doing two jobs
+with opposite requirements.** Config storage must keep the value; audit history
+must not have it.
 
-### Not yet done
+### Fix applied — close the read boundary
 
-- Regression test proving a secret written through `PATCH /api/admin/settings`
-  never reaches `metadata.value`, and that the viewer suppresses it for
-  pre-existing rows.
-- A migration/backfill decision for rows already carrying secrets. **This needs
-  the owner** — it is a production data change (Rule 4).
+There are exactly two readers, and only one of them is an audit reader:
 
-**`OWNER DECISION NEEDED:`** existing `admin_control_upsert` rows in production
-almost certainly contain live or recently-rotated secrets. Redacting them is a
-production write. Do not apply without explicit approval. Rotating the affected
-credentials is the safer first step and is the owner's call.
+| reader | purpose | needs raw value? |
+|---|---|---|
+| `admin-control.ts` → `readControlRows` | CONFIG | **yes** — untouched |
+| `admin-audit-log.ts` → `getAuditLogRows` | AUDIT | no — now redacted |
+
+New `src/lib/admin-audit-redaction.ts` redacts at the second one:
+
+- **Rule 1 — settings saves.** The secret sits in `metadata.value` while its
+  *name* is in `target_id`. `value` is not a secret-sounding key, so a generic
+  rule cannot see it; `target_id` is what classifies the row.
+- **Rule 2 — everything else.** Any metadata field whose own name marks it a
+  credential is redacted in *any* audit row, at any nesting depth. This is what
+  stops a future writer reopening the hole under a different action.
+
+Classification is by canonicalised key substring (`smtp_password`,
+`smtpPassword`, `SMTP_PASSWORD` all match), so a future `mailgun_api_key` is
+covered without an edit. The settings API's `secretKeySet` / `passwordSet`
+booleans are excepted, so operational history stays readable.
+
+`getAuditLogRows` now returns redacted metadata; the viewer at
+`src/app/admin/audit-log/page.tsx` inherits it with no change of its own.
+
+### Reproduction and verification
+
+`src/lib/admin-audit-log-redaction.test.ts` drives the real `getAuditLogRows`
+against a stubbed Supabase client and re-implements the page's Details-cell
+renderer, so the assertion is against what an operator would actually see.
+
+Before the fix — **red for the right reason**, not on scaffolding:
+
+```
+AssertionError: expected 'value: re_LIVE_0123456789abcdef012345…' not to contain 're_LIVE_0123456789abcdef0123456789ab'
+Received: "value: re_LIVE_0123456789abcdef0123456789ab • actorUsername: owner"
+   Tests  7 failed | 2 passed (9)
+```
+
+The 2 that passed are the negative controls — non-secret settings still
+readable, actor still recorded — and they passed before and after, which is the
+point of them.
+
+After: **23 passed (23)**. Full suite **204 files / 3595 tests passed, 1 file
+and 7 tests skipped, zero regressions**; `tsc --noEmit` clean; eslint clean.
+
+### Negative controls
+
+Each mutation, and which tests caught it:
+
+| # | Mutation | Result |
+|---|---|---|
+| M1 | Remove the `redactAuditMetadata` call in `getAuditLogRows` | 7 failed — the leak returns |
+| M2 | `isSecretKeyName` always returns `false` | 16 failed |
+| M3 | `redactAuditMetadata` always returns `null` | 12 failed — over-redaction caught too |
+| M4 | Drop the `NON_SECRET_EXCEPTIONS` guard | **22 passed — NOT CAUGHT** |
+| M5 | Stop recursing into nested objects | 3 failed |
+| M6 | Drop the generic key rule, keep only the control-`value` rule | 2 failed |
+
+**M4 found a real defect in the fix.** `publishablekey` matches no marker, so
+listing it as an exception was dead code implying protection that was not
+there; the two entries that *do* fire (`secretKeySet`, `passwordSet`) had no
+test. Dead entry removed, a test added for the live ones, and M4 re-run: now
+**1 failed** — caught. Restored, and 23/23 green again.
+
+### Still owed — needs the owner
+
+Redaction at the read does **not** remove the value from the table, from a
+backup, or from anyone who already had access.
+
+**`OWNER DECISION NEEDED:`**
+
+1. **Rotate** the Resend API key, the SMTP password, and the
+   `fulfillment/webhook_secret`. This is the substantive remediation; the code
+   fix only stops the bleeding. Rotation is a credential operation, not a code
+   change, and it is the owner's to perform.
+2. **Redacting the historical rows** is a production write and is blocked on
+   approval under Rule 4. Note it cannot be done blindly: blanking
+   `email/smtp_password` and `email/resend_api_key` would blank the **live
+   config**, because those rows *are* the config. The correct order is rotate
+   first, re-save through the settings screen, and only then redact rows older
+   than the newest per key.
+3. **Structural:** splitting the settings store out of `admin_audit_logs` is
+   the durable fix. Out of scope for this block — recorded as
+   **CROSS-BLOCK:** `src/lib/admin-control.ts` — config and audit share one
+   table; consider a dedicated `admin_control_values` table with the audit row
+   carrying only a fingerprint.
 
 ---
 
@@ -386,12 +520,16 @@ type, and apply the 8 MB cap inside the helper so both entry points inherit it.
 
 | Id | Severity | Evidence | Fixed |
 |---|---|---|---|
-| I-01 | P0 | `SOURCE-INSPECTED` | No — fix proposed, owner decision needed on existing rows |
+| I-01 | P0 | `DATABASE-PROVEN` + `BEHAVIORAL-TEST-PROVEN` | **Read boundary fixed & tested.** Rotation + historical rows still owed to the owner |
 | I-02 | P1 | `SOURCE-INSPECTED` | No — fix proposed, CROSS-BLOCK with D |
 | I-03 | P1 | `SOURCE-INSPECTED` | No — fix proposed |
 | I-04 | P2 | `SOURCE-INSPECTED` | No — fix proposed, CROSS-BLOCK unassigned |
 | I-05 | P2 | `SOURCE-INSPECTED` | No — fix proposed |
 
-Nothing above has been upgraded past `SOURCE-INSPECTED`: per the execution
-plan's step 3, a finding is not proven until a test fails for the right reason.
-Tests and fixes follow.
+I-01 is proven and fixed at the read boundary, with negative controls recorded
+above. I-02 through I-05 remain `SOURCE-INSPECTED`: per the execution plan's
+step 3, a finding is not proven until a test fails for the right reason. Their
+tests and fixes follow.
+
+Full suite after I-01: **204 files / 3595 tests passed**, 1 file / 7 tests
+skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
