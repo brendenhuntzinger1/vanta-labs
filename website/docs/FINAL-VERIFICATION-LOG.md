@@ -811,3 +811,53 @@ alter table public.orders drop column if exists inventory_restocked_at;
 ```
 Safe while no order carries a non-null `inventory_restocked_at` — true now
 (the column does not exist), and it must be re-checked before any later rollback.
+
+### STEP 2 — APPLIED ✅
+
+Verify output:
+
+```
+col_exists_expect_1              : 1
+fn_exists_expect_1               : 1
+anon_execute_expect_false        : false
+authd_execute_expect_false       : false
+service_role_expect_true         : true
+idx_expect_1                     : 1
+products_total_qty_expect_115    : 115     <-- unchanged
+doses_total_qty_expect_1139      : 1139    <-- unchanged
+already_restocked_expect_0       : 0
+```
+
+Every value as predicted. **The two stock totals are byte-identical to the
+pre-state**, confirming the step moved no inventory. The new function is
+service_role only — `anon` and `authenticated` are both denied EXECUTE, so this
+did not reintroduce the I-07 exposure class while restoring the function.
+
+**Live behaviour change, as forecast:** the currently-deployed code's
+`adjust_inventory_on_sale` fallback and its `inventory_restocked_at` restock
+claim both work from this moment. Webhook refunds now return stock. Admin
+cancellations still do not — that half ships with the code.
+
+**G-04 / I-12 residual and the restock-claim half of G-02 / K-17 are CLOSED in
+production.**
+
+---
+
+## STEP 3 — pre-state capture (committed BEFORE the step runs)
+
+```
+pending_emails rows : 0
+columns             : id:uuid, to_email:text, subject:text, html:text, text_body:text,
+                      reply_to:text, attempts:integer, status:text, last_error:text,
+                      next_attempt_at:timestamptz, created_at:timestamptz, updated_at:timestamptz
+pending_emails_order_idx exists : 0
+```
+
+Zero rows — nothing can be lost. `order_id` and `email_kind` are both absent, as
+expected.
+
+**Manual reconstruction, if ever needed:**
+```sql
+drop index if exists public.pending_emails_order_idx;
+alter table public.pending_emails drop column if exists order_id, drop column if exists email_kind;
+```
