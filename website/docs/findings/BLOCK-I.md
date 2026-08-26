@@ -561,59 +561,107 @@ deployment; not run, and not to be run against production.
 
 ---
 
-## I-04 — `GET /api/ads/purchase-event/[orderId]` is a second, weaker, unrated-limited door to order data — and it writes
+## I-04 — CORRECTED. `GET /api/ads/purchase-event/[orderId]` had no sweep protection and writes on a GET; the "data leak" half was my error
 
-**Grade:** `SOURCE-INSPECTED` · **Severity:** P2 · **Status:** OPEN
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P3 (down from P2) ·
+**Status:** FIXED
 
-The four non-admin parameterised routes were checked for IDOR:
+### Correction to the first version of this finding
 
-| Route | Verdict |
-|---|---|
-| `account/addresses/[addressId]` PATCH/DELETE | **PASS.** Every mutation carries `.eq("user_id", user.id)` alongside `.eq("id", addressId)`, so the path parameter cannot select another customer's row (`route.ts:52-56`, `78-82`). |
-| `checkout/order-status/[orderId]` GET | **PASS by design.** Unguessable UUID as bearer token, rate limited via the hardened resolver, returns coarse status only — no email, address, amount or line items, and the reasoning is written down at `route.ts:27-39`. |
-| `coa/[coaId]/file` GET | **PASS.** Re-checks published-and-live, mints a short-lived signed URL, 307 + `no-store`. |
-| `ads/purchase-event/[orderId]` GET | **See below.** |
+I filed this as "a second, weaker door to order data", claiming the route leaks
+`amountPaid` plus per-line product names, quantities and unit prices that
+`order-status` deliberately withholds.
 
-`ads/purchase-event/[orderId]` shares the bearer-token model but not the
-discipline that goes with it. For any order id, **unauthenticated**, it returns
-`amountPaid`, and per line item the product name, quantity and unit price
-(`route.ts:98-109`, returned inside `event`/`snapPurchase`/`redditPurchase` at
-`305-308`).
+The first half is true — it does return those (`route.ts:98-109`, reaching the
+client inside `event.properties.contents` via `buildPurchase`, which carries
+`content_name`, `quantity` and `price`). **The framing was wrong**, and reading
+the confirmation page is what showed it:
 
-That is precisely the data `order-status` refuses to return, from the same
-identifier, on the same trust model. `order-status` states the intent
-explicitly: *"This must not become a second, weaker way to read an order."*
-This is that second way.
+`src/app/order-confirmation/[orderId]/page.tsx:57` selects
+`order_items(product_name, quantity, line_total)` and `amount_paid` and renders
+them to **anyone holding the link**. It masks the email
+(`maskEmail`, `page.tsx:29-36`) and nothing else, and says why: *"The
+confirmation URL is an unguessable bearer token but can circulate."*
 
-Three concrete gaps:
+So the priced basket is already, deliberately, visible to a link holder. This
+route exposing the same class of data to a holder of the same id is **consistent
+with the documented model, not a new leak**. `order-status` is the outlier for
+being *stricter* than its siblings, not this route for being weaker. Severity
+drops P2 → P3, and the recommendation to strip `unitPrice`/`productName` is
+withdrawn — it would have degraded ad measurement to fix a non-defect.
 
-1. **No rate limit.** `order-status` is capped at 120/min per IP *specifically*
-   so the id space cannot be swept (`order-status/route.ts:46-52`). This route
-   has no limit, so the sweep protection on the guarded door is moot while the
-   unguarded one is open.
-2. **An unauthenticated GET performs writes and external sends.** It upserts
-   `ad_purchase_events_sent` (`route.ts:287-296`), POSTs a conversion to TikTok
-   (`260`) and to Reddit (`242`). A GET with side effects, reachable by anyone
-   holding an order id, is also a way to force outbound traffic on the store's
-   ad credentials.
-3. **`?inspect=1` is gated, the default path is not** — and the default path is
-   the one that leaks. The admin check at `200-201` guards the *diagnostic*
-   view while the anonymous branch below already returns the value and items.
-   The comment at `26-30` reasons that the confirmation page renders the same
-   total to anyone holding the link, which is true of the total and not of the
-   per-line unit prices.
+### What is actually left, and it is real
 
-### Fix (proposed — not yet applied)
+**No sweep protection, on the one route in the family that also writes.**
 
-Rate-limit on the same key and resolver `order-status` uses; drop line-item
-`unitPrice`/`productName` from the anonymous response (the pixel needs content
-ids and a total, not a priced basket); and gate the send/upsert side effects so
-a repeat GET cannot re-trigger outbound calls.
+`checkout/order-status/[orderId]` rate limits at 120/min per IP and states the
+reason: *"Rate limited per IP so the id space cannot be swept."*
+`ads/purchase-event/[orderId]` had **no limit at all**, while a GET on it:
 
-**CROSS-BLOCK:** `src/app/api/ads/**` is not in any block's primary file list.
-Recording rather than editing; consolidation should assign it.
+- upserts `ad_purchase_events_sent` (`route.ts:287-296`),
+- POSTs a conversion to TikTok (`:260`) and to Reddit (`:242`).
 
----
+Same trust model, same id space, one door watched and one not.
+
+**Bounding it honestly** — I checked rather than assumed:
+
+- The outbound sends are guarded by `alreadySent`, read from
+  `ad_purchase_events_sent`, and that table exists in production (confirmed via
+  `pg_class`: RLS enabled). So sends are **once per order**, not per request.
+  The amplification story I implied is not there.
+- A UUIDv4 order id is 122 bits of entropy. Sweeping it is not feasible whether
+  or not a limit exists. The limit is defence in depth, exactly as it is on
+  `order-status`.
+
+That is why this is P3 and not higher. It is still worth closing: two budgets on
+one id space is the same gap wearing a smaller number, and the write-on-GET
+makes this the member of the family that least deserves the weaker treatment.
+
+**`?inspect=1` is correctly gated** (`route.ts:200-201`, admin session required)
+and the reasoning for checking it late rather than early is sound.
+
+### Fix applied
+
+The same limit and the same key as its sibling: `checkRateLimit(…, 120, 60)`
+keyed through `rateLimitKeyForRequest`, so it inherits the single hardened
+resolver from I-03 rather than growing a fourth opinion about client IPs.
+
+A tripped limit answers `{ found: false, event: null }` with `Retry-After`
+rather than a bare error, because the confirmation page reads this response and
+"no event" is the shape it already handles. The route's own rule — *"the one
+thing it must never do is guess that a purchase happened"* — holds on the 429
+path too.
+
+### Reproduction and verification
+
+Red first for the right reason — no bucket was ever recorded, and a limited
+request returned 404 instead of 429:
+
+```
+× rate limits every request                       expected [] to have a length of 1
+× keys the limit on the proxy-supplied IP         (no bucket to inspect)
+× answers 429 with Retry-After once it trips      expected 404 to be 429
+   Tests  3 failed | 1 passed (4)
+```
+
+After: **4 passed (4)**. Full suite **208 files / 3628 tests passed**, 1 file /
+7 skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
+
+### Negative controls
+
+| # | Mutation | Result |
+|---|---|---|
+| A1 | Remove the limit | 3 failed |
+| A2 | Key it on the forgeable `x-forwarded-for` | 1 failed |
+| A3 | Drop the `Retry-After` header | 1 failed |
+| A4 | Return 429 carrying a truthy `event` | 1 failed |
+
+All four caught. A4 is the one that matters: it is the mistake that would make a
+throttled request look like a conversion.
+
+**CROSS-BLOCK:** `src/app/api/ads/**` is in no block's primary file list. The
+fix was made here because it is a security control in this block's lens;
+consolidation should confirm no other session touched the file.
 
 ## I-05 — Product image upload trusts a client-supplied MIME type and a client-supplied extension, into a public bucket — and a second route skips even that
 
@@ -808,17 +856,22 @@ imagery? Left unchanged rather than guessed at.
 | I-01 | P0 | `DATABASE-PROVEN` + `BEHAVIORAL-TEST-PROVEN` | **Read boundary fixed & tested.** Rotation + historical rows still owed to the owner |
 | I-02 | P3 today / P1 if enabled | `DATABASE-PROVEN` | No — **corrected**; latent, owner decision before the switch is flipped |
 | I-03 | P1 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** (incl. I-03b, found by the test) |
-| I-04 | P2 | `SOURCE-INSPECTED` | No — fix proposed, CROSS-BLOCK unassigned |
+| I-04 | P3 (down from P2) | `BEHAVIORAL-TEST-PROVEN` | **Corrected & fixed** — rate limit added; "leak" half withdrawn |
 | I-05 | **P1** (raised) | `BEHAVIORAL-TEST-PROVEN` + `DATABASE-PROVEN` | **Fixed & tested** |
 | I-05b | — | `SOURCE-INSPECTED` | **PASS** — customer-facing proof upload already correct |
 | I-06 | P3 | `DATABASE-PROVEN` | No — owner decision (accept GIFs or not) |
 
-I-01, I-03 and I-05 are proven and fixed, with negative controls recorded
-above. I-02 and I-04 remain `SOURCE-INSPECTED`: per the execution plan's
-step 3, a finding is not proven until a test fails for the right reason. Their
-tests and fixes follow.
+I-01, I-03, I-04 and I-05 are proven and fixed, each with negative controls
+recorded above. I-02 is corrected and recorded as a latent risk with no code
+change, for the reasons given there. I-06 needs a product decision.
 
-Full suite after I-05: **207 files / 3624 tests passed**, 1 file / 7 tests
+**Two of my own findings were overstated and are corrected in place** — I-02
+(a grep that missed `canView*`) and I-04 (a "leak" that the confirmation page
+already exposes by design). Both corrections are kept in the record rather than
+quietly rewritten, because a reader needs to know which claims were checked
+hard enough to break.
+
+Full suite after I-04: **208 files / 3628 tests passed**, 1 file / 7 tests
 skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
 
 **CROSS-BLOCK:** `src/app/api/catalog/back-in-stock/route.ts` sits under
