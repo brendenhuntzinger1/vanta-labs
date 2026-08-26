@@ -30,6 +30,7 @@ const state: {
 } = { paymentStatus: "awaiting_verification", updateFilters: [], updatesApplied: 0, paymentMethod: "zelle" };
 
 const sideEffects = {
+  push: vi.fn(async () => {}),
   points: vi.fn(async () => {}),
   coupon: vi.fn(async () => ({ ok: true })),
   email: vi.fn(async (): Promise<{ ok?: boolean; success?: boolean; error?: string }> => ({ ok: true })),
@@ -40,6 +41,10 @@ const sideEffects = {
 
 vi.mock("server-only", () => ({}));
 vi.mock("next/server", () => ({ after: (fn: () => unknown) => { void fn; } }));
+
+vi.mock("@/lib/order-push-notification", () => ({
+  scheduleOrderPushNotification: (...args: unknown[]) => sideEffects.push(...(args as [])),
+}));
 
 vi.mock("@/lib/membership", () => ({
   calculateEarnedPoints: () => 100,
@@ -287,5 +292,24 @@ describe("orders that must never be approved through this path", () => {
     expect(result.alreadyPaid).toBe(true);
     expect(state.updatesApplied).toBe(0);
     expect(sideEffects.points).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The operator's phone alert is a side effect like any other on this list,
+   * and it is the one an admin notices is missing. A manual approval is the
+   * lane where an order becomes real WITHOUT a processor callback, so a
+   * notification wired only into the card lane leaves Cash App and Zelle orders
+   * silent — which looks exactly like no order having arrived.
+   */
+  it("tells the operator about a manually-approved order", async () => {
+    await approve();
+    expect(sideEffects.push).toHaveBeenCalledTimes(1);
+    expect(sideEffects.push).toHaveBeenCalledWith(ORDER_ID);
+  });
+
+  it("does not notify twice when the approve is clicked twice", async () => {
+    await approve();
+    await approve();
+    expect(sideEffects.push).toHaveBeenCalledTimes(1);
   });
 });

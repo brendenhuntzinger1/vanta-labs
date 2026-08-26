@@ -6,6 +6,7 @@ import { sendEmail } from "@/lib/email/send";
 import { sendOrderEmailOnce } from "@/lib/email/order-email-once";
 import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { commissionEarnedTemplate, orderConfirmationTemplate, refundConfirmationTemplate } from "@/lib/email/templates";
+import { scheduleOrderPushNotification } from "@/lib/order-push-notification";
 import { getSiteUrl } from "@/lib/env";
 import { redeemCoupon } from "@/lib/coupons";
 import { calculateEarnedPoints, getActivePointsMultiplier, getActivePointsPerDollar, recordPointsLedgerEntry, redeemPoints, restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
@@ -1273,6 +1274,11 @@ export async function finalizeManualPayment(
     console.error("Unable to record paid_side_effects_at for manual order", orderId, latchError);
   }
 
+  // Same notification as the card lane. This lane has its own single-use claim
+  // (the conditional paid-flip above), so approving an already-approved manual
+  // payment returns early and never reaches here.
+  await scheduleOrderPushNotification(orderId);
+
   return { orderId, alreadyPaid: false, status: "paid" };
 }
 
@@ -1808,6 +1814,13 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // The 30-minute sweep remains as the safety net for the case where this
       // callback dies with the process.
       scheduleShippoSync(orderId);
+
+      // Tell the operator an order came in. Inside the side-effects claim, so a
+      // duplicate or replayed delivery cannot ring the phone twice; deferred
+      // like the Shippo push above, so it cannot add its latency to the
+      // provider's callback. Not awaited for success: a push notification is a
+      // convenience, and /admin/orders is the record that matters.
+      await scheduleOrderPushNotification(orderId);
     }
   }
 
