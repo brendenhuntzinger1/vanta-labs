@@ -43,6 +43,7 @@ pasted verbatim.
 | K-18 | P1 | `SOURCE-INSPECTED` | Four compliance attestations are collected and none is durably recorded on the card lane |
 | K-19 | P1 | `SOURCE-INSPECTED` | Every call to the payment processor has no timeout, while the ad pixels and the label printer all have one |
 | K-20 | P2 | `SOURCE-INSPECTED` | Four tables are written and never read, and two double the visitor data retained for no benefit |
+| K-21 | P1 | `SOURCE-INSPECTED` | The homepage hardcodes the "99%" the trust-claims module says never appears, and checkout makes a different fulfilment promise from the rest of the site |
 
 ---
 
@@ -3181,6 +3182,227 @@ name and confirm the test names it.
   others — are artefacts of the line-based classifier: their write is on the line
   *after* the `.from(...)`. Each was re-checked by hand and has a real writer.
   Recorded so block M does not re-chase them.
+
+---
+
+---
+
+## K-21 — The trust-claims module says no hardcoded "99%" appears in the UI; the homepage hardcodes it, and checkout makes a different fulfilment promise from the rest of the site
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN
+**Area:** legal/policy
+
+### The module that exists to prevent this
+
+`src/lib/trust-claims.ts` is the single source of truth for every customer-facing
+trust claim, and its header records the exact incident it was written after:
+
+> These strings were previously copied into eight files and had already drifted
+> into four different versions of the same fulfilment promise — **"Ships within
+> one business day"**, "Ships in 1 business day", "Most in-stock orders are
+> prepared within one business day", and a bare "Fast Dispatch". Four wordings of
+> one commitment is how a store ends up unable to say what it actually promised
+> when a customer disputes an order.
+>
+> The rule for anything added here: a claim earns its place by being checkable
+> against configuration, published policy, or an explicit decision by the owner
+> that is recorded in the comment next to it. **Nothing goes in because it would
+> convert well.**
+
+The module is genuinely well-built. Every constant carries its provenance. The
+problem is that two of the highest-traffic pages do not use it.
+
+### Defect 1 — the homepage hardcodes the one number the module says never appears
+
+`src/lib/trust-claims.ts:50-53` states it as a fact about the codebase:
+
+> So: **no hard-coded "99%" appears anywhere in the UI.** The figure a customer
+> sees is the figure the lab recorded for the lot in front of them, and where that
+> record does not exist yet, nothing is claimed at all.
+
+`src/app/page.tsx:28`:
+
+```tsx
+label: "99%+ Purity",
+```
+
+The statement is false. And the module's reasoning for why it matters is exactly
+right: *"A number attached to a specific vial is a statement about that vial"*.
+The homepage asserts it catalogue-wide, detached from any lot, while ledger
+finding **F-006 establishes that ZERO COAs exist**.
+
+The homepage's `TRUST_POINTS` array (`src/app/page.tsx:12-52`) is a **local
+redeclaration** that shadows the shared one — and it is a *partial* import, which
+is the worst version:
+
+```tsx
+import { FULFILMENT_SHORT } from "@/lib/trust-claims";   // page.tsx:8
+…
+label: "Based in the USA",              // :19  — no provenance anywhere
+label: "99%+ Purity",                   // :28  — the module says this does not exist
+label: FULFILMENT_SHORT,                // :39  — correctly sourced
+label: "Third-Party Batch Verified",    // :48  — stronger than TESTING_SHORT ("Third-Party Tested")
+```
+
+One of four claims is sourced from the module. A reader seeing the import
+reasonably assumes the array is governed by it.
+
+"Third-Party Batch **Verified**" is also a materially stronger claim than the
+canonical "Third-Party Tested" — *verified* implies documentation a third party
+can inspect, which is precisely what does not exist yet. "Based in the USA" has no
+provenance recorded anywhere in the codebase.
+
+### Defect 2 — checkout makes a different fulfilment promise, on the screen where it counts
+
+`src/app/checkout/page.tsx:182-187` is a second local redeclaration:
+
+```tsx
+const TRUST_POINTS = [
+  { label: "256-bit SSL encrypted", … },
+  { label: "Secure payment processing", … },
+  { label: "Full batch traceability", … },
+  { label: "Ships within 1 business day", … },
+];
+```
+
+**"Ships within 1 business day"** is, word for word, one of the four drifted
+variants the module's header lists as the reason it was created. The canonical
+value is:
+
+```ts
+FULFILMENT_DETAIL = "Order by 2PM ET, ships same day (Mon–Fri)"
+```
+
+Those are different commitments. "Same day if ordered before 2PM ET on a weekday"
+and "within 1 business day" resolve differently for an order placed at 3PM Friday.
+The drifted one is on the **last screen before payment** — the version a customer
+would quote in a dispute, and the one a card network would read as the promise
+that induced the purchase.
+
+The other two are equally unsourced:
+
+- **"256-bit SSL encrypted"** — a specific technical assertion. The module
+  deliberately declines to make it: `CHECKOUT_DETAIL = "Card details never touch
+  our servers"`, with the note *"'Encrypted' describes the transport, and claims
+  nothing about certification."* Checkout asserts a cipher strength instead, which
+  is the kind of claim the module's own rule exists to exclude.
+- **"Full batch traceability"** — stronger than the canonical
+  `COA_SHORT = "COA Documented"`, made site-wide, with zero COAs on file.
+
+### Defect 3 — "COA Documented" is on the age gate and the footer, ungated
+
+This sharpens F-006 rather than repeating it, by naming where and why.
+
+`COA_SHORT` is *per-product* gated — `hasCoa()` in `coa-url.ts` rejects
+placeholders like `"pending"` and `"TBD"` — and the module's docblock explains
+that the site-wide strings are "deliberately weaker than the per-product ones"
+because "a catalogue-level badge is a statement about the programme".
+
+That reasoning holds for `TESTING_SHORT` ("Third-Party Tested"), which describes
+how the store operates. It does **not** hold for "COA **Documented**", which is a
+claim that documents exist. It is rendered ungated in the two highest-visibility
+places on the site:
+
+- `src/components/site-footer.tsx:67` — `TRUST_POINTS.map(…)`, all four, **every page**
+- `src/components/age-gate.tsx:483` — `TRUST_POINTS.slice(0, 3)`, i.e. Testing,
+  **COA**, Checkout — **the first screen any visitor sees**
+
+By the module's own admission rule — *checkable against configuration, published
+policy, or a recorded owner decision* — this claim is checkable and currently
+false.
+
+### Impact
+
+The store's compliance posture is its differentiator, and its trust strip is where
+that posture is asserted. Today it asserts a purity figure no document supports,
+"batch traceability" and "COA Documented" with zero certificates on file, and — on
+the payment screen specifically — a fulfilment commitment that contradicts the one
+every other page makes.
+
+The mechanism that would have caught all of it exists, works, and is bypassed by
+local copies in the two pages that matter most.
+
+### Reproduction
+
+```
+grep -rn "TRUST_POINTS" website/src --include=*.tsx | grep -v '\.test\.'
+```
+→ `site-footer.tsx` and `age-gate.tsx` import the shared constant;
+`src/app/page.tsx:12` and `src/app/checkout/page.tsx:182` **declare their own**.
+
+```
+grep -rn '99%' website/src --include=*.tsx | grep -v '\.test\.'
+```
+→ `src/app/page.tsx:28`, contradicting `trust-claims.ts:50`.
+
+In the browser: load `/`, `/checkout` and any product page at 390×844 and read the
+four trust strips side by side. Three different fulfilment wordings and two
+different testing claims. **Block G+H should capture this as a screenshot set** —
+it is more persuasive rendered than quoted.
+
+### Smallest safe root-cause fix
+
+1. Delete both local `TRUST_POINTS` arrays and render from
+   `TRUST_POINTS_DETAILED`, keeping each page's own icons. The shared array is
+   already shaped for this (`trust-claims.ts:118-124`).
+2. Any claim not currently in the module and worth keeping — "Based in the USA" —
+   gets added there **with its provenance comment**, per the module's stated rule,
+   or is dropped.
+3. **Remove `COA_SHORT` from `TRUST_POINTS` until at least one COA is published.**
+   It can return the day the COA Library is non-empty; nothing else needs to
+   change. The per-product badge already gates itself correctly and can stay.
+4. Delete `"99%+ Purity"` and `"Full batch traceability"` outright. Both are
+   product-level claims being made catalogue-wide, which is the distinction the
+   module already draws correctly for testing.
+
+### Regression test to write
+
+A source-text test — the pattern this codebase already uses successfully, and the
+one that caught a consent-copy regression (`cookie-consent.tsx:76-80`):
+
+- assert no file under `src/app/` or `src/components/` declares a local
+  `TRUST_POINTS`;
+- assert no `.tsx` outside `trust-claims.ts` contains a percentage literal
+  adjacent to "purity", or the strings "batch traceability", "SSL", or a
+  fulfilment phrase not exported from the module.
+
+Negative control: re-add `"99%+ Purity"` to `page.tsx` and confirm the test names
+that file and line. This is the only mechanism that will hold — the module was
+already the right idea and drift beat it twice.
+
+### CROSS-BLOCK
+
+- `src/app/page.tsx` and `src/app/checkout/page.tsx` — unowned by any block, but
+  **Block G+H** are exercising both in the browser and should screenshot the three
+  strips before anything changes, so the drift is evidenced rather than asserted.
+- Ledger **F-006** ("Zero COAs exist, but the storefront advertises COA
+  documentation") should be updated with the two exact render sites above rather
+  than left as a general statement.
+
+### Also checked, and clear — `trust-claims.ts` itself is exemplary
+
+Recorded deliberately, because the finding above should not read as a criticism of
+the module:
+
+- Every constant carries a provenance comment naming an owner decision, a
+  configuration value, or a published policy. `DESTINATIONS_SENTENCE` is annotated
+  *"Enforced, not aspirational: quote-order.ts rejects any address outside these
+  two countries"* — and that is true.
+- `RESEARCH_USE_SENTENCE` records that a scan of all 111 public URLs found the full
+  restriction ("Not for human or veterinary use") only inside a **collapsed,
+  conditionally-rendered** Description tab, and that earlier compliance sweeps
+  reported it clean because they were reading the age gate's copy rather than the
+  pages. It is now rendered at `site-footer.tsx:92` and
+  `product-detail-client.tsx:665`. **Fixed, and the fix is verifiable.**
+- `FULFILMENT_CUTOFF = "2PM ET"` is a promise in the business timezone and
+  **nothing in the code computes it** — a repo-wide search for cutoff logic,
+  `getHours`, or a 14:00 boundary finds only `admin-analytics.ts:37` and
+  `admin-auth.ts:43`, neither related. So it cannot be computed in the wrong zone.
+  Clean for this block's timezone sweep. Worth noting separately that because
+  nothing computes it, the site cannot tell a customer ordering at 3PM ET that
+  they have missed today's cutoff — it shows them the same "ships same day" badge.
+  That is a product decision, not a defect, and it is stated here so it is a
+  decision rather than an oversight.
 
 ---
 
