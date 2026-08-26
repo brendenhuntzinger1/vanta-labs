@@ -1413,10 +1413,17 @@ Record the exact totals: files passed/failed, tests passed/failed, duration. Do 
 
 A test failing because of a change in this plan is fixed here. A test failing for a pre-existing reason is reported verbatim as pre-existing, with its name — never silently skipped.
 
-- [ ] **Step 3: Typecheck and lint**
+- [ ] **Step 3: Typecheck, lint, AND BUILD**
 
-Run: `npx tsc --noEmit && npm run lint`
-Expected: clean.
+Run: `npx tsc --noEmit && npm run lint && npm run build`
+Expected: all clean.
+
+**The build is not optional and not redundant with the other two.** Task 7 proved it: a
+`"use client"` component importing a module that starts with `import "server-only"` is a hard
+Next.js build error, and NEITHER `vitest` NOR `tsc --noEmit` can see it — `vitest.config.ts:24`
+deliberately aliases `server-only` to an empty module so tests can import server code. A green
+test suite and a clean typecheck coexisted with a build-breaking import. Only `npm run build`
+catches this class of defect.
 
 - [ ] **Step 4: Confirm zero production mutation**
 
