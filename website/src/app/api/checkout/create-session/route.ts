@@ -1,4 +1,5 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
+import { reportRepeatedCheckoutFailure } from "@/lib/checkout-failure-alert";
 import { recordOrderAttribution } from "@/lib/order-attribution";
 import { attributeOrderToCampaign } from "@/lib/email/campaign-attribution";
 import { readCampaignCookie } from "@/lib/email/campaign-links";
@@ -128,6 +129,17 @@ export async function POST(request: Request) {
     await attributeOrderToCampaign({
       orderId: result.orderId,
       cookieValue: readCampaignCookie(request),
+    });
+
+    // Notice a shopper who keeps starting checkout and never finishing. On
+    // 2026-08-26 one did it three times in sixteen minutes and nothing noticed,
+    // because nothing errored and no processor event ever arrived — the only
+    // signal that existed was the unpaid order rows this has just added to.
+    //
+    // Deferred with after() so a monitoring read can never sit between a
+    // shopper and the card form, and non-throwing by construction besides.
+    after(async () => {
+      await reportRepeatedCheckoutFailure(customer.email);
     });
 
     return NextResponse.json({
