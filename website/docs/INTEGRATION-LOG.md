@@ -996,3 +996,76 @@ to add a table has to justify it against the danger list, not just extend an arr
 errors. This is the first time the merged tree has been fully green** — Block C's
 three deliberate failures are now closed by their fix rather than by their
 assertions being changed.
+
+## 4.3 G-02 + G-04 + K-17 — three findings, one missing pair
+
+Verified against production this session:
+
+```
+orders.inventory_restocked_at   ABSENT
+adjust_inventory_on_sale        ABSENT   (22 functions in public; not one of them)
+```
+
+- **G-02** — `restockInventoryForOrder` is gated by `claimInventoryRestock`,
+  which flips a column that is not there. The claim errors `42703` and, by its
+  own fail-safe, returns false. **The safe branch is the only branch that ever
+  runs.** Inventory tracking is ON in production, so every refund and every
+  cancellation permanently destroys its units.
+- **G-04** — even a claim that succeeded would move nothing: the delta goes
+  through the missing function.
+- **K-17** — Block K's fix for *"cancelling a paid order permanently destroys its
+  stock"* routes through **both**. **It is inert in production, twice over.**
+  Block K had no database and could not have seen it.
+
+One migration closes all three, and none of them closes without it:
+`src/lib/sql/inventory-return-path.sql` (+ its rollback).
+
+### The trap in shipping the repository's own copy
+
+`deploy-run-once.sql:941` defines `adjust_inventory_on_sale` moving
+`inventory_quantity` **and nothing else**. Fine on the way down; wrong on the way
+up — `finalize_inventory_for_order` stamps `stock_status='Out of Stock'` when a
+sale empties a line, and nothing would ever stamp it back. **A refunded unit
+would return with the count correct and the storefront still refusing to sell
+it.** Deploying the repo's copy verbatim would have turned one silent failure
+into another, and closed the finding on paper.
+
+The repository already answers this, in the admin receive-stock path
+(`inventory-operations.ts:102-108`): *"Move the STATUS with the quantity, or
+receiving a shipment does not put the product back on sale… Only the automatic
+pair is touched. 'Limited' and 'Reserved' are set deliberately in the product
+editor and must survive a stock movement."* The migration applies that same rule,
+so the two paths cannot disagree. **This answers Block K's open question**
+("does `restockInventoryForOrder` reset `stock_status`?") — it does now.
+
+### Proven on the harness, then regression-tested against the shipped file
+
+Harness (`snnezhxvssochqpqsjcm`), rolled back:
+
+```
+restock sold-out(+1):        moved=t qty=1 status=In Stock      ← the fix
+sell in-stock(-5):           moved=t qty=0 status=Out of Stock
+restock curated(+3):         moved=t qty=3 status=Limited       ← editorial survives
+oversell in-stock(-1 at 0):  moved=f qty=0                      ← guard holds
+unknown slug:                moved=f
+```
+
+`inventory-return-path.test.ts` — 10 tests — executes
+**`sql/inventory-return-path.sql` itself**, not a copy, against a real Postgres.
+A test that restated the function body would pass while the shipping file said
+something else, which is exactly how this function came to exist in the repo and
+not in the database.
+
+| mutation | result |
+|---|---|
+| ship `deploy-run-once.sql`'s version verbatim (quantity only, no status rule) | **2 failures** |
+| let the status rule stomp editorial statuses too | **1 failure** |
+| drop the never-below-zero guard | **1 failure** |
+| never add the claim column | **suite-level failure** — the migration's own partial index refuses to build, reported as `Test Files 1 failed` |
+
+### Not done, deliberately
+
+Historical refunds are **not** replayed. Orders refunded before this runs have
+already lost their units and will read `inventory_restocked_at IS NULL`, which is
+true. Restoring those counts is a data decision — which orders, and does the
+physical shelf agree — not a migration. The query to list them is in the file.
