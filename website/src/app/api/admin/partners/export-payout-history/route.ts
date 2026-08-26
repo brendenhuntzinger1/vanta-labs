@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds } from "@/lib/admin-roles";
+// Partner name, email and referral code come from the PUBLIC application form.
+// This escaper neutralises a leading formula character; the local one it
+// replaced only quoted, which a spreadsheet strips before evaluating.
+import { csvSafeCell } from "@/lib/csv-safe";
 import { getPayoutHistory } from "@/lib/admin-ambassadors";
-
-function escapeCsv(value: string) {
-  return `"${value.replace(/"/g, '""')}"`;
-}
 
 // Exports the actual payout LOG (each Mark-as-Paid event: date, amount, notes,
 // ambassador) - distinct from export-payouts, which exports the per-ambassador
@@ -43,10 +43,10 @@ export async function GET(request: Request) {
 
     for (const row of rows) {
       lines.push([
-        escapeCsv(new Date(row.createdAt).toISOString().slice(0, 10)),
-        escapeCsv(row.ambassadorName),
+        csvSafeCell(new Date(row.createdAt).toISOString().slice(0, 10)),
+        csvSafeCell(row.ambassadorName),
         row.amount.toFixed(2),
-        escapeCsv(row.note ?? ""),
+        csvSafeCell(row.note ?? ""),
       ].join(","));
     }
 

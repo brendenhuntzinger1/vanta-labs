@@ -4,6 +4,7 @@ import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getMembershipPerks } from "@/lib/membership";
 import { getRequestIpAddress } from "@/lib/admin-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 export async function POST(request: Request) {
   try {
@@ -57,7 +58,13 @@ export async function POST(request: Request) {
       discountAmount: coupon.discountAmount,
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to verify coupon code";
+    // Sanitised rather than echoed. safe-error.ts:5-16 is explicit that a raw
+    // message hands a shopper a vendor hostname, a Postgres relation/column
+    // name or an env-var name. Logged in full server-side, so no diagnostic
+    // is lost; a genuinely shopper-written message still passes through,
+    // because the sanitiser is a deny-list.
+    console.error("[coupons/validate]", error);
+    const message = customerSafeMessage(error, "Unable to verify coupon code");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

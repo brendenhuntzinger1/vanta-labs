@@ -29,6 +29,13 @@ function getSessionTokenFromCookieHeader(cookieHeader: string | null | undefined
   return decodeURIComponent(match.split("=").slice(1).join("="));
 }
 
+// Fixed salt and a hash of the right length (64 bytes, hex) for the equal-work
+// path in validateAdminCredentials. Not a credential: nothing authenticates
+// against it, and verifyPassword's own length check plus timingSafeEqual make
+// the comparison constant-time regardless.
+const DUMMY_PASSWORD_SALT = "vanta-labs-nonexistent-account-salt";
+const DUMMY_PASSWORD_HASH = "00".repeat(64);
+
 function verifyPassword(password: string, salt: string, hashHex: string) {
   const derived = scryptSync(password, salt, 64);
   const expected = Buffer.from(hashHex, "hex");
@@ -57,22 +64,11 @@ function normalizeIpAddress(raw: string | null | undefined) {
   return raw.split(",")[0]?.trim() || null;
 }
 
-export function getRequestIpAddress(request: Request) {
-  // Prefer headers the hosting proxy (Vercel) sets itself and that a client
-  // cannot forge: x-vercel-forwarded-for and x-real-ip are overwritten at the
-  // edge with the true client IP. x-forwarded-for is only a last resort — a
-  // client can PREPEND spoofed entries to it, so its leftmost token is
-  // attacker-controlled and must never be the primary lockout key.
-  const trusted = request.headers.get("x-vercel-forwarded-for") ?? request.headers.get("x-real-ip");
-  if (trusted && trusted.trim()) {
-    return normalizeIpAddress(trusted);
-  }
-  return normalizeIpAddress(request.headers.get("x-forwarded-for") ?? null);
-}
-
-export function getRequestUserAgent(request: Request) {
-  return request.headers.get("user-agent") ?? null;
-}
+// The resolver these two used to define now lives in request-ip.ts, so the
+// public endpoints share it instead of each keeping a weaker copy. Re-exported
+// rather than moved outright: existing importers of admin-auth keep working,
+// and there is still exactly one implementation.
+export { getRequestIpAddress, getRequestUserAgent } from "@/lib/request-ip";
 
 export function buildAdminSessionCookie(token: string) {
   return {
@@ -219,6 +215,18 @@ export async function validateAdminCredentials(
     .maybeSingle();
 
   if (error || !data) {
+    // EQUAL WORK FOR AN ACCOUNT THAT DOES NOT EXIST.
+    //
+    // The login route deliberately answers every failure with one generic
+    // message so an attacker cannot tell which factor was wrong (login
+    // route.ts:14-17). Returning here without deriving a key defeated that: a
+    // real username paid for a full scrypt and a made-up one did not, and
+    // scrypt is slow ON PURPOSE, so the response time answered the question the
+    // message refuses to.
+    //
+    // Derived against a fixed dummy salt, never a stored one, so this cannot
+    // become an oracle of its own. The result is discarded.
+    verifyPassword(password, DUMMY_PASSWORD_SALT, DUMMY_PASSWORD_HASH);
     return null;
   }
 

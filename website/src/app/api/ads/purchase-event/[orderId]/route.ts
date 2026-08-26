@@ -8,6 +8,8 @@ import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { credentialStatus, describeResult, sendServerEvents } from "@/lib/ads/tiktok-events-api";
 import { getRequestIpAddress, verifyAdminSessionFromCookie } from "@/lib/admin-auth";
+import { checkRateLimit } from "@/lib/rate-limit";
+import { rateLimitKeyForRequest } from "@/lib/request-ip";
 
 /**
  * The authoritative source for a Purchase event.
@@ -30,6 +32,29 @@ import { getRequestIpAddress, verifyAdminSessionFromCookie } from "@/lib/admin-a
  */
 export async function GET(request: Request, context: { params: Promise<{ orderId: string }> }) {
   const { orderId } = await context.params;
+
+  // SWEEP PROTECTION, matching checkout/order-status/[orderId].
+  //
+  // Both routes answer questions about an order to anyone holding its id, on
+  // the same accepted bearer-token model, over the same id space. order-status
+  // rate limits "so the id space cannot be swept" and this one did not -- one
+  // door watched, one not. Same limit and same key, deliberately, because two
+  // different budgets on one id space is the same gap wearing a smaller number.
+  //
+  // It matters slightly more here than there: a GET on this route also writes
+  // ad_purchase_events_sent and can trigger outbound conversion sends.
+  //
+  // Answers the no-event shape rather than a bare error: the confirmation page
+  // reads this response, and "no event" is the honest answer it already knows
+  // how to handle. The one thing it must never do is guess that a purchase
+  // happened.
+  const rateLimit = await checkRateLimit(rateLimitKeyForRequest("ads-purchase-event", request), 120, 60);
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { found: false, event: null },
+      { status: 429, headers: { "cache-control": "no-store", "Retry-After": String(rateLimit.retryAfterSeconds) } },
+    );
+  }
 
   // `?inspect=1` answers "what would this order report?" without reporting it.
   //

@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { redactAuditMetadata } from "@/lib/admin-audit-redaction";
 
 // Every homepage/promotions/settings save in the control center writes a
 // new row here too (src/lib/admin-control.ts, action "admin_control_upsert")
@@ -77,7 +78,17 @@ export async function getAuditLogRows(filters: AuditLogFilters = {}): Promise<Au
       action: String(row.action),
       targetTable: row.target_table,
       targetId: row.target_id,
-      metadata: (row.metadata ?? null) as Record<string, unknown> | null,
+      // Redacted at the AUDIT read boundary. This table doubles as the
+      // settings store, so the raw value has to stay in the row for
+      // getControlSnapshot -- but nothing reading it as an audit log has any
+      // business seeing an SMTP password or a provider API key. See
+      // admin-audit-redaction.ts.
+      metadata: redactAuditMetadata({
+        action: String(row.action),
+        targetTable: row.target_table,
+        targetId: row.target_id,
+        metadata: (row.metadata ?? null) as Record<string, unknown> | null,
+      }),
       createdAt: row.created_at,
     })),
     total,

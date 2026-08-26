@@ -3,6 +3,8 @@ import { sendEmail } from "@/lib/email/send";
 import { contactFormNotificationTemplate, contactFormAutoReplyTemplate } from "@/lib/email/templates";
 import { getBusinessSettings } from "@/lib/admin-control";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { rateLimitKeyForRequest } from "@/lib/request-ip";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 const SUBMISSION_WINDOW_MS = 3000;
 const RATE_LIMIT_WINDOW_SECONDS = 10 * 60;
@@ -28,11 +30,6 @@ type ContactBody = {
 
 function parseString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function getClientKey(request: Request) {
-  const forwardedFor = request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip") ?? "unknown";
-  return forwardedFor.split(",")[0].trim() || "unknown";
 }
 
 export async function POST(request: Request) {
@@ -76,7 +73,7 @@ export async function POST(request: Request) {
     }
 
     const rateLimit = await checkRateLimit(
-      `contact:${getClientKey(request)}`,
+      rateLimitKeyForRequest("contact", request),
       MAX_SUBMISSIONS_PER_WINDOW,
       RATE_LIMIT_WINDOW_SECONDS,
     );
@@ -109,7 +106,13 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to send message";
+    // Sanitised rather than echoed. safe-error.ts:5-16 is explicit that a raw
+    // message hands a shopper a vendor hostname, a Postgres relation/column
+    // name or an env-var name. Logged in full server-side, so no diagnostic
+    // is lost; a genuinely shopper-written message still passes through,
+    // because the sanitiser is a deny-list.
+    console.error("[contact]", error);
+    const message = customerSafeMessage(error, "Unable to send message");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }
