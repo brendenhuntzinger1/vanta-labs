@@ -52,6 +52,29 @@ export function resolveMembershipCycle(raw: unknown, orderId: string): "monthly"
   return "monthly";
 }
 
+/**
+ * A durable alert for a financial effect that FAILED and CANNOT be auto-repaired.
+ *
+ * The repair sweeps cover the six effects whose every downstream write is
+ * idempotent. These five are not: retrying them would double-write a ledger
+ * row, a counter, or a billing event. Until they carry uniqueness guarantees
+ * they get a human, not a retry.
+ */
+export function unsafeEffectAlert(effect: string, orderId: string, error: unknown) {
+  return {
+    type: `unsafe_effect_failed_${effect}`,
+    severity: "critical" as const,
+    message:
+      `A financial side-effect (${effect}) failed for order ${orderId} and cannot be retried automatically `
+      + "because it is not idempotent. It must be applied by hand after checking whether it partially ran.",
+    context: {
+      orderId,
+      effect,
+      error: error instanceof Error ? error.message : String(error),
+    },
+  };
+}
+
 export interface WebhookEventState {
   eventId: string;
   orderId: string;
@@ -1130,6 +1153,8 @@ export async function finalizeManualPayment(
       await redeemCoupon(String(order.coupon_code));
     } catch (couponError) {
       console.error("Unable to redeem coupon on manual payment", orderId, couponError);
+      await recordSystemAlert(unsafeEffectAlert("coupon_redemption", orderId, couponError))
+        .catch(() => {});
     }
   }
 
@@ -1166,6 +1191,8 @@ export async function finalizeManualPayment(
       }
     } catch (pointsError) {
       console.error("Unable to process membership points for manual order", orderId, pointsError);
+      await recordSystemAlert(unsafeEffectAlert("points_earn", orderId, pointsError))
+        .catch(() => {});
     }
   }
 
@@ -1221,6 +1248,8 @@ export async function finalizeManualPayment(
       }
     } catch (membershipError) {
       console.error("Unable to activate membership for order", orderId, membershipError);
+      await recordSystemAlert(unsafeEffectAlert("membership_activation", orderId, membershipError))
+        .catch(() => {});
     }
   } else {
     // Commit stock now that payment is verified. Finalize the reservation held
@@ -1646,6 +1675,8 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           await redeemCoupon(effectiveCouponCode);
         } catch (couponError) {
           console.error("Unable to redeem coupon for order", orderId, couponError);
+          await recordSystemAlert(unsafeEffectAlert("coupon_redemption", orderId, couponError))
+            .catch(() => {});
         }
       }
 
@@ -1695,6 +1726,8 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           }
         } catch (pointsError) {
           console.error("Unable to process membership points for order", orderId, pointsError);
+          await recordSystemAlert(unsafeEffectAlert("points_earn", orderId, pointsError))
+            .catch(() => {});
         }
       }
 
@@ -1768,6 +1801,8 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           await activatePaidMembership(String(customerUserId), String(orderRecord.membership_tier_id), cycle);
         } catch (membershipError) {
           console.error("Unable to activate membership for order", orderId, membershipError);
+          await recordSystemAlert(unsafeEffectAlert("membership_activation", orderId, membershipError))
+            .catch(() => {});
         }
       }
 
@@ -1793,6 +1828,8 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           }
         } catch (inventoryError) {
           console.error("Unable to decrement inventory for order", orderId, inventoryError);
+          await recordSystemAlert(unsafeEffectAlert("inventory_decrement", orderId, inventoryError))
+            .catch(() => {});
         }
       }
 
