@@ -3406,6 +3406,93 @@ the module:
 
 ---
 
+---
+
+# Block K — coverage and handoff
+
+## Coverage against the seven assigned areas
+
+The audit standard requires every item to be ✅ or explicitly `NOT VERIFIED` with
+a reason. Nothing below is graded higher than its evidence.
+
+| area | status | what was done | what is still owed |
+|---|---|---|---|
+| **Time / date / timezone** | ✅ | 8 findings (K-01, K-03, K-05, K-07, K-08, K-09, K-10, K-12). Every customer-facing date formatter swept; coupon `starts_at`/`ends_at`, membership grace/renewal/skip, store-credit month, birthday, offers-bar urgency all exercised. Five probes run. | Nothing material. DST-specific behaviour is inherently covered by the instant-comparison style used throughout, and the one `+365d` annual term drifts a day per leap year — noted, too small to number. |
+| **Money / numeric precision** | 🟨 | K-11 (points round-trip, exhaustive probe over 100k values). Disproved the Phase 1 Buy-3-Get-1 P1 lead in writing. Verified `bundle-pricing.ts` and `calculateCardProcessingFee` are correct. Ruled out `numeric(12,2)` overflow. | **`NOT VERIFIED`: sales-tax rounding** (per-line vs on-total, and whether `admin-tax-report` re-derives it the same way) — belongs with Block F, who own `admin-tax-report.ts`. **`NOT VERIFIED`: `resolveCartDiscount`'s float comparison** when two candidates differ by <1¢. **`NOT VERIFIED`: percent round-trip through `numeric(5,2)`** — needs a database. |
+| **Dead / legacy / dormant code** | 🟨 | K-20, from a full 61-table read/write classification. Confirmed the `product_subscriptions` lead, corrected the map on `referrals`, cleared `partner_program_stats`. | **`NOT VERIFIED`: unreferenced exports, uncalled API routes, unimported components, SQL columns no TS reads.** The table sweep was run; these four were not. |
+| **Environment / config drift** | ✅ | K-06 (the `admin_control` reader table, all ten) and K-16 (pixel-ID defaults, plus four negative controls on the payment kill switches). Full `process.env` enumeration done. | The Vercel-side question — whether `TIKTOK_EVENTS_API_ACCESS_TOKEN` and `REDDIT_CONVERSIONS_ACCESS_TOKEN` are scoped per-environment — **cannot be answered from source**. It needs the dashboard, and it decides how bad K-16 is in practice. |
+| **Legal / policy** | ✅ | K-04, K-17, K-18, K-21. Every policy DEFAULT read and checked against behaviour; age gate, compliance attestations, trust claims, consent, cancellation promise. | **`NOT VERIFIED`: the shipping and terms policies** were read but not line-by-line reconciled against `getShippingConfig`/`calculateShipping`. Lower value than the four found, but not done. |
+| **Third-party degraded mode** | ✅ | K-13, K-15, K-19. Every dependency classified fail-open/fail-closed; all 11 outbound `fetch` sites tabulated for timeouts. | **`NOT VERIFIED`: retry semantics on non-idempotent operations.** Timeouts were swept; retry-of-a-charge was not traced end to end. |
+| **Background jobs / cron** | 🟨 | K-13, K-14, and K-03's missing claim. Cadence-vs-semantics, failure visibility, maintenance blast radius, the heartbeat gap. | **`NOT VERIFIED`: the per-job bounds/claims table for all 13.** Partially covered via the Phase 1 map, but not independently re-derived here. Specifically not re-verified: `retryPendingEmails`' missing claim (duplicate real transactional mail), the Shippo sweeps' head-of-line blocking, and `runAutomationSweep` paging the whole orders table. **These are real and already documented in `PHASE1-SYSTEM-MAP.md`; they are unconfirmed only in the sense that this block did not independently reproduce them.** |
+
+**Honest summary:** 21 findings, 6 with runnable probes (`BEHAVIORAL-TEST-PROVEN`),
+15 `SOURCE-INSPECTED`. **Zero `DATABASE-PROVEN` or `BROWSER-PROVEN`** — this block
+had no network and no database, which is the stated ceiling on its evidence, not
+an omission. Nine findings are P1.
+
+One Phase 1 lead was **disproved** in writing (the Buy-3-Get-1 client/server
+rounding divergence, K-11) and one was **corrected** (the map's prediction that a
+NaN `couponExpirationHours` would fail silently — it throws loudly, K-06; and the
+map's claim that `referrals` is read by other surfaces — it is not, K-20).
+
+## CROSS-BLOCK index
+
+Every note, gathered for block M. Ordered by which block must act.
+
+| block | file | what they need to do | from |
+|---|---|---|---|
+| **A+B** | `src/app/r/[code]/route.ts:49` | **Delete the `referrals` insert.** This single edit resolves three separate findings: their own non-transactional `Promise.all`, K-04's pre-consent PII, and K-20's write-only table. Tell them as one change. | K-04, K-20 |
+| **A+B** | `src/lib/payment-webhook.ts:463, 1066, 1543` | Pass `order.created_at` into `redeemStoreCredit`, and add `created_at` to the `.select(...)` at `:463`. | K-12 |
+| **A+B** | `src/lib/partner-portal.ts` (2 date sites, `:1717`) | Unpinned-zone date formatting; the `referrals` delete becomes dead. | K-01, K-20 |
+| **C** | `src/lib/email/templates.ts:1111-1145` | Thread `discountPercent` through both cart-recovery templates; add an " ET" zone label to the four "expires …" strings. | K-01, K-02, K-05 |
+| **C** | `src/lib/email/providers/resend.ts:25`, `sendgrid.ts:29` | Add `signal: AbortSignal.timeout(10_000)`. Two lines. | K-19 |
+| **D** | `src/lib/inventory-reservation.ts:185-196` | Stop swallowing the RPC error — `throw` so the sweep alerts. A visibility fix, not an inventory-logic change. | K-13 |
+| **D** | `src/lib/sql/inventory-reservations.sql` | Have `reserve_inventory` discount holds past `expires_at`, so the TTL stops depending on the sweep cadence. Also answer whether `restockInventoryForOrder` resets `stock_status`. | K-13, K-17 |
+| **E** | four e2e suites | `process.env.ALLOW_MOCK_PAYMENTS = "true"` at module scope is now a no-op; a reader would misjudge those tests' preconditions. | K-16 |
+| **F** | `admin-tax-report.ts` and the reporting surfaces | **Do not chase `points_redeemed` vs `discount_amount` mismatches as a reporting defect.** They are upstream in `dollarsToPoints` (K-11). Also, sales-tax rounding is left `NOT VERIFIED` here and is yours. | K-11 |
+| **G+H** | browser | Screenshot the three trust strips (`/`, `/checkout`, a PDP) side by side **before** anything changes. Try **Skip twice** on a membership whose renewal is ≤3 days out. Confirm the pre-ticked compliance boxes and the four age-gate statements render as described. | K-21, K-07, K-18 |
+| **I** | `middleware.ts:65-82` | Add `/api/cron`, `/api/unsubscribe`, `/api/coa`, `/api/health` (and `/api/veyra`) to `pathBypassesMaintenance`. **One pass over both this list and `CSRF_PROTECTED_PREFIXES:292`** — better than two sessions touching this file. | K-14 |
+| **I** | `src/app/api/admin/cart-recovery/settings/route.ts:21-39` | Write-side validation: reject non-finite / negative / non-integer, mirroring `admin-coupons.ts:95-104`. | K-06 |
+| **I** | `src/app/api/admin/orders/[orderId]/route.ts:607` | Restock on cancel behind `claimInventoryRestock`. | K-17 |
+| **I** | the three IP resolvers | Composes with K-15: a bypassable key on a non-atomic, fail-open counter. **Neither fix is sufficient alone** — land them together. | K-15 |
+| **M** | `src/lib/admin-control.ts` | Hoist the four hand-copied `num()` guards into one `controlNumber()`. Touches ten call sites in one shared file — **best done once, last**, not by whoever reaches it first. | K-06 |
+| **M** | `src/lib/quote-order.ts` `buildOrderRow` | Persist the card lane's compliance acknowledgement (needs three new `orders` columns → **owner approval under Rule 4**). | K-18 |
+| **M** | **Phase 20 — preview verification** | ⚠️ **Do not place a paid test order on a Vercel preview until K-16's environment gate lands.** The pixel IDs default to production and the server legs send real conversions. This is the most time-sensitive line in this file. | K-16 |
+| **M** | ledger `F-006` | Update with the two exact render sites for the ungated COA claim (`site-footer.tsx:67`, `age-gate.tsx:483`) rather than leaving it general. | K-21 |
+
+## Open questions for the owner
+
+1. **Store credit: calendar month or billing anniversary?** The sweep implements
+   calendar month with no anniversary check, so a member joining on the 30th gets
+   a full month's credit for one day. That is a product decision and it changes
+   what K-09's fix should be.
+2. **Should affiliate-click attribution be unconditional?** K-04's fix depends on
+   the answer. If yes, that is legitimate — but the Cookie Policy must then name
+   `vl_referral_code` as essential and the Privacy Policy must stop conditioning
+   campaign-parameter capture on acceptance. Silence is the only option not
+   available.
+3. **Are the ad API tokens scoped per Vercel environment?** Decides whether K-16
+   is already live in production ad accounts or only latent.
+4. **Is "Based in the USA" substantiable?** It appears on the homepage with no
+   provenance recorded anywhere, unlike every other claim in `trust-claims.ts`.
+
+## Method note, for whoever reads this next
+
+Findings graded `BEHAVIORAL-TEST-PROVEN` were produced by probes that either
+import the real exported function or transcribe the operative lines verbatim with
+the source line cited inline; all output is pasted unedited and the sources are in
+Appendix A. Findings graded `SOURCE-INSPECTED` quote every line they rest on.
+
+Where a parallel investigation surfaced a lead, it was **re-verified against the
+source in this session before being written up** — twice that produced a sharper
+result than the lead (K-05's zero-hour margin, K-07's boundary identity with the
+reminder window), and the sharper version is what is recorded.
+
+`website/scratchpad/*.test.ts` is gitignored so audit probes never join the
+203-file suite. If you add probes, keep them there.
+
+---
+
 # Appendix A — probe sources
 
 The probes below produced the verbatim output quoted in the findings above. They
