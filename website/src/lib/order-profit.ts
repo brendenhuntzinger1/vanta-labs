@@ -96,6 +96,20 @@ export interface OrderProfitInput {
   processingFeeIsEstimate?: boolean;
   /** Amount refunded to the customer (reverses revenue). */
   refund: number;
+  /**
+   * The TAX portion of `refund`, in dollars. Only meaningful when
+   * `countTaxAsProfit` is false.
+   *
+   * A refund returns the sale AND the tax charged on it, so `refund` contains
+   * both. When collected tax is treated as a pass-through it was never added to
+   * revenue — so deducting the whole refund from revenue removes tax that was
+   * never there, and the order reports NEGATIVE revenue equal to its own tax.
+   * Supplying this lets the reversal match what was actually counted.
+   *
+   * Defaults to 0, which is exactly right when tax counts as profit (the
+   * reversal is then symmetric with the addition and this term is unused).
+   */
+  refundedTax?: number;
   /** Worst-case unit cost (cents) used only when a line has no snapshot. */
   fallbackUnitCostCents?: number;
   /**
@@ -225,7 +239,16 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   // (shipping protection, surcharge). Collected sales tax is added only when the
   // owner opts to count it (otherwise it's a pass-through, remitted to the state).
   const grossRevenue = round(merchandiseRevenue + shippingRevenue + additionalRevenue + (countTaxAsProfit ? taxCollected : 0));
-  const revenue = round(grossRevenue - refund);
+  // THE REVERSAL MUST MATCH WHAT WAS COUNTED. `refund` is everything handed
+  // back, tax included. When tax counts as profit it is inside grossRevenue and
+  // the two cancel exactly — a fully refunded order nets to zero. When tax is a
+  // pass-through it is NOT inside grossRevenue, so subtracting the whole refund
+  // takes out tax that was never added: a fully refunded $127 order (of which
+  // $8 was tax) reported revenue of −$8 and profit $8 worse than the truth,
+  // once per refunded order, on a toggle the owner is invited to set.
+  const refundedTax = round(Math.min(taxCollected, Math.max(0, input.refundedTax ?? 0)));
+  const revenueRefund = countTaxAsProfit ? refund : round(Math.max(0, refund - refundedTax));
+  const revenue = round(grossRevenue - revenueRefund);
   const profit = round(revenue - totalExpenses);
   const marginPercent = revenue > 0 ? round((profit / revenue) * 100) : 0;
   const shippingProfit = round(shippingRevenue - shippingCost);

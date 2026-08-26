@@ -82,6 +82,17 @@ function processingFeeFor(order: OrderRecord, config: ProfitSettingsConfig): num
   return Math.max(0, base * (config.processingFeePercent / 100));
 }
 
+// The tax that came back with a refund. Nothing records it, so it is derived
+// from the two figures that exist: what the customer paid (tax included) and
+// what was returned. A full refund gives a ratio of exactly 1. Mirrors
+// admin-tax-report.refundedTaxFor so the profit report and the filing report
+// cannot disagree about the same refund.
+function refundedTaxPortion(amountPaid: number, taxCollected: number, refund: number): number {
+  if (taxCollected <= 0 || refund <= 0) return 0;
+  if (amountPaid <= 0) return taxCollected;
+  return Math.round(Math.min(taxCollected, taxCollected * Math.min(1, refund / amountPaid)) * 100) / 100;
+}
+
 function profitForOrder(
   order: OrderRecord,
   lines: OrderProfitLine[],
@@ -150,6 +161,12 @@ function profitForOrder(
     // explicitly rather than left to the default so the reason is on the record.
     processingFeeIsEstimate: true,
     refund: Math.max(0, Number(order.refund_amount ?? 0)),
+    // The tax handed back with the refund, derived the same way the sales-tax
+    // report derives it: nothing records the tax portion of a refund, so it is
+    // the refunded share of what was paid, capped at the tax charged. Only used
+    // when collected tax is configured as a pass-through — see
+    // OrderProfitInput.refundedTax.
+    refundedTax: refundedTaxPortion(amountPaid, taxCollected, Math.max(0, Number(order.refund_amount ?? 0))),
     fallbackUnitCostCents: Math.round(config.worstCaseUnitCost * 100),
   });
 }

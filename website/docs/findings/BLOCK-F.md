@@ -381,6 +381,178 @@ lost rows (which nothing can).
 
 ---
 
+## F-12 — A refund removed sales tax from profit that was never added to it
+
+**Grade:** `TEST-PROVEN` · **Severity:** P1 (on a setting the business is heading for) · **Status:** FIXED
+
+**Reproduction.** `computeOrderProfit` on a fully refunded $127 order
+(`$100` merchandise, `$10` shipping, `$8` tax, `$9` card surcharge):
+
+    countTaxAsProfit = true    grossRevenue 127   revenue   0    profit  -6
+    countTaxAsProfit = false   grossRevenue 119   revenue  -8    profit -14
+
+**Root cause.** `order-profit.ts:228` was `revenue = grossRevenue − refund`.
+`refund` is everything handed back, **tax included**. Whether the tax is inside
+`grossRevenue` depends on `countTaxAsProfit`
+(`order-profit.ts:227`). With the toggle on, the two cancel and a full refund
+nets to zero — correct. With it off, tax was never added, so subtracting the
+whole refund removes tax that was never there. Every refunded order then
+reports negative revenue equal to its own tax, and profit that much worse than
+the truth. `marginPercent` guards on `revenue > 0` and reports **0%**, so the
+negative revenue does not even show up as an obviously broken margin.
+
+`countSalesTaxAsProfit` is an admin toggle (`admin-control.ts:602-605`:
+"True = the owner keeps it (counted as profit); false = it's a pass-through
+remitted to the state"). It defaults to `true`, which is why this has never
+been seen. This store runs a real sales-tax remittance report — pass-through is
+the accounting posture it is heading for, not a hypothetical.
+
+**Fix.** `OrderProfitInput` gained an optional `refundedTax`, and the reversal
+became `countTaxAsProfit ? refund : max(0, refund − refundedTax)`. The default
+path is byte-identical — `refundedTax` is unused when tax counts as profit.
+`admin-profit.profitForOrder` supplies it via `refundedTaxPortion()`, which
+derives the tax share of a refund the same way `admin-tax-report.refundedTaxFor`
+does, so the profit report and the filing report cannot disagree about the same
+refund.
+
+**Tests.** `order-profit-refund-tax.test.ts`, 5 cases including "is unchanged
+when tax counts as profit" (the no-op proof on the default path).
+
+**Negative controls.** Three: reverting to subtracting the whole refund fails 3
+of 5; dropping the `min(taxCollected, …)` cap fails the over-refund case;
+applying the adjustment when tax IS counted fails the no-op proof.
+
+---
+
+## F-13 — The degraded checkout insert blanks the tax jurisdiction the filing report groups by
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN — CROSS-BLOCK, root cause is outside this block
+
+**Root cause, confirmed line by line.** `quote-order.buildOrderRow` returns two
+rows. `baseOrderRow` (`quote-order.ts:946-983`) carries `tax_amount`.
+`orderRowWithContact` (`:991-1005`) adds `state`, `phone`, `billing_*`,
+**`tax_rate_percent`** and **`tax_state`**. `insertOrderRow` (`:1028-1053`)
+retries with `draft.base` — the row *without* those columns — when the insert
+returns `PGRST204`, or when the message mentions one of those columns and looks
+like a missing column.
+
+An order written through that fallback therefore has `tax_amount > 0` with
+`tax_state`, `tax_rate_percent` and `state` all NULL. `admin-tax-report` then
+does exactly this:
+
+```ts
+const state = order.tax_state ?? normalizeUsState(order.state) ?? "UNKNOWN";
+ratePercent: Number(order.tax_rate_percent ?? 0),
+```
+
+So the collection lands in an `UNKNOWN` jurisdiction bucket **at a reported rate
+of 0%**, on a document filed with a state revenue department. Nothing logs,
+alerts, or records that the fallback fired — there is no `recordSystemAlert`
+call anywhere on that path.
+
+**Reachability is not limited to a missing migration.** `PGRST204` alone
+triggers the fallback, and `PGRST204` is what PostgREST returns for a column
+absent *from its schema cache* — which happens transiently after a migration,
+before the cache reloads. A cache-reload lag can therefore blank a window of
+orders on a fully migrated database.
+
+**Mitigating.** `UNKNOWN` does surface as its own row in `byState`, sorted with
+the rest, so the money is visible on the admin page. It is the **rate** that
+silently reads 0%, and the per-order CSV detail line that carries it.
+
+**Why not fixed here.** The root cause is the silent degradation in
+`quote-order.ts`, a Rule-3 shared file. Papering over it in the report would
+make the tax report *look* fine while orders continue to be written without
+their jurisdiction. Recorded as CROSS-BLOCK.
+
+---
+
+## F-14 — Manual postage entry finalizes profit while the order page and the generated column stay blank
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P2 · **Status:** OPEN — CROSS-BLOCK
+
+Confirms [`PHASE1-SYSTEM-MAP.md:403`](../PHASE1-SYSTEM-MAP.md).
+
+Three surfaces read three different columns for one number:
+
+| Surface | Column |
+|---|---|
+| `admin-profit` shipping overlay | `actual_shipping_cost_cents` |
+| admin order page "Postage" (`admin/orders/[orderId]/page.tsx:138`) | `postage_cost_cents` |
+| `orders.shipping_profit_cents` (GENERATED, `shippo-orders-sync.sql:121-126`) | `postage_cost_cents` only |
+
+`recordActualShippingCost` (`admin-profit.ts:546`) writes **only**
+`actual_shipping_cost_cents`, `estimated_shipping_cost_cents`,
+`shipping_cost_source`, `shipping_cost_updated_at` and `profit_finalized`. The
+admin manual-correction action `set_shipping_cost`
+(`api/admin/orders/[orderId]/route.ts:689-700`) is a caller of exactly that.
+
+So after an owner enters the real postage by hand: profit reports **Finalized**
+on the exact figure, `shipping_profit_cents` stays **NULL forever** (a stored
+generated column can only be recomputed by writing its source), and the order
+page shows no postage at all — its whole `label` block is gated on
+`shippoTransactionId && !labelVoidedAt` (`page.tsx:130`), which a
+manually-corrected order does not have.
+
+**Not a defect:** the `Math.max(0, …)` clamp at `admin-profit.ts:571`. The route
+already rejects anything outside `$0–$10,000` before calling
+(`route.ts:694`), so the clamp cannot manufacture a `0` from a negative. A
+genuine `$0` entry is accepted and asserted as a finalized real cost, but that
+is an operator entering zero, not the code inventing it.
+
+**Why not fixed here.** The write path and the admin page both sit outside Block
+F's files. Recorded as CROSS-BLOCK.
+
+---
+
+## F-15 — The two "processing fee percent" constants agree, and are two concepts. DISPROVED as a live defect.
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P3 · **Status:** DISPROVED, one risk recorded
+
+[`PHASE1-SYSTEM-MAP.md:727`](../PHASE1-SYSTEM-MAP.md) flags "TWO different
+concepts with near-identical names". Both exist and both are `8`:
+
+- `admin-control.DEFAULT_PROFIT_CONFIG.processingFeePercent = 8`
+  (`admin-control.ts:625`) — the fee the STORE PAYS its processor. Read at
+  runtime by `admin-profit.processingFeeFor` via `getProfitSettings()`, so the
+  admin-configured value wins and the constant is only a fallback.
+- `profit-engine.DEFAULT_PROFIT_SETTINGS.processingFeePercent = 8`
+  (`profit-engine.ts:50`) — the same concept, used only as the **default
+  argument** of `protectProfit(inputs, settings = DEFAULT_PROFIT_SETTINGS)`
+  (`profit-engine.ts:291`). Every production caller passes real settings.
+
+Neither is `orders.card_processing_fee`, which is the surcharge the CUSTOMER was
+charged — and `admin-profit` treats that correctly, as *revenue*
+(`additionalRevenue`), never as the store's cost.
+
+**Risk recorded, not raised to a finding:** they are two literals that must
+never drift. If the admin raises the processor fee, `protectProfit`'s default
+still says 8 — which only matters for a caller that omits settings, and none
+does today.
+
+---
+
+## F-16 — Reachability of the `expectedOrderTotal` clamp divergence (F-08)
+
+**Grade:** `SOURCE-INSPECTED` · **Status:** LATENT — no writer found
+
+F-08 left open whether any path mutates `orders.subtotal`,
+`orders.discount_amount`, `orders.store_credit_redeemed_cents` or
+`orders.points_redeemed` **after** insert, which is what would be needed to make
+the flat-subtraction divergence produce a false `total_mismatch`.
+
+Searched `src/app/api/admin/**`, `src/lib/payment-webhook.ts` and
+`src/lib/admin-*.ts`. The post-insert writers to `orders` touch payment status,
+refund amount and timestamps, fulfillment status, tracking and shipping-cost
+columns — **not** the four component columns. No such writer was found.
+
+The divergence therefore stays **LATENT**, and is characterised in
+`reconciliation-math-differential.test.ts` rather than reported as a defect. The
+reason to keep it on the record is that it is one writer away, and the writer
+that adds it will have no reason to suspect the reconciliation screen.
+
+---
+
 ## CROSS-BLOCK
 
 Recorded per Rule 3, not edited from this block.
@@ -397,6 +569,17 @@ Recorded per Rule 3, not edited from this block.
   JS fallback was deliberately left matching the RPC: making them disagree would
   reintroduce exactly the class of defect F-03 fixed. **Needs a decision, not a
   patch.**
+- **`src/lib/quote-order.ts`** (second entry) — `insertOrderRow`'s `PGRST204`
+  fallback silently writes an order with no `tax_state` and no
+  `tax_rate_percent`, which the filing report then reports as an `UNKNOWN`
+  jurisdiction at a 0% rate. The fix belongs on the write path: either do not
+  degrade those two columns, or `recordSystemAlert` when the fallback fires so
+  the blanked window is knowable. (F-13)
+- **`src/app/api/admin/orders/[orderId]/route.ts` + `src/app/admin/orders/[orderId]/page.tsx` + `src/lib/sql/shippo-orders-sync.sql`**
+  — one shipping cost, three columns. A manual postage entry finalizes profit
+  while `postage_cost_cents` (and therefore the generated
+  `shipping_profit_cents`, and the order page's Postage line) stays empty.
+  (F-14)
 
 ---
 
@@ -410,14 +593,30 @@ Recorded per Rule 3, not edited from this block.
 2. **The project's Supabase "Max rows" setting.** No longer load-bearing for
    correctness after F-11, but worth knowing for request budgeting: it now
    determines how many round trips a full profit read costs.
-3. **Confirmation of the proportional partial-refund tax treatment in F-07**,
-   since it is a filing assumption rather than a recorded value.
+3. **Confirmation of the proportional partial-refund tax treatment in F-07 and
+   F-12**, since it is a filing assumption rather than a recorded value, and it
+   now feeds the profit report as well.
+4. **Should collected sales tax count toward net profit?** The toggle
+   (`count_sales_tax_as_profit`) defaults to TRUE — the owner keeps it. This
+   store runs a remittance report, which implies the money is not the owner's.
+   F-12 makes the FALSE setting correct rather than wrong, but the choice
+   itself is the owner's.
 
 ---
 
+## Summary
+
+| | Findings |
+|---|---|
+| Fixed, with regression test + negative control | F-01, F-02, F-03, F-04, F-05, F-06, F-07, F-09, F-10, F-11, F-12 |
+| Disproved (reported as leads, do not exist) | F-08, F-15 |
+| Open, root cause outside Block F (CROSS-BLOCK) | F-13, F-14 |
+| Latent, characterised not fixed | F-08 (handling_fee, clamps), F-16 |
+| Needs the owner | 4 questions below |
+
 ## Verification
 
-- Full suite: **3,583 passing**, 14 skipped, 0 failing (`npx vitest run`).
+- Full suite: **3,588 passing**, 14 skipped, 0 failing (`npx vitest run`).
 - Typecheck: clean (`npx tsc --noEmit`).
 - Lint: clean on every file touched.
 - The 21,000-row suite is gated on `VANTA_TEST_DATABASE_URL` and skips loudly,
