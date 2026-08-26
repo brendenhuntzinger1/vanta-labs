@@ -737,3 +737,86 @@ in that order. Recorded in `DEPLOYMENT-ORDER.md`.
 
 Three findings in this audit have now been disproved after being filed as
 defects: `F-005`, `F-007`, and `I-12`.
+
+---
+
+# PHASE 4 — REPAIRS
+
+## 4.0 A local Postgres, and six tests nobody had ever run
+
+The database-gated suites were skipping (65 tests). A local Postgres 16 was
+started for the session, and they ran for the first time **on the merged tree**:
+
+```
+initdb -D /tmp/vantapg -A trust -U postgres     # as an unprivileged user
+pg_ctl -D /tmp/vantapg -o '-p 55432 -k /tmp' start
+VANTA_TEST_DATABASE_URL=postgres://postgres@localhost:55432/postgres npx vitest run
+```
+
+**Six failed.** All six were in the Block F merge area, and none of them could
+have been seen without a database. This is precisely why a skipped suite that
+reports success is dangerous.
+
+### M-02 — the reconciliation screen died on a missing optional column
+
+`getReconciliationFlags` carries a deliberate degradation and states its reason:
+
+> *"Reconciliation reporting an error is worse than reconciliation reporting
+> slightly softer results, and this is the screen an operator opens when they
+> already suspect something is wrong."*
+
+It degraded on `shipping_protection_fee` alone. **Block F-B added `handling_fee`
+to the same formula** — it is the fifth term of the charged total — **but not to
+the fallback.** An environment with one column and not the other threw, which is
+the exact opposite of the promise. Latent in production (which has both), live
+for anyone on an older schema, and it only surfaced when two branches met and a
+DB-backed suite ran.
+
+**Fix:** the read now drops optional columns **one at a time**, preferring the
+column the error actually names, and only for errors that look like a schema gap.
+
+New suite `reconciliation-column-degrade.test.ts` — 6 tests, always-on (no DB).
+
+| mutation | result |
+|---|---|
+| put `handling_fee` back among the mandatory columns (the pre-fix state) | **2 failures** |
+| drop the newest optional column instead of the one the error names | **1 failure** |
+| soften on ANY error rather than only a schema gap | **1 failure** *(survived until a hard-error control was added — recorded, because the first version of this suite could not tell a permission failure from a missing column)* |
+
+### The four truncation assertions — STRENGTHENED, not weakened
+
+Four tests asserted that a server-side row cap must raise `truncated` /
+`scan_truncated`. They passed on Block F-B's branch because its local pager
+advanced by a fixed stride and stopped on the first short page — a cap really did
+cut the scan short, so announcing it was the best available outcome.
+
+The merged reader (`readAllRowsBounded`) advances by the rows it actually
+received, so a cap costs round trips instead of coverage. **Measured, not
+assumed** — a probe was added to the failing tests before touching them:
+
+```
+PROBE maxRows=40 over 100 orders -> flags: []
+PROBE maxRows=500 over 1500 orders -> {"orders":1500,"truncated":false}
+```
+
+The requirement is *"the operator must not be shown a smaller number as if it
+were the whole story."* There are two ways to satisfy it and **returning the
+whole story is the better one.** The assertions now require completeness. The
+ceiling case — where the application's own bound, not the server, ends the read —
+remains asserted in `supabase-page-bounded.test.ts`.
+
+**Mutation control:** making the pager stop on a short page again (Block F-B's
+behaviour) breaks **8 tests** across three files.
+
+### The two order-count expectations
+
+`financial-reporting-consistency` expected 7 revenue orders and got 6;
+`financial-reporting-row-caps` expected 20,958 and got 20,937. Both differences
+are **exactly the `$0` reships** — 1 and 21 respectively. That is Block F-B's
+`NON_SALE_ORDER_TYPES` exclusion, merged into the SQL rollup and the JS fallback,
+working correctly. The fixtures predate it; their expectations now derive the
+sale set rather than restating a total, and both assert that excluding a reship
+moves the **count** and not the **money**.
+
+`handling_fee` was also added to two fixtures' schemas, because production has it
+and a fixture that does not model production is how M-02 hid.

@@ -56,6 +56,10 @@ const PAID_STATUS_ORDERS = NORMAL_PRODUCT_ORDERS + PER_THOUSAND + PER_THOUSAND; 
  * here and its refund is netted off the money, not the order.
  */
 const REVENUE_ORDERS = PAID_STATUS_ORDERS + PER_THOUSAND; // + partially_refunded
+// Revenue SALES: the same set less the $0 reships, which carry a revenue status
+// but are not sales (ledger.NON_SALE_ORDER_TYPES, mirrored in the rollup SQL).
+// Counting them adds a $0 denominator to average order value.
+const REVENUE_SALES = REVENUE_ORDERS - PER_THOUSAND;
 const PROFIT_ELIGIBLE_ORDERS = REVENUE_ORDERS;
 
 const SCHEMA = `
@@ -79,6 +83,7 @@ create table orders (
   amount_paid numeric(12,2) not null default 0,
   refund_amount numeric(12,2) not null default 0,
   card_processing_fee numeric(12,2) not null default 0,
+  handling_fee numeric(12,2) not null default 0,
   shipping_protection_fee numeric(12,2) not null default 0,
   store_credit_redeemed_cents integer not null default 0,
   points_redeemed integer not null default 0,
@@ -301,7 +306,7 @@ describeDb("financial reporting at 21,000 orders", () => {
     const { getRevenueMetrics } = await import("@/lib/admin-revenue");
 
     const viaRpc = await getRevenueMetrics();
-    expect(viaRpc.totalPaidOrders).toBe(REVENUE_ORDERS);
+    expect(viaRpc.totalPaidOrders).toBe(REVENUE_SALES);
 
     // Same code, same data, RPC not migrated yet.
     activeOptions = { missingRpcs: new Set(["admin_revenue_summary", "admin_revenue_by_method"]) };
@@ -310,7 +315,7 @@ describeDb("financial reporting at 21,000 orders", () => {
     // BEFORE THE FIX: 10,000 orders / $1,268,369 here against 20,937 /
     // $2,655,582 from the RPC — the same page, the same data, and which number
     // you saw depended only on whether one migration had been run.
-    expect(viaFallback.totalPaidOrders).toBe(REVENUE_ORDERS);
+    expect(viaFallback.totalPaidOrders).toBe(REVENUE_SALES);
     expect(viaFallback.totalPaidRevenue).toBeCloseTo(viaRpc.totalPaidRevenue, 2);
     expect(viaFallback.averageOrderValue).toBeCloseTo(viaRpc.averageOrderValue, 2);
   }, 300_000);

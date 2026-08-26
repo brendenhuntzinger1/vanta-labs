@@ -304,9 +304,24 @@ describeDb("reconciliation — what the operator can actually see", () => {
     expect(flags.map((f) => f.orderId)).toContain("order-oldest-broken");
   });
 
-  it("says so when it could not examine every order", async () => {
-    // Truncation must be visible rather than silent. Whatever bound exists, the
-    // operator has to know the screen is not showing them everything.
+  it("examines every order even when the server caps each response", async () => {
+    // THIS ASSERTION WAS STRENGTHENED, NOT WEAKENED. It used to require
+    // `scan_truncated` to be raised under a server cap, because the reader of
+    // the day advanced by a fixed stride and stopped on the first short page —
+    // so a cap really did cut the scan short, and announcing it was the best
+    // available outcome.
+    //
+    // The merged reader (readAllRowsBounded) advances by the rows it actually
+    // received, so a cap costs round trips instead of coverage. Measured here:
+    // 40-row responses over 100 orders returns all 100 and flags nothing.
+    // "Did not truncate" is a better answer than "truncated, and said so", and
+    // raising the notice anyway would be a false alarm on a screen the operator
+    // opens when they already suspect something is wrong.
+    //
+    // The ceiling case — where MAX_RECONCILIATION_ORDERS, not the server, ends
+    // the read — is still asserted, at the helper level, in
+    // supabase-page-bounded.test.ts ("reports truncation when the ceiling stops
+    // it short").
     const rows: SeedOrder[] = [];
     for (let i = 0; i < 100; i += 1) {
       rows.push({ orderId: `order-c-${i}`, subtotal: 100, shipping: 15, amountPaid: 115, createdAt: iso(NOW - i * 60_000) });
@@ -316,7 +331,14 @@ describeDb("reconciliation — what the operator can actually see", () => {
 
     const { getReconciliationFlags } = await import("@/lib/admin-reconciliation");
     const flags = await getReconciliationFlags();
-    expect(flags.map((f) => f.type)).toContain("scan_truncated");
+
+    // Every order was examined, so there is nothing to announce.
+    expect(flags.map((f) => f.type)).not.toContain("scan_truncated");
+    // And it is not silent-and-empty because the scan died: all 100 orders here
+    // reconcile exactly, so a clean result is the correct result. The companion
+    // test above ("flags every mismatched order…") is what proves a short read
+    // would have been caught.
+    expect(flags).toHaveLength(0);
   });
 });
 
@@ -376,15 +398,22 @@ describeDb("row caps on the profit reads", () => {
     expect(metrics.truncated).toBe(false);
   });
 
-  it("says so when the profit figures are incomplete", async () => {
+  it("reports the WHOLE figure under a cap far below the page size", async () => {
+    // Strengthened for the same reason as the reconciliation test above. The
+    // requirement is "the operator must not be shown a smaller number as if it
+    // were the whole story"; there are two ways to satisfy it, and returning
+    // the whole story is the better one.
+    //
+    // 500-row responses over 1,500 orders. A reader that treated a short page
+    // as the end would report 500 and a third of the profit.
     await seed1500();
     holder.client = createPgSupabaseClient(pg, { maxRows: 500 });
 
     const { getProfitWindowMetrics } = await import("@/lib/admin-profit");
     const metrics = await getProfitWindowMetrics(NOW);
-    // Whatever bound applies, the operator must not be shown a smaller number
-    // as if it were the whole story.
-    expect(metrics.truncated).toBe(true);
+
+    expect(metrics.ordersLast30Days).toBe(1500);
+    expect(metrics.truncated).toBe(false);
   });
 });
 

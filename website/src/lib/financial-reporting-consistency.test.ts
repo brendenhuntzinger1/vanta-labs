@@ -65,6 +65,11 @@ const LEDGER: Seed[] = [
 
 const id = (n: number) => `order-${String(n).padStart(4, "0")}`;
 const revenueStatuses = new Set(["paid", "completed", "succeeded", "partially_refunded"]);
+// A reship is not a sale. It is `paid` with amount_paid 0, so a filter on status
+// alone counts it as an order and divides revenue by a denominator that includes
+// it — the same exclusion `ledger.NON_SALE_ORDER_TYPES` and the rollup SQL apply.
+// Revenue is unchanged by it (order #8 is $0); the ORDER COUNT is not.
+const nonSaleTypes = new Set(["replacement"]);
 
 const SCHEMA = `
 drop table if exists order_items; drop table if exists commissions; drop table if exists orders;
@@ -74,7 +79,8 @@ create table orders (
   shipping_amount numeric(12,2) not null default 0, discount_amount numeric(12,2) not null default 0,
   tax_amount numeric(12,2) not null default 0, tax_rate_percent numeric(6,3), tax_state text, state text,
   amount_paid numeric(12,2) not null default 0, refund_amount numeric(12,2) not null default 0,
-  card_processing_fee numeric(12,2) not null default 0, shipping_protection_fee numeric(12,2) not null default 0,
+  card_processing_fee numeric(12,2) not null default 0, handling_fee numeric(12,2) not null default 0,
+  shipping_protection_fee numeric(12,2) not null default 0,
   store_credit_redeemed_cents integer not null default 0, points_redeemed integer not null default 0,
   payment_method text, payment_status text not null, fulfillment_status text not null default 'awaiting_fulfillment',
   actual_shipping_cost_cents integer, shipping_cost_source text, profit_finalized boolean not null default false,
@@ -138,7 +144,7 @@ describeDb("the four surfaces agree on the owner's rules", () => {
   afterAll(async () => { await client?.end(); });
 
   // -- the arithmetic, derived from LEDGER rather than typed in --------------
-  const revenueOrders = LEDGER.filter((o) => revenueStatuses.has(o.status));
+  const revenueOrders = LEDGER.filter((o) => revenueStatuses.has(o.status) && !nonSaleTypes.has(o.type));
   const netRevenueGross = revenueOrders.reduce((s, o) => s + (o.paid - o.refund), 0);
   const taxLiability = LEDGER.filter((o) => revenueStatuses.has(o.status)).reduce((s, o) => s + o.tax, 0);
 
@@ -151,7 +157,8 @@ describeDb("the four surfaces agree on the owner's rules", () => {
     const { getRevenueMetrics } = await import("@/lib/admin-revenue");
     const viaRpc = await getRevenueMetrics();
 
-    // 5 revenue orders: #1 235, #2 100.40, #3 56, #4 314.40, #5 150, #8 0, #9 99.
+    // 6 revenue SALES: #1 235, #2 100.40, #3 56, #4 314.40, #5 150, #9 99.
+    // #8 is a $0 reship — revenue-status, but not a sale, so it is not an order.
     expect(viaRpc.totalPaidOrders).toBe(revenueOrders.length);
     expect(viaRpc.totalPaidRevenue).toBeCloseTo(netRevenueGross, 2);
 
@@ -164,7 +171,9 @@ describeDb("the four surfaces agree on the owner's rules", () => {
     expect(viaFallback.totalPaidRevenue).toBeCloseTo(viaRpc.totalPaidRevenue, 2);
 
     // Order #5 is the whole point: excluded before, worth $150 now.
-    expect(viaRpc.totalPaidRevenue).toBeCloseTo(235 + 100.4 + 56 + 314.4 + 150 + 0 + 99, 2);
+    expect(viaRpc.totalPaidRevenue).toBeCloseTo(235 + 100.4 + 56 + 314.4 + 150 + 99, 2);
+    // Excluding the reship must not move the money, only the count — it is $0.
+    expect(viaRpc.totalPaidOrders).toBe(6);
   }, 60_000);
 
   it("the profit dashboard treats sales tax as a liability, not as revenue or profit", async () => {

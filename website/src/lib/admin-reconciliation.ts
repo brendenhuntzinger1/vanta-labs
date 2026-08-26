@@ -48,8 +48,14 @@ function roundMoney(value: number) {
 const MAX_RECONCILIATION_ORDERS = 200_000;
 
 export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
-  const BASE_COLUMNS =
-    "order_id, customer_email, subtotal, shipping_amount, discount_amount, handling_fee, tax_amount, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, refund_amount, payment_status, paid_at, created_at";
+  const CORE_COLUMNS =
+    "order_id, customer_email, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, refund_amount, payment_status, paid_at, created_at";
+
+  // Columns that a pre-migration environment may not have. Both are terms of the
+  // charged total, so a missing one softens the check rather than invalidating
+  // it. Dropped one at a time, most-recent first, so an environment missing only
+  // one still reconciles on the other.
+  const OPTIONAL_COLUMNS = ["shipping_protection_fee", "handling_fee"] as const;
 
   // Typed explicitly because the column list is chosen at runtime, which defeats
   // supabase-js's inference from a literal select string.
@@ -116,25 +122,49 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
     }
   };
 
-  // Ask for the protection fee, and fall back to the original column set if the
+  // Ask for everything, and drop optional columns one at a time if the
   // migration has not been applied — the same degradation insertOrderRow uses.
   // Reconciliation reporting an error is worse than reconciliation reporting
   // slightly softer results, and this is the screen an operator opens when they
   // already suspect something is wrong.
-  let { data, error } = await read(`${BASE_COLUMNS}, shipping_protection_fee`);
-  let protectionColumnPresent = true;
-  if (error) {
-    const message = String(error.message ?? "").toLowerCase();
-    const missingColumn =
-      error.code === "PGRST204" ||
-      message.includes("shipping_protection_fee") ||
-      message.includes("does not exist") ||
-      message.includes("schema cache");
-    if (!missingColumn) throw error;
-    protectionColumnPresent = false;
-    ({ data, error } = await read(BASE_COLUMNS));
-    if (error) throw error;
+  //
+  // It used to degrade on `shipping_protection_fee` alone. `handling_fee` was
+  // later added to the formula as a second optional term, but not to the
+  // fallback, so an environment missing THAT one threw instead of softening —
+  // the opposite of what the paragraph above promises.
+  // PostgREST names the offending column when it can ("column orders.x does not
+  // exist"), and sometimes reports only a stale schema cache. Prefer the named
+  // column; fall back to dropping the newest optional one. Matching on the
+  // generic phrase FIRST would drop the wrong column and leave the real one in
+  // the next query, which just fails again one column poorer.
+  const namesColumn = (err: ReadError, column: string) =>
+    String(err?.message ?? "").toLowerCase().includes(column);
+  const looksLikeMissingColumn = (err: ReadError) => {
+    const message = String(err?.message ?? "").toLowerCase();
+    return err?.code === "PGRST204"
+      || message.includes("does not exist")
+      || message.includes("schema cache");
+  };
+
+  const present = new Set<string>(OPTIONAL_COLUMNS);
+  let data: ReconciliationRow[] | null = null;
+  let error: ReadError = null;
+  for (let attempt = 0; attempt <= OPTIONAL_COLUMNS.length; attempt += 1) {
+    const columns = [CORE_COLUMNS, ...OPTIONAL_COLUMNS.filter((c) => present.has(c))].join(", ");
+    ({ data, error } = await read(columns));
+    if (!error) break;
+    // Drop the optional column the error actually names; if it names none but
+    // still looks like a schema gap, drop the newest still in play. Anything
+    // else is a real failure and must surface — a permission error or a dead
+    // connection must never read as "nothing wrong with your orders".
+    const named = OPTIONAL_COLUMNS.find((c) => present.has(c) && namesColumn(error, c));
+    const dropped = named
+      ?? (looksLikeMissingColumn(error) ? [...OPTIONAL_COLUMNS].reverse().find((c) => present.has(c)) : undefined);
+    if (!dropped) throw error;
+    present.delete(dropped);
   }
+  if (error) throw error;
+  const protectionColumnPresent = present.has("shipping_protection_fee");
 
   const flags: ReconciliationFlag[] = [];
   const staleThreshold = Date.now() - 24 * 60 * 60 * 1000;
