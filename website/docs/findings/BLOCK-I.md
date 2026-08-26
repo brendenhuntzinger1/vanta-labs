@@ -849,6 +849,178 @@ imagery? Left unchanged rather than guessed at.
 
 ---
 
+## I-07 — `create_partner_invite` is an unauthenticated, RLS-bypassing write into the affiliate money tables, reachable by anyone with the public anon key
+
+**Grade:** `DATABASE-PROVEN` · **Severity:** **P0** · **Status:** OPEN —
+revoke written and ready, **blocked on the owner (Rule 4)**
+
+Found by asking Supabase's own security advisor rather than by reading source,
+which is why nothing in the source-level passes caught it: **the function does
+not exist in this repository.**
+
+### What it is
+
+```
+public.create_partner_invite(p_id uuid, p_auth_user_id uuid, p_name text,
+                             p_email text, p_referral_code text,
+                             p_commission_percent numeric, p_created_by uuid)
+```
+
+| property | value |
+|---|---|
+| `prosecdef` (SECURITY DEFINER) | **true** |
+| owner | `postgres` |
+| `has_function_privilege('anon', …, 'EXECUTE')` | **true** |
+| `has_function_privilege('authenticated', …, 'EXECUTE')` | **true** |
+| authorization check inside the body | **none** |
+
+`SECURITY DEFINER` + owner `postgres` means it runs with the owner's rights and
+**bypasses RLS** on `partners` and `ambassadors`. PostgREST publishes every
+`public` function at `/rest/v1/rpc/<name>`, and
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` ships to every browser that loads the site.
+
+I read the whole body. It never calls `auth.uid()`, `auth.jwt()`, or anything
+else that would identify the caller. Every parameter — including
+`p_commission_percent`, `p_referral_code` and `p_created_by` — is taken on
+trust from whoever calls it.
+
+The RLS sweep this codebase is proud of (`rls-enforce-all-tables.sql`) does not
+help. RLS on `partners` and `ambassadors` is enabled and correct; this function
+is *defined to bypass it*.
+
+### Two paths through the body
+
+**Branch 3 — create.** Inserts a matched `partners` + `ambassadors` pair with
+attacker-chosen `id`, `name`, `email`, `referral_code` and
+`commission_percent`. Status is hard-coded `'pending'`, so accrual and payout
+(gated on approved status) do not follow immediately. What does follow:
+unbounded row injection into the affiliate roster, and **referral-code
+squatting** — registering the codes a real campaign would want, since
+`referral_code` is unique.
+
+**Branch 2 — claim, and this is the severe one.** If a row exists in
+`ambassadors` matching `lower(email) = lower(p_email)`, the function checks only:
+
+```sql
+if pre_added.auth_user_id is not null
+   and pre_added.auth_user_id is distinct from p_auth_user_id then
+  raise exception 'ambassador % is already claimed by another account', p_email;
+end if;
+```
+
+The guard fires **only when `auth_user_id` is already set**. When it is NULL —
+which is exactly the state of an ambassador an admin has pre-added and who has
+not yet signed up — an anonymous caller supplying that email and their own
+`p_auth_user_id` gets:
+
+```sql
+update public.ambassadors set auth_user_id = p_auth_user_id, ...
+```
+
+plus an upsert of the `partners` twin. The victim's **referral code, commission
+percent, approved status and payout fields are preserved and rebound to the
+attacker's auth user.** That is account takeover of an affiliate's earnings
+stream, by anyone who can guess an email address.
+
+`p_created_by` is attacker-supplied too, so the audit attribution on the
+resulting rows is forgeable.
+
+### Live exposure, measured
+
+```sql
+select (select count(*) from public.ambassadors) as ambassadors_total,
+       (select count(*) from public.ambassadors where auth_user_id is null) as unclaimed,
+       (select count(*) from public.ambassadors where auth_user_id is null and status='approved') as unclaimed_approved,
+       (select count(*) from public.partners where auth_user_id is null) as partners_unclaimed;
+```
+
+| ambassadors_total | unclaimed | unclaimed_approved | partners_unclaimed |
+|---|---|---|---|
+| 7 | **0** | **0** | **0** |
+
+**Branch 2 is not exploitable at this instant** — every ambassador is claimed.
+Branch 3 is exploitable right now by anyone.
+
+That zero is a snapshot, not a control. The window opens the moment an admin
+pre-adds an ambassador by email, which is a first-class supported workflow —
+the function's own comment calls it *"Pre-added by an admin under this email"*
+and `F-002` in the ledger discusses exactly that flow. Every future onboarding
+re-opens it, and the window stays open until that person signs up.
+
+I did **not** test any of this against production. No RPC was called, no row
+written. The evidence is the function definition, the privilege catalogue and
+row counts — all reads.
+
+### Why no source pass would have found it
+
+`grep -rn "create_partner_invite"` across the entire repository returns
+**nothing**: not in `src/`, not in `src/lib/sql/`, not in `docs/`. The
+application's partner-creation RPC is `create_partner_application`, a different
+function. So this is **orphaned live-database drift** — a function that exists
+only in production, that no checked-in migration creates, and that no code
+calls.
+
+That also makes it safe to revoke: nothing can break, because nothing uses it.
+
+### The full anon-reachable SECURITY DEFINER surface
+
+Enumerated rather than sampled — every `SECURITY DEFINER` function in `public`
+with EXECUTE for `anon` or `authenticated`:
+
+| function | verdict |
+|---|---|
+| `create_partner_invite` | **the defect above** |
+| `validate_referral_code` | **correct, leave alone.** `STABLE` (read-only), filtered to `status = 'approved'`, returns only what the storefront needs to apply a typed-in referral discount. Referral codes are meant to be shared publicly and the storefront cannot validate one without an anonymous path. |
+
+Two functions, one defect. No others are reachable.
+
+### Fix — written, deliberately NOT applied
+
+`website/src/lib/sql/revoke-anon-create-partner-invite.sql`:
+
+```sql
+revoke execute on function public.create_partner_invite(
+  uuid, uuid, text, text, text, numeric, uuid
+) from anon, authenticated, public;
+```
+
+Server-side callers are unaffected either way — the service-role key bypasses
+grants entirely.
+
+**`OWNER DECISION NEEDED:` this is the most urgent item in Block I.** Applying
+it is a production DDL change, which Rule 4 reserves to the owner. Recommended
+order:
+
+1. Run the revoke (zero application risk — nothing calls the function).
+2. Then decide whether to `drop function` outright. Revoke is reversible and
+   sufficient; the drop is the tidy-up.
+3. Separately, audit `partners` / `ambassadors` for rows this could already
+   have created. `created_by`, unexpected `referral_code` values and rows with
+   no matching application are the tells. Current counts (7 and 7, fully
+   converged per `F-002`) suggest nothing has been injected, but that is
+   inference, not proof.
+
+**CROSS-BLOCK:** `partners` / `ambassadors` are Block A+B's tables. This is
+filed here because it is a missing-authorization defect on an internet-reachable
+endpoint (Phase 12), not an affiliate-logic defect — but A+B should know the
+write path exists, and consolidation should make sure only one block acts on it.
+
+### Also from the advisor, recorded not fixed
+
+- **Leaked-password protection is disabled** in Supabase Auth (customer
+  accounts). One toggle; the owner's call. P3.
+- **`current_auth_role`, `current_auth_uid`, `current_auth_email` have a mutable
+  `search_path`** (WARN). These three back the RLS policies including
+  `admin_audit_logs_admin_only` from I-01. Low risk here because exploiting a
+  mutable `search_path` needs the ability to create objects in a schema earlier
+  in the path, which `anon` does not have — but they are one-line fixes
+  (`set search_path = public, pg_temp`) and they are load-bearing for RLS. P3.
+- **35 tables have RLS enabled with no policy** (INFO). That is
+  deny-by-default and is exactly what `rls-enforce-all-tables.sql` intends —
+  **not a defect**, recorded so nobody re-files it from the advisor output.
+
+---
+
 ## Status
 
 | Id | Severity | Evidence | Fixed |
@@ -860,6 +1032,7 @@ imagery? Left unchanged rather than guessed at.
 | I-05 | **P1** (raised) | `BEHAVIORAL-TEST-PROVEN` + `DATABASE-PROVEN` | **Fixed & tested** |
 | I-05b | — | `SOURCE-INSPECTED` | **PASS** — customer-facing proof upload already correct |
 | I-06 | P3 | `DATABASE-PROVEN` | No — owner decision (accept GIFs or not) |
+| **I-07** | **P0** | `DATABASE-PROVEN` | **No — revoke written, blocked on owner (Rule 4)** |
 
 I-01, I-03, I-04 and I-05 are proven and fixed, each with negative controls
 recorded above. I-02 is corrected and recorded as a latent risk with no code
