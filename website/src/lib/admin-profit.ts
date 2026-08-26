@@ -658,12 +658,13 @@ export interface RecordShippingCostInput {
   /**
    * Where the exact cost came from.
    *
-   * "shippo" is a label bought in Shippo -- the only automatic source now that
-   * fulfillment is in-house. "provider" and "fulfillment" are retained so
-   * historical audit rows written by the former 3PL integration still describe
-   * themselves accurately; nothing writes them any more.
+   * "shippo" is a label bought in Shippo; "manual" is a cost entered by hand.
+   *
+   * The former "provider" and "fulfillment" values belonged to the EvoLabs
+   * third-party fulfilment integration, which is gone. Zero orders ever used
+   * them.
    */
-  source: "shippo" | "manual" | "provider" | "fulfillment";
+  source: "shippo" | "manual";
   changedBy?: string | null;
 }
 
