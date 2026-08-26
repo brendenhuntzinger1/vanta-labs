@@ -590,6 +590,54 @@ async function upsertOrderItems(orderId: string, items?: Array<{
   }
 }
 
+/**
+ * Accrue the commission for an order that is ALREADY PAID, from the order row.
+ *
+ * The repair sweep's entry point (review finding 1). Both paid lanes derive the
+ * accrual's two money inputs identically and from nothing but the order:
+ *
+ *   qualifyingSubtotal   = orders.subtotal                      (what checkout gated on)
+ *   commissionableSubtotal = orders.subtotal - orders.discount_amount
+ *
+ * That is the whole reason a repair is possible without a new column or a new
+ * migration: `orders` is already the durable record of what is owed, and has
+ * been since checkout wrote it. A missing `referral_orders` row is therefore
+ * always reconstructable, never lost.
+ *
+ * Eligibility is re-evaluated at repair time, not frozen at payment time — the
+ * same defence-in-depth `ensureCommissionRecord` has always applied. An
+ * ambassador deactivated between the payment and the repair accrues a row with
+ * commission 0 and an ineligible_reason, which is the correct conservative
+ * answer and is still strictly better than no row at all.
+ */
+export async function accrueCommissionForPaidOrder(order: {
+  order_id: unknown;
+  ambassador_id?: unknown;
+  referral_code?: unknown;
+  subtotal?: unknown;
+  discount_amount?: unknown;
+  customer_email?: unknown;
+  shipping_address?: unknown;
+  city?: unknown;
+  postal_code?: unknown;
+}): Promise<{ id: string } | null> {
+  const subtotal = roundMoney(Number(order.subtotal ?? 0));
+  const discountAmount = roundMoney(Number(order.discount_amount ?? 0));
+
+  return ensureCommissionRecord({
+    orderId: String(order.order_id),
+    ambassadorId: order.ambassador_id ? String(order.ambassador_id) : undefined,
+    referralCode: order.referral_code ? String(order.referral_code) : undefined,
+    commissionableSubtotal: roundMoney(Math.max(0, subtotal - discountAmount)),
+    qualifyingSubtotal: subtotal,
+    paymentStatus: "paid",
+    customerEmail: order.customer_email ? String(order.customer_email) : null,
+    shippingAddress: order.shipping_address ? String(order.shipping_address) : null,
+    city: order.city ? String(order.city) : null,
+    postalCode: order.postal_code ? String(order.postal_code) : null,
+  });
+}
+
 async function ensureCommissionRecord(input: {
   orderId: string;
   ambassadorId?: string;
@@ -1033,26 +1081,48 @@ export async function finalizeManualPayment(
   const referralCode = order.referral_code ? String(order.referral_code) : undefined;
   const ambassadorId = order.ambassador_id ? String(order.ambassador_id) : undefined;
 
-  await ensureCommissionRecord({
-    orderId,
-    ambassadorId,
-    referralCode,
-    commissionableSubtotal,
-    qualifyingSubtotal: subtotal,
-    paymentStatus: "paid",
-    customerEmail: order.customer_email ? String(order.customer_email) : null,
-    shippingAddress: order.shipping_address ? String(order.shipping_address) : null,
-    city: order.city ? String(order.city) : null,
-    postalCode: order.postal_code ? String(order.postal_code) : null,
-  });
+  // BEST-EFFORT, LIKE EVERY OTHER SIDE EFFECT ON THIS PATH (review finding 1).
+  //
+  // This used to be unguarded, and the claim above is single-use: the UPDATE
+  // carries `.eq("payment_status", <what we read>)`, so once it lands a retry
+  // matches zero rows and returns alreadyPaid. An accrual that threw therefore
+  // took out everything BELOW it as well — analytics, coupon redemption,
+  // abandoned-cart recovery, points earned and redeemed, the confirmation
+  // email, membership activation and, worst of all, `finalizeInventoryForOrder`.
+  // The customer paid, the units stayed on the shelf, and the store went on
+  // selling stock it no longer had. None of it re-ran, ever.
+  //
+  // The commission itself is not dropped by catching here: repairMissingCommissionAccruals
+  // re-derives it from the order row, which carries everything the accrual needs.
+  try {
+    await ensureCommissionRecord({
+      orderId,
+      ambassadorId,
+      referralCode,
+      commissionableSubtotal,
+      qualifyingSubtotal: subtotal,
+      paymentStatus: "paid",
+      customerEmail: order.customer_email ? String(order.customer_email) : null,
+      shippingAddress: order.shipping_address ? String(order.shipping_address) : null,
+      city: order.city ? String(order.city) : null,
+      postalCode: order.postal_code ? String(order.postal_code) : null,
+    });
+  } catch (commissionError) {
+    console.error("Unable to record commission for manually approved order", orderId, commissionError);
+  }
 
-  await logCommerceAnalyticsEvent({
-    eventType: "purchase",
-    orderId,
-    amountPaid,
-    referralCode,
-    ambassadorId,
-  });
+  try {
+    await logCommerceAnalyticsEvent({
+      eventType: "purchase",
+      orderId,
+      amountPaid,
+      referralCode,
+      ambassadorId,
+    });
+  } catch (analyticsError) {
+    // Same reasoning: an analytics write is never worth an unfulfilled order.
+    console.error("Unable to log purchase analytics for manually approved order", orderId, analyticsError);
+  }
 
   if (order.coupon_code) {
     try {

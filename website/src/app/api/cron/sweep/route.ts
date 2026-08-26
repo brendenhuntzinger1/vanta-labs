@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { grantMonthlyStoreCreditSweep, runMembershipBillingSweep } from "@/lib/membership-billing";
 import { runAbandonedCartSweep } from "@/lib/cart-recovery";
 import { autoApproveEligibleCommissions } from "@/lib/partner-portal";
+import { repairMissingCommissionAccruals } from "@/lib/commission-accrual-repair";
 import { expireStaleReservations } from "@/lib/inventory-reservation";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
 import { expireStaleExpressIntents, reconcileVeyraPendingPayments } from "@/lib/express-reconcile";
@@ -38,6 +39,11 @@ const JOBS = {
   // Advance ambassador commissions past the 14-day hold automatically, instead
   // of only when someone happens to load the partner page. Idempotent.
   commissionApproval: { label: "commission_approval", run: autoApproveEligibleCommissions },
+  // Re-derive commissions whose accrual failed after the paid claim was already
+  // consumed. Both paid lanes give the accrual exactly one attempt and nothing
+  // else retries it, so without this a single failed insert lost an
+  // ambassador's commission permanently. Idempotent: it looks for ABSENCE.
+  commissionAccrualRepair: { label: "commission_accrual_repair", run: repairMissingCommissionAccruals },
   // Reclaim inventory held by abandoned checkouts past their expiry window.
   reservationsExpired: { label: "reservation_expiry", run: expireStaleReservations },
   // Retry transactional emails (receipts/shipping) that failed to send.

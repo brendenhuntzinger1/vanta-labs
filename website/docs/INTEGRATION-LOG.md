@@ -2067,3 +2067,87 @@ nothing correctness-related, so skipping it is safe.
 
 **Not applied.** It is a production DDL change, and the standing rule is to ask
 every time.
+
+---
+
+# BLOCK N — INDEPENDENT REVIEW REMEDIATION
+
+An independent reviewer read the full `main@9aea901 → 0ca5521` diff with no
+knowledge of intent, and used production only for read-only verification. Six
+findings, two of them P0. Both P0s were confirmed by the owner before work
+started. Neither is a fix that went wrong — both are places where a NEW module
+assumed an invariant another module was already known to violate.
+
+## N-01 (P0) — a failed commission accrual was permanently unrecoverable
+
+**FOUND.** Both paid lanes take a single-use, exactly-once claim and THEN
+accrue:
+
+| lane | claim | accrual |
+|---|---|---|
+| card | `orders.paid_side_effects_at` NULL→now | swallowed into `console.error` |
+| manual | `orders.payment_status` `<read>`→`paid` | **unguarded, threw** |
+
+Once the claim lands the accrual gets exactly ONE attempt. A webhook redelivery
+loses the claim; an admin's second approve returns `alreadyPaid`. So a single
+failed insert lost an ambassador's commission permanently, with a serverless log
+line as the only record of money owed to a real person.
+
+**AND IT IS LIVE TODAY.** Read from production `2026-08-26`:
+
+```
+referral_orders_payment_status_check
+  CHECK (payment_status = ANY (ARRAY['paid','refunded','partially_refunded']))
+```
+
+The accrual inserts `'pending'`. On the current database that is a **23514 on
+every referred order**, until `sql/referral-orders-commission-lifecycle.sql` is
+applied. The migration ordering was not hygiene — it was the difference between
+working commissions and silent, unreconstructable data loss.
+
+**WORSE THAN REPORTED, found while reproducing.** On the manual lane the throw
+escaped `finalizeManualPayment` entirely, taking out every side effect BELOW it:
+analytics, coupon redemption, abandoned-cart recovery, points earned and
+redeemed, the confirmation email, membership activation — and
+`finalizeInventoryForOrder`. The customer paid, the units stayed on the shelf,
+and the store went on selling stock it no longer had. The retry then returned
+`alreadyPaid`, so none of it ever ran. The reviewer's report understated this.
+
+**FIXED, two parts.**
+
+1. `finalizeManualPayment` now guards the accrual and the analytics call, the
+   same treatment every other side effect on that path already had. A commission
+   failure can no longer cost the order its inventory movement.
+
+2. `commission-accrual-repair.ts` — `repairMissingCommissionAccruals()`,
+   registered in the cron sweep. **No new column and no new migration**, on
+   purpose: `orders` is ALREADY the durable record. Checkout persists
+   `ambassador_id`, `referral_code`, `subtotal` and `discount_amount` before
+   payment is attempted, and both lanes derive the accrual's two money inputs
+   from exactly those. A paid order carrying an ambassador with no
+   `referral_orders` row is by construction an accrual that never ran, and
+   everything needed to run it is still on the order. A `commission_accrued_at`
+   latch would have made recovery depend on the very migration ordering that
+   caused the loss.
+
+   A missing row is unambiguous: `ensureCommissionRecord` writes a row even when
+   it DECLINES to pay (amount 0 + `ineligible_reason`), so "no row" never means
+   "considered and refused". Idempotent by construction — it looks for absence.
+   It also clears the existing backlog, not just future failures.
+
+**TEST.** `commission-accrual-recovery.test.ts`. The double models the REAL
+production CHECK verbatim and can be told to "apply the migration" mid-test,
+which is the actual deployment sequence. This closes the gap the reviewer named:
+every previous accrual double accepted any insert, so the failure branch was
+unreachable and `'pending'` always landed.
+
+**MUTATIONS** — each broke a different test, so none of the six is decorative:
+
+| mutation | test that caught it |
+|---|---|
+| un-catch the manual-lane accrual | *still pays the order and still moves the stock* |
+| sweep swallows accrual failures | *reports the backlog it could not clear* |
+| sweep drops the absence check | *is idempotent: a second sweep does not accrue twice* |
+| sweep uses gross subtotal (ignores discount) | *re-derives it from the order* (asserts $27.00, not merely "a row exists") |
+
+**GATE.** 260 files / 4147 tests green, with Postgres up. Lint and `tsc` clean.
