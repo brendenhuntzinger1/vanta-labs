@@ -487,3 +487,98 @@ describeDb("sales tax — the number filed with each state", () => {
     expect(report.totals.taxRefunded).toBe(6);
   });
 });
+
+describeDb("the customer invoice adds up", () => {
+  beforeAll(async () => {
+    pg = new Pool({ connectionString: DATABASE_URL, max: 8 });
+    await pg.query(SERVICE_ROLE_DDL);
+    await pg.query(ORDERS_DDL);
+    await pg.query(readFileSync(join(SQL_DIR, "admin-dashboard-rollups.sql"), "utf8"));
+  }, 60_000);
+
+  afterAll(async () => {
+    await pg?.end();
+  });
+
+  beforeEach(async () => {
+    await reset();
+  });
+
+  /** Reads the order back the way the invoice route does, then totals it. */
+  async function invoiceFor(orderId: string) {
+    const { getCustomerOrderDetail } = await import("@/lib/account-orders");
+    const { buildInvoiceTotals, invoiceReconciles } = await import("@/lib/invoice-totals");
+    const order = await getCustomerOrderDetail(USER_ID, "buyer@example.test", orderId);
+    if (!order) throw new Error(`order ${orderId} not found`);
+    const totals = buildInvoiceTotals(order);
+    return { order, totals, reconciles: invoiceReconciles(totals) };
+  }
+
+  const USER_ID = "11111111-1111-1111-1111-111111111111";
+
+  async function seedOwned(order: SeedOrder) {
+    await seed([{ ...order, customerEmail: "buyer@example.test" }]);
+    await pg.query("update public.orders set customer_user_id = $1 where order_id = $2", [USER_ID, order.orderId]);
+  }
+
+  it("adds up on the three real production orders that carry a protection fee", async () => {
+    // Read from production (read-only) on 2026-08-26. Every one of these
+    // rendered an invoice whose lines were short of "Total paid" by exactly the
+    // protection fee: $0.08, $0.15 and $2.20.
+    const REAL = [
+      { orderId: "order-VL-37C1E4B0", subtotal: 2.00, shipping: 15, tax: 0, protectionFee: 0.08, amountPaid: 17.08 },
+      { orderId: "order-VL-8D132452", subtotal: 3.80, shipping: 15, tax: 0, protectionFee: 0.15, amountPaid: 18.95 },
+      { orderId: "order-VL-E8F4D52F", subtotal: 54.99, shipping: 15, tax: 3.85, protectionFee: 2.20, amountPaid: 76.04 },
+    ];
+    for (const row of REAL) {
+      await seedOwned({ ...row, createdAt: iso(NOW), paymentStatus: "paid" });
+      const { totals, reconciles } = await invoiceFor(row.orderId);
+      expect(reconciles).toBe(true);
+      expect(totals.lines.map((l) => l.label)).toContain("Shipping Protection");
+      expect(totals.lines.find((l) => l.label === "Shipping Protection")?.amount).toBe(row.protectionFee);
+      // And no unexplained remainder was needed to make it balance.
+      expect(totals.lines.map((l) => l.label)).not.toContain("Other charges");
+    }
+  });
+
+  it("adds up on a card order, where the 3% surcharge is the missing piece", async () => {
+    // No card order exists in production yet, so this half of the defect has
+    // never reached a customer. It fires on the first one.
+    await seedOwned({
+      orderId: "order-card", subtotal: 200, discount: 20, shipping: 15, tax: 12.30,
+      cardFee: 10.37, protectionFee: 8, amountPaid: 225.67,
+      paymentMethod: "card", paymentStatus: "paid", createdAt: iso(NOW),
+    });
+    const { totals, reconciles } = await invoiceFor("order-card");
+    expect(reconciles).toBe(true);
+    expect(totals.lines.find((l) => l.label === "Service Fee")?.amount).toBe(10.37);
+    expect(totals.lines.map((l) => l.label)).not.toContain("Other charges");
+  });
+
+  it("shows store credit and points as deductions, so the total is reachable downward too", async () => {
+    await seedOwned({
+      orderId: "order-redeemed", subtotal: 200, shipping: 15, tax: 0,
+      storeCreditCents: 2500, pointsRedeemed: 1000, amountPaid: 180,
+      paymentStatus: "paid", createdAt: iso(NOW),
+    });
+    const { totals, reconciles } = await invoiceFor("order-redeemed");
+    expect(reconciles).toBe(true);
+    expect(totals.lines.find((l) => l.label === "Store credit")?.amount).toBe(-25);
+    expect(totals.lines.find((l) => l.label === "Points redeemed")?.amount).toBe(-10);
+    expect(totals.lines.map((l) => l.label)).not.toContain("Other adjustments");
+  });
+
+  it("names an unexplained remainder rather than hiding it", async () => {
+    // A row written before shipping_protection_fee existed folded the fee into
+    // amount_paid and recorded it nowhere. The invoice cannot say what the
+    // charge was, but it must not pretend the arithmetic works.
+    await seedOwned({
+      orderId: "order-legacy", subtotal: 100, shipping: 15, tax: 0,
+      protectionFee: 0, cardFee: 0, amountPaid: 119,
+      paymentStatus: "paid", createdAt: iso(NOW),
+    });
+    const { totals, reconciles } = await invoiceFor("order-legacy");
+    expect(reconciles).toBe(true);
+    expect(totals.lines.find((l) => l.label === "Other charges")?.amount).toBe(4);
+  });
+});
