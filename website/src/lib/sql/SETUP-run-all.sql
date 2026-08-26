@@ -80,6 +80,11 @@ alter table if exists public.product_images
 -- ---------------------------------------------------------------------------
 -- 2) LOAD THE GROUPED EVO CATALOG (37 products, 51 dose variants)
 -- ---------------------------------------------------------------------------
+-- NOTE: The cost values in this seed are historical EvoLabs wholesale figures.
+-- `src/lib/sql/product-cogs.sql` is the authoritative landed-cost source.
+-- Re-running this file will deliberately NOT touch product_cost_cents on rows
+-- that already exist — see the ON CONFLICT clauses below for cost handling.
+-- ---------------------------------------------------------------------------
 insert into public.products
   (slug, name, category, price_cents, product_cost_cents, is_featured, position,
    is_published, is_enabled, is_active, is_archived, stock_status, inventory_quantity)
@@ -126,7 +131,7 @@ from (values
 ) as v(slug, name, category, price_cents, cost_cents, is_featured, position)
 on conflict (slug) do update set
   name=excluded.name, category=excluded.category, price_cents=excluded.price_cents,
-  product_cost_cents=excluded.product_cost_cents, is_featured=excluded.is_featured,
+  is_featured=excluded.is_featured,
   is_published=true, is_enabled=true, is_active=true, is_archived=false,
   stock_status='In Stock', updated_at=now();
 
@@ -191,7 +196,7 @@ from (values
 join public.products p on p.slug = d.parent_slug
 on conflict (product_id, slug_suffix) do update set
   label=excluded.label, price_cents=excluded.price_cents,
-  product_cost_cents=excluded.product_cost_cents, is_default=excluded.is_default,
+  is_default=excluded.is_default,
   is_enabled=true, stock_status='In Stock', updated_at=now();
 
 -- ---------------------------------------------------------------------------
