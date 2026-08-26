@@ -1141,3 +1141,62 @@ the option.
 **K-27** — `partially_refunded` orders are no longer dropped from the sales-tax
 report; the Block F merge resolution covers it. **K-26 remains open**:
 `taxableSales` is still `subtotal − discount` and does not include taxed shipping.
+
+## 4.5 K-15 — the throttle that only stopped serial traffic
+
+Two independent defects in one 40-line module.
+
+**(b) The count and the record were not atomic.** It SELECTed the count, then
+INSERTed. Two hundred requests arriving together all read a count below the
+limit, all passed, and all then inserted. **The effective limit under a
+concurrent burst was unbounded** — it only ever throttled *serial* traffic, and
+automated abuse is concurrent by construction.
+
+Behind that gate: coupon-code enumeration (**the only barrier** — codes are
+minted as `SAVE-XXXX` and matched case-insensitively), order creation, payment
+submission, wallet session minting, and two unauthenticated email-sending forms.
+
+**Fix:** record first, then count, and compare `> limit` instead of `>= limit`
+so the limit-th request is still the last allowed one. A burst is fully counted
+before any member of it asks how big it is. The trade — a denied request still
+costs a row — is stated in the code and is the safe direction.
+
+**(a) It failed open on any storage error, silently.** No log, no alert, no
+distinguishable return value: *"under the limit"* and *"the rate-limit table is
+unreachable"* looked identical to every caller.
+
+**Fail-open is KEPT** — it is a documented, deliberate posture, an abuse
+speed-bump must not take down checkout, and admin login has its own separate
+mechanism (`admin_login_attempts`) that does not depend on this module. What
+changed is the silence: a `degraded: true` on the result, a console line, and a
+`critical` `rate_limit_degraded` alert throttled to one per five minutes, because
+a storage outage hits every route at once and an alert per request would bury the
+signal it exists to raise.
+
+**Severity bounded by a production read:** `rate_limit_hits` **does** exist in
+production, so K-15's worst case — every rate limit in the application silently
+off — is *not* live. The concurrency hole is.
+
+| mutation | result |
+|---|---|
+| back to count-then-insert (the original) | **2 failures** |
+| stop alerting on a degraded limiter | **4 failures** |
+| stop flagging `degraded` in the return value | **3 failures** |
+| alert on every request (bury the signal) | **1 failure** |
+| never deny anything | **3 failures** |
+
+One assertion was corrected rather than left as written: the burst test first
+asserted `allowed > 0`, which encoded an interleaving the fake cannot produce.
+Under the perfect simultaneity of the fake every member of a 200-burst is denied,
+and that is correct and safe. The assertion is now `<= limit` plus `< 50` (the
+pre-fix behaviour was 200), and the serial test is what proves legitimate traffic
+is not locked out.
+
+## 4.6 Postgres, and a property working as designed
+
+The container reclaimed the test Postgres twice during this block. Both times the
+database-backed suites **errored** rather than quietly passing — the property
+Block F recorded and `F-014` exists to guarantee. It is the reason the gate in
+Phase 7 checks the cluster is up rather than assuming it.
+
+`scripts/start-test-postgres.sh` is committed so the gate is reproducible.
