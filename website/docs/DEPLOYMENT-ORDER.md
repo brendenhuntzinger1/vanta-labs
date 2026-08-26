@@ -71,10 +71,38 @@ where table_name='referral_orders' and column_name='payment_status';   -- expect
 outside the original three. That is correct — reverting would orphan real accrued
 commissions, and what happens to those is the owner's decision, not a migration's.
 
-> **Order note:** Step 1 must land **before or with** the code, not after. The
-> code half (sending `original_subtotal`/`customer_discount`) is harmless without
-> it — the insert simply keeps failing exactly as it does today — so there is no
-> broken half-state either way.
+> ### Order note — REWRITTEN AFTER REVIEW FINDING 1. Read this one.
+>
+> Step 1 must land **before or with** the code, not after.
+>
+> **The previous wording here was wrong, and wrong in the direction that gets
+> data destroyed.** It said the code half was "harmless without it — the insert
+> simply keeps failing exactly as it does today — so there is no broken
+> half-state either way." That was false. Deploying the code before this
+> migration did not merely leave commissions un-accrued; it **destroyed them
+> permanently, one per referred order, with no way to reconstruct them.**
+>
+> Why: both paid lanes take a single-use, exactly-once claim and THEN accrue.
+> The card lane flips `orders.paid_side_effects_at` NULL→now; the manual lane
+> flips `payment_status` under a read-guard. Once that claim lands the accrual
+> gets exactly ONE attempt. A webhook redelivery loses the claim. An admin's
+> second approve returns `alreadyPaid`. So each 23514 burned an order's only
+> chance at its commission and left a `console.error` in a serverless log as the
+> sole record of money owed to a real person.
+>
+> **This is now recoverable, and that is a safety net, not a licence.**
+> `repairMissingCommissionAccruals()` (registered in the cron sweep) re-derives
+> any missing accrual from the order row — `orders` already carries
+> `ambassador_id`, `referral_code`, `subtotal` and `discount_amount`, which is
+> everything the accrual consumes. It clears the existing backlog on its next run
+> after this migration is applied, and it raises a critical alert for anything it
+> still cannot fix.
+>
+> So the honest statement of the risk is now: **deploying out of order costs
+> every referred order's commission until the migration lands and the sweep next
+> runs, plus one alert.** It is no longer unrecoverable. Apply the migration
+> first anyway — the sweep exists because deployments go wrong, not so that this
+> one can.
 
 ---
 
@@ -83,7 +111,8 @@ commissions, and what happens to those is the owner's decision, not a migration'
 | | |
 |---|---|
 | **Apply** | `website/src/lib/sql/inventory-return-path.sql` |
-| **Why** | `orders.inventory_restocked_at` and `adjust_inventory_on_sale` are both absent. The restock claim errors `42703` and returns false by its own fail-safe, so **nothing is ever restocked** — every refund and cancellation permanently destroys its units while tracking is ON. (G-02, G-04/I-12, K-17) |
+| **Why** | `orders.inventory_restocked_at` and `adjust_inventory_on_sale` are both absent. The restock claim errors `42703`, so **nothing is ever restocked** — every refund and cancellation permanently destroys its units while tracking is ON. (G-02, G-04/I-12, K-17) |
+| **Also fixed in code (finding 2)** | That failure used to be **indistinguishable from success**. `claimInventoryRestock` returned a bare `false` for both "somebody else already restocked this" and "the claim could not be evaluated", so the cancel path reported the missing column to the operator as `already_returned`. It now returns `claimed` / `already_claimed` / `unavailable`, and `unavailable` raises a critical alert instead of a reassuring string. **Until this migration lands, every cancel and refund now ALERTS rather than silently writing off stock.** |
 | **Rollback** | `ROLLBACK-inventory-return-path.sql` |
 | **Blast radius** | One nullable column, one partial index, one new function. No existing row changes. |
 

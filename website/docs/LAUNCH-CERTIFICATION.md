@@ -34,6 +34,66 @@ close, and I have not upgraded a single grade to make a section look finished.
 
 ---
 
+---
+
+## 1b. THE INDEPENDENT REVIEW HAPPENED, AND IT FOUND TWO P0s
+
+**Condition 2 below — "a human reads the diff" — was acted on. Someone did, with
+no knowledge of intent, reading the code before any of the reports and using
+production only for read-only verification. Six findings came back, two of them
+P0. The owner independently confirmed both before any work started.**
+
+This section exists because §1 predicted exactly this and should be graded on it.
+§1 said a test and its subject sharing an author share the author's blind spots.
+That is precisely what happened, and the verdict below was too confident as a
+result: it stated "the P0 in the commission path is fixed and proven" while the
+commission path still carried an unrecoverable P0 that no test could see.
+
+| # | Severity | What | Where it came from |
+|---|---|---|---|
+| 1 | **P0** | A failed commission accrual was permanently unrecoverable — both paid lanes consume a single-use claim and THEN accrue | **new code from this block** |
+| 2 | **P0** | Cancelling a manually-paid order wrote off its stock; the K-17 return path was inert on one lane, and inert on the other for a second reason | **new code from this block** |
+| 3 | P1 | A new dose stole `is_default` and `position` from an existing one | **regression this block introduced** |
+| 4 | P1 | `isRevenueOrderStatus` — the declared "single source of truth" — had zero call sites | **new code from this block** |
+| 5 | P2 | A textual assertion blind to the only defect in the file it guarded, hiding a ~3× revenue overstatement | assertion new; underlying bug pre-existing |
+| 6 | P2 | The rate limiter became a write amplifier and self-locked user-keyed buckets | **new code from this block** |
+
+All six are fixed, each with a reproduction, a RED test that failed for the right
+reason, a root-cause fix, and recorded mutation controls. Full working record in
+`INTEGRATION-LOG.md` under **BLOCK N**.
+
+### The pattern, which matters more than any individual finding
+
+**Five of the six were introduced by the fixes in this block, not found beneath
+them.** And both P0s were the same shape:
+
+> **A new module confidently asserted, in a comment, an invariant that another
+> module was already known to violate.**
+
+- `order-cancellation-inventory.ts` wrote *"`paid_side_effects_at` is the signal,
+  because it is the latch under which the paid side effects ran"* — true of one
+  of the two paid lanes.
+- `admin-dashboard-rollups.sql` wrote *"Every function mirrors the JS logic it
+  replaces EXACTLY (same status filters, same net-of-refund revenue...)"* — one
+  function had no status filter at all.
+
+Neither was sloppy logic. Both were confident prose about code in another file,
+never checked against that file. A dedicated sweep for that specific shape is
+recorded in `INTEGRATION-LOG.md`.
+
+### What this does to the grades
+
+Nothing below is upgraded. Two things are **downgraded**:
+
+- Any claim that the commission path was "proven" is withdrawn. It was proven
+  against doubles that could not fail — every accrual double accepted any insert,
+  so the failure branch was unreachable.
+- Mutation testing is confirmed as valuable **and as insufficient on its own**.
+  §4 already reported two surviving mutants. Block N produced **four more**, and
+  every one turned out to be a gap in the test rather than an equivalent mutant.
+  The rule that came out of it: **write the mutation first, and if it survives,
+  suspect the test before the code.**
+
 ## 2. THE VERDICT
 
 ### Ship the code. Do not ship it *today*, and not without the migrations.
@@ -43,9 +103,23 @@ close, and I have not upgraded a single grade to make a section look finished.
 1. **Apply the migrations in `DEPLOYMENT-ORDER.md`, in that order, before the
    code.** Two are launch blockers. Step 4 is the one order-sensitive step.
    Every step has an exact rollback; four have committed `ROLLBACK-*.sql` files.
-2. **A human reads the diff.** Not because I found it wrong — because §1 is
-   true. The highest-risk files are `payment-service.ts`,
-   `membership-billing.ts`, `payment-webhook.ts`, `/r/[code]/route.ts`.
+   **Step 5b is no longer optional** — it now runs before the deploy (finding 6).
+
+   **This condition was previously undersold, and the wording that undersold it
+   is corrected in `DEPLOYMENT-ORDER.md`.** Step 1's order note used to say the
+   code half was "harmless" without its migration. It was not: deploying the code
+   first destroyed one commission per referred order, permanently, because the
+   accrual gets exactly one attempt after a single-use claim. Finding 1 makes
+   that recoverable via a repair sweep — a safety net, not a licence. Apply the
+   migrations first regardless.
+2. **A human reads the diff — STILL OUTSTANDING, and now larger.** An
+   independent review has since read it and found two P0s (§1b), so this
+   condition is partly discharged and its value is no longer hypothetical. It is
+   not closed: the review was itself unreviewed, and Block N added ~1,400 lines
+   of new fixes and tests that **nobody has read at all**. The highest-risk files
+   are `payment-webhook.ts`, `payment-service.ts`, `membership-billing.ts`,
+   `/r/[code]/route.ts`, and now `commission-accrual-repair.ts` and
+   `order-cancellation-inventory.ts`.
 3. **Decide the owner-decision items in §6.** One of them (affiliate
    attribution as essential storage) is a published-policy question, not an
    engineering one.
@@ -57,7 +131,14 @@ close, and I have not upgraded a single grade to make a section look finished.
 The core transaction works and has now been proven to work end to end, from a
 clean browser, on the final build, with the database checked against the screen
 at every step. That had **never been done in any environment** before this
-audit. The P0 in the commission path is fixed and proven. The orphan-order and
+audit.
+
+~~The P0 in the commission path is fixed and proven.~~ **Withdrawn — see §1b.**
+The commission path carried a second, unrecoverable P0 that the independent
+review found and that no test here could have caught. It is now fixed, tested
+against a double that models production's real CHECK constraint, and backed by a
+repair sweep. "Proven" is a word this document should use more carefully than it
+did. The orphan-order and
 denial-of-inventory hole is fixed and proven. The renewal double-charge is
 fixed. The consent violation is fixed.
 

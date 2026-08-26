@@ -2467,3 +2467,62 @@ the ordering changed, not the risk. **Not applied here:** it is production DDL,
 and the standing rule is to ask every time.
 
 **GATE.** 263 files / 4174 tests green. Lint and `tsc` clean.
+
+## BLOCK N — FINAL GATE, FROM A CLEAN CHECKOUT
+
+Not the working tree. A fresh `git clone` of the branch into `/tmp/cleanco`,
+`npm ci` from the lockfile, everything run against a real Postgres.
+
+| gate | before Block N | after Block N |
+|---|---|---|
+| test files | 259 passed | **263 passed** |
+| tests | 4141 passed | **4174 passed** |
+| duration | 55.10s | 46.65s |
+| `tsc --noEmit` | clean | **clean** |
+| `eslint` | 0 errors | **0 errors**, 42 warnings across 28 files |
+| `next build` | — | **✓ compiled in 27.3s, 105/105 static pages** |
+
+Every one of the 42 lint warnings is pre-existing and unused-variable-class;
+none is in a file Block N created or touched — checked by name, not assumed.
+
+**Zero skipped suites.** The eight Postgres-backed suites that skip without
+`VANTA_TEST_DATABASE_URL` all ran. A skipped suite reporting success is how
+fourteen dead proofs once passed this gate (F-014), so the throwaway cluster
+from `scripts/start-test-postgres.sh` was up for every run recorded here.
+
+**Net new coverage:** +4 test files, +33 tests.
+
+- `commission-accrual-recovery.test.ts` — models production's real
+  `referral_orders` CHECK and applies the migration mid-test
+- `manual-payment-cancellation-inventory.test.ts` — drives the real
+  `finalizeManualPayment` into the real cancel path over one order store
+- `revenue-definition-agreement.test.ts` — one canonical basket, every revenue
+  surface asked to agree, expectation derived from the ledger
+- `sql/bulk-savings-rollup-executed.test.ts` — executes the shipped SQL against
+  a real Postgres instead of grepping it
+
+## BLOCK N — DOCUMENTATION CORRECTED
+
+`DEPLOYMENT-ORDER.md`:
+
+- **Step 1's order note rewritten.** It used to say the code half was "harmless"
+  without its migration — "the insert simply keeps failing exactly as it does
+  today — so there is no broken half-state either way". That was false in the
+  direction that destroys data: each 23514 burned an order's only accrual
+  attempt, permanently. The note now states the real risk, and states that
+  finding 1's repair sweep makes it recoverable — a safety net, not a licence.
+- **Step 2 gained a note** that the missing-column failure used to be
+  indistinguishable from success, and now alerts.
+- **Step 5b reclassified** from OPTIONAL to RUN BEFORE THE DEPLOY.
+
+`LAUNCH-CERTIFICATION.md`:
+
+- **New §1b** records the independent review, all six findings, and the pattern
+  behind both P0s.
+- **Condition 1 expanded** with the corrected migration-ordering risk.
+- **Condition 2 explicitly NOT closed.** The review is partly discharged, but it
+  was itself unreviewed, and Block N added ~1,400 lines nobody has read.
+- **"The P0 in the commission path is fixed and proven" is struck through and
+  withdrawn.** It was proven against doubles that could not fail.
+
+No grade anywhere was upgraded. Two were downgraded.
