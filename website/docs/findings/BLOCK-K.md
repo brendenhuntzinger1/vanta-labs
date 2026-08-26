@@ -45,6 +45,7 @@ pasted verbatim.
 | K-20 | P2 | `SOURCE-INSPECTED` | Four tables are written and never read, and two double the visitor data retained for no benefit |
 | K-21 | P1 | `SOURCE-INSPECTED` | The homepage hardcodes the "99%" the trust-claims module says never appears, and checkout makes a different fulfilment promise from the rest of the site |
 | K-22 | P2 | `BEHAVIORAL-TEST-PROVEN` | A coupon that loses the discount competition is still recorded and still redeemed, burning a one-shot code for nothing |
+| K-23 | P1 | `SOURCE-INSPECTED` | The email retry sweep has neither duplicate-send guard this codebase already uses; the free one is a single argument |
 | — | none | `SOURCE-INSPECTED` | *Dead-code sweep part 2: API routes. Two money-spending orphans investigated and cleared — recorded so the next session does not re-derive the false start.* |
 
 ---
@@ -3652,6 +3653,159 @@ literals. No action.
 
 ---
 
+---
+
+## K-23 — The email retry sweep has neither of the two duplicate-send guards this codebase already uses, and the one it could get for free is one argument
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN
+**Area:** background jobs
+
+### What is wrong
+
+`src/lib/email/retry-queue.ts:39-90` selects due rows, sends each, and updates
+afterwards:
+
+```ts
+const { data, error } = await supabaseAdmin
+  .from("pending_emails")
+  .select("id, to_email, subject, html, text_body, reply_to, attempts")
+  .eq("status", "pending")
+  .lte("next_attempt_at", new Date().toISOString())
+  .order("next_attempt_at", { ascending: true })
+  .limit(maxPerRun);
+…
+for (const row of data) {
+  const result = await sendEmail({ to: …, subject: …, html: …, text: …, replyTo: … });
+  …
+  if (result.success) { …update({ status: "sent" })… }
+```
+
+Nothing marks a row in flight. Two overlapping sweep invocations — or one that
+outlives its 30-minute slot — both select the same rows and both send them. This
+is **transactional** mail: receipts and shipping notices, reaching a real customer
+twice.
+
+### Two guards exist in this codebase, and this function uses neither
+
+**Guard 1 — an atomic claim.** The pattern is used twice, well, nearby:
+
+- `src/lib/cart-recovery.ts` `reserveAndSendStage` inserts against a unique
+  `(abandoned_cart_id, stage)` index **before** sending, and deletes the
+  reservation if the send fails (`:215-218`).
+- `src/lib/email/campaign-sender.ts` `claimBatch` uses a conditional UPDATE with a
+  10-minute stale-claim reclaim.
+
+Both live in the same subsystem. Neither was applied here.
+
+**Guard 2 — the provider idempotency key, which is already wired.** The type
+declares it and the Resend provider forwards it:
+
+```ts
+// src/lib/email/types.ts:21
+idempotencyKey?: string;
+// src/lib/email/providers/resend.ts:33
+...(message.idempotencyKey ? { "Idempotency-Key": message.idempotencyKey } : {}),
+```
+
+and the codebase already uses it where a duplicate would matter:
+
+```ts
+// src/lib/email/order-email-once.ts:130
+const result = await sendEmail({ to, ...template, idempotencyKey: `${kind}:${orderId}` });
+```
+
+`retryPendingEmails` passes **no** `idempotencyKey`. The one code path whose entire
+purpose is re-sending is the one that omits the header that makes re-sending safe.
+
+A stable key is available at zero cost — `pending-email:${row.id}` — and the row id
+is already selected.
+
+Caveat, stated rather than hidden: `src/lib/email/providers/sendgrid.ts` has no
+`idempotencyKey` handling at all, so on SendGrid guard 2 buys nothing and the claim
+is the only real fix. Guard 2 is a cheap second layer, not a substitute.
+
+### Two corrections to the Phase 1 map
+
+The map raises this as *"select-then-send with no claim"* and separately worries
+that a row at max attempts "dies silently". Both need adjusting:
+
+- **The give-up path is not silent.** `retry-queue.ts:73-78` raises
+  `recordSystemAlert({ type: "email_undeliverable", severity: "warning", … })`
+  naming the subject and recipient. Working as intended.
+- **The outer `catch { }` (`:87-89`, "Table not migrated / transient — safe to
+  skip this run") wraps the whole loop, which looks like it could strand a row
+  mid-flight — incremented `attempts` never written, so it stays immediately due
+  and, being sorted `next_attempt_at` ascending, re-selected first forever.** It
+  cannot: `sendEmail` (`src/lib/email/send.ts:22-29`) catches everything and
+  returns `{ success: false, error }`, so a provider throw becomes a failure
+  *result* and takes the normal backoff branch. **Checked and cleared** — recorded
+  because it is the natural next hypothesis.
+
+### Impact
+
+A customer receives their order receipt, or a shipping notice with a tracking
+number, twice. Duplicate transactional mail is the kind of defect customers report
+and forwards land in a support inbox, and for a store still building trust it
+reads as a system that does not know what it has already done.
+
+The backoff is `min(60, 5 * 2 ** (attempts - 1))` minutes with `MAX_ATTEMPTS = 5`,
+so a row is genuinely in the queue for up to about two hours — several sweep ticks
+of exposure per row.
+
+### Reproduction
+
+Insert two rows into `pending_emails` with `status='pending'` and
+`next_attempt_at` in the past, then fire the sweep twice concurrently against a
+staging SMTP catcher:
+
+```
+curl -H "Authorization: Bearer $CRON_SECRET" .../api/cron/sweep &
+curl -H "Authorization: Bearer $CRON_SECRET" .../api/cron/sweep &
+wait
+```
+
+Two deliveries per row in Mailhog proves the missing claim. Then repeat with an
+`idempotencyKey` added and a Resend key configured to show guard 2 collapsing them.
+
+### Smallest safe root-cause fix
+
+**Add the key first — it is one argument and helps immediately:**
+
+```ts
+const result = await sendEmail({
+  to: String(row.to_email), subject: …, html: …, text: …, replyTo: …,
+  idempotencyKey: `pending-email:${row.id}`,
+});
+```
+
+**Then add the claim, which is the real fix.** Mirror `claimBatch`: a conditional
+UPDATE flipping `status` `'pending' → 'sending'` guarded on the old value, select
+only what this sweep won, and reclaim rows stuck in `'sending'` older than ten
+minutes — exactly the shape `campaign-sender.ts` already implements. The stale
+reclaim matters: without it a crash between claim and send strands the row, which
+is the failure mode a claim-before-send always has to answer for.
+
+### Regression test to write
+
+Drive `retryPendingEmails` twice concurrently with `Promise.all` against a stubbed
+provider and assert each row is sent exactly once. This fails today. Negative
+control: run them sequentially and confirm it passes, proving the test measures
+concurrency rather than the loop.
+
+Second, cheaper test: assert `sendEmail` is called with an `idempotencyKey`
+containing the row id. Negative control: remove the argument and confirm it fails.
+
+### CROSS-BLOCK
+
+- `src/lib/email/retry-queue.ts` — **Block C** owns `src/lib/email/**` and
+  `retry-queue.ts` is named explicitly in their scope. **This is theirs to fix.**
+  Recorded here because the sweep is Block K's area; the finding is handed over,
+  not acted on.
+- **Block A** (concurrency/idempotency) will reach the same function from the race
+  angle. The `idempotencyKey` half is independent of the claim and can land first.
+
+---
+
 # Block K — coverage and handoff
 
 ## Coverage against the seven assigned areas
@@ -3667,7 +3821,7 @@ a reason. Nothing below is graded higher than its evidence.
 | **Environment / config drift** | ✅ | K-06 (the `admin_control` reader table, all ten) and K-16 (pixel-ID defaults, plus four negative controls on the payment kill switches). Full `process.env` enumeration done. | The Vercel-side question — whether `TIKTOK_EVENTS_API_ACCESS_TOKEN` and `REDDIT_CONVERSIONS_ACCESS_TOKEN` are scoped per-environment — **cannot be answered from source**. It needs the dashboard, and it decides how bad K-16 is in practice. |
 | **Legal / policy** | ✅ | K-04, K-17, K-18, K-21. Every policy DEFAULT read and checked against behaviour; age gate, compliance attestations, trust claims, consent, cancellation promise. | **`NOT VERIFIED`: the shipping and terms policies** were read but not line-by-line reconciled against `getShippingConfig`/`calculateShipping`. Lower value than the four found, but not done. |
 | **Third-party degraded mode** | ✅ | K-13, K-15, K-19. Every dependency classified fail-open/fail-closed; all 11 outbound `fetch` sites tabulated for timeouts. | **`NOT VERIFIED`: retry semantics on non-idempotent operations.** Timeouts were swept; retry-of-a-charge was not traced end to end. |
-| **Background jobs / cron** | 🟨 | K-13, K-14, and K-03's missing claim. Cadence-vs-semantics, failure visibility, maintenance blast radius, the heartbeat gap. | **`NOT VERIFIED`: the per-job bounds/claims table for all 13.** Partially covered via the Phase 1 map, but not independently re-derived here. Specifically not re-verified: `retryPendingEmails`' missing claim (duplicate real transactional mail), the Shippo sweeps' head-of-line blocking, and `runAutomationSweep` paging the whole orders table. **These are real and already documented in `PHASE1-SYSTEM-MAP.md`; they are unconfirmed only in the sense that this block did not independently reproduce them.** |
+| **Background jobs / cron** | 🟨 | K-13, K-14, and K-03's missing claim. Cadence-vs-semantics, failure visibility, maintenance blast radius, the heartbeat gap. | **`NOT VERIFIED`: the per-job bounds/claims table for all 13.** Partially covered via the Phase 1 map, but not independently re-derived here. `retryPendingEmails` **was** independently re-verified — see K-23, which also corrects the map twice. Specifically **not** re-verified: the Shippo sweeps' head-of-line blocking, and `runAutomationSweep` paging the whole orders table. **These are real and already documented in `PHASE1-SYSTEM-MAP.md`; they are unconfirmed only in the sense that this block did not independently reproduce them.** |
 
 **Honest summary:** 21 findings, 6 with runnable probes (`BEHAVIORAL-TEST-PROVEN`),
 15 `SOURCE-INSPECTED`. **Zero `DATABASE-PROVEN` or `BROWSER-PROVEN`** — this block
