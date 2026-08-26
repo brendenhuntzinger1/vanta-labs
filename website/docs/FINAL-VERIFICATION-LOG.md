@@ -180,3 +180,64 @@ Their own banners state they cover double payout, the exactly-once payout claim,
 the auto-approve read/write race and admin-invite atomicity, and that these are
 **NOT covered by any in-memory test**. These are money-path proofs that did not
 run in this gate.
+
+### PART 4a — THE GATE, FINAL NUMBERS (clean `npm ci` checkout of `eb80a55`)
+
+| step | result |
+|---|---|
+| `npm ci` | exit 0 |
+| `npm run lint` | exit 0 — **0 errors, 42 warnings** |
+| `npx tsc --noEmit` | exit 0, clean |
+| `npm test` | exit 0 — **Test Files 255 passed / 9 skipped (264)**, **Tests 4101 passed / 78 skipped (4179)**, 0 failed |
+| `npm run build` | exit 0 — `✓ Compiled successfully`, `✓ Generating static pages (105/105)` |
+
+**CONTRADICTION OF A RECORDED NUMBER.** Block N recorded
+`264 files / 4179 tests / 0 failed / 0 skipped`. The file and test **totals** are
+right. **`0 skipped` is wrong: 9 files and 78 tests are skipped.** The totals
+were read off the summary line and the skip count was assumed.
+
+#### The 78 skips, named — and then RUN
+
+Six of the nine print a `SKIPPED:` banner. **Three print nothing at all** — the
+exact silent-skip trap this audit has already been bitten by. The silent three
+are 36 of the 78 tests, all of them financial reporting.
+
+| file | tests | banner? |
+|---|---|---|
+| `src/lib/admin-financial-surfaces.test.ts` | 21 | **silent** |
+| `src/lib/financial-reporting-consistency.test.ts` | 8 | **silent** |
+| `src/lib/financial-reporting-row-caps.test.ts` | 7 | **silent** |
+| `src/lib/affiliate-concurrency.test.ts` | 9 | yes |
+| `src/lib/inventory-return-path.test.ts` | 10 | yes |
+| `src/lib/partner-identity-convergence.test.ts` | 7 | yes |
+| `src/lib/partner-invite-atomicity.test.ts` | 7 | yes |
+| `src/lib/partner-status-integrity.test.ts` | 6 | yes |
+| `src/lib/sql/bulk-savings-rollup-executed.test.ts` | 3 | yes |
+| **total** | **78** | |
+
+All nine gate on `VANTA_TEST_DATABASE_URL`. **This session stood one up** —
+PostgreSQL 16.13, `initdb -A trust`, port 55440, a separate database per suite —
+and ran all nine:
+
+```
+admin-financial-surfaces          21 passed  EXIT=0
+affiliate-concurrency              9 passed  EXIT=0
+financial-reporting-consistency    8 passed  EXIT=0
+financial-reporting-row-caps       7 passed  EXIT=0
+inventory-return-path             10 passed  EXIT=0
+partner-identity-convergence       7 passed  EXIT=0
+partner-invite-atomicity           7 passed  EXIT=0
+partner-status-integrity           6 passed  EXIT=0
+bulk-savings-rollup-executed       3 passed  EXIT=0
+                                  78 passed
+```
+
+**With a database supplied, the true gate is 4,179 / 4,179 passing, 0 skipped,
+0 failed.** These are the double-payout, exactly-once-payout-claim,
+auto-approve-race, partner-invite-atomicity, inventory-return-path and
+row-cap proofs — the money-path suites — and they are DATABASE-PROVEN here for
+the first time. No previous session in this audit had run them.
+
+**Action owed regardless of the merge:** the three silent skips must print a
+banner like the other six. A financial-reporting suite that disappears without
+a word is how 36 assertions go missing while the run reports success.
