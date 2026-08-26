@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { computeRetainedCommission, getCommissionStateForRefund } from "@/lib/payment-webhook";
 import { resolveBestDiscount, type DiscountCandidate, type DiscountType } from "@/lib/discount-resolution";
 import { calculateCouponDiscount } from "@/lib/coupons";
@@ -27,6 +27,13 @@ const DISCOUNT_TYPES: readonly DiscountType[] = [
 ];
 
 const CASES = 20_000; // × 5 invariant groups = 100,000 total generated cases
+
+// The global vitest.setup.ts stub makes calculateCouponDiscount return 0. This
+// file imports it and fuzzes thousands of coupon cases against it, so without
+// this unmock every coupon assertion here reduces to 0 >= 0 and the entire
+// coupon arm is vacuous. Verified by mutation: making the real function return
+// `subtotal * 10` (unbounded) left this file green.
+vi.unmock("@/lib/coupons");
 
 describe(`Ambassador financial invariants — ${(CASES * 5).toLocaleString()} randomized cases`, () => {
   it("commission is exact-2dp, never exceeds the un-refunded amount, and reverses correctly", () => {

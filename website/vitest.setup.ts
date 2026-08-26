@@ -1,5 +1,67 @@
 import { vi } from "vitest";
 
+// ===========================================================================
+// ELEVEN GLOBAL MODULE STUBS, AND WHAT EACH ONE HIDES.
+//
+// Every vi.mock() below applies to ALL 200+ suites. That is deliberate — it
+// keeps a pricing test from needing a membership database and stops any suite
+// sending a real email — but a global stub is invisible coverage loss: a suite
+// that imports the stubbed module without vi.unmock() is testing the stub, and
+// nothing says so.
+//
+// A stub is only safe when the module it replaces is exercised SOMEWHERE. This
+// list records where, so the next person can tell "deliberately stubbed" from
+// "accidentally untested". Measured by mutation, not assumed.
+//
+//   @/lib/email/send          Always succeeds, so no suite that relies on this
+//                             stub can see a send failure. Suites that need
+//                             one replace it per file with a failing double
+//                             (order-email-once.test.ts, and journey.harness's
+//                             emailFailures counter). Verified: recording a
+//                             failed send as "sent" — which would let the
+//                             partial unique index block the retry forever —
+//                             is caught by order-email-once.test.ts.
+//
+//   @/lib/membership-billing  Stubbed down to two no-ops, which left
+//                             startMembershipSignup — the function that takes
+//                             membership money — with ZERO behavioural
+//                             coverage. Resolved: membership-signup-behaviour
+//                             .test.ts vi.unmock()s it and drives the real
+//                             function against the fake database. Before that
+//                             file, restoring the historical defect (a FAILED
+//                             first charge writing a membership row) left all
+//                             3,660 tests green.
+//
+//   @/lib/coupons             calculateCouponDiscount returns 0. Three fuzz
+//                             suites import it without vi.unmock and therefore
+//                             assert 0 >= 0 across 40,000+ "cases" — see
+//                             docs/findings/BLOCK-E.md. Real coverage lives in
+//                             coupons.test.ts / coupon-validation.test.ts.
+//
+//   @/lib/membership          Perks, points and tiers. Unmocked per file by
+//                             the e2e suites and by reconciliation-drift.
+//   @/lib/catalog             Two products. Unmocked by the e2e suites.
+//   @/lib/admin-control       Store settings. Unmocked by the e2e suites and
+//                             overridden per file where real tax/bulk config
+//                             matters.
+//   @/lib/ambassador-settings Payout threshold + hold days. Overridden per
+//                             file by payout-authority.test.ts.
+//   @/lib/tax-provider        NOT a stub in the usual sense: it runs the REAL
+//                             resolveSalesTax against the mocked settings, so
+//                             tax math stays genuine.
+//   @/lib/cart-recovery       No-ops. Covered by its own suite.
+//   @/lib/supabase-server     A minimal in-memory fake. Almost every suite
+//                             that does real database work replaces it per
+//                             file with fake-db, the journey harness, or (for
+//                             the financial-reporting suites) a real Postgres.
+//   @/lib/fulfillment/service A module that DOES NOT EXIST in src. The stub is
+//                             inert; nothing imports it. Safe to delete once a
+//                             session owns that cleanup.
+//
+// If you add a stub here, add its line above and say where the real module is
+// exercised. If the answer is "nowhere", that is the finding.
+// ===========================================================================
+
 type GenericRow = Record<string, unknown>;
 
 vi.mock("@/lib/email/send", () => ({

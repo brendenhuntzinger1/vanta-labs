@@ -19,7 +19,7 @@
 // scripts/db-integrity-stress.mjs (run via scripts/verify-db-locally.sh). This
 // file is the pricing/lifecycle half; the two together cover the checklist.
 // ============================================================================
-import { describe, it, expect } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   getBundleDiscountedUnitPrice,
   DEFAULT_BUNDLE_CONFIG,
@@ -338,6 +338,13 @@ function simulateOrder(): SimResult {
     };
   }
 }
+
+// The global vitest.setup.ts stub makes calculateCouponDiscount return 0. This
+// file imports it and fuzzes thousands of coupon cases against it, so without
+// this unmock every coupon assertion here reduces to 0 >= 0 and the entire
+// coupon arm is vacuous. Verified by mutation: making the real function return
+// `subtotal * 10` (unbounded) left this file green.
+vi.unmock("@/lib/coupons");
 
 describe("Randomized order-lifecycle simulation (2,000+ orders)", () => {
   const N = 2500;
