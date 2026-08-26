@@ -196,6 +196,26 @@ export function normalizeLegacyStatus(value: string | null | undefined): Fulfill
  * title-cased version of the raw value so an unrecognised status still renders
  * as readable text instead of an empty cell that looks like missing data.
  */
+/**
+ * Every RAW value a row may carry that normalises to `canonical`.
+ *
+ * For querying `orders.fulfillment_status` directly. A count that filters on a
+ * single literal silently misses the synonyms sitting on live rows: the Revenue
+ * page's "Awaiting Fulfillment" matched only `awaiting_fulfillment`, so with 60
+ * orders sitting in the pick queue as `ready_to_fulfill` it reported 0 while
+ * the workstation reported 60.
+ *
+ * Prefer the fulfilment buckets where a bucket exists. Use this when a query
+ * has to name statuses itself.
+ */
+export function rawStatusesFor(canonical: FulfillmentStatus): string[] {
+  const raw = Object.entries(LEGACY_STATUS_MAP)
+    .filter(([, mapped]) => mapped === canonical)
+    .map(([value]) => value);
+  // The canonical value itself is always accepted, even if nothing aliases it.
+  return raw.includes(canonical) ? raw : [...raw, canonical];
+}
+
 export function fulfillmentStatusLabel(value: string | null | undefined): string {
   const normalized = normalizeLegacyStatus(value);
   if (normalized) {
