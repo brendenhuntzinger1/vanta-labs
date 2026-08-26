@@ -494,6 +494,51 @@ describe("6. payout removes it from owed and records it once", () => {
     expect(paidHistory()[0].commission_amount).toBe(EXPECTED_COMMISSION);
   });
 
+
+  // BLOCK E / E-03 — the boundary this suite never crossed.
+  //
+  // Mutation testing found that changing markCommissionsPaid's status filter from
+  //     .in("payment_status", ["approved_for_payout"])
+  // to  .in("payment_status", ["approved_for_payout", "pending"])
+  // left the ENTIRE 3,593-test suite green. This suite drives the real function,
+  // but its fixture never held a commission still inside its hold period, so
+  // widening the filter changed nothing it could observe.
+  //
+  // A payout that also sweeps up `pending` commissions pays an ambassador for
+  // orders that can still be refunded — the hold period exists precisely to stop
+  // that, and it is worthless if the payout query ignores it.
+  it("pays only what is approved, leaving commissions still inside the hold period alone", async () => {
+    await payFor("evt-1");
+    const row = db.referralOrders.get(ORDER)!;
+    db.referralOrders.set(ORDER, { ...row, payment_status: "approved_for_payout", approved_for_payout_at: new Date().toISOString() });
+
+    // A second commission for the same ambassador, still held.
+    const HELD = "order-e2e-held";
+    db.referralOrders.set(HELD, {
+      ...row,
+      id: `${HELD}-r`,
+      order_id: HELD,
+      payment_status: "pending",
+      approved_for_payout_at: null,
+      commission_amount: 60,
+    });
+
+    const { markCommissionsPaid } = await import("@/lib/partner-portal");
+    const result = await markCommissionsPaid({
+      partnerId: AMB, amount: EXPECTED_COMMISSION, confirmedTransferred: true,
+      overrideMinimumThreshold: true, actorUsername: "owner",
+    });
+
+    // The approved one, and only the approved one.
+    expect(result.amount).toBe(EXPECTED_COMMISSION);
+    expect(result.orderCount).toBe(1);
+
+    // The held one is untouched and still owed to nobody yet.
+    expect(db.referralOrders.get(HELD)!.payment_status).toBe("pending");
+    expect(paidHistory()).toHaveLength(1);
+    expect(paidHistory()[0].order_id).toBe(ORDER);
+  });
+
   it("the display mirror is flipped to paid as well", async () => {
     await approveAndPay();
     expect(db.commissions.get(ORDER)!.status).toBe("paid");

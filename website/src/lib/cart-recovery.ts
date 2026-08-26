@@ -4,7 +4,7 @@ import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getCartRecoveryControlConfig } from "@/lib/admin-control";
 import { getSiteUrl } from "@/lib/env";
-import { sendMarketingEmail } from "@/lib/email/marketing";
+import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
 import {
   cartRecoveryT30mTemplate,
   cartRecoveryT12hTemplate,
@@ -123,11 +123,18 @@ function generateCouponCode(): string {
   return `SAVE-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
 }
 
-export async function mintCartRecoveryCoupon(email: string, discountPercent: number, expiresInHours: number): Promise<{ code: string; expiresAt: string } | null> {
+/** A minted (or re-offered) cart-recovery discount. */
+export interface RecoveryCoupon {
+  id: string;
+  code: string;
+  expiresAt: string;
+}
+
+export async function mintCartRecoveryCoupon(email: string, discountPercent: number, expiresInHours: number): Promise<RecoveryCoupon | null> {
   const code = generateCouponCode();
   const expiresAt = new Date(Date.now() + expiresInHours * HOUR_MS).toISOString();
 
-  const { error } = await supabaseAdmin.from("coupons").insert({
+  const { data, error } = await supabaseAdmin.from("coupons").insert({
     code,
     discount_type: "percent",
     discount_value: discountPercent,
@@ -138,14 +145,16 @@ export async function mintCartRecoveryCoupon(email: string, discountPercent: num
     assigned_email: email.trim().toLowerCase(),
     source: "cart_recovery",
     created_at: new Date().toISOString(),
-  });
+  }).select("id").single();
 
   if (error) {
     console.error("Unable to mint cart recovery coupon:", error);
     return null;
   }
 
-  return { code, expiresAt };
+  // The id is carried onto the stage reservation (abandoned_cart_emails.coupon_id)
+  // so a later stage can re-offer the SAME code instead of minting another one.
+  return { id: String(data?.id ?? ""), code, expiresAt };
 }
 
 interface DueCartRow {
@@ -157,51 +166,112 @@ interface DueCartRow {
   first_seen_at: string;
 }
 
-async function hasSentStage(cartId: string, stage: string): Promise<boolean> {
-  const { data } = await supabaseAdmin
+/**
+ * The coupon a previous stage already minted for this cart, if any.
+ *
+ * t72h re-offers the code from t24h rather than minting a second one. It used to
+ * print the literal string "SEE PREVIOUS EMAIL", which was already poor, and
+ * became wrong once a claimed stage stopped implying a delivered email: the
+ * "previous email" may never have arrived. Reading the real coupon off the
+ * reservation gives the shopper a usable code either way, and mints nothing new.
+ */
+async function couponFromStage(cartId: string, stage: string): Promise<RecoveryCoupon | null> {
+  const { data: reservation } = await supabaseAdmin
     .from("abandoned_cart_emails")
-    .select("id")
+    .select("coupon_id")
     .eq("abandoned_cart_id", cartId)
     .eq("stage", stage)
     .maybeSingle();
-  return Boolean(data);
+
+  const couponId = reservation?.coupon_id ? String(reservation.coupon_id) : "";
+  if (!couponId) return null;
+
+  const { data: coupon } = await supabaseAdmin
+    .from("coupons")
+    .select("id, code, ends_at")
+    .eq("id", couponId)
+    .maybeSingle();
+
+  if (!coupon?.code) return null;
+  return { id: String(coupon.id), code: String(coupon.code), expiresAt: String(coupon.ends_at ?? "") };
 }
 
 function restoreUrl(cartId: string) {
   return `${getSiteUrl()}/cart/restore?id=${cartId}`;
 }
 
-// Reserves the (abandoned_cart_id, stage) slot via the unique index on
-// abandoned_cart_emails BEFORE sending, then uses the reserved row's id to
-// build open/click tracking links for that specific send. If a stage was
-// already reserved (duplicate-key error) this returns null, meaning
-// "already sent - skip" rather than an error; any other insert failure
-// throws. If the send itself fails, the reservation is rolled back so a
-// later sweep pass can retry.
+/**
+ * Claim a (cart, stage) slot, mint its coupon if it needs one, and send — in
+ * that order, once, ever.
+ *
+ * THE ORDER IS THE FIX (finding C-06). Minting used to happen in the caller,
+ * BEFORE the slot was claimed, and a failed send deleted the claim "so a later
+ * sweep pass can retry". Those two together made the retry unbounded: every
+ * failed send re-armed the stage and minted another live coupon, once per
+ * 30-minute sweep for as long as the cart stayed in the 96-hour window. In
+ * production that ran 2,994 times and left 335 coupons.
+ *
+ * Now the unique index on (abandoned_cart_id, stage) is claimed FIRST and the
+ * mint happens behind it. A coupon cannot be minted for a stage that is already
+ * claimed, so "at most one coupon per cart per stage" is a property of the
+ * schema rather than of this function remembering to check.
+ *
+ * A FAILED SEND KEEPS ITS CLAIM. That costs a retry: a stage whose send fails is
+ * not attempted again, and the shopper does not get that email. It is the
+ * deliberate trade. An unbounded retry that re-mints is worse in every
+ * direction — it spams the shopper if the failure was a false negative, and it
+ * mints for ever for someone who has UNSUBSCRIBED. Bounded retry is a follow-up
+ * and needs a column to count attempts; see PROPOSED-abandoned-cart-email-retry.sql.
+ *
+ * A FAILED MINT releases the claim, and that is safe for the opposite reason: no
+ * coupon row exists, so a later pass cannot accumulate one. It is the only path
+ * that still deletes a reservation.
+ */
 async function reserveAndSendStage(input: {
   cartId: string;
   stage: "t30m" | "t12h" | "t24h" | "t72h";
   email: string;
   campaignType: string;
   templateKey: string;
-  couponId?: string | null;
-  buildTemplate: (restoreUrlForEmail: string) => { subject: string; html: string; text: string };
+  /** Stages that carry a discount supply this; it runs only once the slot is held. */
+  mintCoupon?: () => Promise<RecoveryCoupon | null>;
+  buildTemplate: (restoreUrlForEmail: string, coupon: RecoveryCoupon | null) => { subject: string; html: string; text: string };
 }): Promise<boolean> {
   const { data: inserted, error: insertError } = await supabaseAdmin
     .from("abandoned_cart_emails")
-    .insert({ abandoned_cart_id: input.cartId, stage: input.stage, sent_at: new Date().toISOString(), coupon_id: input.couponId ?? null })
+    .insert({ abandoned_cart_id: input.cartId, stage: input.stage, sent_at: new Date().toISOString(), coupon_id: null })
     .select("id")
     .single();
 
   if (insertError) {
+    // 23505 — another sweep, or an earlier pass, already holds this stage.
+    // Nothing to mint, nothing to send.
     if (insertError.code === "23505") {
       return false;
     }
     throw insertError;
   }
 
-  const trackedRestoreUrl = `${getSiteUrl()}/api/email/track/click?id=${inserted.id}&url=${encodeURIComponent(restoreUrl(input.cartId))}`;
-  const openTrackingPixelUrl = `${getSiteUrl()}/api/email/track/open?id=${inserted.id}`;
+  const reservationId = inserted.id;
+
+  let coupon: RecoveryCoupon | null = null;
+  if (input.mintCoupon) {
+    coupon = await input.mintCoupon();
+    if (!coupon) {
+      // No coupon exists, so releasing the slot cannot accumulate one. Let a
+      // later sweep try again rather than silently dropping the stage.
+      await supabaseAdmin.from("abandoned_cart_emails").delete().eq("id", reservationId);
+      return false;
+    }
+    // Link the claim to the coupon so a later stage re-offers this code.
+    await supabaseAdmin
+      .from("abandoned_cart_emails")
+      .update({ coupon_id: coupon.id })
+      .eq("id", reservationId);
+  }
+
+  const trackedRestoreUrl = `${getSiteUrl()}/api/email/track/click?id=${reservationId}&url=${encodeURIComponent(restoreUrl(input.cartId))}`;
+  const openTrackingPixelUrl = `${getSiteUrl()}/api/email/track/open?id=${reservationId}`;
 
   const sendResult = await sendMarketingEmail({
     to: input.email,
@@ -209,11 +279,18 @@ async function reserveAndSendStage(input: {
     referenceId: input.cartId,
     templateKey: input.templateKey,
     openTrackingPixelUrl,
-    ...input.buildTemplate(trackedRestoreUrl),
+    ...input.buildTemplate(trackedRestoreUrl, coupon),
   });
 
   if (!sendResult.success) {
-    await supabaseAdmin.from("abandoned_cart_emails").delete().eq("id", inserted.id);
+    // The claim STANDS. See the header: re-arming this stage is what produced
+    // the coupon flood, and for a suppressed recipient it never terminates.
+    console.error(
+      "[cart-recovery] stage send failed; claim retained so it cannot re-mint",
+      input.cartId,
+      input.stage,
+      sendResult.error,
+    );
     return false;
   }
 
@@ -257,6 +334,20 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     const items = Array.isArray(row.items) ? row.items : [];
     if (items.length === 0) continue;
 
+    // UNSUBSCRIBED SHOPPERS ARE SKIPPED BEFORE ANYTHING IS WRITTEN.
+    //
+    // sendMarketingEmail already refuses to mail them, but it reports that
+    // refusal as `{ success: false, suppressed: true }` — the same shape as a
+    // provider outage. Cart recovery used to treat it as a retryable failure and
+    // re-mint a coupon on every sweep, so one unsubscribe became a permanent
+    // coupon-generation loop for someone who had explicitly opted out (C-06).
+    //
+    // Checking here, before the claim and before the mint, means a suppressed
+    // shopper produces NO coupon, NO reservation row and NO send attempt at all.
+    // It is re-checked each sweep rather than recorded, so re-subscribing
+    // restores normal service by itself.
+    if (await isMarketingSuppressed(row.email)) continue;
+
     const name = row.customer_name ?? "";
 
     if (config.t30mEnabled && elapsedMs >= 30 * MINUTE_MS) {
@@ -284,58 +375,57 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     }
 
     if (config.t24hEnabled && elapsedMs >= 24 * HOUR_MS) {
-      // Mint a coupon only if this cart hasn't already had its t24h email — the
-      // sweep runs repeatedly, so minting before the send-dedup check (as this
-      // did) re-created a fresh SAVE-… code on every pass for any cart that
-      // stayed abandoned. Guarding the mint (matching the t72h stage below)
-      // means each forgotten cart gets exactly one recovery code.
-      const alreadySent = await hasSentStage(row.id, "t24h");
-      const coupon = alreadySent
-        ? null
-        : await mintCartRecoveryCoupon(row.email, config.discountPercent, config.couponExpirationHours);
-      if (coupon) {
-        const sent = await reserveAndSendStage({
-          cartId: row.id,
-          stage: "t24h",
-          email: row.email,
-          campaignType: "cart_recovery_t24h",
-          templateKey: "cartRecoveryT24hTemplate",
-          buildTemplate: (url) => cartRecoveryT24hTemplate({
-            name,
-            items,
-            cartValueCents: row.cart_value_cents,
-            restoreUrl: url,
-            couponCode: coupon.code,
-            expiresAt: new Date(coupon.expiresAt).toLocaleString("en-US"),
-          }),
-        });
-        if (sent) result.t24hSent += 1;
-      }
+      // The mint is handed to reserveAndSendStage rather than performed here, so
+      // it cannot run until the (cart, stage) slot is claimed. That ordering is
+      // the whole of C-06's fix: minting first, then claiming, is what let a
+      // failed send re-mint on every sweep.
+      const sent = await reserveAndSendStage({
+        cartId: row.id,
+        stage: "t24h",
+        email: row.email,
+        campaignType: "cart_recovery_t24h",
+        templateKey: "cartRecoveryT24hTemplate",
+        mintCoupon: () => mintCartRecoveryCoupon(row.email, config.discountPercent, config.couponExpirationHours),
+        buildTemplate: (url, coupon) => cartRecoveryT24hTemplate({
+          name,
+          items,
+          cartValueCents: row.cart_value_cents,
+          restoreUrl: url,
+          couponCode: coupon?.code ?? "",
+          expiresAt: coupon?.expiresAt ? new Date(coupon.expiresAt).toLocaleString("en-US") : "",
+        }),
+      });
+      if (sent) result.t24hSent += 1;
     }
 
     if (config.t72hEnabled && elapsedMs >= 72 * HOUR_MS) {
-      const alreadyHasCoupon = await hasSentStage(row.id, "t24h");
-      const coupon = alreadyHasCoupon ? null : await mintCartRecoveryCoupon(row.email, config.discountPercent, config.couponExpirationHours);
-
-      if (alreadyHasCoupon || coupon) {
-        const couponForEmail = coupon ?? { code: "SEE PREVIOUS EMAIL", expiresAt: new Date(now + config.couponExpirationHours * HOUR_MS).toISOString() };
-        const sent = await reserveAndSendStage({
-          cartId: row.id,
-          stage: "t72h",
-          email: row.email,
-          campaignType: "cart_recovery_t72h",
-          templateKey: "cartRecoveryT72hTemplate",
-          buildTemplate: (url) => cartRecoveryT72hTemplate({
-            name,
-            items,
-            cartValueCents: row.cart_value_cents,
-            restoreUrl: url,
-            couponCode: couponForEmail.code,
-            expiresAt: new Date(couponForEmail.expiresAt).toLocaleString("en-US"),
-          }),
-        });
-        if (sent) result.t72hSent += 1;
-      }
+      // Re-offer the code t24h already minted rather than minting a second
+      // discount for the same cart. Reading it off that stage's reservation
+      // (abandoned_cart_emails.coupon_id) replaces the old "SEE PREVIOUS EMAIL"
+      // placeholder, which was already a poor thing to put in front of a
+      // customer and became wrong once a claimed stage stopped implying a
+      // delivered email — the "previous email" may never have arrived.
+      const priorCoupon = await couponFromStage(row.id, "t24h");
+      const sent = await reserveAndSendStage({
+        cartId: row.id,
+        stage: "t72h",
+        email: row.email,
+        campaignType: "cart_recovery_t72h",
+        templateKey: "cartRecoveryT72hTemplate",
+        // Re-offering costs no mint; only a cart that never reached t24h mints here.
+        mintCoupon: priorCoupon
+          ? async () => priorCoupon
+          : () => mintCartRecoveryCoupon(row.email, config.discountPercent, config.couponExpirationHours),
+        buildTemplate: (url, coupon) => cartRecoveryT72hTemplate({
+          name,
+          items,
+          cartValueCents: row.cart_value_cents,
+          restoreUrl: url,
+          couponCode: coupon?.code ?? "",
+          expiresAt: coupon?.expiresAt ? new Date(coupon.expiresAt).toLocaleString("en-US") : "",
+        }),
+      });
+      if (sent) result.t72hSent += 1;
     }
   }
 
