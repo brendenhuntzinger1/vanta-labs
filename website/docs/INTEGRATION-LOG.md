@@ -604,3 +604,136 @@ All eleven findings files are present and distinctly named:
 `BLOCK-F-PRODUCTION-CHANGES`, `BLOCK-GH`, `BLOCK-I`, `BLOCK-J`, `BLOCK-K`, plus the
 ledger. **131 numbered findings, 2 sub-findings, 16 unnumbered — unchanged.**
 Nothing was eaten.
+
+---
+
+# PHASE 3 — I-12, VERIFIED INDEPENDENTLY AGAINST PRODUCTION
+
+Read-only, against `mlpimwgkwuqpsvsrlpqv`. Three separate facts, and they do not
+say the same thing.
+
+## 3.1 The function really is missing — CONFIRMED
+
+```sql
+select n.nspname, p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+where p.proname ilike '%inventory%' or p.proname ilike '%adjust%' or p.proname ilike '%stock%';
+```
+
+```
+public | finalize_inventory_for_order(p_order_id text)
+public | release_inventory_for_order(p_order_id text)
+public | reserve_inventory(p_slug text, p_variant_id text, p_order_id text, p_quantity integer, p_expires_at timestamptz)
+```
+
+**No `adjust_inventory_on_sale`, in any schema.** 22 functions exist in `public`;
+it is not one of them. Block I and Block G+H are both right about this.
+
+## 3.2 Its stated consequence is **DISPROVED**
+
+> *"paid orders never decrement stock"*
+
+They do. `finalize_inventory_for_order` **exists in production** and is what moves
+the stock. Its body, read from production's own catalog:
+
+```sql
+for r in select id, slug, variant_id, quantity from public.inventory_reservations
+   where order_id = p_order_id and status = 'active' for update loop
+  update public.product_doses
+     set inventory_quantity = greatest(0, inventory_quantity - r.quantity),
+         reserved_quantity  = greatest(0, reserved_quantity  - r.quantity),
+         stock_status = case when inventory_quantity - r.quantity <= 0 and track_inventory
+                             then 'Out of Stock' else stock_status end
+   where id::text = r.variant_id;
+  …
+  update public.inventory_reservations set status = 'finalized' where id = r.id;
+```
+
+Both paid paths call it first and reach the missing function only as a fallback
+(`payment-webhook.ts:1136` and `:1646`):
+
+```ts
+const fin = await finalizeInventoryForOrder(orderId);
+if (fin.degraded || fin.finalized === 0) {
+  await decrementInventoryForOrder(...);   // ← the one that calls the missing RPC
+}
+```
+
+Block G+H proved the same thing empirically — it dropped the function from the
+harness to match production and ran a real purchase; stock moved 23 → 21 anyway.
+Block I had no harness and could not have known.
+
+**`I-12` and `G-04` are ONE finding, and its severity is `P2 latent`, not `P0`.**
+Recorded as such. The brief's instruction to treat it as "the single most serious
+open item in the entire audit" rests on Block I's stated consequence, and that
+consequence does not hold.
+
+## 3.3 What IS real, and is worse than the fallback
+
+Three things remain true and one of them is a genuine launch blocker.
+
+### G-02 — refunds and cancellations never return stock. **CONFIRMED P1.**
+
+```sql
+select column_name from information_schema.columns
+where table_schema='public' and table_name='orders'
+  and column_name in ('inventory_restocked_at','paid_side_effects_at');
+```
+
+```
+paid_side_effects_at        ← present
+(inventory_restocked_at)    ← ABSENT
+```
+
+`restockInventoryForOrder` is gated behind `claimInventoryRestock`, which flips
+`orders.inventory_restocked_at` from NULL. The column does not exist, so the claim
+errors `42703` and — by its own documented fail-safe — returns false, and the
+caller does not restock. **The safe branch is the only branch that ever runs.**
+
+Production has `inventory.tracking_enabled = true`, so stored quantities really do
+gate sales. Every refund or cancellation permanently destroys its units. Products
+will read "Out of Stock" while sitting on the shelf, and the only trace is a log
+line. This is the P0-shaped item in this area, and it is not the one the brief
+named.
+
+### G-04 — the fallback path is inert
+
+When `finalize` finds no active hold (`finalized === 0`): an expired reservation,
+an untracked item, a pre-migration order, or a replacement order. In those cases
+the fallback fires, calls a function that does not exist, and the error is caught
+and logged. Silent, bounded, real.
+
+### The trap in the obvious fix
+
+Deploying `adjust_inventory_on_sale` on its own is **not** safe to do casually.
+`finalized === 0` is also what a *replayed* webhook sees once the reservation is
+already `finalized`. The `paid_side_effects_at` claim
+(`payment-webhook.ts:1449-1461`) is what stops a replay reaching this code at all —
+so the missing function is currently the *second* line of defence, and the first
+one must be verified live before the second is restored. It is, and it is in
+production, which is why deploying the function is safe **in that order** and only
+in that order. Recorded in `DEPLOYMENT-ORDER.md`.
+
+## 3.4 The seven live migrations
+
+```
+20260825003037  rpc_execute_lockdown
+20260825204855  referral_code_returns_customer_discount
+20260825214916  partner_application_atomic_creation
+20260825215051  affiliate_balances_server_side_aggregate
+20260825231628  partner_application_adopts_pre_added_ambassador
+20260826002258  partner_invite_atomic_and_convergent
+20260826014217  revoke_anon_create_partner_invite
+```
+
+22 functions in `public`. Reconciled against the repo in Phase 5.
+
+## 3.5 Verdict on I-12
+
+| | |
+|---|---|
+| **as filed** (P0 — paid orders never decrement stock) | **DISPROVED** |
+| **the schema gap** (`adjust_inventory_on_sale` absent) | **CONFIRMED**, P2 latent, = `G-04` |
+| **the real P1 in this area** | **`G-02`** — no `inventory_restocked_at`, so nothing is ever restocked |
+
+Three findings in this audit have now been disproved after being filed as
+defects: `F-005`, `F-007`, and `I-12`.
