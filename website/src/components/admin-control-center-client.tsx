@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { US_STATE_TAX_TABLE } from "@/lib/sales-tax";
+import { buildControlUpdates, type ControlUpdate } from "@/lib/admin-control-updates";
 
 type ControlSnapshot = Record<string, Record<string, unknown>>;
 
@@ -43,6 +44,18 @@ function parseCsv(value: string) {
 
 export function AdminControlCenterClient() {
   const [saving, setSaving] = useState(false);
+  /**
+   * Whether a snapshot has actually landed (F-02).
+   *
+   * Every field below initialises blank, so an unloaded form and a form the
+   * operator emptied by hand are the same object. Until this is true the save
+   * button is disabled and buildControlUpdates refuses to emit anything --
+   * because on 2026-08-15 a save over an unloaded form wrote "" across every
+   * key it owns, and the store stopped charging sales tax for eight days.
+   */
+  const [loaded, setLoaded] = useState(false);
+  /** The stored snapshot the fields were populated from, keyed "section.key". */
+  const [baseline, setBaseline] = useState<Record<string, unknown>>({});
   const [quickSaving, setQuickSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -126,7 +139,11 @@ export function AdminControlCenterClient() {
       error?: string;
     };
     if (!res.ok || !json.success) {
-      setMessage(json.error ?? "Unable to load settings");
+      // Stay UNLOADED on failure. The previous version only set a message and
+      // left the save button live over a form full of empty inputs, which is
+      // one of the two ways the 2026-08-15 blanking save became possible.
+      setLoaded(false);
+      setMessage(json.error ?? "Unable to load settings — settings cannot be saved until this succeeds.");
       return;
     }
 
@@ -209,6 +226,18 @@ export function AdminControlCenterClient() {
     );
     setProfitFeeIncludesTax(profit.processing_fee_includes_tax !== false && profit.processing_fee_includes_tax !== "false");
     setProfitCountTax(profit.count_sales_tax_as_profit !== false && profit.count_sales_tax_as_profit !== "false");
+
+    // Remember exactly what was stored, so a save can send the operator's edits
+    // rather than the whole form. Flattened to the "section.key" paths
+    // buildControlUpdates compares against.
+    const flattened: Record<string, unknown> = {};
+    for (const [section, entries] of Object.entries(next)) {
+      for (const [key, value] of Object.entries(entries ?? {})) {
+        flattened[`${section}.${key}`] = value;
+      }
+    }
+    setBaseline(flattened);
+    setLoaded(true);
   };
 
   useEffect(() => {
@@ -244,10 +273,18 @@ export function AdminControlCenterClient() {
   }, []);
 
   const saveAll = async () => {
+    // RULE 1 (F-02): an unloaded form cannot write. Belt and braces with the
+    // disabled button -- a keyboard submit or a double click during the load
+    // window must not reach the network either.
+    if (!loaded) {
+      setMessage("Settings have not loaded yet — nothing was saved.");
+      return;
+    }
+
     setSaving(true);
     setMessage(null);
 
-    const updates = [
+    const desired: ControlUpdate[] = [
       { section: "homepage", key: "hero_headline", value: homepageHeroHeadline },
       { section: "homepage", key: "hero_subheadline", value: homepageHeroSubheadline },
       { section: "homepage", key: "promo_ticker_items", value: parseCsv(homepageTickerItems) },
@@ -308,6 +345,17 @@ export function AdminControlCenterClient() {
       { section: "profit", key: "count_sales_tax_as_profit", value: profitCountTax },
     ];
 
+    // RULE 2 (F-02): send the edit, not the form. Unchanged keys are dropped,
+    // and emptying a populated setting is tagged as a deliberate clear so the
+    // server can tell it apart from an accidental blank.
+    const updates = buildControlUpdates({ loaded, desired, baseline });
+
+    if (updates.length === 0) {
+      setMessage("No changes to save.");
+      setSaving(false);
+      return;
+    }
+
     const res = await fetch("/api/admin/control", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -321,7 +369,7 @@ export function AdminControlCenterClient() {
       return;
     }
 
-    setMessage("Control center updates saved and synced.");
+    setMessage(`Saved ${updates.length} change${updates.length === 1 ? "" : "s"}: ${updates.map((u) => `${u.section}.${u.key}`).join(", ")}.`);
     setSaving(false);
     void loadSnapshot();
   };
@@ -390,8 +438,8 @@ export function AdminControlCenterClient() {
             >
               {quickSaving ? "Updating..." : maintenanceMode ? "Unfreeze Site" : "Freeze Site Now"}
             </button>
-            <button type="button" onClick={saveAll} disabled={saving} className="vl-btn-primary vl-focus-ring px-5 py-3 text-sm disabled:opacity-60">
-              {saving ? "Saving..." : "Save All Changes"}
+            <button type="button" onClick={saveAll} disabled={saving || !loaded} className="vl-btn-primary vl-focus-ring px-5 py-3 text-sm disabled:opacity-60">
+              {saving ? "Saving..." : loaded ? "Save Changes" : "Loading settings..."}
             </button>
           </div>
         </div>
