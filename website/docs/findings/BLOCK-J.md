@@ -210,6 +210,23 @@ fail but it passed", forcing them to be converted into ordinary assertions.
 Block J is analysis-only and `quote-order.ts` is a Rule 3 shared file, so this is
 proven and left unfixed by design.
 
+**Status against production: UNFIRED.** Five Aug 2–3 orders were put forward as
+J-04 having fired. They are real and one is PAID with no `idempotency_key`, but
+they are **not** this mechanism — see §J-07 for the three checks that refute it,
+the decisive one being that `buildOrderRow` did not exist until three weeks after
+those orders were written. Every order under the current code (Aug 7 onward)
+carries `idempotency_key` and the full overlay.
+
+So J-04 is a **proven mechanism that has not been observed to fire**, and it is
+recorded at that grade deliberately. It is still worth fixing before launch on its
+own merits, and the argument does not need the production claim: `PGRST204` is a
+stale-PostgREST-schema-cache error, which is exactly what happens in the minutes
+after a migration is applied — an ordinary event for this team — and the blast
+radius of one occurrence is an order taken with its duplicate-charge guard
+silently removed. The fix is small: retry without *the offending column* rather
+than falling back to a fixed legacy row, or at minimum never drop
+`idempotency_key`.
+
 **CROSS-BLOCK (F, and whoever owns `quote-order.ts`):** the fix shape is to retry
 without *the offending column* rather than falling back to a fixed legacy row —
 or at minimum never to drop `idempotency_key`, which is a guard, not a
@@ -238,6 +255,83 @@ fourth physical unit that ships. If the discount is applied to the price without
 corresponding reservation, that unit is not held against stock — an oversell path
 that looks like a pricing feature. **Not investigated**; flagged for whoever
 reaches it first.
+
+---
+
+## §J-07 — Five orders written without the guard columns, including one PAID. Real, but **not** J-04 firing.
+**Grade:** `DATABASE-PROVEN` (the data) · `REFUTED` (the attribution to J-04) · **Severity:** P2 historical data-integrity
+
+Reported by the owner and verified read-only against production this session.
+
+### The data — confirmed, and worse than reported
+
+| Order | Created (UTC) | Status | Lane | Overlay |
+|---|---|---|---|---|
+| `VL-E8F4D52F` | Aug 2 03:10 | paid | express | **present** |
+| `VL-55EFC617` | Aug 2 05:40 | canceled | card | missing |
+| `VL-02506E34` | Aug 2 05:47 | canceled | card | missing |
+| `VL-08EC72DC` | Aug 3 01:40 | canceled | card | missing |
+| *(NULL order_number)* | Aug 3 03:13 | canceled | card | missing |
+| **`VL-49CA32C1`** | **Aug 3 10:26** | **paid** | card | **missing** |
+| `VL-8847B157` | Aug 3 10:40 | paid | express | **present** |
+| `VL-64F8EDE4` | Aug 3 19:39 | pending | card | **present** |
+
+It is not only the three columns reported. On all five, the **entire `full`
+overlay is absent together** — `idempotency_key`, `tax_state`, `billing_address`,
+**`state`**, **`phone`** all NULL, `tax_rate_percent` 0.000 and
+`shipping_protection_fee` 0.00 — while every `base` column is populated. A card
+order with no shipping state and no phone is not a normal write.
+
+**A PAID order exists with no duplicate-charge guard: `VL-49CA32C1`.** That is
+true and is stated plainly.
+
+### The owner's read was right: it is not a migration boundary. It is not J-04 either.
+
+Three independent checks, each of which alone refutes the attribution:
+
+1. **The split is by LANE, not by time.** `VL-49CA32C1` (card, missing) is
+   10:26 on Aug 3; `VL-8847B157` (express, present) is **14 minutes later**.
+   Express is correct on both Aug 2 and Aug 3, spanning the whole window, while
+   card fails throughout it. No schema change and no deploy can be lane-specific
+   in that way.
+2. **J-04's mechanism predicts the opposite lane.** The express lane sends a
+   strict **superset** of the card lane's columns — it adds
+   `extraColumns: { checkout_channel }` (`express/authorize/route.ts:295`), which
+   card does not send at all. A missing-column / stale-schema-cache error would
+   therefore hit **express first and hardest**. Express is the lane that worked.
+3. **The code did not exist yet.** `buildOrderRow` and its `orderRowWithContact`
+   overlay first appear in `04136e4`, **2026-08-23** — and this repository's
+   entire git history begins that same day. These orders are from Aug 2–3, three
+   weeks earlier. Whatever wrote them is not in the repository, so it cannot have
+   been the fallback in `quote-order.ts:1028`.
+
+One row having a **NULL `order_number`** is the tell that closes it:
+`buildOrderRow` always sets `order_number`, and `order_number` is in the **`base`**
+set — so even a fallback insert would carry it. That row cannot have come through
+`insertOrderRow` at any point in its history.
+
+### What it most likely was, stated as the inference it is
+
+`INFERRED`, not proven, and unprovable from this repository: a pre-history version
+of the card lane that did not populate those columns, or an older tolerant-insert
+of its own. The *class* of defect — a forgiving write silently dropping a guard —
+is corroborated. The specific J-04 code path is not.
+
+### Live risk: none from these rows
+
+- Every order from **Aug 7 onward (7 orders, all lanes)** carries
+  `idempotency_key` and `state`. The current code populates them correctly and
+  the J-04 fallback has not fired in any observable order.
+- `admin-tax-report` filters `.gt("tax_amount", 0)` (`admin-tax-report.ts:63`).
+  All five affected rows have `tax_amount = 0.00`, so they are **excluded from the
+  sales-tax report** — there is no tax misstatement from them.
+- `VL-49CA32C1`'s missing `idempotency_key` is historical. It cannot retroactively
+  cause a double charge.
+
+**Remediation:** none urgent. The five rows are missing customer state, phone and
+billing address, which matters only if any needs to be re-shipped or re-invoiced;
+four are `canceled`. The NULL `order_number` row is worth deleting or labelling so
+it stops appearing in order counts.
 
 ---
 
