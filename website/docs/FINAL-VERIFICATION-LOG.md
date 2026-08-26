@@ -766,3 +766,48 @@ alter table public.referral_orders alter column payment_status set default 'paid
 ```
 
 Zero rows, so no data can be lost by any outcome of this step.
+
+### STEP 1 — APPLIED ✅
+
+Verify output:
+
+```
+constraint_count_MUST_BE_1 : 1
+definition : CHECK ((payment_status = ANY (ARRAY['pending'::text, 'approved_for_payout'::text,
+             'paid'::text, 'reversed'::text, 'voided'::text, 'refunded'::text,
+             'partially_refunded'::text])))
+col_default : 'pending'::text
+```
+
+**The hard-stop check passed: ONE constraint, not two.** The drop-by-rule loop
+found and removed exactly the one legacy constraint; no duplicate under another
+name existed in production (as predicted — `pc_ro_ps` was harness-only). The
+commission lifecycle can now be written. **M-01 / G-01 is CLOSED in production.**
+
+---
+
+## STEP 2 — pre-state capture (committed BEFORE the step runs)
+
+```
+orders.inventory_restocked_at exists      : 0  (absent)
+adjust_inventory_on_sale exists           : 0  (absent)
+orders_inventory_restock_pending_idx      : 0  (absent)
+orders rows                               : 15
+products rows / total inventory_quantity  : 46 / 115
+product_doses rows / total inventory_qty  : 71 / 1139
+```
+
+**The two stock totals are the number that matters.** This step creates the
+function that moves them, and the currently-deployed code begins calling it
+successfully the moment it exists. `products` total **115** and `product_doses`
+total **1139** are the pre-migration baseline; nothing in this step writes to
+either, so both must be unchanged immediately afterwards.
+
+**Manual reconstruction, if ever needed:**
+```sql
+drop function if exists public.adjust_inventory_on_sale(text, text, integer);
+drop index if exists public.orders_inventory_restock_pending_idx;
+alter table public.orders drop column if exists inventory_restocked_at;
+```
+Safe while no order carries a non-null `inventory_restocked_at` — true now
+(the column does not exist), and it must be re-checked before any later rollback.
