@@ -28,10 +28,22 @@ import { recordSystemAlert } from "@/lib/monitoring";
  *   "an order the customer never received (a failed or cancelled order whose
  *   goods never left), which is a different situation."
  *
- * A cancel is that different situation, by construction:
- * `FULFILLMENT_TRANSITIONS` reaches `cancelled` only from `awaiting_payment`,
- * `paid`, `ready_to_fulfill` and `packed` — every one pre-carrier — under the
- * stated rule "No cancel after shipping: the goods are gone."
+ * A cancel is USUALLY that different situation — but NOT by construction, and
+ * the earlier wording here claimed otherwise. It said `FULFILLMENT_TRANSITIONS`
+ * reaches `cancelled` only from `awaiting_payment`, `paid`, `ready_to_fulfill`
+ * and `packed`, "every one pre-carrier". That is false: `label_purchased` also
+ * carries a `cancelled` edge (order-pipeline.ts:271-280), and the app knows it —
+ * `fulfillment-workstation.tsx` renders a dedicated queue for cancelled orders
+ * that already have a purchased label.
+ *
+ * So postage may already be paid and the parcel may already be with the carrier.
+ * That case is handled by the CALLER — `setOrderFulfillmentStatus` refuses to
+ * restock a cancel out of `label_purchased` and raises an alert instead, because
+ * restocking there would INVENT units. Everything below assumes it was filtered
+ * out upstream.
+ *
+ * The rule "No cancel after shipping: the goods are gone" does hold from
+ * `shipped` onward.
  *
  * THREE THINGS MUST NOT HAPPEN, and the branch below is what prevents each:
  *
@@ -63,8 +75,26 @@ import { recordSystemAlert } from "@/lib/monitoring";
  * the two current writers are the only ones, and both are named here so the next
  * author does not have to discover the contract by losing inventory.
  *
- * Any future path that cancels an order must call this. The pipeline is the only
- * writer of the `cancelled` transition, so that is the place to look for callers.
+ * WHO CALLS THIS, AND WHY YOU SHOULD NOT NEED TO KNOW.
+ *
+ * The earlier wording here said "Any future path that cancels an order must call
+ * this. The pipeline is the only writer of the `cancelled` transition, so that is
+ * the place to look for callers." Both halves were false, and the second made the
+ * first unenforceable. `order-pipeline.ts` writes NOTHING — its own header says
+ * "Everything here is PURE: no database, no network, no clock"; it is a decision
+ * table. An author following that pointer found no callers to check, which is
+ * exactly how two of the three real cancel paths (the bulk action in
+ * admin-orders.ts, and the status dropdown's `update_status` branch) came to
+ * write `cancelled` without ever returning the stock.
+ *
+ * So this is no longer something a caller has to remember. The sole writer of
+ * `fulfillment_status` — `setOrderFulfillmentStatus` in shippo/service.ts — calls
+ * this itself, which makes "every path that cancels returns the stock" true by
+ * construction. Add a new cancel path and it inherits the behaviour; you do not
+ * need to find this file at all.
+ *
+ * It stays exported and idempotent (behind the `inventory_restocked_at` claim) so
+ * a caller that also asks explicitly is a no-op rather than a double-return.
  */
 
 export type CancellationInventoryAction =

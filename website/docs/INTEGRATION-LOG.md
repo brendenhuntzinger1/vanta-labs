@@ -2606,6 +2606,10 @@ gets better is worse than no test.
 
 ### Other claims that did not hold — REPORTED, NOT FIXED
 
+> **SUPERSEDED.** The list below was a filtered selection of ten. The complete
+> register of all 28 non-holding claims is in **BLOCK N — CROSS-MODULE CLAIM
+> REGISTER** at the end of this file. Read that one.
+
 Surfaced and verified, but outside the six findings. Recorded for the owner
 rather than changed unilaterally, because each is a judgement call about intent:
 
@@ -2643,3 +2647,148 @@ one-line comment corrections; `cart-recovery.ts:215` and `payment-mock.ts:6` are
 the two worth real attention.
 
 **GATE.** 264 files / 4179 tests green. Lint and `tsc` clean.
+
+## BLOCK N — CROSS-MODULE CLAIM REGISTER (the full 28, not a summary)
+
+**Correction to my own reporting.** I described this sweep's output as "ten
+claims that do not hold". That was a filtered subset I picked by judgement and
+then quoted as if it were the finding. **The sweep checked 47 cross-module claims
+and 28 did not hold.** Every one is listed here, with what actually fails.
+
+Severities are the verifier's. "OUTSTANDING" means the comment is still wrong in
+the tree at the head of this branch — the code may be fine; the prose is not.
+
+### Fixed in Block N (6)
+
+| file:line | claim | what was wrong | fixed by |
+|---|---|---|---|
+| `order-cancellation-inventory.ts:66` | "the pipeline is the only writer of the `cancelled` transition, so that is the place to look for callers" | `order-pipeline.ts` writes nothing — pure decision table. Real writer is `setOrderFulfillmentStatus`, with 3 callers, 2 of which never restocked | N-07 (chokepoint) + comment rewritten |
+| `order-cancellation-inventory.ts:32` | "`FULFILLMENT_TRANSITIONS` reaches `cancelled` only from … every one pre-carrier" | `label_purchased` also has a `cancelled` edge; postage already paid | N-07 (alert, no restock) + comment rewritten |
+| `order-cancellation-inventory.ts:52` / `:57` | `paid_side_effects_at` is the latch under which the paid side effects ran | true of the card lane only | N-02 (manual lane stamps it) + comment names both writers |
+| `inventory-fulfillment.ts:7` | about `adjust_inventory_on_sale` | function absent from production | already STEP 2 in `DEPLOYMENT-ORDER.md` |
+| `inventory-fulfillment.ts:136` | `finalize_inventory_for_order` vs `adjust_inventory_on_sale` agree | they do not | same migration, STEP 2 |
+| `inventory-reservation-model.ts:1` | about `reserve_inventory` / `expire_stale_reservations` | `reserve_inventory` is not in production | already covered by the migration steps |
+
+### OUTSTANDING — P1 (2)
+
+| file:line | what does not hold |
+|---|---|
+| `src/lib/payment-mock.ts:6` | Claims the mock body differs from the live VeyraGate callback only in "where the event originates". It does not — the mock re-reads customer identity out of the database; a live envelope carries a charge and no shopper. **A passing mock payment does not certify the live callback path**, and the `payment_id` join plus the `isRecognisedMoneyEvent` guard have zero mock coverage. |
+| `src/lib/cart-recovery.ts:268` | "at most one coupon per cart per stage is a property of the schema". True inside the sweep, but `resendCartRecoveryEmail` (admin-cart-recovery.ts) reaches the mint on a path the unique index does not cover. |
+
+### OUTSTANDING — P2 (18)
+
+| file:line | what does not hold |
+|---|---|
+| `src/lib/cart-recovery.ts:215` | "Same predicate the checkout will run (`validateCoupon`)." The recovery predicate is strictly weaker, so a recovery email can carry a coupon the till then refuses. |
+| `src/lib/email/retry-queue.ts:216` | "`pending_emails` carries no order id by design." Contradicted ~150 lines earlier **in the same file**, which inserts `order_id` and `email_kind`. |
+| `src/lib/email/audience.ts:234` | "`order_items.product_id` holds the product SLUG (verified against live rows)". The `order_id`-is-text half is true; the `product_id`-is-slug half is not. |
+| `src/lib/shippo/config.ts:49` | "Every money-spending path checks this." `isShippoLive()` has **zero callers** anywhere in the repo. |
+| `src/lib/shippo/client.ts:472` | "there must be exactly ONE system that can buy a label, and that system is now Vanta." The named target (`labelPurchasingEnabled()`) says the opposite today. |
+| `src/lib/shippo/service.ts:115` | `label` "set only by the two post-purchase failures". More constructors set it, so "money was spent" is not the signal it claims. |
+| `src/lib/shippo/parcel.ts:19` | Default unit weight "matches the `products.shipping_weight_oz` column default" and MUST stay in sync. The two disagree (`0.36` vs the SQL default). |
+| `src/lib/admin-auth.ts:220` | "The login route deliberately answers every failure with one generic message." Not on every branch. |
+| `src/lib/membership-billing.ts:1342` | "mirrors the bulk-savings rule". The store-credit outcome is right; the two rules do not mirror on the trial filter. |
+| `src/lib/express-reconcile.ts:81` | About when the card lane writes `orders.payment_id` in `createCheckoutSession`. Timing asserted does not match. |
+| `src/lib/order-attribution.ts:78` | Asserts the `getOrderAttribution` call graph. Does not match actual callers. |
+| `src/lib/referral-code-validation.ts:30` | Asserts `uq_ambassadors_referral_code` behaviour; the index/constraint story differs. |
+| `src/lib/partner-portal.ts:1013` | Asserts `DEFAULT_COMMISSION_HOLD_DAYS` / `commissionHoldDays` agreement between two config modules. |
+| `src/lib/admin-tax-report.ts:77` | Names `refundedTaxPortion` in admin-profit as the same computation. |
+| `src/lib/admin-profit.ts:88` | The mirror image — names `refundedTaxFor` in admin-tax-report. **These two are a pair: each names the other as the shared source of truth for refunded tax, and they are not identical.** Worth resolving together. |
+| `src/lib/reconciliation-math.ts:13` | About `maxProtection` at `admin-reconciliation.ts:219`; that value is derived per-DATABASE (whether a column read succeeded), not per-order as implied. |
+
+### OUTSTANDING — P3 (2)
+
+| file:line | what does not hold |
+|---|---|
+| `src/lib/partner-portal.ts:1570` | Asserts the `ambassadors_status_check` / `partners_status_check` CHECK contents. |
+| `src/lib/membership-billing.ts:520` | "mirrors Evo's `pages/api/membership/subscribe.js`". The Vanta half (server-side pricing) is true and verified; the cross-repo half is unverifiable from here and should not be asserted. |
+
+### Why none of these was fixed in Block N
+
+Each is a judgement call about intent rather than a defect with a right answer,
+and changing a comment to match code can hide a case where the CODE is what
+drifted. `payment-mock.ts:6` and `cart-recovery.ts:215` are the two with real
+behavioural consequences and are the ones to look at first.
+
+**The two P2s worth doing together** are `admin-tax-report.ts:77` and
+`admin-profit.ts:88`: each names the other as the shared source of truth for
+refunded tax, and they are not identical. That is the same shape as N-04 — two
+implementations of one money rule, each certain the other agrees.
+
+## BLOCK N — WHAT STILL NEEDS A HUMAN READ
+
+**Correction: I said "~1,400 lines". The real figure is 2,902 insertions across
+30 files** (`git diff --shortstat 0ca5521..HEAD`). I gave a remembered number
+instead of measuring one. Measured breakdown:
+
+| kind | insertions | deletions |
+|---|---|---|
+| production code (`.ts`, non-test) | **566** | 75 |
+| tests | 1,612 | 32 |
+| SQL | 16 | 2 |
+| docs | 708 | 11 |
+| **total** | **2,902** | **120** |
+
+Nobody has read any of it. Review the **566 production lines first** — that is
+the part that can lose money.
+
+### Commits, oldest first
+
+| commit | subject | files | +/- |
+|---|---|---|---|
+| `9063111` | Make a failed commission accrual recoverable (finding 1, P0) | 6 | +717/-19 |
+| `9f5eb67` | Return stock when a manually-paid order is cancelled (finding 2, P0) | 8 | +536/-21 |
+| `ce4dd62` | Stop a new dose stealing is_default and position (finding 3, P1) | 3 | +151/-7 |
+| `a965063` | Adopt the ledger's revenue rule on every revenue surface (finding 4, P1) | 6 | +325/-21 |
+| `a7fb212` | Execute the bulk-savings rollup instead of grepping it (finding 5, P2) | 6 | +305/-6 |
+| `8d49b2e` | Stop the rate limiter amplifying writes and self-locking users (finding 6, P2) | 4 | +236/-7 |
+| `872e94e` | Correct the deployment and certification docs | 3 | +178/-9 |
+| `931ed94` | Restock at the cancel chokepoint (found by the sweep, P1) | 5 | +452/-30 |
+| `6f7c055` | Record the final clean-checkout gate numbers | 1 | +6/-4 |
+
+### The 566 production lines, in the order I would read them
+
+Highest risk first. Every one of these is on a path that carries real orders.
+
+| file | +/- | commit | why it needs eyes |
+|---|---|---|---|
+| `lib/commission-accrual-repair.ts` | +148/-0 | `9063111` | **Entirely new, runs on a cron, writes money rows.** Nobody has read a line. Check: the 30-day/100-row window, that absence really is an unambiguous signal, and that re-running eligibility at repair time (rather than freezing it at payment) is the behaviour you want. |
+| `lib/payment-webhook.ts` | +127/-20 | `9063111`, `9f5eb67` | Three changes on the hottest path: the manual lane's accrual/analytics guards, the new `accrueCommissionForPaidOrder` export, and the `paid_side_effects_at` stamp. **The stamp's PLACEMENT is the load-bearing decision** — written last, after inventory, so the latch means "the decrement happened". Argue with that ordering if you disagree. |
+| `lib/rate-limit.ts` | +74/-2 | `8d49b2e` | New in-process memo of denied buckets. Per-instance, capped at 10k, deny-only. Check the cap and the eviction, and that a per-instance memo is acceptable to you at all. |
+| `lib/shippo/service.ts` | +61/-0 | `931ed94` | The restock moved INTO the sole writer of `fulfillment_status`. Check `LABEL_BOUGHT_STATUSES` is the right set, and that a restock failure never failing the status change is the trade you want. |
+| `lib/order-cancellation-inventory.ts` | +31/-2 | `9f5eb67`, `931ed94` | New `unavailable` outcome + alert; two docblock claims rewritten after both were shown false. |
+| `lib/admin-products.ts` | +30/-7 | `ce4dd62` | `createDoseRows` signature change. Small, but it moves `is_default`/`position`, which the storefront reads. |
+| `lib/inventory-fulfillment.ts` | +26/-8 | `9f5eb67` | `claimInventoryRestock` boolean → tri-state. **Both call sites updated; verify no third appears.** |
+| `lib/admin-analytics.ts` | +18/-9 | `a965063` | Revenue predicate swap + `order_type` added to four selects. Numbers on dashboards move. |
+| `lib/admin-email.ts` | +11/-4 | `a965063` | Same swap; campaign revenue and order counts move. |
+| `lib/best-sellers.ts` | +10/-4 | `a965063` | Same swap; product ranking moves. |
+| `lib/admin-membership.ts` | +9/-2 | `a7fb212` | Bulk-savings JS fallback now filters and nets. **This is the path production runs today** (the RPC is unmigrated), so the number on that dashboard changes on deploy. |
+| `app/api/admin/orders/[orderId]/route.ts` | +8/-13 | `9f5eb67`, `931ed94` | Explicit restock call REMOVED — now inherited from the chokepoint. Confirm you are happy with that indirection. |
+| `lib/admin-profit.ts` | +7/-4 | `a965063` | Inline predicate deleted in favour of `isRevenueOrderStatus`. |
+| `app/api/cron/sweep/route.ts` | +6/-0 | `9063111` | One job registered. Trivial, but it is what makes the repair sweep actually run. |
+
+### The 16 SQL lines
+
+`sql/admin-dashboard-rollups.sql` — `admin_bulk_savings_stats` gains a status
+filter, a replacement exclusion, and refund netting. **This is a migration that
+has to be applied for the RPC path to match the JS path.** It is not currently
+in `DEPLOYMENT-ORDER.md` as a numbered step because the JS fallback is what
+production runs today — but if the RPC is ever applied without this file, the two
+diverge again.
+
+### The 1,612 test lines
+
+Lower risk, but not zero: a wrong test is how this branch got here. The four new
+suites carry hand-built doubles, and **a double that is too permissive
+manufactures a false pass**. Three fidelity repairs were needed mid-session and
+are worth spot-checking:
+
+- `manual-payment-cancellation-inventory.test.ts` — honours the `select`
+  projection, and `.is(col, value)` only null-guards when the value is `null`
+- `revenue-definition-agreement.test.ts` — `.range()` actually slices, `.gte`/`.is`
+  actually filter
+- `commission-accrual-recovery.test.ts` — models production's real CHECK verbatim
+
+Each was found because a mutation SURVIVED. If you read one test file, read the
+mutation tables in this log alongside it: they say what each test can detect.

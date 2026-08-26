@@ -115,8 +115,12 @@ Nothing below is upgraded. Two things are **downgraded**:
 2. **A human reads the diff — STILL OUTSTANDING, and now larger.** An
    independent review has since read it and found two P0s (§1b), so this
    condition is partly discharged and its value is no longer hypothetical. It is
-   not closed: the review was itself unreviewed, and Block N added ~1,400 lines
-   of new fixes and tests that **nobody has read at all**. The highest-risk files
+   not closed: the review was itself unreviewed, and Block N added **2,902
+   insertions across 30 files — 566 of them production code** — that **nobody
+   has read at all**. (I first reported this as "~1,400 lines" from memory
+   rather than measurement; the register in `INTEGRATION-LOG.md` under "BLOCK N
+   — WHAT STILL NEEDS A HUMAN READ" has the measured breakdown and a
+   highest-risk-first reading order.) The highest-risk files
    are `payment-webhook.ts`, `payment-service.ts`, `membership-billing.ts`,
    `/r/[code]/route.ts`, and now `commission-accrual-repair.ts` and
    `order-cancellation-inventory.ts`.
