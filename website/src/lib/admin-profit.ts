@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
 import { isPaidOrderStatus, isEarnedCommission } from "@/lib/ledger";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 
 // The order fields profit needs. Everything is stored on the order at checkout,
 // so profit is computed from the record — not from today's live product cost.
@@ -81,6 +82,17 @@ function processingFeeFor(order: OrderRecord, config: ProfitSettingsConfig): num
   return Math.max(0, base * (config.processingFeePercent / 100));
 }
 
+// The tax that came back with a refund. Nothing records it, so it is derived
+// from the two figures that exist: what the customer paid (tax included) and
+// what was returned. A full refund gives a ratio of exactly 1. Mirrors
+// admin-tax-report.refundedTaxFor so the profit report and the filing report
+// cannot disagree about the same refund.
+function refundedTaxPortion(amountPaid: number, taxCollected: number, refund: number): number {
+  if (taxCollected <= 0 || refund <= 0) return 0;
+  if (amountPaid <= 0) return taxCollected;
+  return Math.round(Math.min(taxCollected, taxCollected * Math.min(1, refund / amountPaid)) * 100) / 100;
+}
+
 function profitForOrder(
   order: OrderRecord,
   lines: OrderProfitLine[],
@@ -149,6 +161,12 @@ function profitForOrder(
     // explicitly rather than left to the default so the reason is on the record.
     processingFeeIsEstimate: true,
     refund: Math.max(0, Number(order.refund_amount ?? 0)),
+    // The tax handed back with the refund, derived the same way the sales-tax
+    // report derives it: nothing records the tax portion of a refund, so it is
+    // the refunded share of what was paid, capped at the tax charged. Only used
+    // when collected tax is configured as a pass-through — see
+    // OrderProfitInput.refundedTax.
+    refundedTax: refundedTaxPortion(amountPaid, taxCollected, Math.max(0, Number(order.refund_amount ?? 0))),
     fallbackUnitCostCents: Math.round(config.worstCaseUnitCost * 100),
   });
 }
@@ -163,12 +181,24 @@ async function costLinesByOrderId(orderIds: string[]): Promise<Map<string, Order
 
   for (let i = 0; i < orderIds.length; i += IN_CHUNK) {
     const chunk = orderIds.slice(i, i + IN_CHUNK);
-    const { data } = await supabaseAdmin
-      .from("order_items")
-      .select("order_id, quantity, unit_cost_cents")
-      .in("order_id", chunk);
+    // PAGED, unlike the other two batch reads, because this is the only one
+    // that returns MORE than one row per order. 150 orders averaging seven line
+    // items is over a thousand rows in one response, and a row source that caps
+    // responses would drop the overflow — silently removing product cost, which
+    // makes profit look BETTER than it is. The commission and overlay reads
+    // below are one row per order and cannot exceed the chunk size.
+    const { rows } = await readAllRowsBounded<{ order_id: string; quantity: number | null; unit_cost_cents: number | null }>(
+      (from, to) =>
+        supabaseAdmin
+          .from("order_items")
+          .select("order_id, quantity, unit_cost_cents")
+          .in("order_id", chunk)
+          .order("id", { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{ data: Array<{ order_id: string; quantity: number | null; unit_cost_cents: number | null }> | null; error: { message?: string } | null }>,
+      { maxRows: MAX_PROFIT_ORDERS, label: "order items read" },
+    );
 
-    for (const raw of (data ?? []) as Array<{ order_id: string; quantity: number | null; unit_cost_cents: number | null }>) {
+    for (const raw of rows) {
       const list = byOrder.get(raw.order_id) ?? [];
       list.push({
         unitCostCents: raw.unit_cost_cents == null ? null : Number(raw.unit_cost_cents),
@@ -321,13 +351,31 @@ export async function getOrderProfitMap(orderIds: string[]): Promise<Map<string,
   return map;
 }
 
+// Ceilings on one report, not definitions of the answer — see `truncated` on
+// ProfitDashboard. Both reads below page to exhaustion.
+const MAX_PROFIT_ORDERS = 200_000;
+
 async function profitForPaidOrdersInRange(fromIso: string, toIso: string): Promise<OrderProfit[]> {
-  const { data: orders } = await supabaseAdmin
-    .from("orders")
-    .select(ORDER_FIELDS)
-    .gte("created_at", fromIso)
-    .lte("created_at", toIso);
-  return computeProfitForOrders((orders ?? []) as OrderRecord[]);
+  // This select carried no `.limit()` and no `.range()` at all, which is not
+  // the same as being unbounded: PostgREST caps every response at its
+  // `db-max-rows` (Supabase exposes it as "Max rows"), and a capped read came
+  // back looking exactly like a small store. Paging to exhaustion removes the
+  // dependency on that setting entirely.
+  const { rows } = await readAllRowsBounded<OrderRecord>(
+    (from, to) =>
+      supabaseAdmin
+        .from("orders")
+        .select(ORDER_FIELDS)
+        .gte("created_at", fromIso)
+        .lte("created_at", toIso)
+        // created_at is not unique; order_id breaks the ties so paging can
+        // neither repeat nor skip a row.
+        .order("created_at", { ascending: false })
+        .order("order_id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: OrderRecord[] | null; error: { message?: string } | null }>,
+    { maxRows: MAX_PROFIT_ORDERS, label: "profit range read" },
+  );
+  return computeProfitForOrders(rows);
 }
 
 export interface ProfitWindowMetrics {
@@ -361,7 +409,13 @@ export async function getProfitWindowMetrics(nowMs: number = Date.now()): Promis
     if (!Number.isFinite(eventTime)) continue;
     if (eventTime >= monthStart) {
       last30Days += row.profit;
-      ordersLast30Days += 1;
+      // SALES, not outbound shipments — the same rule getProfitDashboard's
+      // orderCount applies, and for the same reason its docblock gives: a
+      // reship has no buyer, so counting it inflates the order count and drags
+      // average order value down. This line used to increment unconditionally,
+      // so the 30-day tile and the lifetime tile on the same page reported
+      // different order counts for the same store.
+      if (String(row.orderType ?? "").toLowerCase() !== "replacement") ordersLast30Days += 1;
       if (row.profitStatus === "estimated") hasEstimatedCost = true;
     }
     if (eventTime >= weekStart) last7Days += row.profit;
@@ -423,21 +477,46 @@ export interface ProfitDashboard {
     totalShippingExpense: number;
     totalShippingProfit: number;
   };
+  /**
+   * Sales tax collected across the same orders, as a LIABILITY — money held on
+   * behalf of a state, never part of revenue or profit.
+   *
+   * Surfaced here because the owner's decision was not merely "stop counting
+   * tax as profit" but "track it separately as a tax liability". Excluding a
+   * number from profit without showing it anywhere just makes it invisible.
+   * `taxCountedAsProfit` on each order says which side of the line it fell on.
+   */
+  salesTaxCollected: number;
+  /** True if any order in the window was configured to count tax as profit. */
+  salesTaxCountedAsProfit: boolean;
   /** Orders whose profit is still estimated (exact shipping cost pending). */
   estimatedOrderCount: number;
   hasEstimatedProfit: boolean;
+  /**
+   * True when MAX_PROFIT_ORDERS stopped the read before the whole order history
+   * had been seen. Every figure above is then a floor, not a total.
+   */
+  truncated: boolean;
 }
 
-const MAX_DASHBOARD_ORDERS = 20000;
-
 export async function getProfitDashboard(nowMs: number = Date.now()): Promise<ProfitDashboard> {
-  const { data: orders } = await supabaseAdmin
-    .from("orders")
-    .select(ORDER_FIELDS)
-    .order("created_at", { ascending: false })
-    .limit(MAX_DASHBOARD_ORDERS);
+  // Was a single `.limit(20000)`. Past twenty thousand orders it returned the
+  // newest twenty thousand and every lifetime figure on /admin — gross revenue,
+  // net profit, margin, AOV, order count — was computed from that slice and
+  // presented as the store's whole history, with nothing on the screen to say
+  // so.
+  const { rows: orders, truncated } = await readAllRowsBounded<OrderRecord>(
+    (from, to) =>
+      supabaseAdmin
+        .from("orders")
+        .select(ORDER_FIELDS)
+        .order("created_at", { ascending: false })
+        .order("order_id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: OrderRecord[] | null; error: { message?: string } | null }>,
+    { maxRows: MAX_PROFIT_ORDERS, label: "profit dashboard read" },
+  );
 
-  const rows = await computeProfitForOrders((orders ?? []) as OrderRecord[]);
+  const rows = await computeProfitForOrders(orders);
 
   const now = new Date(nowMs);
   const startOfToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
@@ -459,6 +538,8 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
   let orderCount = 0;
   let replacementCount = 0;
   let estimatedOrderCount = 0;
+  let salesTaxCollected = 0;
+  let salesTaxCountedAsProfit = false;
 
   for (const row of rows) {
     const eventTime = Date.parse(row.paidAt ?? row.createdAt ?? "");
@@ -480,6 +561,8 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
     totalShippingRevenue += row.shippingCharged;
     totalShippingExpense += row.shippingCost;
     if (row.profitStatus === "estimated") estimatedOrderCount += 1;
+    salesTaxCollected += row.taxCollected;
+    if (row.taxCountedAsProfit) salesTaxCountedAsProfit = true;
 
     if (eventTime >= startOfToday) profit.today += row.profit;
     if (eventTime >= startOfYesterday && eventTime < startOfToday) profit.yesterday += row.profit;
@@ -516,8 +599,11 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
       totalShippingExpense: round(totalShippingExpense),
       totalShippingProfit: round(totalShippingProfit),
     },
+    salesTaxCollected: round(salesTaxCollected),
+    salesTaxCountedAsProfit,
     estimatedOrderCount,
     hasEstimatedProfit: estimatedOrderCount > 0,
+    truncated,
   };
 }
 

@@ -2,6 +2,8 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { expectedOrderTotal, isTotalMismatch, maxShippingProtectionFee } from "@/lib/reconciliation-math";
+import { readAllRowsBounded } from "@/lib/supabase-page";
+import { pointsToDollars } from "@/lib/points-math";
 
 // "Reconciliation" here means internal ledger consistency - checking that
 // this store's own order/commission math holds together - not reconciling
@@ -37,6 +39,12 @@ function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
+// Ceiling on one sweep, not a definition of the answer. The old `.limit(2000)`
+// meant an order that stopped reconciling could never be flagged once 2,000
+// newer orders existed — on the one screen an operator opens BECAUSE they think
+// the ledger is wrong.
+const MAX_RECONCILIATION_ORDERS = 200_000;
+
 export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
   const BASE_COLUMNS =
     "order_id, customer_email, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, refund_amount, payment_status, paid_at, created_at";
@@ -61,16 +69,29 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
     shipping_protection_fee?: number | null;
   };
 
+  type ReadError = { message?: string; code?: string } | null;
+
   const read = async (columns: string) => {
-    const result = await supabaseAdmin
-      .from("orders")
-      .select(columns)
-      .order("created_at", { ascending: false })
-      .limit(2000);
-    return {
-      data: result.data as unknown as ReconciliationRow[] | null,
-      error: result.error,
-    };
+    try {
+      const { rows } = await readAllRowsBounded<ReconciliationRow>(
+        (from, to) =>
+          supabaseAdmin
+            .from("orders")
+            .select(columns)
+            // created_at is not unique; order_id breaks the ties so paging can
+            // neither repeat nor skip a row.
+            .order("created_at", { ascending: false })
+            .order("order_id", { ascending: true })
+            .range(from, to) as unknown as PromiseLike<{ data: ReconciliationRow[] | null; error: { message?: string } | null }>,
+        { maxRows: MAX_RECONCILIATION_ORDERS, label: "reconciliation read" },
+      );
+      return { data: rows, error: null as ReadError };
+    } catch (err) {
+      // readAllRows throws on a page error; the missing-column fallback below
+      // still needs to inspect it, so it is handed back rather than rethrown.
+      const cause = err as { message?: string; code?: string };
+      return { data: null as ReconciliationRow[] | null, error: { message: String(cause.message ?? err), code: cause.code } as ReadError };
+    }
   };
 
   // Ask for the protection fee, and fall back to the original column set if the
@@ -105,7 +126,13 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
     const tax = roundMoney(Number(order.tax_amount ?? 0));
     const cardFee = roundMoney(Number(order.card_processing_fee ?? 0));
     const storeCredit = roundMoney(Number(order.store_credit_redeemed_cents ?? 0) / 100);
-    const pointsDollars = roundMoney(Number(order.points_redeemed ?? 0) / 100);
+    // points_redeemed is stored in POINTS. This used to divide by a hardcoded
+    // 100 — a fifth copy of a redemption rate that already has a name and an
+    // exported constant (points-math.POINTS_PER_DOLLAR_REDEMPTION). The two
+    // agree today, so nothing was wrong; the moment the rate changes, the
+    // hardcoded copy would flag every points-redeeming order as a mismatch on
+    // the screen the owner opens to find real ones.
+    const pointsDollars = roundMoney(pointsToDollars(Number(order.points_redeemed ?? 0)));
     const amountPaid = roundMoney(Number(order.amount_paid ?? 0));
     const refundAmount = roundMoney(Number(order.refund_amount ?? 0));
     // expectedOrderTotal + isTotalMismatch are pure and unit-tested in
