@@ -42,6 +42,7 @@ pasted verbatim.
 | K-17 | P1 | `SOURCE-INSPECTED` | Cancelling a paid order permanently destroys its stock, in the one case the codebase's own comment says should restock |
 | K-18 | P1 | `SOURCE-INSPECTED` | Four compliance attestations are collected and none is durably recorded on the card lane |
 | K-19 | P1 | `SOURCE-INSPECTED` | Every call to the payment processor has no timeout, while the ad pixels and the label printer all have one |
+| K-20 | P2 | `SOURCE-INSPECTED` | Four tables are written and never read, and two double the visitor data retained for no benefit |
 
 ---
 
@@ -2985,6 +2986,201 @@ deadline. Negative control: remove the signal and confirm the test times out.
   `reconcileVeyraPendingPayments` exists to settle. The timeout does not create
   that risk (a platform kill already produces it, without the bound); it makes it
   explicit and survivable. Worth their eyes on the ordering.
+
+---
+
+---
+
+## K-20 — Four tables are written and never read, and two of them double the visitor data the store retains for no benefit at all
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P2 · **Status:** OPEN
+**Area:** dead/legacy/dormant code (with a privacy consequence)
+
+### Method
+
+Every `.from("<table>")` call site in `src/` (excluding `*.test.ts` and
+`src/lib/e2e/`) was classified as a read or a write, and the two sets compared.
+Sixty-one tables; four are write-only. Multi-line chains were then resolved by
+hand — the four below were each re-checked with
+`grep -rn '"<table>"' src --include=*.ts --include=*.tsx`, and the complete
+result for each is quoted.
+
+### The four
+
+```
+email_campaign_clicks   src/app/api/email/click/route.ts:65        insert     — 0 reads
+product_cost_changes    src/lib/admin-products.ts:635              insert     — 0 reads
+product_subscriptions   src/app/api/catalog/subscribe-save/route.ts:63  insert — 0 reads
+referrals               src/app/r/[code]/route.ts:49               insert
+                        src/lib/partner-portal.ts:1717             delete     — 0 reads
+```
+
+(`referrals`' only other reference is a `.delete()` when a partner is removed —
+cleanup, not a read.)
+
+### `referrals` — this one corrects the Phase 1 map, and it matters
+
+The map's sources-of-truth table records:
+
+> Referral click counts | nothing — `src/app/r/[code]/route.ts` INSERTs the same
+> click i… | `partner_clicks` (partner dashboard totalClicks), **`referrals`
+> (event_type='click')**
+
+implying two tables read by two different surfaces, and framing the risk as
+*divergence* between them. **`referrals` is not read by anything.** The divergence
+has no reporting consequence, because there is no second reader to diverge.
+
+The real consequence is worse, and it is a privacy one. `/r/[code]` writes the
+same six fields into `referrals` that it writes into `partner_clicks`:
+
+```ts
+supabaseAdmin.from("referrals").insert({
+  partner_id: …, referral_code: …, event_type: "click", landing_path: …,
+  utm_source: …, utm_medium: …, utm_campaign: …,
+  referrer: request.headers.get("referer"),
+  user_agent: request.headers.get("user-agent"),
+  ip_address: ipAddress,          // RAW
+});
+```
+
+So every affiliate click stores the visitor's **raw IP address, user agent and
+referrer twice**, and the second copy is consumed by nothing, ever. K-04
+establishes that this write happens before consent is asked and contradicts three
+published promises; this finding establishes that **half of that data collection
+buys the store nothing at all.**
+
+That changes the fix. K-04's remedy for the second write is not "make the two
+tables consistent" — it is **delete the `referrals` insert**. That is a strict
+improvement on every axis: less PII retained, one fewer non-transactional write in
+a `Promise.all` (the partial-failure defect Block A+B owns in the same file), and
+no feature lost.
+
+Contrast, and it is instructive: `email_campaign_clicks` writes `ip_hash`
+(`src/app/api/email/click/route.ts:70-73`, via `hashIpAddress`). The campaign
+tracker hashes the IP; the affiliate tracker stores it raw. Two click-tracking
+paths in one codebase, opposite privacy postures.
+
+### `email_campaign_clicks` — a per-click detail table nothing consumes
+
+The route writes both a detail row **and** a first-click stamp on the recipient:
+
+```ts
+await supabaseAdmin.from("email_campaign_clicks").insert({ campaign_id, email, clicked_at, user_agent, ip_hash });
+// First click only — `clicked_at` on the recipient row is "did this person ever click"
+await supabaseAdmin.from("email_campaign_recipients").update({ clicked_at: … })
+```
+
+Reporting reads only the second: `src/lib/admin-email.ts:71-105` selects
+`campaign_id, status, opened_at, clicked_at` from `email_campaign_recipients` and
+tallies `if (row.clicked_at) tally.clicked++`.
+
+So the detail table — the one that would answer "how many times did they click",
+"from what device", "over what period" — is written on every click and read by
+nothing. Either build the reader or stop writing the row; today the store pays the
+storage and the retention obligation for neither.
+
+### `product_cost_changes` — a cost audit trail nobody can see
+
+`src/lib/admin-products.ts:635` writes `changeRows` on every product cost edit.
+Nothing reads them. For a store whose profit engine derives margin from
+`order_items.unit_cost_cents` (`src/lib/admin-profit.ts`), a cost-change history
+that cannot be read means **an unexplained margin shift cannot be explained** —
+the record exists and is unreachable. This is the most valuable of the four to
+wire up rather than delete.
+
+### `product_subscriptions` — confirmed dead, both sides
+
+The Phase 1 lead is correct. One INSERT
+(`src/app/api/catalog/subscribe-save/route.ts:63`), zero SELECTs anywhere.
+`/account/subscriptions` renders *memberships* (`getCustomerMembership`,
+`getMembershipBillingHistory`) and never touches this table; no admin route reads
+it either.
+
+A shopper who opts into Subscribe & Save therefore gets a confirmation, a row, and
+nothing else: they cannot see, edit or cancel it, no admin can find it, and the
+stored `discount_percent` is honoured by no pricing path. **The customer has
+agreed to a recurring arrangement the system has no way to fulfil or to stop** —
+which is the part that lifts this above ordinary dead code.
+
+`getSubscribeSaveConfig` (`src/lib/admin-control.ts:402-414`) defaults
+`enabled: cfg.enabled === true` — i.e. **off** unless explicitly turned on. That is
+the only thing keeping this dormant, and it is one admin toggle away from being
+live.
+
+### Impact
+
+Two tables of unread visitor data the store must nonetheless disclose, retain and
+defend; one audit trail that cannot answer the question it was built for; and one
+customer-facing feature that is a dead end from both sides and is enabled by a
+single toggle.
+
+### Reproduction
+
+```
+grep -rn '"referrals"'             website/src --include=*.ts --include=*.tsx | grep -v '\.test\.'
+grep -rn '"email_campaign_clicks"' website/src --include=*.ts --include=*.tsx | grep -v '\.test\.'
+grep -rn '"product_cost_changes"'  website/src --include=*.ts --include=*.tsx | grep -v '\.test\.'
+grep -rn '"product_subscriptions"' website/src --include=*.ts --include=*.tsx | grep -v '\.test\.'
+```
+
+Each returns writes only. With database access, confirm the rows are accumulating:
+`select count(*) from referrals;` etc.
+
+### Smallest safe root-cause fix
+
+Decide per table, and record the decision in the code so the next reader does not
+have to re-derive it:
+
+- **`referrals`** — delete the insert at `src/app/r/[code]/route.ts:49`. Drop the
+  table once block M confirms no out-of-repo consumer. Highest value: it removes
+  a duplicate store of raw PII **and** simplifies K-04.
+- **`email_campaign_clicks`** — keep the write (it is already IP-hashed and is the
+  only per-click detail available) and add the reader the campaign dashboard is
+  missing; or delete it. Either is fine, silence is not.
+- **`product_cost_changes`** — wire up a reader. An admin cost-history panel is
+  small, and it is the only way to explain a margin change after the fact.
+- **`product_subscriptions`** — while `subscribe_save` is off, the honest fix is a
+  comment at `subscribe-save/route.ts:63` stating that nothing reads this table and
+  the feature is incomplete, so it cannot be enabled by accident. **Do not enable
+  `subscribe_save` until a customer-facing cancel path exists.**
+
+### Regression test to write
+
+Generalise the method: a test that parses every `.from("…")` in `src/` and fails
+on any table with writes and no reads that is not on an explicit
+`KNOWN_WRITE_ONLY` allowlist with a stated reason. That converts "dead table"
+from an archaeology exercise into a build-time signal, and the allowlist forces
+the decision to be written down. Negative control: add a write to a fresh table
+name and confirm the test names it.
+
+### CROSS-BLOCK
+
+- `src/app/r/[code]/route.ts:49` — **Block A+B.** They already own two defects in
+  this file (the non-transactional double write, and K-04's pre-consent
+  tracking). **All three resolve to the same edit: delete the `referrals`
+  insert.** That should be told to them as one change, not three.
+- `src/lib/partner-portal.ts:1717` — **Block A+B.** The `referrals` delete becomes
+  dead once the insert goes.
+- `src/app/api/email/click/route.ts` — unowned, but adjacent to **Block C**'s
+  email work.
+- `src/lib/admin-products.ts` — unowned; **Block D** owns `catalog.ts` and
+  inventory, which is adjacent but not this file.
+
+### Also checked, and cleared
+
+- `partner_program_stats` (`src/lib/partner-portal.ts:611`) reads with **no
+  writer in `src/`**, which looks like the inverse defect. It is not:
+  `src/lib/sql/affiliate-program-rls.sql:78-90` gives it public-select and
+  admin-insert/update policies, and the read builds an `overrides` map. It is a
+  deliberate manually-populated override table — almost certainly the mechanism
+  behind ledger finding F-007 ("affiliate marketing figures are a deliberate
+  pre-launch floor"). Working as designed.
+- The other "no writer in `src/`" hits from the sweep — `commissions`,
+  `order_email_log`, `notification_queue`, `marketing_subscribers`,
+  `order_shipping_cost_audit`, `fulfillment_batches`, `admin_credentials` and
+  others — are artefacts of the line-based classifier: their write is on the line
+  *after* the `.from(...)`. Each was re-checked by hand and has a real writer.
+  Recorded so block M does not re-chase them.
 
 ---
 
