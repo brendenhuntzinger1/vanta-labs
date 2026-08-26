@@ -96,12 +96,30 @@ export async function decrementInventoryForOrder(items: OrderItemRef[]): Promise
 // (which would create phantom stock and feed overselling). Mirrors the
 // paid_side_effects_at exactly-once pattern used for the paid side-effects.
 //
-// Fail-safe: if the claim errors (e.g. the column isn't migrated yet), it
-// returns false so the caller does NOT restock. Under-restock (stock stays low)
-// is a recoverable inconvenience; double-restock is a money-losing oversell, so
-// the safe failure direction is "don't restock". Run the
-// add-inventory-restock-claim.sql migration BEFORE deploying this code.
-export async function claimInventoryRestock(orderId: string): Promise<boolean> {
+// Fail-safe: if the claim errors (e.g. the column isn't migrated yet), it does
+// NOT restock. Under-restock (stock stays low) is a recoverable inconvenience;
+// double-restock is a money-losing oversell, so the safe failure direction is
+// "don't restock". Run the add-inventory-restock-claim.sql migration BEFORE
+// deploying this code.
+//
+// THREE OUTCOMES, NOT TWO (review finding 2). This returned a bare boolean, and
+// `false` meant both "somebody else already restocked this order" and "the claim
+// could not be evaluated at all". Those are opposite facts: the first says the
+// units are safely back, the second says they are gone and nothing is coming for
+// them. orders.inventory_restocked_at DOES NOT EXIST in production as of
+// 2026-08-26, so today every call returns the failure — and the cancel path
+// reported it to the operator as "already returned". A failure wearing a
+// success's clothes is how the whole K-17 return path came to be inert without
+// anyone noticing.
+export type InventoryRestockClaim =
+  /** This caller won the flip and MUST restock. */
+  | "claimed"
+  /** A refund, chargeback or earlier cancel already returned these units. */
+  | "already_claimed"
+  /** The claim could not be evaluated. Nothing was restocked and nothing will be. */
+  | "unavailable";
+
+export async function claimInventoryRestock(orderId: string): Promise<InventoryRestockClaim> {
   const { data, error } = await supabaseAdmin
     .from("orders")
     .update({ inventory_restocked_at: new Date().toISOString() })
@@ -110,9 +128,9 @@ export async function claimInventoryRestock(orderId: string): Promise<boolean> {
     .select("id");
   if (error) {
     console.error("Inventory restock claim failed (skipping restock) for order", orderId, error);
-    return false;
+    return "unavailable";
   }
-  return Boolean(data && data.length > 0);
+  return data && data.length > 0 ? "claimed" : "already_claimed";
 }
 
 // Return stock when a paid order is fully refunded or canceled — the exact

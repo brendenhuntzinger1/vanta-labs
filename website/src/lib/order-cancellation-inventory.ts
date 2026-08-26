@@ -54,6 +54,15 @@ import { recordSystemAlert } from "@/lib/monitoring";
  * ran. Asking "was this order paid?" via `payment_status` would be a proxy;
  * asking whether the decrement happened is the question itself.
  *
+ * THAT LATCH IS WRITTEN BY BOTH PAID LANES, and only became true of both in
+ * review finding 2. It was originally set in ONE place — processPaymentWebhook,
+ * the card lane — while finalizeManualPayment ran the identical side effects
+ * behind its own claim and left it NULL. Every manually-paid order therefore
+ * took the "never decremented" branch here and had its stock written off. If a
+ * third paid lane is ever added, it MUST stamp this latch after its stock moves;
+ * the two current writers are the only ones, and both are named here so the next
+ * author does not have to discover the contract by losing inventory.
+ *
  * Any future path that cancels an order must call this. The pipeline is the only
  * writer of the `cancelled` transition, so that is the place to look for callers.
  */
@@ -67,7 +76,11 @@ export type CancellationInventoryAction =
   | "already_returned"
   | "no_items"
   | "order_not_found"
-  /** The order could not be read; nothing was changed. */
+  /**
+   * The order could not be read, or the exactly-once restock claim could not be
+   * evaluated. Nothing was changed and nothing else will change it — this is a
+   * call for a human, never a quiet success.
+   */
   | "unavailable";
 
 export interface CancellationInventoryOutcome {
@@ -110,7 +123,23 @@ export async function returnInventoryForCancelledOrder(
   if (items.length === 0) return { action: "no_items" };
 
   // Exactly-once, shared with the webhook refund path.
-  if (!(await claimInventoryRestock(orderId))) {
+  const claim = await claimInventoryRestock(orderId);
+
+  if (claim === "unavailable") {
+    // NOT "already_returned". Nothing returned these units and nothing will:
+    // the claim column is missing or unreadable, so the exactly-once guard
+    // cannot be honoured and restocking anyway could double-return them. Same
+    // rule as the failed read above — do not guess, say so loudly.
+    await recordSystemAlert({
+      type: "cancellation_inventory_unresolved",
+      severity: "critical",
+      message: `Order ${orderId} was cancelled but its inventory could not be returned — the restock claim could not be evaluated. Check the stock count for this order's items by hand.`,
+      context: { orderId, stage: "claim" },
+    });
+    return { action: "unavailable" };
+  }
+
+  if (claim === "already_claimed") {
     return { action: "already_returned" };
   }
 

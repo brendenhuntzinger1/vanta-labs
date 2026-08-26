@@ -128,6 +128,16 @@ vi.mock("@/lib/supabase-server", () => {
               filters.push([`neq:${column}`, value]);
               return builder;
             },
+            // The paid_side_effects_at latch write at the end of the approval
+            // (review finding 2) is a conditional UPDATE terminated by .is(),
+            // with no .select(). Awaiting the builder has to resolve.
+            is(column: string, value: unknown) {
+              filters.push([`is:${column}`, value]);
+              return builder;
+            },
+            then(resolve: (v: unknown) => unknown) {
+              return Promise.resolve({ error: null }).then(resolve);
+            },
             async select() {
               state.updateFilters.push(filters);
               // Models the real conditional UPDATE: it matches only while the

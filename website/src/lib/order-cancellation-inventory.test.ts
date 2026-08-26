@@ -67,9 +67,9 @@ vi.mock("@/lib/inventory-fulfillment", async () => {
     // exactly-once, so a stub that always returns true would hide the defect.
     claimInventoryRestock: vi.fn(async (orderId: string) => {
       const order = state.orders.find((o) => o.order_id === orderId);
-      if (!order || order.inventory_restocked_at !== null) return false;
+      if (!order || order.inventory_restocked_at !== null) return "already_claimed";
       order.inventory_restocked_at = new Date().toISOString();
-      return true;
+      return "claimed";
     }),
   };
 });

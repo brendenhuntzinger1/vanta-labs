@@ -2151,3 +2151,76 @@ unreachable and `'pending'` always landed.
 | sweep uses gross subtotal (ignores discount) | *re-derives it from the order* (asserts $27.00, not merely "a row exists") |
 
 **GATE.** 260 files / 4147 tests green, with Postgres up. Lint and `tsc` clean.
+
+## N-02 (P0) — cancelling a manually-paid order wrote off the stock
+
+**FOUND.** `returnInventoryForCancelledOrder` decides "were these units
+decremented?" from `orders.paid_side_effects_at`. Its own docblock called that
+latch "the signal, because it is the latch under which the paid side effects
+run". True of exactly one lane: the latch was written in ONE place in the whole
+repository — `processPaymentWebhook`. `finalizeManualPayment` runs the identical
+side effects behind its own claim and never touched it.
+
+So a manually-paid order: stock decremented, latch NULL, cancel takes the "never
+decremented" branch, calls `releaseInventoryForOrder` — which only reclaims
+reservations still `active`, and this one is `finalized`, so it is a **no-op** —
+and returns `"released"`. The units are gone, and the function reports success.
+K-17 was inert on one of the two payment lanes.
+
+**SECOND DEFECT, found while reproducing.** `orders.inventory_restocked_at`
+**does not exist in production** (read `2026-08-26`). `claimInventoryRestock`
+returned `false` on ANY error, so a missing column was indistinguishable from
+"someone else already restocked" — and the cancel path reported it as
+`"already_returned"`. K-17 was therefore inert on the **card lane too**, for the
+same underlying reason: a failure wearing a success's clothes.
+
+**FIXED.**
+
+1. `finalizeManualPayment` now stamps `paid_side_effects_at`, so both lanes
+   speak the latch. Written **last, after the inventory branch**, not as part of
+   the paid-flip: the latch has to mean "the decrement happened", not "the
+   decrement was about to be attempted". Stamping it early would let a crash in
+   between leave a cancel free to restock units that were never removed —
+   inventing stock, which oversells. Failing the other way merely repeats the old
+   conservative behaviour for one narrow window, and this codebase's stated rule
+   for inventory ambiguity is never to guess in the direction that invents units.
+
+2. `claimInventoryRestock` returns three states, not two: `claimed` /
+   `already_claimed` / `unavailable`. Both call sites updated. The cancel path
+   raises a critical alert on `unavailable` instead of calling it
+   `already_returned`.
+
+3. The docblock that made the false claim now names BOTH writers and states the
+   contract for any future third lane.
+
+**TEST.** `manual-payment-cancellation-inventory.test.ts` drives the REAL
+`finalizeManualPayment` into the REAL `returnInventoryForCancelledOrder` over one
+shared order store, and asserts on the stock. The existing suite could not have
+found this: it builds fixtures and sets `paid_side_effects_at` **by hand**, and a
+test that constructs the latch it is testing can never discover that the
+production writer does not set it.
+
+Two fidelity repairs to the new double, both made because the looser version
+would have hidden a real defect: it now honours the `select` projection
+(including nested `order_items(...)`), and `.is(col, value)` only behaves as a
+null-guard when the value is actually `null`.
+
+**MUTATIONS** — four, each caught by a different test:
+
+| mutation | test that caught it |
+|---|---|
+| remove the manual-lane latch write (the original bug) | *RETURNS the units to stock on cancel* + 3 others |
+| write the latch as part of the paid-flip, before inventory | *leaves the latch NULL if the stock never actually moved* |
+| collapse the claim tri-state back to a boolean | *does NOT report a silent no-op as 'already returned'* |
+| restock unpaid orders too | *still RELEASES rather than restocks an order that was never paid* |
+
+The second mutation initially SURVIVED. That was not a strong test — it was a
+weak double ignoring the `.is()` value, plus an ordering property asserted in a
+comment and tested nowhere. Both fixed, then the mutation failed as it should.
+
+**THREE SUITES UPDATED** for the deliberate `claimInventoryRestock` signature
+change — assertions migrated to the new semantics, and
+`inventory-restock-claim.test.ts` gained a case asserting `unavailable` is
+distinguishable from `already_claimed`, which is the entire point.
+
+**GATE.** 261 files / 4155 tests green. Lint and `tsc` clean.

@@ -83,20 +83,20 @@ beforeEach(() => {
 
 describe("claiming the right to restock an order", () => {
   it("grants the claim the first time", async () => {
-    expect(await claim("order-1")).toBe(true);
+    expect(await claim("order-1")).toBe("claimed");
   });
 
   it("REFUSES every later attempt, so stock is returned once", async () => {
-    expect(await claim("order-1")).toBe(true);
-    expect(await claim("order-1")).toBe(false);
-    expect(await claim("order-1")).toBe(false);
+    expect(await claim("order-1")).toBe("claimed");
+    expect(await claim("order-1")).toBe("already_claimed");
+    expect(await claim("order-1")).toBe("already_claimed");
   });
 
   it("gives exactly one winner when handlers race", async () => {
     // A duplicate refund webhook, a retry and an owner double-click all
     // arriving together.
     const results = await Promise.all([claim("order-1"), claim("order-1"), claim("order-1")]);
-    expect(results.filter(Boolean)).toHaveLength(1);
+    expect(results.filter((r) => r === "claimed")).toHaveLength(1);
   });
 
   it("claims conditionally on the column still being NULL", async () => {
@@ -115,13 +115,24 @@ describe("claiming the right to restock an order", () => {
       state.failNext = true;
       // Under-restock is recoverable; double-restock is a money-losing
       // oversell. The safe failure direction is "do not restock".
-      expect(await claim("order-1")).toBe(false);
+      expect(await claim("order-1")).not.toBe("claimed");
+    });
+
+    it("says UNAVAILABLE, never 'already claimed' (review finding 2)", async () => {
+      // These are opposite facts. "already_claimed" means the units are safely
+      // back; "unavailable" means they are gone and nothing is coming for them.
+      // Collapsing both into one falsey answer is how the cancel path came to
+      // report a silent no-op to the operator as a successful return — and, with
+      // orders.inventory_restocked_at absent from production, it did so on every
+      // single call.
+      state.failNext = true;
+      expect(await claim("order-1")).toBe("unavailable");
     });
 
     it("still allows a genuine claim afterwards", async () => {
       state.failNext = true;
-      expect(await claim("order-1")).toBe(false);
-      expect(await claim("order-1")).toBe(true);
+      expect(await claim("order-1")).toBe("unavailable");
+      expect(await claim("order-1")).toBe("claimed");
     });
   });
 });

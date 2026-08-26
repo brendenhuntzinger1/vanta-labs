@@ -1239,6 +1239,40 @@ export async function finalizeManualPayment(
     scheduleShippoSync(orderId);
   }
 
+  // RECORD THAT THE PAID SIDE EFFECTS RAN (review finding 2).
+  //
+  // `paid_side_effects_at` is the vocabulary the two paid lanes share, and until
+  // now only the card lane spoke it — it was written in exactly ONE place in the
+  // repository, inside processPaymentWebhook. This lane runs the identical side
+  // effects behind its own single-use claim (the conditional payment_status
+  // flip) and left the latch NULL forever.
+  //
+  // Anything downstream asking "were this order's units decremented?" therefore
+  // got "no" for every manually-paid order. returnInventoryForCancelledOrder
+  // asks exactly that, and answered it by releasing a reservation that was
+  // already finalized — a no-op — so cancelling a manually-paid order destroyed
+  // its stock and reported "released".
+  //
+  // WRITTEN LAST, NOT AS PART OF THE CLAIM. The latch has to mean "the decrement
+  // happened", not "the decrement was about to be attempted". Setting it up with
+  // the paid-flip would mark stock as decremented before finalizeInventoryForOrder
+  // ran, and a crash in between would let a later cancel restock units that were
+  // never removed — inventing stock, which oversells. Failing the other way round
+  // (latch NULL, stock already moved) merely repeats the old conservative
+  // behaviour for one narrow window, and this codebase's stated rule for
+  // inventory ambiguity is to never guess in the direction that invents units.
+  const { error: latchError } = await supabaseAdmin
+    .from("orders")
+    .update({ paid_side_effects_at: new Date().toISOString() })
+    .eq("order_id", orderId)
+    .is("paid_side_effects_at", null);
+
+  if (latchError) {
+    // Never fails the approval — the payment is verified and the stock has
+    // moved. But a cancel will now under-restock, so say so.
+    console.error("Unable to record paid_side_effects_at for manual order", orderId, latchError);
+  }
+
   return { orderId, alreadyPaid: false, status: "paid" };
 }
 
@@ -1807,7 +1841,10 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // Atomic exactly-once claim: only the FIRST refund/cancel event for this
       // order restocks; a concurrent chargeback or replayed event loses the
       // claim and skips, so stock is never returned twice.
-      if (!isMembershipOrder && await claimInventoryRestock(orderId)) {
+      // Only the caller that WON the claim restocks. "already_claimed" means
+      // somebody else returned these units; "unavailable" means the claim could
+      // not be evaluated, and restocking blind could double-return them.
+      if (!isMembershipOrder && await claimInventoryRestock(orderId) === "claimed") {
         const { data: refundItems } = await supabaseAdmin
           .from("order_items")
           .select("product_id, quantity")
