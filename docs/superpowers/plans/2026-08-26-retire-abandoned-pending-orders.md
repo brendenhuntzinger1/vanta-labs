@@ -10,6 +10,31 @@
 
 **Spec:** No separate spec doc — the Background section below is the spec, derived from live production evidence gathered 2026-08-26.
 
+> ## STATUS 2026-08-26: partially superseded — read before executing
+>
+> The operator chose the smallest safe path, not this plan. What actually shipped:
+>
+> - **The two production orders were cleared by hand**, not by code. A guarded
+>   `UPDATE` (filtered on `payment_status = 'pending_payment' AND paid_at IS NULL
+>   AND provider_event_id IS NULL`) set `VL-9D8CA974` and `VL-0716175A` to
+>   `payment_failed` at 2026-08-26 19:50 UTC. They no longer match the reconcile
+>   query, so the alert stopped immediately.
+> - **Task 2 and Task 3 shipped, in modified form.** The alert copy is fixed and
+>   the type renamed to `payment_reconcile_backlog`, and it is throttled to once
+>   per 6h via `backlogAlertIsDue()`. The wording differs from Task 2 below
+>   because Task 1 did not ship, so the alert still covers abandoned *and*
+>   unreadable sessions and says so.
+> - **Task 1 did NOT ship.** Nothing retires abandoned checkouts automatically.
+>   The pile will grow again, one row per abandoned checkout, and the warning
+>   will return once any of them passes 24h — now at most once every 6h.
+> - **Tasks 4 and 5 are moot** as written (Task 4 verified a deploy that did not
+>   happen; Task 5 was conditional on it).
+>
+> **If you are picking this up later:** Task 1 is the remaining work and is still
+> the right design. Re-read it against the current `express-reconcile.ts`, whose
+> alert block has changed. Task 2's copy would need folding into Task 1's split
+> rather than applying as written.
+
 ## Background — the evidence this plan is built on
 
 Two orders have been `pending_payment` since Aug 24/25 and have fired
