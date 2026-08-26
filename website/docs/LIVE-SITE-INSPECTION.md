@@ -1244,7 +1244,7 @@ The $232.38 the owner sees decomposes as:
 | merchandise subtotal | $145.26 |
 | shipping charged | $75.00 |
 | **sales tax collected** (owed to states, not revenue) | **$9.69** |
-| card processing surcharge | $2.43 |
+| shipping protection fees | $2.43 |
 | **= reported "revenue"** | **$232.38** |
 
 and separately:
@@ -1258,6 +1258,17 @@ So of a headline "$232.38 revenue": 4 % is a tax liability, 32 % is shipping
 recovery, and **$45.47 belongs to an order that was cancelled after payment**.
 At six orders this is noise. At a hundred orders a day it is a materially wrong
 number on the screen the owner runs the business from.
+
+**Correction made during this session.** An earlier draft of this finding
+attributed the $2.43 to a card processing surcharge. That was wrong: every paid
+production order carries `card_processing_fee = 0.00` and
+`card_processing_fee_percent = 0.00` — **the store charges no card surcharge**.
+The $2.43 is `shipping_protection_fee` (0.08 + 0.15 + 2.20). Recorded because
+the mistake is the kind this document exists to catch.
+
+**Order-level accounting reconciles exactly.** For all six paid orders:
+`subtotal − discount + shipping + tax + card fee + handling + protection =
+amount_paid`, to the cent, with no residual.
 
 ### ADM-03 — 75 referral clicks, zero referral orders
 
@@ -1307,6 +1318,217 @@ this is fine. **Cannot be determined without signing in.**
   `label_purchased`, one at `awaiting_fulfillment`, one at `cancelled`.
 - **335 `active = true` coupons that have all expired** (LIVE-015) will inflate
   any "active promotions" count the dashboard shows.
+
+## 2j. THE TRANSACTIONAL CHAIN — HARNESS
+
+**What this is.** A real Next.js production build of the current `main`, served
+against a local Postgres carrying the schema from `scripts/setup-local-harness.sh`,
+with the payment processor replaced by a stub that only mints a session id and a
+signed `payment.succeeded` event POSTed to the **real** `/api/webhooks/payment`.
+No production data was touched. Grade: **HARNESS-PROVEN**. RLS and signed-in
+flows are not exercised and stay NOT VERIFIED.
+
+**Two things had to be worked around, and neither weakened a control:**
+
+1. `harness-server.mjs` no longer works. It sets `NODE_ENV = "test"` at runtime
+   so mock payments are reachable, but Next 16 / Turbopack **inlines**
+   `process.env.NODE_ENV` at build time and the minifier then deletes the branch
+   entirely. The shipped bundle reads:
+   ```js
+   if ("mock" === t || "test" === t) throw Error("PAYMENT_PROVIDER=mock/test is forbidden in production…")
+   ```
+   **This is good news for production** — the mock-payment lockout is not a
+   runtime check that a stray env var could satisfy, it is an unconditional
+   throw compiled into the bundle. It also means the audit's own harness tooling
+   cannot run mock payments against this build. `NODE_ENV=test npx next build`
+   does not help; Next forces production. The lockout was **not** weakened.
+2. Payment was therefore driven the way `scripts/harness-pay-order.mjs` already
+   does it: sign the same `payment.succeeded` event and POST it to the real
+   webhook route — the identical code path a live processor callback takes.
+
+### HARN-01 — the full affiliate chain is CORRECT, end to end
+
+**Status:** HARNESS-PROVEN
+
+One qualifying referred order, `EXPLICIT15` (15 %), 3 × $39.99:
+
+| Stage | Value |
+|---|---|
+| cart | Subtotal $110.37 · **Ambassador code EXPLICIT15 −$8.40** · total $116.97 |
+| order row | `paid` · `awaiting_fulfillment` · `paid_at` set · `paid_side_effects_at` set |
+| | subtotal 110.37 · discount **8.40** · amount_paid 120.48 |
+| `referral_orders` | pct **15.00** · commission **15.30** · original_subtotal 110.37 · customer_discount **8.40** · customer_discount_percent **15.00** · payment_status **pending** · payout_status **unpaid** · ineligible_reason **none** |
+| `commissions` | pct 15.00 · amount **15.30** · status **pending** |
+| inventory | BPC5 **19 → 16**, reserved returns to **0** |
+
+**The commission arithmetic is right and matches the published rule.**
+`/ambassador` says "Commission is calculated on the order subtotal after the
+customer's discount". Commissionable = 110.37 − 8.40 = 101.97; 15 % = 15.2955 →
+**$15.30**. Exactly what was written.
+
+**One consistent financial event:** the $8.40 the customer saved appears on the
+order *and* in `referral_orders.customer_discount`; the $15.30 appears in both
+money tables; the hold state is `pending`/`unpaid`. Nothing disagrees.
+
+### HARN-02 — a replayed webhook changes nothing
+
+**Status:** HARNESS-PROVEN
+
+The same signed `payment.succeeded` event was POSTed a second time:
+
+```
+orders with this id  : 1
+referral_orders rows : 1
+commissions rows     : 1
+inventory BPC5       : 13 on hand, 0 reserved   (unchanged)
+```
+
+**No duplicate order, no duplicate commission, no second inventory decrement.**
+
+### HARN-03 — inventory cannot be oversold, and a failed payment consumes nothing
+
+**Status:** HARNESS-PROVEN
+
+| Test | Result |
+|---|---|
+| **Two buyers race for the final unit** (1 in stock, both submit simultaneously) | one 200, one **400 "1ct just sold out. Please adjust your cart and try again."** — stock ends 1 on hand / 1 reserved. **No oversell.** |
+| **Order 5 of a 1-unit product** | **400 "We can't ship that many of Last One right now. Please lower the quantity and try again."** |
+| **Processor unreachable mid-checkout** | order written then set `canceled`, reservation `released`, **inventory unchanged**, customer told "No charge was made and no order was placed" |
+| **Negative inventory** | `count(*) where inventory_quantity < 0` → **0** |
+| **Reserved exceeding on-hand** | `count(*) where reserved_quantity > inventory_quantity` → **0** |
+
+### HARN-04 — the affiliate edge cases behave
+
+**Status:** HARNESS-PROVEN
+
+| Edge | Result |
+|---|---|
+| **Below the $100 minimum** with a valid code | create-session **refuses**: "This referral code requires a minimum merchandise subtotal of $100.00. Add more items or remove the referral code to continue." **No order created.** |
+| **Unapproved ambassador** (`info_requested`) | order created and paid with **discount 0.00** and `referral_code` **stripped to null**; **zero** `referral_orders` rows. No discount, no commission, no attribution. |
+| Invalid code | `validate_referral_code` → `{"valid": false}` (production, §AFF-01) |
+| Self-referral | blocked by email and by account id (`quote-order.ts:577`) — code-read, not run |
+
+### AFF-03 ESCALATED — the sub-$100 referral path is a **checkout blocker**, not just a missing discount
+
+**Severity: P0 for the ambassador channel** (was P1)
+**Status:** CONFIRMED · BROWSER-PROVEN (production) + HARNESS-PROVEN (the server side)
+
+The harness supplies the half production could not safely show. Putting the two
+together, here is what happens to a customer who clicks an ambassador's link and
+puts one $39.99 vial in the basket:
+
+1. `/cart` displays **"Ambassador Xavier Martinez • 15% customer discount"**.
+2. The order summary applies **no discount** and gives no reason.
+3. The client still sends `referralCode` to `create-session` — confirmed in the
+   captured request payload.
+4. The server **throws**: *"This referral code requires a minimum merchandise
+   subtotal of $100.00. Add more items or remove the referral code to
+   continue."* — HTTP 400, **no order created**.
+
+So the customer is promised a discount, shown none, and then **stopped at the pay
+button** by a minimum they were never told about. They can recover — checkout
+offers "Remove code" — but only if they work out that the ambassador's own code
+is what is blocking them.
+
+**This is the only path a referred customer takes.** Nobody types a code; they
+click a link. And beside it sits the production fact from ADM-03: **75 referral
+clicks, 0 referral orders.** At a $39.99–$49.99 median product price, most first
+baskets are under $100.
+
+The fix is not in the money — the money is right at every step. It is that the
+minimum is invisible until the last possible moment, and that the restore path
+announces a discount the basket does not qualify for.
+
+### AFF-09 — **DEFECT** — a failed commission accrual is invisible to everyone
+
+**Severity:** P1 · SILENT FAILURE (FAILURE TRUTH)
+**Status:** CONFIRMED · HARNESS-PROVEN (demonstrated) + code-read
+**Cross-reference:** NEW. Distinct from the constraint defect the audit fixed.
+
+While reproducing the chain, the harness hit a constraint that refused the
+accrual. What the system did:
+
+```
+order              -> paid, awaiting_fulfillment, paid_side_effects_at set
+inventory          -> 3 units committed  (19 -> 16)
+customer           -> shown a successful order
+webhook response   -> HTTP 200 {"success":true, "status":"paid"}
+referral_orders    -> 0 rows
+commissions        -> 0 rows
+the only trace     -> console.error("Unable to record commission for order …")
+```
+
+**The customer received the ambassador's 15 % discount and the ambassador earned
+nothing, and nothing anywhere said so.**
+
+Both accrual lanes swallow the failure identically:
+
+```
+payment-webhook.ts:1622  } catch (commissionError) {
+payment-webhook.ts:1623    console.error("Unable to record commission for order", orderId, commissionError);
+payment-webhook.ts:1110  } catch (commissionError) {
+payment-webhook.ts:1111    console.error("Unable to record commission for manually approved order", orderId, commissionError);
+```
+
+There is **no `Sentry.captureException`**, no `ineligible_reason` written, no
+admin flag, no retry. `captureException` appears exactly once in the codebase, in
+`global-error.tsx` (client-side React errors), and no
+`captureConsoleIntegration` is configured — so `console.error` never reaches
+Sentry. Confirmed against the live Sentry project: three open issues, none about
+commissions.
+
+**Catching is right — an unfulfilled order is worse than a missing commission
+row.** What is missing is the alarm. This store already proves it can alert well:
+`express_reconcile_backlog` and `shippo_label_unattributed` are deliberate,
+well-written Sentry alerts (§LIVE-033). The money path that pays ambassadors has
+none.
+
+**Production is not currently broken by this** — see AFF-10 — but a guard whose
+failure mode is silent is one bad row away from costing an ambassador their
+earnings with no way to discover it.
+
+### AFF-10 — production's constraint is CORRECT, and the harness parity script re-creates the broken one
+
+**Status:** DATABASE-PROVEN (both sides)
+
+The constraint that refused the accrual above:
+
+| Where | Constraint | Accepts `'pending'`? |
+|---|---|---|
+| **Production** | `referral_orders_payment_status_check` — `CHECK (payment_status = ANY (ARRAY['pending','approved_for_payout','paid','reversed','voided','refunded','partially_refunded']))` | **YES ✅** |
+| **Freshly built harness** | `pc_ro_ps` — `CHECK (payment_status = ANY (ARRAY['paid','refunded','partially_refunded']))` | **NO ❌** |
+
+The accrual writes `payment_status: "pending"` (`payment-webhook.ts`, `basePayload`).
+
+**So the production fix is real, and this session proved it by reproducing the
+original failure and then showing production's constraint accepts exactly what
+the code writes.** The first real ambassador sale will accrue.
+
+**But `src/lib/sql/harness-prod-parity-constraints.sql:51` still adds `pc_ro_ps`**,
+and `scripts/setup-local-harness.sh` runs it. Every harness built from this repo
+therefore carries the narrow constraint and **fails every commission accrual**.
+`referral-orders-commission-lifecycle.sql` already anticipated this — it drops by
+rule rather than by name, and its comment names `pc_ro_ps` explicitly — but the
+parity script that creates it was never updated to match the widened production
+rule.
+
+Consequence: **future affiliate testing on a rebuilt harness produces a false
+failure**, and an engineer could reasonably conclude the production P0 had
+regressed. It cost this session about an hour to distinguish the two. Aligning
+the parity script with production closes it.
+
+### HARN-05 — the server is the price authority, and it errs in the customer's favour
+
+**Status:** HARNESS-PROVEN
+
+The captured `create-session` payload sends **no prices** — only
+`{id, quantity}` per line — plus an `expectedTotal` for the server to check
+against. On one run the client sent `expectedTotal: 125.37` (its referral had not
+hydrated) while the server computed **$116.97 + fees**, applied the discount, and
+created the order at the **lower** figure rather than rejecting the mismatch.
+
+The browser cannot set a price, and a client that under-claims a discount does
+not cost the customer money. **AUTHORIZATION TRUTH for pricing: PROVEN.**
 
 _(walk continues)_
 
