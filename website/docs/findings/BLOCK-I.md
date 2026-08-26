@@ -16,8 +16,10 @@ Finding ids are namespaced `I-nn` per Rule 2. Cross-block items are marked
 
 ## Inventory: what was enumerated
 
-- **78 admin API route files** under `src/app/api/admin/**`, every exported
-  HTTP method, and the auth + capability call in each. Table in I-02.
+- **75 admin API route files** under `src/app/api/admin/**`, every exported
+  HTTP method, and the auth + capability call in each. 58 gate on a capability,
+  17 do not; each of the 17 judged individually in I-02. (My first pass said 78
+  files and 16 ungated, from a grep that missed `canView*` — corrected there.)
 - **Every client-IP read** in the codebase (`x-forwarded-for`, `x-real-ip`,
   `x-vercel-forwarded-for`): 10 call sites, 3 distinct resolution strategies.
 - **Every parameterised non-admin API route** (4 files) for IDOR.
@@ -277,63 +279,148 @@ backup, or from anyone who already had access.
 
 ---
 
-## I-02 — Money-spending fulfillment and shipping routes have no capability gate: `staff` can buy and void shipping labels
+## I-02 — CORRECTED. The capability-gate gap is real but far narrower than I first filed, and the money-spending path is dead code in production
 
-**Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN
+**Grade:** `DATABASE-PROVEN` · **Severity:** P3 today / **P1 the day
+`SHIPPO_ALLOW_LABEL_PURCHASE` is set to `true`** · **Status:** OPEN as a latent
+risk; no code change made
 
-Every admin route was enumerated with its methods and its auth calls. 62 of 78
-carry both a session check and a capability gate. **16 carry a session check
-only** — meaning the lowest-privilege role, `staff`, can call them.
+### Correction to the first version of this finding
 
-Most of those 16 are read-only and defensible. These are not:
+The version of I-02 committed earlier in this block was **overstated, and the
+cause was a defect in my own method.** I enumerated capability gates with a grep
+for `canManage[A-Za-z]*` and did not include `canView[A-Za-z]*`. Two capability
+functions are named `canViewProfit` and `canViewAuditLog`, so every route gated
+by those read as ungated.
 
-| Route | Methods | What it does with no capability gate |
-|---|---|---|
-| `orders/[orderId]/shipping/label` | POST, DELETE | **Buys a shipping label (real money) / voids-refunds one** |
-| `fulfillment/labels` | GET, POST | **Bulk label purchase** |
-| `orders/[orderId]/shipping/rates` | GET, POST | Queries carrier rates |
-| `orders/[orderId]/shipping/sync` | POST | Writes tracking state onto an order |
-| `fulfillment/batches` | GET, POST, PATCH | Creates/mutates fulfillment batches |
-| `orders/[orderId]/communications` | GET, **POST** | **Sends a message to a customer** |
-| `tax/export` | GET | Full tax export |
+Concretely wrong in the first version:
 
-The comparison that makes this a defect rather than a design choice is
-*internal*: this codebase already treats spending and customer contact as
-manager+ work.
+| Claim | Reality |
+|---|---|
+| "`tax/export` requires nothing … three exports of comparable sensitivity, two gated, one not" | **False.** `tax/export:17` calls `canViewProfit(session.role)` — manager+. There is no inconsistency. |
+| "`orders/[orderId]/communications` POST **sends a message to a customer**" | **Overstated.** It re-sends emails *already queued as failed for this order* and reaches no business logic to do it (`route.ts:9-14`). It cannot compose or send new content. |
+| "16 routes carry a session check only" | **Wrong count.** Corrected below. |
 
-- `canManageRefunds` is manager+ because "refunds move real money once a payment
-  processor is connected" (`src/lib/admin-roles.ts:16-23`). Buying a label moves
-  real money **today**, through Shippo, with no processor required.
-- `canManageEmailCampaigns` is manager+ because "a bad send cannot be recalled"
-  (`admin-roles.ts:78-83`). `orders/[orderId]/communications` POST sends to a
-  customer and equally cannot be recalled.
-- `orders/export` and `customers/export` require `canManageSettings`;
-  `tax/export` requires nothing. Three exports of comparable sensitivity, two
-  gated, one not.
+Corrected enumeration, pattern `\bcan[A-Z][A-Za-z]*\b` across every route file:
 
-There is **no `canManageFulfillment` capability at all** in `admin-roles.ts` —
-the gate was never written, so the routes could not have used one.
+- **75** route files under `src/app/api/admin/`
+- **58** call a capability gate
+- **17** do not (16 of those still require an admin session; `auth/logout`
+  correctly needs neither)
 
-`src/lib/admin-permission-matrix.test.ts` enumerates every exported capability
-and fails when a new one is unclassified. It cannot catch this: the failure is
-a *missing* capability, not an unclassified one. The matrix proves the gates
-that exist are correctly assigned; it says nothing about routes that reference
-no gate.
+### The 17, each judged individually
 
-### Fix (proposed — not yet applied)
+Read in full including header comments, because this codebase documents its
+decisions and a documented decision is authoritative intent, not a defect.
 
-Add `canManageFulfillment` (manager+, same bar as refunds), apply it to the
-label-purchase, label-void, bulk-label, batch-mutation and customer-message
-routes, gate `tax/export` behind `canManageSettings` to match its two
-siblings, and extend the permission matrix test with the new capability.
+| Route | Verdict |
+|---|---|
+| `auth/logout`, `auth/session` | Correct. Logout must work without a gate; session returns the caller's own identity. |
+| `account` PATCH | **Correct, and documented.** *"any signed-in admin can change their OWN password or username after re-entering their current password. No role gate — you can always manage your own credentials."* Re-authenticates via `validateAdminCredentials(session.username, …)` at `:25`, and every write targets `session.username`. Cannot reach another account and cannot set a role. |
+| `metrics`, `fulfillment/queues`, `fulfillment/labels/print`, `orders/[orderId]/packing-slip`, `orders/[orderId]/shipping/label/print`, `orders/[orderId]/shipping/rates`, `shipping/diagnostics`, `inventory-reservation-check`, `checkout-preflight` | Read-only operational views. `metrics` carries no profit/COGS/margin field, so `canViewProfit` is not being bypassed. |
+| `orders/[orderId]/communications` | Bounded retry of already-queued failed mail. No new content possible. |
+| `orders/[orderId]/shipping/sync` POST | Documented as *"the ONLY writing endpoint left in the shipping surface … and it still cannot spend money: creating a Shippo order is a record, not a purchase."* Verified against `syncOrderToShippo`. |
+| `fulfillment/batches` POST/PATCH | Grouping and picking state. No money, no customer contact. |
+| `orders/[orderId]/shipping/label` POST/DELETE, `fulfillment/labels` POST | **The only real question.** See below. |
 
-**CROSS-BLOCK:** `src/app/api/admin/orders/[orderId]/shipping/**` and
-`src/app/api/admin/fulfillment/**` are Block D's primary files (fulfillment).
-Per Rule 3 the capability-gate edit is recorded here rather than applied, unless
-Block D has not touched them at consolidation time. `src/lib/admin-roles.ts` and
-`src/lib/admin-permission-matrix.test.ts` are Block I's own and are safe to edit.
+### The label-purchase routes: a documented decision, and a dead path
 
----
+`orders/[orderId]/shipping/label` states the decision explicitly (`route.ts:16-21`):
+
+> *"There is no role gate beyond 'is an admin': packing and shipping is the
+> daily work of every account that gets into this dashboard, and making staff
+> wait for a manager to void a mis-bought label would leave a wrong label live.
+> Both actions are written to admin_audit_logs with who, when and what it cost."*
+
+That is a considered business decision with a stated rationale and a named
+compensating control. Under the execution plan's step 2 it is authoritative
+intent. I do not overrule it.
+
+The controls that actually exist on the purchase path, all verified in source:
+
+1. **A kill switch, defaulting to OFF.** `labelPurchasingEnabled()`
+   (`src/lib/shippo/service.ts:1074-1076`) returns true only when
+   `SHIPPO_ALLOW_LABEL_PURCHASE` is exactly `"true"`. Absent or anything else →
+   purchasing refuses with `PURCHASING_DISABLED_MESSAGE`: *"Vanta does not buy
+   postage."*
+2. Checked twice — at the money boundary inside `purchaseLabelForOrder` and
+   again up front in the batch route, so a stray batch call gets one clear
+   refusal instead of N.
+3. **Explicit spend confirmation in the request body**: `confirmSpend !== true`
+   is refused (`fulfillment/labels/route.ts`), so a replayed fetch or stale tab
+   cannot buy.
+4. **25 orders per request** (`MAX_ORDERS_PER_PURCHASE`).
+5. An atomic `label_purchase_claimed_at` claim, a `Shippo-Idempotency-Key` keyed
+   on the order, and an audit row recording what was *actually* bought.
+
+### Answering the system map's open question (line 440)
+
+`PHASE1-SYSTEM-MAP.md:440` asks:
+
+> *"Is SHIPPO_ALLOW_LABEL_PURCHASE set anywhere? If it is false everywhere,
+> purchaseLabelForOrder / purchaseBatchLabels are dead code and the only live
+> label path is applyTransactionCreated — which changes the severity ordering of
+> several findings."*
+
+**Answered, with production data.** `purchaseLabelForOrder` sets
+`label_purchase_claimed_at` atomically *before* it can buy anything, so that
+column is the fingerprint of Vanta's own purchase path having run:
+
+```sql
+select count(*) as total_orders,
+       count(*) filter (where label_purchase_claimed_at is not null) as ever_claimed,
+       count(*) filter (where label_purchased_at    is not null) as ever_purchased,
+       count(*) filter (where label_voided_at       is not null) as ever_voided,
+       count(*) filter (where shippo_transaction_id is not null) as has_txn,
+       count(*) filter (where shippo_order_id       is not null) as synced_to_shippo
+from public.orders;
+```
+
+| total_orders | ever_claimed | ever_purchased | ever_voided | has_txn | synced_to_shippo |
+|---|---|---|---|---|---|
+| 15 | **0** | 2 | 0 | 2 | 5 |
+
+**Zero claims, ever — while two labels exist.** Vanta's own purchase path has
+never executed in production. The two labels arrived through
+`applyTransactionCreated`, the webhook fired when a label is bought by hand in
+Shippo's dashboard, exactly as the system map describes the intended workflow.
+
+So today: `purchaseLabelForOrder` and `purchaseBatchLabels` are **dead code in
+production**, and no admin of any role can spend a cent through this app.
+
+### What remains, stated at its true size
+
+Two things, both latent rather than live:
+
+1. **No cumulative spend cap anywhere.** The 25-per-request cap bounds one
+   request, not a sequence of them; nothing limits spend per hour, per day or
+   per account. The compensating control named in the route's rationale is the
+   audit log, which is *after the fact* — it records a spend, it does not stop
+   one. The moment `SHIPPO_ALLOW_LABEL_PURCHASE=true` is set, a single
+   compromised **staff** session can buy postage in unbounded sequential
+   batches, and nothing intervenes until someone reads the audit log.
+2. **The bulk route inherits a rationale that was never written down at it.**
+   The single-label route argues its no-role-gate decision; `fulfillment/labels`
+   POST does not restate it. Buying up to 25 labels at once is a materially
+   different act from buying one, and it should say so or say why not.
+
+### No code change made — deliberately
+
+Adding `canManageFulfillment` would overrule a documented decision on a path
+that cannot currently spend money, in a file another session may also be
+editing, on the strength of a risk that is conditional on an env var nobody has
+set. That trade is wrong. Recorded, not patched.
+
+**`OWNER DECISION NEEDED:`** before `SHIPPO_ALLOW_LABEL_PURCHASE` is ever set to
+`true`, decide (a) whether a per-day or per-account spend cap should exist, and
+(b) whether bulk purchase should sit behind manager+ even though single purchase
+deliberately does not. Both are cheap to add *before* the switch is flipped and
+awkward afterwards.
+
+**CROSS-BLOCK:** `src/lib/shippo/service.ts` is Block D's primary file. The
+kill-switch and claim behaviour above was read, not modified. Block D should
+know that `ever_claimed = 0` proves its purchase path is untested in production
+by anything other than unit tests.
 
 ## I-03 — Public rate limits are keyed on a client-controlled header; the same codebase already calls that header untrusted
 
@@ -719,7 +806,7 @@ imagery? Left unchanged rather than guessed at.
 | Id | Severity | Evidence | Fixed |
 |---|---|---|---|
 | I-01 | P0 | `DATABASE-PROVEN` + `BEHAVIORAL-TEST-PROVEN` | **Read boundary fixed & tested.** Rotation + historical rows still owed to the owner |
-| I-02 | P1 | `SOURCE-INSPECTED` | No — fix proposed, CROSS-BLOCK with D |
+| I-02 | P3 today / P1 if enabled | `DATABASE-PROVEN` | No — **corrected**; latent, owner decision before the switch is flipped |
 | I-03 | P1 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** (incl. I-03b, found by the test) |
 | I-04 | P2 | `SOURCE-INSPECTED` | No — fix proposed, CROSS-BLOCK unassigned |
 | I-05 | **P1** (raised) | `BEHAVIORAL-TEST-PROVEN` + `DATABASE-PROVEN` | **Fixed & tested** |
