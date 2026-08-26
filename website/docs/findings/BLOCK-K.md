@@ -44,6 +44,7 @@ pasted verbatim.
 | K-19 | P1 | `SOURCE-INSPECTED` | Every call to the payment processor has no timeout, while the ad pixels and the label printer all have one |
 | K-20 | P2 | `SOURCE-INSPECTED` | Four tables are written and never read, and two double the visitor data retained for no benefit |
 | K-21 | P1 | `SOURCE-INSPECTED` | The homepage hardcodes the "99%" the trust-claims module says never appears, and checkout makes a different fulfilment promise from the rest of the site |
+| K-22 | P2 | `BEHAVIORAL-TEST-PROVEN` | A coupon that loses the discount competition is still recorded and still redeemed, burning a one-shot code for nothing |
 
 ---
 
@@ -3408,6 +3409,164 @@ the module:
 
 ---
 
+---
+
+## K-22 — A coupon that loses the discount competition is still stamped on the order and still redeemed, burning a one-shot code for nothing
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` (the competition) + `SOURCE-INSPECTED` (the redemption chain) · **Severity:** P2 · **Status:** OPEN
+**Area:** money and numeric precision (found while closing that area's open item)
+
+### What is wrong
+
+Only **one** discount applies to an order. `resolveCustomerDiscount` (server) and
+`resolveCartDiscount` (`src/lib/discount-resolution.ts:68-83`) pick the largest
+candidate from bulk savings, member pricing, ambassador personal, the promo, and
+the coupon — and discard the rest.
+
+The coupon is recorded and redeemed regardless of whether it won:
+
+```ts
+// src/lib/quote-order.ts:586   — validate
+? await validateCoupon(input.couponCode, discountBase, input.customer.email, { isActiveMember: … })
+// src/lib/quote-order.ts:870   — carried forward, whether or not it won the competition
+couponCode: coupon?.code ?? null,
+// src/lib/quote-order.ts:976   — stamped on the order row
+coupon_code: input.couponCode,
+// src/lib/payment-webhook.ts:1331, 1510
+const effectiveCouponCode = orderRecord?.coupon_code ? String(orderRecord.coupon_code) : eventPayload.couponCode;
+…
+if (effectiveCouponCode) {
+  …redeemCoupon(effectiveCouponCode)
+```
+
+`if (effectiveCouponCode)` is the entire condition. Nothing asks whether the
+coupon produced the discount that was actually applied.
+
+### Why this is not a rare tie-break
+
+It fires whenever any other candidate beats the coupon, which is ordinary:
+
+- A **member** with member pricing worth more than a 5% cart-recovery code enters
+  the code anyway (it was emailed to them). Member pricing wins, the code is
+  redeemed.
+- A cart at a **bulk-savings tier** worth more than the coupon.
+- An **ambassador** using their personal discount.
+
+Cart-recovery coupons are minted `max_redemptions: 1` with an `assigned_email`
+(`src/lib/cart-recovery.ts:135-138`) — personal and one-shot. Burning one is
+permanent for that customer.
+
+For a store-wide limited code, every such order consumes a redemption slot from
+the campaign's cap while discounting nothing, so the cap is reached early and
+later customers are told *"This coupon has reached its redemption limit"* for
+orders that were never discounted.
+
+### Evidence — the competition, probed against the real function
+
+```
+$ TZ=UTC npx vitest run scratchpad/k-disc.test.ts
+  bulk 50.004 vs member 50.000 -> bulk_savings 50
+  bulk 50.00 vs member 50.01 -> member_pricing 50.01
+  0.1+0.2 = 0.30000000000000004 vs 0.3 -> bulk_savings 0.3
+  bulk 40 vs coupon 40 -> bulk_savings
+  member 40 vs coupon 40 -> member_pricing
+  discount 999 on a 500 subtotal -> 500
+  negative candidate -> null
+
+ Test Files  1 passed (1)   Tests  5 passed (5)
+```
+
+Rows 4 and 5 are the finding: with an equal or larger competing discount the
+coupon does not win — and the redemption chain above does not care.
+
+### Impact
+
+A customer who receives a personal recovery code, applies it, and happens to hold
+a better discount loses the code permanently and gets nothing for it. From their
+side the code silently "worked" — no error, no message that it was superseded.
+When they try it on the next order it reports as already used.
+
+The store also loses the campaign-cap accounting: `redemptions_count` measures
+orders that *carried* a code, not orders a code *discounted*, so the redemption
+metric overstates the campaign's reach and the cap binds early.
+
+### Reproduction
+
+1. Give a customer an active membership whose member-pricing discount on a test
+   cart exceeds 5%.
+2. Mint a cart-recovery coupon for them (`max_redemptions: 1`, `assigned_email`).
+3. Place an order applying that code.
+4. `select coupon_code, discount_amount from orders where order_id='<id>'` → the
+   code is recorded, and `discount_amount` equals the **member-pricing** amount,
+   not the coupon's.
+5. `select redemptions_count from coupons where code='SAVE-…'` → **1**.
+6. Try the code on a second order → *"This coupon has reached its redemption
+   limit"*.
+
+### Smallest safe root-cause fix
+
+Record the coupon only when it is the discount that applied. `quoteOrder` already
+knows which candidate won — that is what `resolveCustomerDiscount` returns — so
+carry that through instead of the validated code:
+
+```ts
+// quote-order.ts:870
+couponCode: appliedDiscount?.type === "coupon" ? (coupon?.code ?? null) : null,
+```
+
+That fixes the redemption automatically, because `payment-webhook.ts:1331` reads
+`orders.coupon_code`.
+
+**Then tell the customer.** Today a superseded coupon is silently swallowed. The
+quote already knows both amounts, so the cart can say *"Your membership discount
+of $X is larger than coupon SAVE-… ($Y), so we applied the membership discount and
+kept your code for next time."* That converts a silent loss into a good outcome,
+and it is the difference between a support ticket and a retained code.
+
+If the business would rather keep recording the entered code for attribution, add
+a separate `coupon_code_entered` column and redeem only on `coupon_code` — but do
+not conflate "entered" with "redeemed", which is the current defect.
+
+### Regression test to write
+
+Quote an order where member pricing beats the coupon and assert
+`buildOrderRow`'s `coupon_code` is null while `discount_amount` equals the member
+amount. Negative control: restore `coupon?.code ?? null` and confirm the test
+fails on the recorded code.
+
+Second test: assert `redeemCoupon` is not called for an order whose applied
+discount was not the coupon.
+
+### CROSS-BLOCK
+
+- `src/lib/quote-order.ts:870` — **shared file, earlier-lettered block wins.** One
+  line.
+- `src/lib/payment-webhook.ts:1331,1510` — **Block A+B.** No change needed if the
+  quote-order fix lands; flag it so they do not fix it a second way.
+- **Block D** owns the discount resolvers and should confirm the server's
+  `resolveCustomerDiscount` in `profit-engine.ts` returns the winning type in a
+  form `buildOrderRow` can read.
+
+### Also checked, and clear — the float-comparison concern in this area is not real
+
+This closes the `NOT VERIFIED` item on `resolveCartDiscount`'s float compare:
+
+- `compete()` (`discount-resolution.ts:71`) applies
+  `Math.round(value * 100) / 100` **before** any comparison, so two candidates
+  differing by less than a cent are equal by the time `resolveBestDiscount` sees
+  them. `50.004` vs `50.000` both resolve to `50`, and `0.1 + 0.2` resolves to
+  `0.3` exactly. **A sub-cent float difference cannot decide which discount
+  applies.**
+- The result is clamped to the subtotal (`999` on a `500` cart → `500`) and
+  negative candidates are rejected (`resolveBestDiscount` requires `amount > 0`),
+  so a stacked discount cannot produce a negative total from here.
+- On an exact tie the strict `>` in `resolveBestDiscount:29` means the first
+  candidate in the array wins — bulk, then member, then ambassador, then promo,
+  then coupon. **The money is identical either way**; only the displayed label
+  differs. That ordering is what surfaces K-22, but it is not itself a defect.
+
+---
+
 # Block K — coverage and handoff
 
 ## Coverage against the seven assigned areas
@@ -3418,7 +3577,7 @@ a reason. Nothing below is graded higher than its evidence.
 | area | status | what was done | what is still owed |
 |---|---|---|---|
 | **Time / date / timezone** | ✅ | 8 findings (K-01, K-03, K-05, K-07, K-08, K-09, K-10, K-12). Every customer-facing date formatter swept; coupon `starts_at`/`ends_at`, membership grace/renewal/skip, store-credit month, birthday, offers-bar urgency all exercised. Five probes run. | Nothing material. DST-specific behaviour is inherently covered by the instant-comparison style used throughout, and the one `+365d` annual term drifts a day per leap year — noted, too small to number. |
-| **Money / numeric precision** | 🟨 | K-11 (points round-trip, exhaustive probe over 100k values). Disproved the Phase 1 Buy-3-Get-1 P1 lead in writing. Verified `bundle-pricing.ts` and `calculateCardProcessingFee` are correct. Ruled out `numeric(12,2)` overflow. | **`NOT VERIFIED`: sales-tax rounding** (per-line vs on-total, and whether `admin-tax-report` re-derives it the same way) — belongs with Block F, who own `admin-tax-report.ts`. **`NOT VERIFIED`: `resolveCartDiscount`'s float comparison** when two candidates differ by <1¢. **`NOT VERIFIED`: percent round-trip through `numeric(5,2)`** — needs a database. |
+| **Money / numeric precision** | 🟨 | K-11 (points round-trip, exhaustive probe over 100k values) and K-22 (a losing coupon is still redeemed). Disproved the Phase 1 Buy-3-Get-1 P1 lead in writing, and closed the `resolveCartDiscount` float-compare question as a negative result. Verified `bundle-pricing.ts` and `calculateCardProcessingFee` are correct. Ruled out `numeric(12,2)` overflow. | **`NOT VERIFIED`: sales-tax rounding** (per-line vs on-total, and whether `admin-tax-report` re-derives it the same way) — belongs with Block F, who own `admin-tax-report.ts`. **`NOT VERIFIED`: percent round-trip through `numeric(5,2)`** — needs a database. |
 | **Dead / legacy / dormant code** | 🟨 | K-20, from a full 61-table read/write classification. Confirmed the `product_subscriptions` lead, corrected the map on `referrals`, cleared `partner_program_stats`. | **`NOT VERIFIED`: unreferenced exports, uncalled API routes, unimported components, SQL columns no TS reads.** The table sweep was run; these four were not. |
 | **Environment / config drift** | ✅ | K-06 (the `admin_control` reader table, all ten) and K-16 (pixel-ID defaults, plus four negative controls on the payment kill switches). Full `process.env` enumeration done. | The Vercel-side question — whether `TIKTOK_EVENTS_API_ACCESS_TOKEN` and `REDDIT_CONVERSIONS_ACCESS_TOKEN` are scoped per-environment — **cannot be answered from source**. It needs the dashboard, and it decides how bad K-16 is in practice. |
 | **Legal / policy** | ✅ | K-04, K-17, K-18, K-21. Every policy DEFAULT read and checked against behaviour; age gate, compliance attestations, trust claims, consent, cancellation promise. | **`NOT VERIFIED`: the shipping and terms policies** were read but not line-by-line reconciled against `getShippingConfig`/`calculateShipping`. Lower value than the four found, but not done. |
@@ -3822,4 +3981,53 @@ for (const total of [0.29, 1.13, 4.58, 8.23, 12.29]) {
   const fair = Math.round(pointsDiscountAmount * 100);
   console.log(`    total $${String(total).padEnd(6)} discount $${String(pointsDiscountAmount).padEnd(6)} debited ${String(pointsRedeemed).padEnd(6)} fair ${String(fair).padEnd(6)} ${pointsRedeemed !== fair ? "<-- MISMATCH, store eats " + ((fair - pointsRedeemed) / 100).toFixed(2) : ""}`);
 }
+```
+
+### K-22 / discount resolution
+
+```ts
+import { describe, it, expect } from "vitest";
+import { resolveCartDiscount, resolveBestDiscount } from "@/lib/discount-resolution";
+
+const base = { subtotal: 500, quantityBundleSavings: 0, bulkSavingsAmount: 0,
+  memberPricingAmount: 0, ambassadorPersonalAmount: 0, couponDiscountAmount: 0, promo: null };
+
+describe("resolveCartDiscount float behaviour", () => {
+  it("sub-cent differences cannot decide the winner: compete() rounds first", () => {
+    // Two candidates 0.004 apart - below a cent.
+    const r = resolveCartDiscount({ ...base, bulkSavingsAmount: 50.004, memberPricingAmount: 50.0 });
+    console.log("  bulk 50.004 vs member 50.000 ->", r.best?.type, r.amount);
+    expect(r.amount).toBe(50);           // both round to 50.00
+  });
+
+  it("a real cent decides it correctly", () => {
+    const r = resolveCartDiscount({ ...base, bulkSavingsAmount: 50.00, memberPricingAmount: 50.01 });
+    console.log("  bulk 50.00 vs member 50.01 ->", r.best?.type, r.amount);
+    expect(r.best?.type).toBe("member_pricing");
+  });
+
+  it("classic float error is absorbed", () => {
+    const r = resolveCartDiscount({ ...base, bulkSavingsAmount: 0.1 + 0.2, memberPricingAmount: 0.3 });
+    console.log("  0.1+0.2 =", 0.1 + 0.2, "vs 0.3 ->", r.best?.type, r.amount);
+    expect(r.amount).toBe(0.3);
+  });
+
+  it("ON A TIE the array order decides, and the coupon is last", () => {
+    const r = resolveCartDiscount({ ...base, bulkSavingsAmount: 40, couponDiscountAmount: 40 });
+    console.log("  bulk 40 vs coupon 40 ->", r.best?.type);
+    expect(r.best?.type).toBe("bulk_savings");     // strict >, so first wins
+    const r2 = resolveCartDiscount({ ...base, memberPricingAmount: 40, couponDiscountAmount: 40 });
+    console.log("  member 40 vs coupon 40 ->", r2.best?.type);
+    expect(r2.best?.type).toBe("member_pricing");
+    // same MONEY either way - the difference is which label the cart shows
+    expect(r.amount).toBe(r2.amount);
+  });
+
+  it("clamps to the subtotal and never goes negative", () => {
+    console.log("  discount 999 on a 500 subtotal ->", resolveCartDiscount({ ...base, couponDiscountAmount: 999 }).amount);
+    expect(resolveCartDiscount({ ...base, couponDiscountAmount: 999 }).amount).toBe(500);
+    console.log("  negative candidate ->", resolveBestDiscount([{ type: "coupon", amount: -5 }]));
+    expect(resolveBestDiscount([{ type: "coupon", amount: -5 }])).toBeNull();
+  });
+});
 ```
