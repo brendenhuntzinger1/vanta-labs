@@ -919,3 +919,51 @@ alter table public.partners    drop column if exists referral_code_locked,
 ```
 Safe only while `referral_code_aliases` holds no rows — an alias is a live
 redirect for links already printed. It is empty now (the table does not exist).
+
+### STEP 4 — APPLIED ✅
+
+Verify output:
+
+```
+alias_table               : referral_code_aliases
+changes_table             : referral_code_changes
+ambassador_cols_expect_2  : 2
+partner_cols_expect_2     : 2
+uq_index_expect_1         : 1
+ambassadors_rows_expect_8 : 8      <-- unchanged
+codes_expect_8            : 8      <-- unchanged, none lost to the unique index
+alias_rows_expect_0       : 0
+```
+
+The UNIQUE index built without conflict — all 8 ambassador codes survive, none
+was dropped or altered. **M-03 is CLOSED in production.** The ambassador
+"change my code" feature is now live against the currently-deployed
+`referral-code-service.ts`, which is byte-identical to the branch's copy, so
+there is no half-state to worry about.
+
+---
+
+## STEP 5b — pre-state capture (committed BEFORE the step runs)
+
+Both index definitions on `rate_limit_hits`, verbatim, plus live usage:
+
+| index | definition | size | idx_scan |
+|---|---|---|---|
+| `rate_limit_hits_bucket_time_idx` | `CREATE INDEX rate_limit_hits_bucket_time_idx ON public.rate_limit_hits USING btree (bucket, created_at DESC)` | 280 kB | **20,864** |
+| `idx_rate_limit_bucket_time` | `CREATE INDEX idx_rate_limit_bucket_time ON public.rate_limit_hits USING btree (bucket, created_at DESC)` | 272 kB | **49** |
+| `rate_limit_hits_pkey` | `CREATE UNIQUE INDEX rate_limit_hits_pkey ON public.rate_limit_hits USING btree (id)` | 88 kB | 1 |
+
+**Byte-identical definitions** apart from the name. The planner has already
+chosen: 20,864 scans against 49, a 426× difference. `idx_rate_limit_bucket_time`
+is the one to drop; `rate_limit_hits_bucket_time_idx` must survive.
+
+**Manual reconstruction, if ever needed:**
+```sql
+create index concurrently if not exists idx_rate_limit_bucket_time
+  on public.rate_limit_hits using btree (bucket, created_at desc);
+```
+And if the WRONG one is dropped, recreate immediately:
+```sql
+create index concurrently if not exists rate_limit_hits_bucket_time_idx
+  on public.rate_limit_hits using btree (bucket, created_at desc);
+```
