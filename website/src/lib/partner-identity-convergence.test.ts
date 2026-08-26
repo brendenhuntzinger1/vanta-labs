@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "pg";
+import { suiteDatabaseUrl } from "@/lib/test-support/suite-database";
 
 // ---------------------------------------------------------------------------
 // IDENTITY CONVERGENCE — the half of the BRUTUS defect that was never fixed.
@@ -140,7 +141,7 @@ if (!DATABASE_URL) {
 describeDb("partner identity convergence (real plpgsql)", () => {
   beforeEach(async () => {
     if (!client) {
-      client = new Client({ connectionString: DATABASE_URL });
+      client = new Client({ connectionString: await suiteDatabaseUrl(DATABASE_URL!, "identity_convergence") });
       await client.connect();
     }
     await client.query(FIXTURE_DDL);

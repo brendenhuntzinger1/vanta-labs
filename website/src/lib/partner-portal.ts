@@ -364,19 +364,39 @@ export async function autoApproveEligibleCommissions() {
 
   const approvedAt = now.toISOString();
 
-  const { error: approveError } = await supabaseAdmin
+  // Guard the write with the status we READ. The select above and this update
+  // are separate requests, so anything can happen to these rows in between — a
+  // refund reversing one, an admin releasing a payout, another sweep still
+  // running. Without the guard this update overwrites all of them, dragging
+  // money that was reversed (or already paid) back into the payout queue, where
+  // it gets paid again. markCommissionsPaid has always claimed its rows this
+  // way; this path never did.
+  const { data: claimedRows, error: approveError } = await supabaseAdmin
     .from("referral_orders")
     .update({ payment_status: "approved_for_payout", approved_for_payout_at: approvedAt, updated_at: approvedAt })
-    .in("id", eligibleIds);
+    .in("id", eligibleIds)
+    .eq("payment_status", "pending")
+    .select("id, order_id");
 
   assertNoSupabaseError("referral_orders.update(auto approve)", approveError);
 
-  const { error: mirrorError } = await supabaseAdmin
-    .from("commissions")
-    .update({ status: "approved_for_payout", updated_at: approvedAt })
-    .in("order_id", pendingRows.filter((row) => eligibleIds.includes(row.id)).map((row) => row.order_id));
+  // Mirror only what this call actually claimed, not what it hoped to claim.
+  // Keying off the pre-read list would move `commissions` rows whose
+  // authoritative row was just claimed by someone else.
+  const claimedOrderIds = (claimedRows ?? []).map((row) => row.order_id).filter(Boolean);
 
-  assertNoSupabaseError("commissions.update(auto approve)", mirrorError);
+  if (claimedOrderIds.length > 0) {
+    const { error: mirrorError } = await supabaseAdmin
+      .from("commissions")
+      .update({ status: "approved_for_payout", updated_at: approvedAt })
+      .in("order_id", claimedOrderIds)
+      // Same reasoning one statement later: a reversal can land between the two
+      // ledger writes, and an unguarded mirror would silently undo it on this
+      // side only, leaving the two ledgers disagreeing about the same order.
+      .eq("status", "pending");
+
+    assertNoSupabaseError("commissions.update(auto approve)", mirrorError);
+  }
 }
 
 function toMonthKey(dateIso: string) {

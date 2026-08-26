@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "pg";
+import { suiteDatabaseUrl } from "@/lib/test-support/suite-database";
 
 // ---------------------------------------------------------------------------
 // THE ADMIN INVITE DOOR — the other half of the BRUTUS defect.
@@ -249,7 +250,7 @@ if (!DATABASE_URL) {
 describeDb("createPartnerInvite (real Postgres, real constraints)", () => {
   beforeEach(async () => {
     if (!client) {
-      client = new Client({ connectionString: DATABASE_URL });
+      client = new Client({ connectionString: await suiteDatabaseUrl(DATABASE_URL!, "invite_atomicity") });
       await client.connect();
     }
     authUsersByEmail.clear();
