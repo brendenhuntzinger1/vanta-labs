@@ -4,6 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { supabase } from "@/lib/supabase";
 import { US_STATE_TAX_TABLE } from "@/lib/sales-tax";
+// NOT from "@/lib/admin-control" — that module starts with `import
+// "server-only"`, which Next.js hard-errors on if any Client Component's
+// module graph reaches it (even for an unrelated, dependency-free export).
+// This client-safe file holds the one piece this component actually needs.
+import { describeEffectiveRate, PROCESSING_FEE_DEFAULT_PERCENT } from "@/lib/admin-control-shared";
 
 type ControlSnapshot = Record<string, Record<string, unknown>>;
 
@@ -566,7 +571,13 @@ export function AdminControlCenterClient() {
               <label className="text-zinc-300">Minimum margin (%)<input value={profitMinPercent} onChange={(e) => setProfitMinPercent(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Minimum profit ($)<input value={profitMinDollars} onChange={(e) => setProfitMinDollars(e.target.value)} placeholder="0" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Worst-case unit cost ($, when a product has no cost set)<input value={profitWorstCaseCost} onChange={(e) => setProfitWorstCaseCost(e.target.value)} placeholder="33" className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Payment processor fee (%)<input value={profitProcessingFee} onChange={(e) => setProfitProcessingFee(e.target.value)} placeholder="8" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Payment processor fee (%)
+                <input value={profitProcessingFee} onChange={(e) => setProfitProcessingFee(e.target.value)} placeholder="8" className="vl-input mt-1 w-full px-3 py-2" />
+                <span className="mt-1 block text-xs text-zinc-500">
+                  {describeEffectiveRate(profitProcessingFee, PROCESSING_FEE_DEFAULT_PERCENT)}
+                  {" · this fee is modelled, not a settled processor charge."}
+                </span>
+              </label>
               <label className="text-zinc-300">Shipping cost estimate ($ per order, pre-ship)<input value={profitShippingEstimate} onChange={(e) => setProfitShippingEstimate(e.target.value)} placeholder="6" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Processor fee charged on sales tax?
                 <select value={profitFeeIncludesTax ? "yes" : "no"} onChange={(e) => setProfitFeeIncludesTax(e.target.value === "yes")} className="vl-input mt-1 w-full px-3 py-2">

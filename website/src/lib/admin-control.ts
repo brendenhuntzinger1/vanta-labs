@@ -11,6 +11,17 @@ import {
   type PaymentMethodConfig,
   type CardProcessingFeeConfig,
 } from "@/lib/payment-methods";
+import { PROCESSING_FEE_DEFAULT_PERCENT, describeEffectiveRate } from "@/lib/admin-control-shared";
+
+// Re-exported so every existing/expected `@/lib/admin-control` import site
+// keeps working. The implementation itself lives in admin-control-shared.ts
+// (which has no `server-only` import) because this file's `import
+// "server-only"` above poisons the whole module for any Client Component
+// that imports from it — Next.js hard-errors at build time even for an
+// otherwise-pure, dependency-free export like this one. A Client Component
+// (e.g. admin-control-center-client.tsx) must import `describeEffectiveRate`
+// from `@/lib/admin-control-shared` directly, not from here.
+export { describeEffectiveRate };
 
 const CONTROL_ACTION = "admin_control_upsert";
 
@@ -622,7 +633,7 @@ export const DEFAULT_PROFIT_CONFIG: ProfitSettingsConfig = {
   minProfitPercent: 0,
   minProfitDollars: 0,
   worstCaseUnitCost: 33,
-  processingFeePercent: 8,
+  processingFeePercent: PROCESSING_FEE_DEFAULT_PERCENT,
   processingFeeIncludesTax: true,
   // FALSE BY OWNER'S DECISION. Collected sales tax is money held on behalf of a
   // state, not the store's to keep, and this store files a remittance return for
