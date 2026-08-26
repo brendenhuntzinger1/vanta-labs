@@ -32,6 +32,7 @@ pasted verbatim.
 | K-07 | P1 | `BEHAVIORAL-TEST-PROVEN` | The "one skip per paid period" cap allows two skips, in exactly the window the reminder email targets |
 | K-08 | P2 | `BEHAVIORAL-TEST-PROVEN` | The birthday bonus is decided in UTC, so a Pacific member who opens their account on their birthday never gets it |
 | K-09 | P2 | `BEHAVIORAL-TEST-PROVEN` | Store credit is granted and spent on UTC calendar months, so it dies at 7 PM ET on the last day |
+| K-10 | P3 | `BEHAVIORAL-TEST-PROVEN` | The storefront offers bar says "Ends tonight" for a coupon that expires that morning, and for one a year away |
 
 ---
 
@@ -1359,3 +1360,370 @@ month with no anniversary check, which is why a member who joins on the 30th get
 a full month's credit for one day of membership. That is a product decision, not a
 defect, and it is worth settling before the boundary fix goes in — the fix is
 different for each answer.
+
+## K-10 — The storefront offers bar says "Ends tonight" for a coupon that expires that morning, and for one a year away
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P3 · **Status:** OPEN
+**Area:** time/date/timezone × legal/policy (claims made to shoppers)
+
+### What is wrong
+
+`src/lib/storefront-offer-format.ts:92` decides urgency by comparing two
+*rendered day strings*:
+
+```ts
+if (formatDisplayDate(end, "short") === formatDisplayDate(now, "short")) return "Ends tonight";
+
+const label = formatDisplayDate(endsAt, "short");
+return label ? `Ends ${label}` : null;
+```
+
+The `"short"` style is `{ month: "short", day: "numeric" }`
+(`src/lib/format-date.ts:42`) — **no year and no time**. Two holes follow:
+
+1. **"Tonight" is asserted for any expiry on the same calendar day**, including
+   one at 9:00 AM. The bar promises the whole evening on a code that dies before
+   lunch.
+2. **Two dates a year apart render identically**, so a coupon ending
+   `2027-09-03` reads "Ends tonight" on `2026-09-03`. The fallback branch has the
+   same hole: it prints "Ends Dec 1" with no year.
+
+The zone handling itself is correct, and deliberately so — the comment at
+`:85-91` explains that comparing rendered strings is what pins both sides to the
+business zone. **The defect is the missing year and time-of-day, not the
+timezone.** Recorded that way so a fix does not undo the right decision.
+
+### Evidence — probe against the real exported function
+
+```
+$ TZ=UTC npx vitest run scratchpad/k-ends.test.ts
+  now 8:00 AM ET, coupon dies 9:00 AM ET -> Ends tonight
+  now Sep 3 2026, coupon dies Sep 3 2027 -> Ends tonight
+  now Sep 3 2026, coupon dies Dec 1 2028 -> Ends Dec 1
+
+ Test Files  1 passed (1)   Tests  3 passed (3)
+```
+
+### Impact
+
+A false urgency claim in the storefront's own voice, on a component whose file
+header argues at length that the bar must never promise what checkout will not
+honour. A shopper told "Ends tonight" who plans to order after work finds the code
+refused. The year-blind variant manufactures urgency for a promotion with twelve
+months left to run — the opposite failure, and the one a regulator would read as
+a dark pattern rather than a bug.
+
+Combined with K-01, a cart-recovery coupon can be announced by the bar as "Ends
+tonight" while the email announcing the same code states a time in a third
+rendering.
+
+### Smallest safe root-cause fix
+
+Compare the instant, not the rendered day, and say what is actually true:
+
+- return `"Ends tonight"` only when `end` is on the same **display-zone calendar
+  day** *and* at or after ~6 PM local; otherwise fall through to a labelled time
+  (`"Ends 9:00 AM today"`), which the `"datetime"` style already renders.
+- include the year in the fallback whenever `end` is not in the current year.
+
+Deriving the day key with `Intl.DateTimeFormat("en-CA", { timeZone: DISPLAY_TIME_ZONE, year, month, day })`
+— the technique at `format-date.ts:74-82` — keeps the correct zone behaviour while
+making the comparison year-aware.
+
+### CROSS-BLOCK
+
+None. Block G+H should confirm the corrected label in the browser, since this is
+storefront copy.
+
+---
+
+# Appendix A — probe sources
+
+The probes below produced the verbatim output quoted in the findings above. They
+are **not** committed as test files: `website/scratchpad/*.test.ts` is gitignored
+so agent working files never join the 203-file suite that block M runs.
+
+To re-run one, write it to `website/scratchpad/<name>.test.ts` and run
+`TZ=UTC npx vitest run scratchpad/<name>.test.ts --disable-console-intercept`
+**from `website/`**. Each probe either imports the real exported function or
+transcribes the operative lines verbatim, with the source line cited inline.
+
+## `scratchpad/k-skip.test.ts` — K-07 — skipNextBilling cap (transcribes membership-billing.ts:1027, :1046-1053)
+
+```ts
+import { describe, it, expect } from "vitest";
+
+// membership-billing.ts:1027 guard + :1046-1053 advance, transcribed verbatim.
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+
+function skip(nowMs: number, nextBillingAt: number | null): number {
+  if (nextBillingAt !== null && nextBillingAt > nowMs + 33 * ONE_DAY_MS) {
+    throw new Error("You've already skipped a charge this cycle — your next billing is already deferred.");
+  }
+  const base = nextBillingAt !== null ? nextBillingAt : nowMs;      // :1046
+  const from = base <= nowMs ? nowMs : base;                        // :1047
+  return from + 30 * ONE_DAY_MS;                                    // :1053
+}
+
+function howManySkips(nowMs: number, start: number | null): number {
+  let n = 0, cur = start;
+  for (;;) {
+    try { cur = skip(nowMs, cur); n += 1; } catch { return n; }
+    if (n > 10) return n;
+  }
+}
+
+describe("skipNextBilling cap (membership-billing.ts:1023-1027 says ONE skip per paid period)", () => {
+  const now = Date.parse("2026-09-01T12:00:00Z");
+  const d = (n: number) => new Date(now + n * ONE_DAY_MS).toISOString();
+
+  it("allows TWO skips when the renewal is inside the 3-day reminder window", () => {
+    for (const days of [0, 1, 2, 3]) {
+      const n = howManySkips(now, now + days * ONE_DAY_MS);
+      console.log(`  next_billing_at = now + ${String(days).padStart(2)}d (${d(days)}) -> ${n} skips accepted`);
+      expect(n).toBe(2);
+    }
+  });
+
+  it("allows only ONE skip once the renewal is 4+ days out — the cap working as designed", () => {
+    for (const days of [4, 7, 10, 29]) {
+      const n = howManySkips(now, now + days * ONE_DAY_MS);
+      console.log(`  next_billing_at = now + ${String(days).padStart(2)}d -> ${n} skip accepted`);
+      expect(n).toBe(1);
+    }
+  });
+
+  it("the exploitable window is exactly the window the reminder email targets", () => {
+    // runMembershipBillingSweep:1243  const in3Days = new Date(now.getTime() + 3 * ONE_DAY_MS);
+    const reminderWindowEnd = now + 3 * ONE_DAY_MS;
+    const largestDoubleSkip = now + 3 * ONE_DAY_MS;   // base + 30d <= now + 33d  =>  base <= now + 3d
+    console.log(`  Step 4 emails 'renewal in 3 days' for next_billing_at <= ${new Date(reminderWindowEnd).toISOString()}`);
+    console.log(`  double-skip is possible for       next_billing_at <= ${new Date(largestDoubleSkip).toISOString()}`);
+    expect(largestDoubleSkip).toBe(reminderWindowEnd);
+  });
+
+  it("shows the resulting free period", () => {
+    const start = now + 3 * ONE_DAY_MS;
+    const a = skip(now, start), b = skip(now, a);
+    console.log(`  paid period ended        ${new Date(start).toISOString()}`);
+    console.log(`  after skip #1            ${new Date(a).toISOString()}  (+${(a - now) / ONE_DAY_MS}d from now)`);
+    console.log(`  after skip #2            ${new Date(b).toISOString()}  (+${(b - now) / ONE_DAY_MS}d from now)`);
+    console.log(`  perks retained for       ${(b - start) / ONE_DAY_MS} days beyond the paid period, on one charge`);
+    expect((b - start) / ONE_DAY_MS).toBe(60);
+  });
+});
+```
+
+## `scratchpad/k-bday.test.ts` — K-08 — birthday day comparison (transcribes membership.ts:606-608)
+
+```ts
+import { describe, it, expect } from "vitest";
+
+// membership.ts:606-608, transcribed verbatim.
+function isBirthdayToday(nowIso: string, birthday: string): boolean {
+  const today = new Date(nowIso);
+  const birthdayDate = new Date(birthday);
+  return today.getUTCMonth() === birthdayDate.getUTCMonth()
+      && today.getUTCDate() === birthdayDate.getUTCDate();
+}
+const inZone = (iso: string, tz: string) =>
+  new Intl.DateTimeFormat("en-US", { timeZone: tz, dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
+
+describe("birthday bonus day comparison (membership.ts:606-608)", () => {
+  const birthday = "1990-05-14";
+  it("is false for most of the member's actual birthday evening in the US", () => {
+    const rows = [
+      "2026-05-14T16:00:00Z",  // noon ET  — still their birthday
+      "2026-05-15T00:30:00Z",  // 8:30 PM ET — still their birthday
+      "2026-05-15T02:00:00Z",  // 10 PM ET / 7 PM PT — still their birthday in both zones
+      "2026-05-15T06:30:00Z",  // 11:30 PM PT — still their birthday on the west coast
+    ];
+    for (const iso of rows) {
+      const got = isBirthdayToday(iso, birthday);
+      console.log(`  ${iso}  ET ${inZone(iso,"America/New_York").padEnd(24)} PT ${inZone(iso,"America/Los_Angeles").padEnd(24)} -> ${got}`);
+    }
+    expect(isBirthdayToday("2026-05-14T16:00:00Z", birthday)).toBe(true);
+    expect(isBirthdayToday("2026-05-15T00:30:00Z", birthday)).toBe(false);   // 8:30 PM ET on their birthday
+    expect(isBirthdayToday("2026-05-15T06:30:00Z", birthday)).toBe(false);   // 11:30 PM PT on their birthday
+  });
+
+  it("is TRUE the evening BEFORE, which then burns the once-a-year guard", () => {
+    const early = "2026-05-14T02:00:00Z";   // 10 PM ET on May 13
+    console.log(`  ${early}  ET ${inZone(early,"America/New_York")} -> ${isBirthdayToday(early, birthday)}`);
+    expect(isBirthdayToday(early, birthday)).toBe(true);
+    // membership.ts:613 currentYear = today.getUTCFullYear(); :620 returns false if already awarded this year
+  });
+
+  it("the eligible window in the member's own zone", () => {
+    const startUtc = Date.parse("2026-05-14T00:00:00Z"), endUtc = Date.parse("2026-05-15T00:00:00Z");
+    for (const [label, tz] of [["Eastern","America/New_York"],["Pacific","America/Los_Angeles"]] as const) {
+      console.log(`  ${label.padEnd(8)} eligible from ${inZone(new Date(startUtc).toISOString(),tz)} to ${inZone(new Date(endUtc-1000).toISOString(),tz)}`);
+    }
+    expect(true).toBe(true);
+  });
+});
+```
+
+## `scratchpad/k-config.test.ts` — K-06 — admin-control.ts numeric readers (transcribes all ten idioms)
+
+```ts
+import { describe, it, expect } from "vitest";
+
+describe("admin-control.ts numeric readers, fed the same blank value", () => {
+  it("three different idioms in one file give three different answers", () => {
+    const blank = "";   // what clearing an admin form field produces
+    const rows: Array<[string, unknown]> = [
+      ["getCartRecoveryControlConfig:261-262   Number(x ?? 48)          ", Number(blank ?? 48)],
+      ["getCardProcessingFeeConfig:332         Number(x) || 0           ", Number(blank) || 0],
+      ["getSubscribeSaveConfig:408             Number(x ?? 10) || 10    ", Number(blank ?? 10) || 10],
+      ["getWelcomeOffer:443                    Number(x ?? 10) || 10    ", Number(blank ?? 10) || 10],
+      ["getBulkSavings / getProfitSettings /                            ", null],
+      ["  getShippingConfig  (local num())     blank -> fallback        ", (blank === "" || blank == null) ? 48 : Number(blank)],
+      ["clampPercent:552 (referral/ambassador) blank -> fallback        ", (blank === "" || blank == null) ? 10 : Number(blank)],
+    ];
+    for (const [k, v] of rows) if (v !== null) console.log(`  ${k} -> ${v}`);
+    expect(Number(blank ?? 48)).toBe(0);                       // unguarded: blank becomes zero
+    expect((blank === "" ? 48 : Number(blank))).toBe(48);      // guarded: blank keeps the default
+  });
+
+  it("the unguarded reader also passes NaN and negatives straight through", () => {
+    for (const v of ["", "abc", "-12", "3.5", null, undefined] as const) {
+      const n = Number(v as never);
+      const unguarded = Number((v as never) ?? 48);
+      const guarded = (v === "" || v == null) ? 48 : (Number.isFinite(n) && n >= 0 ? n : 48);
+      console.log(`  stored ${String(JSON.stringify(v)).padEnd(11)} unguarded=${String(unguarded).padEnd(6)} guarded=${guarded}`);
+    }
+    expect(Number("abc")).toBeNaN();
+    expect(Number("-12")).toBe(-12);
+  });
+
+  it("what each of those values does downstream in mintCartRecoveryCoupon (cart-recovery.ts:128)", () => {
+    const HOUR_MS = 3600_000;
+    const mint = Date.parse("2026-08-26T10:00:00Z");
+    const outcome = (hours: number) => {
+      let endsAt: string;
+      try {
+        endsAt = new Date(mint + hours * HOUR_MS).toISOString();   // cart-recovery.ts:128
+      } catch (e) {
+        return `THROWS ${(e as Error).constructor.name}: ${(e as Error).message}`;
+      }
+      // coupons.ts:157  if (ends_at && new Date(ends_at).getTime() < now) -> "This coupon has expired"
+      return Date.parse(endsAt) < mint ? `ends_at=${endsAt}  -> REFUSED at checkout`
+           : Date.parse(endsAt) === mint ? `ends_at=${endsAt}  -> dead on creation`
+           : `ends_at=${endsAt}  -> valid`;
+    };
+    for (const h of [48, 0, -12, NaN]) console.log(`  couponExpirationHours=${String(h).padEnd(5)} ${outcome(h)}`);
+
+    expect(outcome(0)).toContain("dead on creation");
+    expect(outcome(-12)).toContain("REFUSED at checkout");
+    expect(outcome(NaN)).toContain("THROWS RangeError");
+  });
+});
+```
+
+## `scratchpad/k-ends.test.ts` — K-10 — endsLabel (imports the REAL src/lib/storefront-offer-format.ts)
+
+```ts
+import { describe, it, expect } from "vitest";
+import { endsLabel } from "@/lib/storefront-offer-format";
+
+describe("endsLabel truthfulness", () => {
+  it("says 'Ends tonight' for a coupon that dies at 9am", () => {
+    const now = new Date("2026-08-31T12:00:00Z");        // 8:00 AM ET
+    const ends = "2026-08-31T13:00:00.000Z";             // 9:00 AM ET, one hour away
+    console.log("  now 8:00 AM ET, coupon dies 9:00 AM ET ->", endsLabel(ends, now));
+    expect(endsLabel(ends, now)).toBe("Ends tonight");
+  });
+
+  it("says 'Ends tonight' for a coupon a FULL YEAR away", () => {
+    const now = new Date("2026-09-03T15:00:00Z");
+    const ends = "2027-09-03T20:00:00.000Z";             // same month+day, next year
+    console.log("  now Sep 3 2026, coupon dies Sep 3 2027 ->", endsLabel(ends, now));
+    expect(endsLabel(ends, now)).toBe("Ends tonight");
+  });
+
+  it("prints a year-less date for a far-future coupon", () => {
+    const now = new Date("2026-09-03T15:00:00Z");
+    console.log("  now Sep 3 2026, coupon dies Dec 1 2028 ->", endsLabel("2028-12-01T20:00:00.000Z", now));
+    expect(endsLabel("2028-12-01T20:00:00.000Z", now)).toBe("Ends Dec 1");
+  });
+});
+```
+
+## Plain-node probes
+
+### K-01 — cart-recovery expiry rendering
+
+```js
+// A coupon that expires at 6:00 PM Eastern on Aug 27 2026 (EDT = UTC-4)
+const expiresAt = "2026-08-27T22:00:00.000Z";
+console.log("process.env.TZ =", JSON.stringify(process.env.TZ));
+console.log("resolved zone  =", Intl.DateTimeFormat().resolvedOptions().timeZone);
+console.log("cart-recovery.ts renders:", new Date(expiresAt).toLocaleString("en-US"));
+console.log("truth in America/New_York:", new Intl.DateTimeFormat("en-US",{timeZone:"America/New_York",dateStyle:"short",timeStyle:"medium"}).format(new Date(expiresAt)));
+console.log("truth in America/Los_Angeles:", new Intl.DateTimeFormat("en-US",{timeZone:"America/Los_Angeles",dateStyle:"short",timeStyle:"medium"}).format(new Date(expiresAt)));
+```
+
+### K-03 — renewal idempotency key
+
+```js
+const userId = "u-123", tierId = "t-pro";
+// One membership whose paid period ends at 2026-08-27T23:40:00Z.
+const nextBillingAt = "2026-08-27T23:40:00.000Z";
+
+// The sweep runs every 30 min. Two consecutive ticks that both see this row due:
+const tick1 = new Date("2026-08-27T23:45:00.000Z");   // charges
+const tick2 = new Date("2026-08-28T00:15:00.000Z");   // row still due -> charges again
+
+const key = (now) => `renewal-${userId}-${tierId}-${now.toISOString().slice(0, 10)}`;
+
+console.log("membership-billing.ts:1497 renewal key");
+console.log("  tick1 23:45Z ->", key(tick1));
+console.log("  tick2 00:15Z ->", key(tick2));
+console.log("  same key?      ", key(tick1) === key(tick2));
+console.log();
+console.log("the period-scoped key the fix would use");
+const fixed = `renewal-${userId}-${tierId}-${nextBillingAt}`;
+console.log("  tick1 ->", fixed);
+console.log("  tick2 ->", fixed, "(identical: derived from the row, not the clock)");
+console.log();
+console.log("for contrast, step 2's remainder key (membership-billing.ts:1334) carries no date:");
+console.log("  ->", `remainder-${userId}-${tierId}`, "- stable across any number of ticks");
+```
+
+### K-05 — t72h expiry identity
+
+```js
+const HOUR = 3600_000;
+const couponExpirationHours = 48;      // admin-control.ts:249 DEFAULT
+const firstSeen = Date.parse("2026-08-20T09:07:00Z");   // cart abandoned
+
+// vercel.json: "*/30 * * * *" -> ticks on :00 and :30
+const tickAtOrAfter = (t) => Math.ceil(t / (30 * 60_000)) * (30 * 60_000);
+
+const t24Tick = tickAtOrAfter(firstSeen + 24 * HOUR);   // cart-recovery.ts:286
+const t72Tick = tickAtOrAfter(firstSeen + 72 * HOUR);   // cart-recovery.ts:316
+
+// cart-recovery.ts:128 - ends_at is stamped from Date.now() at mint
+const realEndsAt = t24Tick + couponExpirationHours * HOUR;
+// cart-recovery.ts:321 - the t72h email fabricates one from the sweep's `now`
+const emailClaims = t72Tick + couponExpirationHours * HOUR;
+
+const iso = (t) => new Date(t).toISOString();
+console.log("cart first_seen_at        ", iso(firstSeen));
+console.log("t24h mail + coupon minted ", iso(t24Tick));
+console.log("  real coupons.ends_at    ", iso(realEndsAt));
+console.log("t72h 'last chance' mail   ", iso(t72Tick));
+console.log("  email says expires      ", iso(emailClaims));
+console.log("  email says code is      ", '"SEE PREVIOUS EMAIL"');
+console.log();
+console.log("real coupon still alive when the last-chance mail is sent?",
+            realEndsAt > t72Tick, `(margin: ${(realEndsAt - t72Tick) / HOUR}h)`);
+console.log("overstatement in the email:", (emailClaims - realEndsAt) / HOUR, "hours");
+console.log();
+console.log("why the margin is exactly zero: the t24h->t72h gap is 48h and");
+console.log("couponExpirationHours defaults to 48, so mint+48h lands on the");
+console.log("same cron tick that sends the final email.");
+```
+
+---
