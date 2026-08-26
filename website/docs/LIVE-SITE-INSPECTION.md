@@ -1530,7 +1530,157 @@ created the order at the **lower** figure rather than rejecting the mismatch.
 The browser cannot set a price, and a client that under-claims a discount does
 not cost the customer money. **AUTHORIZATION TRUTH for pricing: PROVEN.**
 
-_(walk continues)_
+## 2k. WHAT PRODUCTION IS TELLING YOU RIGHT NOW
+
+Read from the live Sentry project `vanta-innovation-llc` and reconciled against
+the production database. These are **current, open, unresolved**.
+
+### LIVE-033 — **a real customer failed checkout three times in the last half hour**
+
+**Severity:** P0 for revenue · **live right now**
+**Status:** CONFIRMED · DATABASE-PROVEN
+
+```
+order-574d6762…  19:28:38Z  pending_payment  $98.18   glp-1 + bac water
+order-0a0cffc4…  19:36:46Z  pending_payment  $103.38  glp-3 + bac water
+order-a0190dd6…  19:44:24Z  pending_payment  $103.38  glp-3 + bac water
+                              all three: lilycaroline2006@icloud.com
+```
+
+Three attempts in **sixteen minutes**, from one real customer, none completed.
+All three hold **active** inventory reservations:
+
+```
+glp-3 10mg           39 on hand,  2 reserved
+glp-1 10mg           29 on hand,  1 reserved
+bacteriostatic-water 39 on hand,  3 reserved
+```
+
+Three attempts in that pattern is not idle browsing — it is someone who wants to
+buy and cannot. `create-session` clearly succeeded each time (order rows exist
+with `pending_payment`), so the failure is at or after the hosted payment step.
+
+**Not diagnosed, and deliberately so.** Loading `/checkout/pay/<orderId>` for
+another person's live order was not something to do on production during an
+inspection. The pay page polls `GET /api/checkout/order-status/…` and is
+read-only (verified on the harness), so it *can* be opened safely — but it is
+that customer's order, and the decision belongs to the owner.
+
+**This is the first thing to look at.** Either the payment step is broken for
+some customers, or this customer's card is failing three times — and the store
+has no way to tell those apart from the outside.
+
+### LIVE-034 — two orders have been alerting for 21 hours and nobody has acted
+
+**Severity:** P2 · operational
+**Status:** CONFIRMED · Sentry + DATABASE-PROVEN
+
+Sentry `VANTA-LABS-2`, **15 events**, first seen 21 hours ago, last seen minutes
+before this was written:
+
+> **express_reconcile_backlog:** 2 express order(s) have been pending at the
+> processor for over 24h — typically an abandoned 3DS challenge. **They hold
+> inventory and will never settle on their own**; review and cancel or complete
+> them.
+
+The two matching orders:
+
+```
+order-694115f4…  pending_payment  $68.49   16 days old
+order-21fb4328…  pending_payment  $125.02  23 days old
+```
+
+**Two corrections to the alert's own text**, both checked:
+
+- Their reservations are `released`, not active — they are **not** holding
+  inventory. The alert overstates. An owner acting on it would find nothing held.
+- The genuinely held stock belongs to the *three fresh* orders in LIVE-033, which
+  this alert does not mention.
+
+The monitoring is well built and the message is actionable; it has simply been
+firing into a void for a day, and it is slightly wrong about the consequence.
+
+### LIVE-035 — a Shippo label was bought that no order can be matched to
+
+**Severity:** P2 · money spent, unattributed
+**Status:** CONFIRMED · Sentry
+
+`VANTA-LABS-4`, 1 event, 6 hours old, from `POST /api/webhooks/shippo`:
+
+> **shippo_label_unattributed:** A Shippo label was purchased that Vanta could
+> not match to an order. The postage is not in any order's profit, and if this
+> was a Vanta order it is still sitting in Needs Fulfillment.
+
+Real postage was spent and is missing from profit. Open, unactioned.
+
+### LIVE-036 — a JavaScript error inside an in-app browser, on the catalog
+
+**Severity:** P3 · SUSPECTED impact
+**Status:** CONFIRMED occurrence · Sentry
+
+`VANTA-LABS-3`, 2 events, 7 hours old, culprit `/products`:
+
+> `Error: Error invoking postMessage: Java object is gone`
+
+That signature is an Android WebView / in-app browser (TikTok, Instagram)
+teardown. Given the store's ad channels are TikTok, Snapchat and Reddit, **most
+paid traffic will arrive inside an in-app browser**, so this is worth
+reproducing there rather than dismissing. Whether it breaks anything the
+customer can see is NOT VERIFIED.
+
+### The monitoring itself is good — that is the point
+
+`express_reconcile_backlog` and `shippo_label_unattributed` are custom,
+deliberate, well-written operational alerts with the consequence and the remedy
+in the message. The store *can* tell its owner when something needs attention.
+Which is exactly why **AFF-09** matters: the one money path with no alarm at all
+is the one that pays ambassadors.
+
+---
+
+## 2l. CONSENT ON A REFERRAL CLICK — the fix works, the policy still disagrees
+
+**Status:** HARNESS-PROVEN (`/r/[code]` writes two rows, so it was never called
+on production)
+
+Three clicks on `/r/EXPLICIT15?utm_source=tiktok&utm_medium=bio&utm_campaign=aug`,
+one per consent state:
+
+| `vl_cookie_consent` | utm / user-agent / IP recorded | attribution row | 30-day `vl_referral_code` cookie |
+|---|---|---|---|
+| **unset** (banner unanswered) | **NULL, NULL, NULL** ✅ | written | **set** |
+| **declined** | **NULL, NULL, NULL** ✅ | written | **set** |
+| **accepted** | `tiktok`, `Mozilla/5.0 (X11; Li…`, `127.0.0.1` | written | set |
+
+**The audit's consent fix is correct and now proven at runtime**, including
+`unset` counting as no.
+
+### LIVE-037 — the Cookie Policy does not cover the referral cookie
+
+**Severity:** P2 · policy vs behaviour
+**Status:** CONFIRMED · HARNESS-PROVEN + BROWSER-PROVEN (policy text)
+**Cross-reference:** the open owner decision `/r/[code]` flags in its own comment.
+
+`/legal/cookies` says:
+
+> "**Essential** — cart contents, checkout state, login sessions, and your age
+> confirmation. These are always on; the store cannot work without them."
+> "**Choosing Decline on the banner stops all non-essential storage**; nothing in
+> the analytics category is created."
+
+A visitor who clicks Decline and then follows an ambassador's link still gets a
+**30-day `vl_referral_code` cookie**, and a server-side `partner_clicks` row and
+`referrals` row naming the ambassador, the code and the landing path.
+
+The referral cookie is **in none of the three published categories**. Either it
+is essential (say so, and list it) or it is not (and Decline must stop it). The
+code says as much and declines to decide:
+
+> "whether THAT is essential storage is the owner's call, not a decision to make
+> silently inside a bug fix. **Flagged, not changed.**"
+
+**It is still flagged and still not decided, and the policy has not been
+updated.** This is an owner decision, not an engineering bug.
 
 ---
 
