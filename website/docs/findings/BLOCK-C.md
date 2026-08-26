@@ -848,3 +848,26 @@ every message. Nothing was written to production.
 - **Browser verification.** Block C is server-side; no customer-facing email UI
   was driven. The admin email settings screen and the communications panel
   (C-12) would benefit from it and are left to blocks G+H.
+
+## Verification of this block's own work
+
+Run on the block C branch, `website/`:
+
+```
+npx vitest run     → Test Files  3 failed | 202 passed | 1 skipped (206)
+                     Tests       9 failed | 3577 passed | 7 skipped (3593)
+npx tsc --noEmit   → clean (exit 0)
+npm run lint       → 0 errors, 38 warnings (all pre-existing; none in this block's files)
+```
+
+The 9 failures are **all** in the three files added here and are **all
+deliberate** — they are the evidence for C-01, C-02 and C-06:
+
+| File | Failures | Finding |
+|---|---|---|
+| `src/lib/approval-email-commission-rate.test.ts` | 4 | C-01 |
+| `src/lib/email/order-email-sweep-duplicate.test.ts` | 3 | C-02 |
+| `src/lib/email/cart-recovery-coupon-leak.test.ts` | 2 | C-06 |
+
+No pre-existing test was changed, broken, or made to pass. All nine turn green
+when the corresponding fix lands, and that is their acceptance criterion.
