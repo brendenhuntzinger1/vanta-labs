@@ -262,12 +262,54 @@ Two things were confirmed rather than assumed:
    fixture never contained. A boundary the fixture never crosses cannot be tested
    by crossing it.
 
+### The hold-period tests exercise the real implementation, and the mutation control is retained
+
+Asked directly, and verified two independent ways, because the failure mode being
+guarded against is exactly what hid M07 in the first place — a suite asserting
+against a stub.
+
+**1. In-suite assertion.** `payout-authority-guards.test.ts` opens with a
+`describe("this suite is wired to the real implementation")` block that fails if
+`@/lib/partner-portal` is ever mocked:
+
+```ts
+expect(vi.isMockFunction(autoApproveEligibleCommissions)).toBe(false);
+```
+
+A stub could satisfy that by accident, so a second test asserts on a side effect
+only the real function can produce — the exact approval write the fake database
+observed: `expect(db.approvals).toEqual([{ ids: ["ripe"], status: "approved_for_payout" }])`.
+Only supabase, admin-control and ambassador-settings are faked; never the module
+under test.
+
+**2. The M07 mutation control, re-run after every later change.** Deleting the
+hold comparison from the real source still produces exactly three failures, all
+in this file:
+
+```
+== M07 new failures vs baseline:
+   + ... > approves only the aged commission when fresh ones sit beside it
+   + ... > does not approve a commission one day short of the hold period
+   + ... > does not approve a commission that is one day old
+== M07 failures that DISAPPEARED:   (none)
+```
+
+M13's control was re-run alongside it and still produces its two failures. Both
+controls are documented here so they can be re-run by block M rather than taken
+on trust; the mutation catalogue is
+`/tmp/.../mutations.json` in-session, and each entry is reproduced verbatim in
+this document's tables.
+
 ### Verification
 
 ```
 before E-02:  Tests  9 failed | 3577 passed | 7 skipped (3593)
 after  E-02:  Tests  9 failed | 3589 passed | 7 skipped (3605)
+after  C-06 fix + guards:  Tests  7 failed | 3609 passed | 7 skipped (3623)
 ```
+
+The drop from 9 failures to 7 is C-06's two regression tests going green when
+that defect was fixed — not a test being weakened.
 
 **+12 tests, no new failures.** The 9 are still block C's deliberate ones.
 `npx tsc --noEmit` clean; `npm run lint` 0 errors, 38 pre-existing warnings, none

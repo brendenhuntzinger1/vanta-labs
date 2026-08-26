@@ -1,29 +1,30 @@
 # Block C — Email
 
-> ## ⚠️ READ FIRST — BLOCK M: THIS BRANCH COMMITS 9 DELIBERATELY FAILING TESTS
+> ## ⚠️ READ FIRST — BLOCK M: THIS BRANCH COMMITS 7 DELIBERATELY FAILING TESTS
 >
 > **A red suite on this branch is not a broken merge. It is this block's evidence.**
 >
 > ```
-> npx vitest run  →  Tests  9 failed | 3577 passed | 7 skipped (3593)
+> npx vitest run  →  Tests  7 failed | 3609 passed | 7 skipped (3623)
 > ```
 >
-> All 9 failures are in the three test files added by this block, and every one of
-> them is asserting the CORRECT behaviour against code that is currently WRONG:
+> All 7 failures are in two test files added by this block, and every one of them
+> asserts the CORRECT behaviour against code that is currently WRONG:
 >
 > | File | Failures | Finding | Goes green when |
 > |---|---|---|---|
 > | `src/lib/approval-email-commission-rate.test.ts` | 4 | C-01 | A+B fixes `updatePartnerStatus` |
 > | `src/lib/email/order-email-sweep-duplicate.test.ts` | 3 | C-02 | the sweep closes the send-once slot |
-> | `src/lib/email/cart-recovery-coupon-leak.test.ts` | 2 | C-06 | the reservation survives a failed send |
 >
 > They are **not** skipped, `.todo`'d or `it.fails`-inverted, because any of those
 > would hide a P0 from the consolidation regression run. **Do not "fix" them by
 > changing the assertions.** Each one turning green is the acceptance criterion for
-> its finding. No pre-existing test was changed, broken, or made to pass — the
-> other 3577 pass, typecheck is clean, lint reports no new warnings.
+> its finding. No pre-existing test was changed, broken, or made to pass.
 >
-> The fixes for C-01 and C-06 live in files owned by other blocks (Rule 3), which
+> **C-06's tests were the third red file and are now GREEN — the defect is fixed
+> on this branch** (19 tests, plus three negative controls). See C-06 below.
+>
+> The fixes for C-01 and C-02 live in files owned by other blocks (Rule 3), which
 > is why this block filed evidence rather than patches.
 
 Session branch: `claude/block-ab-audit-zuuyuz` (reassigned to block C mid-session).
@@ -413,9 +414,10 @@ inherits the same one-way guarantee.
 | | |
 |---|---|
 | **Severity** | **P1 — LAUNCH BLOCKER (deliverability and customer trust).** Re-graded; see below. |
-| **Evidence grade** | A — reproduced by test **and** confirmed against production |
-| **Status** | `CONFIRMED — CROSS-BLOCK (cart-recovery.ts)` |
-| **Regression test** | `website/src/lib/email/cart-recovery-coupon-leak.test.ts` (2 of 3 RED) |
+| **Evidence grade** | A — reproduced by test, confirmed against production, fixed and re-verified |
+| **Status** | ✅ **FIXED on this branch** (owner-approved). 19 tests GREEN + 3 negative controls. |
+| **Regression test** | `website/src/lib/email/cart-recovery-coupon-leak.test.ts` (19 tests) |
+| **Schema change** | **None.** No migration was applied. |
 
 ### Severity: re-graded from "money leak" to "launch blocker for deliverability"
 
@@ -540,17 +542,87 @@ Three dedupe stores are poisoned by that single result, this being the worst:
    which `loadAlreadySent` excludes, so the same recipients are re-attempted every
    30 minutes indefinitely (see C-08).
 
-### Fix
+### The fix (applied)
 
-`CROSS-BLOCK: src/lib/cart-recovery.ts:294-300 — mint the coupon only after the stage reservation is held, and do not delete the reservation on a send failure; mark it instead (e.g. status/attempts on abandoned_cart_emails) so hasSentStage still sees it and the retry does not re-mint.`
+Three changes, all in `src/lib/cart-recovery.ts` and `src/lib/email/marketing.ts`.
+**No schema change; nothing was applied to production.**
 
-Separately, in block C's own files: `NoopEmailProvider` should return a result
-callers can distinguish — a `skipped: true` / `reason: "disabled"` field —
-so "not configured" stops being processed as "provider rejected it". That is a
-type change across `EmailSendResult` consumers and is recorded here rather than
-made unilaterally, because C-02's fix touches the same result type.
+**1. The claim comes first, and the mint happens behind it.**
+`reserveAndSendStage` now owns the whole stage lifecycle. It claims the
+`(abandoned_cart_id, stage)` slot, and only then runs a `mintCoupon` callback
+supplied by the caller. Minting moved out of the sweep entirely, so it is no
+longer *possible* to mint before claiming — "at most one coupon per cart per
+stage" became a property of the existing unique index rather than of this code
+remembering to check.
 
----
+**2. A failed send keeps its claim.** The `delete` that re-armed the stage is
+gone. This is a deliberate trade, stated plainly in the code: a stage whose send
+fails is not retried, so that shopper does not get that one recovery email. An
+unbounded retry that re-mints is worse in every direction — it spams the shopper
+if the failure was a false negative, and it never terminates for someone who has
+unsubscribed.
+
+A failed **mint** still releases the claim, and that is safe for the opposite
+reason: no coupon row exists, so a later pass cannot accumulate one. That is now
+the only path that deletes a reservation.
+
+**3. Unsubscribed shoppers are skipped before anything is written.**
+`isMarketingSuppressed()` is exported from `marketing.ts` and called once per
+cart, ahead of the claim and the mint. `sendMarketingEmail` reports suppression
+as `{ success: false, suppressed: true }` — the same shape as a provider outage —
+which is exactly why an unsubscribe used to become a permanent minting loop. A
+suppressed shopper now produces **no coupon, no reservation row and no send
+attempt at all**. The check is re-run each sweep rather than recorded, so
+re-subscribing restores normal service by itself.
+
+**Bonus correctness fix.** t72h re-offers the code t24h minted, read from the
+reservation's `coupon_id` — a column that already existed and that no caller ever
+populated. This replaces the literal string `"SEE PREVIOUS EMAIL"`, which was
+already poor customer-facing copy and became *wrong* under the new semantics: a
+claimed stage no longer implies a delivered email, so the "previous email" may
+never have arrived.
+
+### Verification matrix — 19 tests, all GREEN
+
+`npx vitest run src/lib/email/cart-recovery-coupon-leak.test.ts` → **19 passed**
+
+| Scenario | Coupons minted | Emails attempted | Assertion |
+|---|---|---|---|
+| Successful send | 1 | 1 | one coupon, one email, reservation linked to it |
+| Repeated cron (3 runs, healthy) | 1 | 1 | no growth |
+| Repeated cron (10 runs, healthy) | 1 | — | at most one recovery discount per cart |
+| Provider failure, 3 sweeps | ≤1 | 1 | no re-mint, no re-send |
+| **Provider failure, 192 sweeps (full 96 h)** | **≤1** | **1** | the original incident, bounded |
+| Provider recovers after failure | no change | — | recovery does not mint a second coupon |
+| **Suppressed recipient, 1 sweep** | **0** | **0** | nothing written at all |
+| **Suppressed recipient, 192 sweeps** | **0** | **0** | the permanent loop is gone |
+| Suppressed → re-subscribes | 1 | 1 | normal service restored |
+| Duplicate execution (`Promise.all` ×2) | 1 | 1 | unique index, not timing |
+| Cart too young for the stage | 0 | 0 | threshold still respected |
+| Coupon terms | — | — | percent/5/max 1/0 redemptions/active/assigned_email intact |
+
+Reservation deletes are asserted to be **0** across every failure and suppression
+path.
+
+### Negative controls — each guard proven load-bearing
+
+Each guard was reverted in isolation against the committed fix and the suite
+re-run. A guard that can be removed without failing a test is not a guard:
+
+| Reverted guard | Result | Tests that caught it |
+|---|---|---|
+| Restore `delete` on send failure | **5 failed** | re-mint, re-arm, re-send, 96 h outage, recovery |
+| Remove the suppression pre-check | **4 failed** | all four suppression tests |
+| Mint before the claim | **8 failed** | successful send, repeated cron, 96 h outage, duplicate execution |
+
+### What this fix does NOT do
+
+It does not retry a failed marketing send. That is the trade above, taken
+knowingly. Buying it back needs a column to bound the attempts, written as
+`website/src/lib/sql/PROPOSED-abandoned-cart-email-retry.sql` — **proposed, not
+applied**, and not needed for correctness. It also does not touch the 335
+historical coupon rows: they are expired and unredeemed, and deleting production
+rows is a Rule 4 action nobody needs to take.
 
 ## C-07 — `vitest.setup.ts` globally stubs whole subsystems, so tests of them cannot fail
 
@@ -892,6 +964,89 @@ panel, or state plainly there that account email is a separate channel.
 
 ---
 
+---
+
+## C-16 — `notification_queue` is not a queue: no consumer, no retry, and two kinds whose `pending` means opposite things
+
+| | |
+|---|---|
+| **Severity** | P2 (operator trust in an alerting surface) |
+| **Evidence grade** | A — full table read from production, cross-referenced against the email-config timeline |
+| **Status** | `CONFIRMED — CROSS-BLOCK (partner-portal.ts)` |
+| **Answers** | the open question raised in production read 5 |
+
+### It has no consumer *by design*, and that is the finding
+
+Every reference to the table in the codebase is in `partner-portal.ts`. There is
+no sweep, no cron, no worker. The pattern at all three write sites is:
+
+```
+enqueueNotification(kind, …) → status 'pending'
+   … send the email inline …
+update status 'sent'          ← only if the send is considered to have worked
+```
+
+So it is **an inline marker, not a work queue**. A `pending` row does not mean
+"queued for later" — nothing will ever pick it up. It means *"the email that
+accompanies this row did not get sent, and nothing will retry it."*
+
+The only reader is `getAdminOperationsSummary` (`:1276`), which counts
+`status='pending'` and surfaces it on the admin dashboard as
+`pendingNotifications`.
+
+### The five stuck rows, individually
+
+Not harmless, and not all the same thing. The full table (33 rows) plus the
+`admin_control` email timeline separates them cleanly:
+
+**Four × `partner_application_received` — legacy, from before the marker existed.**
+Created 2026-07-21 23:13, 07-22 04:02, 07-23 02:18, 07-23 06:06 (Jayla isaacs,
+brenden h, Robin Lagrama, brenden h). **Every** `received` row from 2026-07-25
+17:52 onward is `sent`; **every** one before it is `pending`. That clean boundary
+matches the source comment at `partner-portal.ts:581` — *"this kind previously had
+no consumer"* — so the mark-sent for this kind was added around 07-24/25 and these
+four predate it. They are not failed emails.
+
+**One × `partner_application_rejected` — a genuinely failed email.**
+Created 2026-07-20 08:18 for "brenden h" (`BRENDE-720F72`), the oldest row in the
+table. `updatePartnerStatus` marks sent only `if (emailSent && queueRowId)`, so
+this row means the rejection email really did fail. The email config confirms why:
+`smtp_password` was first set 2026-07-21 05:48 and `resend_api_key` 2026-07-22
+03:54 — **on 2026-07-20 no provider credentials existed at all**, so
+`NoopEmailProvider` returned `success: false`. The three later rejected rows
+(07-21 05:50, 05:50, 05:52 — minutes *after* the SMTP password was set) are all
+`sent`. The mechanism is real and the timeline corroborates it exactly.
+
+Impact of that one row is low: the recipient is the owner's own test account, and
+no live ambassador is affected (the seven live ambassadors' notifications are all
+`sent`). **The mechanism is the finding, not this row.**
+
+### The actual defect: the counter can never go down, and two kinds disagree
+
+1. **Nothing drains it.** There is no admin action to dismiss, resolve or retry a
+   pending row. The four legacy rows will inflate `pendingNotifications` by 4 for
+   ever. A counter that only goes up is one an operator learns to ignore — the
+   worst possible outcome for a surface whose whole job is to flag a failed
+   ambassador email.
+2. **`pending` means two different things depending on `kind`.** For
+   `approved`/`rejected` it is a true "the email failed" signal. For `received` it
+   is not a signal at all any more: that path marks sent **unconditionally**,
+   because `sendEmail`'s result is discarded there (finding C-08,
+   `partner-portal.ts:577`). The owner alert can fail and the row still flips to
+   `sent`. Same table, same column, same value, opposite meanings.
+
+### Fix
+
+`CROSS-BLOCK: src/lib/partner-portal.ts:571-592 — gate the received-kind mark-sent on the send result, as the approved/rejected path already does.`
+Otherwise that kind's `pending` state is decorative and its `sent` state is a lie.
+
+`CROSS-BLOCK: src/lib/partner-portal.ts — either give notification_queue a consumer (a retry sweep, reusing the pending_emails backoff) or stop calling it a queue: rename the surface to something like "unsent ambassador notifications" and give the admin a way to retry or dismiss a row.`
+
+**No production write is proposed.** Clearing the four legacy rows would fix the
+counter today, but it is a Rule 4 action and it hides the defect rather than
+fixing it — the counter would start climbing again on the next genuine failure
+with no way to bring it down. Recommend fixing the drain first, then clearing.
+
 # Block C summary
 
 | Id | Severity | Status | Evidence |
@@ -901,7 +1056,7 @@ panel, or state plainly there that account email is a separate channel.
 | C-03 | P1 | CONFIRMED, fix CROSS-BLOCK | inspection |
 | C-04 | P1 | CONFIRMED, fix CROSS-BLOCK | inspection ×3 sites |
 | C-05 | P1 | CONFIRMED, fix CROSS-BLOCK | inspection |
-| C-06 | **P1 — launch blocker** (deliverability/trust, NOT money) | CONFIRMED, fix CROSS-BLOCK | test, RED ×2 + production |
+| C-06 | **P1 — launch blocker** (deliverability/trust, NOT money) | ✅ **FIXED + verified** | 19 tests GREEN, 3 negative controls, production |
 | C-07 | P1 (tests) | CONFIRMED, handed to block E | direct hit |
 | C-08 | P1 | CONFIRMED, 21 sites | enumerated |
 | C-09 | P2 | CONFIRMED, fix CROSS-BLOCK | inspection |
@@ -911,6 +1066,7 @@ panel, or state plainly there that account email is a separate channel.
 | C-13 | P3 | CONFIRMED, fix CROSS-BLOCK | inspection |
 | C-14 | P3 | CONFIRMED, fix CROSS-BLOCK | inspection |
 | C-15 | P3 | CONFIRMED, docs/monitoring | inspection |
+| C-16 | P2 | CONFIRMED, fix CROSS-BLOCK | production table + config timeline |
 
 **Nothing in this block was graded on evidence it does not have.** C-04 is graded
 B because the two-email sequence was established by reading three call sites, not
@@ -970,7 +1126,11 @@ Credential values were deliberately not read; only their presence and length.
 Plaintext credentials living in `admin_audit_logs` rows is block I's finding, and
 this block did nothing to disturb it.
 
-### 3. Live `pending_emails` rows at `status='failed'`? — **None. And the queue has never once been used.**
+### 3. Live `pending_emails` rows at `status='failed'`? — **None. Why it has never been used is `UNVERIFIED`.**
+
+> **STATUS: `UNVERIFIED`.** The observation below is solid; the *explanation* is
+> not, and this block did not establish one. It must not be carried into the
+> ledger as either a defect or a clean bill of health.
 
 ```
 pending_emails:  0 rows now,  n_tup_ins = 0  (zero rows EVER inserted)
@@ -1001,11 +1161,23 @@ the highest of any table checked, so it is the most recently created), and the 4
 inserts came from the two Aug 25 orders; (b) something deleted rows from both
 tables during earlier audit work; (c) those confirmation blocks did not run.
 
-**For block M / the owner:** this is flagged as an unexplained gap, not as a
-defect. It deserves an answer before launch, because "the durable retry queue has
-never captured a single failure" and "the durable retry queue has never been
-needed" look identical from here, and only one of them is reassuring. The one
-thing that IS established: the queue is schema-compatible and would accept a row.
+**For block M / the owner: this stays `UNVERIFIED`.** It is an unexplained gap,
+not a defect and not an all-clear. It deserves an answer before launch, because
+"the durable retry queue has never captured a single failure" and "the durable
+retry queue has never been needed" look identical from here, and only one of them
+is reassuring.
+
+Exactly two things ARE established, and nothing beyond them should be claimed:
+
+1. `pending_emails` is schema-compatible with `enqueueFailedEmail`'s insert
+   payload, so a row would be accepted. The queue is not broken-by-schema.
+2. `n_tup_ins = 0` — no row has ever been inserted, by anything.
+
+What would settle it, and was not available here: the creation timestamps of
+`pending_emails` and `order_email_log` (Postgres does not record them, and
+neither table appears in `supabase_migrations`, so they were created outside the
+tracked migration history). The owner may know when those were deployed; that
+single fact resolves all three candidate explanations at once.
 
 ### 4. Is `MARKETING_POSTAL_ADDRESS` set? — **Yes**
 

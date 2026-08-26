@@ -163,6 +163,42 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+// ---------------------------------------------------------------------------
+// These tests must exercise the REAL autoApproveEligibleCommissions.
+//
+// The failure mode they exist to prevent is precisely the one that hid M07 for
+// so long: src/app/api/cron/sweep/route.test.ts replaces the whole of
+// @/lib/partner-portal with a stub, and a test asserting against a stub cannot
+// fail. Only supabase, admin-control and ambassador-settings are faked here —
+// never the module under test.
+//
+// Two independent controls keep that true:
+//   1. the assertion below, which fails if the module ever becomes mocked
+//   2. the M07 mutation control, documented in docs/findings/BLOCK-E.md and
+//      re-run as part of block E's verification: deleting the hold-period
+//      comparison in the real source must produce exactly three failures here.
+// ---------------------------------------------------------------------------
+describe("this suite is wired to the real implementation", () => {
+  it("is not running against a mocked partner-portal", () => {
+    expect(vi.isMockFunction(autoApproveEligibleCommissions)).toBe(false);
+    expect(typeof autoApproveEligibleCommissions).toBe("function");
+  });
+
+  /**
+   * A stub would satisfy the assertions above by accident. This one cannot be
+   * satisfied without the real function actually reading the tables and writing
+   * the approval — it asserts on a side effect the fake database observed.
+   */
+  it("drives real database work rather than returning a canned value", async () => {
+    db.referralOrders = [seedCommission("ripe", HOLD_DAYS + 1)];
+    db.orders = [{ order_id: "order-ripe", payment_status: "paid" }];
+
+    await autoApproveEligibleCommissions();
+
+    expect(db.approvals).toEqual([{ ids: ["ripe"], status: "approved_for_payout" }]);
+  });
+});
+
 describe("the commission hold period is enforced (kills M07)", () => {
   /**
    * THE MUTANT THIS EXISTS TO KILL. Deleting the hold-period comparison in
