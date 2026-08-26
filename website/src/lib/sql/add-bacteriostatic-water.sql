@@ -7,10 +7,18 @@
 -- set on the product (never overwrites image_url). It does NOT delete
 -- anything. Supabase -> SQL Editor -> New query -> paste -> Run.
 -- ============================================================================
+--
+-- NOTE: The cost values in this seed are historical seed estimates.
+-- `src/lib/sql/product-cogs.sql` is the authoritative landed-cost source.
+-- Re-running this file will deliberately NOT touch product_cost_cents on rows
+-- that already exist — see the ON CONFLICT clauses below for cost handling.
+--
+-- ============================================================================
 
 -- ---------------------------------------------------------------------------
 -- 1. Parent product. Parent price = the default (lowest) size.
---    On conflict we refresh name/category/price/cost but KEEP the existing photo.
+--    On conflict we refresh name/category/price but KEEP the existing photo
+--    and cost.
 -- ---------------------------------------------------------------------------
 insert into public.products
   (slug, name, category, price_cents, product_cost_cents, is_featured, position,
@@ -21,10 +29,10 @@ values
    true, true, true, false, 'In Stock', 100)
 on conflict (slug) do update set
   name=excluded.name, category=excluded.category, price_cents=excluded.price_cents,
-  product_cost_cents=excluded.product_cost_cents, is_featured=excluded.is_featured,
+  is_featured=excluded.is_featured,
   is_published=true, is_enabled=true, is_active=true, is_archived=false,
   stock_status='In Stock', updated_at=now();
-  -- (image_url intentionally NOT updated → an existing product photo is preserved)
+  -- (image_url and product_cost_cents intentionally NOT updated → existing photo and cost are preserved)
 
 -- ---------------------------------------------------------------------------
 -- 2. Size variants. Each carries its own price + wholesale cost so the
@@ -42,7 +50,7 @@ from (values
 join public.products p on p.slug = d.parent_slug
 on conflict (product_id, slug_suffix) do update set
   label=excluded.label, price_cents=excluded.price_cents,
-  product_cost_cents=excluded.product_cost_cents, is_default=excluded.is_default,
+  is_default=excluded.is_default,
   is_enabled=true, stock_status='In Stock', updated_at=now();
 
 -- ---------------------------------------------------------------------------
