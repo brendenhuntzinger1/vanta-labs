@@ -209,6 +209,58 @@ where n.nspname='public' and p.prosecdef
 
 ---
 
+## STEP 5b — drop the duplicate rate-limit index (OPTIONAL, but free)
+
+| | |
+|---|---|
+| **Apply** | the `drop index` below |
+| **Why** | `rate_limit_hits` carries **two byte-identical indexes** on `(bucket, created_at DESC)`. Every insert maintains both. This block's rate-limiter rewrite made that table take **one insert per throttled request** — the hottest write path in the app — so the redundant one is paid for on every checkout, referral click and login attempt. |
+| **Rollback** | recreate it (below). Fully reversible. |
+| **Blast radius** | None. The remaining index has the identical definition, so no query plan loses its access path. |
+
+**Measured on production, not assumed** — the planner has already chosen
+between them:
+
+| index | size | `idx_scan` |
+|---|---|---|
+| `rate_limit_hits_bucket_time_idx` | 280 kB | **20,606** |
+| `idx_rate_limit_bucket_time` | 272 kB | **49** |
+
+Same definition, 400× the usage. The low-scan one is duplicated work.
+
+**Apply:**
+```sql
+drop index concurrently if exists public.idx_rate_limit_bucket_time;
+```
+`concurrently` so it never takes a lock that could block a checkout. It cannot
+run inside a transaction block — run it on its own.
+
+**Rollback:**
+```sql
+create index concurrently if not exists idx_rate_limit_bucket_time
+  on public.rate_limit_hits using btree (bucket, created_at desc);
+```
+
+**Verify:**
+```sql
+select count(*) from pg_index i
+join pg_class t on t.oid = i.indrelid
+join pg_namespace n on n.oid = t.relnamespace
+where n.nspname = 'public' and t.relname = 'rate_limit_hits'
+  and pg_get_indexdef(i.indexrelid) like '%(bucket, created_at DESC)%';
+-- expect 1
+```
+
+**ABORT if** that returns 0 — the surviving index was dropped instead. Recreate
+it with the rollback above immediately; the limiter's count query degrades to a
+sequential scan without it (it fails open, so the store keeps serving, but
+every throttled route is unlimited until it is back).
+
+**Skipping this is safe.** It costs a little write throughput and some storage,
+nothing correctness-related.
+
+---
+
 ## STEP 6 — configuration, before the code
 
 Set in Vercel **Production** before deploying. See INTEGRATION-LOG §7 for the

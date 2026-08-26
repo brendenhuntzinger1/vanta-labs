@@ -2033,3 +2033,37 @@ skipped.**
 
 The lesson worth keeping: a test file in a path nobody looks at is still a test
 file, and a green suite is only as honest as the assertions inside it.
+
+### 8.1 Post-certification check on the rate limiter's own table
+
+This block rewrote `rate-limit.ts` to **record-then-count**, which changed
+`rate_limit_hits` from an occasional write to **one insert per throttled
+request** — the hottest write path in the app. Having made that change, its
+storage was worth checking rather than assuming.
+
+**Retention — checked, and my concern was unfounded.** I expected to find an
+append-only table with no cleanup. There is one: a ~1% sampled delete of rows
+older than 24 hours, on the allowed path, explicitly never able to affect the
+decision it follows. Production carries **411 rows** with the oldest at
+2026-08-25. Sound as written; recorded as a pass.
+
+**A real redundancy, measured on production.** The table carries **two
+byte-identical indexes** on `(bucket, created_at DESC)`:
+
+| index | size | `idx_scan` |
+|---|---|---|
+| `rate_limit_hits_bucket_time_idx` | 280 kB | **20,606** |
+| `idx_rate_limit_bucket_time` | 272 kB | **49** |
+
+Identical definitions; the planner has already picked one, by a factor of 400.
+The other is maintained on every insert and read essentially never — and this
+block's change is what made "every insert" mean every checkout, referral click
+and login attempt.
+
+Staged as **`DEPLOYMENT-ORDER.md` STEP 5b**, `drop index concurrently`, with
+its recreate as the rollback, a verify query, and an explicit ABORT if the
+wrong one goes. Marked **optional**: it costs write throughput and storage,
+nothing correctness-related, so skipping it is safe.
+
+**Not applied.** It is a production DDL change, and the standing rule is to ask
+every time.
