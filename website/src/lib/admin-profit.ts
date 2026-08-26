@@ -667,6 +667,21 @@ export interface RecordShippingCostInput {
   changedBy?: string | null;
 }
 
+/**
+ * Whether a new order_shipping_cost_audit row should be written.
+ *
+ * Re-recording the SAME settled cost for an order is a no-op, not an event.
+ * The repair sweep can legitimately re-run against an order whose cost is
+ * already recorded; without this the audit trail fills with identical rows and
+ * stops being usable as a record of what actually changed.
+ */
+export function shouldWriteShippingAudit(
+  existing: Array<{ exactCostCents: number | null }>,
+  amountCents: number,
+): boolean {
+  return !existing.some((row) => row.exactCostCents === amountCents);
+}
+
 export async function recordActualShippingCost(input: RecordShippingCostInput): Promise<{ ok: boolean; error?: string }> {
   const amountCents = Math.max(0, Math.round(input.amountCents));
   const now = new Date().toISOString();
@@ -705,23 +720,26 @@ export async function recordActualShippingCost(input: RecordShippingCostInput): 
   // Profit AFTER reconciliation (now on the exact cost).
   const after = await getOrderProfit(input.orderId).catch(() => null);
 
-  await supabaseAdmin
-    .from("order_shipping_cost_audit")
-    .insert({
-      order_id: input.orderId,
-      estimated_cost_cents: estimatedCents,
-      exact_cost_cents: amountCents,
-      difference_cents: amountCents - estimatedCents,
-      source: input.source,
-      previous_estimated_profit_cents: Math.round((before.profit ?? 0) * 100),
-      finalized_net_profit_cents: after ? Math.round(after.profit * 100) : null,
-      changed_by: input.changedBy ?? null,
-      created_at: now,
-    })
-    .then(
-      () => undefined,
-      () => undefined, // audit is best-effort; never fail the reconciliation over it
-    );
+  const priorAudit = await getShippingCostAudit(input.orderId);
+  if (shouldWriteShippingAudit(priorAudit, amountCents)) {
+    await supabaseAdmin
+      .from("order_shipping_cost_audit")
+      .insert({
+        order_id: input.orderId,
+        estimated_cost_cents: estimatedCents,
+        exact_cost_cents: amountCents,
+        difference_cents: amountCents - estimatedCents,
+        source: input.source,
+        previous_estimated_profit_cents: Math.round((before.profit ?? 0) * 100),
+        finalized_net_profit_cents: after ? Math.round(after.profit * 100) : null,
+        changed_by: input.changedBy ?? null,
+        created_at: now,
+      })
+      .then(
+        () => undefined,
+        () => undefined, // audit is best-effort; never fail the reconciliation over it
+      );
+  }
 
   return { ok: true };
 }
