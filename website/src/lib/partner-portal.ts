@@ -211,7 +211,16 @@ async function sendPartnerStatusEmail(input: {
   name: string;
   status: "approved" | "rejected";
   referralCode?: string;
-  commissionPercent?: number;
+  /**
+   * The ambassador's rate as stored in `ambassadors` — the table checkout and
+   * commission accrual read — as it stands AFTER the update this email is
+   * announcing. The caller used to pass the `partners` copy, which this same
+   * function calls "the mirror" and "a display copy", from a snapshot taken
+   * BEFORE the update. So approving and setting a rate in one action emailed
+   * the previous number, and any drift between the two tables emailed the one
+   * that does not govern the money.
+   */
+  commissionPercent?: number | string | null;
 }) {
   let template;
   if (input.status === "approved") {
@@ -221,11 +230,31 @@ async function sendPartnerStatusEmail(input: {
       getReferralProgramConfig().catch(() => null),
       getAmbassadorProgramSettings().catch(() => null),
     ]);
+    // What the ambassador will ACTUALLY be paid, then the program default —
+    // the resolution sendReferralCodeAssignedEmail's header has always claimed
+    // this email used. The rate typed into this request needs no separate slot:
+    // the authoritative row is read back AFTER the write, so it already carries
+    // it. Quoting the database rather than the request also means a write that
+    // silently matched no rows cannot produce an email promising a rate nobody
+    // holds.
+    // An explicit 0 is honoured — an owner may genuinely run a 0% ambassador —
+    // but null/undefined/"" means "look further", never "email them zero".
+    // When nothing at all is known the value stays undefined so the template's
+    // own default applies, rather than asserting a rate nobody configured.
+    const rateCandidates = [
+      input.commissionPercent,
+      referralProgram?.defaultCommissionPercent,
+    ];
+    const haveRate = rateCandidates.some((candidate) =>
+      candidate !== null && candidate !== undefined
+      && !(typeof candidate === "string" && candidate.trim() === "")
+      && Number.isFinite(Number(candidate)));
+
     template = ambassadorApprovedTemplate({
       name: input.name,
       referralCode: input.referralCode,
       dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
-      commissionPercent: input.commissionPercent ?? referralProgram?.defaultCommissionPercent,
+      commissionPercent: haveRate ? firstFinitePercent(rateCandidates) : undefined,
       personalDiscountPercent: referralProgram?.personalDiscountPercent,
       referralDiscountPercent: referralProgram?.discountPercent,
       holdDays: ambassadorSettings?.commissionHoldDays,
@@ -312,12 +341,28 @@ export async function autoApproveEligibleCommissions() {
   const ambassadorIds = Array.from(
     new Set(pendingRows.map((row) => row.ambassador_id).filter(Boolean)),
   );
-  const { data: ambassadorRows, error: ambassadorError } = ambassadorIds.length
-    ? await supabaseAdmin.from("ambassadors").select("id, status").in("id", ambassadorIds)
-    : { data: [], error: null };
+  // BOTH tables must say approved — the same rule markCommissionsPaid applies
+  // before releasing a payout. Gating accrual on `ambassadors` alone while the
+  // payout gate read `partners` let commissions advance to approved_for_payout
+  // for someone the payout gate would then refuse forever.
+  const [
+    { data: ambassadorRows, error: ambassadorError },
+    { data: partnerStatusRows, error: partnerStatusError },
+  ] = ambassadorIds.length
+    ? await Promise.all([
+      supabaseAdmin.from("ambassadors").select("id, status").in("id", ambassadorIds),
+      supabaseAdmin.from("partners").select("id, status").in("id", ambassadorIds),
+    ])
+    : [{ data: [], error: null }, { data: [], error: null }];
   assertNoSupabaseError("ambassadors.select(auto approve status)", ambassadorError);
+  assertNoSupabaseError("partners.select(auto approve status)", partnerStatusError);
+  const approvedInPartners = new Set(
+    (partnerStatusRows ?? []).filter((row) => row.status === "approved").map((row) => row.id),
+  );
   const approvedAmbassadorIds = new Set(
-    (ambassadorRows ?? []).filter((row) => row.status === "approved").map((row) => row.id),
+    (ambassadorRows ?? [])
+      .filter((row) => row.status === "approved" && approvedInPartners.has(row.id))
+      .map((row) => row.id),
   );
 
   const orderIds = pendingRows.map((row) => row.order_id).filter(Boolean);
@@ -364,19 +409,39 @@ export async function autoApproveEligibleCommissions() {
 
   const approvedAt = now.toISOString();
 
-  const { error: approveError } = await supabaseAdmin
+  // Guard the write with the status we READ. The select above and this update
+  // are separate requests, so anything can happen to these rows in between — a
+  // refund reversing one, an admin releasing a payout, another sweep still
+  // running. Without the guard this update overwrites all of them, dragging
+  // money that was reversed (or already paid) back into the payout queue, where
+  // it gets paid again. markCommissionsPaid has always claimed its rows this
+  // way; this path never did.
+  const { data: claimedRows, error: approveError } = await supabaseAdmin
     .from("referral_orders")
     .update({ payment_status: "approved_for_payout", approved_for_payout_at: approvedAt, updated_at: approvedAt })
-    .in("id", eligibleIds);
+    .in("id", eligibleIds)
+    .eq("payment_status", "pending")
+    .select("id, order_id");
 
   assertNoSupabaseError("referral_orders.update(auto approve)", approveError);
 
-  const { error: mirrorError } = await supabaseAdmin
-    .from("commissions")
-    .update({ status: "approved_for_payout", updated_at: approvedAt })
-    .in("order_id", pendingRows.filter((row) => eligibleIds.includes(row.id)).map((row) => row.order_id));
+  // Mirror only what this call actually claimed, not what it hoped to claim.
+  // Keying off the pre-read list would move `commissions` rows whose
+  // authoritative row was just claimed by someone else.
+  const claimedOrderIds = (claimedRows ?? []).map((row) => row.order_id).filter(Boolean);
 
-  assertNoSupabaseError("commissions.update(auto approve)", mirrorError);
+  if (claimedOrderIds.length > 0) {
+    const { error: mirrorError } = await supabaseAdmin
+      .from("commissions")
+      .update({ status: "approved_for_payout", updated_at: approvedAt })
+      .in("order_id", claimedOrderIds)
+      // Same reasoning one statement later: a reversal can land between the two
+      // ledger writes, and an unguarded mirror would silently undo it on this
+      // side only, leaving the two ledgers disagreeing about the same order.
+      .eq("status", "pending");
+
+    assertNoSupabaseError("commissions.update(auto approve)", mirrorError);
+  }
 }
 
 function toMonthKey(dateIso: string) {
@@ -1379,55 +1444,57 @@ export async function createPartnerInvite(input: {
   }
 
   const partnerId = randomUUID();
-  const now = new Date().toISOString();
 
-  const { error } = await supabaseAdmin
-    .from("partners")
-    .insert({
-      id: partnerId,
-      name: input.name,
-      email: input.email,
-      referral_code: referralCode,
-      status: "pending",
-      commission_percent: input.commissionPercent,
-      auth_user_id: invitedUser.user?.id ?? null,
-      invited_at: now,
-      created_by: actorUserId,
-      updated_at: now,
-    });
+  // BOTH ROWS OR NEITHER, and identity is the person rather than the auth row.
+  //
+  // These used to be two separate inserts. Two PostgREST statements are two
+  // transactions, and `partners` has no unique email while `ambassadors` does --
+  // so inviting an address an admin had already pre-added committed the partners
+  // row and then failed on ambassadors_email_key, leaving an orphan partner
+  // holding a referral code that checkout would never honour. That orphan also
+  // defeated the F-009 adoption repair, because it matches on auth_user_id.
+  // See src/lib/sql/partner-invite-convergence.sql (audit finding F-013).
+  const { data: invited, error } = await supabaseAdmin.rpc("create_partner_invite", {
+    p_id: partnerId,
+    p_auth_user_id: invitedUser.user?.id ?? null,
+    p_name: input.name,
+    p_email: input.email,
+    p_referral_code: referralCode,
+    p_commission_percent: input.commissionPercent,
+    p_created_by: actorUserId,
+  });
 
   if (error) {
-    assertNoSupabaseError("partners.insert(create invite)", error);
+    assertNoSupabaseError("rpc.create_partner_invite", error);
   }
 
-  const { error: ambassadorInsertError } = await supabaseAdmin
-    .from("ambassadors")
-    .insert({
-      id: partnerId,
-      name: input.name,
-      email: input.email,
-      referral_code: referralCode,
-      status: "pending",
-      commission_percent: input.commissionPercent,
-      auth_user_id: invitedUser.user?.id ?? null,
-      invited_at: now,
-      created_by: actorUserId,
-      updated_at: now,
-    });
+  const result = (invited ?? {}) as {
+    partner_id?: string;
+    referral_code?: string;
+    commission_percent?: number | string;
+    adopted?: boolean;
+  };
 
-  if (ambassadorInsertError) {
-    assertNoSupabaseError("ambassadors.insert(create invite mirror)", ambassadorInsertError);
-  }
+  // Answer with the identity the database settled on, not the one generated
+  // here. On adoption the surviving row is the admin's -- with the referral code
+  // they already issued, which may be in circulation, and the rate they set.
+  const settledPartnerId = result.partner_id ?? partnerId;
+  const settledReferralCode = result.referral_code ?? referralCode;
+  const adopted = result.adopted === true;
 
   await supabaseAdmin.from("admin_audit_logs").insert({
     actor_user_id: actorUserId,
-    action: "partner_invited",
+    action: adopted ? "partner_invite_adopted" : "partner_invited",
     target_table: "ambassadors",
-    target_id: partnerId,
+    target_id: settledPartnerId,
     metadata: {
       email: input.email,
-      commissionPercent: input.commissionPercent,
-      referralCode,
+      commissionPercent: adopted ? Number(result.commission_percent) : input.commissionPercent,
+      referralCode: settledReferralCode,
+      // An adopted invite linked an ambassador the admin had already configured;
+      // the rate and code they see are that row's, not the ones typed into the
+      // invite form.
+      adopted,
       actorUsername: input.actorUsername ?? null,
       ipAddress: input.ipAddress ?? null,
       userAgent: input.userAgent ?? null,
@@ -1435,8 +1502,9 @@ export async function createPartnerInvite(input: {
   });
 
   return {
-    partnerId,
-    referralCode,
+    partnerId: settledPartnerId,
+    referralCode: settledReferralCode,
+    adopted,
   };
 }
 
@@ -1587,11 +1655,27 @@ export async function updatePartnerStatus(input: {
   // is written anywhere and the owner sees an honest error. If the partners
   // mirror then fails, the rate that governs money is already correct and only
   // a display copy is stale -- the safe direction to fail in.
-  const { error: ambassadorUpdateError } = await supabaseAdmin
+  const { data: ambassadorUpdated, error: ambassadorUpdateError } = await supabaseAdmin
     .from("ambassadors")
     .update(updatePayload)
-    .eq("id", input.partnerId);
+    .eq("id", input.partnerId)
+    .select("id");
   assertNoSupabaseError("ambassadors.update(authoritative rates)", ambassadorUpdateError);
+
+  // A write that matched NOTHING is not success.
+  //
+  // Existence was checked on `partners` alone, and an update matching zero rows
+  // is not an error in PostgREST — so approving someone with no `ambassadors`
+  // row returned 200, sent them an approval email, and wrote an audit row
+  // naming a table it never touched, while their referral code still resolved
+  // to nothing at checkout. Failing here also keeps the promise the comment
+  // above makes: if the money side does not take the write, nothing is written
+  // anywhere and the owner sees an honest error.
+  if (!ambassadorUpdated || ambassadorUpdated.length === 0) {
+    throw new Error(
+      "This ambassador has no record in the ambassadors table, which is what checkout and commission accrual read. Nothing was changed. Their identity needs repairing before their status can be set.",
+    );
+  }
 
   const { error: partnerUpdateError } = await supabaseAdmin
     .from("partners")
@@ -1622,12 +1706,21 @@ export async function updatePartnerStatus(input: {
         },
       );
 
+      // Read the rate back from the AUTHORITATIVE table, after the write. That
+      // is the number this ambassador will actually be paid, and therefore the
+      // only number worth putting in an email that tells them what they earn.
+      const { data: authoritative } = await supabaseAdmin
+        .from("ambassadors")
+        .select("commission_percent")
+        .eq("id", input.partnerId)
+        .maybeSingle();
+
       const emailSent = await sendPartnerStatusEmail({
         to: existingPartner.email,
         name: existingPartner.name,
         status: input.status,
         referralCode: finalReferralCode,
-        commissionPercent: existingPartner.commission_percent != null ? Number(existingPartner.commission_percent) : undefined,
+        commissionPercent: authoritative?.commission_percent ?? null,
       });
 
       if (emailSent && queueRowId) {
@@ -1771,14 +1864,26 @@ export async function markCommissionsPaid(input: {
   // Commissions that reached approved_for_payout before the ambassador was
   // disabled (e.g. for fraud) must be held until an admin re-approves them —
   // otherwise a disabled ambassador keeps getting paid off their old balance.
-  const { data: partnerStatusRow } = await supabaseAdmin
-    .from("partners")
-    .select("status")
-    .eq("id", input.partnerId)
-    .maybeSingle();
+  // BOTH tables must say approved.
+  //
+  // Accrual gates on `ambassadors.status` and this gate used to read
+  // `partners.status`, so the two halves of the pipeline could disagree about
+  // the same person. Either direction of drift half-broke it: approved in
+  // ambassadors but disabled in partners accrued commissions that could never
+  // be released, and the mirror image left the payout button live for someone
+  // the money table said was disabled. Requiring both to agree can only ever
+  // HOLD money, never release it early — the safe direction to be wrong in.
+  const [{ data: partnerStatusRow }, { data: ambassadorStatusRow }] = await Promise.all([
+    supabaseAdmin.from("partners").select("status").eq("id", input.partnerId).maybeSingle(),
+    supabaseAdmin.from("ambassadors").select("status").eq("id", input.partnerId).maybeSingle(),
+  ]);
   const partnerStatus = String(partnerStatusRow?.status ?? "").toLowerCase();
-  if (partnerStatus !== "approved") {
-    throw new Error(`This ambassador is not currently approved (status: ${partnerStatus || "unknown"}). Re-approve them before releasing a payout, or handle the held balance manually.`);
+  const ambassadorStatus = String(ambassadorStatusRow?.status ?? "").toLowerCase();
+  if (partnerStatus !== "approved" || ambassadorStatus !== "approved") {
+    const reported = partnerStatus === ambassadorStatus
+      ? (partnerStatus || "unknown")
+      : `partners: ${partnerStatus || "missing"}, ambassadors: ${ambassadorStatus || "missing"}`;
+    throw new Error(`This ambassador is not currently approved (status: ${reported}). Re-approve them before releasing a payout, or handle the held balance manually.`);
   }
 
   const { data: pendingRows, error: pendingError } = await supabaseAdmin

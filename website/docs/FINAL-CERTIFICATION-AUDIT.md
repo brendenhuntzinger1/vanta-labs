@@ -548,6 +548,425 @@ Revert path is exact: re-apply `BASELINE-live-functions-2026-08-25.sql`.
 *Still owed:* browser-level proof of the full pre-add → sign-up → apply journey
 (Phase 6), which needs the fix applied to a preview or the local dev database.
 
+### F-013 — The admin invite door reopens BRUTUS, and silently defeats the F-009 repair
+**Grade:** `BEHAVIORAL-TEST-PROVEN` (real Postgres, real constraints, real TypeScript) · **Severity:** P0 · **Status:** REPAIRED, APPLIED TO PRODUCTION AND VERIFIED THERE
+
+F-009 fixed the *self-service* apply path. `createPartnerInvite`
+(`src/lib/partner-portal.ts:1370`) — the **admin invite** path — was never
+routed through anything, and still wrote `partners` then `ambassadors` as two
+independent PostgREST statements. Two statements over HTTP are two
+transactions, so nothing rolls the first one back.
+
+**Reproduced, SQL level.** Faithful replica on local PostgreSQL 16.13; DDL and
+constraints taken from production `information_schema`. Production untouched.
+
+```
+--- SETUP: admin pre-adds the ambassador (a normal, supported operation) ---
+ambassadors | 1      partners | 0
+
+--- step 2: INSERT INTO partners  ---> INSERT 0 1   (commits)
+--- step 3: INSERT INTO ambassadors -->
+ERROR:  duplicate key value violates unique constraint "ambassadors_email_key"
+
+=== STATE AFTER ===
+ambassadors | 1      partners | 1     <- the first insert was NOT rolled back
+
+--- orphan partners rows (partners row with no ambassadors twin) ---
+ 33333333-...  paula@example.test  PAULAP-A1B2C3  pending  10
+```
+
+That orphan **is** the BRUTUS row: a `partners` row holding a live,
+unique-claimed referral code with no `ambassadors` twin.
+
+**It is worse than a stale row — it defeats F-009.** The orphan carries
+`auth_user_id`, and both the app layer (`partner-portal.ts:442`) and
+`create_partner_application` match on `auth_user_id` first. Proven in the
+replica, running the **shipped** F-009 repair:
+
+```
+=== Paula accepts the invite and applies. Does F-009 adoption fire? ===
+{"status":"pending","created":false,"partner_id":"3333...","referral_code":"PAULAP-A1B2C3"}
+                                    ^ no "adopted" key -- adoption never ran
+
+=== Which code is she told she has, and is it valid at checkout? ===
+ told_to_paula | honoured_at_checkout
+ PAULAP-A1B2C3 | f
+
+=== Her real approved identity: still stranded? ===
+ PAULA | approved | 17.50 | 12.50 | unclaimed_by_any_account = t
+```
+
+So the invitee is handed a referral code that **checkout will never honour**
+(`validate_referral_code` reads `ambassadors` and requires `status='approved'`),
+while her real approved identity — with the rates the admin configured — stays
+stranded in `ambassadors`, unclaimed, permanently. The admin saw only a 400.
+
+**Regression tests — RED before the fix.** `src/lib/partner-invite-atomicity.test.ts`
+runs the **real `createPartnerInvite`** against a real Postgres through a
+`supabaseAdmin` shim backed by `pg`, so every insert meets the real constraints.
+
+```
+Tests  5 failed | 2 passed (7)
+leaves no orphan partners row behind
+  -> expected [ { referral_code: "PAULAT-4C800E", commission_percent: "10", ... } ] to deeply equal []
+adopts the admin's ambassador instead of minting a second identity  -> expected 2 to be 1
+reports back a referral code that checkout will actually honour     -> expected null not to be null
+does not strand her real identity unclaimed                         -> expected null not to be null
+refuses to hand over an ambassador another account already claimed  -> orphan left behind
+```
+
+The 2 that already passed are guard rails for behaviour the fix must not break
+(a genuinely new invitee; the admin's configured rates surviving untouched).
+
+**The repair** — `src/lib/sql/partner-invite-convergence.sql` defines
+`create_partner_invite`, deliberately the same shape as F-009's repair because
+it is the same defect through a different door: one plpgsql body is one
+transaction, and identity is the person (their email), not the auth row.
+
+1. Already invited/applied under this auth user → hand back what exists.
+2. An ambassador already holds this email → claimed by another account, raise;
+   unclaimed, **adopt** it and ensure the `partners` twin carries the same id.
+3. Nobody by either → create both rows, or neither.
+
+Nothing the admin configured is overwritten on adoption — not the referral code
+(which may be in circulation), the commission, the customer discount, or the
+status. In particular **the invite form's default commission does not overwrite
+a rate an admin deliberately set**; silently downgrading someone's rate through
+a form default is a money defect. `createPartnerInvite` now answers with the
+identity the database settled on, and records `partner_invite_adopted` in the
+audit log so an adoption is not indistinguishable from a fresh invite.
+
+**GREEN after the fix:** `Tests 7 passed (7)`.
+
+**Negative controls (mutation tests) — each lands on exactly the right test:**
+
+| Mutation | Result |
+|---|---|
+| A: neuter the already-claimed-by-another-account guard | only *"refuses to hand over an ambassador another account already claimed"* fails |
+| B: let adoption overwrite the admin's referral code and rate | *"preserves the referral code and rates the admin configured"* fails — and so does *"reports back a code checkout will honour"*, because the reported code and the stored code then disagree |
+| C: atomic but NOT convergent (drop the email lookup) | the 3 convergence tests fail; *"leaves no orphan"* still passes — correctly isolating atomicity from convergence |
+| D: answer with the locally generated identity | only *"reports back a referral code that checkout will actually honour"* fails |
+| E: adopt the ambassador but never create the `partners` twin | only *"adopts the admin's ambassador instead of minting a second identity"* fails |
+| restored | all 7 green |
+
+**Verification:** full suite **204 files / 3586 tests passing** with the database
+present (was 203/3579 after F-009). `tsc --noEmit` exit 0.
+
+**STATUS: APPLIED TO PRODUCTION AND VERIFIED THERE.** `PRODUCTION-PROVEN`.
+
+Applied 2026-08-26 with the owner's explicit instruction, as Supabase migration
+`partner_invite_atomic_and_convergent` — the same mechanism as the four earlier
+affiliate repairs. The SQL landed **before** the code that calls it, which was
+the deployment hazard this entry previously flagged; that hazard is now closed.
+
+| | value |
+|---|---|
+| `create_partner_invite` before | **did not exist** |
+| `md5(prosrc)` after | `2d6dc067f3ac531a40a53bfd4767fb80` |
+| `create_partner_application` md5 (F-009) | `0c177eff4e03b6a7d2b57927846c0c47` — **unchanged** |
+| `partners` / `ambassadors` counts | 7 / 7 — unchanged |
+
+**Behavioural verification in production, persisting nothing.** The probe ran
+inside a `DO` block ending in `RAISE EXCEPTION`, so every write rolled back. It
+exercised the real tables, real constraints and real defaults:
+
+```
+start p=7 a=7
+A=PASS(already-claimed guard raised)
+B: adopted=true id_match=t code=AUDITINVPRE comm=17.50 status=approved twin=t
+C: created=true both_rows_same_id=1
+before rollback p=9 a=9  -> ROLLED BACK
+```
+
+| Check | Result |
+|---|---|
+| A — an ambassador another account already claimed is NOT handed over (used a **real** existing ambassador's email with a different auth id) | raised, no hand-over |
+| B — adoption fires for a pre-added ambassador | `adopted=true` |
+| Returns the pre-added id, not a newly minted one | `id_match=t` |
+| Admin's issued referral code survives (the invite asked for `AUDITINVNEW`) | `AUDITINVPRE` |
+| Admin's commission survives (`10` was passed in) | `17.50` |
+| Admin's status survives | `approved` |
+| `partners` twin created, same id, auth claimed | `twin=t` |
+| Case-insensitive identity match (email passed UPPERCASE) | matched |
+| C — a genuinely new invitee still gets both rows with one id | `created=true`, `1` |
+
+**Rollback confirmed clean:** `partners=7, ambassadors=7`, **0** probe rows in
+either table, **7 converged pairs**, **0 orphan partners**, and F-009's function
+untouched at its recorded md5.
+
+Revert path is exact: `drop function public.create_partner_invite(uuid,uuid,text,text,text,numeric,uuid);`
+and revert the `createPartnerInvite` change in `partner-portal.ts` together.
+
+### F-014 — The database-backed proofs skip silently; the ledger's "loud skip" claim was false
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P1 (test-suite honesty) · **Status:** REPAIRED IN REPO
+
+This ledger claimed of F-009's suite: *"Without a database the 7 convergence
+tests skip **loudly** via `console.warn` — so CI cannot report a false pass."*
+**That claim was wrong.** Vitest 4 swallows `console.warn` emitted at module
+scope when the suite is skipped. Measured, before the fix:
+
+```
+$ npx vitest run src/lib/partner-identity-convergence.test.ts
+ Test Files  1 skipped (1)
+      Tests  7 skipped (7)          <- and nothing else. No warning at all.
+```
+
+So the 14 tests that constitute the *entire* runtime proof of both BRUTUS
+repairs (F-009's 7 and F-013's 7) skip invisibly whenever
+`VANTA_TEST_DATABASE_URL` is unset, and the run still reports success.
+
+**This matters more than it looks:** the repository has **no `.github/` and no
+CI configuration at all**, so nothing sets that variable automatically. These
+proofs run only when a person deliberately exports it. A green `npm run test` is
+therefore not evidence that either BRUTUS repair still holds.
+
+**Repair:** both suites now emit the notice through `process.stderr.write`,
+which Vitest does not capture. Verified after:
+
+```
+[partner-identity-convergence] SKIPPED: set VANTA_TEST_DATABASE_URL ...
+[partner-invite-atomicity] SKIPPED: set VANTA_TEST_DATABASE_URL ...
+```
+
+*Still owed (Phase 15):* a real gate. Making the run *fail* without a database
+would be the honest default, but there is no CI to configure, so that is a
+decision for the owner rather than a unilateral change. Recorded so the Phase 15
+test-quality report does not repeat the original false claim.
+
+### F-015 — Nothing runs the test suite automatically. There is no CI at all.
+**Grade:** `SOURCE-INSPECTED` (repo) + `PRODUCTION-PROVEN` (Vercel project config) · **Severity:** P1 — process, not code · **Status:** OPEN — owner decision
+
+Measured, not assumed:
+
+| Check | Result |
+|---|---|
+| `.github/` directory | **does not exist** — no workflows, no actions |
+| Any CI config in the repo (`*.yml`, `*.yaml`, `Jenkinsfile`, `.gitlab-ci*`) | the only match is `website/vercel.json`, which contains **just the cron schedule** |
+| `package.json` scripts | `dev`, `build` (`next build`), `start`, `lint`, `test` — **`build` does not invoke `test`** |
+| Vercel project `vanta-labs` | framework `nextjs`, default build; **no test step** |
+
+So the 3,595 tests run **only when a person types the command.** No push, pull
+request, or deployment runs them. A red suite cannot block a merge or a deploy,
+because nothing is watching.
+
+**Why this is a finding and not a footnote.** The audit brief asks how 3,566
+passing tests coexisted with every historical defect. Part of the answer is test
+*quality* (Phase 15). But part of it is simply that **a passing suite was never a
+precondition for anything.** Every regression test this audit adds — F-009's 7,
+F-013's 7, F-016's 9 — protects nothing on its own. They are proofs that the
+defect *was* fixed, not guards that it stays fixed.
+
+Compounded by **F-014**: the 23 database-backed tests among them need
+`VANTA_TEST_DATABASE_URL`, which no automated process would set even if CI
+existed.
+
+*Recommended, but the owner's call:* a workflow on pull request and on push to
+`main` running `npm ci`, `npx tsc --noEmit`, `npm run lint`, and `npm run test`
+with a Postgres service container and `VANTA_TEST_DATABASE_URL` pointed at it.
+Not added unilaterally — introducing a required check changes the owner's
+merge workflow.
+
+### F-016 — The commission sweep overwrites money that moved while it was deciding
+**Grade:** `BEHAVIORAL-TEST-PROVEN` (real Postgres, genuinely concurrent connections) · **Severity:** P0 · **Status:** REPAIRED IN REPO — **no production change needed** (application code only)
+
+`autoApproveEligibleCommissions` (`partner-portal.ts:284`, run by the only cron,
+every 30 minutes) reads `referral_orders WHERE payment_status = 'pending'`, then
+makes **three more round trips** (ambassadors, orders, settings) before writing.
+Its write carried no status guard — just `.in("id", eligibleIds)`. Anything that
+happened to those rows inside that window was silently overwritten.
+
+`markCommissionsPaid` has always guarded its equivalent write with
+`.eq("payment_status", "approved_for_payout")`. This path never did.
+
+**Reproduced with genuinely overlapping calls**, not sequential ones: the real
+function runs against a real Postgres through a **pooled** shim, and the
+competing operation commits **on its own connection** mid-sequence.
+
+```
+a refund reverses a commission mid-sweep -> expected 'reversed',  got 'approved_for_payout'
+an admin pays a commission out mid-sweep -> expected 'paid',      got 'approved_for_payout'
+a reversal landing between the two ledger writes -> referral_orders 'reversed',
+                                                    commissions 'approved_for_payout'
+```
+
+**The second one is the money defect.** A commission that was *already paid*
+is dragged back to `approved_for_payout`, where it re-enters the payout queue
+and is **paid a second time**. The first silently un-reverses a refunded
+commission. The third leaves the two ledgers disagreeing about the same order.
+
+This is not theoretical: the sweep runs every 30 minutes, unattended, and the
+competing writes are ordinary operator actions (a refund, a payout release).
+
+**Repair.** Guard the authoritative write with the status that was read, and
+mirror only the rows actually claimed — the same discipline `markCommissionsPaid`
+already applies, including the A8 "key the mirror off what was claimed" rule.
+A second guard on the mirror covers the tighter window between the two writes.
+
+**RED before / GREEN after:** `4 failed | 5 passed (9)` → `9 passed (9)`.
+
+**Negative controls:**
+
+| Mutation | Result |
+|---|---|
+| A: drop the status guard on the authoritative update | the 3 tests for reversed / already-paid / ledger agreement fail |
+| B: drop the status guard on the `commissions` mirror | only *"does not overwrite a reversal that lands between the two ledger writes"* fails |
+| restored | all 9 green |
+
+**Certified in the same run — mechanisms that DO hold under real contention:**
+
+| Behaviour | Evidence |
+|---|---|
+| `markCommissionsPaid` pays exactly once under two simultaneous releases | 2 concurrent calls → 1 winner, 1 payout row of $140, 0 duplicate |
+| The two payout ledgers stay in step | `partner_payouts` and `payouts` each hold 1 row with the same id |
+| No commission left half-paid | all rows `paid`, none stranded |
+| The paid-side-effects exactly-once claim | 8 concurrent `update ... where paid_side_effects_at is null returning` → **exactly 1** wins |
+
+The last one matters: it is the mechanism preventing double commissions and
+double stock decrements on a replayed payment webhook, and it is sound.
+
+**A harness defect found and fixed along the way.** The three database-backed
+suites shared one database while Vitest ran them in parallel workers, so they
+destroyed each other's fixtures and failed with unique-constraint errors
+belonging to a *different* suite's seed data. Each suite now provisions its own
+throwaway database (`src/lib/test-support/suite-database.ts`). Recorded because
+that failure mode looks exactly like a real defect and would have wasted a
+later reviewer's time.
+
+**Map correction (`DATABASE-PROVEN`).** `PHASE1-SYSTEM-MAP.md` states
+`partner_payouts.ambassador_id references ambassadors(id)`. Live
+`information_schema` shows `partner_payouts` has **only a primary key — no
+foreign key at all**. `payouts.partner_id` → `partners(id)` and
+`commissions.partner_id` → `partners(id)` are the real FK constraints, and
+`referral_orders.ambassador_id` → `ambassadors(id)`. The map's P0 rationale for
+the `markCommissionsPaid` ordering risk is therefore half wrong: a one-sided
+identity breaks the `payouts` mirror, not `partner_payouts`. The ordering risk
+itself (status flipped to `paid` before the payout rows are inserted, with no
+transaction) is **unchanged and still open** — see NOT VERIFIED below.
+
+### F-017 — Historical defect #3: the approval email quotes a commission the ambassador does not earn
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P0 · **Status:** REPAIRED IN REPO — **no production change needed** (application code only)
+
+The referral-code-assigned email was repaired after MIZZY was emailed "0%" with
+15.00 stored. Its header says, in capitals, that telling an ambassador they earn
+0% is worse than not writing, and it resolves the rate through
+`firstFinitePercent([rate set now, stored rate, program default])`.
+
+The comment 30 lines above it claims the **approval** email "resolves it inside
+`sendPartnerStatusEmail` … a caller that forgets cannot reintroduce a hole."
+**It did not, and the caller did.** `updatePartnerStatus` passed:
+
+```ts
+commissionPercent: existingPartner.commission_percent != null
+  ? Number(existingPartner.commission_percent) : undefined,
+```
+
+`existingPartner` is a snapshot of the **`partners`** row taken *before* the
+update — the table this same function calls "the mirror" and "a display copy",
+because `ambassadors` is what checkout and commission accrual read. So:
+
+| Situation | What the ambassador was told | What they actually earn |
+|---|---|---|
+| Approve **and** set the rate in one action (the normal way) | the **previous** rate | the new rate |
+| The two tables have drifted | the **display copy** | the `ambassadors` value |
+| `partners` holds 0 while `ambassadors` holds a real rate | **"0%"** | their real rate |
+
+The third row is historical defect #3 exactly, reachable through the other door.
+
+**RED before / GREEN after:** `4 failed | 2 passed (6)` → `6 passed (6)`.
+
+**The repair.** Read the rate back from `ambassadors` **after** the write and
+quote that — the number the ambassador will actually be paid — falling back to
+the program default, and leaving the value unset (so the template's own default
+applies) when nothing is configured anywhere. An explicit 0 is still honoured;
+`null`, `undefined` and `""` mean "look further", never "email them zero". The
+rate typed into the request needs no separate slot: the authoritative row is
+read after the write, so it already carries it — and quoting the database rather
+than the request means a write that silently matched no rows cannot produce an
+email promising a rate nobody holds.
+
+**Negative controls:**
+
+| Mutation | Result |
+|---|---|
+| A: read the pre-update `partners` copy again (the original defect) | the 4 tests for same-submission rate, authoritative rate, DB agreement and explicit 0 fail |
+| B: read `ambassadors` *before* the write instead of after | 5 of 6 fail — the read's timing is load-bearing, not incidental |
+| C: coerce a missing rate to 0 instead of the program default | only *"falls back to the program default"* fails |
+| restored | all 6 green |
+
+**Two false passes found and fixed along the way — both worth more than the fix.**
+
+1. **My own first fake returned live row references.** PostgREST returns JSON
+   over HTTP, so a row read earlier does not change when the table is updated
+   later. Handing back the stored object made two tests **pass against the
+   unfixed code** — the caller's `existingPartner` appeared to pick up the new
+   rate by itself. Corrected to return snapshots, at which point the defect
+   appeared. Recorded because it is precisely the failure mode this audit
+   exists to find, and it happened *inside the audit*.
+
+2. **`referral-code-email-wiring.test.ts` — the file whose header reads "THE
+   TEST THAT WOULD HAVE CAUGHT IT" — could not have caught this half.** Its fake
+   answered `null` for every `ambassadors` read and had no store behind the
+   `ambassadors` update, so the scenario in its own header ("15.00 stored on
+   **both** tables") was only ever half modelled. A fake that cannot represent
+   the authoritative rate cannot catch an email quoting the wrong one. Now
+   models the row and lets the write land. **This is a concrete, named instance
+   of the Phase 15 "mock-shape drift" P0.**
+
+### F-018 — Approving an ambassador with no `ambassadors` row reported success for a write that touched nothing
+**Grade:** `BEHAVIORAL-TEST-PROVEN` (real Postgres) · **Severity:** P0 · **Status:** REPAIRED IN REPO — application code only
+
+`updatePartnerStatus` checked existence on **`partners` alone**, then updated both
+tables with `.eq("id", …)`. A PostgREST update matching **zero rows is not an
+error**, so `assertNoSupabaseError` passed and the route returned 200.
+
+The owner got a success toast and the applicant got an approval email, while
+`ambassadors` — the table checkout and commission accrual read — was never
+touched, so the referral code still resolved to nothing at checkout. The audit
+log recorded `target_table: 'ambassadors'` for a write that hit no rows.
+
+Reproduced against real Postgres, because the defect is entirely a fact about
+what a zero-row UPDATE returns; a fake that reports "updated" regardless cannot
+show it.
+
+**Repair.** Ask for the rows back (`.select("id")`) and fail when none matched,
+*before* the `partners` mirror is written — which also keeps the promise the
+existing comment already made: if the money side does not take the write,
+nothing is written anywhere and the owner sees an honest error.
+
+**RED → GREEN:** the 2 no-op tests fail before, pass after. Mutation A (drop the
+guard) fails exactly those 2 and nothing else.
+
+### F-019 — Accrual and payout release were gated by different tables
+**Grade:** `BEHAVIORAL-TEST-PROVEN` (real Postgres) · **Severity:** P0 · **Status:** REPAIRED IN REPO — application code only
+
+`autoApproveEligibleCommissions` gated on `ambassadors.status`;
+`markCommissionsPaid` gated on `partners.status`. Two halves of one money
+pipeline asking two different tables about the same person. Both directions of
+drift were reproduced:
+
+| Drift | Result before the repair |
+|---|---|
+| `ambassadors` approved, `partners` disabled | the sweep advanced the commission to `approved_for_payout`, and the payout gate then refused it — **money accrued that nothing could ever release** |
+| `partners` approved, `ambassadors` disabled | accrual blocked, but the payout gate let a release run for someone the **money table** said was disabled |
+
+ELIJAH-AB78AE is documented in the brief as exactly this drift in production.
+
+**Repair.** Both gates now require **both tables to say approved**. This can only
+ever *hold* money, never release it early — the safe direction to be wrong in,
+and the same direction `getPayoutQueue`'s own header argues for. The error
+message names both statuses when they disagree, so an operator can see the drift
+instead of guessing.
+
+**Negative controls:** reverting the payout gate to `partners` only fails exactly
+the mirror-image test; reverting the accrual gate to `ambassadors` only fails
+exactly the accrual test. Guard rails (both approved → payout releases $60;
+both rows present → approval works normally) stay green throughout.
+
+*Note:* this makes the repaired state stricter. If an ambassador is currently
+approved in only one table, their commissions will now hold rather than move.
+Production is converged today (F-002: 7/7 matching pairs), so nothing is held by
+this change right now.
+
 ### F-011 — Three safety-critical database functions exist only in production
 **Grade:** `DATABASE-PROVEN` · **Severity:** P1 · **Status:** BASELINE CAPTURED
 
@@ -634,9 +1053,9 @@ Issues found:
 |---|---|---|---|
 | 1 | 15% discount displayed as 10% | **Server side PASS.** `validate_referral_code('MIZZY')` returns `customer_discount_percent: 15`; NULL passes through un-coerced for inheritors. Cart calls the same `resolveAmbassadorCustomerDiscount` as the server. **Browser proof still owed.** | `DATABASE-PROVEN` + `SOURCE-INSPECTED` |
 | 2 | Mystery $100 affiliate minimum | Not yet assessed. `DEFAULT_MINIMUM_QUALIFYING_ORDER` exists; `/api/catalog/promotions` swallows a settings failure with `.catch(() => ({ minimumQualifyingOrder: DEFAULT }))` — a silent fallback to watch. | `NOT VERIFIED` |
-| 3 | 0% commission approval email | Not yet assessed. | `NOT VERIFIED` |
-| 4 | Brutus/Paul duplicate identity | **FAIL → REPAIRED & LIVE.** Reproduced in an isolated replica; convergence implemented; 7 behavioural tests red→green with 4 negative controls; applied to production and proven there by a rolled-back probe. Browser proof still owed. | `PRODUCTION-PROVEN` |
-| 5 | Elijah status drift | **PASS (behavioural).** `validate_referral_code('ELIJAH-AB78AE')` → `{valid:false}` because the RPC filters `status='approved'`. Both tables show `info_requested`. | `DATABASE-PROVEN` |
+| 3 | 0% commission approval email | **FAIL → REPAIRED (repo).** The referral-code email was fixed; the APPROVAL email still passed the pre-update `partners` copy, so approving and rate-setting in one action emailed the old number, and a `partners`-0 / `ambassadors`-real drift emailed "0%". 6 tests red→green, 3 negative controls. Two false passes found and fixed, one of them in the test named "THE TEST THAT WOULD HAVE CAUGHT IT". | `BEHAVIORAL-TEST-PROVEN` |
+| 4 | Brutus/Paul duplicate identity | **TWO DOORS. Self-service (F-009): REPAIRED & LIVE** — reproduced in a replica, 7 tests red→green, 4 negative controls, applied to production and proven there by a rolled-back probe. **Admin invite (F-013): REPRODUCED & REPAIRED IN REPO, not yet applied to production** — the same orphan, and it silently defeats the F-009 repair; 7 tests red→green, 5 negative controls. Browser proof still owed for both. | `PRODUCTION-PROVEN` (F-009) + `BEHAVIORAL-TEST-PROVEN` (F-013) |
+| 5 | Elijah status drift | **PASS in data, FAIL in mechanism → REPAIRED.** The code path was still there: accrual gated on `ambassadors.status`, payout on `partners.status`, so drift half-broke the pipeline in either direction (F-019). Both gates now require both tables to agree. And `updatePartnerStatus` silently no-opped on a missing `ambassadors` row (F-018). | `BEHAVIORAL-TEST-PROVEN` |
 | 6 | Affiliate money chain | Not yet assessed. `commissions`, `payouts`, `partner_payouts`, `referral_orders` are all **0 rows** — no production money has ever flowed, so all proof must be behavioural. | `NOT VERIFIED` |
 | 7 | Affiliate balance row-cap | `affiliate_balances()` RPC exists (server-side aggregation, SECURITY DEFINER) — the structural fix is present. Not yet proven above the row cap. | `SOURCE-INSPECTED` |
 
@@ -859,7 +1278,7 @@ every visitor while `coa_records` is empty and no product carries a COA URL**
 | 1 — System map | ✅ COMPLETE — see PHASE1-SYSTEM-MAP.md (159 risks catalogued, none reproduced) |
 | 2 — Production data integrity | 🔄 PARTIAL (11 findings) |
 | 5 — Migrations / schema reconciliation | 🔄 STARTED — 3 missing functions captured (F-011); full table/policy diff still owed |
-| 6 — Affiliate / ambassador | 🔄 F-009 repaired, applied to production and verified there; browser proof of the end-to-end journey still owed |
+| 6 — Affiliate / ambassador | 🔄 F-009 repaired and live; **F-013 (admin invite door) reproduced and repaired in repo, production migration pending approval**; browser proof of the end-to-end journey still owed |
 | 3 — Customer journey | 🔄 BLOCKED for data-driven flows by E-001; age gate PASS, trust claims captured |
 | 4, 7–21 | ⬜ NOT STARTED |
 
@@ -869,6 +1288,8 @@ every visitor while `coa_records` is empty and no product carries a COA URL**
 |---|---|---|---|
 | F-009 | `src/lib/sql/partner-identity-convergence.sql` + adoption handling in `src/lib/partner-portal.ts` | 7 integration (real Postgres) + 6 app-layer; 4 negative controls | **APPLIED & VERIFIED** — migration `partner_application_adopts_pre_added_ambassador`; production probe passed on all 9 checks and rolled back clean |
 | F-011 | `src/lib/sql/BASELINE-live-functions-2026-08-25.sql` (verbatim capture) | n/a — baseline | no change; documents current state |
+| F-013 | `src/lib/sql/partner-invite-convergence.sql` (new `create_partner_invite` RPC) + `createPartnerInvite` rewired in `src/lib/partner-portal.ts` | 7 integration (real Postgres, real `createPartnerInvite`); 5 negative controls | **APPLIED & VERIFIED** — migration `partner_invite_atomic_and_convergent`; production probe passed all 9 checks and rolled back clean |
+| F-014 | `process.stderr.write` instead of `console.warn` in both database-backed suites | verified: notice now prints on a skipped run | repo only; no production change |
 
 ## Running the database-backed tests
 

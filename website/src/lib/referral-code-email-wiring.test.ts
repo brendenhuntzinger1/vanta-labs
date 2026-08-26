@@ -104,11 +104,39 @@ vi.mock("@/lib/supabase-server", () => {
         select: () => ({
           eq: () => ({
             neq: () => ({ limit: async () => ({ data: [], error: null }) }),
-            async maybeSingle() { return { data: null, error: null }; },
+            // The AUTHORITATIVE row, and it really holds the stored rate.
+            //
+            // This used to answer `null`, so the scenario in this file's header
+            // -- "15.00 stored on BOTH tables" -- was only ever half modelled.
+            // The approval email reads this table (it is what checkout and
+            // accrual read), and against a null it silently fell through to the
+            // program default. A fake that cannot represent the authoritative
+            // rate cannot catch an email quoting the wrong one.
+            async maybeSingle() {
+              return {
+                data: { id: PARTNER_ID, commission_percent: state.storedCommission },
+                error: null,
+              };
+            },
           }),
         }),
         update: (payload: Record<string, unknown>) => ({
-          eq: async () => { state.writes.push({ table: "ambassadors", payload }); return { error: null }; },
+          eq: () => {
+            state.writes.push({ table: "ambassadors", payload });
+            // And the write lands, so a read AFTER the update sees the new rate
+            // -- which is the whole point of reading it after the update.
+            if ("commission_percent" in payload) {
+              state.storedCommission = payload.commission_percent as string | number | null;
+            }
+            // The row exists in this scenario, so the write matched it. A caller
+            // asking .select("id") is checking exactly that: an update matching
+            // zero rows is not an error, so it has to look.
+            const matched = [{ id: PARTNER_ID }];
+            return {
+              select: async () => ({ data: matched, error: null }),
+              then: (res: (v: unknown) => unknown) => Promise.resolve(res({ data: matched, error: null })),
+            };
+          },
         }),
       };
     }

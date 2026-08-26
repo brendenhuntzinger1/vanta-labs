@@ -2,6 +2,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "pg";
+import { suiteDatabaseUrl } from "@/lib/test-support/suite-database";
 
 // ---------------------------------------------------------------------------
 // IDENTITY CONVERGENCE — the half of the BRUTUS defect that was never fixed.
@@ -130,7 +131,7 @@ const describeDb = DATABASE_URL ? describe : describe.skip;
 if (!DATABASE_URL) {
   // Not a silent skip. A skipped suite that nobody notices is how a defect
   // reaches production behind a green run.
-  console.warn(
+  process.stderr.write(
     "\n[partner-identity-convergence] SKIPPED: set VANTA_TEST_DATABASE_URL to a " +
     "throwaway Postgres to run the identity-convergence proofs. These cover " +
     "audit finding F-009 and are NOT covered by any in-memory test.\n",
@@ -140,7 +141,7 @@ if (!DATABASE_URL) {
 describeDb("partner identity convergence (real plpgsql)", () => {
   beforeEach(async () => {
     if (!client) {
-      client = new Client({ connectionString: DATABASE_URL });
+      client = new Client({ connectionString: await suiteDatabaseUrl(DATABASE_URL!, "identity_convergence") });
       await client.connect();
     }
     await client.query(FIXTURE_DDL);
