@@ -549,7 +549,7 @@ Revert path is exact: re-apply `BASELINE-live-functions-2026-08-25.sql`.
 (Phase 6), which needs the fix applied to a preview or the local dev database.
 
 ### F-013 — The admin invite door reopens BRUTUS, and silently defeats the F-009 repair
-**Grade:** `BEHAVIORAL-TEST-PROVEN` (real Postgres, real constraints, real TypeScript) · **Severity:** P0 · **Status:** REPAIRED IN REPO — **production migration NOT yet applied, see the deployment warning**
+**Grade:** `BEHAVIORAL-TEST-PROVEN` (real Postgres, real constraints, real TypeScript) · **Severity:** P0 · **Status:** REPAIRED, APPLIED TO PRODUCTION AND VERIFIED THERE
 
 F-009 fixed the *self-service* apply path. `createPartnerInvite`
 (`src/lib/partner-portal.ts:1370`) — the **admin invite** path — was never
@@ -652,14 +652,50 @@ audit log so an adoption is not indistinguishable from a fresh invite.
 **Verification:** full suite **204 files / 3586 tests passing** with the database
 present (was 203/3579 after F-009). `tsc --noEmit` exit 0.
 
-> ⚠️ **DEPLOYMENT ORDER — READ BEFORE MERGING.** `partner-portal.ts` now calls
-> `rpc("create_partner_invite")`, and **that function does not exist in
-> production yet.** The SQL must be applied to the database *before* this code
-> deploys, or the admin invite path will fail outright. It would fail *closed*
-> (no orphan, which is still safer than today's behaviour), but it would be
-> broken. Applying it needs your approval, as the F-009 migration did.
-> Revert path: drop `public.create_partner_invite` and revert the
-> `createPartnerInvite` change together.
+**STATUS: APPLIED TO PRODUCTION AND VERIFIED THERE.** `PRODUCTION-PROVEN`.
+
+Applied 2026-08-26 with the owner's explicit instruction, as Supabase migration
+`partner_invite_atomic_and_convergent` — the same mechanism as the four earlier
+affiliate repairs. The SQL landed **before** the code that calls it, which was
+the deployment hazard this entry previously flagged; that hazard is now closed.
+
+| | value |
+|---|---|
+| `create_partner_invite` before | **did not exist** |
+| `md5(prosrc)` after | `2d6dc067f3ac531a40a53bfd4767fb80` |
+| `create_partner_application` md5 (F-009) | `0c177eff4e03b6a7d2b57927846c0c47` — **unchanged** |
+| `partners` / `ambassadors` counts | 7 / 7 — unchanged |
+
+**Behavioural verification in production, persisting nothing.** The probe ran
+inside a `DO` block ending in `RAISE EXCEPTION`, so every write rolled back. It
+exercised the real tables, real constraints and real defaults:
+
+```
+start p=7 a=7
+A=PASS(already-claimed guard raised)
+B: adopted=true id_match=t code=AUDITINVPRE comm=17.50 status=approved twin=t
+C: created=true both_rows_same_id=1
+before rollback p=9 a=9  -> ROLLED BACK
+```
+
+| Check | Result |
+|---|---|
+| A — an ambassador another account already claimed is NOT handed over (used a **real** existing ambassador's email with a different auth id) | raised, no hand-over |
+| B — adoption fires for a pre-added ambassador | `adopted=true` |
+| Returns the pre-added id, not a newly minted one | `id_match=t` |
+| Admin's issued referral code survives (the invite asked for `AUDITINVNEW`) | `AUDITINVPRE` |
+| Admin's commission survives (`10` was passed in) | `17.50` |
+| Admin's status survives | `approved` |
+| `partners` twin created, same id, auth claimed | `twin=t` |
+| Case-insensitive identity match (email passed UPPERCASE) | matched |
+| C — a genuinely new invitee still gets both rows with one id | `created=true`, `1` |
+
+**Rollback confirmed clean:** `partners=7, ambassadors=7`, **0** probe rows in
+either table, **7 converged pairs**, **0 orphan partners**, and F-009's function
+untouched at its recorded md5.
+
+Revert path is exact: `drop function public.create_partner_invite(uuid,uuid,text,text,text,numeric,uuid);`
+and revert the `createPartnerInvite` change in `partner-portal.ts` together.
 
 ### F-014 — The database-backed proofs skip silently; the ledger's "loud skip" claim was false
 **Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P1 (test-suite honesty) · **Status:** REPAIRED IN REPO
@@ -696,6 +732,116 @@ which Vitest does not capture. Verified after:
 would be the honest default, but there is no CI to configure, so that is a
 decision for the owner rather than a unilateral change. Recorded so the Phase 15
 test-quality report does not repeat the original false claim.
+
+### F-015 — Nothing runs the test suite automatically. There is no CI at all.
+**Grade:** `SOURCE-INSPECTED` (repo) + `PRODUCTION-PROVEN` (Vercel project config) · **Severity:** P1 — process, not code · **Status:** OPEN — owner decision
+
+Measured, not assumed:
+
+| Check | Result |
+|---|---|
+| `.github/` directory | **does not exist** — no workflows, no actions |
+| Any CI config in the repo (`*.yml`, `*.yaml`, `Jenkinsfile`, `.gitlab-ci*`) | the only match is `website/vercel.json`, which contains **just the cron schedule** |
+| `package.json` scripts | `dev`, `build` (`next build`), `start`, `lint`, `test` — **`build` does not invoke `test`** |
+| Vercel project `vanta-labs` | framework `nextjs`, default build; **no test step** |
+
+So the 3,595 tests run **only when a person types the command.** No push, pull
+request, or deployment runs them. A red suite cannot block a merge or a deploy,
+because nothing is watching.
+
+**Why this is a finding and not a footnote.** The audit brief asks how 3,566
+passing tests coexisted with every historical defect. Part of the answer is test
+*quality* (Phase 15). But part of it is simply that **a passing suite was never a
+precondition for anything.** Every regression test this audit adds — F-009's 7,
+F-013's 7, F-016's 9 — protects nothing on its own. They are proofs that the
+defect *was* fixed, not guards that it stays fixed.
+
+Compounded by **F-014**: the 23 database-backed tests among them need
+`VANTA_TEST_DATABASE_URL`, which no automated process would set even if CI
+existed.
+
+*Recommended, but the owner's call:* a workflow on pull request and on push to
+`main` running `npm ci`, `npx tsc --noEmit`, `npm run lint`, and `npm run test`
+with a Postgres service container and `VANTA_TEST_DATABASE_URL` pointed at it.
+Not added unilaterally — introducing a required check changes the owner's
+merge workflow.
+
+### F-016 — The commission sweep overwrites money that moved while it was deciding
+**Grade:** `BEHAVIORAL-TEST-PROVEN` (real Postgres, genuinely concurrent connections) · **Severity:** P0 · **Status:** REPAIRED IN REPO — **no production change needed** (application code only)
+
+`autoApproveEligibleCommissions` (`partner-portal.ts:284`, run by the only cron,
+every 30 minutes) reads `referral_orders WHERE payment_status = 'pending'`, then
+makes **three more round trips** (ambassadors, orders, settings) before writing.
+Its write carried no status guard — just `.in("id", eligibleIds)`. Anything that
+happened to those rows inside that window was silently overwritten.
+
+`markCommissionsPaid` has always guarded its equivalent write with
+`.eq("payment_status", "approved_for_payout")`. This path never did.
+
+**Reproduced with genuinely overlapping calls**, not sequential ones: the real
+function runs against a real Postgres through a **pooled** shim, and the
+competing operation commits **on its own connection** mid-sequence.
+
+```
+a refund reverses a commission mid-sweep -> expected 'reversed',  got 'approved_for_payout'
+an admin pays a commission out mid-sweep -> expected 'paid',      got 'approved_for_payout'
+a reversal landing between the two ledger writes -> referral_orders 'reversed',
+                                                    commissions 'approved_for_payout'
+```
+
+**The second one is the money defect.** A commission that was *already paid*
+is dragged back to `approved_for_payout`, where it re-enters the payout queue
+and is **paid a second time**. The first silently un-reverses a refunded
+commission. The third leaves the two ledgers disagreeing about the same order.
+
+This is not theoretical: the sweep runs every 30 minutes, unattended, and the
+competing writes are ordinary operator actions (a refund, a payout release).
+
+**Repair.** Guard the authoritative write with the status that was read, and
+mirror only the rows actually claimed — the same discipline `markCommissionsPaid`
+already applies, including the A8 "key the mirror off what was claimed" rule.
+A second guard on the mirror covers the tighter window between the two writes.
+
+**RED before / GREEN after:** `4 failed | 5 passed (9)` → `9 passed (9)`.
+
+**Negative controls:**
+
+| Mutation | Result |
+|---|---|
+| A: drop the status guard on the authoritative update | the 3 tests for reversed / already-paid / ledger agreement fail |
+| B: drop the status guard on the `commissions` mirror | only *"does not overwrite a reversal that lands between the two ledger writes"* fails |
+| restored | all 9 green |
+
+**Certified in the same run — mechanisms that DO hold under real contention:**
+
+| Behaviour | Evidence |
+|---|---|
+| `markCommissionsPaid` pays exactly once under two simultaneous releases | 2 concurrent calls → 1 winner, 1 payout row of $140, 0 duplicate |
+| The two payout ledgers stay in step | `partner_payouts` and `payouts` each hold 1 row with the same id |
+| No commission left half-paid | all rows `paid`, none stranded |
+| The paid-side-effects exactly-once claim | 8 concurrent `update ... where paid_side_effects_at is null returning` → **exactly 1** wins |
+
+The last one matters: it is the mechanism preventing double commissions and
+double stock decrements on a replayed payment webhook, and it is sound.
+
+**A harness defect found and fixed along the way.** The three database-backed
+suites shared one database while Vitest ran them in parallel workers, so they
+destroyed each other's fixtures and failed with unique-constraint errors
+belonging to a *different* suite's seed data. Each suite now provisions its own
+throwaway database (`src/lib/test-support/suite-database.ts`). Recorded because
+that failure mode looks exactly like a real defect and would have wasted a
+later reviewer's time.
+
+**Map correction (`DATABASE-PROVEN`).** `PHASE1-SYSTEM-MAP.md` states
+`partner_payouts.ambassador_id references ambassadors(id)`. Live
+`information_schema` shows `partner_payouts` has **only a primary key — no
+foreign key at all**. `payouts.partner_id` → `partners(id)` and
+`commissions.partner_id` → `partners(id)` are the real FK constraints, and
+`referral_orders.ambassador_id` → `ambassadors(id)`. The map's P0 rationale for
+the `markCommissionsPaid` ordering risk is therefore half wrong: a one-sided
+identity breaks the `payouts` mirror, not `partner_payouts`. The ordering risk
+itself (status flipped to `paid` before the payout rows are inserted, with no
+transaction) is **unchanged and still open** — see NOT VERIFIED below.
 
 ### F-011 — Three safety-critical database functions exist only in production
 **Grade:** `DATABASE-PROVEN` · **Severity:** P1 · **Status:** BASELINE CAPTURED
@@ -1018,7 +1164,7 @@ every visitor while `coa_records` is empty and no product carries a COA URL**
 |---|---|---|---|
 | F-009 | `src/lib/sql/partner-identity-convergence.sql` + adoption handling in `src/lib/partner-portal.ts` | 7 integration (real Postgres) + 6 app-layer; 4 negative controls | **APPLIED & VERIFIED** — migration `partner_application_adopts_pre_added_ambassador`; production probe passed on all 9 checks and rolled back clean |
 | F-011 | `src/lib/sql/BASELINE-live-functions-2026-08-25.sql` (verbatim capture) | n/a — baseline | no change; documents current state |
-| F-013 | `src/lib/sql/partner-invite-convergence.sql` (new `create_partner_invite` RPC) + `createPartnerInvite` rewired in `src/lib/partner-portal.ts` | 7 integration (real Postgres, real `createPartnerInvite`); 5 negative controls | **NOT APPLIED — needs your approval.** SQL must land *before* the code deploys, or admin invites break (fail closed) |
+| F-013 | `src/lib/sql/partner-invite-convergence.sql` (new `create_partner_invite` RPC) + `createPartnerInvite` rewired in `src/lib/partner-portal.ts` | 7 integration (real Postgres, real `createPartnerInvite`); 5 negative controls | **APPLIED & VERIFIED** — migration `partner_invite_atomic_and_convergent`; production probe passed all 9 checks and rolled back clean |
 | F-014 | `process.stderr.write` instead of `console.warn` in both database-backed suites | verified: notice now prints on a skipped run | repo only; no production change |
 
 ## Running the database-backed tests

@@ -29,7 +29,7 @@ disappears because the audit got long — which the brief explicitly warns about
 | 3 | Customer journey (Playwright) | 🔒 | Age gate PASS + trust claims captured. Everything data-driven blocked |
 | 4 | Checkout / payments | 🟨 | Mapped in depth (both card and express lanes). 3 P1s recorded, none reproduced |
 | 5 | Inventory / catalog | 🟨 | 1 P0, 5 P1 recorded. F-001 (31 of 36 products parent-zero) needs browser proof |
-| 6 | Affiliate / ambassador | 🟨 | **F-009 fixed and live. F-013 (`createPartnerInvite`) reproduced + repaired in repo — production migration pending approval.** 4 P0 + 6 P1 remain |
+| 6 | Affiliate / ambassador | 🟨 | **F-009 and F-013 both fixed and LIVE in production; F-016 fixed in repo.** Remaining P0s: `markCommissionsPaid` ordering, `updatePartnerStatus` no-op, accrual/payout gated by different tables |
 | 7 | Discounts / promotions / memberships | 🟨 | 1 P0, 5 P1. Includes the dormant Buy-3-Get-1 + coupon interaction |
 | 8 | Emails | 🟨 | 2 P0, 5 P1. **Includes historical defect #3 (0% commission email) — map says still suspect** |
 | 9 | Fulfillment / Shippo / replacements | 🟨 | 2 P0, 4 P1. Replacements had no mapper — critic caught it |
@@ -39,7 +39,7 @@ disappears because the audit got long — which the brief explicitly warns about
 | 13 | Mobile / responsive / in-app | 🔒 | Nothing beyond the 390×844 tooling check |
 | 14 | Performance / observability | 🟨 | Sentry reachable and alerting correctly (F-005). No performance work |
 | 15 | Test quality / negative controls | 🟨 | 6 P0 targets identified. 9 mutation controls run (4 on F-009, 5 on F-013). **F-014: the database-backed proofs were skipping silently — the ledger's "loud skip" claim was false; fixed.** No CI exists at all, so the 14 proofs run only when a person sets `VANTA_TEST_DATABASE_URL` |
-| 16 | Concurrency / idempotency | 🔄 | **IN PROGRESS.** Local Postgres harness in place. Map flags several non-transactional money writes across mirrored tables |
+| 16 | Concurrency / idempotency | 🟨 | **F-016 found, reproduced with genuinely concurrent connections, and repaired** (sweep overwrote reversed/already-paid commissions → double payout). Certified under real contention: `markCommissionsPaid` exactly-once, both payout ledgers in step, paid-side-effects claim won by exactly 1 of 8. **Still NOT VERIFIED:** `markCommissionsPaid` ordering (paid before payout rows inserted), inventory/checkout concurrency, multi-tab |
 | 17 | Cross-system collisions | ⬜ | Matrix not built |
 | 18 | Complete browser regression | 🔒 | |
 | 19 | Full test / typecheck / lint / build | ✅ | 3586 tests (204 files), tsc clean — at current HEAD. Re-run owed after each repair |
