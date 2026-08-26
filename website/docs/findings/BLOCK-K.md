@@ -39,6 +39,8 @@ pasted verbatim.
 | K-14 | P1 | `SOURCE-INSPECTED` | Maintenance mode 503s the entire cron sweep and the one-click unsubscribe in already-delivered marketing email |
 | K-15 | P1 | `SOURCE-INSPECTED` | Rate limiting is a read-then-write with no claim and fails open silently, so the throttle does not hold under concurrent traffic |
 | K-16 | P1 | `SOURCE-INSPECTED` | Three live production ad pixel IDs are hardcoded as env fallbacks with no `VERCEL_ENV` guard, so a preview deployment reports into the real ad accounts |
+| K-17 | P1 | `SOURCE-INSPECTED` | Cancelling a paid order permanently destroys its stock, in the one case the codebase's own comment says should restock |
+| K-18 | P1 | `SOURCE-INSPECTED` | Four compliance attestations are collected and none is durably recorded on the card lane |
 
 ---
 
@@ -2487,6 +2489,336 @@ Two smaller notes from the same sweep, not raised as findings:
   `commission-eligibility`, `commerce-journey`). That is now a no-op. Harmless,
   but a reader would misjudge those tests' preconditions. **CROSS-BLOCK: Block E**
   (test quality).
+
+---
+
+---
+
+## K-17 — Cancelling a paid order permanently destroys its stock, in the one case the codebase's own comment says should restock
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN
+**Area:** legal/policy (a published promise) × dead/missing path
+
+### The published promise
+
+`src/lib/legal-content.ts`, the `refund` default (Return & Reimbursement Policy):
+
+> ## Cancellations
+> If you need to cancel, email … as soon as possible. **We can usually cancel an
+> order before it has been packed and a shipping label has been purchased.**
+
+### What the code does
+
+`src/app/api/admin/orders/[orderId]/route.ts:607-631` — the entire cancel action:
+
+```ts
+if (action === "cancel") {
+  const cancelled = await setOrderFulfillmentStatus({ orderId, to: "cancelled", source: "admin", actor: session.username });
+  if (!cancelled.ok) return NextResponse.json({ success: false, error: cancelled.message }, { status: 400 });
+}
+```
+
+A status transition and nothing else. `setOrderFulfillmentStatus` touches no
+inventory — `grep -n "nventory|restock|release" src/lib/order-pipeline.ts`
+returns **zero hits**.
+
+A repo-wide sweep for every inventory-return caller confirms none of them is in
+the admin route:
+
+```
+src/app/api/checkout/express/authorize/route.ts:361,384   releaseInventoryForOrder   (pre-payment hold, on failure)
+src/lib/express-reconcile.ts:174                          releaseInventoryForOrder   (Veyra reports the session dead)
+src/lib/payment-webhook.ts:1695                           releaseInventoryForOrder   (webhook failure path)
+src/lib/payment-webhook.ts:1712-1717                      restockInventoryForOrder   (behind claimInventoryRestock)
+```
+
+`src/app/api/admin/orders/[orderId]/route.ts:438` mentions `claimInventoryRestock`
+— **in a comment**, describing the webhook's behaviour. There is no call.
+
+### Why it is permanent for a paid order, not merely slow
+
+The pipeline permits cancelling a **paid** order:
+`paid: ["ready_to_fulfill", "cancelled", "refunded"]` (`order-pipeline.ts:265`),
+and likewise from `ready_to_fulfill` and `packed` (`:268-269`) — precisely the
+window the policy promises.
+
+For a paid order the reservation has already been *finalized*:
+
+```sql
+-- src/lib/sql/inventory-reservations.sql:154-165 (finalize_inventory_for_order)
+update public.product_doses
+   set inventory_quantity = greatest(0, inventory_quantity - r.quantity),
+       reserved_quantity  = greatest(0, reserved_quantity  - r.quantity),
+       stock_status = case when inventory_quantity - r.quantity <= 0 and track_inventory then 'Out of Stock' else stock_status end,
+```
+
+`inventory_quantity` is decremented and the reservation row moves to
+`finalized`. The sweep cannot recover it: `expire_stale_reservations` selects
+`where res.status = 'active'` (`:238`). **Nothing anywhere returns those units.**
+
+For an `awaiting_payment` cancel the hold is still `active`, so the sweep does
+eventually reclaim it — after the TTL plus up to a sweep period (K-13), which is
+**24 hours** for a manual-payment hold (`MANUAL_RESERVATION_MINUTES`). Slow, but
+self-healing. The paid case is not.
+
+### The codebase already draws the right distinction — this path is on the wrong side of it
+
+The refund action 170 lines earlier carries a careful, correct rationale for
+*not* restocking (`route.ts:425-441`):
+
+> Restocking on the strength of a money record would put a vial that may have
+> spent a week in a mailbox back on the shelf automatically, and the next customer
+> would buy it. Phantom stock also oversells… So the safe direction is to leave
+> stock alone.
+>
+> The processor-driven refund/chargeback path in payment-webhook.ts is UNCHANGED
+> and still restocks behind `claimInventoryRestock()`: **that one covers an order
+> the customer never received (a failed or cancelled order whose goods never
+> left), which is a different situation.**
+
+That last sentence is exactly this case. A cancel before packing is *by
+definition* an order whose goods never left. The author identified the rule
+correctly and the admin-facing path implementing it does neither thing.
+
+### Impact
+
+Every cancellation the store honours — the operation its own policy tells
+customers to ask for — silently writes off the stock. On this catalogue that is
+not marginal: ledger finding F-001 established that 31 of 36 storefront-eligible
+products hold their stock at the dose level in small quantities, so a handful of
+cancelled orders can take a product to "Out of Stock" (the `stock_status` write
+above is one-way) with units that physically exist sitting on the shelf.
+
+The loss is invisible: no alert, no audit row naming an inventory effect, and the
+admin inventory screen simply shows a lower number. It is discoverable only by
+counting the shelf against the database.
+
+### Reproduction
+
+1. Note `inventory_quantity` for a tracked dose.
+2. Place and pay an order for 2 units. Confirm `inventory_quantity` fell by 2 and
+   `inventory_reservations.status = 'finalized'`.
+3. `PATCH /api/admin/orders/<orderId>` with `{"action":"cancel"}` → 200,
+   `fulfillment_status = 'cancelled'`.
+4. Re-read `inventory_quantity`: **still 2 lower**. Re-read
+   `inventory_reservations`: still `finalized`.
+5. Run `/api/cron/sweep` and confirm `reservationsExpired` does not include it and
+   the count never returns.
+
+### Smallest safe root-cause fix
+
+Restock on cancel, behind the same claim the webhook uses, and only for the
+transitions where the goods demonstrably never left:
+
+```ts
+if (action === "cancel") {
+  const cancelled = await setOrderFulfillmentStatus({ … });
+  if (!cancelled.ok) return …;
+
+  // The goods never left: FULFILLMENT_TRANSITIONS only reaches `cancelled`
+  // from awaiting_payment / paid / ready_to_fulfill / packed, all pre-carrier.
+  // This is the case payment-webhook.ts's restock covers; the refund path's
+  // "leave stock alone" rule is about a RETURNED unit of unknown condition,
+  // which this is not.
+  if (await claimInventoryRestock(orderId)) {
+    await restockInventoryForOrder(items);
+  }
+}
+```
+
+`claimInventoryRestock` (`src/lib/inventory-fulfillment.ts:104`) already exists
+and is already the exactly-once gate for this, so a later processor-driven refund
+on the same order cannot double-restock.
+
+Also worth doing: `stock_status` is set to `'Out of Stock'` on the way down and
+nothing in `restockInventoryForOrder` is shown here to set it back. Whoever lands
+this must confirm the status flips back, or a restocked product stays unbuyable
+with stock on hand.
+
+### Regression test to write
+
+Cancel a paid order against a stubbed inventory layer and assert
+`restockInventoryForOrder` was called with the order's lines. Negative control:
+remove the call and confirm the test fails on the missing restock — not on a stub
+error. Add a second assertion that cancelling **twice** restocks once, proving the
+claim is doing its job.
+
+### CROSS-BLOCK
+
+- `src/app/api/admin/orders/[orderId]/route.ts` — **Block I** owns
+  `src/app/api/admin/**`. This is their edit.
+- `src/lib/inventory-fulfillment.ts` — **Block D** owns `inventory-*.ts`. No
+  change needed; the fix reuses `claimInventoryRestock` and
+  `restockInventoryForOrder` as they are. The `stock_status` question above is
+  Block D's to answer.
+- Block D is also auditing "non-atomic status writes" in the fulfillment area.
+  This is adjacent but distinct: not a torn write, a missing one.
+
+---
+
+## K-18 — The store collects four separate compliance attestations and keeps a durable record of none of them on the card lane
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN
+**Area:** legal/policy
+
+### What is wrong
+
+There are two attestation points, and between them the store keeps essentially no
+evidence.
+
+**1. The age gate collects four statements and stores them in `sessionStorage`.**
+
+`src/components/age-gate.tsx:53-56` explains the design:
+
+> Each statement is acknowledged individually: a single combined tick is one click
+> that stands for four different representations, which is exactly the assent a
+> regulator would question. Entry is refused until all four are made.
+
+The four are "I am 21 years of age or older", "I represent a laboratory, business,
+educational institution, or qualified research organization", and two more. The
+reasoning is sound and the design is deliberate.
+
+The result is then held in `sessionStorage` and nowhere else. The module's own
+header (`:26-50`) records why: a 30-day localStorage token was "TOO LONG" because
+"a shared device carried one person's attestation to the next", and React state
+alone was "TOO SHORT". `sessionStorage` is the right *lifetime* for gating entry.
+
+But it is a **gate**, not a **record**. Nothing is ever sent to the server. The
+store has built an attestation specifically for regulatory defensibility and
+retains no evidence that any individual customer ever made it.
+
+**2. The card checkout validates its acknowledgements and then discards them.**
+
+```ts
+// src/app/api/checkout/create-session/route.ts:59
+if (!hasRequiredAcknowledgements(body.complianceAcknowledgements)) { … }
+```
+
+That is the only use. The object is checked and dropped. A full trace confirms
+there is no other consumer:
+
+```
+src/app/checkout/page.tsx:601                  complianceAcknowledgements: acknowledgements,   (sent)
+src/app/api/checkout/create-session/route.ts:59  hasRequiredAcknowledgements(...)              (validated, discarded)
+src/app/api/checkout/express/session/route.ts:194  compliance_copy_version: COMPLIANCE_COPY_VERSION  (the ONLY write)
+```
+
+Only `express_checkout_intents` gets `compliance_ack`, `compliance_acked_at` and
+`compliance_copy_version`. The `orders` table has no equivalent column in any file
+under `src/lib/sql/`.
+
+So **every card order placed to date has no record of what the customer agreed
+to** — while an Apple Pay order does.
+
+**3. And the version stamp the express lane does keep can silently go stale.**
+
+```ts
+// src/lib/express-wallet.ts:44
+export const COMPLIANCE_COPY_VERSION = "2026-08-25";
+```
+
+A hand-maintained literal in a different file from the copy it versions
+(`src/lib/checkout-confirmations.ts`). Nothing ties them: the wording can be
+edited without the constant changing, and the stamp then asserts a version the
+customer never saw. A version number that can drift from the thing it versions is
+worse than none, because it is trusted.
+
+### Why this matters more than usual here
+
+`src/lib/checkout-confirmations.ts:4` records that both boxes now start
+**pre-ticked** by product decision — accepting that a pre-ticked box evidences
+"did not object" rather than "affirmatively agreed". That is a defensible trade
+**only if the submitted values are recorded**, so the store can show what was
+presented and what came back. They are not. The weaker form of consent was
+adopted and the compensating record was not built.
+
+The acknowledgement also incorporates the Research Disclaimer by reference — and
+`getPolicy` (`src/lib/legal-content.ts:209-224`) silently falls back to the coded
+launch-day DEFAULTS on any control-store read failure, while always rendering
+`updated: "2026"` (a hardcoded literal, `:217`). So a reader cannot tell whether
+they are looking at the current policy or the fallback, and afterwards there is no
+way to establish which text any given card customer agreed to.
+
+### Impact
+
+For the primary checkout lane the store cannot answer, for any order: *what did
+this customer attest to, and when, and against which version of the wording?*
+That is the question a regulator, a payment processor in a chargeback, or an
+insurer asks first, and it is the question the age gate's own design comment
+anticipates.
+
+The express lane can answer it, imperfectly. The card lane — the majority path —
+cannot answer it at all.
+
+### Reproduction
+
+```
+grep -rn 'compliance' website/src/lib/sql/*.sql
+```
+→ the only orders-adjacent hits are in `express-checkout.sql`.
+
+Then place a card order end to end and `select * from orders where order_id='<id>'`
+— no acknowledgement column exists. Contrast:
+`select compliance_ack, compliance_acked_at, compliance_copy_version from express_checkout_intents order by created_at desc limit 1`
+after one Apple Pay tap.
+
+For the drift half: `git log -p --follow website/src/lib/checkout-confirmations.ts`
+and compare the dates of copy changes against changes to
+`COMPLIANCE_COPY_VERSION` in `src/lib/express-wallet.ts`. Any copy change without
+a matching bump is a stamp asserting the wrong version.
+
+### Smallest safe root-cause fix
+
+1. **Persist the card lane's acknowledgement**, matching the express lane exactly:
+   add `compliance_ack jsonb`, `compliance_acked_at timestamptz`,
+   `compliance_copy_version text` to `orders`, and write them in `buildOrderRow`
+   from the object `create-session` already receives and validates. The data is in
+   hand; only the write is missing.
+2. **Derive the version instead of maintaining it.** Hash the presented copy:
+   `COMPLIANCE_COPY_VERSION = sha256(REQUIRED_CONFIRMATIONS.map(c => c.text).join("\n")).slice(0,12)`.
+   The stamp then cannot drift from the wording, because it *is* the wording.
+   Keep the date as a human-readable label alongside it if useful.
+3. **Record the age-gate attestation once per session**, server-side — a single
+   POST on acceptance carrying the four statement ids and the copy hash, keyed to
+   the session, joinable to an order later. This does not change the gate's
+   lifetime (`sessionStorage` stays the right gating mechanism) and does not make
+   it a tracking identifier; it makes the attestation evidenceable.
+   **Note for whoever lands this:** that POST is itself a server-side write about
+   a visitor, so it must be reconciled with the Cookie Policy in the same pass —
+   see K-04. An attestation record is arguably essential rather than analytic, but
+   the policy text must say so rather than being silent.
+
+### Regression test to write
+
+A source-text test asserting `COMPLIANCE_COPY_VERSION` equals the hash of the
+current `REQUIRED_CONFIRMATIONS` text. It fails the moment the copy changes
+without the version, which is the drift this is meant to stop. Negative control:
+edit one confirmation's wording and confirm the test fails naming it.
+
+Plus a route test that a card order persists the acknowledgement object. Negative
+control: remove the write and confirm it fails on the null column.
+
+### CROSS-BLOCK
+
+- `src/lib/quote-order.ts` `buildOrderRow` — **shared file, earlier-lettered block
+  wins.** The orders-table write lands there.
+- `src/app/api/checkout/create-session/route.ts` and `src/app/checkout/page.tsx` —
+  unowned; **Block G+H** are exercising checkout in the browser and should confirm
+  the pre-ticked state and the four age-gate statements render as described.
+- A migration adding three columns to `orders` needs the owner's approval under
+  Rule 4 of the parallel-assignment contract. **Not attempted here.**
+
+### Also checked, and clear
+
+- The age gate's *lifetime* logic is correct and well-reasoned. `sessionStorage`
+  read through `useSyncExternalStore` survives refresh, full-document navigation,
+  back/forward and the payment round trip, and is gone when the tab closes. The
+  header (`age-gate.tsx:26-50`) records both previous wrong answers and why each
+  was wrong. Being signed in grants nothing — "authentication and age attestation
+  are separate". **This is not the defect; the missing record is.**
+- The gate refuses entry until all four statements are individually acknowledged,
+  and the decline path clears the legacy `localStorage` key and `vl_age_verified`
+  cookie (`:387-394`) before navigating away.
 
 ---
 
