@@ -190,6 +190,14 @@ on the live store. The harness defaulted to off and was aligned to match.
 
 ## Still open
 
+> **CORRECTED 2026-08-26 — see `CHECKOUT-CERTIFICATION-2026-08-26.md` §1.** The
+> claim below is WRONG. Production `payment_events` contains one `payment_failed`
+> (`vtxn_a4485b87dd204a8a83f97ae4`, order `VL-49CA32C1`, 2026-08-03, followed by a
+> success on the same order). Veyra DOES send decline webhooks and this
+> integration DOES record them. What is true is narrower: the three incident
+> orders produced no processor event of any kind, which is what happens when a
+> shopper never submits a card.
+
 **Gap 1 — declines are invisible to the store.** `payment_events` has never
 recorded a `payment.failed` from the live processor. The handler understands the
 type (`payment-webhook.ts:84-86`); nothing sends it. D-01 fixes what the *shopper*
