@@ -1,4 +1,4 @@
-# BLOCK F — Financial reporting
+# BLOCK F-A — Financial reporting (session `claude/block-ab-audit-o62bop`)
 
 > ## ⚠ FOR THE MASTER INTEGRATION AUDIT (Block M) — recheck every pagination test
 >
@@ -7,7 +7,7 @@
 > suite that asserted on a paged read through that fake could not have been
 > testing the paging: the fake returned the same rows for every page.
 >
-> Fixed here (F-18), but the consequence is wider than Block F: **until now, any
+> Fixed here (F-A-18), but the consequence is wider than Block F: **until now, any
 > assertion about a paged read made through this fake was passing for a reason
 > unrelated to whether the paging worked.** Two separate paging helpers existed
 > in `src/lib/` at the same time, and neither was exercised end to end.
@@ -16,7 +16,7 @@
 >
 > | File | Status |
 > |---|---|
-> | `src/lib/supabase-page.test.ts` | pre-existing; simulates the cap directly, does NOT use the fake — sound, but see F-19 for the hole it encodes |
+> | `src/lib/supabase-page.test.ts` | pre-existing; simulates the cap directly, does NOT use the fake — sound, but see F-A-19 for the hole it encodes |
 > | `src/lib/supabase-page-bounded.test.ts` | added by Block F |
 > | `src/lib/admin-profit-at-scale.test.ts` | rewritten by Block F; its fake now models a per-response cap |
 > | `src/lib/financial-reporting-row-caps.test.ts` | added by Block F; real Postgres |
@@ -26,7 +26,7 @@
 > | anything else importing `@/lib/e2e/fake-db` | **recheck** |
 >
 > Also: **Block C** owns the three callers of `supabase-page.readAllRows`
-> (`admin-email.ts`, `email/audience.ts`, `marketing-broadcast.ts`). F-19 is a
+> (`admin-email.ts`, `email/audience.ts`, `marketing-broadcast.ts`). F-A-19 is a
 > latent truncation in that helper that would silently shorten a **suppression
 > list** — i.e. mail people who unsubscribed. Not changed from here.
 
@@ -54,7 +54,7 @@ is $150 of revenue, and it is still an order.
 | `admin-revenue` RPC + JS fallback | **excluded it entirely** | counts it; refund netted off the money |
 | `admin_customer_rollup` | summed **gross** `amount_paid` | nets the refund off |
 | `admin_ops_summary` live sales | gross, `paid` only | net, over revenue statuses |
-| `admin-tax-report` | **dropped it entirely** (F-05) | counts it; proportional tax refund |
+| `admin-tax-report` | **dropped it entirely** (F-A-05) | counts it; proportional tax refund |
 | `admin-reconciliation` | already examined every status | unchanged — it checks the original charge, which is correct |
 
 The definition now has one home: `ledger.REVENUE_ORDER_STATUSES` and
@@ -71,7 +71,7 @@ behalf of a state.
 - Tracked, not merely excluded: `ProfitDashboard.salesTaxCollected` and
   `salesTaxCountedAsProfit` are the liability line, and the sales-tax report is
   the filing view of the same money.
-- F-12 is what makes this setting *safe* to turn on: before it, a refund
+- F-A-12 is what makes this setting *safe* to turn on: before it, a refund
   deducted tax from revenue it had never been added to.
 
 **3. `revenue − discounts − refunds − COGS − processor fees − shipping = profit.`**
@@ -145,7 +145,7 @@ Not one of them raised an error, set a flag, or logged a warning.
 
 ---
 
-## F-01 — The reconciliation screen cannot see a mismatch older than 2,000 orders
+## F-A-01 — The reconciliation screen cannot see a mismatch older than 2,000 orders
 
 **Grade:** `DATABASE-PROVEN` (21,000 rows, real Postgres) · **Severity:** P1 · **Status:** FIXED
 
@@ -175,7 +175,7 @@ test alone fails, on the mismatch list. Restored → passes.
 
 ---
 
-## F-02 — The profit dashboard truncates lifetime figures at 20,000 orders
+## F-A-02 — The profit dashboard truncates lifetime figures at 20,000 orders
 
 **Grade:** `DATABASE-PROVEN` · **Severity:** P1 · **Status:** FIXED
 
@@ -197,11 +197,11 @@ The field is additive — no admin page needed changing.
 20,000", asserting against a SQL ground-truth query using the dashboard's own
 predicate.
 
-**Negative control.** `MAX_PROFIT_ORDERS` → `20000` fails that test (and F-05's).
+**Negative control.** `MAX_PROFIT_ORDERS` → `20000` fails that test (and F-A-05's).
 
 ---
 
-## F-03 — The revenue page reports two different lifetime totals depending on whether one migration has run
+## F-A-03 — The revenue page reports two different lifetime totals depending on whether one migration has run
 
 **Grade:** `DATABASE-PROVEN` · **Severity:** P1 · **Status:** FIXED
 
@@ -230,7 +230,7 @@ not" — now asserting the two agree on orders, revenue and AOV.
 
 ---
 
-## F-04 — The sales-tax filing report stops after 20 pages
+## F-A-04 — The sales-tax filing report stops after 20 pages
 
 **Grade:** `DATABASE-PROVEN` · **Severity:** P1 · **Status:** FIXED
 
@@ -252,7 +252,7 @@ ceiling", asserting row count and total against SQL.
 
 ---
 
-## F-05 — A partially refunded order was absent from the sales-tax return entirely
+## F-A-05 — A partially refunded order was absent from the sales-tax return entirely
 
 **Grade:** `TEST-PROVEN` + `DATABASE-PROVEN` · **Severity:** P1 · **Status:** FIXED
 
@@ -283,7 +283,7 @@ predicate fails exactly that test.
 
 ---
 
-## F-06 — A refund was deducted from net tax without its collection ever being recorded
+## F-A-06 — A refund was deducted from net tax without its collection ever being recorded
 
 **Grade:** `TEST-PROVEN` · **Severity:** P1 · **Status:** FIXED
 
@@ -308,7 +308,7 @@ six tests in that file.
 
 ---
 
-## F-07 — Partial refunds had no proportional tax treatment
+## F-A-07 — Partial refunds had no proportional tax treatment
 
 **Grade:** `TEST-PROVEN` · **Severity:** P2 · **Status:** FIXED (with a stated assumption)
 
@@ -337,7 +337,7 @@ a refunded row carries no refund_amount".
 
 ---
 
-## F-08 — `reconciliation-math.expectedOrderTotal` agrees with the charged formula. The map's implied defect is DISPROVED.
+## F-A-08 — `reconciliation-math.expectedOrderTotal` agrees with the charged formula. The map's implied defect is DISPROVED.
 
 **Grade:** `TEST-PROVEN` (differential sweep) · **Severity:** — · **Status:** DISPROVED, with two latent risks recorded
 
@@ -381,7 +381,7 @@ is recorded, not edited. See CROSS-BLOCK below.
 
 ---
 
-## F-09 — Two order counts in `admin-profit.ts` disagreed with each other
+## F-A-09 — Two order counts in `admin-profit.ts` disagreed with each other
 
 **Grade:** `DATABASE-PROVEN` · **Severity:** P2 · **Status:** FIXED
 
@@ -405,7 +405,7 @@ test.
 
 ---
 
-## F-10 — `admin-reconciliation` carried a fifth hand-copy of the points redemption rate
+## F-A-10 — `admin-reconciliation` carried a fifth hand-copy of the points redemption rate
 
 **Grade:** `TEST-PROVEN` · **Severity:** P3 · **Status:** FIXED
 
@@ -428,7 +428,7 @@ total still is.
 
 ---
 
-## F-11 — Nothing detected a short read from the row source
+## F-A-11 — Nothing detected a short read from the row source
 
 **Grade:** `TEST-PROVEN` (modelled) · **Severity:** P1 · **Status:** FIXED — and the question it depended on is now moot
 
@@ -463,7 +463,7 @@ lost rows (which nothing can).
 
 ---
 
-## F-12 — A refund removed sales tax from profit that was never added to it
+## F-A-12 — A refund removed sales tax from profit that was never added to it
 
 **Grade:** `TEST-PROVEN` · **Severity:** P1 (on a setting the business is heading for) · **Status:** FIXED
 
@@ -506,7 +506,7 @@ applying the adjustment when tax IS counted fails the no-op proof.
 
 ---
 
-## F-13 — The degraded checkout insert blanks the tax jurisdiction the filing report groups by
+## F-A-13 — The degraded checkout insert blanks the tax jurisdiction the filing report groups by
 
 **Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN — CROSS-BLOCK, root cause is outside this block
 
@@ -549,7 +549,7 @@ their jurisdiction. Recorded as CROSS-BLOCK.
 
 ---
 
-## F-14 — Manual postage entry finalizes profit while the order page and the generated column stay blank
+## F-A-14 — Manual postage entry finalizes profit while the order page and the generated column stay blank
 
 **Grade:** `SOURCE-INSPECTED` · **Severity:** P2 · **Status:** OPEN — CROSS-BLOCK
 
@@ -587,7 +587,7 @@ F's files. Recorded as CROSS-BLOCK.
 
 ---
 
-## F-15 — The two "processing fee percent" constants agree, and are two concepts. DISPROVED as a live defect.
+## F-A-15 — The two "processing fee percent" constants agree, and are two concepts. DISPROVED as a live defect.
 
 **Grade:** `SOURCE-INSPECTED` · **Severity:** P3 · **Status:** DISPROVED, one risk recorded
 
@@ -614,11 +614,11 @@ does today.
 
 ---
 
-## F-16 — Reachability of the `expectedOrderTotal` clamp divergence (F-08)
+## F-A-16 — Reachability of the `expectedOrderTotal` clamp divergence (F-A-08)
 
 **Grade:** `SOURCE-INSPECTED` · **Status:** LATENT — no writer found
 
-F-08 left open whether any path mutates `orders.subtotal`,
+F-A-08 left open whether any path mutates `orders.subtotal`,
 `orders.discount_amount`, `orders.store_credit_redeemed_cents` or
 `orders.points_redeemed` **after** insert, which is what would be needed to make
 the flat-subtraction divergence produce a false `total_mismatch`.
@@ -635,7 +635,7 @@ that adds it will have no reason to suspect the reconciliation screen.
 
 ---
 
-## F-17 — The COGS read is the one that returns many rows per order, and it was undefended
+## F-A-17 — The COGS read is the one that returns many rows per order, and it was undefended
 
 **Grade:** `TEST-PROVEN` · **Severity:** P2 · **Status:** FIXED
 
@@ -644,7 +644,7 @@ orders in one `.in()`**, unbounded. One row per order is the assumption; the
 table holds one row per *line item*. An order averaging seven lines is over a
 thousand rows in a single response.
 
-This is the same defect class as F-01…F-04 with the **opposite sign**: losing
+This is the same defect class as F-A-01…F-A-04 with the **opposite sign**: losing
 order rows makes profit look smaller, and someone eventually notices. Losing
 line-item rows removes **product cost**, so profit looks *better* than it is.
 Nobody goes looking for that.
@@ -676,7 +676,7 @@ made unilaterally here.
 
 ---
 
-## F-18 — The shared e2e fake ignored `range()`, so it could not model paging at all
+## F-A-18 — The shared e2e fake ignored `range()`, so it could not model paging at all
 
 **Grade:** `TEST-PROVEN` · **Severity:** P2 (test-infrastructure fidelity) · **Status:** FIXED
 
@@ -685,7 +685,7 @@ made unilaterally here.
 shot; not harmless once the reporting modules page, because **a source that
 ignores the range returns the same page forever**.
 
-Caught by the fix in F-17: five tests across `commerce-journey.test.ts` and
+Caught by the fix in F-A-17: five tests across `commerce-journey.test.ts` and
 `manual-reimbursement.test.ts` went red with COGS of `7,200,000` against an
 expected `36` — the pager accumulating the same rows up to its ceiling.
 
@@ -703,7 +703,7 @@ on a paged read was passing for the wrong reason.
 
 ---
 
-## F-19 — The pre-existing paging helper stops on a short page, which is only safe while max-rows is exactly 1000
+## F-A-19 — The pre-existing paging helper stops on a short page, which is only safe while max-rows is exactly 1000
 
 **Grade:** `SOURCE-INSPECTED` + `TEST-PROVEN` (the alternative is proven) · **Severity:** P2 · **Status:** OPEN — CROSS-BLOCK (Block C owns the callers)
 
@@ -757,7 +757,7 @@ assuming truncation at the ceiling instead of probing fails the exact-fit case.
 
 ---
 
-## F-20 — The two database-backed suites shared one database and one `orders` table
+## F-A-20 — The two database-backed suites shared one database and one `orders` table
 
 **Grade:** `TEST-PROVEN` · **Severity:** P2 (test infrastructure) · **Status:** FIXED
 
@@ -779,7 +779,7 @@ attached is **3,624 passing, 0 skipped**.
 
 ---
 
-## F-21 — The row-caps suite carried its own hand-copy of the revenue SQL
+## F-A-21 — The row-caps suite carried its own hand-copy of the revenue SQL
 
 **Grade:** `TEST-PROVEN` · **Severity:** P2 · **Status:** FIXED
 
@@ -803,7 +803,7 @@ Recorded per Rule 3, not edited from this block.
 - **`src/lib/quote-order.ts`** — `expectedOrderTotal` is the fourth hand-copy of
   the `amount_paid` formula and `handling_fee` is the fifth term it omits. The
   durable fix is one exported pure total function that both checkout and
-  reconciliation call. Shared file; not touched. (F-08)
+  reconciliation call. Shared file; not touched. (F-A-08)
 - ~~`src/lib/sql/admin-dashboard-rollups.sql` — partially refunded revenue~~
   **RESOLVED by the owner.** Retained revenue counts. Both paths changed
   together; the migration is listed in
@@ -811,7 +811,7 @@ Recorded per Rule 3, not edited from this block.
   **not** been applied.
 - **`src/lib/supabase-page.ts` callers (Block C)** — `admin-email.ts`,
   `email/audience.ts`, `marketing-broadcast.ts` use `readAllRows`, whose
-  short-page termination is only safe while max-rows is exactly 1000 (F-19). A
+  short-page termination is only safe while max-rows is exactly 1000 (F-A-19). A
   truncated suppression-list read mails people who unsubscribed.
 - **`src/lib/partner-portal.ts` `getAdminOperationsSummary` (Block A+B)** — the
   JS twin of `admin_ops_summary`. The SQL now sums NET revenue over the revenue
@@ -822,12 +822,12 @@ Recorded per Rule 3, not edited from this block.
   `tax_rate_percent`, which the filing report then reports as an `UNKNOWN`
   jurisdiction at a 0% rate. The fix belongs on the write path: either do not
   degrade those two columns, or `recordSystemAlert` when the fallback fires so
-  the blanked window is knowable. (F-13)
+  the blanked window is knowable. (F-A-13)
 - **`src/app/api/admin/orders/[orderId]/route.ts` + `src/app/admin/orders/[orderId]/page.tsx` + `src/lib/sql/shippo-orders-sync.sql`**
   — one shipping cost, three columns. A manual postage entry finalizes profit
   while `postage_cost_cents` (and therefore the generated
   `shipping_profit_cents`, and the order page's Postage line) stays empty.
-  (F-14)
+  (F-A-14)
 
 ---
 
@@ -844,13 +844,13 @@ Still open:
    applied. Read-only queries to size the impact first are in
    `BLOCK-F-PRODUCTION-CHANGES.md` §3.
 2. **The project's Supabase "Max rows" setting.** No longer load-bearing for
-   correctness after F-11, but worth knowing for request budgeting: it now
+   correctness after F-A-11, but worth knowing for request budgeting: it now
    determines how many round trips a full profit read costs.
-3. **Confirmation of the proportional partial-refund tax treatment in F-07 and
-   F-12**, since it is a filing assumption rather than a recorded value, and it
+3. **Confirmation of the proportional partial-refund tax treatment in F-A-07 and
+   F-A-12**, since it is a filing assumption rather than a recorded value, and it
    now feeds the profit report as well.
 4. **Should a failed COGS read fail the dashboard, or fall back to the
-   worst-case unit cost?** Today it silently reports zero product cost (F-17).
+   worst-case unit cost?** Today it silently reports zero product cost (F-A-17).
 5. **Should ambassador commission be an expense line or reported separately?**
    It is deducted as an expense today and is not in the formula as you wrote it.
 
@@ -860,10 +860,10 @@ Still open:
 
 | | Findings |
 |---|---|
-| Fixed, with regression test + negative control | F-01…F-07, F-09…F-12, F-17, F-18, F-20, F-21 |
-| Disproved (reported as leads, do not exist) | F-08, F-15 |
-| Open, root cause outside Block F (CROSS-BLOCK) | F-13, F-14, F-19 |
-| Latent, characterised not fixed | F-08 (handling_fee, clamps), F-16 |
+| Fixed, with regression test + negative control | F-A-01…F-A-07, F-A-09…F-A-12, F-A-17, F-A-18, F-A-20, F-A-21 |
+| Disproved (reported as leads, do not exist) | F-A-08, F-A-15 |
+| Open, root cause outside Block F (CROSS-BLOCK) | F-A-13, F-A-14, F-A-19 |
+| Latent, characterised not fixed | F-A-08 (handling_fee, clamps), F-A-16 |
 | Needs the owner | 4 questions below |
 
 ## Verification
@@ -874,7 +874,7 @@ Still open:
 - Typecheck: clean (`npx tsc --noEmit`).
 - Lint: clean on every file touched.
 - The database suites are gated on `VANTA_TEST_DATABASE_URL`, each gets its own
-  database (F-20), and they fail loudly rather than skipping if the cluster is
+  database (F-A-20), and they fail loudly rather than skipping if the cluster is
   reachable but broken — verified when the container reclaimed Postgres
   mid-session and the suite errored instead of quietly passing.
 - Every fix above has a regression test **and** a recorded negative control
