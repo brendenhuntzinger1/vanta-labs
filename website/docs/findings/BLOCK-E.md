@@ -123,3 +123,165 @@ memberships, tax, fulfillment or cart recovery may have been scoring a stub.
 Specifically for block E's own remit: the flagged **"email dedupe"** cluster could
 not be mutation-tested at all before this change — mutating `sendEmail`'s callers
 cannot fail a test whose `sendEmail` always returns `{ success: true }`.
+
+---
+
+## E-02 — Mutation testing the six flagged clusters: 14 mutants, 2 real survivors, both closed
+
+| | |
+|---|---|
+| **Severity** | P1 (one survivor guarded a money control with zero coverage) |
+| **Evidence grade** | A — every verdict is a recorded full-suite run |
+| **Status** | **BOTH SURVIVORS CLOSED on this branch** |
+
+### Method
+
+Fourteen mutations, each a single semantic change to **source** (never to a test),
+chosen so that each one corresponds to a defect this business could actually
+suffer. Each was applied alone, the **entire** suite run, and the file reverted.
+Running the whole suite rather than a hand-picked subset removes the "the auditor
+missed a suite" failure mode.
+
+**A correction to the method, mid-run, that changed two verdicts.** The first
+pass scored KILLED / SURVIVED by comparing the *count* of failing tests against
+the baseline of 9. That is unsound when the baseline is non-zero: a mutation can
+create one failure and silence another, netting zero. It did exactly that. **M05**
+was scored SURVIVED on the count; comparing the *set* of failing test names showed
+it both broke `order-email-once.test.ts` and silenced one of C-02's assertions
+(the mutant forces every log row to `sent`, which is what that assertion is
+complaining about). M05 is **killed**. All survivor verdicts below were re-run
+with set comparison; KILLED verdicts from a count *increase* remain sound, since
+a higher count guarantees at least one new failure.
+
+### Results
+
+| Cluster | Mutants | Killed | Survived |
+|---|---|---|---|
+| fulfillment-state | 3 | 3 | 0 |
+| payment-idempotency | 2 | 2 | 0 |
+| inventory-decrement | 2 | 2 | 0 |
+| commission-calculation | 2 | 2 | 0 |
+| email-dedupe | 3 | 2 | **1** |
+| payout-authority | 2 | 1 equivalent | **1** |
+
+**Four of the six flagged clusters killed every mutant put to them**, including
+mutations as consequential as *a paid order increases stock instead of decreasing
+it*, *pay every ambassador ten times their rate*, *remove the webhook's atomic
+side-effects claim*, and *allow cancelling an order after it has shipped*. Those
+clusters were flagged for review and come out of it well; that is a real result
+and is reported as one.
+
+### Survivor 1 — the commission hold period had zero test coverage (M07)
+
+```
+src/lib/partner-portal.ts, autoApproveEligibleCommissions
+-  return Number.isFinite(createdAt) && now.getTime() - createdAt >= holdPeriodMs;
++  return Number.isFinite(createdAt);
+→ 3,593 tests, ZERO new failures
+```
+
+**This is the most serious finding in block E.** The hold period is the only
+control standing between a commission accruing and money being sent to an
+ambassador for an order that can still be refunded or charged back. Deleting it
+entirely was invisible to the whole suite.
+
+Category: **no test covers it.** The only file naming
+`autoApproveEligibleCommissions` is `src/app/api/cron/sweep/route.test.ts`, which
+does `vi.mock("@/lib/partner-portal", () => ({ autoApproveEligibleCommissions: () => commissions() }))`
+— it asserts the sweep *calls* something, never that the something is correct. The
+real function was executed by no test in the repository.
+
+**Closed by** `website/src/lib/payout-authority-guards.test.ts` (7 tests, new).
+It drives the real function and pins the boundary from both sides: a
+one-day-old commission and one a single day short of the hold are **not**
+approved; one past it is; and with both sitting in the table only the aged one
+moves. It also locks the three gates beside it that were equally untested — order
+not paid, ambassador no longer approved, fraud-flagged.
+
+Verified: re-applying M07 now produces exactly **3 new failures**, all in this
+file. Before it, zero.
+
+### Survivor 2 — the automation dedupe filter was untested (M13)
+
+```
+src/lib/email/automations.ts, loadAlreadySent
+-  .neq("status", "failed")
+→ 3,593 tests, ZERO new failures
+```
+
+The line's own comment states the stake: *"A failed attempt must stay eligible, or
+one provider hiccup silently drops that recipient from the sequence permanently."*
+Deleting it means a customer whose welcome or win-back email failed once is
+treated as served for ever — the customers the system has already failed once.
+
+Category: **no test covers it.** `loadAlreadySent` has no direct test, and
+`runAutomationSweep` appears only in the sweep route test, which mocks
+`@/lib/email/automations` wholesale.
+
+This is the mirror image of block C's **C-09**: the same guard is *absent* in
+`marketing-broadcast.ts`, where it is a live defect. Present-and-untested in one
+path, missing in the other.
+
+**Closed by** `website/src/lib/email/automation-dedupe-guard.test.ts` (4 tests,
+new). Three recipients — one whose prior send is logged `failed`, one `sent`, one
+never emailed — and the assertion that exactly the first and third are served.
+Verified: re-applying M13 produces **2 new failures**, both in this file.
+
+### Not a survivor: an equivalent mutant, reported as such (M08)
+
+```
+src/lib/partner-portal.ts, markCommissionsPaid
+-  .in("payment_status", ["approved_for_payout"]);
++  .in("payment_status", ["approved_for_payout", "pending"]);
+→ ZERO new failures
+```
+
+Initially filed as a second payout-authority gap. It is **not one**, and the
+distinction is worth the paragraph: the widened `select` only builds a *candidate*
+id list, and the authoritative step is the atomic claim below it —
+
+```ts
+.update({ payment_status: "paid", ... }).in("id", ids)
+.eq("payment_status", "approved_for_payout").select(...)
+```
+
+— which re-filters, and pays exactly the rows it claimed. The mutation cannot
+change observable behaviour, so no test can kill it. **An equivalent mutant is a
+sign of defence in depth, not of missing coverage, and inflating the survivor
+count with it would have misrepresented this cluster.**
+
+Two things were confirmed rather than assumed:
+
+1. Removing the **claim guard** instead (`.eq("payment_status", "approved_for_payout")`)
+   **is** killed — by the existing `"two simultaneous payouts pay once between
+   them"` test. The control that matters is covered.
+2. With **both** mutations applied, a held commission does get paid
+   (`expected 85.5 to be 25.5`). The new test added to
+   `affiliate-end-to-end.test.ts` is what catches that pair — a commission still
+   inside its hold period sitting beside an approved one, which that suite's
+   fixture never contained. A boundary the fixture never crosses cannot be tested
+   by crossing it.
+
+### Verification
+
+```
+before E-02:  Tests  9 failed | 3577 passed | 7 skipped (3593)
+after  E-02:  Tests  9 failed | 3589 passed | 7 skipped (3605)
+```
+
+**+12 tests, no new failures.** The 9 are still block C's deliberate ones.
+`npx tsc --noEmit` clean; `npm run lint` 0 errors, 38 pre-existing warnings, none
+in the new files.
+
+### What block E did NOT do
+
+- **Only 14 mutants.** A serious mutation campaign runs hundreds, generated
+  rather than hand-picked. These were chosen for consequence, not coverage, so
+  "4 of 6 clusters killed everything" means *these* mutants died — not that those
+  clusters are exhaustively tested.
+- **The six clusters only.** The rest of the suite was not mutation-tested.
+- **The parallel fleet planned for this did not run.** A six-agent workflow, one
+  isolated worktree per cluster, was launched and every agent died on a session
+  rate limit. The work above was done serially in this session instead, which is
+  why the mutant count is 14 and not 60.
+- `CROSS-BLOCK: the pre-existing suites were not re-run against E-01's harness change by their owning blocks. Any block that added tests tonight should re-run them on the merged branch — a test that passed before E-01 and fails after was measuring a stub.`
