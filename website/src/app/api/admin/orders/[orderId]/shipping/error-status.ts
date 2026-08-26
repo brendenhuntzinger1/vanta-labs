@@ -30,6 +30,10 @@ const STATUS_BY_CODE: Record<ShippoServiceErrorCode, number> = {
   not_configured: 503,
   no_rates: 400,
   shippo_error: 502,
+  // The order moved under this request. Nothing was written, and re-sending the
+  // same decision would only undo whatever landed first — so it reads as a 409
+  // alongside the other "re-read and try again" cases.
+  status_conflict: 409,
   rate_expired: 409,
   purchase_in_progress: 409,
   no_label: 404,

@@ -93,6 +93,11 @@ export type ShippoServiceErrorCode =
   /** The caller passed something unusable. */
   | "invalid_request"
   /**
+   * The order's fulfillment_status changed between the read this request was
+   * decided against and the write. NOTHING WAS WRITTEN. Re-read and decide again.
+   */
+  | "status_conflict"
+  /**
    * BUYING POSTAGE FROM VANTA IS TURNED OFF. Labels are purchased in Shippo.
    * Nothing was bought and no claim was taken. Retrying will not help.
    */
@@ -1198,7 +1203,30 @@ export async function purchaseLabelForOrder(
   // carrier has already scanned must not drag it backwards.
   if (transition.ok) update.fulfillment_status = transition.next;
 
-  const { error } = await supabaseAdmin.from("orders").update(update).eq("order_id", order.order_id);
+  // The status half of this write is a pipeline decision made against a status
+  // read earlier, so it is applied only while that status still holds. The label
+  // half is a fact about money already spent and must land either way.
+  const { fulfillment_status: decidedStatus, ...labelFacts } = update;
+  let error: unknown = null;
+  let statusApplied = decidedStatus !== undefined;
+
+  if (decidedStatus === undefined) {
+    ({ error } = await supabaseAdmin.from("orders").update(labelFacts).eq("order_id", order.order_id));
+  } else {
+    const write = await updateOrderGuardedByStatus(order.order_id, order.fulfillment_status, update);
+    error = write.error;
+    if (!error && !write.won) {
+      // A carrier scan moved the order between our read and this write. The
+      // status is no longer ours to set, but POSTAGE IS ALREADY CHARGED, so the
+      // label facts are recorded without it. Losing the status is survivable;
+      // losing a paid label is not.
+      statusApplied = false;
+      console.warn("Label purchase lost a concurrent status write; recording label facts only", order.order_id);
+      const retry = await supabaseAdmin.from("orders").update(labelFacts).eq("order_id", order.order_id);
+      error = retry.error;
+    }
+  }
+
   if (error) {
     // POSTAGE WAS CHARGED and we could not record it. The label still travels
     // back so it can be printed; nothing about this invites a retry.
@@ -1228,7 +1256,8 @@ export async function purchaseLabelForOrder(
     });
   }
 
-  if (transition.ok) {
+  // Only claim the transition happened if the guarded write actually applied it.
+  if (transition.ok && statusApplied) {
     await recordStatusHistory(transition.history);
     await upsertShipment({
       orderId: order.order_id,
@@ -1257,7 +1286,8 @@ export async function purchaseLabelForOrder(
       labelUrl: label.labelUrl || null,
       postageCostCents: label.postageCostCents,
       purchasedAt: now,
-      fulfillmentStatus: transition.ok ? transition.next : String(order.fulfillment_status ?? ""),
+      fulfillmentStatus:
+        transition.ok && statusApplied ? transition.next : String(order.fulfillment_status ?? ""),
       reused: false,
     },
   };
@@ -1391,7 +1421,26 @@ export async function voidLabelForOrder(
     update.shipped_at = null;
   }
 
-  const { error } = await supabaseAdmin.from("orders").update(update).eq("order_id", order.order_id);
+  // Same split as the purchase path: the refund is a fact, the status is a
+  // decision. Never let a stale status decision overwrite a newer scan, but
+  // never lose the record of a voided label either.
+  const { fulfillment_status: voidStatus, ...voidFacts } = update;
+  let error: unknown = null;
+  let voidStatusApplied = voidStatus !== undefined;
+
+  if (voidStatus === undefined) {
+    ({ error } = await supabaseAdmin.from("orders").update(voidFacts).eq("order_id", order.order_id));
+  } else {
+    const write = await updateOrderGuardedByStatus(order.order_id, order.fulfillment_status, update);
+    error = write.error;
+    if (!error && !write.won) {
+      voidStatusApplied = false;
+      console.warn("Label void lost a concurrent status write; recording void facts only", order.order_id);
+      const retry = await supabaseAdmin.from("orders").update(voidFacts).eq("order_id", order.order_id);
+      error = retry.error;
+    }
+  }
+
   if (error) {
     console.error("Voided a Shippo label but could not update the order", order.order_id, error);
     await recordSystemAlert({
@@ -1521,6 +1570,37 @@ export function buildTrackingEventKey(payload: ShippoWebhookPayload): string | n
 
   const statusDate = text(data?.tracking_status?.status_date) ?? "";
   return `${parcel}:${status}:${statusDate}`.slice(0, 250);
+}
+
+/**
+ * Write to an order whose new fulfillment_status was decided against a status
+ * read a moment earlier.
+ *
+ * order-pipeline.ts already refuses to walk an order backwards, but it can only
+ * judge the snapshot it was handed. Between that read and this write another
+ * carrier scan can commit, and an unguarded `.eq("order_id", ...)` would then
+ * overwrite a newer status with a stale decision - delivered back to in_transit,
+ * exactly what the pipeline exists to prevent.
+ *
+ * So the row is claimed the way the rest of this file claims things: Postgres
+ * applies the update only while fulfillment_status still holds the value the
+ * decision was based on, and tells us whether it matched anything. A writer that
+ * matched nothing lost the race and must not go on to record history or email.
+ */
+async function updateOrderGuardedByStatus(
+  orderId: string,
+  expectedStatus: string | null | undefined,
+  update: Record<string, unknown>,
+): Promise<{ error: unknown; won: boolean }> {
+  const base = supabaseAdmin.from("orders").update(update).eq("order_id", orderId);
+  const guarded =
+    expectedStatus === null || expectedStatus === undefined
+      ? base.is("fulfillment_status", null)
+      : base.eq("fulfillment_status", expectedStatus);
+
+  const { data, error } = await guarded.select("order_id");
+  if (error) return { error, won: false };
+  return { error: null, won: Array.isArray(data) ? data.length > 0 : Boolean(data) };
 }
 
 async function recordStatusHistory(record: OrderStatusHistoryRecord): Promise<void> {
@@ -1807,13 +1887,23 @@ export async function applyTrackingUpdate(payload: ShippoWebhookPayload): Promis
     update.delivered_at = now;
   }
 
-  const { error: updateError } = await supabaseAdmin.from("orders").update(update).eq("order_id", order.order_id);
-  if (updateError) {
-    console.error("Unable to apply a tracking update", order.order_id, updateError);
+  const write = await updateOrderGuardedByStatus(order.order_id, order.fulfillment_status, update);
+  if (write.error) {
+    console.error("Unable to apply a tracking update", order.order_id, write.error);
     // Leave the event unprocessed AND release the key, so Shippo's retry can
     // genuinely re-run it.
     await releaseWebhookClaim(eventKey);
     return fail("db_error", "Could not apply this tracking update to the order.");
+  }
+  if (!write.won) {
+    // Another scan moved this order between our read and our write, so the
+    // transition above was decided against a status that no longer exists.
+    // Nothing is written, no history row, no email. Releasing the claim lets
+    // Shippo's retry re-decide against the current status - where the pipeline
+    // will reject it as a regression if that is what it now is.
+    console.warn("A tracking update lost a concurrent write and will be retried", order.order_id);
+    await releaseWebhookClaim(eventKey);
+    return fail("db_error", "This order changed while the tracking update was being applied.");
   }
 
   await recordStatusHistory(transition.history);
@@ -1898,10 +1988,19 @@ export async function setOrderFulfillmentStatus(input: {
   if (transition.next === "packed" && !order.packed_at) update.packed_at = now;
   if (transition.next === "shipped" && !order.shipped_at) update.shipped_at = now;
 
-  const { error } = await supabaseAdmin.from("orders").update(update).eq("order_id", order.order_id);
-  if (error) {
-    console.error("Unable to set the fulfillment status", order.order_id, error);
+  const write = await updateOrderGuardedByStatus(order.order_id, order.fulfillment_status, update);
+  if (write.error) {
+    console.error("Unable to set the fulfillment status", order.order_id, write.error);
     return fail("db_error", "Could not update this order's status.");
+  }
+  if (!write.won) {
+    // The order moved while the admin's request was in flight. Applying it now
+    // would silently undo whatever landed first, so it is refused and the
+    // operator can re-read and decide again.
+    return fail(
+      "status_conflict",
+      "This order changed while your request was being applied. Reload and try again.",
+    );
   }
 
   await recordStatusHistory(transition.history);

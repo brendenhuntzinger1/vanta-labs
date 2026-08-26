@@ -52,7 +52,9 @@ const recordActualShippingCost = vi.fn(async () => {});
 vi.mock("@/lib/admin-profit", () => ({ recordActualShippingCost }));
 vi.mock("server-only", () => ({}));
 
-vi.mock("@/lib/supabase-server", () => {
+vi.mock("@/lib/supabase-server", async () => {
+  // Postgres-faithful update semantics: see the double's own header.
+  const { ordersUpdateDouble } = await import("./test-support/orders-table-double");
   const from = (table: string) => {
     if (table === "orders") {
       return {
@@ -81,11 +83,12 @@ vi.mock("@/lib/supabase-server", () => {
           };
           return builder;
         },
-        update: (payload: Record<string, unknown>) => ({
-          eq: async (_column: string, value: string) => {
-            state.updatedOrderIds.push(value);
+        update: ordersUpdateDouble({
+          currentStatus: (predicates) =>
+            state.orders.find((o) => o.order_id === predicates.order_id)?.fulfillment_status ?? null,
+          onCommit: (payload, predicates) => {
+            state.updatedOrderIds.push(String(predicates.order_id ?? ""));
             state.updates.push(payload);
-            return { error: null };
           },
         }),
       };

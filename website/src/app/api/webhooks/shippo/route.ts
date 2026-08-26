@@ -111,18 +111,55 @@ export async function POST(request: Request) {
   // one is logged rather than dropped: it means money was spent on a label we
   // could not attribute to an order.
   if (String(payload?.event ?? "") === "transaction_created") {
+    const data = payload.data as unknown as Parameters<typeof applyTransactionCreated>[0];
+    const objectId = String(data?.object_id ?? "").trim();
+
+    // CLAIM THE EVENT BEFORE DOING THE WORK, NOT AFTER.
+    //
+    // This used to run the handler first and record the event afterwards, and
+    // nothing ever read that row back — so every redelivery re-ran the whole
+    // write: label_purchased_at moved to now, recordActualShippingCost inserted
+    // another audit row and re-set profit_finalized, and a label that had since
+    // been VOIDED had its cost resurrected. Shippo retries on any non-2xx, so
+    // that was a live path, not a theoretical one.
+    //
+    // The tracking path has always claimed its key first. This now matches it:
+    // the unique index on event_key is the lock, and losing the race to it means
+    // somebody else already did this work.
+    //
+    // An event with no object_id cannot be identified, so it is not deduped —
+    // collapsing every unidentifiable event onto one key would silently drop
+    // genuinely different labels.
+    const eventKey = objectId ? `transaction_created:${objectId}` : null;
+
+    if (eventKey) {
+      const { error: claimError } = await supabaseAdmin.from("shippo_webhook_events").insert({
+        event_key: eventKey,
+        event_type: "transaction_created",
+        shippo_object_id: objectId,
+        received_at: new Date().toISOString(),
+      });
+
+      if (claimError) {
+        if (String((claimError as { code?: string }).code ?? "") === "23505") {
+          return NextResponse.json({ received: true, duplicate: true });
+        }
+        console.error("Unable to claim a Shippo transaction event", eventKey, claimError);
+        return NextResponse.json({ error: "Could not record this event." }, { status: 500 });
+      }
+    }
+
     try {
-      const data = payload.data as unknown as Parameters<typeof applyTransactionCreated>[0];
       const outcome = await applyTransactionCreated(data);
 
       await supabaseAdmin
         .from("shippo_webhook_events")
         .upsert(
           {
-            event_key: `transaction_created:${String(data?.object_id ?? "unknown")}`,
+            event_key: eventKey ?? `transaction_created:unknown:${new Date().toISOString()}`,
             event_type: "transaction_created",
             order_id: outcome.orderId,
-            shippo_object_id: String(data?.object_id ?? "") || null,
+            shippo_object_id: objectId || null,
             matched: outcome.matched,
             error: outcome.matched ? null : (outcome.reason ?? "unmatched"),
             processed_at: new Date().toISOString(),
@@ -163,6 +200,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ received: true, matched: outcome.matched, orderId: outcome.orderId });
     } catch (error) {
       console.error("Unexpected failure handling a Shippo transaction webhook", error);
+      // Release the claim so Shippo's retry genuinely re-runs this. Holding it
+      // would turn a transient failure into a permanently lost label cost.
+      if (eventKey) {
+        await supabaseAdmin
+          .from("shippo_webhook_events")
+          .delete()
+          .eq("event_key", eventKey)
+          .is("processed_at", null);
+      }
       return NextResponse.json({ error: "Could not process this event." }, { status: 500 });
     }
   }
