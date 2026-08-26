@@ -28,6 +28,7 @@ pasted verbatim.
 | K-03 | P1 | `BEHAVIORAL-TEST-PROVEN` | The membership renewal charge's only double-charge guard is keyed to the UTC calendar date, and the post-charge state write is unchecked |
 | K-04 | P1 | `SOURCE-INSPECTED` | The affiliate link records IP, UA and campaign parameters and sets a 30-day identifier before consent is asked, contradicting three published promises |
 | K-05 | P1 | `BEHAVIORAL-TEST-PROVEN` | The 72h "last chance" recovery email ships a dead coupon code, and prints the literal string `SEE PREVIOUS EMAIL` |
+| K-06 | P2 | `BEHAVIORAL-TEST-PROVEN` | One config module, ten numeric readers, three idioms, four hand-copies of the same guard — and the unguarded one controls coupon money |
 
 ---
 
@@ -797,3 +798,222 @@ literal string — not on a missing stub.
   `discountPercent` through (K-02) needs a template-signature change here. The
   expiry fix itself does not require it.
 - `src/lib/cart-recovery.ts` is unowned; the fix lands there.
+
+---
+
+## K-06 — One config module, ten numeric readers, three idioms, four hand-copies of the same guard — and the one reader with no guard controls coupon money
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P2 · **Status:** OPEN
+**Area:** environment/config drift
+
+### What is wrong
+
+`src/lib/admin-control.ts` resolves every business constant the store runs on. It
+coerces admin-supplied values to numbers in **ten** places, using **three**
+different idioms with three different answers to the same question: *what does a
+blank field mean?*
+
+Four readers answer it correctly, and each does so by declaring its **own local
+copy** of the identical helper — with its own comment explaining the hazard:
+
+```ts
+// getBulkSavingsControlConfig:204-210
+// Blank = default (Number("") is 0 — a blank tier threshold must not
+// unlock bulk savings at $0).
+const num = (value: unknown, fallback: number) => {
+  if (value === "" || value == null) return fallback;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
+```
+
+The same block, re-typed, appears at `getProfitSettings:635-641` ("a blank
+worst-case unit cost must never become $0 — that would defang the profit guard"),
+at `getShippingConfig:702-706` ("a blank flat rate silently became $0 and made
+every order ship free"), and as `clampPercent:552-558` ("would silently zero out
+a referral/commission percent").
+
+The hazard was found four separate times, understood four separate times, and
+fixed four separate times — **and never hoisted**. That is precisely why the
+fifth reader misses it.
+
+### The table
+
+| reader | line | idiom | blank `""` → | `"abc"` → | `"-12"` → |
+|---|---|---|---|---|---|
+| `getBulkSavingsControlConfig` | 204-210 | local `num()` | default ✅ | default ✅ | default ✅ |
+| `getProfitSettings` | 635-641 | local `num()` | default ✅ | default ✅ | default ✅ |
+| `getShippingConfig` | 702-706 | local `num()` | default ✅ | default ✅ | default ✅ |
+| `clampPercent` (referral, ambassador) | 552-558 | shared helper | default ✅ | default ✅ | default ✅ |
+| `getSalesTaxSettings` rate overrides | 511-513 | `isFinite && 0..25` | skipped ✅ | skipped ✅ | skipped ✅ |
+| `getSubscribeSaveConfig` | 408-409 | `Number(x ?? d) \|\| d` | default ✅ | default ✅ | **−12** ⚠ |
+| `getWelcomeOffer` | 443 | `Number(x ?? d) \|\| d` | default ✅ | default ✅ | **−12** ⚠ |
+| `resolvePaymentMethod` order | 293 | `Number(x) \|\| base` | base ✅ | base ✅ | **−12** ⚠ |
+| **`getCardProcessingFeeConfig`** | **332** | **`Number(x) \|\| 0`** | **0** ❌ | **0** ❌ | **−12** ⚠ |
+| **`getCartRecoveryControlConfig`** | **261-262** | **`Number(x ?? d)`** | **0** ❌ | **NaN** ❌ | **−12** ❌ |
+
+### Evidence — probe, run in this session
+
+```
+$ TZ=UTC npx vitest run scratchpad/k-config.test.ts
+  getCartRecoveryControlConfig:261-262   Number(x ?? 48)           -> 0
+  getCardProcessingFeeConfig:332         Number(x) || 0            -> 0
+  getSubscribeSaveConfig:408             Number(x ?? 10) || 10     -> 10
+  getWelcomeOffer:443                    Number(x ?? 10) || 10     -> 10
+    getShippingConfig  (local num())     blank -> fallback         -> 48
+  clampPercent:552 (referral/ambassador) blank -> fallback         -> 10
+
+  stored ""          unguarded=0      guarded=48
+  stored "abc"       unguarded=NaN    guarded=48
+  stored "-12"       unguarded=-12    guarded=48
+  stored "3.5"       unguarded=3.5    guarded=3.5
+  stored null        unguarded=48     guarded=48
+  stored undefined   unguarded=48     guarded=48
+
+  couponExpirationHours=48    ends_at=2026-08-28T10:00:00.000Z  -> valid
+  couponExpirationHours=0     ends_at=2026-08-26T10:00:00.000Z  -> dead on creation
+  couponExpirationHours=-12   ends_at=2026-08-25T22:00:00.000Z  -> REFUSED at checkout
+  couponExpirationHours=NaN   THROWS RangeError: Invalid time value
+
+ Test Files  1 passed (1)   Tests  3 passed (3)
+```
+
+### Nothing upstream catches it either
+
+`??` only catches `null`/`undefined`, so the guard has to be at the read — and
+the write side has none:
+
+```ts
+// src/app/api/admin/cart-recovery/settings/route.ts:21-39
+const entries: Array<[string, unknown]> = [ …, ["coupon_expiration_hours", body.couponExpirationHours] ];
+for (const [key, value] of entries) {
+  if (value === undefined) continue;
+  await upsertControlValue({ section: "cart_recovery", key, value, … });
+}
+```
+
+No type check, no range check, `unknown` all the way to storage. And the admin
+input has no `min`:
+
+```tsx
+// src/components/admin-cart-recovery-client.tsx:183-189
+<input type="number"
+  value={config.couponExpirationHours}
+  onChange={(e) => setConfig((prev) => ({ ...prev, couponExpirationHours: Number(e.target.value) }))} />
+```
+
+Clearing the box to retype yields `Number("")` → `0`. Three layers, no guard in
+any of them. Compare `src/lib/admin-coupons.ts:95-104`, which *does* validate its
+inputs on write — the pattern exists in the codebase.
+
+### Impact — what each bad value actually costs
+
+**`couponExpirationHours`**
+
+- **`0`** — every recovery coupon's `ends_at` is its own creation instant. The
+  emails keep sending, the `coupons` rows keep appearing and read `active: true`,
+  and every single one is refused at checkout by `src/lib/coupons.ts:157`. The
+  whole abandoned-cart discount programme is dead and **looks healthy from the
+  admin**; the only visible symptom is an unexplained flatline in redemptions.
+- **`-12`** — same, with `ends_at` already in the past.
+- **non-numeric** — `new Date(Date.now() + NaN).toISOString()` **throws a
+  `RangeError` at `cart-recovery.ts:128`**, inside the per-cart loop, before the
+  insert. Nothing catches it in `mintCartRecoveryCoupon` or
+  `runAbandonedCartSweep`, so the whole job rejects for **every remaining cart**,
+  every tick, forever.
+
+  *Correction to the Phase 1 map:* it predicted `new Date(Date.now()+NaN)` would
+  produce "an invalid `ends_at` → the coupon INSERT fails → `mintCartRecoveryCoupon`
+  returns null → the t24h stage silently never sends." It does not reach the
+  insert. `.toISOString()` throws first. The consequence is worse in blast radius
+  (the entire job dies, not one stage) but **better in visibility**: the rejection
+  is caught by `Promise.allSettled` at `src/app/api/cron/sweep/route.ts:81` and
+  raises `recordSystemAlert({ type: "cron_sweep_failed", severity: "critical" })`
+  (line 92-101), which emails the operator. This is the one failure in the block
+  that is genuinely loud.
+
+**`discountPercent`** — blank → `0`. Coupons mint at `discount_value: 0` while the
+email (K-02) still promises "5% off". The customer applies a valid code and gets
+nothing off, which is the worst of both: not an error they can report, just a
+discount that silently is not there.
+
+**`getCardProcessingFeeConfig.percentage`** — the inverse defect, and a revenue
+one. `Number(o.percentage) || 0` returns **0**, not the coded default of `3`
+(`src/lib/payment-methods.ts:101-106`). The write path has the same idiom
+(`percentage: Number(fee.percentage) || 0`,
+`src/components/admin-payment-settings-client.tsx:88`), so a blank is coerced to
+zero on save *and* on read, and the resulting `0` is indistinguishable from a
+deliberate "no surcharge". `enabled` stays `true`, so the fee is on and worth
+nothing: **the store stops collecting its 3% card surcharge on every card order
+and nothing anywhere says so.**
+
+### Reproduction
+
+1. `/admin/cart-recovery` → clear **Coupon expiration (hours)** → Save.
+2. `select metadata->>'value' from admin_audit_logs where action='admin_control_upsert'
+   and target_table='cart_recovery' and target_id='coupon_expiration_hours'
+   order by created_at desc limit 1;` → `0` (or `""`).
+3. Age a cart past 24h, run the sweep.
+4. `select code, discount_value, ends_at, created_at from coupons
+   where source='cart_recovery' order by created_at desc limit 1;`
+   → `ends_at` equals `created_at`.
+5. Apply that code at checkout → *"This coupon has expired"*.
+
+For the NaN variant, insert an `admin_control_upsert` row with
+`metadata.value = 'abc'` directly and confirm `system_alerts` gains a
+`cron_sweep_failed` row naming `cart_recovery` on the next tick.
+
+For the card fee: `/admin/payments` → clear **Fee percentage (%)** → Save → place
+a card order → `select card_processing_fee from orders order by created_at desc limit 1;`
+→ `0`, with `enabled` still true.
+
+### Smallest safe root-cause fix
+
+**Hoist the helper that already exists four times.** One module-level function in
+`src/lib/admin-control.ts`:
+
+```ts
+/** Blank means "keep the default" — Number("") is 0, which has silently zeroed
+ *  a shipping rate, a profit floor, a bulk tier and a commission percent. */
+function controlNumber(value: unknown, fallback: number, opts?: { max?: number }): number {
+  if (value === "" || value == null) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+  return opts?.max !== undefined && parsed > opts.max ? fallback : parsed;
+}
+```
+
+Point all ten readers at it, deleting the four hand-copies. Then:
+
+- `getCartRecoveryControlConfig:261-262` — use it, with a `>= 1` floor on
+  `couponExpirationHours` (a zero-hour coupon has no valid meaning).
+- `getCardProcessingFeeConfig:332` — fall back to
+  `DEFAULT_CARD_PROCESSING_FEE.percentage`, not `0`. To keep a *deliberate* zero
+  working, distinguish it at the write: send `null` for blank and a real `0` for
+  an entered zero, rather than collapsing both with `|| 0`.
+- Add write-side validation to
+  `src/app/api/admin/cart-recovery/settings/route.ts` (400 on non-finite,
+  negative or non-integer), mirroring `admin-coupons.ts:95-104`.
+- Add `min="1"` to the hours input and `min="0"` to the discount input as the
+  third layer.
+
+### Regression test to write
+
+Table-driven over every reader in `admin-control.ts`: for each, feed
+`""`, `"abc"`, `"-1"`, `null`, `undefined`, `"0"` and `"3.5"` through a stubbed
+snapshot and assert the resolved value is either the coded default or the
+explicitly-entered number — never `0`, never `NaN`, never negative. **A new
+reader added later without the guard fails this test**, which is the property
+worth buying: the four hand-copies prove that individual fixes do not hold.
+
+Negative control: revert one reader to `Number(x ?? d)` and confirm exactly the
+blank and `"abc"` rows fail.
+
+### CROSS-BLOCK
+
+- `src/app/api/admin/cart-recovery/settings/route.ts` — **Block I** owns
+  `src/app/api/admin/**`. The write-side validation belongs to them; the read-side
+  clamp in `src/lib/admin-control.ts` and the client `min` attributes do not.
+- `src/lib/admin-control.ts` is read by nearly every block. The hoist touches ten
+  call sites in one file — **best done once, by block M, after the other blocks
+  have landed**, rather than by whoever gets there first.
