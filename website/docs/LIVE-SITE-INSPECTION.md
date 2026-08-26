@@ -2000,3 +2000,291 @@ Three facts stop me going further:
 
 The harness working does not convert any of those into a pass, and I have not
 converted them.
+
+
+---
+
+## 8. THE FIX — AFF-03 CLOSED
+
+**Committed on `claude/vanta-labs-live-inspection-h1eh4f` after the inspection,
+at the owner's instruction, and merged to `main`.**
+
+### What was wrong, restated precisely
+
+A customer arriving from an ambassador's link with a basket under the $100
+programme minimum was told they had a discount, given none, and then **refused at
+the pay button**. `quote-order.ts` threw; `create-session` returned HTTP 400; no
+order was created. It is the only path a referred customer takes — nobody types
+a code — and production carried **75 referral clicks and 0 referral orders**.
+
+### The decision, and why
+
+The central question was whether a below-minimum referred order should be
+**refused** or **allowed at full price with the attribution kept**. The codebase
+answers it in six places:
+
+1. `payment-webhook.ts:714-716` computes a minimum-specific `ineligible_reason`
+   that **no checkout-originated order could ever produce** — dead code that only
+   makes sense if such orders were meant to exist.
+2. `payment-webhook.ts:719-721` treats below-minimum as a pricing outcome
+   (`commissionPercent = 0`), not an error. It does not throw or skip.
+3. The `referral_orders` row is written **unconditionally**.
+4. `payment-webhook.ts:687` calls its own eligibility check *"defence in depth"* —
+   which presumes a first line that lets the order through.
+5. `commission-accrual-repair.ts:34` exists so that *"'no row' never means
+   'considered and refused'"* — meaningless if refused orders never become orders.
+6. **Thirty lines above the throw**, `quote-order.ts:541-546` drops a *stale*
+   referral rather than throwing, on the stated grounds that **"a stale referral
+   must never hard-block a legitimate sale."**
+
+A perfectly valid code that merely arrived with a small basket has at least as
+good a claim. The minimum is a **commission** rule, not a **sale** rule.
+
+### What changed
+
+| File | Change |
+|---|---|
+| **`src/lib/referral-qualification.ts`** *(new)* | `referralQualifies()`, `referralShortfall()`, `referralStatusLine()`. One rule, used by the cart preview, `quote-order.ts` **and** `payment-webhook.ts`. Compares in **cents**, and a corrupt minimum resolves to *no* minimum rather than silently stripping every ambassador's discount. |
+| `src/lib/quote-order.ts` | The throw is gone. The referral stays attached for **attribution** and is inert for **pricing**: `referralAccepted` / `referralPercent` and the profit guard's `guardCommissionPercent` are all gated on qualification. Self-referral still throws. |
+| `src/lib/payment-webhook.ts` | Uses the same shared rule instead of its own inline comparison. Behaviourally a no-op for every reachable input; it is there so the two cannot drift. |
+| `src/lib/quote-order.ts` *(second pass)* | Store credit and points are now suppressed by a referral discount **being given**, not by a code being attached — `!referralQualifiesForDiscount` in place of `!referral`. See "The review found a P0 in the first pass" below. |
+| `src/components/cart-context.tsx` | Exposes `referralMinimumOrder`, `referralMeetsMinimum`, `referralAmountToQualify`, and — after review — the finished sentence itself (`referralStatusText`) plus `referralNeedsMoreToQualify`, both from `referralCartStatus()`. |
+| `cart-client.tsx`, `cart-drawer.tsx`, `checkout/page.tsx` | All three render one string from context. They previously hand-copied six arguments each into `referralStatusLine()`; that is the drift shape `resolveCartDiscount` was extracted to end, and it had already produced a defect (below). |
+
+**Coupon exclusivity is deliberately still keyed on the code being attached.**
+Unlike credit and points, a coupon is something the shopper actively chooses to
+enter, and the cart clears one when the other is applied; relaxing it is a
+product decision, not a correctness fix.
+
+### What the customer sees now
+
+| Basket | Before | After |
+|---|---|---|
+| $39.99 with a referral link | "Ambassador Xavier Martinez • **15% customer discount**", no discount applied, **HTTP 400 at the pay button** | "Explicit Fifteen · **15% off orders of $100.00 or more — add $60.01 to unlock it**", amber, no discount, **order goes through** |
+| $110.37 with a referral link | correct | unchanged — "15% customer discount", `−$8.40`, total $116.97 |
+| 4 vials, Buy-3-Get-1 running | "15% customer discount" — **directly beneath the notice saying referral discounts are paused** | "Explicit Fifteen · **referral code applied**" — no discount claimed, no unreachable advice |
+| ambassador row with a null name | the literal text `null` (would have been; the old JSX rendered nothing) | "**Your ambassador** · 15% customer discount" |
+
+"orders **of** $100.00 **or more**", not "over": `referralQualifies` rounds both
+sides to cents and compares with `>=`, so a basket of exactly $100.00 qualifies.
+"Over" described a threshold the module deliberately does not have.
+
+Verified in the browser on all three surfaces (cart page, cart drawer, checkout
+panel) at 390×844 and 1440×900, in all three basket states. All three surfaces
+render **the identical string** in every state. At 390px the drawer's wrapped
+sentence and its "Remove" button were measured for collision: none
+(`flex-shrink-0` was added to the button in the same pass). With the bundle
+running the drawer replaces the whole codes section with "Buy 3, Get 1 Free —
+active · Your lowest-priced eligible item is free. Referral discounts pause while
+this promotion applies." — which the other two surfaces now agree with instead of
+contradicting.
+
+### Evidence
+
+**Tests — 4,147 pass, 0 fail, 78 skipped, `tsc` clean, eslint 0 errors.**
+
+- `referral-qualification.test.ts` — 41 tests. **Every one was watched failing**
+  before the code existed, and then again against a deliberately *wrong* stub, so
+  the negative assertions got a genuine red rather than a missing-export error.
+- `commission-eligibility.test.ts` — the test that asserted HTTP 400 and zero
+  orders was **replaced**, deliberately, with the invariant that actually
+  matters. Three new tests:
+  - below the minimum → **200, `discount_amount = 0`, `referral_code` kept**
+  - exactly **on** the minimum → discount applies
+  - a thin-margin below-minimum cart is **not** refused by the profit guard
+- `ambassador-regression.test.ts` — a **source-text** assertion
+  (`expect(webhook).toContain("qualifyingSubtotal < ...")`) was replaced with a
+  behavioural test in the e2e file, because the refactor moved the string while
+  the behaviour was untouched. That is the placebo pattern this audit exists to
+  catch, found in the act.
+
+**Mutation controls — each new test watched killing a real mutant:**
+
+| Mutant | Test that caught it |
+|---|---|
+| gate the webhook on `commissionableSubtotal` instead of `qualifyingSubtotal` | "a discount that drops the commissionable subtotal below the minimum still earns" |
+| apply the referral discount below the minimum | "allows a cart below the minimum…" (`expected 10 to be +0`) |
+| revert **both** profit-guard gates | "does not charge the profit guard…" (`Promotion unavailable on this order.`) |
+
+That last one matters: **reverting only one of the two guard gates survived the
+entire 241-test checkout suite**, because `profit-engine.ts:244` multiplies the
+commission rate by `referralAccepted`. The window was then *measured*, not
+guessed — with the guard wrongly charged, a $99.99 referred cart is refused once
+unit cost passes **$80**; correctly gated, not until **$105**. Every
+below-minimum referred cart costing between those figures was being refused
+outright while the identical cart *without* a code went through.
+
+**Harness, end to end** — a real production build against a local Postgres, paid
+by signing the real `payment.succeeded` webhook:
+
+| Case | subtotal | discount | `referral_code` | commission | `ineligible_reason` |
+|---|---|---|---|---|---|
+| qualifying | 110.37 | **8.40** | `EXPLICIT15` | **15.30** @ 15% | — |
+| **below minimum** | 39.99 | **0.00** | `EXPLICIT15` | **0.00** | "below the 100.00 minimum qualifying order." |
+| unapproved code | 110.37 | 0.00 | **NULL** | — | — |
+
+The previously-unreachable branch at `payment-webhook.ts:715` is now live and
+doing exactly what it was written to do.
+
+### The review found a P0 in the first pass — the store credit divergence
+
+The first pass was reviewed by an adversarial panel before merge, and the panel
+was right about the most important thing.
+
+**What the first pass did.** It relaxed the client — `cart-context.tsx` and the
+checkout panel stopped suppressing store credit and points on
+`referralDetails` and started suppressing on `referralMeetsMinimum` — and left
+the server on `if (!referral)`. The commit's own comment claimed the two sides
+matched. **They did not**, and the comment described the code as it had been
+before the same commit edited it.
+
+**What that costs.** A signed-in shopper with store credit or points arrives on
+an ambassador's link with a small basket:
+
+- client: the referral is inert, so the credit applies → `expectedTotal` = $30
+- server: a code is attached, so the credit is zeroed → `expectedTotal` = $80
+- `quote-order.ts` sees the client claiming *less* than the server computes,
+  which is exactly what the underpayment guard exists to reject →
+  **HTTP 400, "Altered total detected"**
+
+The error even tells her to refresh the page, and refreshing changes nothing.
+That is the same class of failure this fix exists to remove, moved to a different
+customer. On the express lane, which sends no `expectedTotal` and therefore has
+no guard, the same divergence charges the wallet **$50 more than the drawer
+showed**.
+
+**The fix.** Both gates in `quote-order.ts` now read
+`!referralQualifiesForDiscount`. The exclusivity rule is unchanged in substance —
+nothing stacks with a referral discount — but it is now expressed as *a discount
+being given* rather than *a code being attached*, which is what it always meant.
+An inert code costs the shopper nothing.
+
+Proved by two tests driving the real `quoteOrder` against the in-memory database
+(`commission-eligibility.test.ts`): a below-minimum referred order redeems the
+shopper's points, and — the mutation control, without which deleting the gate
+outright would also pass — a **qualifying** referral still refuses to stack them.
+
+This closes what was recorded as OPEN-01 below.
+
+### Two more the review caught, both in the sentence itself
+
+- **The cart claimed a discount underneath the text saying it could not be
+  given.** Buy-3-Get-1 suppresses the referral outright in `promoDiscount`, and
+  not one of the three surfaces knew: with the promo running the cart read
+  "15% customer discount", and below the minimum it read "add $60.01 to unlock
+  it" — advice that adding $60.01 could not act on. The whole status is now
+  derived once by `referralCartStatus()`, which takes the bundle amount as an
+  input; the three surfaces render the string it returns.
+- **A null `ambassador_name` would have rendered the literal word "null".**
+  `referral-client.ts` returns the column straight from the RPC and it is
+  nullable. Falls back to "Your ambassador".
+
+### A note on verifying this repo
+
+One review lens reported the branch red when the rest of the evidence said
+green. It was right: a warm `node_modules/.vite` cache served a stale transform
+of `quote-order.ts`, which flipped the profit-guard test in and out of failure
+with no source change. The final numbers below were taken after
+`rm -rf node_modules/.vite`.
+
+**Final: 4,147 tests pass, 0 fail, 78 skipped, `tsc` clean, eslint 0 errors** —
+cold cache, whole suite.
+
+---
+
+## 9. WHAT THE FIX LEAVES OPEN
+
+Recorded because they are real, and because scoping them out of a payment-path
+change that goes straight to `main` was a deliberate decision, not an oversight.
+
+### OPEN-01 — CLOSED during review
+
+A below-minimum code no longer suppresses store credit or points; see "The
+review found a P0 in the first pass" in §8. It was recorded here as a P2
+follow-up, the review showed it was a P0 in the diff itself, and it was fixed
+before merge. **Coupon exclusivity is unchanged** and still keys on the code
+being attached — a coupon is entered deliberately and the cart clears one when
+the other is applied, so relaxing it is a product decision rather than a
+correctness fix.
+
+### OPEN-02 — below-minimum orders will appear in the admin FRAUD REVIEW queue
+
+**Severity:** P3 · noise
+**Status:** CONFIRMED by code read
+
+`admin-ambassadors.ts:45` builds the fraud-review list as
+`fraud_flag || ineligible_reason || payment_status === "manual_review"`. Every
+below-minimum referred order now carries an `ineligible_reason`, so every one of
+them lands in a queue meant for fraud.
+
+The queue already mixed eligibility with fraud ("Ambassador is not active",
+"Commissions are paused"), so this is a change of volume, not of kind — and the
+volume will be high, because most first baskets are under $100. Excluding the
+below-minimum reason specifically would fix it, but that is a judgement call
+about an admin surface this session never saw.
+
+### OPEN-03 — a stale client minimum still fails with "Altered total detected"
+
+**Severity:** P2 · pre-existing, unchanged by this fix
+**Status:** CONFIRMED by code read
+
+`cart-context.tsx` fetches `referralMinimumOrder` once on mount and returns
+early on `if (!response.ok)`, leaving the client on the built-in default of 100.
+The server reads the stored value. If the owner sets the minimum to 150 and a
+shopper's `/api/catalog/promotions` call fails — or their tab predates the
+change — a $120 basket qualifies on the client and not on the server, the
+client's `expectedTotal` comes in low, and the underpayment guard refuses the
+order.
+
+The refusal is correct; the **message** is not. It reads like a fraud accusation
+and tells the shopper to refresh, which does not help. Special-casing the message
+when `referral && !referralQualifiesForDiscount`, or returning the qualification
+state in the quote so the client can reconcile, would close it.
+
+### OPEN-04 — the sentence still says "customer discount" when bundle pricing wins
+
+**Severity:** P3 · pre-existing wording, not a regression
+**Status:** CONFIRMED by code read
+
+`resolveCustomerDiscount` makes the referral *compete* with quantity-bundle
+pricing, and the bundle wins at the 5-unit (12%) and 10-unit (20%) tiers. Ten
+units of a $30 item: bundle $60.00 beats referral $45.00, the referral
+contributes **$0.00**, and the line still reads "15% customer discount". The
+Buy-3-Get-1 case of exactly this was closed above; the quantity-bundle case
+would need `referralCartStatus` to be told which candidate won, which means
+threading the resolved discount into it. Worth doing, in its own diff.
+
+Related and smaller: "add $4.96 to unlock it" can be unreachable by adding
+$4.96, because adding a unit can cross into a deeper bundle tier and *lower* the
+subtotal (9 × $12.00 → $95.04; 10 × $12.00 → $96.00). Self-correcting on the
+next render, but wrong at the moment it is read.
+
+### OPEN-05 — ineligible `referral_orders` rows stay `pending` forever
+
+**Severity:** P3 · unbounded growth
+**Status:** CONFIRMED by code read
+
+Every below-minimum referred order now writes a `referral_orders` row with a
+zero commission and an `ineligible_reason`, and nothing ever moves it off
+`payment_status = 'pending'`. `partner-portal.ts:331` selects **all** pending
+rows with no limit to compute what an ambassador is owed. The rows contribute
+$0, so no figure is wrong today, but the query grows without bound and the
+portal's "pending" count will read as money in flight when it is not. A
+`ineligible_reason is null` filter is behaviour-preserving.
+
+### Still true, and unchanged by this fix
+
+- **AFF-09** — a failed commission accrual is still invisible: both lanes catch
+  and `console.error`, with no `Sentry.captureException` anywhere on the path.
+  **This is the single highest-value remaining fix in the affiliate system.**
+- **AFF-10** — `harness-prod-parity-constraints.sql:51` still creates the old
+  narrow `pc_ro_ps`, so any rebuilt harness still fails every accrual.
+- **AFF-06 / LIVE-016 / LIVE-017** — the partner pages still advertise $22,638 in
+  commissions paid, and still contradict themselves on the commission rate.
+- **LIVE-033** — the customer who made three payment attempts is still
+  undiagnosed, **and this fix does not address it.** Checked directly: all three
+  orders carry `referral_code = NULL` and `ambassador_id = NULL`, with
+  merchandise subtotals of $79.98, $84.98 and $84.98. So although every one of
+  them is under the $100 minimum, none carried a code and none could have hit
+  AFF-03. Their failure is at or after the hosted payment step and remains the
+  most urgent open item.

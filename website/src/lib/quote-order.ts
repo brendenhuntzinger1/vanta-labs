@@ -5,6 +5,7 @@
 import { getCatalogProductsBySlugs, getStockLevelsBySlugs } from "@/lib/catalog";
 import { calculateDiscountAmount } from "@/lib/referral-service";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
+import { referralQualifies } from "@/lib/referral-qualification";
 import { validateCoupon } from "@/lib/coupons";
 import { getMembershipPerks, getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/lib/membership";
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
@@ -564,11 +565,34 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     }
   }
 
+  // BELOW THE PROGRAMME MINIMUM THE REFERRAL IS INERT, NOT FATAL.
+  //
+  // This used to THROW, which made an ambassador's own link a checkout blocker
+  // for any basket under the minimum: the cart announced her discount, applied
+  // none, still sent the code, and the pay button returned HTTP 400 naming a
+  // minimum the shopper had never been shown. Production carried 75 referral
+  // clicks and 0 referral orders.
+  //
+  // Thirty lines above, a STALE code is dropped rather than thrown, on the
+  // stated grounds that "a stale referral must never hard-block a legitimate
+  // sale". A code that is perfectly valid and merely arrived with a small
+  // basket has at least as good a claim.
+  //
+  // So the referral stays attached for ATTRIBUTION — payment-webhook.ts is
+  // already built to record a referral_orders row with an ineligible_reason and
+  // zero commission for exactly this case — while being inert for PRICING. The
+  // invariant that matters is "no undeserved discount", and that is enforced
+  // below by referralQualifiesForDiscount, not by refusing the sale.
+  //
+  // Exclusivity is deliberately NOT relaxed here: store credit and points stay
+  // suppressed whenever a code is attached, qualifying or not, because the cart
+  // preview suppresses them on exactly the same condition. Loosening one side
+  // alone would let the server silently spend a shopper's store credit on a
+  // total the cart never showed them.
+  let referralQualifiesForDiscount = false;
   if (referral) {
     const ambassadorSettings = await getAmbassadorProgramSettings();
-    if (subtotal < ambassadorSettings.minimumQualifyingOrder) {
-      throw new Error(`This referral code requires a minimum merchandise subtotal of $${ambassadorSettings.minimumQualifyingOrder.toFixed(2)}. Add more items or remove the referral code to continue.`);
-    }
+    referralQualifiesForDiscount = referralQualifies(subtotal, ambassadorSettings.minimumQualifyingOrder);
 
     const customerEmail = input.customer.email.trim().toLowerCase();
     const isSelfReferralByEmail = Boolean(referral.ambassadorEmail) && referral.ambassadorEmail!.trim().toLowerCase() === customerEmail;
@@ -618,8 +642,8 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       quantityBundleSavings,
       productCost: 0,
       bundleDiscount: buy3Get1Discount,
-      referralAccepted: Boolean(referral),
-      referralPercent: referral ? referral.discountPercent : 0,
+      referralAccepted: referralQualifiesForDiscount,
+      referralPercent: referralQualifiesForDiscount && referral ? referral.discountPercent : 0,
       isMember: memberPricingAmount > 0,
       membershipPercent: memberPerks.memberDiscountPercent,
       couponDiscount: coupon ? coupon.discountAmount : 0,
@@ -670,8 +694,12 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // (an unlocked ambassador on a performance tier earns more than their stored
   // rate). Using the stored rate here let a thin-margin order pass the guard yet
   // finalize below true break-even once the higher tier commission was applied.
+  // Only a QUALIFYING referral will accrue commission, so only a qualifying one
+  // may be charged for it here. Reserving a phantom commission on a basket that
+  // will never earn one tightens the break-even floor for no reason and can
+  // refuse the order outright with "Promotion unavailable on this order."
   let guardCommissionPercent = 0;
-  if (referral) {
+  if (referral && referralQualifiesForDiscount) {
     try {
       const effective = await getEffectiveCommissionPercent({ ambassadorId: referral.ambassadorId, fallbackPercent: referral.commissionPercent });
       guardCommissionPercent = Math.max(referral.commissionPercent, effective.percent);
@@ -696,7 +724,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       subtotal,
       productCost: guardProductCost,
       bundleDiscount: 0,
-      referralAccepted: Boolean(referral),
+      referralAccepted: referralQualifiesForDiscount,
       referralPercent: 0,
       isMember: false,
       membershipPercent: 0,
@@ -746,9 +774,26 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // before points; the actual ledger deduction is recorded once the order is
   // paid (payment-webhook), and returned if the order is later refunded.
   let storeCreditRedeemedCents = 0;
-  // Store credit, like points, never stacks with a referral code (referral is
-  // exclusive of every other discount).
-  if (!referral && memberPerks.storeCreditBalanceCents > 0 && Math.round(subtotal * 100) >= memberPerks.storeCreditMinOrderCents) {
+  // Store credit, like points, never stacks with a referral DISCOUNT — referral
+  // discounts are exclusive of everything else.
+  //
+  // A REFERRAL THAT GIVES NOTHING IS NOT A DISCOUNT TO BE EXCLUSIVE OF.
+  //
+  // This read `!referral`, and while quoteOrder threw on a below-minimum
+  // referral that was the same thing: the inert case could not reach this line.
+  // Removing the throw made it reachable, and the two sides stopped agreeing —
+  // cart-context and the checkout panel suppress on `referralMeetsMinimum`
+  // (the basket actually earning the discount) while this still suppressed on
+  // "a code is attached". The shopper watched $50 of her own credit come off
+  // the displayed total and then had `create-session` refuse the order: her
+  // expectedTotal is below the server's, which is precisely what the
+  // underpayment guard exists to reject. The refusal even tells her to refresh
+  // the page, and refreshing changes nothing.
+  //
+  // Gating both sides on the discount actually being GIVEN says what the rule
+  // always meant, keeps the two in step, and stops an inert code costing a
+  // shopper money it never earned her.
+  if (!referralQualifiesForDiscount && memberPerks.storeCreditBalanceCents > 0 && Math.round(subtotal * 100) >= memberPerks.storeCreditMinOrderCents) {
     storeCreditRedeemedCents = Math.max(0, Math.min(memberPerks.storeCreditBalanceCents, Math.round(totalBeforePoints * 100)));
   }
   const storeCreditDiscount = roundMoney(storeCreditRedeemedCents / 100);
@@ -763,7 +808,10 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // balance.
   let pointsRedeemed = 0;
   let pointsDiscountAmount = 0;
-  if (!referral && input.customerUserId && input.pointsToRedeem && input.pointsToRedeem > 0) {
+  // Same rule, same reason as store credit directly above: exclusive of a
+  // referral discount that is actually being given, not of a code that is
+  // merely attached.
+  if (!referralQualifiesForDiscount && input.customerUserId && input.pointsToRedeem && input.pointsToRedeem > 0) {
     const balance = await getPointsBalance(input.customerUserId);
     const requestedPoints = Math.min(Math.floor(input.pointsToRedeem), balance);
     const requestedDollars = pointsToDollars(requestedPoints);

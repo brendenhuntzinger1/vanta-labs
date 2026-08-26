@@ -84,7 +84,8 @@ export function CartDrawer() {
     autoBestDiscountApplied,
     total,
     referralCode,
-    referralDetails,
+    referralStatusText,
+    referralNeedsMoreToQualify,
     referralError,
     referralSuccess,
     applyReferralCode,
@@ -471,10 +472,13 @@ export function CartDrawer() {
                         </div>
                         {referralSuccess ? <p className="mt-1.5 text-xs text-emerald-400">{referralSuccess}</p> : null}
                         {referralError ? <p className="mt-1.5 text-xs text-rose-400">{referralError}</p> : null}
-                        {referralDetails ? (
-                          <p className="mt-1.5 flex items-center justify-between text-xs text-zinc-400">
-                            <span>{referralDetails.ambassadorName} · {referralDetails.customerDiscountPercent}% off</span>
-                            <button type="button" onClick={clearReferralCode} className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
+                        {referralStatusText ? (
+                          <p className="mt-1.5 flex items-start justify-between gap-2 text-xs text-zinc-400">
+                            {/* The non-qualifying sentence is a full line of prose, not a name and
+                                a percentage. At 390px it wraps, and without flex-shrink-0 the
+                                Remove button was squeezed onto its own wrapped characters. */}
+                            <span className={referralNeedsMoreToQualify ? "text-amber-300/80" : undefined}>{referralStatusText}</span>
+                            <button type="button" onClick={clearReferralCode} className="flex-shrink-0 text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
                           </p>
                         ) : null}
                       </div>

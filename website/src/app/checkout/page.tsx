@@ -223,7 +223,9 @@ export default function CheckoutPage() {
     appliedDiscountLabel,
     autoBestDiscountApplied,
     referralCode,
-    referralDetails,
+    referralMeetsMinimum,
+    referralStatusText,
+    referralNeedsMoreToQualify,
     referralError,
     referralSuccess,
     applyReferralCode,
@@ -352,15 +354,16 @@ export default function CheckoutPage() {
   // Membership store credit auto-applies when the merchandise subtotal meets
   // the tier's redemption minimum (mirrors payment-service.ts).
   const storeCreditApplied = useMemo(() => {
-    if (referralDetails) return 0; // referral codes are exclusive of store credit
+    // Only a QUALIFYING code is exclusive of store credit. Mirrors quote-order.ts.
+    if (referralMeetsMinimum) return 0;
     if (storeCreditBalanceCents <= 0) return 0;
     if (Math.round(subtotal * 100) < storeCreditMinOrderCents) return 0;
     return Math.min(storeCreditBalanceCents / 100, totalBeforeCredit);
-  }, [referralDetails, storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforeCredit]);
+  }, [referralMeetsMinimum, storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforeCredit]);
   const totalBeforePoints = Math.max(0, totalBeforeCredit - storeCreditApplied);
   const pointsRedeemedDiscount = useMemo(
-    () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints)),
-    [referralDetails, pointsToRedeem, totalBeforePoints],
+    () => (referralMeetsMinimum ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints)),
+    [referralMeetsMinimum, pointsToRedeem, totalBeforePoints],
   );
   // `total` is the pre-payment-method total sent to the server as
   // expectedTotal (matches the server's own recompute exactly). The card
@@ -1053,7 +1056,7 @@ export default function CheckoutPage() {
                     )}
                     {referralSuccess ? <p className="mt-2 text-xs text-emerald-300">{referralSuccess}</p> : null}
                     {referralError ? <p className="mt-2 text-xs text-rose-300">{referralError}</p> : null}
-                    {referralDetails ? <p className="mt-2 text-xs text-white/45">{referralDetails.ambassadorName} · {referralDetails.customerDiscountPercent}% off</p> : null}
+                    {referralStatusText ? <p className={`mt-2 text-xs ${referralNeedsMoreToQualify ? "text-amber-300/80" : "text-white/45"}`}>{referralStatusText}</p> : null}
                     {referralCode && !isBuy3Get1FreeActive ? (
                       <button type="button" onClick={() => { clearReferralCode(); setReferralInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
                     ) : null}
@@ -1103,7 +1106,7 @@ export default function CheckoutPage() {
                       <p className="text-xs text-white/45">
                         <span className="text-white/80">{pointsBalance.toLocaleString()}</span> available ({formatCartCurrency(pointsBalance / 100)} value).
                       </p>
-                      {referralDetails ? (
+                      {referralMeetsMinimum ? (
                         <p className="mt-2 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
                           A referral code is applied. Remove it to redeem points.
                         </p>

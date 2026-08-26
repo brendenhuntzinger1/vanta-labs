@@ -382,8 +382,19 @@ describe("commission creation is exactly-once", () => {
     expect(webhook).toContain("roundMoney(commissionableSubtotal * (commissionPercent / 100))");
   });
 
+  // The invariant is the ARGUMENT, not the operator: the minimum is measured
+  // against the PRE-discount subtotal, so the customer's own discount can never
+  // push a qualifying cart under the bar and cost the ambassador the commission.
+  // The comparison itself now lives in the shared referralQualifies rule that
+  // quote-order.ts gates on, so the two cannot drift.
+  //
+  // A source-text assertion cannot tell whether that is still true — it only
+  // tells whether the text moved. The behaviour is covered for real in
+  // e2e/commission-eligibility.test.ts, "a discount that drops the commissionable
+  // subtotal below the minimum still earns", which was watched failing against a
+  // mutant that gated on commissionableSubtotal.
   it("gates on the PRE-discount subtotal, so a discount cannot disqualify a cart", () => {
-    expect(webhook).toContain("qualifyingSubtotal < ambassadorSettings.minimumQualifyingOrder");
+    expect(webhook).toContain("referralQualifies(qualifyingSubtotal, ambassadorSettings.minimumQualifyingOrder)");
   });
 
   it("snapshots both rates onto every row that records a commission", () => {
