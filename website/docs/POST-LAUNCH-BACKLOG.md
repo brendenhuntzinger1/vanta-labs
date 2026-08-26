@@ -149,7 +149,52 @@ not after it.
 | PLB-01 | P2 | zero callers, so it cannot return a wrong answer | wire it up or delete it — not a comment edit |
 | PLB-02 | P2 | production has zero refunded orders | one rule, one implementation, both comments corrected |
 | PLB-03 | P2 | nothing has ever shipped, so nothing has returned | owner decision, then alert (recommended) or restock |
+| PLB-04 | P3 | the probe degrades correctly; the offers bar renders | apply `coupon-storefront-fields.sql` |
 
 None of these blocks the launch. All three should be closed before the store has
 enough volume to make them reachable — PLB-03 the soonest, since it becomes
 reachable the first time a parcel comes back.
+
+---
+
+## PLB-04 — a by-design column probe logs a permanent 42703 against production
+
+**Severity:** P3 · observability · pre-existing, inherited unchanged by this branch
+**Files:** `website/src/lib/storefront-offers.ts:81` · closed by `website/src/lib/sql/coupon-storefront-fields.sql`
+
+**Found by:** the owner, from live production logs, during the migration run.
+Not previously recorded by any block.
+
+**What production logs, continuously:**
+
+```
+42703  column coupons.storefront_headline does not exist
+400    GET /rest/v1/coupons
+```
+
+**This is not a failure.** `publicCoupons()` is a deliberate degradation ladder
+that tries three column-sets widest-first and steps down on error. Verified
+against production: `is_private` and `member_scope` exist,
+`storefront_headline` and `storefront_priority` do not, so **tier 2 succeeds and
+the offers bar renders correctly** with the generated headline and default
+priority 10. No customer sees anything wrong.
+
+**Why it is still worth closing.** A permanently-red `42703` in Sentry is
+indistinguishable at a glance from a real missing-column error — and this
+codebase has load-bearing ones in exactly that class
+(`orders.inventory_restocked_at` failed with the same code and went unnoticed
+because a caller reported it as success). A by-design probe that cries wolf every
+render is how the next real one hides.
+
+Secondary: operators cannot override an offer's headline or ordering. The
+generated headline is derived from the coupon's own discount and so cannot drift
+from it, which makes the current fallback the safer default anyway.
+
+**Does it block the deploy?** No. It is unchanged by this branch, additive to
+fix, and customer-invisible.
+
+**What closes it.** Apply `sql/coupon-storefront-fields.sql` (adds
+`storefront_headline` and `storefront_priority`). Additive, zero blast radius.
+Alternatively, probe `information_schema` once per process instead of probing by
+provoking an error — but the migration is the smaller change.
+
