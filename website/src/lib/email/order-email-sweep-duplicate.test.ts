@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 //
 // Both halves are true in isolation and wrong together. The sweep
 // (retryPendingEmails) calls sendEmail directly: no idempotency key, no order
-// id — pending_emails has no order_id column by design — and it neither reads
+// id — pending_emails had no order_id column — and it neither reads
 // nor writes order_email_log. So when the sweep delivers a receipt, the log row
 // stays at status='failed'. 'failed' rows fall OUTSIDE the partial unique index
 // `order_email_log_one_live (order_id, kind) where status in ('sending','sent')`,
@@ -33,6 +33,9 @@ const delivered: Array<{ to: string; subject: string; idempotencyKey?: string }>
 
 type LogRow = { id: number; order_id: string; kind: string; status: string };
 type PendingRow = {
+  /** sql/pending-emails-order-link.sql — nullable, so a context-less row is unchanged. */
+  order_id?: string | null;
+  email_kind?: string | null;
   id: number;
   to_email: string;
   subject: string;
@@ -89,13 +92,25 @@ vi.mock("@/lib/supabase-server", () => {
             },
           }),
         }),
-        update: (payload: { status?: string }) => ({
-          async eq(_column: string, value: number) {
-            const row = db.orderEmailLog.find((r) => r.id === value);
-            if (row && payload.status) row.status = payload.status;
-            return { error: null };
-          },
-        }),
+        // Chainable, because the sweep's write-back claims the slot by
+        // (order_id, kind, status) rather than by the id it never saw.
+        update: (payload: Record<string, unknown>) => {
+          const filters: Array<[string, unknown]> = [];
+          const chain: Record<string, unknown> = {
+            eq(column: string, value: unknown) {
+              filters.push([column, value]);
+              return chain;
+            },
+            then(resolve: (v: unknown) => unknown) {
+              for (const row of db.orderEmailLog) {
+                const match = filters.every(([c, v]) => (row as unknown as Record<string, unknown>)[c] === v);
+                if (match) Object.assign(row, payload);
+              }
+              return Promise.resolve(resolve({ error: null }));
+            },
+          };
+          return chain;
+        },
       };
     }
 
@@ -112,6 +127,10 @@ vi.mock("@/lib/supabase-server", () => {
             attempts: Number(payload.attempts ?? 1),
             status: String(payload.status ?? "pending"),
             next_attempt_at: new Date(0).toISOString(),
+            // sql/pending-emails-order-link.sql. Nullable — a row queued without
+            // order context (a shipping notice) still behaves exactly as before.
+            order_id: (payload.order_id as string) ?? null,
+            email_kind: (payload.email_kind as string) ?? null,
           });
           return { error: null };
         },
@@ -158,7 +177,11 @@ async function attemptConfirmation() {
     template: TEMPLATE,
   });
   if (outcome.attempted && !outcome.sent) {
-    await enqueueFailedEmail({ to: CUSTOMER, ...TEMPLATE }, outcome.error);
+    await enqueueFailedEmail(
+      { to: CUSTOMER, ...TEMPLATE },
+      outcome.error,
+      { orderId: ORDER_ID, kind: "order_confirmation" },
+    );
   }
   return outcome;
 }
@@ -241,5 +264,33 @@ describe("sweep-then-replay: the customer gets two receipts", () => {
     // Without an idempotency key, a provider that honours one (Resend) cannot
     // collapse the sweep's copy with any other send of the same receipt.
     expect(delivered[0].idempotencyKey).toBe(`order_confirmation:${ORDER_ID}`);
+  });
+
+  /**
+   * The write-back claims the slot only from 'failed'. If it stomped any status,
+   * a sweep landing while another caller holds 'sending' would flip that live
+   * claim to 'sent' — the second sender would then finish and write 'sent' too,
+   * and the customer would have two receipts with the log insisting on one.
+   */
+  it("does not overwrite a slot another sender is holding", async () => {
+    // A live claim, exactly as sendOrderEmailOnce leaves it mid-flight.
+    db.orderEmailLog.push({ id: 99, order_id: ORDER_ID, kind: "order_confirmation", status: "sending" });
+    db.pendingEmails.push({
+      id: db.nextPendingId++,
+      to_email: CUSTOMER,
+      subject: TEMPLATE.subject,
+      html: TEMPLATE.html,
+      text_body: TEMPLATE.text,
+      reply_to: null,
+      attempts: 1,
+      status: "pending",
+      next_attempt_at: new Date(0).toISOString(),
+      order_id: ORDER_ID,
+      email_kind: "order_confirmation",
+    });
+
+    await retryPendingEmails();
+
+    expect(db.orderEmailLog.find((r) => r.id === 99)!.status).toBe("sending");
   });
 });

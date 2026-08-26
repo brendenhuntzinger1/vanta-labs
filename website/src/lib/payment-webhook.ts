@@ -1127,7 +1127,14 @@ export async function finalizeManualPayment(
       });
       if (emailResult.attempted && !emailResult.sent) {
         console.error("Order confirmation email not sent for order", orderId, emailResult.error);
-        await enqueueFailedEmail({ to: String(order.customer_email), subject: template.subject, html: template.html, text: template.text }, emailResult.error);
+        // The (orderId, kind) pair lets the sweep close this send-once slot when
+        // it delivers (C-02). Without it the retry succeeds, the log row stays
+        // 'failed', and the next caller sends the customer a second receipt.
+        await enqueueFailedEmail(
+          { to: String(order.customer_email), subject: template.subject, html: template.html, text: template.text },
+          emailResult.error,
+          { orderId, kind: "order_confirmation" },
+        );
       }
     } catch {
       // Confirmation email is best-effort; approval already succeeded.
@@ -1633,7 +1640,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
             // Never throw (order is already paid), but make a silent miss visible
             // and queue it for durable retry by the sweep.
             console.error("Order confirmation email not sent for order", orderId, emailResult.error);
-            await enqueueFailedEmail({ to: buyerEmail, subject: template.subject, html: template.html, text: template.text }, emailResult.error);
+            await enqueueFailedEmail(
+              { to: buyerEmail, subject: template.subject, html: template.html, text: template.text },
+              emailResult.error,
+              { orderId, kind: "order_confirmation" },
+            );
           }
         } catch (emailError) {
           console.error("Unable to send order confirmation email for order", orderId, emailError);

@@ -930,3 +930,69 @@ and what happens to them is the owner's decision, not a migration's.
 and **nothing in the application ever reads or writes it.** The lifecycle lives
 on `payment_status` instead. Converging the two is a real change to money code
 and is a follow-up, not something to smuggle into a constraint fix.
+
+## 4.2 C-02 — the retry sweep that delivered a receipt and left the door open
+
+Block C committed three RED tests and left the decision to Block M:
+
+> *"The owner held this on 2026-08-26… **Block M decides with the full picture.**"*
+
+**Decision: apply it.** The alternative — matching `subject ilike '%<orderNumber>%'`
+— is the fragile join `C-08` is a finding *about*. The migration is two nullable
+columns and one partial index on a table with **zero rows ever**.
+
+### A defect in the proposal itself
+
+The held proposal declared `pending_emails.order_id **uuid**`.
+`order_email_log.order_id` is **text** in production (verified against
+`information_schema.columns`), and order ids look like `order-23e40002-…`.
+
+**A uuid column could not hold them.** The migration would have applied cleanly,
+the write-back join would have matched nothing, and the duplicate would have
+survived a fix everyone believed had landed. Corrected to `text` in
+`src/lib/sql/pending-emails-order-link.sql`.
+
+### The fix
+
+- `enqueueFailedEmail(message, error, context?)` takes `{ orderId, kind }` and
+  writes them, **degrading to the old insert** if the columns are not there yet.
+  So the code is safe to deploy *before* the migration, and the migration is safe
+  to apply *before* the code — which is what lets `DEPLOYMENT-ORDER.md` put them
+  in either order.
+- The sweep reads the link (degrading the same way), sends with
+  `idempotencyKey: ${kind}:${orderId}` — the same identity `sendOrderEmailOnce`
+  uses, so the provider also sees one email — and on success closes the slot:
+  `order_email_log … set status='sent' where order_id=? and kind=? and status='failed'`.
+- The `status='failed'` guard is load-bearing: without it a sweep landing while
+  another sender holds `'sending'` would flip that live claim to `'sent'`.
+- The two `payment-webhook.ts` call sites pass the context. The Shippo one does
+  **not**, deliberately — shipping notices hold no `order_email_log` slot, and
+  Block C's own spec says context-less rows must behave exactly as before.
+
+| mutation | result |
+|---|---|
+| sweep stops closing the slot | **2 failures** |
+| sweep stops sending an idempotency key | **1 failure** |
+| the approval path stops passing the order context | **1 failure** *(survived the first round — nothing asserted the real call site; a behavioural test was added to `manual-payment-double-approve.test.ts`, which drives the real approval path with a failing provider)* |
+| write-back stops guarding on `status='failed'` | **1 failure** *(also survived the first round; a live-slot control was added)* |
+| enqueue stops writing the order link | **3 failures** |
+
+### One safety invariant deliberately widened, and inverted while widening
+
+`order-communications.test.ts` asserted the retry module writes to exactly one
+table — the safety claim shown to the owner in the UI. The sweep now also writes
+`order_email_log`, which is email bookkeeping, the same category as
+`pending_emails`.
+
+An allowlist that merely grew by one is weaker than it looks, so the assertion
+was **inverted**: it now names the FORBIDDEN tables explicitly — orders,
+payments, referral_orders, commissions, payouts, products, inventory, coupons,
+memberships, shippo events — and keeps the allowlist beside them. The next person
+to add a table has to justify it against the danger list, not just extend an array.
+
+---
+
+**After Phase 4's first pass: 250 test files, ALL GREEN, `tsc` clean, lint 0
+errors. This is the first time the merged tree has been fully green** — Block C's
+three deliberate failures are now closed by their fix rather than by their
+assertions being changed.

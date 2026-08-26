@@ -150,9 +150,32 @@ describe("retrying an email cannot touch business logic", () => {
     }
   });
 
-  it("it only ever writes to its own queue table", () => {
-    const tables = [...queue.matchAll(/\.from\("([a-z_]+)"\)/g)].map((match) => match[1]);
-    expect([...new Set(tables)]).toEqual(["pending_emails"]);
+  /**
+   * Widened, deliberately, when C-02 was fixed — and inverted while widening.
+   *
+   * The sweep now also writes `order_email_log`, to close the send-once slot it
+   * just satisfied. Without that the retry delivers the receipt, the log row
+   * stays 'failed', and the next caller claims the released slot and sends the
+   * customer a second one.
+   *
+   * `order_email_log` is email bookkeeping — the same category as
+   * `pending_emails` — so this is inside the safety claim, not an exception to
+   * it. But an allowlist that simply grew by one is a weaker test than it looks:
+   * the next person adds a third table and the assertion grows again. So the
+   * DANGEROUS set is now named explicitly, and the allowlist is kept beside it.
+   */
+  it("writes only to email bookkeeping, never to anything that moves money or stock", () => {
+    const tables = [...new Set([...queue.matchAll(/\.from\("([a-z_]+)"\)/g)].map((match) => match[1]))];
+
+    const FORBIDDEN = [
+      "orders", "order_items", "payments", "payment_events",
+      "referral_orders", "commissions", "payouts", "partner_payouts",
+      "products", "product_doses", "inventory_reservations", "inventory_transactions",
+      "coupons", "customer_memberships", "shippo_webhook_events",
+    ];
+    for (const table of tables) expect(FORBIDDEN).not.toContain(table);
+
+    expect(tables.sort()).toEqual(["order_email_log", "pending_emails"]);
   });
 
   it("a manual retry does not consume the automatic retry budget", () => {
