@@ -518,3 +518,131 @@ is confirmed by direct query. **VERIFIED, and it raises a deploy blocker.**
 
 The harness has no GoTrue and no RLS, and per `payment-mock.ts` a passing mock
 payment does not certify the live callback. No grade has been laundered upward.
+
+---
+
+# PART 7 — THE VERDICT
+
+## 1. WAS IT MERGED? **NO.**
+
+Parts 1–4 came back clean. The merge was blocked by Part 6 step 1, which is a
+precondition on the merge itself, not a defect in the code:
+
+**Merging to `main` deploys to production in this repository.** Proven from the
+Vercel deployment record: commit `9aea901` on `main` produced deployment
+`dpl_aQHYozA58q3v5MQ8hZRhG7a85Hck` with `target: "production"`, aliased to
+`vantalabsresearch.com`. Every non-`main` push in the same window produced
+`target: null`. There is no GitHub Actions workflow; the Vercel git integration
+is the deploy trigger and it is armed.
+
+The owner authorised a merge. He did not authorise a deploy. The instruction for
+this exact case was to stop and say so.
+
+**And the deploy would be actively destructive, not merely premature.**
+Production's `referral_orders_payment_status_check` still admits only
+`('paid','refunded','partially_refunded')`. The new code writes `'pending'`
+(`payment-webhook.ts:759`). Promoting this code before applying
+`referral-orders-commission-lifecycle.sql` means every ambassador commission on
+the live store is refused with `23514` from the first sale — while the store
+takes orders normally and reports success. Separately,
+`orders.inventory_restocked_at` does not exist, so every cancellation would
+return no stock and page a human.
+
+**This is not a reason to abandon the merge — it is a reason to sequence it.**
+See §2.
+
+## 2. THE SEQUENCE FROM HERE TO A LIVE STORE
+
+Verified against production rather than taken from `DEPLOYMENT-ORDER.md`.
+
+**Launch blockers, in order. Each must be applied BEFORE any code is promoted.**
+
+| # | step | why it is a blocker | verified |
+|---|---|---|---|
+| 0 | Owner rotates the email-provider credentials (I-01) and purges the historical audit rows | The secrets were exposed in plaintext; the code fix closes the read, not the exposure | — |
+| 1 | Apply `sql/referral-orders-commission-lifecycle.sql` | Without it **every commission accrual fails** the moment the new code is live, with no reconstruction path for the lost rows | ✅ CHECK still narrow in production |
+| 2 | Apply `sql/add-inventory-restock-claim.sql` | Without it **every cancellation returns no stock** and raises a critical alert | ✅ `inventory_restocked_at` absent |
+| 3 | Apply the inventory-RPC migration (STEP 2) | `adjust_inventory_on_sale` absent | ✅ absent; `finalize_inventory_for_order` present |
+| 4 | Apply the `pending_emails.order_id` migration (C-02) | Duplicate receipts otherwise | ✅ column absent |
+| 5b | Drop the duplicate rate-limit index | **Moved from optional to run-before-deploy.** Confirmed as stated in `DEPLOYMENT-ORDER.md`. | — |
+| 6 | Publish the COAs (F-006) | The storefront advertises COA documentation and **zero COAs exist**. Legal exposure, independent of code. | — |
+| 7 | **Only now** merge to `main` — which deploys | | |
+| 8 | Immediately after: confirm one referred order accrues exactly one commission, and one cancellation returns stock | The two things the migrations exist for | |
+
+**Optional, not blockers:** the 20 outstanding cross-module comment claims; the
+three silent test skips (repo hygiene, not customer-facing); `isShippoLive()`;
+the tax-pair divergence (latent — production has zero refunded orders).
+
+**A safer alternative worth putting to the owner:** merge to `main` with the
+Vercel production branch temporarily detached or the deployment paused, so the
+audit record lands in `main` without promoting code. That separates the two
+decisions the owner actually has — "is this work accepted" and "is this work
+live" — which are currently welded together by the git integration.
+
+## 3. OBJECTIVE ABORT CONDITIONS — stop mid-deploy if any of these is true
+
+1. Any migration reports success but the object is not actually present or the
+   rule not actually changed. **Re-query after every migration.** This exact
+   failure has already happened once in this audit: a constraint dropped by name
+   left a duplicate under another name in force, and the migration reported
+   success while every commission still failed.
+2. `select pg_get_constraintdef(oid) from pg_constraint where conrelid='referral_orders'::regclass` does not admit `'pending'` after Step 1.
+3. `orders.inventory_restocked_at` is still absent after Step 2.
+4. More than one constraint on `referral_orders.payment_status` exists at any point.
+5. The first referred order after deploy produces zero or more than one `referral_orders` row.
+6. The first cancellation after deploy does not increase the stock count, or raises `cancellation_inventory_unresolved`.
+7. Sentry shows any `23514` or `23502` on `referral_orders` or `orders`.
+8. The production build fails, or serves a page the preview did not.
+
+Any one of these: roll back the Vercel deployment (`isRollbackCandidate: true`
+on the prior production deployment) and stop. The migrations are additive and do
+not need reversing to make the old code safe.
+
+## 4. WHAT IS OWED BY THE OWNER, NOT AN ENGINEER
+
+1. **Rotate the email-provider credentials** and purge the historical
+   `admin_audit_logs` rows containing them (I-01). The code fix closed the
+   viewer; it did not un-expose the secret.
+2. **Publish the COAs** (F-006 / K-21). The footer and the age gate both promise
+   COA documentation and there are none.
+3. **Approve the staged migrations**, including **Step 5b**.
+4. **Decide whether merging may deploy** — or authorise detaching the Vercel
+   production branch first. This is the immediate decision.
+5. **Business rules still undecided:** whether Bac Water is stock-tracked (D-07);
+   GIF support on product images (I-06); the cart-recovery discount rate that is
+   hardcoded as "5% off" (K-02); coupon redemption when the coupon loses the
+   discount competition (K-22); visitor-data retention for four tables that are
+   written and never read (K-20); whether the free Buy-3-Get-1 unit is reserved
+   (J-06); **and — found in this session — whether a `returned` parcel puts its
+   units back into sellable stock. Nothing in this audit has recorded a decision
+   on that, and `returned` currently does not restock.**
+6. **Compliance attestations (K-18).** Four are collected at checkout and none is
+   durably recorded on the card lane. This is legal exposure and I recommend
+   treating it as a launch blocker rather than an optional item.
+7. **CI (F-015).** There is no continuous integration of any kind — `.github/`
+   does not exist. Every gate in this audit was run by hand. That is an owner
+   decision about how this codebase is maintained after launch.
+
+## 5. VERDICT
+
+# 🔴 NOT MERGED — these blockers first
+
+**The code is in better shape than the merge decision is.** Nothing found in
+Parts 1–4 blocks it: ancestry is clean, no commit was stranded on any of the ten
+block branches, the gate is green, all 78 previously-skipped money-path tests now
+run and pass against a real Postgres, and nine real mutations against the most
+safety-critical new code were all caught. Block N's 602 unread production lines
+hold up under an adversarial read.
+
+**What blocks it is that in this repository, merging *is* deploying** — and three
+migrations the code depends on are not applied. Merging today would put a store
+live that silently destroys every ambassador commission and returns no stock on
+any cancellation.
+
+Two things unblock it, and both are the owner's to give:
+
+1. Apply the staged migrations (Steps 1–4 and 5b above), **or**
+2. Authorise merging with the Vercel production branch detached, so the audit
+   record lands in `main` without promoting code.
+
+Say which, and the merge takes minutes.
