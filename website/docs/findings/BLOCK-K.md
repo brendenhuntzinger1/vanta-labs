@@ -3813,6 +3813,83 @@ containing the row id. Negative control: remove the argument and confirm it fail
 
 ---
 
+---
+
+## Operational note for block M — `npm test` collects the audit scratchpad, and the gate will read 3609 instead of 3579
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** none (process, not product) · **Status:** ACTION NEEDED BEFORE PHASE 19/23
+
+### What happens
+
+`vitest.config.ts` sets no `exclude` beyond the defaults, so the include glob
+`**/*.{test,spec}.?(c|m)[jt]s?(x)` reaches `website/scratchpad/`. Audit probes
+written there — by this session and by the parallel investigations — are collected
+as product tests.
+
+Measured at this branch's HEAD, minutes apart:
+
+```
+$ npx vitest run                                          # scratchpad present
+ Test Files  211 passed | 1 skipped (212)
+      Tests  3602 passed | 7 skipped (3609)
+
+$ npx vitest run --exclude='**/node_modules/**' --exclude='**/scratchpad/**'
+ Test Files  202 passed | 1 skipped (203)
+      Tests  3572 passed | 7 skipped (3579)
+```
+
+**3579 is the real number**, and it matches the ledger's Phase 19 baseline exactly
+("3579 tests, tsc clean, build clean, lint clean — at current HEAD"). The suite is
+unchanged from the recorded baseline; nothing has regressed it.
+
+**3609 is nine scratch files and thirty audit probes** wearing the suite's clothes.
+
+### Why it matters
+
+Adding `website/.gitignore` entries (which this branch did — `/scratchpad/*.test.ts`
+and `/scratch-verify/`) keeps probes out of **git**. It does not keep them out of
+**vitest**, which does not consult `.gitignore`. So a session can have a clean
+`git status` and a polluted test run at the same time — which is exactly the shape
+that fools a zero-regression gate.
+
+The failure mode for Phase 23 is a passing gate that reads as *more* coverage
+than the baseline. A reviewer comparing 3609 against 3579 would reasonably
+conclude thirty tests were added, when thirty audit probes were merely left on
+disk.
+
+### Recommended fix — not applied here
+
+Two lines in `vitest.config.ts`:
+
+```ts
+test: {
+  exclude: ["**/node_modules/**", "**/dist/**", "**/scratchpad/**"],
+  …
+}
+```
+
+(Vitest's defaults must be restated when `exclude` is set, which is why
+`node_modules` and `dist` appear.)
+
+**Deliberately not applied from this block.** `vitest.config.ts` is shared by every
+parallel session and is not on any block's file list; a unilateral edit is exactly
+the kind of change the deconfliction contract exists to prevent, and six sessions
+are running concurrently. It is one line of work for block M, before the gate.
+
+### For block M, whichever way that goes
+
+1. Before Phase 19/23, run `ls website/scratchpad/*.test.ts` and delete what is
+   there. Every probe worth keeping is already reproduced in **Appendix A** of this
+   file, with its output and instructions to re-run it.
+2. Assert the gate against **3579**, not against whatever `npm test` reports on a
+   dirty tree.
+3. Verify the same for the other blocks' findings files — the parallel
+   investigations were instructed to clean up after themselves, and at the time of
+   writing four probe files from other sessions were still on disk here
+   (`money-probe-a1`, `probe-degrade-9f21`, `probe-shippo-hol`, `v-bday-verify`).
+
+---
+
 # Block K — coverage and handoff
 
 ## Coverage against the seven assigned areas
@@ -3869,6 +3946,7 @@ Every note, gathered for block M. Ordered by which block must act.
 | **M** | `src/lib/admin-control.ts` | Hoist the four hand-copied `num()` guards into one `controlNumber()`. Touches ten call sites in one shared file — **best done once, last**, not by whoever reaches it first. | K-06 |
 | **M** | `src/lib/quote-order.ts` `buildOrderRow` | Persist the card lane's compliance acknowledgement (needs three new `orders` columns → **owner approval under Rule 4**). | K-18 |
 | **M** | **Phase 20 — preview verification** | ⚠️ **Do not place a paid test order on a Vercel preview until K-16's environment gate lands.** The pixel IDs default to production and the server legs send real conversions. This is the most time-sensitive line in this file. | K-16 |
+| **M** | `vitest.config.ts` + `website/scratchpad/` | **Before the Phase 19/23 gate:** delete leftover probes and assert against **3579**, not the 3609 a dirty tree reports. Consider adding `"**/scratchpad/**"` to vitest's `exclude`. Not applied here — shared config, six concurrent sessions. | operational note |
 | **M** | ledger `F-006` | Update with the two exact render sites for the ungated COA claim (`site-footer.tsx:67`, `age-gate.tsx:483`) rather than leaving it general. | K-21 |
 
 ## Open questions for the owner
