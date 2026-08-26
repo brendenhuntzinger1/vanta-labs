@@ -42,6 +42,41 @@
 -- are no rows. Nothing else references the constraint.
 -- ===========================================================================
 
+-- DROP BY RULE, NOT BY NAME.
+--
+-- A migration that drops one constraint by name does not remove a DUPLICATE of
+-- the same rule created under a different name — and that is not hypothetical:
+-- the browser harness carries `pc_ro_ps`, added by a parity script, enforcing
+-- exactly the narrow rule this file exists to widen. Applying the by-name
+-- version there widened one constraint, left the other in force, and every
+-- commission still failed. It took a full purchase through the browser to see
+-- it, because the by-name migration reported success.
+--
+-- Production currently has only `referral_orders_payment_status_check`, so this
+-- loop removes exactly that one there. It is written this way so the file
+-- cannot be defeated by a name it does not know about.
+do $$
+declare c record;
+begin
+  for c in
+    select con.conname
+    from pg_constraint con
+    join pg_class t on t.oid = con.conrelid
+    join pg_namespace n on n.oid = t.relnamespace
+    where n.nspname = 'public'
+      and t.relname = 'referral_orders'
+      and con.contype = 'c'
+      and pg_get_constraintdef(con.oid) like '%payment_status%'
+      -- Only the ones that would REFUSE an accrual. A constraint that already
+      -- permits 'pending' is either this migration re-running or something
+      -- deliberately wider, and neither should be destroyed.
+      and pg_get_constraintdef(con.oid) not like '%''pending''%'
+  loop
+    raise notice 'dropping legacy payment_status constraint %', c.conname;
+    execute format('alter table public.referral_orders drop constraint %I', c.conname);
+  end loop;
+end $$;
+
 alter table public.referral_orders
   drop constraint if exists referral_orders_payment_status_check;
 

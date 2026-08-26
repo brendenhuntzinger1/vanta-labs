@@ -1430,3 +1430,107 @@ created:      reserve_inventory anon=t   create_partner_invite anon=t
 after revoke: reserve_inventory anon=f   create_partner_invite anon=f
 service_role retains: reserve_inventory=t
 ```
+
+---
+
+## Phase 6 — Browser verification
+
+### 6.1 THE HEADLINE TEST — one complete purchase, screen vs database at every step
+
+The brief ranks this above everything else: *"prove ONE COMPLETE PURCHASE …
+cart → discount applied → payment (mock) → order row written → inventory
+decremented → confirmation email queued → order lands in the fulfilment
+queue"*, checking that **the database agrees with the screen** at each step.
+
+Environment: production build (`npm run build && npm run start`), never `npm run
+dev`. Supabase reached through `scripts/pgrst-shim.mjs` over a real Postgres
+carrying the real schema, constraints and plpgsql functions.
+`PAYMENT_PROVIDER=live`, `EMAIL_ENABLED=false` — so no processor and no mailbox
+can be reached, and the mock gateway's own production hard-block stays intact.
+Payment is driven by `scripts/harness-pay-order.mjs`, which signs the same
+`payment.succeeded` event a processor would and POSTs it to the real
+`/api/webhooks/payment` route. Nothing about the paid-order path is stubbed.
+
+Cart: 2 × BPC-157 10mg. Referral code `EXPLICIT15` (approved, 15% explicit).
+
+**Screen at checkout, and the order row it produced:**
+
+| | Screen | `orders` | |
+|---|---|---|---|
+| Subtotal | $131.10 | `subtotal` 131.10 | ✅ |
+| Ambassador code EXPLICIT15 | −$13.80 | `discount_amount` 13.80 | ✅ |
+| Shipping | $15.00 | `shipping_amount` 15.00 | ✅ |
+| Service Fee (3%) | +$3.97 | `card_processing_fee` 3.97 | ✅ |
+| **Total** | **$136.27** | `amount_paid` **136.27** | ✅ |
+
+The screen arithmetic reconciles: list is 2 × $69.00 = $138.00; the line already
+shows $131.10 (a 5% volume tier); the ambassador line is the **increment**
+that tops the stack up to a flat 15% off list ($138.00 × 0.85 = $117.30, and
+$131.10 − $13.80 = $117.30). Discounts do not stack — the larger one wins and
+the smaller is absorbed. `$117.30 + $15.00 = $132.30`, `3% = $3.969 → $3.97`,
+total `$136.27`. Every figure matches to the cent.
+
+**After the webhook — every downstream effect, measured:**
+
+| Effect | Expected | Measured | |
+|---|---|---|---|
+| Order paid | `payment_status='paid'` | `paid` | ✅ |
+| Paid timestamp | set | set | ✅ |
+| Exactly-once claim | `paid_side_effects_at` set | set | ✅ |
+| Provider event recorded | 1 `payment_events` | 1 | ✅ |
+| **Inventory decremented** | 25 → 23 | **23** | ✅ |
+| Reservation resolved | `finalized` | `finalized`, `reserved_quantity` 0 | ✅ |
+| Confirmation email queued | 1 `order_email_log` + 1 `pending_emails` | 1 + 1 | ✅ |
+| Lands in fulfilment queue | `awaiting_fulfillment` | `awaiting_fulfillment` | ✅ |
+| **Commission accrued** | 1 `referral_orders` + 1 `commissions` | 1 + 1 | ✅ |
+
+**Commission money, and the M-01 invariant:**
+
+```
+referral_orders: commission_percent 15.00  commission_amount 17.60
+                 original_subtotal 131.10  customer_discount 13.80
+                 amount_paid       117.30  payment_status 'pending'
+commissions:     commission_percent 15.00  commission_amount 17.60  status 'pending'
+```
+
+`original_subtotal − customer_discount = amount_paid` → `131.10 − 13.80 =
+117.30` ✅. `commission_amount = 15% × 117.30 = 17.595 → 17.60` ✅. The
+ambassador is paid on what the customer actually paid, not on the pre-discount
+figure — which is exactly the defect M-01 (G-01) existed to fix, now proven
+end-to-end rather than by unit test alone.
+
+Evidence grade: **BROWSER-PROVEN** for application behaviour. Auth- and
+RLS-dependent behaviour is **NOT VERIFIED** here and is graded separately —
+the shim connects as superuser and has no GoTrue, so policy correctness is not
+exercised. See `docs/BROWSER-TESTING-RUNBOOK.md`.
+
+### 6.2 A defect only the browser could find — drop by name vs drop by rule
+
+The first run of this purchase produced everything above **except** the two
+commission rows, which stayed at zero. `referral-orders-commission-lifecycle.sql`
+had already run and reported success.
+
+Root cause: the harness carried a **second** check constraint, `pc_ro_ps`
+(from `harness-prod-parity-constraints.sql:51`), enforcing the same narrow
+`payment_status` rule under a different name. The migration dropped
+`referral_orders_payment_status_check` **by name**, widened it, and left
+`pc_ro_ps` in force — so every accrual insert still failed the narrow rule.
+The migration reported success because, by its own terms, it had succeeded.
+
+Fix: the file now drops **by rule** — it loops over every check constraint on
+`referral_orders` whose definition mentions `payment_status` and does **not**
+already permit `'pending'`, and drops each. Constraints that already permit
+`'pending'` are left alone, so a re-run and any deliberately wider rule both
+survive. Re-run emitted `NOTICE: dropping legacy payment_status constraint
+pc_ro_ps`, and the accrual then succeeded.
+
+Production today has only `referral_orders_payment_status_check`, so the loop
+removes exactly that one there — the change is defensive, not behavioural, for
+the production apply. But it is the reason to prefer rule over name: a by-name
+drop is silently defeated by a duplicate it does not know about, and the only
+signal is a downstream write that fails long after the migration said OK.
+
+This is the single clearest argument in this audit for the browser phase
+existing at all. Unit tests, the migration's own output, and source inspection
+all reported healthy. Only a real purchase through a real browser against a
+real database showed the commission was missing.
