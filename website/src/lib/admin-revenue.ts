@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { PAID_ORDER_STATUSES, netOrderRevenue } from "@/lib/ledger";
+import { readAllRows } from "@/lib/supabase-paging";
 
 export interface RevenueByMethod {
   method: string;
@@ -40,6 +41,9 @@ function methodLabel(method: string) {
   return METHOD_LABELS[method] ?? (method ? method : "Unspecified");
 }
 
+// Ceiling on the RPC-less fallback, not a definition of the answer.
+const MAX_REVENUE_ORDERS = 200_000;
+
 // Aggregates the manual-payment revenue dashboard. Counts use head:true count
 // queries; revenue totals fetch paid orders' amounts and aggregate in JS
 // (Supabase-js has no SUM without an RPC). Fine for a dashboard-scale table.
@@ -52,9 +56,10 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
     supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).eq("payment_status", "paid"),
     supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).eq("payment_status", "paid").eq("fulfillment_status", "awaiting_fulfillment"),
     supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).eq("fulfillment_status", "shipped"),
-    // Aggregate revenue in Postgres (one grouped pass, no row transfer, no cap).
-    // Falls back to the legacy 10k-capped JS scan if the RPC isn't migrated yet
-    // — see src/lib/sql/admin-dashboard-rollups.sql.
+    // Aggregate revenue in Postgres (one grouped pass, no row transfer). Falls
+    // back to a paged JS scan if the RPC isn't migrated yet — see
+    // src/lib/sql/admin-dashboard-rollups.sql. Both paths now answer with the
+    // same total; the fallback is slower, not smaller.
     supabaseAdmin.rpc("admin_revenue_summary", { p_start_of_today: startOfToday }),
     supabaseAdmin.rpc("admin_revenue_by_method"),
   ]);
@@ -87,17 +92,32 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
       }))
       .sort((a, b) => b.revenue - a.revenue);
   } else {
-    // Fallback: RPC not present — legacy 10k-capped scan + JS aggregation
-    // (identical math). Run the migration to remove the cap at scale.
-    const paidResult = await supabaseAdmin
-      .from("orders")
-      .select("amount_paid, refund_amount, payment_method, card_processing_fee, paid_at")
-      .in("payment_status", Array.from(PAID_ORDER_STATUSES))
-      .limit(10000);
-    if (paidResult.error) {
-      throw paidResult.error;
-    }
-    const paidOrders = paidResult.data ?? [];
+    // Fallback: RPC not present — the same aggregation in JS.
+    //
+    // This used to be one `.limit(10000)`. Past ten thousand paid orders it
+    // returned ten thousand of them and the page reported that as the store's
+    // lifetime revenue — so whether the admin_revenue_summary migration had
+    // been run changed the headline number, silently, with no way to tell from
+    // the screen which figure you were looking at. It is paged to exhaustion so
+    // both paths answer with the same total.
+    type PaidRow = {
+      amount_paid: number | null;
+      refund_amount: number | null;
+      payment_method: string | null;
+      card_processing_fee: number | null;
+      paid_at: string | null;
+    };
+    const { rows: paidOrders } = await readAllRows<PaidRow>(
+      (from, to) =>
+        supabaseAdmin
+          .from("orders")
+          .select("amount_paid, refund_amount, payment_method, card_processing_fee, paid_at")
+          .in("payment_status", Array.from(PAID_ORDER_STATUSES))
+          // Any stable key will do; paging without one can repeat or skip rows.
+          .order("id", { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{ data: PaidRow[] | null; error: { message?: string } | null }>,
+      { maxRows: MAX_REVENUE_ORDERS, label: "revenue read" },
+    );
     const methodMap = new Map<string, { revenue: number; orders: number }>();
 
     for (const order of paidOrders) {

@@ -12,19 +12,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // At a hundred orders a day it is 3,000 orders and about sixty round trips per
 // dashboard load. That is worth knowing before it happens rather than after.
 //
-// THE PART THAT MATTERS MORE THAN SPEED. The orders fetch has no .range(), no
-// .limit(), and no check that it received everything it asked for. If the row
-// source ever returns fewer rows than exist — PostgREST applies a db-max-rows
-// cap when one is configured, and Supabase exposes it as "Max rows" in the
-// project's API settings — the dashboard does not fail, warn, or notice. It
-// reports a smaller profit, confidently. The last test in this file
-// demonstrates exactly that, and it is the reason to go and read that setting.
+// THE PART THAT MATTERED MORE THAN SPEED, AND HAS SINCE BEEN FIXED. The orders
+// fetch had no .range(), no .limit(), and no check that it received everything
+// it asked for. If the row source returned fewer rows than existed — PostgREST
+// applies a db-max-rows cap when one is configured, and Supabase exposes it as
+// "Max rows" in the project's API settings — the dashboard did not fail, warn,
+// or notice. It reported a smaller profit, confidently.
 //
-// I could not check the setting from here: this environment has no Supabase
-// credentials, and the read-only SQL I do have shows no db-max-rows on any
-// role, which only rules out a role-level override — not the PostgREST config
-// itself. So this is written as an exposure, not as a confirmed defect, and no
-// production code is changed for it.
+// The setting still cannot be read from this environment. Block F stopped
+// trying: the read now pages until the source returns nothing, so the value of
+// that setting no longer changes any reported number. The last describe block
+// holds the tests that used to record the exposure and now hold the defence.
 // ---------------------------------------------------------------------------
 
 const IN_CHUNK = 150;
@@ -38,8 +36,13 @@ const DAY = 24 * 60 * 60 * 1000;
 
 const calls = { orders: 0, orderItems: 0, commissions: 0, overlay: 0 };
 
-/** Set to a row count to simulate a source that silently truncates. */
-let truncateOrdersAt: number | null = null;
+/**
+ * Models PostgREST's `db-max-rows`: a cap on how many rows a SINGLE response
+ * may carry, not on how many exist. That distinction is the whole point — a
+ * reader that pages can recover everything from a capped source, and a reader
+ * that fires one unbounded select cannot.
+ */
+let sourceMaxRowsPerResponse: number | null = null;
 
 interface FakeOrder {
   order_id: string;
@@ -150,12 +153,15 @@ vi.mock("@/lib/supabase-server", () => {
                 profit_finalized: true,
               })));
             },
-            // The unbounded window read.
+            // The paged window read.
             gte() { return b; },
-            lte() {
+            lte() { return b; },
+            order() { return b; },
+            range(from: number, to: number) {
               calls.orders += 1;
-              const rows = truncateOrdersAt === null ? orders : orders.slice(0, truncateOrdersAt);
-              return envelope(rows);
+              const wanted = orders.slice(from, to + 1);
+              const capped = sourceMaxRowsPerResponse === null ? wanted : wanted.slice(0, sourceMaxRowsPerResponse);
+              return envelope(capped);
             },
           };
           return b;
@@ -175,7 +181,7 @@ beforeEach(() => {
   calls.orderItems = 0;
   calls.commissions = 0;
   calls.overlay = 0;
-  truncateOrdersAt = null;
+  sourceMaxRowsPerResponse = null;
 });
 
 describe("3,000 orders in the window", () => {
@@ -212,15 +218,19 @@ describe("3,000 orders in the window", () => {
   it("makes the number of round trips the chunk size implies, and no more", async () => {
     await getProfitWindowMetrics(NOW);
     const chunks = Math.ceil(TOTAL_ORDERS / IN_CHUNK); // 20
+    // Three full pages of 1,000, then one empty page that ends the read. That
+    // last request is the price of never guessing whether a source is finished:
+    // stopping on a short page instead would mis-handle a capped source.
+    const orderPages = Math.ceil(TOTAL_ORDERS / 1000) + 1; // 4
 
-    expect(calls.orders).toBe(1); // one unbounded window read
+    expect(calls.orders).toBe(orderPages);
     expect(calls.orderItems).toBe(chunks);
     expect(calls.commissions).toBe(chunks);
     expect(calls.overlay).toBe(chunks);
 
-    // 61 in total. Not per-order — an N+1 here would be 9,001.
+    // 64 in total. Not per-order — an N+1 here would be 9,001.
     const total = calls.orders + calls.orderItems + calls.commissions + calls.overlay;
-    expect(total).toBe(1 + chunks * 3);
+    expect(total).toBe(orderPages + chunks * 3);
     expect(total).toBeLessThan(100);
   });
 
@@ -233,46 +243,54 @@ describe("3,000 orders in the window", () => {
   });
 });
 
-describe("what a silent row cap would do to the dashboard", () => {
+describe("a silent row cap on the source", () => {
   /**
-   * The exposure, made concrete. Nothing here asserts that a cap EXISTS — it
-   * asserts what happens if the source ever returns short, which is that the
-   * owner is shown a smaller profit with no indication anything was missing.
+   * THE EXPOSURE THIS FILE WAS WRITTEN FOR, NOW CLOSED.
+   *
+   * It used to record that a short read produced a smaller profit with no
+   * indication anything was missing, and deliberately changed no production
+   * code: at eight orders the cap could not bite, and the setting could not be
+   * read from this environment.
+   *
+   * Block F reproduced it at 21,000 orders against a real Postgres
+   * (financial-reporting-row-caps.test.ts) and fixed the read instead of
+   * measuring the setting. profitForPaidOrdersInRange pages until the source
+   * returns nothing, advancing by the rows it actually received, so a cap now
+   * costs round trips rather than accuracy — and the project's "Max rows"
+   * value stops being something the profit figure depends on.
    */
-  it("under-reports profit, silently, if the source returns short", async () => {
+  it("no longer changes the profit figure", async () => {
     const full = await getProfitWindowMetrics(NOW);
 
-    truncateOrdersAt = 1000; // the common PostgREST db-max-rows default
+    sourceMaxRowsPerResponse = 1000; // the common PostgREST db-max-rows default
     const capped = await getProfitWindowMetrics(NOW);
 
-    expect(capped.ordersLast30Days).toBe(1000);
-    expect(capped.last30Days).toBeLessThan(full.last30Days);
-    // Two thirds of the month's profit is simply absent from the figure.
-    expect(capped.last30Days / full.last30Days).toBeCloseTo(1 / 3, 2);
+    expect(capped.ordersLast30Days).toBe(TOTAL_ORDERS);
+    expect(capped.ordersLast30Days).toBe(full.ordersLast30Days);
+    expect(capped.last30Days).toBeCloseTo(full.last30Days, 2);
   });
 
   /**
-   * And it says nothing about it. There is no flag on the returned object that
-   * distinguishes "this is your profit" from "this is some of your profit" —
-   * hasEstimatedCost covers missing COSTS, not missing ORDERS.
+   * A cap that is not a multiple of the page size makes every response arrive
+   * short of what was asked for. A reader that treats "short" as "finished"
+   * stops on the first page; this one stops only on an empty one.
    */
-  it("carries no signal that the figure is partial", async () => {
-    truncateOrdersAt = 1000;
+  it("survives a cap that is not a multiple of the page size", async () => {
+    const full = await getProfitWindowMetrics(NOW);
+
+    sourceMaxRowsPerResponse = 337;
+    calls.orders = 0; // count only the capped run's page requests
     const capped = await getProfitWindowMetrics(NOW);
-    expect(Object.keys(capped)).toEqual([
-      "today", "last7Days", "last30Days", "ordersLast30Days", "hasEstimatedCost",
-    ]);
-    expect(capped.hasEstimatedCost).toBe(false);
+
+    expect(capped.ordersLast30Days).toBe(full.ordersLast30Days);
+    expect(capped.last30Days).toBeCloseTo(full.last30Days, 2);
+    // It costs requests, and that is the whole cost.
+    expect(calls.orders).toBe(Math.ceil(TOTAL_ORDERS / 337) + 1);
   });
 
-  /**
-   * At today's real volume — 8 orders in the store's entire history — no cap
-   * can bite. This is a scale exposure, not a live fault, and that distinction
-   * is why nothing was changed.
-   */
-  it("is unreachable at the store's current volume", async () => {
+  it("still reports the truth at the store's current volume", async () => {
     orders.length = 8;
-    truncateOrdersAt = 1000;
+    sourceMaxRowsPerResponse = 1000;
     const metrics = await getProfitWindowMetrics(NOW);
     expect(metrics.ordersLast30Days).toBe(8);
   });

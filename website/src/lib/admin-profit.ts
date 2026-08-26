@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
 import { isPaidOrderStatus, isEarnedCommission } from "@/lib/ledger";
+import { readAllRows } from "@/lib/supabase-paging";
 
 // The order fields profit needs. Everything is stored on the order at checkout,
 // so profit is computed from the record — not from today's live product cost.
@@ -321,13 +322,31 @@ export async function getOrderProfitMap(orderIds: string[]): Promise<Map<string,
   return map;
 }
 
+// Ceilings on one report, not definitions of the answer — see `truncated` on
+// ProfitDashboard. Both reads below page to exhaustion.
+const MAX_PROFIT_ORDERS = 200_000;
+
 async function profitForPaidOrdersInRange(fromIso: string, toIso: string): Promise<OrderProfit[]> {
-  const { data: orders } = await supabaseAdmin
-    .from("orders")
-    .select(ORDER_FIELDS)
-    .gte("created_at", fromIso)
-    .lte("created_at", toIso);
-  return computeProfitForOrders((orders ?? []) as OrderRecord[]);
+  // This select carried no `.limit()` and no `.range()` at all, which is not
+  // the same as being unbounded: PostgREST caps every response at its
+  // `db-max-rows` (Supabase exposes it as "Max rows"), and a capped read came
+  // back looking exactly like a small store. Paging to exhaustion removes the
+  // dependency on that setting entirely.
+  const { rows } = await readAllRows<OrderRecord>(
+    (from, to) =>
+      supabaseAdmin
+        .from("orders")
+        .select(ORDER_FIELDS)
+        .gte("created_at", fromIso)
+        .lte("created_at", toIso)
+        // created_at is not unique; order_id breaks the ties so paging can
+        // neither repeat nor skip a row.
+        .order("created_at", { ascending: false })
+        .order("order_id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: OrderRecord[] | null; error: { message?: string } | null }>,
+    { maxRows: MAX_PROFIT_ORDERS, label: "profit range read" },
+  );
+  return computeProfitForOrders(rows);
 }
 
 export interface ProfitWindowMetrics {
@@ -361,7 +380,13 @@ export async function getProfitWindowMetrics(nowMs: number = Date.now()): Promis
     if (!Number.isFinite(eventTime)) continue;
     if (eventTime >= monthStart) {
       last30Days += row.profit;
-      ordersLast30Days += 1;
+      // SALES, not outbound shipments — the same rule getProfitDashboard's
+      // orderCount applies, and for the same reason its docblock gives: a
+      // reship has no buyer, so counting it inflates the order count and drags
+      // average order value down. This line used to increment unconditionally,
+      // so the 30-day tile and the lifetime tile on the same page reported
+      // different order counts for the same store.
+      if (String(row.orderType ?? "").toLowerCase() !== "replacement") ordersLast30Days += 1;
       if (row.profitStatus === "estimated") hasEstimatedCost = true;
     }
     if (eventTime >= weekStart) last7Days += row.profit;
@@ -426,18 +451,31 @@ export interface ProfitDashboard {
   /** Orders whose profit is still estimated (exact shipping cost pending). */
   estimatedOrderCount: number;
   hasEstimatedProfit: boolean;
+  /**
+   * True when MAX_PROFIT_ORDERS stopped the read before the whole order history
+   * had been seen. Every figure above is then a floor, not a total.
+   */
+  truncated: boolean;
 }
 
-const MAX_DASHBOARD_ORDERS = 20000;
-
 export async function getProfitDashboard(nowMs: number = Date.now()): Promise<ProfitDashboard> {
-  const { data: orders } = await supabaseAdmin
-    .from("orders")
-    .select(ORDER_FIELDS)
-    .order("created_at", { ascending: false })
-    .limit(MAX_DASHBOARD_ORDERS);
+  // Was a single `.limit(20000)`. Past twenty thousand orders it returned the
+  // newest twenty thousand and every lifetime figure on /admin — gross revenue,
+  // net profit, margin, AOV, order count — was computed from that slice and
+  // presented as the store's whole history, with nothing on the screen to say
+  // so.
+  const { rows: orders, truncated } = await readAllRows<OrderRecord>(
+    (from, to) =>
+      supabaseAdmin
+        .from("orders")
+        .select(ORDER_FIELDS)
+        .order("created_at", { ascending: false })
+        .order("order_id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: OrderRecord[] | null; error: { message?: string } | null }>,
+    { maxRows: MAX_PROFIT_ORDERS, label: "profit dashboard read" },
+  );
 
-  const rows = await computeProfitForOrders((orders ?? []) as OrderRecord[]);
+  const rows = await computeProfitForOrders(orders);
 
   const now = new Date(nowMs);
   const startOfToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
@@ -518,6 +556,7 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
     },
     estimatedOrderCount,
     hasEstimatedProfit: estimatedOrderCount > 0,
+    truncated,
   };
 }
 
