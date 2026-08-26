@@ -553,6 +553,74 @@ that adds it will have no reason to suspect the reconciliation screen.
 
 ---
 
+## F-17 — The COGS read is the one that returns many rows per order, and it was undefended
+
+**Grade:** `TEST-PROVEN` · **Severity:** P2 · **Status:** FIXED
+
+`costLinesByOrderId` (`admin-profit.ts`) asks for the line items of **150
+orders in one `.in()`**, unbounded. One row per order is the assumption; the
+table holds one row per *line item*. An order averaging seven lines is over a
+thousand rows in a single response.
+
+This is the same defect class as F-01…F-04 with the **opposite sign**: losing
+order rows makes profit look smaller, and someone eventually notices. Losing
+line-item rows removes **product cost**, so profit looks *better* than it is.
+Nobody goes looking for that.
+
+The sibling reads are safe and now say so in a comment: `commissionByOrderId`
+and `shippingOverlayByOrderId` return at most one row per order, so a chunk of
+150 cannot exceed any plausible cap.
+
+**Fix.** Paged, ordered by `id`.
+
+**Test.** `admin-profit-at-scale.test.ts` — "does not lose product cost to a cap
+on the line-item read", asserted against the arithmetic
+(`$115 − $40 − $9.20 − $9 = $56.80` an order) rather than against the uncapped
+run, so it cannot pass by both runs losing COGS together.
+
+**Negative control.** Capping the line-item read at 100 rows fails that test
+**and** the file's existing "gets the money right, to the cent". The first
+version of this test used a loose bound and did **not** fail under that
+mutation — the negative control is what caught it, and the assertion was
+tightened.
+
+**Recorded, not fixed:** `costLinesByOrderId` ignores the query error entirely
+(`const { data } = await …`). A transient failure on that read yields an empty
+map, which computes **zero COGS** and reports profit inflated by the whole
+product cost, indistinguishable from an order genuinely having no items.
+Changing it means choosing between failing the dashboard and degrading to the
+worst-case unit cost — a behaviour decision, so it is on the record rather than
+made unilaterally here.
+
+---
+
+## F-18 — The shared e2e fake ignored `range()`, so it could not model paging at all
+
+**Grade:** `TEST-PROVEN` · **Severity:** P2 (test-infrastructure fidelity) · **Status:** FIXED
+
+`src/lib/e2e/fake-db.ts` implemented `range()` as `range() { return builder; }`
+— a stub that discards its arguments. Harmless while every caller read in one
+shot; not harmless once the reporting modules page, because **a source that
+ignores the range returns the same page forever**.
+
+Caught by the fix in F-17: five tests across `commerce-journey.test.ts` and
+`manual-reimbursement.test.ts` went red with COGS of `7,200,000` against an
+expected `36` — the pager accumulating the same rows up to its ceiling.
+
+Those tests were not wrong. The fake was: it could not truncate, so it could not
+model the thing paging exists to survive.
+
+**Fix.** `range(from, to)` now records the bounds and slices after ordering and
+limit, matching PostgREST's inclusive Range semantics. Three lines, no test's
+meaning changed, all 111 tests in those two files pass unmodified.
+
+`fake-db.ts` is harness infrastructure rather than a `*.test.ts` file, so this
+is inside Block F's remit — but **Block E should know**, since it is
+mutation-testing suites that run on this fake, and until now any suite asserting
+on a paged read was passing for the wrong reason.
+
+---
+
 ## CROSS-BLOCK
 
 Recorded per Rule 3, not edited from this block.
@@ -596,7 +664,9 @@ Recorded per Rule 3, not edited from this block.
 3. **Confirmation of the proportional partial-refund tax treatment in F-07 and
    F-12**, since it is a filing assumption rather than a recorded value, and it
    now feeds the profit report as well.
-4. **Should collected sales tax count toward net profit?** The toggle
+4. **Should a failed COGS read fail the dashboard, or fall back to the
+   worst-case unit cost?** Today it silently reports zero product cost (F-17).
+5. **Should collected sales tax count toward net profit?** The toggle
    (`count_sales_tax_as_profit`) defaults to TRUE — the owner keeps it. This
    store runs a remittance report, which implies the money is not the owner's.
    F-12 makes the FALSE setting correct rather than wrong, but the choice
@@ -608,7 +678,7 @@ Recorded per Rule 3, not edited from this block.
 
 | | Findings |
 |---|---|
-| Fixed, with regression test + negative control | F-01, F-02, F-03, F-04, F-05, F-06, F-07, F-09, F-10, F-11, F-12 |
+| Fixed, with regression test + negative control | F-01, F-02, F-03, F-04, F-05, F-06, F-07, F-09, F-10, F-11, F-12, F-17, F-18 |
 | Disproved (reported as leads, do not exist) | F-08, F-15 |
 | Open, root cause outside Block F (CROSS-BLOCK) | F-13, F-14 |
 | Latent, characterised not fixed | F-08 (handling_fee, clamps), F-16 |
@@ -616,7 +686,7 @@ Recorded per Rule 3, not edited from this block.
 
 ## Verification
 
-- Full suite: **3,588 passing**, 14 skipped, 0 failing (`npx vitest run`).
+- Full suite: **3,589 passing**, 14 skipped, 0 failing (`npx vitest run`).
 - Typecheck: clean (`npx tsc --noEmit`).
 - Lint: clean on every file touched.
 - The 21,000-row suite is gated on `VANTA_TEST_DATABASE_URL` and skips loudly,

@@ -181,12 +181,24 @@ async function costLinesByOrderId(orderIds: string[]): Promise<Map<string, Order
 
   for (let i = 0; i < orderIds.length; i += IN_CHUNK) {
     const chunk = orderIds.slice(i, i + IN_CHUNK);
-    const { data } = await supabaseAdmin
-      .from("order_items")
-      .select("order_id, quantity, unit_cost_cents")
-      .in("order_id", chunk);
+    // PAGED, unlike the other two batch reads, because this is the only one
+    // that returns MORE than one row per order. 150 orders averaging seven line
+    // items is over a thousand rows in one response, and a row source that caps
+    // responses would drop the overflow — silently removing product cost, which
+    // makes profit look BETTER than it is. The commission and overlay reads
+    // below are one row per order and cannot exceed the chunk size.
+    const { rows } = await readAllRows<{ order_id: string; quantity: number | null; unit_cost_cents: number | null }>(
+      (from, to) =>
+        supabaseAdmin
+          .from("order_items")
+          .select("order_id, quantity, unit_cost_cents")
+          .in("order_id", chunk)
+          .order("id", { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{ data: Array<{ order_id: string; quantity: number | null; unit_cost_cents: number | null }> | null; error: { message?: string } | null }>,
+      { maxRows: MAX_PROFIT_ORDERS, label: "order items read" },
+    );
 
-    for (const raw of (data ?? []) as Array<{ order_id: string; quantity: number | null; unit_cost_cents: number | null }>) {
+    for (const raw of rows) {
       const list = byOrder.get(raw.order_id) ?? [];
       list.push({
         unitCostCents: raw.unit_cost_cents == null ? null : Number(raw.unit_cost_cents),

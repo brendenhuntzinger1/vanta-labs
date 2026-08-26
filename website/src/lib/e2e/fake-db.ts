@@ -212,6 +212,14 @@ export class FakeDb {
       let limitCount: number | null = null;
       let orderColumn: string | null = null;
       let ascending = true;
+      // PostgREST's Range header, inclusive at both ends. This used to be a
+      // no-op stub, which was harmless while every caller read in one shot. It
+      // is not harmless now that the reporting modules PAGE: a source that
+      // ignores the range returns the same page forever, so a pager either
+      // never terminates or accumulates the same rows until its ceiling. A fake
+      // that cannot truncate cannot model the thing paging exists to survive.
+      let rangeFrom: number | null = null;
+      let rangeTo: number | null = null;
 
       const run = () => {
         const failure = db.takeFailure(table, "select");
@@ -232,6 +240,7 @@ export class FakeDb {
           });
         }
         if (limitCount != null) rows = rows.slice(0, limitCount);
+        if (rangeFrom != null) rows = rows.slice(rangeFrom, rangeTo == null ? undefined : rangeTo + 1);
         const projected = rows.map((row) => {
           const copy: Row = { ...row };
           for (const embed of embeds) {
@@ -274,7 +283,7 @@ export class FakeDb {
           return builder;
         },
         limit(count: number) { limitCount = count; return builder; },
-        range() { return builder; },
+        range(from: number, to: number) { rangeFrom = from; rangeTo = to; return builder; },
         async maybeSingle() {
           const result = run();
           if (result.error) return { data: null, error: result.error };

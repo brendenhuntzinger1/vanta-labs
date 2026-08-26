@@ -123,13 +123,22 @@ vi.mock("@/lib/supabase-server", () => {
   const from = (table: string) => {
     if (table === "order_items") {
       return {
-        select: () => ({
-          in(_c: string, ids: string[]) {
-            calls.orderItems += 1;
-            // $40 unit cost on a $100 order.
-            return envelope(ids.map((id) => ({ order_id: id, quantity: 1, unit_cost_cents: 4000 })));
-          },
-        }),
+        select: () => {
+          let ids: string[] = [];
+          const b: Record<string, unknown> = {
+            in(_c: string, values: string[]) { ids = values; return b; },
+            order() { return b; },
+            range(from: number, to: number) {
+              calls.orderItems += 1;
+              // $40 unit cost on a $100 order. ONE row per order here, but this
+              // is the read that can return many rows per order in production.
+              const all = ids.map((id) => ({ order_id: id, quantity: 1, unit_cost_cents: 4000 }));
+              const wanted = all.slice(from, to + 1);
+              return envelope(sourceMaxRowsPerResponse === null ? wanted : wanted.slice(0, sourceMaxRowsPerResponse));
+            },
+          };
+          return b;
+        },
       };
     }
     if (table === "commissions") {
@@ -223,15 +232,19 @@ describe("3,000 orders in the window", () => {
     // stopping on a short page instead would mis-handle a capped source.
     const orderPages = Math.ceil(TOTAL_ORDERS / 1000) + 1; // 4
 
+    // The COGS read is paged too — one page of items per chunk (150 rows, well
+    // inside a page) plus the empty page that ends it.
+    const itemPages = chunks * 2;
+
     expect(calls.orders).toBe(orderPages);
-    expect(calls.orderItems).toBe(chunks);
+    expect(calls.orderItems).toBe(itemPages);
     expect(calls.commissions).toBe(chunks);
     expect(calls.overlay).toBe(chunks);
 
-    // 64 in total. Not per-order — an N+1 here would be 9,001.
+    // Not per-order — an N+1 here would be 9,001.
     const total = calls.orders + calls.orderItems + calls.commissions + calls.overlay;
-    expect(total).toBe(orderPages + chunks * 3);
-    expect(total).toBeLessThan(100);
+    expect(total).toBe(orderPages + itemPages + chunks * 2);
+    expect(total).toBeLessThan(150);
   });
 
   it("stays well inside a request budget", async () => {
@@ -286,6 +299,29 @@ describe("a silent row cap on the source", () => {
     expect(capped.last30Days).toBeCloseTo(full.last30Days, 2);
     // It costs requests, and that is the whole cost.
     expect(calls.orders).toBe(Math.ceil(TOTAL_ORDERS / 337) + 1);
+  });
+
+  /**
+   * THE COGS READ IS THE ONE THAT RETURNS MANY ROWS PER ORDER. Every chunk asks
+   * for the line items of 150 orders at once, so an order averaging seven lines
+   * is over a thousand rows in a single response. Losing the overflow does not
+   * make profit look smaller — it removes PRODUCT COST, which makes profit look
+   * BETTER than it is. That is the direction nobody goes looking for.
+   */
+  it("does not lose product cost to a cap on the line-item read", async () => {
+    const full = await getProfitWindowMetrics(NOW);
+
+    // Smaller than one chunk's worth of line items, so the item read is forced
+    // to page as well as the order read.
+    sourceMaxRowsPerResponse = 100;
+    const capped = await getProfitWindowMetrics(NOW);
+
+    expect(capped.last30Days).toBeCloseTo(full.last30Days, 2);
+    // NOT merely equal to the uncapped run — that alone would pass if BOTH runs
+    // lost the same cost. Asserted against the arithmetic instead:
+    //   $115 revenue ex-tax − $40 COGS − $9.20 processing − $9 shipping = $56.80.
+    // Drop the COGS and it becomes $96.80 an order, which this cannot absorb.
+    expect(capped.last30Days).toBeCloseTo(56.8 * TOTAL_ORDERS, 2);
   });
 
   it("still reports the truth at the store's current volume", async () => {
