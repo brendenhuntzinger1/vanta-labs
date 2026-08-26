@@ -107,11 +107,19 @@ export function resolveUnitCostCents(
   slug: string,
   variantId: string | undefined,
   unitCostByDoseId: Map<string, number>,
-  _unitCostBySlug: Map<string, number>,
+  unitCostBySlug: Map<string, number>,
+  slugsWithDoses: Set<string>,
 ): number | null {
   const doseCost = variantId ? unitCostByDoseId.get(variantId) : undefined;
   if (doseCost && doseCost > 0) return Math.round(doseCost * 100);
-  return null;
+  // HAS doses but no cost on the chosen one: refuse to substitute. The parent
+  // figure here is an inherited EvoLabs seed cost, 1.4x-6.8x the true landed
+  // cost, and a confident wrong number is worse than a visible estimate.
+  if (slugsWithDoses.has(slug)) return null;
+  // NO doses at all: the parent cost is the ONLY cost this product has, and
+  // product-cogs.sql sets it for exactly this case. Using it is correct.
+  const slugCost = unitCostBySlug.get(slug);
+  return slugCost && slugCost > 0 ? Math.round(slugCost * 100) : null;
 }
 ```
 

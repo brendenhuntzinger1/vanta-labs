@@ -93,11 +93,26 @@ costs are inherited EvoLabs figures.
 that has at least one dose row. Matches `product-cogs.sql`'s stated intent: *"The parent is set only for
 products that have no dose rows at all."*
 
-**B2. Change the fallback semantics — this is the fix that prevents recurrence.** In
-`quote-order.ts:819-826`, `unitCostCentsForLine` currently falls back to the parent slug cost when a dose
-cost is absent. After this change a missing dose cost returns `null`, so `computeOrderProfit` sets
-`hasEstimatedCost` and reports COGS as *estimated* rather than silently substituting another number.
-The data change alone would not prevent this; the fallback is the mechanism.
+**B2. Change the fallback semantics — this is the fix that prevents recurrence.**
+*(AMENDED 2026-08-26 after Task 3 surfaced a defect in the original wording — see below.)*
+
+In `quote-order.ts`, `unitCostCentsForLine` falls back to the parent slug cost whenever a dose cost is
+absent. The corrected rule has TWO branches, mirroring what `product-cogs.sql` states outright —
+*"The parent is set only for products that have no dose rows at all"*:
+
+| product shape | dose cost | result |
+|---|---|---|
+| HAS dose rows | present | use the dose cost |
+| HAS dose rows | absent | **`null`** — report COGS as estimated; never borrow the stale parent figure |
+| NO dose rows | n/a | **use the parent cost** — for a dose-less product the parent IS authoritative |
+
+> **The original wording of B2 was wrong** and said simply "a missing dose cost returns `null`". That
+> flattened the second and third rows together, so a product with no doses lost its legitimate cost and
+> fell through to `worstCaseUnitCost` ($33). It broke 5 e2e tests whose fixture
+> (`src/lib/e2e/journey.harness.ts:123`) creates products with a real `product_cost_cents` and no dose
+> rows: COGS read $33/unit instead of $12/unit. No production product is dose-less today, so live impact
+> was nil — but a future one would have been over-costed, which is the very bug this section exists to
+> prevent, pointing the other way.
 
 The same fallback appears in `guardProductCost` (the checkout profit floor). There it must keep falling
 back — to `profitSettings.worstCaseUnitCost`, never to a parent figure — so an unpriced SKU still cannot be
