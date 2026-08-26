@@ -35,12 +35,6 @@ const db = {
   nextCartEmailId: 1,
 };
 
-// vitest.setup.ts stubs @/lib/cart-recovery globally — runAbandonedCartSweep is
-// replaced with `async () => ({ t30mSent: 0, ... })` for EVERY suite in the
-// repo. Without this line the sweep under test never runs and this file passes
-// against a function that does nothing. See finding C-07.
-vi.unmock("@/lib/cart-recovery");
-
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://www.vantalabsresearch.com" }));
 vi.mock("@/lib/email/marketing", () => ({

@@ -1,6 +1,12 @@
 import { createHmac } from "node:crypto";
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { processPaymentWebhook } from "@/lib/payment-webhook";
+
+// These two fakes used to live in vitest.setup.ts, where they were applied to
+// every suite in the repo. They belong to this suite, so this suite asks for them.
+vi.mock("@/lib/catalog", async () => (await import("@/test-support/payment-suite-fakes")).catalogModule());
+vi.mock("@/lib/supabase-server", async () => (await import("@/test-support/payment-suite-fakes")).supabaseServerModule());
+
 
 // ---------------------------------------------------------------------------
 // A WEBHOOK MUST NEVER ERASE WHO THE CUSTOMER IS.
