@@ -118,13 +118,26 @@ group by 1,2;
 |---|---|---|---|---|---|
 | `email` | `resend_api_key` | 2 | **2** | 36 | 2026-07-21 |
 | `email` | `smtp_password` | 1 | **1** | 19 | 2026-07-21 |
+| `fulfillment` | `api_key` | 1 | **1** | 40 | 2026-07-30 |
 | `fulfillment` | `webhook_secret` | 1 | **1** | 64 | 2026-07-30 |
 | `payment_processor` | `publishable_key` | 12 | 0 | 0 | 2026-07-21 |
 | `payment_processor` | `provider` / `enabled` / `display_name` | 12 each | — | — | 2026-07-21 |
 
-Three live secrets are in the table today. A 36-character `resend_api_key` is
-the length of a real Resend key; a 64-character `fulfillment/webhook_secret` is
-a full hex signing secret.
+**Correction to my own first pass.** The original query filtered on a *guessed
+list* of key names (`smtp_password, resend_api_key, sendgrid_api_key,
+secret_key, webhook_secret`) and therefore missed `fulfillment/api_key`. Listing
+the whole `fulfillment` section instead of querying names I expected turned up a
+complete legacy 3PL credential set — `api_key` (40 chars), `webhook_secret` (64
+chars), `api_base_url` (46 chars), `provider_name`, `mode`, `auto_transmit`,
+`enabled = true` — all written 2026-07-30. **Four** live secrets, not three.
+
+That is the same enumeration mistake as I-02's `canView*` grep, and the lesson
+is identical: enumerate the space, do not filter it by what you expect to find.
+
+The redaction fix from this finding does cover the missed key — `api_key`
+canonicalises to `apikey`, which is a marker — and a regression test now pins
+`fulfillment/api_key` explicitly. `api_base_url` is deliberately **not**
+redacted: a URL is not a credential, though it does name a vendor.
 
 Two things this narrows:
 
@@ -261,10 +274,10 @@ backup, or from anyone who already had access.
 
 **`OWNER DECISION NEEDED:`**
 
-1. **Rotate** the Resend API key, the SMTP password, and the
-   `fulfillment/webhook_secret`. This is the substantive remediation; the code
-   fix only stops the bleeding. Rotation is a credential operation, not a code
-   change, and it is the owner's to perform.
+1. **Rotate all four secrets** — see the rotation table in the "Credential
+   rotation" section at the end of this document. This is the substantive
+   remediation; the code fix only stops the bleeding. Rotation is a credential
+   operation, not a code change, and it is the owner's to perform.
 2. **Redacting the historical rows** is a production write and is blocked on
    approval under Rule 4. Note it cannot be done blindly: blanking
    `email/smtp_password` and `email/resend_api_key` would blank the **live
@@ -1455,26 +1468,65 @@ a product decision. **`OWNER DECISION NEEDED.`**
 
 ---
 
-## Not verified
+## ⛔ NOT VERIFIED — must be picked up by the master audit
 
-Stated plainly rather than left implied, per the execution plan's rule that a
-block which ran out of road reports `NOT VERIFIED` and that is a valid outcome.
+Listed explicitly so consolidation can carry each into the coverage matrix as
+`NOT VERIFIED` with a reason, per the execution plan's rule that running out of
+road is a valid outcome but silence is not. **None of the items below was
+tested. Do not read Block I's other results as covering them.**
 
-- **Injection beyond CSV.** I-08 covers formula injection across all eight
-  escapers. **Not** examined: SSRF through any outbound `fetch` whose URL is
-  influenced by user input, path traversal in storage keys beyond the upload
-  paths in I-05, and PDF generation (packing slips, labels) fed
-  customer-controlled strings. A parallel agent was assigned this lens and did
-  not complete — see below.
-- **The `x-forwarded-for` question in I-03** still needs a forged-header request
-  against a **preview** deployment to settle whether Vercel's edge overwrites
-  it. Not run; not to be run against production.
-- **Nothing was browser-verified.** Block I did no Playwright work; the admin
-  console was never operated as the owner. Every finding here is source,
-  test or database evidence. "Operate the store as the owner" in the block's
-  brief is **NOT VERIFIED**.
-- **No production write was made and no production endpoint was exercised.**
-  I-07 in particular is proven from the catalogue, not by calling the RPC.
+| # | Area | Status | Why | Who should pick it up |
+|---|---|---|---|---|
+| NV-1 | **SSRF** | ⛔ NOT VERIFIED | No outbound `fetch()` whose URL is influenced by user input was traced. The app calls Shippo, Resend, TikTok, Reddit, Snap and Veyra; none of those call sites was checked for user-controlled URL components. | Block L (unknown-unknown) or a dedicated pass |
+| NV-2 | **Path traversal** | ⛔ NOT VERIFIED | Only the two upload paths in I-05 were examined. Storage keys built elsewhere — COA paths, label/packing-slip artifacts, export filenames — were not. | Block L |
+| NV-3 | **PDF generation** | ⛔ NOT VERIFIED | `pdf-lib` renders packing slips and labels from customer-controlled strings (names, addresses, notes). No injection, resource-exhaustion or malformed-input testing was done. | Block D (fulfillment) or L |
+| NV-4 | **Injection/export beyond CSV** | ⛔ PARTIAL | I-08 covers spreadsheet formula injection across all eight CSV escapers, and that part is `BEHAVIORAL-TEST-PROVEN`. **Not** covered: raw SQL / `.rpc()` built from user input, XML/JSON export paths, and the `ilike` filter in `admin-audit-log.ts` `sanitizeTerm`. | Block L |
+| NV-5 | **Browser verification of the admin console** | ⛔ NOT VERIFIED | Block I's brief says *"Operate the store as the owner."* **No Playwright work was done at all.** Every Block I finding is source, unit-test or database evidence. No admin screen was ever loaded. | Block G/H (browser) or M |
+| NV-6 | **The `x-forwarded-for` question (I-03)** | ⛔ NOT VERIFIED | Whether Vercel's edge overwrites `x-forwarded-for` before the function sees it is unresolved. Needs a forged-header request against a **preview** deployment. The I-03 fix is correct under either answer, and I-03b was real regardless. | Block M (has preview access) |
+| NV-7 | **I-07 retrospective row audit** | ⛔ NOT VERIFIED | Fingerprints and 7/7 converged counts are *consistent with* nothing having been injected via `create_partner_invite`, but that is inference. A definitive check means finding `partners` rows with no corresponding application record. | Block A+B |
+| NV-8 | **Rate-limit efficacy end to end** | ⛔ NOT VERIFIED | I-03 and I-04 prove the *bucket key* is correct by unit test. No test drives real traffic through `checkRateLimit` against a database to prove a limit actually trips and releases. Note it **fails open** on any storage error by design. | Block M |
+
+### Carried into Block E and master integration — tests that could not fail
+
+Three separate negative-control mutations in this block exposed **green tests
+that proved nothing**. Each looked exactly like success:
+
+| Finding | The trap | How it was caught |
+|---|---|---|
+| I-08 (C3) | The mutation script's string replacement silently failed to match, so **nothing was mutated** and the suite passed on an unmodified fix | Re-applied with an assertion that the anchor exists |
+| I-09 (E4) | The test mocked `@/lib/website-analytics`, a module the route **does not import**, and sent a body the route rejected before the code under test | Mocked the real dependency (`supabaseAdmin`) and sent a valid payload |
+| I-01 (M4) | An exception-list entry (`publishablekey`) that matched no marker — **dead code implying protection that was not there** — while the two live entries had no test | Removed the dead entry, added a test for the live ones |
+
+A fourth, related: I-09's first run reported 4 failures. Fixing an unrelated
+harness bug — `getAuthenticatedUser` reaching `next/headers` `cookies()` outside
+a request scope, so *that* error was caught instead of the one under test —
+took the red to **6**. Two more real leaks had been hidden behind a test passing
+for the wrong reason.
+
+**The rule for Block E:** a mutation that fails to apply, and a test that never
+reaches its subject, are indistinguishable from a mutation that is correctly
+caught — and both read as the reassuring result. Every "not caught" verdict must
+be re-checked for whether the mutation actually landed and whether the test can
+reach the code at all. All three cases above were initially recorded as "not
+caught", and all three turned out to be defects in the test, not proof of a good
+fix.
+
+### Also carried forward — the recurring shape
+
+Three of this block's findings were the same structure: **one correct
+implementation and several weaker copies of it.**
+
+| Finding | Correct | Divergent |
+|---|---|---|
+| I-03 | `admin-auth.getRequestIpAddress` | 3 hand-rolled resolvers in public routes |
+| I-05 | `payment-proof-storage`, `coa-format` sniffers | product image upload had none |
+| I-08 | 4 formula-guarding CSV escapers | 4 quote-only escapers |
+
+In none of these did the codebase fail to *know* the hazard — each correct
+implementation documents it in a comment. The failure was that knowing did not
+propagate. A master-audit recommendation worth making: for any security-relevant
+primitive, one exported implementation and a test that fails when a second
+appears.
 
 ### On the parallel sweep
 
@@ -1626,6 +1678,47 @@ suspect: there is nothing to race.
 `adjust_inventory_on_sale` definition from `deploy-run-once.sql:941-977`, then
 re-verify. Until then, treat storefront stock counts as not decrementing on
 sale.
+
+---
+
+## Credential rotation required (I-01)
+
+Every value below sat in `admin_audit_logs.metadata.value` in **plaintext**,
+readable by anything with table access, and was rendered verbatim by
+`/admin/audit-log?includeConfigSaves=1` to any manager-or-above session until
+the fix in I-01 landed. Treat all four as **compromised**.
+
+Redaction at the read boundary does not un-disclose them. **Rotation is the only
+real remediation.**
+
+No current value is reproduced here, in this document, in the commit history, or
+anywhere else in this audit. Only lengths were ever read.
+
+| # | Secret | Stored at | Status in code | Where to rotate |
+|---|---|---|---|---|
+| 1 | **Resend API key** | `email` / `resend_api_key` (36 chars) | **ACTIVE** — `email.provider = "resend"`, `email.enabled = true`, sending from `orders@vantalabsresearch.com` | Resend dashboard → **API Keys** → create a new key, then **delete the old one**. Paste the new key into **Admin → Settings → Email**. Send a test email from that screen to confirm before deleting the old key. |
+| 2 | **SMTP password** | `email` / `smtp_password` (19 chars) | **Inactive but live credential** — `smtp_host` is empty and the provider is Resend, so nothing sends through SMTP. The account is `smtp_user = brendenhuntzinger1`. | Rotate the password on **that mail account itself**, at its provider. If it is a Google app password, revoke it at Google Account → Security → App passwords and issue a new one. Do **not** re-enter it in Admin → Settings unless you intend to switch back to SMTP — leaving the field blank preserves the stored value, so clearing it needs a deliberate change. |
+| 3 | **3PL provider API key** | `fulfillment` / `api_key` (40 chars) | **Orphaned** — no code reads it. `getFulfillmentAdminSettings` returns only inventory tracking and Shippo status, and the settings route now refuses fulfillment credentials by design. | Rotate at the **former 3PL provider's** dashboard (`fulfillment/provider_name` and `api_base_url`, both stored alongside, identify it). If the integration is genuinely retired, **revoke the key outright** rather than reissuing. |
+| 4 | **3PL webhook secret** | `fulfillment` / `webhook_secret` (64 chars) | **Orphaned** — no code reads it. The only `webhook_secret` any code reads is `payment_processor.webhook_secret`, which has **zero rows**. | Rotate or revoke at the same provider as #3. A 64-char hex value is a signing secret; if the endpoint it signed is gone, revoke it. |
+
+**Not affected:** `payment_processor.secret_key` and
+`payment_processor.webhook_secret` have **no rows at all** — the card-payment
+credential was never saved through this path. That is the single biggest reason
+I-01 is a bounded P0 rather than a critical one.
+
+### After rotating
+
+1. Re-save the active value (#1) through **Admin → Settings → Email** so the
+   store keeps sending. The new value will be written to a *new* audit row —
+   still plaintext, because this table **is** the settings store (see I-01's
+   root cause). The I-01 fix stops it being *read back* as an audit entry; it
+   does not encrypt it at rest.
+2. Only then consider redacting the historical rows. Order matters: for #1 the
+   newest row per key **is** the live config, so blanking it blanks the running
+   configuration. Rows #2–#4 are read by nothing and can be redacted or deleted
+   safely once their credentials are revoked.
+3. Redacting historical rows is a production data change and needs approval
+   under Rule 4. It was **not** done.
 
 ---
 

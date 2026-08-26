@@ -34,8 +34,12 @@ describe("I-01 — secrets must not survive the audit-log read boundary", () => 
     ["email", "sendgrid_api_key"],
     ["payment_processor", "secret_key"],
     ["payment_processor", "webhook_secret"],
-    // Present in production even though the settings route no longer writes it.
+    // A legacy 3PL credential set is present in production even though the
+    // settings route no longer writes fulfillment credentials at all. Found by
+    // listing the section rather than by querying key names I had guessed --
+    // my first enumeration filtered on a name list and missed api_key.
     ["fulfillment", "webhook_secret"],
+    ["fulfillment", "api_key"],
   ])("redacts %s/%s", (section, key) => {
     const redacted = redactAuditMetadata(controlRow(section, key, "sk_live_THE_ACTUAL_SECRET"));
     expect(redacted?.value).toBe(SECRET_PLACEHOLDER);
