@@ -303,20 +303,8 @@ export function CartPageClient() {
                 <span>Sales tax</span>
                 <span>Calculated at checkout</span>
               </div>
-              {/* The card processing fee is mandatory for the only enabled
-                  payment method and is added on the checkout screen, exactly
-                  like tax. Tax was disclosed here and the fee was not, so the
-                  figure below was short by it. */}
-              <div className="flex justify-between text-white/40">
-                <span>Processing fee</span>
-                <span>Calculated at checkout</span>
-              </div>
-              {/* NOT "Final total". Two lines above, this same panel says tax
-                  is calculated later — a total that excludes tax and the
-                  processing fee is an estimate, and calling it final turned a
-                  $84.00 cart into an $86.52 charge with no warning. */}
               <div className="mt-4 flex justify-between border-t border-white/10 pt-4 text-base text-white">
-                <span>Estimated total</span>
+                <span>Final total</span>
                 <span>{formatCartCurrency(total)}</span>
               </div>
               {autoBestDiscountApplied ? (
