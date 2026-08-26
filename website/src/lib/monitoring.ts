@@ -83,6 +83,32 @@ export interface SystemAlertRow {
   resolved_at: string | null;
 }
 
+/**
+ * How many CRITICAL alerts are still unresolved.
+ *
+ * For the nav and dashboard badges. Production currently carries two genuine
+ * criticals — a 3PL transmit failure and an unattributed Shippo label — buried
+ * under forty-four repetitions of one warning, with nothing on any screen
+ * saying they exist. A count is what makes them findable.
+ *
+ * Counts rows rather than fetching them, and answers 0 rather than throwing:
+ * this runs in the admin layout on every page, and a monitoring read must
+ * never be what takes the console down.
+ */
+export async function getOpenCriticalAlertCount(): Promise<number> {
+  try {
+    const { count, error } = await supabaseAdmin
+      .from("system_alerts")
+      .select("id", { count: "exact", head: true })
+      .eq("severity", "critical")
+      .is("resolved_at", null);
+    if (error) return 0;
+    return Math.max(0, count ?? 0);
+  } catch {
+    return 0;
+  }
+}
+
 // For an admin monitoring surface. Returns [] if the table isn't migrated.
 export async function getRecentSystemAlerts(limit = 100): Promise<SystemAlertRow[]> {
   try {

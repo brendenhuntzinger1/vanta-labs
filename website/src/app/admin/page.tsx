@@ -9,6 +9,9 @@ import { getAdminOrderRows } from "@/lib/admin-orders";
 import { listAdminProducts } from "@/lib/admin-products";
 import { getLowStockCount } from "@/lib/admin-inventory";
 import { getReconciliationFlagCount } from "@/lib/admin-reconciliation";
+import { getBucketCounts } from "@/lib/fulfillment-queues";
+import { getOpenCriticalAlertCount } from "@/lib/monitoring";
+import { EMPTY_WORK_QUEUE, summarizeWorkQueue } from "@/lib/admin-work-queue";
 import { getAdminPartnerRows } from "@/lib/partner-portal";
 import { AdminControlCenterClient } from "@/components/admin-control-center-client";
 import { AdminLiveMetrics } from "@/components/admin-live-metrics";
@@ -36,6 +39,14 @@ export default async function AdminHomePage() {
     getReconciliationFlagCount().catch(() => 0),
     getProfitWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, ordersLast30Days: 0, hasEstimatedCost: false })),
   ]);
+
+  // What is waiting for a human. Same buckets the workstation renders, so the
+  // dashboard headline and the pick queue cannot disagree.
+  const [workBuckets, openCriticals] = await Promise.all([
+    getBucketCounts().catch(() => null),
+    getOpenCriticalAlertCount().catch(() => 0),
+  ]);
+  const work = workBuckets ? summarizeWorkQueue(workBuckets, openCriticals) : EMPTY_WORK_QUEUE;
 
   // Full profit analytics (calendar windows + lifetime aggregates) — only
   // fetched for roles allowed to see profit.
@@ -68,6 +79,26 @@ export default async function AdminHomePage() {
         </section>
 
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
+          {/*
+            THE FIRST NUMBER ON THE PAGE, because it is the only one that
+            implies an action. This dashboard previously opened with revenue and
+            profit and never stated how many orders were waiting to ship — with
+            60 in the queue, the number 60 appeared nowhere on the screen.
+          */}
+          <Link
+            href="/admin/fulfillment/workstation"
+            className="vl-panel rounded-2xl p-4 transition hover:border-white/25 sm:col-span-2"
+          >
+            <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Needs Fulfillment</p>
+            <p className={work.needsFulfillment > 0 ? "mt-2 text-2xl font-semibold text-amber-300" : "mt-2 text-2xl font-semibold text-white"}>
+              {work.needsFulfillment}
+            </p>
+            <p className="mt-1 text-[11px] text-zinc-500">
+              {work.inProgress} in progress
+              {work.exceptions > 0 ? ` \u00b7 ${work.exceptions} need attention` : ""}
+              {work.openCriticalAlerts > 0 ? ` \u00b7 ${work.openCriticalAlerts} critical alert${work.openCriticalAlerts === 1 ? "" : "s"}` : ""}
+            </p>
+          </Link>
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Paid Orders</p>
             <p className="mt-2 text-2xl font-semibold text-white">{revenueMetrics?.totalPaidOrders ?? 0}</p>

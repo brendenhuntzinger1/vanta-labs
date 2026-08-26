@@ -390,6 +390,16 @@ export function FulfillmentWorkstation({
                   className="h-4 w-4"
                 />
                 <span className="font-mono text-xs text-zinc-300">{order.orderNumber ?? order.orderId}</span>
+                {/*
+                  Expedited orders sort to the top of this queue; the badge is
+                  what tells the picker WHY the order is there. Without it the
+                  ordering looks arbitrary.
+                */}
+                {order.priority ? (
+                  <span className="shrink-0 rounded-full bg-amber-400/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                    Priority
+                  </span>
+                ) : null}
                 <span className="text-xs text-zinc-500">{order.customerName}</span>
                 <span className="ml-auto text-xs text-zinc-600">{order.destination}</span>
               </label>

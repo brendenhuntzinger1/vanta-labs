@@ -43,7 +43,7 @@ const QUEUE_COLUMNS =
   // The clocks for the two time-based exceptions. Without these selected, a
   // parcel the carrier never scanned and a parcel that stopped moving both
   // stay invisible — the rules exist but never see a timestamp to measure.
-  + "label_purchased_at, shipped_at, updated_at";
+  + "label_purchased_at, shipped_at, updated_at, priority";
 
 export interface QueueOrder {
   orderId: string;
@@ -68,6 +68,12 @@ export interface QueueOrder {
   paidAt: string | null;
   createdAt: string;
   batchId: string | null;
+  /**
+   * Expedited. The column existed and shipped nowhere: with four priority
+   * orders sitting in a 60-order pick queue, nothing on the workstation
+   * distinguished them from the other fifty-six.
+   */
+  priority: boolean;
 }
 
 function toQueueOrder(row: Record<string, unknown>, batchId: string | null = null): QueueOrder {
@@ -100,6 +106,7 @@ function toQueueOrder(row: Record<string, unknown>, batchId: string | null = nul
     paidAt: row.paid_at ? String(row.paid_at) : null,
     createdAt: String(row.created_at),
     batchId,
+    priority: row.priority === true || row.priority === "true",
   };
 }
 
@@ -198,7 +205,16 @@ export async function getBucketOrders(
   const merged = results.flat().map((row) => toQueueOrder(row as unknown as Record<string, unknown>));
   // An exception belongs only to the exception queue.
   const clean = merged.filter((o) => o.exceptions.length === 0 && o.bucket === bucket);
-  clean.sort((a, b) => String(a.paidAt ?? a.createdAt).localeCompare(String(b.paidAt ?? b.createdAt)));
+  // Priority first, then oldest-paid first within each band.
+  //
+  // The queue was pure oldest-first, so an expedited order paid this morning
+  // sat behind every standard order from the previous days — and nothing on
+  // screen said it was expedited. Sorting here rather than in the component
+  // means the API, the page and any future consumer agree on pick order.
+  clean.sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority ? -1 : 1;
+    return String(a.paidAt ?? a.createdAt).localeCompare(String(b.paidAt ?? b.createdAt));
+  });
   return clean.slice(0, limit);
 }
 
