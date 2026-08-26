@@ -1057,6 +1057,257 @@ coa-library. No unpublished slug appears.
 (`resolveReferralCode` returns null before the insert) — the one referral URL it
 was safe to request.
 
+## 2g. CATALOG CONTROLS
+
+### Working — PROVEN WORKING · BROWSER-PROVEN
+
+- **All 9 categories filter correctly** and the rendered card count matches the
+  page's own "N products" every time: Blends 2, Cognitive 3, GLP 4, Growth
+  Hormone 7, Longevity 5, Metabolic 4, Repair & Recovery 5, Solvents 1,
+  Specialty 5 — **summing to exactly 36**.
+- **Price: Low to High** verified ascending; **Price: High to Low** verified
+  descending; **Name: A to Z** verified against a locale sort of the rendered
+  names.
+- **Search** works and is not just a name match — `glp` → 4 (including
+  Cagrilintide, by category), `water` → 1, `BPC` → 2, `zzzz` → 0 with a proper
+  empty state: "No products matched your filters".
+- **Best Sellers** toggle → 3 cards, matching the three ★ BEST SELLER badges.
+- **CLEAR ALL** resets to 36.
+- **Deep link** `/products?category=Growth%20Hormone` applies the category, and
+  browser back/forward across that real navigation restores it.
+
+### LIVE-028 — **DEFECT** — filters and sort are lost the moment a customer opens a product
+
+**Severity:** P2 · FRICTION, high frequency, direct conversion cost
+**Status:** CONFIRMED · BROWSER-PROVEN
+**Cross-reference:** NEW.
+
+Reproduction, desktop 1440×900:
+
+```
+1. /products → category "Growth Hormone", sort "Price: High to Low"
+   state: 7 cards, selects = [Growth Hormone, Price: High to Low], url = /products
+2. click the first card                    → /products/igf-1-lr3
+3. press Back                              → /products
+   state: 36 cards, selects = [All, Best Sellers First]
+```
+
+**Every filter and the sort are discarded.** The customer who narrowed 36
+products down to 7, opened one, and hit Back is returned to the top of the
+unfiltered catalog.
+
+Root cause is visible in the state dump: **filter state never enters the URL** —
+`url` stays `/products` through all nine category changes and all five sort
+changes. With nothing in the URL there is no history entry to come back to, and
+no filtered view can be shared or bookmarked either.
+
+### LIVE-029 — **DEFECT** — "Purity: Highest" sorts by something that is not purity
+
+**Severity:** P2 · DEAD FEATURE presented as data
+**Status:** CONFIRMED · BROWSER-PROVEN + DATABASE-PROVEN
+
+`products.purity_result` is an **empty string for all 36 published products**
+(§LIVE-001). There is no purity value to rank by.
+
+Selecting "Purity: Highest" nevertheless reorders the grid, into an order that
+is neither the A-to-Z order nor the Best Sellers order:
+
+```
+A-Z     : 5-Amino-1MQ | B12 | Bac Water | BPC-157 | BPC-157 + TB-500 | Cagrilintide
+Purity  : 5-Amino-1MQ | BPC-157 | Cagrilintide | CJC-1295 no DAC | DSIP | GHK-Cu
+Best    : GLP-1 | MOTS-C | Bac Water | 5-Amino-1MQ | BPC-157 | Cagrilintide
+```
+
+A customer who sorts by purity is shown an arbitrary order and will reasonably
+read the first item as the purest product Vanta sells. Presenting an unranked
+list as a purity ranking is worse than not offering the option.
+
+### LIVE-030 — the "In Stock" toggle can never do anything
+
+**Severity:** P3 · DEAD CONTROL
+**Status:** CONFIRMED · BROWSER-PROVEN + DATABASE-PROVEN
+
+Toggle ON → 36 cards. Toggle OFF → 36 cards. Every catalog product reports
+`stockStatus: "In Stock"` (§LIVE-027), so there is nothing for the filter to
+remove. Harmless today; it becomes meaningful only once something can go out of
+stock, which — given the parent-zero architecture and the capped
+`availableQuantity` — nothing currently can.
+
+---
+
+## 2h. TAX, TOTALS AND FORM VALIDATION AT CHECKOUT
+
+Method: the checkout form was **filled completely and never submitted**.
+`/checkout` only issues `GET /api/catalog/payment-methods` and
+`GET /api/account/me` on load; `create-session` (the write) fires on submit only.
+
+### LIVE-031 — sales tax is switched off in every state, and the cart implies otherwise
+
+**Severity:** P1 for the owner to *decide on* (not a code defect) · business/compliance
+**Status:** CONFIRMED · BROWSER-PROVEN + DATABASE-PROVEN
+
+`GET /api/catalog/promotions` → `"salesTax": {"nexusStates": [], "rateOverrides": {}}`.
+
+Filled the same $110.37 basket with a Texas, then a California, then a New York
+shipping address:
+
+| State | Subtotal | Shipping | Tax line | TOTAL |
+|---|---|---|---|---|
+| TX 78701 | $110.37 | $15.00 | **none** | $125.37 |
+| CA 90001 | $110.37 | $15.00 | **none** | $125.37 |
+| NY 10001 | $110.37 | $15.00 | **none** | $125.37 |
+
+**No sales tax is charged anywhere.** Meanwhile the cart shows a line reading
+
+> Sales tax — *Calculated at checkout*
+
+which is never calculated and simply disappears at checkout. And the database
+shows tax **was** collected historically: `$9.69` across four earlier orders
+(`orders.tax_amount`), so this was configured once and is now off.
+
+Whether to collect is the owner's call and depends on real nexus. What is not a
+judgement call: **the store promises a calculation it never performs**, and the
+owner should know tax collection is currently disabled everywhere before
+volume arrives.
+
+### LIVE-032 — **DEFECT** — the pay button is never disabled, however invalid the form
+
+**Severity:** P2 · MISSING STATE (submit behaviour itself NOT VERIFIED)
+**Status:** CONFIRMED for the button state · BROWSER-PROVEN
+
+`Continue to secure payment`, measured after each step:
+
+| Form state | Button |
+|---|---|
+| completely empty | **enabled** |
+| email = `not-an-email`, then blurred | **enabled**, and *no inline error appeared* |
+| fully filled, valid | enabled |
+| **a required legal confirmation UNTICKED** ("Confirm to continue — 1 of 2") | **enabled** |
+| cart empty | disabled ✅ (the one case handled) |
+
+So the page states "Both are required to place a research order", displays
+"1 of 2", and still offers an enabled primary button. An invalid email produces
+no feedback at all until the customer commits.
+
+**What happens on click is NOT VERIFIED and must not be guessed.** Clicking
+`Continue to secure payment` calls `POST /api/checkout/create-session`, which
+writes an order row, so it was not clicked on production. The three
+possibilities — client-side guard, server rejection, or an order created from an
+invalid form — are materially different, and **this is the single highest-value
+thing to exercise on the harness.**
+
+### Verified correct here
+
+- **Shipping protection** — $4.41 on a $110.37 subtotal is exactly 4.0 %
+  (`110.37 × 0.04 = 4.4148`), and the total moved $125.37 → **$129.78** when
+  ticked and back when unticked.
+- **Country switch** — US $15 / free at $200; Canada $25 / free at $400, both
+  matching config.
+- **Quantity controls** in the checkout summary adjust the line and the totals.
+
+---
+
+## 2i. ADMIN — reconciled against the database without signing in
+
+**No admin credentials were available to this session**, and `/vault` requires a
+username, a password *and* a 6-digit passcode. **Every admin screen is therefore
+`NOT VERIFIED` as an interface.** What could be done instead: call the same
+Postgres rollup functions the admin screens read, and reconcile them against raw
+SQL. That is DATABASE-PROVEN, and it answers the "do the numbers agree" question
+without a login.
+
+### ADM-01 — the three revenue surfaces agree with each other
+
+**Status:** PASS · DATABASE-PROVEN
+
+```
+admin_revenue_summary(today)   -> total_paid_orders 6, total_paid_revenue 232.38
+admin_ops_summary(today,month) -> live_sales_month 232.38, live_sales_today 0
+admin_revenue_by_method()      -> card: 6 orders, revenue 232.38
+```
+
+Raw check: the six `payment_status = 'paid'` rows sum to **exactly $232.38** of
+`amount_paid`. The audit's warning about *"five surfaces using three different
+definitions of revenue"* does **not** reproduce at the rollup layer — these
+three agree.
+
+### ADM-02 — but "revenue" is gross receipts, and includes a cancelled order
+
+**Severity:** P2 · ADMIN TRUTH (harmless at 6 orders, material at 100/day)
+**Status:** CONFIRMED · DATABASE-PROVEN
+**Cross-reference:** NEW (related to, but distinct from, POST-LAUNCH-BACKLOG PLB-02).
+
+The $232.38 the owner sees decomposes as:
+
+| Component | Amount |
+|---|---|
+| merchandise subtotal | $145.26 |
+| shipping charged | $75.00 |
+| **sales tax collected** (owed to states, not revenue) | **$9.69** |
+| card processing surcharge | $2.43 |
+| **= reported "revenue"** | **$232.38** |
+
+and separately:
+
+| | |
+|---|---|
+| **paid orders whose `fulfillment_status` is `cancelled`** | **$45.47** |
+| membership orders counted in product revenue | $1.00 |
+
+So of a headline "$232.38 revenue": 4 % is a tax liability, 32 % is shipping
+recovery, and **$45.47 belongs to an order that was cancelled after payment**.
+At six orders this is noise. At a hundred orders a day it is a materially wrong
+number on the screen the owner runs the business from.
+
+### ADM-03 — 75 referral clicks, zero referral orders
+
+**Status:** DATABASE-PROVEN · operational finding, not a defect claim
+
+```
+partner_clicks            75      referrals (click events)   75
+ambassadors with clicks    2      MIZZY 51  ·  FLAVIAROSSETTI 24
+referral_orders            0      commissions                0
+orders with referral_code  0
+```
+
+Two ambassadors have sent **75 real visitors** to the store and **not one has
+converted**. This does not prove a cause, and small numbers can be nothing. It
+is recorded because it sits directly beside **AFF-03**: the only path those 75
+visitors took is the one that shows "Ambassador X • 15% customer discount" and
+then charges full price whenever the basket is under $100 — which, at a $39.99
+median product price, is most first baskets.
+
+**Worth the owner's attention before spending more on ambassadors.**
+
+### ADM-04 — `admin_bulk_savings_stats()` returns no rows
+
+**Status:** DATABASE-PROVEN · not currently wrong
+
+The function the bulk-savings admin surface reads returns **zero rows**. The
+audit's "bulk-savings figure inflated nearly 3×" therefore **cannot be
+reproduced today** — there is no figure. Recorded so the absence is not mistaken
+for a passing check: it is untestable at present, not proven correct.
+
+### ADM-05 — `admin_partner_rollups()` returns only ambassadors who have clicks
+
+**Severity:** P3 · SUSPECTED (page not seen)
+**Status:** DATABASE-PROVEN for the function; admin rendering NOT VERIFIED
+
+The function returns **2 rows** for the 2 ambassadors with click history. The
+other **6 approved ambassadors are absent entirely**. If the partners screen
+renders this rollup directly, the owner sees 2 of 8 ambassadors and has no way
+to find the other six. If the screen joins it onto the full `partners` list,
+this is fine. **Cannot be determined without signing in.**
+
+### Other admin facts worth the owner's eye
+
+- `points_outstanding()` = **3,000 points** of outstanding customer liability.
+- `orders` = 15 total: 6 paid, 5 canceled, 4 pending_payment.
+- One paid order sits at `fulfillment_status = 'shipped'`, two at
+  `label_purchased`, one at `awaiting_fulfillment`, one at `cancelled`.
+- **335 `active = true` coupons that have all expired** (LIVE-015) will inflate
+  any "active promotions" count the dashboard shows.
+
 _(walk continues)_
 
 ---
