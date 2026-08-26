@@ -184,3 +184,25 @@ begin
   );
 end;
 $function$;
+
+-- ---------------------------------------------------------------------------
+-- I-11 — close these to anon on creation, rather than sweeping up afterwards.
+--
+-- Supabase's default privilege grants EXECUTE on every function created in
+-- `public` to `anon` and `authenticated`. A SECURITY DEFINER function is
+-- therefore reachable by anyone holding the public anon key the moment it
+-- exists. That is exactly how `create_partner_invite` became an
+-- unauthenticated, RLS-bypassing write into the affiliate money tables (I-07).
+--
+-- Production is currently clean, because migration 20260825003037 swept every
+-- function that existed at that moment. But a sweep is point-in-time and the
+-- default is still armed — HALF of it cannot even be disarmed from this
+-- project's access (see sql/rpc-default-privilege-lockdown.sql for the proof).
+-- So re-running this file in a fresh environment would create these
+-- world-executable, and the sweep would have to be remembered again.
+--
+-- rpc-security-posture.test.ts fails the build if a new function arrives here
+-- without one of these lines.
+-- ---------------------------------------------------------------------------
+revoke all on function public.create_partner_invite(uuid, uuid, text, text, text, numeric, uuid) from public, anon, authenticated;
+grant execute on function public.create_partner_invite(uuid, uuid, text, text, text, numeric, uuid) to service_role;

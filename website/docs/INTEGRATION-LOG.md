@@ -1279,3 +1279,154 @@ own signal and so a second failing RPC still gets its own alarm.
 
 A genuine zero from the sweep is asserted **not** to alert — otherwise the signal
 would mean nothing.
+
+---
+
+# PHASE 5 — SCHEMA AND DEPLOYMENT TRUTH
+
+## 5.1 Production, measured
+
+| | |
+|---|---|
+| tables (`public`) | **68** |
+| columns | **884** |
+| functions | **22** (19 SECURITY DEFINER) |
+| RLS policies | **80**, on **68/68** tables |
+| CHECK constraints | **21** |
+| indexes | **254** |
+| triggers | **2** |
+| applied migrations | **7** |
+
+## 5.2 Table drift — the app against the database
+
+Every `.from("…")` in the source (62 tables) compared against production:
+
+**App references, NOT in production — 2:**
+
+| table | consequence |
+|---|---|
+| `referral_code_aliases` | read in 5 places in `referral-code-service.ts` |
+| `referral_code_changes` | read/written in 4 places |
+
+**M-03 — the referral-code-change subsystem is entirely undeployed.** The repo
+declares it in `sql/referral-code-management.sql` (2 tables, 2 columns on each of
+`ambassadors`/`partners`, 4 indexes, all `if not exists`); production has **none**
+of it. Also missing: `ambassadors.referral_code_locked` and
+`referral_code_changed_at`.
+
+Traced, not assumed:
+
+- **The customer-facing referral LINK is fine.** `resolveReferralCode` checks the
+  live `ambassadors`/`partners` rows **first** and returns before touching the
+  alias table. A live code resolves normally.
+- **The ambassador-facing "change my code" feature is inert, and fails closed.**
+  `loadAmbassadorByAuthUser` selects `referral_code_locked, referral_code_changed_at`;
+  in production that select errors `42703`, `data` is null, and
+  `changeOwnReferralCode` throws *"Only approved ambassadors can set a referral
+  code."* An approved ambassador is told they are not approved. Confusing, not
+  dangerous.
+- **The change-rate limits are consequently unreachable**, not merely off: nothing
+  gets far enough to count.
+
+Not a launch blocker — affiliate links work and the broken half fails closed —
+but it is drift the owner should know about before an ambassador tries to rename
+their code. Staged in `DEPLOYMENT-ORDER.md`.
+
+**In production, app never references — 8:** `ambassador_wallet_ledger`,
+`fulfillment_events`, `fulfillment_orders`, `fulfillment_payouts`,
+`inventory_items`, `order_amount_backfills`, `order_attribution`,
+`inventory_reservations`. The last two are false positives of the `.from()` grep —
+`order-attribution.ts` reaches `order_attribution` through a constant, and
+`inventory_reservations` is driven by RPC. The other six are the dormant 3PL
+tables Block K's dead-code sweep already recorded.
+
+## 5.3 RPC drift
+
+All 17 RPCs the app calls exist in production **except `adjust_inventory_on_sale`**
+(§3, §4.3 — its migration is staged).
+
+## 5.4 The seven live migrations vs the repository
+
+| version | name | committed SQL? |
+|---|---|---|
+| `20260825003037` | `rpc_execute_lockdown` | ⚠️ **sweep not committed** — see I-11 below |
+| `20260825204855` | `referral_code_returns_customer_discount` | ✅ `referral-code-*.sql` (4 files declare `validate_referral_code`) |
+| `20260825214916` | `partner_application_atomic_creation` | ✅ superseded by `20260825231628`, which is committed |
+| `20260825215051` | `affiliate_balances_server_side_aggregate` | ✅ `BASELINE-live-functions-2026-08-25.sql` |
+| `20260825231628` | `partner_application_adopts_pre_added_ambassador` | ✅ `partner-identity-convergence.sql` |
+| `20260826002258` | `partner_invite_atomic_and_convergent` | ✅ `partner-invite-convergence.sql` |
+| `20260826014217` | `revoke_anon_create_partner_invite` | ✅ `migrations-applied/…` |
+
+**F-011 is CLOSED.** Its three production-only functions
+(`create_partner_application`, `affiliate_balances`, `rls_auto_enable`) are all
+captured verbatim in the baseline file. The statements of all seven migrations are
+recoverable from `supabase_migrations.schema_migrations.statements`, which is
+recorded here so no future session has to rediscover it.
+
+## 5.5 I-11 — measured, and it CANNOT be fully closed from here
+
+The default privilege is real and still armed. From `pg_default_acl`, production:
+
+```
+schema=public objtype=f
+  grantor=postgres        {postgres=X, anon=X, authenticated=X, service_role=X}
+  grantor=supabase_admin  {postgres=X, anon=X, authenticated=X, service_role=X}
+```
+
+Every function created in `public` is granted EXECUTE to `anon` on creation. That
+is exactly what made `create_partner_invite` an unauthenticated, RLS-bypassing
+write into the affiliate money tables (**I-07**).
+
+**Proven on the harness, running as `postgres`:**
+
+```
+BEFORE grantor=postgres        {postgres=X,anon=X,authenticated=X,service_role=X}
+BEFORE grantor=supabase_admin  {postgres=X,anon=X,authenticated=X,service_role=X}
+AFTER  grantor=postgres        {postgres=X,service_role=X}            <- closed
+AFTER  grantor=supabase_admin  {postgres=X,anon=X,authenticated=X}    <- UNCHANGED
+… and a function created after the ALTER was STILL anon-executable.
+```
+
+**A default privilege can only be altered by the role that granted it.** Half of
+this one belongs to `supabase_admin`, which this project's SQL access does not
+hold. **So the fix does not work, and saying it did would have been the lie.**
+
+**Current production posture is nonetheless clean:** of 19 SECURITY DEFINER
+functions, exactly **one** is anon-executable — `validate_referral_code`, which
+the storefront calls deliberately. The sweep held; the door is simply unlocked for
+the next arrival.
+
+### What was done instead
+
+1. **`rpc-security-posture.test.ts`** — fails the build if any repo SQL file
+   creates a SECURITY DEFINER function without revoking it from `anon`/
+   `authenticated`. This is the control that does not depend on an author
+   remembering, which is the failure mode Block I's own drift-check file
+   describes: *"Two authors remembered, two did not, and the one that did not
+   created a brand-new function."*
+
+   Its first run found **28** offenders. **14 were false positives** —
+   `current_auth_uid`/`current_auth_role`/`current_auth_email` are
+   *invoker*-security, so `anon` calling them gains nothing `anon` did not already
+   have, and RLS policies invoke them as the caller. The matcher was narrowed to
+   SECURITY DEFINER only rather than the finding being widened to fit.
+
+   **13 genuine offenders remained, and were fixed** — including
+   `partner-invite-convergence.sql: create_partner_invite`, **the I-07 function
+   itself**. Re-running that file in a fresh environment would have re-created it
+   world-executable.
+
+2. **`sql/rpc-default-privilege-lockdown.sql`** — disarms the half that *can* be
+   disarmed, re-sweeps anything that drifted, and states the limitation in the
+   file rather than in a commit message.
+
+3. **The `supabase_admin` half is an EXTERNAL DEPENDENCY** and is listed as one.
+
+Every generated revoke line was executed against the harness to prove it parses
+and does what it says:
+
+```
+created:      reserve_inventory anon=t   create_partner_invite anon=t
+after revoke: reserve_inventory anon=f   create_partner_invite anon=f
+service_role retains: reserve_inventory=t
+```
