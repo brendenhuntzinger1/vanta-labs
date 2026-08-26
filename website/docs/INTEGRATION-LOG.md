@@ -518,3 +518,89 @@ customer a second one. These stay RED until Phase 4 fixes them.
 
 **Running total after merge 6: 227 files / 3712 tests, 3 failing — all three are
 C-02, all three deliberate.**
+
+| 7 | `audit-parallel-assignments-block-k-r8fpix` (K) | **2 files** (`cart-recovery.ts`, `.gitignore`) | 235 files / **3892** (29 skipped), 3 failing | see §2.2 |
+| 8 | `block-ab-audit-o62bop` (F-A) | none | 243 files / **3937** (44 skipped), 3 failing | renamed `BLOCK-F.md` → `BLOCK-F-A.md` first, so merge 9 could not collide on the path |
+| 9 | `audit-blocks-f-e-8jxi9v` (F-B + E-B) | **8 files** | 249 files / **4032** (65 skipped), 3 failing | see §2.3 |
+
+## 2.2 Block C × Block K — `cart-recovery.ts`
+
+Two blocks rewrote the abandoned-cart sweep, for different reasons. Taking either
+side loses a real fix.
+
+| | Block C (C-06) | Block K (K-05, K-01) |
+|---|---|---|
+| defect | minting the coupon **before** claiming the stage let a failed send re-mint on every 30-min sweep — 2,994 passes, 335 live coupons in production | the t72h email printed the literal string `SEE PREVIOUS EMAIL` and an expiry no row held; and re-offering the t24h code is not enough, because under the shipped defaults that code is already dead when t72h fires |
+| fix | claim the `(cart, stage)` slot first, mint behind it | `resolveLastChanceCoupon` — re-offer only while still live, mint fresh otherwise; format expiries through `formatDisplayDate` |
+
+**Resolution: both.** The sweep claims first, and resolves the coupon *behind the
+claim* through Block K's resolver. `couponFromStage` was deleted — it read the same
+reservation without checking liveness, which is the defect K-05 names, and keeping
+two readers of one reservation is the duplicate-implementation shape this audit
+exists to remove.
+
+**Mutation controls (run, recorded):**
+
+| mutation | result |
+|---|---|
+| let a failed send re-arm the stage (undo C-06) | **5 failures** |
+| drop the liveness check, re-offer a dead coupon (undo K-05) | **1 failure** |
+| format the expiry in the ambient zone again (undo K-01) | **1 failure** |
+| restore the `SEE PREVIOUS EMAIL` placeholder | **7 failures** |
+
+Two fixtures had to start applying writes: `cart-recovery-last-chance.test.ts`
+swallowed `update()` and `delete()`, so `coupon_id` never landed on the
+reservation and the suite would have gone on passing while the merged code minted
+a second coupon for a cart that already had a live one.
+
+`.gitignore`: both sides kept, with a note that `.gitignore` does **not** keep
+probes out of vitest — that needs `vitest.config.ts`, which is §7.
+
+## 2.3 Block F-A × Block F-B — the same five modules, twice
+
+Both sessions were assigned "Block F — financial reporting" and both rewrote
+`admin-profit.ts`, `admin-revenue.ts`, `admin-reconciliation.ts`,
+`admin-tax-report.ts`, `ledger.ts`, `admin-dashboard-rollups.sql` and
+`admin-profit-at-scale.test.ts`. Several of their findings are the same defect
+found twice. Every conflict was resolved by taking **both** corrections where they
+were different, and **one implementation** where they were the same rule.
+
+| file | F-A had | F-B had | kept |
+|---|---|---|---|
+| `ledger.ts` | `REVENUE_ORDER_STATUSES` — a partial refund keeps its retained revenue | `NON_SALE_ORDER_TYPES` / `isSaleOrder` — a reship is not a sale | **both**; they answer different questions |
+| `admin-revenue.ts` | paged to exhaustion via `readAllRowsBounded`; widened to revenue statuses | excluded reships from the JS fallback | **both**, in one query |
+| `admin-dashboard-rollups.sql` | `partially_refunded` added | `order_type <> 'replacement'` added | **both**, in both functions |
+| `admin-profit.ts` | `readAllRowsBounded` (advances by rows received; probes past the ceiling) | local `readOrdersPaged` (fixed stride, **breaks on a short page**, swallows query errors) + a COUNT cross-check + `truncated` on the 30-day window | **`readAllRowsBounded`**, plus F-B's `truncated` signal and `isSaleOrder`. The local pager was deleted — its short-page break is exactly the latent defect `F-A-19` names |
+| `admin-reconciliation.ts` | `readAllRowsBounded` | local pager + a COUNT cross-check that raises `scan_truncated` | **F-A's read, F-B's COUNT check** — the COUNT was outside the conflict and survives |
+| `admin-tax-report.ts` | paged to exhaustion; `refundedTaxFor` (exported, mirrored by `admin-profit`) | 20-page loop; `refundedProportionOf` (local); per-row `netTax` | **F-A's paging, F-B's per-row `netTax`, one refund rule** (`refundedTaxFor`). `refundedProportionOf` deleted: two functions answering one question about one refund is how a filing report and a profit report end up disagreeing |
+| `vitest.setup.ts` | **deleted nine of eleven global stubs** after measuring each by removal | kept all eleven and catalogued where each module is really exercised | **the deletions, plus the catalogue as a comment.** A stub nothing needs is pure invisible coverage loss; the catalogue is the map of which modules had no behavioural coverage at all |
+| `admin-profit-at-scale.test.ts` | matches `readAllRowsBounded`; has the COGS-cap test (`F-A-17`) | matches the local pager; asserts the COUNT | **F-A's**, since it matches the implementation kept |
+
+`refunded` on a tax row now means **any** refund, partial or full. F-A had kept it
+full-only "for the existing CSV/table columns"; no surface reads it — the CSV and
+the revenue page both read the `byState` summaries — so the honest meaning wins.
+
+### Fallout from deleting the global stubs, and why it was worth it
+
+Two Block F-B/E-B suites were written against a setup that stubbed eleven modules
+for every file in the repo. With the stubs gone they broke, which is the point:
+
+- **`reconciliation-drift.test.ts`** (18 tests) hit the real `supabase-server` and
+  threw on a missing env var. It now applies `supabaseServerModule()` locally —
+  visible in the suite that needs it, per E-A's rule. 18 passing.
+- **`membership-signup-behaviour.test.ts`** mocked `@/lib/veyra-membership`
+  without `changeVeyraMembershipPlan`, which **Block D added for D-05**. The mock
+  now has it, and the tier-change test asserts D-05's actual guarantee: the new
+  price is pushed to the processor, not just written locally.
+  **Mutation control: removing the reprice call breaks 4 tests.**
+
+**After merge 9: 249 files / 4032 tests, 3 failing — all three C-02, all three
+deliberate. `tsc --noEmit` clean.**
+
+## 2.4 Arithmetic re-asserted after the merge
+
+All eleven findings files are present and distinctly named:
+`BLOCK-C`, `BLOCK-D`, `BLOCK-E-A`, `BLOCK-E-B`, `BLOCK-F-A`, `BLOCK-F-B`,
+`BLOCK-F-PRODUCTION-CHANGES`, `BLOCK-GH`, `BLOCK-I`, `BLOCK-J`, `BLOCK-K`, plus the
+ledger. **131 numbered findings, 2 sub-findings, 16 unnumbered — unchanged.**
+Nothing was eaten.

@@ -47,14 +47,48 @@ interface Filter {
   value: unknown;
 }
 
-/** Columns that behave as a PRIMARY KEY / UNIQUE index, by table. */
+/**
+ * Columns that behave as a PRIMARY KEY / UNIQUE index, by table.
+ *
+ * Verified against the live database (pg_indexes, read-only, 2026-08-26).
+ * `commissions_order_id_key` was missing here, so a duplicate INSERT into
+ * `commissions` was silently accepted in every e2e run — the exactly-once
+ * guarantee on the commission mirror was unmodelled and therefore untestable.
+ *
+ * `partner_payouts` carries only its primary key in production, so there is
+ * nothing to add for it (the audit map listed it alongside the other two).
+ */
 const UNIQUE_KEYS: Record<string, string[]> = {
   orders: ["order_id"],
   payment_events: ["event_id"],
   shippo_webhook_events: ["event_key"],
   referral_orders: ["order_id"],
   order_shipments: ["order_id"],
+  commissions: ["order_id"],
   inventory_reservations: [],
+};
+
+/**
+ * PARTIAL unique indexes — unique over some rows only. Kept separate from
+ * UNIQUE_KEYS because `upsert` reads that map as a plain conflict-target column
+ * list, and a partial index is not a valid conflict target.
+ *
+ * `order_email_log_one_live` is
+ *   UNIQUE (order_id, kind) WHERE status IN ('sending','sent')
+ * and it is the claim that makes an order confirmation send exactly once. It
+ * was unmodelled, so in every e2e suite the insert always succeeded and
+ * once-ness rested entirely on the separate paid_side_effects_at claim — two
+ * independent guards, only one of them ever exercised.
+ *
+ * The predicate matters as much as the columns: a row left at 'failed' must NOT
+ * block a retry, or a transient provider outage would silently suppress a
+ * customer's receipt forever.
+ */
+const PARTIAL_UNIQUE_KEYS: Record<string, { columns: string[]; applies: (row: Row) => boolean }> = {
+  order_email_log: {
+    columns: ["order_id", "kind"],
+    applies: (row) => row.status === "sending" || row.status === "sent",
+  },
 };
 
 function matches(row: Row, filter: Filter): boolean {
@@ -187,6 +221,15 @@ export class FakeDb {
   }
 
   private violatesUnique(table: string, row: Row): boolean {
+    const partial = PARTIAL_UNIQUE_KEYS[table];
+    if (partial && partial.applies(row)) {
+      const clash = this.table(table).some((existing) =>
+        partial.applies(existing)
+        && partial.columns.every((key) => row[key] != null && String(existing[key] ?? "") === String(row[key])),
+      );
+      if (clash) return true;
+    }
+
     const keys = UNIQUE_KEYS[table];
     if (!keys || keys.length === 0) return false;
     return this.table(table).some((existing) =>

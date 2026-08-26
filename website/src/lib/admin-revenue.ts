@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { REVENUE_ORDER_STATUSES, netOrderRevenue } from "@/lib/ledger";
+import { REVENUE_ORDER_STATUSES, netOrderRevenue, NON_SALE_ORDER_TYPES } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 
 export interface RevenueByMethod {
@@ -98,14 +98,19 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
       .sort((a, b) => b.revenue - a.revenue);
   } else {
     // Fallback: RPC not present — the same aggregation in JS, over the same
-    // REVENUE_ORDER_STATUSES the RPC filters on.
+    // rows the RPC filters on. Two separate corrections live here and neither
+    // subsumes the other:
     //
-    // This used to be one `.limit(10000)`. Past ten thousand paid orders it
-    // returned ten thousand of them and the page reported that as the store's
-    // lifetime revenue — so whether the admin_revenue_summary migration had
-    // been run changed the headline number, silently, with no way to tell from
-    // the screen which figure you were looking at. It is paged to exhaustion so
-    // both paths answer with the same total.
+    // 1. It used to be one `.limit(10000)`. Past ten thousand revenue orders it
+    //    returned ten thousand of them and the page reported that as the
+    //    store's lifetime revenue — so whether the admin_revenue_summary
+    //    migration had been run changed the headline number, silently, with no
+    //    way to tell from the screen which figure you were looking at. It is
+    //    paged to exhaustion so both paths answer with the same total.
+    // 2. Reshipments are `paid` rows with amount_paid 0. They add nothing to
+    //    revenue and a $0 denominator to average order value, so 100 sales plus
+    //    3 reships used to report 103 orders. They are excluded here, the same
+    //    exclusion the rollup function applies.
     type PaidRow = {
       amount_paid: number | null;
       refund_amount: number | null;
@@ -114,14 +119,17 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
       paid_at: string | null;
     };
     const { rows: paidOrders } = await readAllRowsBounded<PaidRow>(
-      (from, to) =>
-        supabaseAdmin
+      (from, to) => {
+        let query = supabaseAdmin
           .from("orders")
           .select("amount_paid, refund_amount, payment_method, card_processing_fee, paid_at")
-          .in("payment_status", Array.from(REVENUE_ORDER_STATUSES))
+          .in("payment_status", Array.from(REVENUE_ORDER_STATUSES));
+        for (const orderType of NON_SALE_ORDER_TYPES) query = query.neq("order_type", orderType);
+        return query
           // Any stable key will do; paging without one can repeat or skip rows.
           .order("id", { ascending: true })
-          .range(from, to) as unknown as PromiseLike<{ data: PaidRow[] | null; error: { message?: string } | null }>,
+          .range(from, to) as unknown as PromiseLike<{ data: PaidRow[] | null; error: { message?: string } | null }>;
+      },
       { maxRows: MAX_REVENUE_ORDERS, label: "revenue read" },
     );
     const methodMap = new Map<string, { revenue: number; orders: number }>();

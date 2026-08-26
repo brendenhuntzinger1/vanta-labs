@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   computeProfit,
   resolveCustomerDiscount,
@@ -92,6 +92,13 @@ function randomOrderInputs(g: ReturnType<typeof makeRng>): OrderInputs {
 }
 
 const ALL = new Set<DiscountComponent>(["coupon", "referral", "bundle", "membership"]);
+
+// The global vitest.setup.ts stub makes calculateCouponDiscount return 0. This
+// file imports it and fuzzes thousands of coupon cases against it, so without
+// this unmock every coupon assertion here reduces to 0 >= 0 and the entire
+// coupon arm is vacuous. Verified by mutation: making the real function return
+// `subtotal * 10` (unbounded) left this file green.
+vi.unmock("@/lib/coupons");
 
 describe(`fuzz: profit engine invariants (${ITER.toLocaleString()} cases each)`, () => {
   it("computeProfit: money fields well-formed and P&L identity holds", TIMEOUT, () => {

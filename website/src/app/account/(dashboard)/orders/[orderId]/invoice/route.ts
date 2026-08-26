@@ -5,6 +5,7 @@ import { getCustomerOrderDetail } from "@/lib/account-orders";
 import { isUnpaid } from "@/lib/order-status";
 import { displayOrderReference } from "@/lib/order-reference";
 import { formatDisplayDate } from "@/lib/format-date";
+import { buildInvoiceTotals } from "@/lib/invoice-totals";
 
 function money(value: number, currency = "USD") {
   return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(value);
@@ -46,14 +47,24 @@ export async function GET(_request: Request, context: { params: Promise<{ orderI
     )
     .join("");
 
+  // Every line comes from buildInvoiceTotals, which guarantees they sum to
+  // "Total paid". Rendering only, no arithmetic — the invoice used to compute
+  // its own line list here and omitted the card surcharge and the protection
+  // fee, so it did not add up on any order that paid either.
+  const invoice = buildInvoiceTotals(order);
   const totals = [
-    `<tr><td>Subtotal</td><td class="num">${money(order.subtotal, c)}</td></tr>`,
-    order.discountAmount > 0 ? `<tr><td>Discount</td><td class="num">−${money(order.discountAmount, c)}</td></tr>` : "",
-    `<tr><td>Shipping</td><td class="num">${order.shippingAmount > 0 ? money(order.shippingAmount, c) : "Free"}</td></tr>`,
-    order.handlingFee > 0 ? `<tr><td>Handling</td><td class="num">${money(order.handlingFee, c)}</td></tr>` : "",
-    order.taxAmount > 0 ? `<tr><td>Tax</td><td class="num">${money(order.taxAmount, c)}</td></tr>` : "",
-    `<tr class="total"><td>Total paid</td><td class="num">${money(order.amountPaid, c)}</td></tr>`,
-    order.refundAmount > 0 ? `<tr><td>Refunded</td><td class="num">−${money(order.refundAmount, c)}</td></tr>` : "",
+    ...invoice.lines.map((line) => {
+      // A free-shipping order says "Free" rather than "$0.00" — it reads as a
+      // benefit, and a $0 line otherwise looks like a rendering fault.
+      const value = line.label === "Shipping" && line.amount === 0
+        ? "Free"
+        : line.amount < 0
+          ? `−${money(Math.abs(line.amount), c)}`
+          : money(line.amount, c);
+      return `<tr><td>${esc(line.label)}</td><td class="num">${value}</td></tr>`;
+    }),
+    `<tr class="total"><td>Total paid</td><td class="num">${money(invoice.totalPaid, c)}</td></tr>`,
+    invoice.refunded > 0 ? `<tr><td>Refunded</td><td class="num">−${money(invoice.refunded, c)}</td></tr>` : "",
   ].join("");
 
   const html = `<!doctype html>

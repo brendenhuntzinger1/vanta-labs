@@ -30,6 +30,48 @@ import { vi } from "vitest";
 // (`server-only` is aliased to an empty module in vitest.config.ts rather than
 // mocked here — that is a resolution concern, not a behavioural one.)
 
+// ---------------------------------------------------------------------------
+// WHAT THE ELEVEN WERE, AND WHERE EACH MODULE IS REALLY EXERCISED.
+//
+// Two sessions audited this file independently. One measured each stub by
+// deleting it and re-running the whole suite; nine changed the result by zero
+// tests and were removed (above). The other kept all eleven and catalogued
+// where the real module is covered. The deletions won — a stub nothing needs is
+// pure invisible coverage loss — but the catalogue is the more valuable half of
+// the second session's work and is kept here, because it is the map of which
+// modules had no behavioural coverage at all until this audit.
+//
+//   @/lib/email/send          Always succeeded, so NO suite in the repo could
+//                             observe a failed send — which is where three
+//                             separate email defects live. Real coverage:
+//                             order-email-once.test.ts and the journey
+//                             harness's emailFailures counter.
+//   @/lib/membership-billing  Stubbed to two no-ops, leaving
+//                             startMembershipSignup — the function that takes
+//                             membership money — with ZERO behavioural
+//                             coverage. Restoring the historical defect (a
+//                             FAILED first charge still writing a membership
+//                             row) left all 3,660 tests green. Real coverage:
+//                             membership-signup-behaviour.test.ts.
+//   @/lib/coupons             calculateCouponDiscount returned 0, so three
+//                             fuzz suites asserted 0 >= 0 across 40,000+
+//                             "cases". Real coverage: coupons.test.ts,
+//                             coupon-validation.test.ts.
+//   @/lib/membership          Real coverage: the e2e suites, reconciliation-drift.
+//   @/lib/catalog             Real coverage: the e2e suites.
+//   @/lib/admin-control       Real coverage: the e2e suites, plus per-file
+//                             overrides where real tax/bulk config matters.
+//   @/lib/ambassador-settings Real coverage: payout-authority.test.ts.
+//   @/lib/tax-provider        Ran the REAL resolveSalesTax against mocked
+//                             settings, so tax maths was always genuine.
+//   @/lib/cart-recovery       Real coverage: cart-recovery-coupon-leak.test.ts,
+//                             cart-recovery-last-chance.test.ts.
+//   @/lib/supabase-server     Replaced per file by fake-db, the journey
+//                             harness, or a real Postgres.
+//   @/lib/fulfillment/service Targeted a module that DOES NOT EXIST in src.
+//                             The stub was inert; it is gone with the rest.
+// ---------------------------------------------------------------------------
+
 void vi;
 
 export {};

@@ -19,12 +19,21 @@ export interface TaxOrderRow {
   ratePercent: number;
   taxableSales: number;
   taxCollected: number;
-  paymentStatus: string;
-  /** True only for a FULL refund. Kept for the existing CSV/table columns. */
-  refunded: boolean;
-  /** Tax handed back on this order — the whole amount on a full refund, the
-   *  refunded share on a partial one, 0 on a clean sale. */
+  /**
+   * The share of this order's tax that went back to the customer. Zero on an
+   * untouched order, the whole of `taxCollected` on a full refund, and a
+   * proportion of it on a partial — see refundedTaxFor below.
+   */
   taxRefunded: number;
+  /** taxCollected − taxRefunded: what this order actually owes the state. */
+  netTax: number;
+  paymentStatus: string;
+  /**
+   * True for ANY refund, partial or full — a partial refund is still a refund,
+   * and calling it false on a filing report would be a false negative. No
+   * surface reads this today; `taxRefunded`/`netTax` carry the money.
+   */
+  refunded: boolean;
 }
 
 export interface TaxStateSummary {
@@ -64,6 +73,12 @@ interface OrderRecord {
   payment_status: string | null;
 }
 
+// One rule for "what share of the tax came back", and it lives in
+// refundedTaxFor below. A second implementation of it arrived from a parallel
+// session and is deliberately not kept: two functions answering the same
+// question about the same money is how a filing report and a profit report end
+// up disagreeing about one refund.
+
 // Ceiling on one report, not a definition of the answer — see `truncated`.
 const MAX_TAX_ORDERS = 200_000;
 
@@ -95,6 +110,12 @@ export function refundedTaxFor(order: {
 
 // Year is optional; default = everything. Only orders that actually carried
 // tax appear — a $0-tax order (non-nexus destination) has nothing to remit.
+//
+// PARTIAL REFUNDS. `partially_refunded` is in neither PAID_ORDER_STATUSES nor
+// the `=== "refunded"` test, so such an order used to fall through the skip
+// above and disappear from the filing entirely — the store under-reported the
+// tax it still owed on the part the customer kept. `orders.refund_amount` was
+// not read anywhere in this file.
 export async function getSalesTaxReport(options?: { year?: number }): Promise<SalesTaxReport> {
   const rows: TaxOrderRow[] = [];
 
@@ -123,28 +144,31 @@ export async function getSalesTaxReport(options?: { year?: number }): Promise<Sa
 
   for (const order of records) {
     const status = String(order.payment_status ?? "").toLowerCase();
-    const refunded = status === "refunded";
+    const fullyRefunded = status === "refunded";
     // A partially refunded order KEPT the sale and the tax on the part the
     // customer did not get back. It is neither in PAID_ORDER_STATUSES nor
     // equal to "refunded", so it used to fall through the skip below and
     // vanish from the filing entirely, tax and all.
     const partiallyRefunded = status === "partially_refunded";
-    const collected = PAID_ORDER_STATUSES.has(status) || partiallyRefunded || refunded;
+    const collected = PAID_ORDER_STATUSES.has(status) || partiallyRefunded || fullyRefunded;
     // Pending/failed/cancelled orders never collected the tax — skip.
     if (!collected) continue;
     // Prefer the exact recorded jurisdiction; orders that predate the
     // tax_state column fall back to the shipping state.
     const state = order.tax_state ?? normalizeUsState(order.state) ?? "UNKNOWN";
+    const taxCollected = roundMoney(Number(order.tax_amount ?? 0));
+    const taxRefunded = refundedTaxFor(order);
     rows.push({
       orderNumber: order.order_number ?? "",
       createdAt: order.created_at ?? "",
       state,
       ratePercent: Number(order.tax_rate_percent ?? 0),
       taxableSales: roundMoney(Math.max(0, Number(order.subtotal ?? 0) - Number(order.discount_amount ?? 0))),
-      taxCollected: roundMoney(Number(order.tax_amount ?? 0)),
+      taxCollected,
+      taxRefunded,
+      netTax: roundMoney(taxCollected - taxRefunded),
       paymentStatus: status,
-      refunded,
-      taxRefunded: refundedTaxFor(order),
+      refunded: fullyRefunded || partiallyRefunded,
     });
   }
 
@@ -153,10 +177,12 @@ export async function getSalesTaxReport(options?: { year?: number }): Promise<Sa
     const entry = byStateMap.get(row.state) ?? { state: row.state, orders: 0, taxableSales: 0, taxCollected: 0, taxRefunded: 0, netTax: 0 };
     entry.orders += 1;
     // COLLECTED AND REFUNDED ARE SEPARATE LINES ON A RETURN, and every taxed
-    // order belongs on the first one. A refund used to be recorded ONLY as a
-    // refund — the same order's collection was never added — so each refunded
-    // order pushed net tax below zero by its own tax, and a state whose only
-    // taxed order was refunded reported a negative amount due.
+    // order belongs on the first one. The money WAS collected on every order
+    // here, refunded or not — a refund is a movement in the other direction,
+    // not an erasure of the collection. Adding a full refund only to
+    // taxRefunded, and never to taxCollected, pushed netTax below zero by the
+    // order's own tax: a single fully-refunded $6.00-tax order reported the
+    // state owing the store $6.00.
     entry.taxableSales = roundMoney(entry.taxableSales + row.taxableSales);
     entry.taxCollected = roundMoney(entry.taxCollected + row.taxCollected);
     entry.taxRefunded = roundMoney(entry.taxRefunded + row.taxRefunded);
@@ -165,6 +191,9 @@ export async function getSalesTaxReport(options?: { year?: number }): Promise<Sa
   }
 
   const byState = Array.from(byStateMap.values()).sort((a, b) => b.netTax - a.netTax);
+  // `taxableSales` now includes refunded orders' bases, so it is gross taxable
+  // sales — matching taxCollected, which is also gross. Net of refunds is
+  // netTax.
   const totals = byState.reduce(
     (acc, s) => ({
       orders: acc.orders + s.orders,

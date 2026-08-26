@@ -3,7 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
-import { isPaidOrderStatus, isEarnedCommission } from "@/lib/ledger";
+import { isPaidOrderStatus, isEarnedCommission, isSaleOrder } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 
 // The order fields profit needs. Everything is stored on the order at checkout,
@@ -174,6 +174,30 @@ function profitForOrder(
 // ---- Batch helpers: fetch COGS lines + commissions + overlay for orders ----
 
 const IN_CHUNK = 150; // keep each `.in(...)` well under the URL length limit
+
+// ---- Reading orders without silently losing some -------------------------
+//
+// Two different things can cut an orders read short, and neither announces
+// itself:
+//
+//   1. A `.limit()` in this file. `profitForPaidOrdersInRange` had none at all,
+//      which is worse, not better: it meant the figure depended entirely on (2).
+//   2. PostgREST's `db-max-rows`, a Supabase project setting this application
+//      cannot read, which caps EVERY response. Supabase's own default for it is
+//      1,000.
+//
+// Reproduced with 1,500 generated orders and a 1,000-row cap: the 30-day profit
+// tile reported 1,000 orders and a third less profit, with no error and no
+// warning. Under-reporting money is the worst direction to be wrong in, so the
+// number of rows actually read is compared against a COUNT — which is one round
+// trip and is not subject to the cap — and the shortfall is reported rather than
+// absorbed.
+// Two implementations of this paging arrived from two sessions. The shared
+// `readAllRowsBounded` is the one kept: it advances by the batch length actually
+// returned, so a server cap smaller than the page size cannot end the read
+// early, and it probes one row past the ceiling so `truncated` is observed
+// rather than inferred. The local variant stopped on any short page — safe only
+// while `db-max-rows` is exactly 1000 — and discarded query errors.
 
 async function costLinesByOrderId(orderIds: string[]): Promise<Map<string, OrderProfitLine[]>> {
   const byOrder = new Map<string, OrderProfitLine[]>();
@@ -352,16 +376,20 @@ export async function getOrderProfitMap(orderIds: string[]): Promise<Map<string,
 }
 
 // Ceilings on one report, not definitions of the answer — see `truncated` on
-// ProfitDashboard. Both reads below page to exhaustion.
+// ProfitDashboard. Every read below pages to exhaustion.
 const MAX_PROFIT_ORDERS = 200_000;
 
-async function profitForPaidOrdersInRange(fromIso: string, toIso: string): Promise<OrderProfit[]> {
+async function profitForPaidOrdersInRange(
+  fromIso: string,
+  toIso: string,
+): Promise<{ rows: OrderProfit[]; truncated: boolean }> {
   // This select carried no `.limit()` and no `.range()` at all, which is not
   // the same as being unbounded: PostgREST caps every response at its
   // `db-max-rows` (Supabase exposes it as "Max rows"), and a capped read came
   // back looking exactly like a small store. Paging to exhaustion removes the
-  // dependency on that setting entirely.
-  const { rows } = await readAllRowsBounded<OrderRecord>(
+  // dependency on that setting entirely, and `truncated` says so when the
+  // ceiling — not the data — ended the read.
+  const { rows, truncated } = await readAllRowsBounded<OrderRecord>(
     (from, to) =>
       supabaseAdmin
         .from("orders")
@@ -375,7 +403,7 @@ async function profitForPaidOrdersInRange(fromIso: string, toIso: string): Promi
         .range(from, to) as unknown as PromiseLike<{ data: OrderRecord[] | null; error: { message?: string } | null }>,
     { maxRows: MAX_PROFIT_ORDERS, label: "profit range read" },
   );
-  return computeProfitForOrders(rows);
+  return { rows: await computeProfitForOrders(rows), truncated };
 }
 
 export interface ProfitWindowMetrics {
@@ -384,6 +412,12 @@ export interface ProfitWindowMetrics {
   last30Days: number;
   ordersLast30Days: number;
   hasEstimatedCost: boolean;
+  /**
+   * True when the orders read came back short of what the table holds, so these
+   * figures are a floor rather than the total. Never let a smaller number be
+   * presented as the whole story.
+   */
+  truncated: boolean;
 }
 
 // True net profit for the dashboard, over today / 7d / 30d windows. Uses the
@@ -396,7 +430,7 @@ export async function getProfitWindowMetrics(nowMs: number = Date.now()): Promis
   const weekStart = nowMs - 7 * oneDay;
   const monthStart = nowMs - 30 * oneDay;
 
-  const rows = await profitForPaidOrdersInRange(fromIso, toIso);
+  const { rows, truncated } = await profitForPaidOrdersInRange(fromIso, toIso);
 
   let today = 0;
   let last7Days = 0;
@@ -409,13 +443,13 @@ export async function getProfitWindowMetrics(nowMs: number = Date.now()): Promis
     if (!Number.isFinite(eventTime)) continue;
     if (eventTime >= monthStart) {
       last30Days += row.profit;
-      // SALES, not outbound shipments — the same rule getProfitDashboard's
-      // orderCount applies, and for the same reason its docblock gives: a
-      // reship has no buyer, so counting it inflates the order count and drags
-      // average order value down. This line used to increment unconditionally,
-      // so the 30-day tile and the lifetime tile on the same page reported
-      // different order counts for the same store.
-      if (String(row.orderType ?? "").toLowerCase() !== "replacement") ordersLast30Days += 1;
+      // SALES, not outbound shipments. A reship's COST belongs in the profit
+      // above, but the reship has no buyer, so counting it inflates the order
+      // count and drags average order value down with a $0 denominator. This
+      // line used to increment unconditionally, so the 30-day tile and the
+      // lifetime tile on the same page reported different order counts for the
+      // same store. isSaleOrder is the one predicate both tiles now use.
+      if (isSaleOrder(row.orderType)) ordersLast30Days += 1;
       if (row.profitStatus === "estimated") hasEstimatedCost = true;
     }
     if (eventTime >= weekStart) last7Days += row.profit;
@@ -423,7 +457,7 @@ export async function getProfitWindowMetrics(nowMs: number = Date.now()): Promis
   }
 
   const round = (v: number) => Math.round(v * 100) / 100;
-  return { today: round(today), last7Days: round(last7Days), last30Days: round(last30Days), ordersLast30Days, hasEstimatedCost };
+  return { today: round(today), last7Days: round(last7Days), last30Days: round(last30Days), ordersLast30Days, hasEstimatedCost, truncated };
 }
 
 export interface ProfitTrendPoint {
@@ -433,7 +467,7 @@ export interface ProfitTrendPoint {
 
 // Per-day net profit across a date range (Analytics profit trend).
 export async function getProfitTrend(fromIso: string, toIso: string): Promise<ProfitTrendPoint[]> {
-  const rows = await profitForPaidOrdersInRange(fromIso, toIso);
+  const { rows } = await profitForPaidOrdersInRange(fromIso, toIso);
   const byDay = new Map<string, number>();
 
   for (const row of rows) {
@@ -494,7 +528,8 @@ export interface ProfitDashboard {
   hasEstimatedProfit: boolean;
   /**
    * True when MAX_PROFIT_ORDERS stopped the read before the whole order history
-   * had been seen. Every figure above is then a floor, not a total.
+   * had been seen — see ProfitWindowMetrics.truncated. Every figure above is
+   * then a floor, not a total.
    */
   truncated: boolean;
 }
@@ -548,10 +583,10 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
     // A replacement's COSTS are counted below exactly like any other order's —
     // the merchandise and the postage were really spent. Only the sale count
     // excludes it, because no customer bought anything.
-    if (String(row.orderType ?? "").toLowerCase() === "replacement") {
-      replacementCount += 1;
-    } else {
+    if (isSaleOrder(row.orderType)) {
       orderCount += 1;
+    } else {
+      replacementCount += 1;
     }
     profit.lifetime += row.profit;
     grossRevenue += row.grossRevenue;
