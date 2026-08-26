@@ -1,8 +1,8 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { PAID_ORDER_STATUSES, netOrderRevenue } from "@/lib/ledger";
-import { readAllRows } from "@/lib/supabase-paging";
+import { REVENUE_ORDER_STATUSES, netOrderRevenue } from "@/lib/ledger";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 
 export interface RevenueByMethod {
   method: string;
@@ -65,6 +65,11 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
   ]);
 
   const pendingPayments = pending.count ?? 0;
+  // NOT the same number as totalPaidOrders, and not labelled as if it were:
+  // this counts rows whose status is exactly "paid", where totalPaidOrders
+  // counts every status that contributes revenue (REVENUE_ORDER_STATUSES,
+  // which also includes partially_refunded). The two differ by the partly
+  // refunded orders, deliberately.
   const approvedPayments = approved.count ?? 0;
   const awaitingFulfillment = awaiting.count ?? 0;
   const shipped = shippedResult.count ?? 0;
@@ -92,7 +97,8 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
       }))
       .sort((a, b) => b.revenue - a.revenue);
   } else {
-    // Fallback: RPC not present — the same aggregation in JS.
+    // Fallback: RPC not present — the same aggregation in JS, over the same
+    // REVENUE_ORDER_STATUSES the RPC filters on.
     //
     // This used to be one `.limit(10000)`. Past ten thousand paid orders it
     // returned ten thousand of them and the page reported that as the store's
@@ -107,12 +113,12 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
       card_processing_fee: number | null;
       paid_at: string | null;
     };
-    const { rows: paidOrders } = await readAllRows<PaidRow>(
+    const { rows: paidOrders } = await readAllRowsBounded<PaidRow>(
       (from, to) =>
         supabaseAdmin
           .from("orders")
           .select("amount_paid, refund_amount, payment_method, card_processing_fee, paid_at")
-          .in("payment_status", Array.from(PAID_ORDER_STATUSES))
+          .in("payment_status", Array.from(REVENUE_ORDER_STATUSES))
           // Any stable key will do; paging without one can repeat or skip rows.
           .order("id", { ascending: true })
           .range(from, to) as unknown as PromiseLike<{ data: PaidRow[] | null; error: { message?: string } | null }>,

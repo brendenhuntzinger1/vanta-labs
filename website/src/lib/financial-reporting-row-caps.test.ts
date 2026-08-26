@@ -1,6 +1,9 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "pg";
 import { createPostgrestShim, type ShimOptions } from "@/lib/e2e/postgrest-shim";
+import { createSuiteDatabase } from "@/lib/e2e/suite-database";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 // ---------------------------------------------------------------------------
 // BLOCK F — the row caps on the financial reporting surfaces, against a real
@@ -47,7 +50,13 @@ const BROKEN_INDICES = [10, 5_000, 8_000, 12_000, 16_000, 20_000];
 
 const NORMAL_PRODUCT_ORDERS = TOTAL_ORDERS - 5 * PER_THOUSAND; // 20,895
 const PAID_STATUS_ORDERS = NORMAL_PRODUCT_ORDERS + PER_THOUSAND + PER_THOUSAND; // + membership + replacement
-const PROFIT_ELIGIBLE_ORDERS = PAID_STATUS_ORDERS + PER_THOUSAND; // + partially_refunded
+/**
+ * Orders that CONTRIBUTE REVENUE — ledger.REVENUE_ORDER_STATUSES. Owner's
+ * decision: a partially refunded order keeps its retained revenue, so it counts
+ * here and its refund is netted off the money, not the order.
+ */
+const REVENUE_ORDERS = PAID_STATUS_ORDERS + PER_THOUSAND; // + partially_refunded
+const PROFIT_ELIGIBLE_ORDERS = REVENUE_ORDERS;
 
 const SCHEMA = `
 drop table if exists commissions;
@@ -184,7 +193,10 @@ describeDb("financial reporting at 21,000 orders", () => {
   let client: Client;
 
   beforeAll(async () => {
-    client = new Client({ connectionString: DATABASE_URL });
+    // Its own database — the two Block F suites both build an `orders`
+    // table and vitest runs files in parallel (Rule 5).
+    const suiteUrl = await createSuiteDatabase(DATABASE_URL!, "row-caps");
+    client = new Client({ connectionString: suiteUrl });
     await client.connect();
     await client.query(SCHEMA);
     await client.query(SEED);
@@ -207,6 +219,11 @@ describeDb("financial reporting at 21,000 orders", () => {
       "select count(*)::int as c from orders where payment_status in ('paid','completed','succeeded')",
     );
     expect(paid.rows[0].c).toBe(PAID_STATUS_ORDERS);
+
+    const revenue = await client.query(
+      "select count(*)::int as c from orders where payment_status in ('paid','completed','succeeded','partially_refunded')",
+    );
+    expect(revenue.rows[0].c).toBe(REVENUE_ORDERS);
 
     const partial = await client.query("select count(*)::int as c from orders where payment_status = 'partially_refunded'");
     expect(partial.rows[0].c).toBe(PER_THOUSAND);
@@ -268,35 +285,23 @@ describeDb("financial reporting at 21,000 orders", () => {
   // whether one migration has been run.
   // -------------------------------------------------------------------------
   it("the revenue fallback caps at 10,000 orders while the RPC path does not", async () => {
-    await client.query(`
-      create or replace function admin_revenue_summary(p_start_of_today timestamptz)
-      returns table (total_paid_revenue numeric, total_paid_orders bigint, processing_fees numeric, today_revenue numeric, today_orders bigint)
-      language sql stable as $$
-        with paid as (
-          select round(greatest(0, coalesce(amount_paid,0) - coalesce(refund_amount,0)), 2) as net,
-                 coalesce(card_processing_fee,0) as fee, paid_at
-          from orders where payment_status in ('paid','completed','succeeded')
-        )
-        select coalesce(sum(net),0), count(*), coalesce(sum(fee),0),
-               coalesce(sum(net) filter (where paid_at is not null and paid_at >= p_start_of_today), 0),
-               count(*) filter (where paid_at is not null and paid_at >= p_start_of_today)
-        from paid;
-      $$;
-      create or replace function admin_revenue_by_method()
-      returns table (method text, revenue numeric, orders bigint)
-      language sql stable as $$
-        select coalesce(payment_method,''),
-               round(coalesce(sum(round(greatest(0, coalesce(amount_paid,0) - coalesce(refund_amount,0)), 2)),0),2),
-               count(*)
-        from orders where payment_status in ('paid','completed','succeeded')
-        group by coalesce(payment_method,'') order by 2 desc;
-      $$;
-    `);
+    // Loaded from the migration file that ships, NOT retyped here. An inline
+    // copy is a fifth hand-written definition of "revenue" — precisely the
+    // thing this block exists to stamp out — and it would let the test keep
+    // passing after the real SQL changed.
+    const sqlFile = readFileSync(path.resolve(__dirname, "sql/admin-dashboard-rollups.sql"), "utf8");
+    for (const fn of ["admin_revenue_summary", "admin_revenue_by_method"]) {
+      const from = sqlFile.indexOf(`create or replace function public.${fn}`);
+      const to = sqlFile.indexOf("$$;", from) + 3;
+      // The grants at the end of the file reference roles a throwaway cluster
+      // does not have; only the function bodies are needed here.
+      await client.query(sqlFile.slice(from, to).replace(/public\./g, ""));
+    }
 
     const { getRevenueMetrics } = await import("@/lib/admin-revenue");
 
     const viaRpc = await getRevenueMetrics();
-    expect(viaRpc.totalPaidOrders).toBe(PAID_STATUS_ORDERS);
+    expect(viaRpc.totalPaidOrders).toBe(REVENUE_ORDERS);
 
     // Same code, same data, RPC not migrated yet.
     activeOptions = { missingRpcs: new Set(["admin_revenue_summary", "admin_revenue_by_method"]) };
@@ -305,7 +310,7 @@ describeDb("financial reporting at 21,000 orders", () => {
     // BEFORE THE FIX: 10,000 orders / $1,268,369 here against 20,937 /
     // $2,655,582 from the RPC — the same page, the same data, and which number
     // you saw depended only on whether one migration had been run.
-    expect(viaFallback.totalPaidOrders).toBe(PAID_STATUS_ORDERS);
+    expect(viaFallback.totalPaidOrders).toBe(REVENUE_ORDERS);
     expect(viaFallback.totalPaidRevenue).toBeCloseTo(viaRpc.totalPaidRevenue, 2);
     expect(viaFallback.averageOrderValue).toBeCloseTo(viaRpc.averageOrderValue, 2);
   }, 300_000);

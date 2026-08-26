@@ -15,9 +15,18 @@
 
 -- ---------------------------------------------------------------------------
 -- Revenue metrics (mirrors src/lib/admin-revenue.ts getRevenueMetrics).
--- Paid statuses = paid|completed|succeeded (ledger.ts PAID_ORDER_STATUSES).
+--
+-- REVENUE STATUSES = paid|completed|succeeded|partially_refunded
+-- (ledger.ts REVENUE_ORDER_STATUSES). Owner's decision: a $200 order refunded
+-- by $50 is $150 of revenue and is still an order. It used to be excluded
+-- entirely by this filter, so its RETAINED revenue vanished from the revenue
+-- page while admin-profit counted it — two numbers for one store.
+--
 -- Net revenue per order = max(0, amount_paid - refund_amount), rounded to 2dp
 -- per order then summed (matches netOrderRevenue()).
+--
+-- ledger-sql-parity.test.ts fails if this status list and REVENUE_ORDER_STATUSES
+-- stop agreeing, so neither side can drift alone.
 -- ---------------------------------------------------------------------------
 create or replace function public.admin_revenue_summary(p_start_of_today timestamptz)
 returns table (
@@ -38,7 +47,7 @@ as $$
       coalesce(card_processing_fee, 0) as fee,
       paid_at
     from public.orders
-    where payment_status in ('paid', 'completed', 'succeeded')
+    where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
   )
   select
     coalesce(sum(net), 0) as total_paid_revenue,
@@ -65,7 +74,7 @@ as $$
     round(coalesce(sum(round(greatest(0, coalesce(amount_paid, 0) - coalesce(refund_amount, 0)), 2)), 0), 2) as revenue,
     count(*) as orders
   from public.orders
-  where payment_status in ('paid', 'completed', 'succeeded')
+  where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
   group by coalesce(payment_method, '')
   order by revenue desc;
 $$;
@@ -82,7 +91,9 @@ grant execute on function public.admin_revenue_by_method() to service_role;
 -- ---------------------------------------------------------------------------
 -- Customer rollup (mirrors src/lib/admin-customers.ts aggregateCustomers).
 -- Aggregates guest/customer orders by lower(customer_email). totalSpent sums
--- amount_paid only for paid|partially_refunded|refunded orders; name is taken
+-- NET revenue (amount_paid - refund_amount) for paid|partially_refunded|refunded
+-- orders -- it used to sum GROSS amount_paid, so a customer whose order was
+-- fully refunded still showed as having spent the whole amount. Name is taken
 -- from the customer's LATEST order (may be null, matching the JS). Search
 -- matches email OR name (case-insensitive). Returns a window total_count so the
 -- caller gets the filtered total alongside the page in one round-trip.
@@ -111,7 +122,9 @@ as $$
     select
       lower(trim(customer_email)) as email,
       count(*) as order_count,
-      coalesce(sum(case when payment_status in ('paid', 'partially_refunded', 'refunded') then coalesce(amount_paid, 0) else 0 end), 0) as total_spent,
+      coalesce(sum(case when payment_status in ('paid', 'partially_refunded', 'refunded')
+                        then round(greatest(0, coalesce(amount_paid, 0) - coalesce(refund_amount, 0)), 2)
+                        else 0 end), 0) as total_spent,
       min(created_at) as first_order_at,
       max(created_at) as last_order_at
     from public.orders
@@ -149,8 +162,16 @@ grant execute on function public.admin_customer_rollup(text, int, int) to servic
 -- ---------------------------------------------------------------------------
 -- Operations summary customer counts + live sales (mirrors partner-portal.ts
 -- getAdminOperationsSummary). new/returning are computed by grouping PAID orders
--- on the RAW customer_email (matches the JS map key — no lower/trim). Live sales
--- sum GROSS amount_paid (not net of refund), matching the JS reduce.
+-- on the RAW customer_email (matches the JS map key — no lower/trim).
+--
+-- Live sales now sum NET revenue over REVENUE_ORDER_STATUSES, so they agree
+-- with the revenue page and the profit dashboard. They previously summed GROSS
+-- amount_paid for status='paid' only, which both ignored refunds and dropped
+-- partly refunded orders.
+--
+-- NOTE FOR BLOCK M: partner-portal.ts getAdminOperationsSummary is the JS twin
+-- of this function and is owned by block A+B. If its reduce still sums gross
+-- amount_paid, the two paths disagree exactly the way admin-revenue's did.
 -- ---------------------------------------------------------------------------
 create or replace function public.admin_ops_summary(
   p_today_start timestamptz,
@@ -175,8 +196,14 @@ as $$
     group by customer_email
   )
   select
-    coalesce((select sum(coalesce(amount_paid, 0)) from public.orders where payment_status = 'paid' and created_at >= p_today_start), 0) as live_sales_today,
-    coalesce((select sum(coalesce(amount_paid, 0)) from public.orders where payment_status = 'paid' and created_at >= p_month_start), 0) as live_sales_month,
+    coalesce((select sum(round(greatest(0, coalesce(amount_paid, 0) - coalesce(refund_amount, 0)), 2))
+              from public.orders
+              where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
+                and created_at >= p_today_start), 0) as live_sales_today,
+    coalesce((select sum(round(greatest(0, coalesce(amount_paid, 0) - coalesce(refund_amount, 0)), 2))
+              from public.orders
+              where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
+                and created_at >= p_month_start), 0) as live_sales_month,
     coalesce((select count(*) from per_customer where cnt = 1), 0) as new_customers,
     coalesce((select count(*) from per_customer where cnt > 1), 0) as returning_customers,
     coalesce((select count(*) from per_customer), 0) as total_customers;

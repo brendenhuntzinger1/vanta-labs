@@ -10,7 +10,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { PAID_ORDER_STATUSES } from "@/lib/ledger";
 import { normalizeUsState } from "@/lib/sales-tax";
 import { roundMoney } from "@/lib/shipping";
-import { readAllRows } from "@/lib/supabase-paging";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 
 export interface TaxOrderRow {
   orderNumber: string;
@@ -100,7 +100,7 @@ export async function getSalesTaxReport(options?: { year?: number }): Promise<Sa
 
   // Paged to exhaustion. The previous 20-page ceiling silently stopped at
   // 20,000 taxed orders and reported whatever it had as the whole filing.
-  const { rows: records, truncated } = await readAllRows<OrderRecord>(
+  const { rows: records, truncated } = await readAllRowsBounded<OrderRecord>(
     (from, to) => {
       let query = supabaseAdmin
         .from("orders")

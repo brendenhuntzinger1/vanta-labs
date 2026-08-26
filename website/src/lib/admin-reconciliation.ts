@@ -2,7 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { expectedOrderTotal, isTotalMismatch, maxShippingProtectionFee } from "@/lib/reconciliation-math";
-import { readAllRows } from "@/lib/supabase-paging";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 import { pointsToDollars } from "@/lib/points-math";
 
 // "Reconciliation" here means internal ledger consistency - checking that
@@ -73,7 +73,7 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
 
   const read = async (columns: string) => {
     try {
-      const { rows } = await readAllRows<ReconciliationRow>(
+      const { rows } = await readAllRowsBounded<ReconciliationRow>(
         (from, to) =>
           supabaseAdmin
             .from("orders")

@@ -1,5 +1,35 @@
 # BLOCK F — Financial reporting
 
+> ## ⚠ FOR THE MASTER INTEGRATION AUDIT (Block M) — recheck every pagination test
+>
+> `src/lib/e2e/fake-db.ts` implemented PostgREST's `range()` as
+> `range() { return builder; }` — **a stub that discarded its arguments**. Any
+> suite that asserted on a paged read through that fake could not have been
+> testing the paging: the fake returned the same rows for every page.
+>
+> Fixed here (F-18), but the consequence is wider than Block F: **until now, any
+> assertion about a paged read made through this fake was passing for a reason
+> unrelated to whether the paging worked.** Two separate paging helpers existed
+> in `src/lib/` at the same time, and neither was exercised end to end.
+>
+> Concrete worklist — every test file that touches a paged read:
+>
+> | File | Status |
+> |---|---|
+> | `src/lib/supabase-page.test.ts` | pre-existing; simulates the cap directly, does NOT use the fake — sound, but see F-19 for the hole it encodes |
+> | `src/lib/supabase-page-bounded.test.ts` | added by Block F |
+> | `src/lib/admin-profit-at-scale.test.ts` | rewritten by Block F; its fake now models a per-response cap |
+> | `src/lib/financial-reporting-row-caps.test.ts` | added by Block F; real Postgres |
+> | `src/lib/financial-reporting-consistency.test.ts` | added by Block F; real Postgres |
+> | `src/lib/e2e/commerce-journey.test.ts` | uses `fake-db`; passed only after the `range()` fix — **recheck** |
+> | `src/lib/e2e/manual-reimbursement.test.ts` | uses `fake-db`; same — **recheck** |
+> | anything else importing `@/lib/e2e/fake-db` | **recheck** |
+>
+> Also: **Block C** owns the three callers of `supabase-page.readAllRows`
+> (`admin-email.ts`, `email/audience.ts`, `marketing-broadcast.ts`). F-19 is a
+> latent truncation in that helper that would silently shorten a **suppression
+> list** — i.e. mail people who unsubscribed. Not changed from here.
+
 Scope per [`AUDIT-PARALLEL-ASSIGNMENTS.md`](../AUDIT-PARALLEL-ASSIGNMENTS.md):
 `admin-profit.ts`, `admin-revenue.ts`, `admin-reconciliation.ts`,
 `reconciliation-math.ts`, `admin-tax-report.ts`, plus `order-profit.ts` and
@@ -7,6 +37,58 @@ Scope per [`AUDIT-PARALLEL-ASSIGNMENTS.md`](../AUDIT-PARALLEL-ASSIGNMENTS.md):
 
 Branch: `claude/block-ab-audit-o62bop`. Findings are namespaced `F-xx` per
 Rule 2; the ledger is not edited from here.
+
+---
+
+## The owner's decisions, and where each one now lives
+
+Recorded verbatim because they resolve questions the reports had been answering
+inconsistently, and because every surface is now asserted against them.
+
+**1. A partial refund keeps its retained revenue.** A $200 order refunded by $50
+is $150 of revenue, and it is still an order.
+
+| Surface | Before | Now |
+|---|---|---|
+| `admin-profit` (dashboard, 30-day, per-order) | counted it | counted it — unchanged |
+| `admin-revenue` RPC + JS fallback | **excluded it entirely** | counts it; refund netted off the money |
+| `admin_customer_rollup` | summed **gross** `amount_paid` | nets the refund off |
+| `admin_ops_summary` live sales | gross, `paid` only | net, over revenue statuses |
+| `admin-tax-report` | **dropped it entirely** (F-05) | counts it; proportional tax refund |
+| `admin-reconciliation` | already examined every status | unchanged — it checks the original charge, which is correct |
+
+The definition now has one home: `ledger.REVENUE_ORDER_STATUSES` and
+`ledger.netOrderRevenue`, mirrored in SQL and held in step by
+`ledger-sql-parity.test.ts`.
+
+**2. Collected sales tax is not revenue or profit.** It is a liability held on
+behalf of a state.
+
+- `DEFAULT_PROFIT_CONFIG.countSalesTaxAsProfit` is now `false`.
+- **A code default is not enough** — see
+  [`BLOCK-F-PRODUCTION-CHANGES.md`](./BLOCK-F-PRODUCTION-CHANGES.md) §2. The
+  Control Center writes this key on every save, so a stored `true` overrides it.
+- Tracked, not merely excluded: `ProfitDashboard.salesTaxCollected` and
+  `salesTaxCountedAsProfit` are the liability line, and the sales-tax report is
+  the filing view of the same money.
+- F-12 is what makes this setting *safe* to turn on: before it, a refund
+  deducted tax from revenue it had never been added to.
+
+**3. `revenue − discounts − refunds − COGS − processor fees − shipping = profit.`**
+
+Asserted end to end in `financial-reporting-consistency.test.ts`, over a
+nine-order ledger, against arithmetic derived independently of the modules.
+
+Two notes on the formula as written:
+
+- **Discounts are already inside revenue.** An order records
+  `subtotal − discount_amount`, so revenue is post-discount and discounts are
+  not deducted a second time.
+- **Ambassador commission is also deducted**, and it is not in your formula. It
+  is a real cost the store pays on a referred sale, so leaving it out would
+  overstate profit — but flagging it because it is a deliberate addition to what
+  you specified, not an oversight. Say the word if you want it reported as a
+  separate line rather than an expense.
 
 ---
 
@@ -621,6 +703,99 @@ on a paged read was passing for the wrong reason.
 
 ---
 
+## F-19 — The pre-existing paging helper stops on a short page, which is only safe while max-rows is exactly 1000
+
+**Grade:** `SOURCE-INSPECTED` + `TEST-PROVEN` (the alternative is proven) · **Severity:** P2 · **Status:** OPEN — CROSS-BLOCK (Block C owns the callers)
+
+**I duplicated before I found it.** `src/lib/supabase-page.ts` already existed,
+already exported `readAllRows`, and was already used by `admin-email.ts`,
+`email/audience.ts` and `marketing-broadcast.ts`. Block F added a second
+`supabase-paging.ts` exporting a function of the same name. Two paging helpers
+in one directory is exactly the hand-copy problem this block spent its time
+writing up, so the duplicate is gone and both now live in `supabase-page.ts`.
+
+Reading the incumbent turned up a real hole. Its loop is:
+
+```ts
+const from = index * PAGE_SIZE;              // fixed stride
+const { data, error } = await page(from, from + PAGE_SIZE - 1);
+if (rows.length < PAGE_SIZE) return all;     // short page means finished
+```
+
+Its docblock states the assumption plainly: *"The page size is deliberately
+equal to the default cap: asking for exactly what the server is willing to give
+makes 'a short page means the end' true."*
+
+That holds **only while Supabase's max-rows is exactly 1000.** It is a project
+API setting, this module cannot observe it, and if it is ever set **below** the
+page size then every page arrives short and the loop returns after the first
+one. The fixed stride compounds it: the next request would start a full
+`PAGE_SIZE` on, skipping whatever the cap held back.
+
+**Why that matters more than it sounds.** The module's own docblock names the
+stakes: *"a truncated read of `email_suppressions` does not fail, it just stops
+mentioning some of the people who unsubscribed, and the next campaign mails
+them."* The helper written to prevent that failure can still produce it.
+
+**What Block F did instead of changing it.** Added `readAllRowsBounded` beside
+it, which stops only on an **empty** page, advances by the rows actually
+received, and reports hitting its ceiling. The four financial modules use that.
+`readAllRows` is untouched — its callers were written against its contract, and
+changing termination semantics under another block's code mid-audit is not this
+block's call. All eight of its existing tests pass unmodified.
+
+**CROSS-BLOCK for Block C / Block M:** the three email callers should move to
+the bounded variant, or `readAllRows` should adopt its termination rule. The
+cost either way is one extra request per read.
+
+**Tests.** `supabase-page-bounded.test.ts`, 9 cases, including a source capped
+at 250 (below the page size) and one at 337 (not a multiple of it).
+
+**Negative controls.** Three, each on the new loop: stopping on a short page
+fails 3 tests; striding by page size instead of rows received fails the same 3;
+assuming truncation at the ceiling instead of probing fails the exact-fit case.
+
+---
+
+## F-20 — The two database-backed suites shared one database and one `orders` table
+
+**Grade:** `TEST-PROVEN` · **Severity:** P2 (test infrastructure) · **Status:** FIXED
+
+Both Block F database suites open with `drop table if exists orders; create
+table orders …`, and vitest runs files in parallel. Run together they dropped
+each other's data mid-test.
+
+The symptom was not a clean error. `financial-reporting-row-caps` reported
+20,958 where it expected 20,937 — a plausible-looking wrong number, which is the
+same failure mode as everything else in this block.
+
+`AUDIT-PARALLEL-ASSIGNMENTS.md` Rule 5 names `src/lib/e2e/suite-database.ts` for
+exactly this and it did not exist. It does now: `createSuiteDatabase(baseUrl,
+suite)` drops and recreates a database named for the suite, so each gets its own.
+Available to every other block with a database-backed suite.
+
+**Verification.** Both suites pass together; the full run with a database
+attached is **3,624 passing, 0 skipped**.
+
+---
+
+## F-21 — The row-caps suite carried its own hand-copy of the revenue SQL
+
+**Grade:** `TEST-PROVEN` · **Severity:** P2 · **Status:** FIXED
+
+`financial-reporting-row-caps.test.ts` defined `admin_revenue_summary` and
+`admin_revenue_by_method` inline, as retyped copies of the migration. When the
+owner's partial-refund decision changed the real SQL, the test kept creating the
+old definition — so the RPC path and the JS fallback disagreed inside the test,
+and it failed.
+
+It failed for the right reason, and the fix is the one this block keeps
+reaching for: **stop copying the definition.** Both database suites now read the
+function bodies out of `src/lib/sql/admin-dashboard-rollups.sql` itself, so they
+exercise the SQL that ships.
+
+---
+
 ## CROSS-BLOCK
 
 Recorded per Rule 3, not edited from this block.
@@ -629,14 +804,19 @@ Recorded per Rule 3, not edited from this block.
   the `amount_paid` formula and `handling_fee` is the fifth term it omits. The
   durable fix is one exported pure total function that both checkout and
   reconciliation call. Shared file; not touched. (F-08)
-- **`src/lib/sql/admin-dashboard-rollups.sql`** — `admin_revenue_summary` and
-  `admin_revenue_by_method` filter `payment_status in ('paid','completed',
-  'succeeded')`, so a partially refunded order's **retained** revenue is absent
-  from the revenue page while `admin-profit` counts it. Changing the predicate
-  needs a migration applied to production, which needs the owner (Rule 4). The
-  JS fallback was deliberately left matching the RPC: making them disagree would
-  reintroduce exactly the class of defect F-03 fixed. **Needs a decision, not a
-  patch.**
+- ~~`src/lib/sql/admin-dashboard-rollups.sql` — partially refunded revenue~~
+  **RESOLVED by the owner.** Retained revenue counts. Both paths changed
+  together; the migration is listed in
+  [`BLOCK-F-PRODUCTION-CHANGES.md`](./BLOCK-F-PRODUCTION-CHANGES.md) §1 and has
+  **not** been applied.
+- **`src/lib/supabase-page.ts` callers (Block C)** — `admin-email.ts`,
+  `email/audience.ts`, `marketing-broadcast.ts` use `readAllRows`, whose
+  short-page termination is only safe while max-rows is exactly 1000 (F-19). A
+  truncated suppression-list read mails people who unsubscribed.
+- **`src/lib/partner-portal.ts` `getAdminOperationsSummary` (Block A+B)** — the
+  JS twin of `admin_ops_summary`. The SQL now sums NET revenue over the revenue
+  statuses; if that reduce still sums gross `amount_paid`, the two disagree the
+  way `admin-revenue`'s two paths used to.
 - **`src/lib/quote-order.ts`** (second entry) — `insertOrderRow`'s `PGRST204`
   fallback silently writes an order with no `tax_state` and no
   `tax_rate_percent`, which the filing report then reports as an `UNKNOWN`
@@ -653,11 +833,16 @@ Recorded per Rule 3, not edited from this block.
 
 ## NEEDS THE OWNER
 
-1. **Is a partially refunded order's retained revenue revenue?** `admin-profit`
-   says yes, `admin-revenue` and both rollup RPCs say no. In the 21,000-row run
-   that is a `$1,617` gap on 21 orders — proportionally, roughly 0.06% of
-   revenue, but the sign of the disagreement is what matters, not the size. Both
-   numbers are labelled "orders" and "revenue" in the admin UI.
+**Answered** — retained revenue counts, and sales tax is a liability. See "The
+owner's decisions" above and
+[`BLOCK-F-PRODUCTION-CHANGES.md`](./BLOCK-F-PRODUCTION-CHANGES.md) for what has
+to be applied.
+
+Still open:
+
+1. **Approve the migration and the one setting change.** Nothing has been
+   applied. Read-only queries to size the impact first are in
+   `BLOCK-F-PRODUCTION-CHANGES.md` §3.
 2. **The project's Supabase "Max rows" setting.** No longer load-bearing for
    correctness after F-11, but worth knowing for request budgeting: it now
    determines how many round trips a full profit read costs.
@@ -666,11 +851,8 @@ Recorded per Rule 3, not edited from this block.
    now feeds the profit report as well.
 4. **Should a failed COGS read fail the dashboard, or fall back to the
    worst-case unit cost?** Today it silently reports zero product cost (F-17).
-5. **Should collected sales tax count toward net profit?** The toggle
-   (`count_sales_tax_as_profit`) defaults to TRUE — the owner keeps it. This
-   store runs a remittance report, which implies the money is not the owner's.
-   F-12 makes the FALSE setting correct rather than wrong, but the choice
-   itself is the owner's.
+5. **Should ambassador commission be an expense line or reported separately?**
+   It is deducted as an expense today and is not in the formula as you wrote it.
 
 ---
 
@@ -678,19 +860,23 @@ Recorded per Rule 3, not edited from this block.
 
 | | Findings |
 |---|---|
-| Fixed, with regression test + negative control | F-01, F-02, F-03, F-04, F-05, F-06, F-07, F-09, F-10, F-11, F-12, F-17, F-18 |
+| Fixed, with regression test + negative control | F-01…F-07, F-09…F-12, F-17, F-18, F-20, F-21 |
 | Disproved (reported as leads, do not exist) | F-08, F-15 |
-| Open, root cause outside Block F (CROSS-BLOCK) | F-13, F-14 |
+| Open, root cause outside Block F (CROSS-BLOCK) | F-13, F-14, F-19 |
 | Latent, characterised not fixed | F-08 (handling_fee, clamps), F-16 |
 | Needs the owner | 4 questions below |
 
 ## Verification
 
-- Full suite: **3,589 passing**, 14 skipped, 0 failing (`npx vitest run`).
+- Full suite with a database attached: **3,624 passing, 0 skipped, 0 failing**.
+- Full suite without one: 3,602 passing, 22 skipped (the three database-backed
+  suites skip loudly, naming the variable and the command to run them).
 - Typecheck: clean (`npx tsc --noEmit`).
 - Lint: clean on every file touched.
-- The 21,000-row suite is gated on `VANTA_TEST_DATABASE_URL` and skips loudly,
-  with the command to run it, when no throwaway Postgres is configured.
+- The database suites are gated on `VANTA_TEST_DATABASE_URL`, each gets its own
+  database (F-20), and they fail loudly rather than skipping if the cluster is
+  reachable but broken — verified when the container reclaimed Postgres
+  mid-session and the suite errored instead of quietly passing.
 - Every fix above has a regression test **and** a recorded negative control
   naming which mutation breaks which test.
 

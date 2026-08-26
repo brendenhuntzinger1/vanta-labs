@@ -4,7 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
 import { isPaidOrderStatus, isEarnedCommission } from "@/lib/ledger";
-import { readAllRows } from "@/lib/supabase-paging";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 
 // The order fields profit needs. Everything is stored on the order at checkout,
 // so profit is computed from the record — not from today's live product cost.
@@ -187,7 +187,7 @@ async function costLinesByOrderId(orderIds: string[]): Promise<Map<string, Order
     // responses would drop the overflow — silently removing product cost, which
     // makes profit look BETTER than it is. The commission and overlay reads
     // below are one row per order and cannot exceed the chunk size.
-    const { rows } = await readAllRows<{ order_id: string; quantity: number | null; unit_cost_cents: number | null }>(
+    const { rows } = await readAllRowsBounded<{ order_id: string; quantity: number | null; unit_cost_cents: number | null }>(
       (from, to) =>
         supabaseAdmin
           .from("order_items")
@@ -361,7 +361,7 @@ async function profitForPaidOrdersInRange(fromIso: string, toIso: string): Promi
   // `db-max-rows` (Supabase exposes it as "Max rows"), and a capped read came
   // back looking exactly like a small store. Paging to exhaustion removes the
   // dependency on that setting entirely.
-  const { rows } = await readAllRows<OrderRecord>(
+  const { rows } = await readAllRowsBounded<OrderRecord>(
     (from, to) =>
       supabaseAdmin
         .from("orders")
@@ -477,6 +477,18 @@ export interface ProfitDashboard {
     totalShippingExpense: number;
     totalShippingProfit: number;
   };
+  /**
+   * Sales tax collected across the same orders, as a LIABILITY — money held on
+   * behalf of a state, never part of revenue or profit.
+   *
+   * Surfaced here because the owner's decision was not merely "stop counting
+   * tax as profit" but "track it separately as a tax liability". Excluding a
+   * number from profit without showing it anywhere just makes it invisible.
+   * `taxCountedAsProfit` on each order says which side of the line it fell on.
+   */
+  salesTaxCollected: number;
+  /** True if any order in the window was configured to count tax as profit. */
+  salesTaxCountedAsProfit: boolean;
   /** Orders whose profit is still estimated (exact shipping cost pending). */
   estimatedOrderCount: number;
   hasEstimatedProfit: boolean;
@@ -493,7 +505,7 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
   // net profit, margin, AOV, order count — was computed from that slice and
   // presented as the store's whole history, with nothing on the screen to say
   // so.
-  const { rows: orders, truncated } = await readAllRows<OrderRecord>(
+  const { rows: orders, truncated } = await readAllRowsBounded<OrderRecord>(
     (from, to) =>
       supabaseAdmin
         .from("orders")
@@ -526,6 +538,8 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
   let orderCount = 0;
   let replacementCount = 0;
   let estimatedOrderCount = 0;
+  let salesTaxCollected = 0;
+  let salesTaxCountedAsProfit = false;
 
   for (const row of rows) {
     const eventTime = Date.parse(row.paidAt ?? row.createdAt ?? "");
@@ -547,6 +561,8 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
     totalShippingRevenue += row.shippingCharged;
     totalShippingExpense += row.shippingCost;
     if (row.profitStatus === "estimated") estimatedOrderCount += 1;
+    salesTaxCollected += row.taxCollected;
+    if (row.taxCountedAsProfit) salesTaxCountedAsProfit = true;
 
     if (eventTime >= startOfToday) profit.today += row.profit;
     if (eventTime >= startOfYesterday && eventTime < startOfToday) profit.yesterday += row.profit;
@@ -583,6 +599,8 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
       totalShippingExpense: round(totalShippingExpense),
       totalShippingProfit: round(totalShippingProfit),
     },
+    salesTaxCollected: round(salesTaxCollected),
+    salesTaxCountedAsProfit,
     estimatedOrderCount,
     hasEstimatedProfit: estimatedOrderCount > 0,
     truncated,
