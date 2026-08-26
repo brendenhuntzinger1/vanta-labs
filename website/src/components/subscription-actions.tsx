@@ -7,6 +7,12 @@ type Membership = {
   status: string;
   billingCycle: string;
   cancelAtPeriodEnd: boolean;
+  /**
+   * K-07. One skip per paid period. Derived on the server by
+   * skipUsedThisPaidPeriod — the same function skipNextBilling guards with — so
+   * the button and the endpoint cannot disagree about the rule.
+   */
+  skipAlreadyUsed?: boolean;
 };
 
 type ActionKey = "pause" | "resume" | "skip";
@@ -52,6 +58,10 @@ export function SubscriptionActions({ membership }: { membership: Membership }) 
 
   if (!canManage) return null;
 
+  // Offering Skip to someone who has already used it produces a confusing
+  // failure at the moment they act. Show the state instead.
+  const skipAvailable = !membership.skipAlreadyUsed;
+
   const run = async (action: ActionKey) => {
     setBusy(true);
     setError(null);
@@ -73,7 +83,7 @@ export function SubscriptionActions({ membership }: { membership: Membership }) 
     }
   };
 
-  const actions: ActionKey[] = isPaused ? ["resume"] : ["skip", "pause"];
+  const actions: ActionKey[] = isPaused ? ["resume"] : skipAvailable ? ["skip", "pause"] : ["pause"];
 
   return (
     <div className="mt-4 border-t border-white/10 pt-4">

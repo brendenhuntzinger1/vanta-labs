@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { getCustomerMembership, getMembershipPerks } from "@/lib/membership";
-import { isPaidBillingEvent } from "@/lib/membership-status";
+import { isPaidBillingEvent, skipUsedThisPaidPeriod } from "@/lib/membership-status";
 import { customerSafeFailureReason } from "@/lib/safe-error";
 import { getMembershipBillingHistory } from "@/lib/membership-billing";
 import { MembershipBillingPanel } from "@/components/membership-billing-panel";
@@ -42,6 +42,13 @@ export default async function AccountSubscriptionsPage() {
     getMembershipPerks(user.id),
     getMembershipBillingHistory(user.id, 24).catch(() => []),
   ]);
+
+  // K-07. Do not offer a control the server will refuse. getMembershipBillingHistory
+  // already returns newest-first in exactly the shape the rule takes, so this is
+  // the SAME function skipNextBilling guards with — not a second opinion that can
+  // drift from it. The server remains the authority: this only avoids showing a
+  // button that would fail.
+  const skipAlreadyUsed = skipUsedThisPaidPeriod(billingHistory);
 
   // Three distinct states, and the difference matters. A paid-cycle row is NOT
   // the same as a working membership: a failed renewal leaves billingCycle
@@ -156,7 +163,7 @@ export default async function AccountSubscriptionsPage() {
 
           {membership.status === "past_due" ? <MembershipBillingPanel membership={membership} /> : null}
           {membership.status === "paused" ? (
-            <SubscriptionActions membership={{ status: membership.status, billingCycle: membership.billingCycle, cancelAtPeriodEnd: membership.cancelAtPeriodEnd }} />
+            <SubscriptionActions membership={{ status: membership.status, billingCycle: membership.billingCycle, cancelAtPeriodEnd: membership.cancelAtPeriodEnd, skipAlreadyUsed }} />
           ) : null}
 
           <div className="mt-4 flex flex-wrap gap-2.5">
@@ -201,7 +208,7 @@ export default async function AccountSubscriptionsPage() {
           <MembershipBillingPanel membership={membership} />
 
           {/* Pause / skip / resume (monthly plans) */}
-          <SubscriptionActions membership={{ status: membership.status, billingCycle: membership.billingCycle, cancelAtPeriodEnd: membership.cancelAtPeriodEnd }} />
+          <SubscriptionActions membership={{ status: membership.status, billingCycle: membership.billingCycle, cancelAtPeriodEnd: membership.cancelAtPeriodEnd, skipAlreadyUsed }} />
 
           <div className="mt-4 flex flex-wrap gap-2.5">
             <Link href="/membership" className="vl2-btn-secondary vl-focus-ring inline-flex px-4 py-2 text-xs">Change plan</Link>
