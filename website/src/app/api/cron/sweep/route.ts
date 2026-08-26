@@ -10,6 +10,8 @@ import { expireStaleExpressIntents, reconcileVeyraPendingPayments } from "@/lib/
 import { sweepMissingShipments, sweepUnsyncedOrders } from "@/lib/shippo/order-sync";
 import { runCampaignSweep } from "@/lib/email/campaign-sender";
 import { runAutomationSweep } from "@/lib/email/automations";
+import { repairMissingShippingCosts } from "@/lib/shipping-cost-repair";
+import { repairIncompleteRefunds } from "@/lib/refund-effect-repair";
 import { recordSystemAlert } from "@/lib/monitoring";
 
 export const dynamic = "force-dynamic";
@@ -44,6 +46,13 @@ const JOBS = {
   // else retries it, so without this a single failed insert lost an
   // ambassador's commission permanently. Idempotent: it looks for ABSENCE.
   commissionAccrualRepair: { label: "commission_accrual_repair", run: repairMissingCommissionAccruals },
+  // Record the postage actually paid for any label whose cost never landed.
+  // Same absence-based shape as commissionAccrualRepair: idempotent, and it
+  // clears the existing backlog rather than only protecting future orders.
+  shippingCostRepair: { label: "shipping_cost_repair", run: repairMissingShippingCosts },
+  // Finish the refund side-effects that the webhook's swallow-and-continue
+  // error handling left half-applied: revenue reversal, points, store credit.
+  refundEffectRepair: { label: "refund_effect_repair", run: repairIncompleteRefunds },
   // Reclaim inventory held by abandoned checkouts past their expiry window.
   reservationsExpired: { label: "reservation_expiry", run: expireStaleReservations },
   // Retry transactional emails (receipts/shipping) that failed to send.

@@ -26,6 +26,8 @@ const shippoSync = sentinel("shippoSync");
 const shipmentRepair = sentinel("shipmentRepair");
 const emailCampaigns = sentinel("emailCampaigns");
 const emailAutomations = sentinel("emailAutomations");
+const shippingCostRepair = sentinel("shippingCostRepair");
+const refundEffectRepair = sentinel("refundEffectRepair");
 interface SystemAlert {
   type: string;
   severity: string;
@@ -53,6 +55,8 @@ vi.mock("@/lib/shippo/order-sync", () => ({
 }));
 vi.mock("@/lib/email/campaign-sender", () => ({ runCampaignSweep: () => emailCampaigns() }));
 vi.mock("@/lib/email/automations", () => ({ runAutomationSweep: () => emailAutomations() }));
+vi.mock("@/lib/shipping-cost-repair", () => ({ repairMissingShippingCosts: () => shippingCostRepair() }));
+vi.mock("@/lib/refund-effect-repair", () => ({ repairIncompleteRefunds: () => refundEffectRepair() }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: (alert: SystemAlert) => recordSystemAlert(alert) }));
 
 const SECRET = "test-cron-secret";
@@ -83,12 +87,14 @@ describe("the scheduled sweep", () => {
     expect(body.shippoSync).toEqual({ job: "shippoSync" });
     expect(body.expressIntentsExpired).toEqual({ job: "expressIntents" });
     expect(body.shipmentRepair).toEqual({ job: "shipmentRepair" });
+    expect(body.shippingCostRepair).toEqual({ job: "shippingCostRepair" });
+    expect(body.refundEffectRepair).toEqual({ job: "refundEffectRepair" });
   });
 
   it("runs every job exactly once", async () => {
     await callSweep();
 
-    for (const job of [membership, storeCredit, cartRecovery, commissions, reservations, emails, paymentReconcile, expressIntents, shippoSync, shipmentRepair]) {
+    for (const job of [membership, storeCredit, cartRecovery, commissions, reservations, emails, paymentReconcile, expressIntents, shippoSync, shipmentRepair, shippingCostRepair, refundEffectRepair]) {
       expect(job).toHaveBeenCalledTimes(1);
     }
   });
@@ -141,5 +147,17 @@ describe("the scheduled sweep", () => {
 
     expect(response.status).toBe(401);
     expect(shippoSync).not.toHaveBeenCalled();
+  });
+
+  it("registers the financial repair sweeps", async () => {
+    const module = await import("@/app/api/cron/sweep/route");
+    // The JOBS registry is keyed, not positional; asserting on the key is
+    // asserting on the response contract an operator reads.
+    const source = await import("node:fs").then((fs) =>
+      fs.readFileSync("src/app/api/cron/sweep/route.ts", "utf8"),
+    );
+    expect(source).toContain("shippingCostRepair");
+    expect(source).toContain("refundEffectRepair");
+    expect(module.GET).toBeTypeOf("function");
   });
 });
