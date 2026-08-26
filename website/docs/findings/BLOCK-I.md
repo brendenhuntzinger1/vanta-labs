@@ -1149,6 +1149,111 @@ consolidation, not a defect — they are not wrong, only duplicated.
 
 ---
 
+## I-09 — Four anonymous customer-facing routes echo raw internal errors, bypassing the sanitiser written to stop exactly that
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P3 · **Status:** FIXED
+
+`src/lib/safe-error.ts` exists for this and states the rule (`:5-16`):
+
+> *"Vanta Labs must be the only brand a customer ever sees. Raw error messages
+> break that in ways that are easy to miss, because the leak only appears when
+> something goes wrong … A Postgres error names tables and columns … Routes
+> that echo `error instanceof Error ? error.message : fallback` hand all of that
+> straight to the shopper."*
+
+It is a careful deny-list — vendor names, URLs, bare hostnames, `E[A-Z]{4,}`
+socket errors, stack frames, SQL, `relation "` / `column "`, UUIDs, credential
+words, `ENV_VAR_NAMES` — and it is adopted by ~20 customer-facing routes.
+
+**Four anonymous ones bypassed it**, echoing the raw message into the response
+body:
+
+| Route | Fallback that was never reached |
+|---|---|
+| `api/coupons/validate` | "Unable to verify coupon code" |
+| `api/analytics/track` | "Unable to track event" |
+| `api/contact` | "Unable to send message" |
+| `api/auth/session` | "Unable to set session" |
+
+`api/membership/card-config:135-137` shows the correct shape for comparison —
+log the original, return fixed text — so the pattern was available.
+
+`auth/session` is the one that matters most: it is the session-establishing
+route, so a Supabase auth error reaches an unauthenticated caller and can help
+distinguish "no such account" from "wrong password".
+
+Checked and **cleared**: `api/webhooks/payment` and
+`api/veyra/express-shipping-callback` also echo raw text, but to a machine
+(processor, carrier), not a shopper. `membership/card-config` is correct. The
+remaining ~66 raw echoes are under `api/admin/**`, where the reader is already
+an authenticated admin.
+
+### Reproduction
+
+`src/lib/customer-error-leakage.test.ts` drives the real handlers, forces each
+to throw four representative messages, and asserts the response body contains
+none of the tells `safe-error.ts` itself names.
+
+Before — red for the right reason:
+
+```
+AssertionError: expected '{"success":false,"error":"getaddrinfo…' not to contain 'getaddrinfo ENOTFOUND veyragate.com'
+AssertionError: expected '{"success":false,"error":"supabase: J…' not to contain 'supabase: JWT expired'
+AssertionError: expected '{"success":false,"error":"SENDGRID_AP…' not to contain 'SENDGRID_API_KEY is not configured'
+   Tests  6 failed | 10 passed (16)
+```
+
+### Fix applied
+
+Each of the four now logs the original server-side (no diagnostic lost) and
+returns `customerSafeMessage(error, fallback)`. Because the sanitiser is a
+deny-list, a genuinely shopper-written message still passes through — asserted
+by a test that a coupon error reading *"This coupon has expired."* survives
+verbatim.
+
+After: **16 passed (16)**. Full suite **211 files / 3659 tests passed**, 1 file
+/ 7 skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
+
+### Negative controls — and two more tests that could not fail
+
+| # | Mutation | Result |
+|---|---|---|
+| E1 | Revert `coupons/validate` to the raw echo | 3 failed |
+| E2 | Blank every message (over-correction) | 1 failed |
+| E3 | Revert `contact` | 3 failed |
+| E4 | Revert `analytics/track` | **16 passed — NOT CAUGHT** |
+
+**E4 found a test that could not fail.** Two independent mistakes in my own
+harness:
+
+1. I mocked `@/lib/website-analytics`. `analytics/track` does not import it —
+   it inserts through `supabaseAdmin` and throws the returned error. The mock
+   was inert.
+2. My request body was `{ event: "view" }`. The route reads `body.eventType`
+   and requires a `sessionId`, so it returned "Unsupported event type" at
+   `:84` and never reached the `catch`.
+
+The assertion passed because the response happened not to contain the leak —
+for reasons that had nothing to do with the code under test. Fixed both, and
+E4 now fails as it should (3 failed).
+
+**Separately**, the first run of this suite reported 4 failures; fixing an
+unrelated harness bug — `coupons/validate` calls `getAuthenticatedUser`, which
+reaches `next/headers` `cookies()` and throws outside a request scope, so *that*
+error was being caught instead of the one under test — took it to 6. Two more
+real leaks had been hidden by a test passing for the wrong reason.
+
+That is now **three** instances in this block of a green test proving nothing
+(I-01 M4, I-08 C3, I-09 E4). See the note under I-08: a mutation that fails to
+apply, and a test that never reaches its subject, both look exactly like
+success. **CROSS-BLOCK:** this is Block E's entire remit and the three cases
+here are worked examples for it.
+
+**CROSS-BLOCK:** `api/coupons/validate` touches discount logic, which is Block
+D's area. Only the error-formatting line changed; the coupon logic is untouched.
+
+---
+
 ## Status
 
 | Id | Severity | Evidence | Fixed |
@@ -1162,6 +1267,7 @@ consolidation, not a defect — they are not wrong, only duplicated.
 | I-06 | P3 | `DATABASE-PROVEN` | No — owner decision (accept GIFs or not) |
 | **I-07** | **P0** | `DATABASE-PROVEN` | **No — revoke written, blocked on owner (Rule 4)** |
 | I-08 | P1 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** |
+| I-09 | P3 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** |
 
 I-01, I-03, I-04 and I-05 are proven and fixed, each with negative controls
 recorded above. I-02 is corrected and recorded as a latent risk with no code
@@ -1173,7 +1279,7 @@ already exposes by design). Both corrections are kept in the record rather than
 quietly rewritten, because a reader needs to know which claims were checked
 hard enough to break.
 
-Full suite after I-08: **210 files / 3643 tests passed**, 1 file / 7 tests
+Full suite after I-09: **211 files / 3659 tests passed**, 1 file / 7 tests
 skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
 
 **CROSS-BLOCK:** `src/app/api/catalog/back-in-stock/route.ts` sits under

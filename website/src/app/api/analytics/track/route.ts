@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { getRequestIpAddress } from "@/lib/admin-auth";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { createOptionalColumnInserter } from "@/lib/analytics-column-fallback";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 const insertAnalyticsEvent = createOptionalColumnInserter(async (row) =>
   supabaseAdmin.from("website_analytics_events").insert(row),
@@ -142,7 +143,13 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to track event";
+    // Sanitised rather than echoed. safe-error.ts:5-16 is explicit that a raw
+    // message hands a shopper a vendor hostname, a Postgres relation/column
+    // name or an env-var name. Logged in full server-side, so no diagnostic
+    // is lost; a genuinely shopper-written message still passes through,
+    // because the sanitiser is a deny-list.
+    console.error("[analytics/track]", error);
+    const message = customerSafeMessage(error, "Unable to track event");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }
