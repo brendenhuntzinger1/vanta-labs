@@ -861,3 +861,61 @@ expected.
 drop index if exists public.pending_emails_order_idx;
 alter table public.pending_emails drop column if exists order_id, drop column if exists email_kind;
 ```
+
+### STEP 3 — APPLIED ✅
+
+Verify output:
+
+```
+email_kind                                  : text
+order_id                                    : text
+order_email_log.order_id (must match type)  : text     <-- types agree, the write-back join works
+pending_emails_order_idx                    : 1
+```
+
+`order_id` is `text`, matching `order_email_log.order_id`. Had it landed as
+`uuid` the send-once write-back would have failed on every join and C-02 would
+have looked fixed while still sending second receipts. **C-02's schema half is
+CLOSED in production.**
+
+---
+
+## STEP 4 — pre-state capture (committed BEFORE the step runs)
+
+`referral-code-management.sql` builds `uq_ambassadors_referral_code`, a UNIQUE
+index over `ambassadors(referral_code) where referral_code is not null`. **Full
+contents of what that index builds over, captured verbatim** — this is the one
+step in the run that touches populated live data:
+
+| id | referral_code | status |
+|---|---|---|
+| 28bbd306-d97a-46e7-9d80-9cddbe10092f | BRUTUS | approved |
+| f6a44e24-e610-405d-abd3-93b89c7f918c | ELIJAH-AB78AE | info_requested |
+| 45b0e626-f5da-4d62-b84e-77e263e89b13 | SMOKE | approved |
+| d289c2c3-f386-49e8-84ca-decd640b6fdf | ZAIN | approved |
+| fd2331d1-b8c9-47b1-a65d-54509c8367f8 | ELOA | approved |
+| af0b3dd9-509a-46b6-9cf7-dfacfc9644f9 | FLAVIAROSSETTI | approved |
+| 8bd67041-34b8-46bd-9aac-02a669342d55 | MIZZY | approved |
+| 2da54572-6e5d-4e97-86e2-9cb70eab4636 | 1ANGEL | pending |
+
+**8 rows, 8 distinct codes, 0 NULLs, 0 duplicates.** The unique index will build.
+This was pre-checked before the run was proposed; it is captured again here in
+full because a UNIQUE index is the only thing in this run that can fail on
+*data* rather than on schema.
+
+Also absent and to be created: `referral_code_aliases`, `referral_code_changes`,
+and `referral_code_locked` / `referral_code_changed_at` on both `ambassadors`
+and `partners`.
+
+**Manual reconstruction, if ever needed:**
+```sql
+drop table if exists public.referral_code_aliases;
+drop table if exists public.referral_code_changes;
+drop index if exists public.uq_ambassadors_referral_code;
+alter table public.ambassadors drop column if exists referral_code_locked,
+                               drop column if exists referral_code_changed_at;
+alter table public.partners    drop column if exists referral_code_locked,
+                               drop column if exists referral_code_changed_at;
+```
+Safe only while `referral_code_aliases` holds no rows — an alias is a live
+redirect for links already printed. It is empty now (the table does not exist).
