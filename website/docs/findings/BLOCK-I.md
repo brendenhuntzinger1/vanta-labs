@@ -1254,6 +1254,190 @@ D's area. Only the error-formatting line changed; the coupon logic is untouched.
 
 ---
 
+## I-10 — Admin login leaked username existence through scrypt timing, defeating its own generic-message design
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P3 · **Status:** FIXED
+
+The login route works hard to prevent enumeration (`route.ts:14-17`):
+
+> *"A single generic message for every credential/passcode failure so an
+> attacker can't tell which of the three factors (username, password, passcode)
+> was correct."*
+
+`validateAdminCredentials` undercut it (`admin-auth.ts:221-223`):
+
+```ts
+if (error || !data) {
+  return null;          // <-- no key derivation at all
+}
+const isValid = verifyPassword(password, String(data.password_salt), String(data.password_hash));
+```
+
+A real username paid for a full `scryptSync(password, salt, 64)`; a made-up one
+returned immediately. scrypt is slow **on purpose**, so response time answered
+precisely the question the generic message refuses to.
+
+This is a finding rather than a nitpick because the intent is written down and
+the side channel defeats it. It is P3, not higher, because the lockout is a
+serious mitigation: `canAttemptAdminLogin` allows 6 failures per 15 minutes per
+username **and** per IP, and statistical timing analysis needs far more samples
+than that.
+
+### Fix applied
+
+The no-account branch now performs an equal-cost derivation against a **fixed
+dummy salt** — never a stored one, so the dummy work cannot become an oracle of
+its own — and discards the result.
+
+### Reproduction
+
+Asserted on scrypt **call count**, not wall-clock, so the test is deterministic
+rather than flaky. Before:
+
+```
+× derives a key even when no account matches                    expected 0 to be greater than 0
+× performs the same number of derivations as a wrong password   expected +0 to be 1
+   Tests  2 failed | 3 passed (5)
+```
+
+After: **5 passed (5)**. Full suite **212 files / 3664 tests passed**, 1 file /
+7 skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
+
+### Negative controls
+
+| # | Mutation | Result |
+|---|---|---|
+| T1 | Remove the equal-work derivation | 2 failed |
+| T2 | Derive against the real stored salt (make the dummy an oracle) | 1 failed |
+| T3 | Always return null | 2 failed |
+| T4 | Accept any password | 2 failed |
+
+All four caught. T2 matters: it is the plausible-looking wrong fix.
+
+---
+
+## Verified clean — what was checked and found sound
+
+Recorded so the consolidation session knows these were examined, not skipped,
+and so nobody re-files them from a linter.
+
+**Admin session handling** (`admin-auth.ts`, `auth/login`, `auth/session`,
+`auth/logout`, `account`, `team`). A fresh 32-byte token is minted per login, so
+no session fixation. `verifyAdminSessionToken` re-reads `role` and `is_active`
+on **every** request and purges sessions for a deactivated or deleted account,
+so offboarding is immediate rather than TTL-bound. It fails closed on a
+Supabase error without throwing. Both session readers take the cookie only —
+no header or bearer bypass. `canAttemptAdminLogin` locks when **either** the
+username or the IP count reaches 6 (`Math.max(...) < MAX` allows only when both
+are under), which is the correct reading. 2FA fails closed:
+`isAnyAdminSecondFactorProvisioned` blocks an account with no passcode once 2FA
+is in use anywhere, so only a genuinely unprovisioned deployment gets in
+single-factor. The distinct 403 at `login/route.ts:65-70` is reachable **only
+after** the password already validated, so it tells an attacker nothing they do
+not already hold.
+
+**Middleware and security headers** (`middleware.ts`, matcher `/:path*`).
+`X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy`,
+`Cross-Origin-Resource-Policy`, HSTS `max-age=63072000; includeSubDomains;
+preload`, and a CSP carrying `object-src 'none'`, `base-uri 'self'`,
+`frame-ancestors 'none'`, `form-action`, `upgrade-insecure-requests`. The
+omission of `default-src`/`script-src` is deliberate and documented at `:21-31`
+with the reason (Next.js injects unnonced inline hydration scripts) and a
+post-launch nonce rollout named. That is a stated, coherent trade, not an
+oversight. A second explicit CSRF layer rejects cross-origin state-changing
+requests to `/api/admin`, `/api/account`, `/api/membership`, `/api/partner`,
+on top of `SameSite`.
+
+**Admin page layer.** All 28 pages under `src/app/admin/**`. Three
+(`ads`, `coa`, `products`) carry no session check of their own and correctly
+inherit `layout.tsx`, which verifies the cookie and redirects to `/vault`.
+Every page rendering cost or margin data gates on `canViewProfit` — the root
+dashboard, `revenue`, and `orders/[orderId]`. `payments/settings` renders
+payment-method and fee configuration, which holds no credential; the processor
+secret is never read into a page. No page renders data its API sibling gates
+more tightly. **Observation, not a defect:** `customers/page.tsx` lists customer
+PII behind a session check alone while `customers/export` requires
+`canManageSettings`. Viewing for support versus bulk export are different acts
+and the split matches the matrix rule (`staff = day-to-day operations only`);
+flagged only so consolidation can confirm it is intended.
+
+**Client-exposed secrets.** `findClientExposedSecrets`
+(`ads/tracking-health-server.ts:32-43`) scans `process.env` at runtime for any
+`NEXT_PUBLIC_*` whose **name** looks secret or whose **value contains** the real
+TikTok token, and it is wired into the tracking health report. Every
+`NEXT_PUBLIC_*` in the tree was reviewed: pixel ids, a Turnstile *site* key, the
+Supabase URL and anon key, build metadata. The Events API token is
+`TIKTOK_EVENTS_API_ACCESS_TOKEN` — server-only.
+`NEXT_PUBLIC_TIKTOK_ACCESS_TOKEN` appears **only** in tests, as the negative
+example that detector is built to catch. Good control; no defect.
+
+**Customer payment-proof upload** — see I-05b. Already correct.
+
+**Anon-reachable `SECURITY DEFINER` surface** — enumerated in I-07. Two
+functions; `validate_referral_code` is correct as-is.
+
+**Log hygiene.** Every `console.*` mentioning key/secret/token/password/body was
+read. They log the *absence* of a credential, or an event key, path or status —
+none prints a secret. `membership/card-config:135-137` is the model: log the
+original, return fixed text.
+
+### Related, recorded not fixed
+
+**Turnstile is available but not on the abusable forms.** A Cloudflare Turnstile
+widget is wired into `account-auth-form.tsx` (sign-in/sign-up) and nowhere else.
+The public `contact`, `wholesale` and `back-in-stock` forms rely on a honeypot,
+a 3-second timing gate and the rate limit fixed in I-03 — none of which stops a
+scripted client. Since the component and the site key already exist, extending
+it to those three is cheap. Not done here: it changes customer-facing UX and is
+a product decision. **`OWNER DECISION NEEDED.`**
+
+---
+
+## Not verified
+
+Stated plainly rather than left implied, per the execution plan's rule that a
+block which ran out of road reports `NOT VERIFIED` and that is a valid outcome.
+
+- **Injection beyond CSV.** I-08 covers formula injection across all eight
+  escapers. **Not** examined: SSRF through any outbound `fetch` whose URL is
+  influenced by user input, path traversal in storage keys beyond the upload
+  paths in I-05, and PDF generation (packing slips, labels) fed
+  customer-controlled strings. A parallel agent was assigned this lens and did
+  not complete — see below.
+- **The `x-forwarded-for` question in I-03** still needs a forged-header request
+  against a **preview** deployment to settle whether Vercel's edge overwrites
+  it. Not run; not to be run against production.
+- **Nothing was browser-verified.** Block I did no Playwright work; the admin
+  console was never operated as the owner. Every finding here is source,
+  test or database evidence. "Operate the store as the owner" in the block's
+  brief is **NOT VERIFIED**.
+- **No production write was made and no production endpoint was exercised.**
+  I-07 in particular is proven from the catalogue, not by calling the RPC.
+
+### On the parallel sweep
+
+Six independent audit lenses were dispatched with three-way adversarial
+verification. **Four failed on an API session limit** (`injection-export`,
+`secret-leakage`, `middleware-surface`, `auth-session`) and two completed.
+
+Both that completed returned **no defect found**, independently corroborating
+this block's own conclusions:
+
+- The capability-gates lens judged all 17 ungated routes covered by a written
+  decision, self-scoped, or day-to-day operational reads — matching the
+  corrected I-02, and reaching it from the source alone without the production
+  data that settled it.
+- The IDOR lens found no ownership defect anywhere, including confirming there
+  are **no server actions** in the codebase (`grep -rn "use server"` is empty),
+  which removes an entire attack surface I had assumed needed checking.
+
+`secret-leakage`, `middleware-surface` and `auth-session` were then completed
+by hand and are written up above (I-09, I-10, and Verified clean).
+`injection-export` was only partly covered by hand — CSV yes, SSRF and path
+traversal no — and is listed under Not verified.
+
+---
+
 ## Status
 
 | Id | Severity | Evidence | Fixed |
@@ -1268,6 +1452,7 @@ D's area. Only the error-formatting line changed; the coupon logic is untouched.
 | **I-07** | **P0** | `DATABASE-PROVEN` | **No — revoke written, blocked on owner (Rule 4)** |
 | I-08 | P1 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** |
 | I-09 | P3 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** |
+| I-10 | P3 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** |
 
 I-01, I-03, I-04 and I-05 are proven and fixed, each with negative controls
 recorded above. I-02 is corrected and recorded as a latent risk with no code
@@ -1279,8 +1464,12 @@ already exposes by design). Both corrections are kept in the record rather than
 quietly rewritten, because a reader needs to know which claims were checked
 hard enough to break.
 
-Full suite after I-09: **211 files / 3659 tests passed**, 1 file / 7 tests
+Full suite after I-10: **212 files / 3664 tests passed**, 1 file / 7 tests
 skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
+
+**The single most urgent item in this block is I-07**, and it is the one thing
+here that code cannot close: revoking anonymous EXECUTE on
+`create_partner_invite` is production DDL and belongs to the owner.
 
 **CROSS-BLOCK:** `src/app/api/catalog/back-in-stock/route.ts` sits under
 `api/catalog/`. Block D owns `catalog.ts` (the library), not this route, so the
