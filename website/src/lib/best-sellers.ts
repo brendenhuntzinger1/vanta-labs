@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { isPaidOrderStatus } from "@/lib/ledger";
+import { isRevenueOrderStatus, isSaleOrder } from "@/lib/ledger";
 
 // Automatic best sellers: the products people actually buy the most. Ranks by
 // total units sold across recent PAID orders (refunded/cancelled orders never
@@ -27,14 +27,20 @@ async function computeBestSellerSlugs(limit: number): Promise<Set<string>> {
 
   const { data: orderRows, error: orderError } = await supabaseAdmin
     .from("orders")
-    .select("order_id, payment_status, created_at")
+    .select("order_id, payment_status, order_type, created_at")
     .gte("created_at", sinceIso)
     .order("created_at", { ascending: false })
     .limit(MAX_ORDERS_SCANNED);
   if (orderError) throw orderError;
 
-  const paidOrderIds = ((orderRows ?? []) as Array<{ order_id: string; payment_status: string | null }>)
-    .filter((o) => isPaidOrderStatus(o.payment_status))
+  // "Units sold", so the same two questions the revenue surfaces ask (review
+  // finding 4). A partially-refunded order really did sell its units — the
+  // refund is often shipping, or one line of several — so excluding it
+  // undercounts the product. A REPLACEMENT is the opposite: an outbound reship
+  // the store paid for, which would rank a product that caused a problem as a
+  // best seller off the back of its own failures.
+  const paidOrderIds = ((orderRows ?? []) as Array<{ order_id: string; payment_status: string | null; order_type?: string | null }>)
+    .filter((o) => isRevenueOrderStatus(o.payment_status) && isSaleOrder(o.order_type))
     .map((o) => o.order_id)
     .filter(Boolean);
   if (paidOrderIds.length === 0) return new Set();

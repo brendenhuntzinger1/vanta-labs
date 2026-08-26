@@ -3,7 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
-import { isPaidOrderStatus, isEarnedCommission, isSaleOrder } from "@/lib/ledger";
+import { isEarnedCommission, isRevenueOrderStatus, isSaleOrder } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 
 // The order fields profit needs. Everything is stored on the order at checkout,
@@ -320,9 +320,12 @@ function paidAndPartiallyRefunded(orders: OrderRecord[]): OrderRecord[] {
   // Include paid orders AND partially-refunded ones (they still netted
   // revenue; the refund is subtracted per-order). Fully "refunded" orders
   // netted ~nothing and are excluded, matching the revenue reports.
-  return orders.filter(
-    (o) => isPaidOrderStatus(o.payment_status) || String(o.payment_status ?? "").toLowerCase() === "partially_refunded",
-  );
+  //
+  // This was a SECOND, hand-written implementation of isRevenueOrderStatus
+  // (review finding 4). It happened to agree, which is exactly why it was
+  // dangerous: widening the ledger's definition would have moved four surfaces
+  // and silently left this one behind. One rule, one place.
+  return orders.filter((o) => isRevenueOrderStatus(o.payment_status));
 }
 
 async function computeProfitForOrders(orders: OrderRecord[]): Promise<OrderProfit[]> {

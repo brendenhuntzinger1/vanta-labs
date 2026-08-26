@@ -2268,3 +2268,67 @@ same lesson as N-02's surviving mutation: a passing mutation control is only
 evidence when the case that needs the code actually exists.
 
 **GATE.** 261 files / 4159 tests green. Lint and `tsc` clean.
+
+## N-04 (P1) — the "single source of truth" ledger had zero call sites
+
+**FOUND.** `ledger.ts` opens by declaring itself the module every report and
+aggregation MUST use "so no two surfaces ever disagree". `isRevenueOrderStatus`
+was exported, asserted on by `ledger-sql-parity`, and **called by nothing**.
+
+| surface | before | correct? |
+|---|---|---|
+| `admin-revenue.ts` | `REVENUE_ORDER_STATUSES` + `NON_SALE_ORDER_TYPES` | yes |
+| `admin-profit.ts:324` | inline RE-IMPLEMENTATION of the same rule | yes, written twice |
+| `admin-analytics.ts` ×2 | `isPaidOrderStatus` | **no** |
+| `admin-email.ts` | `isPaidOrderStatus` | **no** |
+| `best-sellers.ts` | `isPaidOrderStatus` | **no** |
+
+A $200 order refunded by $50 was $150 on the revenue page and **$0** on analytics
+and the campaign report — dashboards an operator reads side by side.
+
+**FIXED.** All three adopt `isRevenueOrderStatus` + `isSaleOrder`, each gaining
+`order_type` in its select. The inline copy at `admin-profit.ts:324` is deleted:
+it happened to AGREE, which is precisely what made it dangerous — widening the
+ledger would have moved four surfaces and silently left it behind.
+
+`best-sellers` gets the same rule for a reasoned rather than mechanical cause: a
+partially-refunded order really did sell its units (the refund is often shipping,
+or one line of several), and a replacement is a free reship that would rank a
+product as a best seller off the back of its own failures.
+
+**DELIBERATELY NOT CHANGED — for the owner to decide.** `email/audience.ts` and
+`email/automations.ts` still use `isPaidOrderStatus`. They ask "did this person
+buy?" for marketing targeting, not "how much revenue" — a different question,
+where "captured money" is a defensible gate. Widening them would change WHO
+RECEIVES EMAIL, a customer-facing effect outside this finding. Worth a look: a
+customer whose only order was partially refunded is currently absent from
+win-back segmentation entirely.
+
+**TEST.** `revenue-definition-agreement.test.ts` feeds ONE canonical basket to
+every surface and asserts they land on the same number, with the expectation
+DERIVED from the ledger rather than hand-typed. Testing each surface against its
+own expectation is what let five of them disagree: each was individually
+"correct" against its own belief.
+
+**MUTATIONS:**
+
+| mutation | test that caught it |
+|---|---|
+| `admin-analytics` reverts to `isPaidOrderStatus` | *admin-analytics revenue windows* + *trend* |
+| `admin-analytics` stops excluding replacements | *admin-analytics revenue windows* + *trend* |
+| `admin-email` drops the sale filter | *admin-email campaign revenue* (order COUNT) |
+| `best-sellers` counts replacements again | *best-sellers counts units from sales only* |
+| ledger drops `partially_refunded` from the revenue set | *basket is worth $350* + `ledger-sql-parity` |
+
+The second mutation SURVIVED at first. `admin-replacements` hardcodes
+`amount_paid: 0`, so `admin-analytics`'s own `amount <= 0` guard masked the
+`order_type` filter completely — the exclusion was unprovable. The basket now
+carries a replacement with money on it (a reship where the customer covered
+postage), added deliberately and labelled as not-yet-occurring, because
+`admin-revenue` excludes replacements STRUCTURALLY and the day a reship starts
+carrying postage is the day those two surfaces silently disagree again.
+
+Third surviving mutation across three findings, same lesson each time: a
+mutation control only proves something when the case that needs the code exists.
+
+**GATE.** 262 files / 4165 tests green. Lint and `tsc` clean.

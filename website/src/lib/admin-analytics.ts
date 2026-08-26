@@ -1,5 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { isPaidOrderStatus, netOrderRevenue } from "@/lib/ledger";
+import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
 
 const ONLINE_WINDOW_MINUTES = 5;
 
@@ -45,14 +45,23 @@ function daysAgoIso(days: number) {
 }
 
 // Delegate to the canonical predicate so every dashboard shares one definition.
-function isPaidStatus(value: unknown) {
-  return isPaidOrderStatus(value as string | null | undefined);
+//
+// isRevenueOrderStatus, NOT isPaidOrderStatus (review finding 4). The two differ
+// by exactly `partially_refunded`, and this surface used the narrower one — so a
+// $200 order refunded by $50 was $150 on the revenue page and $0 here, on
+// dashboards an operator reads side by side. `isSaleOrder` is the second half:
+// a replacement is an outbound reship the store paid for, with amount_paid 0, so
+// it adds nothing to revenue and only pads the order count.
+function countsAsRevenue(row: { payment_status?: unknown; order_type?: unknown }) {
+  return isRevenueOrderStatus(row.payment_status as string | null | undefined)
+    && isSaleOrder(row.order_type as string | null | undefined);
 }
 
 type RevenueRow = {
   amount_paid: number | null;
   refund_amount: number | null;
   payment_status: string | null;
+  order_type: string | null;
   paid_at: string | null;
   created_at: string | null;
 };
@@ -79,7 +88,7 @@ function revenueFromRows(rows: RevenueRow[]) {
   let last30Days = 0;
 
   for (const row of rows) {
-    if (!isPaidStatus(row.payment_status)) {
+    if (!countsAsRevenue(row)) {
       continue;
     }
 
@@ -117,11 +126,11 @@ export async function getRevenueWindowMetrics() {
   const [{ data: paidRows, error: paidError }, { data: fallbackRows, error: fallbackError }] = await Promise.all([
     supabaseAdmin
       .from("orders")
-      .select("amount_paid, refund_amount, payment_status, paid_at, created_at")
+      .select("amount_paid, refund_amount, payment_status, order_type, paid_at, created_at")
       .gte("paid_at", monthStartIso),
     supabaseAdmin
       .from("orders")
-      .select("amount_paid, refund_amount, payment_status, paid_at, created_at")
+      .select("amount_paid, refund_amount, payment_status, order_type, paid_at, created_at")
       .is("paid_at", null)
       .gte("created_at", monthStartIso),
   ]);
@@ -142,12 +151,12 @@ async function getRevenueRowsInRange(input: RevenueRangeInput) {
   const [{ data: paidRows, error: paidError }, { data: fallbackRows, error: fallbackError }] = await Promise.all([
     supabaseAdmin
       .from("orders")
-      .select("amount_paid, refund_amount, payment_status, paid_at, created_at")
+      .select("amount_paid, refund_amount, payment_status, order_type, paid_at, created_at")
       .gte("paid_at", input.fromIso)
       .lte("paid_at", input.toIso),
     supabaseAdmin
       .from("orders")
-      .select("amount_paid, refund_amount, payment_status, paid_at, created_at")
+      .select("amount_paid, refund_amount, payment_status, order_type, paid_at, created_at")
       .is("paid_at", null)
       .gte("created_at", input.fromIso)
       .lte("created_at", input.toIso),
@@ -192,7 +201,7 @@ export async function getRevenueTrend(input: RevenueRangeInput) {
   }
 
   for (const row of rows) {
-    if (!isPaidStatus(row.payment_status)) {
+    if (!countsAsRevenue(row)) {
       continue;
     }
 
