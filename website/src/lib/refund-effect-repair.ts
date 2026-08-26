@@ -46,6 +46,7 @@ export interface RefundCandidate {
   points_earned: number | null;
   points_redeemed: number | null;
   store_credit_redeemed_cents: number | null;
+  amount_paid: number | null;
 }
 
 /**
@@ -54,6 +55,15 @@ export interface RefundCandidate {
  * An effect is only planned when the order actually incurred it: an order that
  * earned no points needs no reversal, and planning one would call a function
  * that correctly does nothing, every sweep, forever.
+ *
+ * `refund_amount` additionally requires that money was actually taken
+ * (`amount_paid > 0`). A legitimately $0 refund — a 100%-discount order
+ * marked `refunded` with nothing ever paid — has no refund amount to record.
+ * Without this guard, the condition "refund_amount is 0" is permanently true
+ * for such an order (the guarded UPDATE would keep matching and rewriting
+ * 0 -> 0), so it would be replanned and "repaired" on every sweep tick
+ * forever: an unbounded stream of pointless writes and a `repaired` count
+ * that no longer means "something was actually fixed".
  */
 export function planRefundRepairs(
   order: RefundCandidate,
@@ -63,7 +73,9 @@ export function planRefundRepairs(
   if (String(order.payment_status ?? "").toLowerCase() !== "refunded") return [];
 
   const planned: RefundRepairEffect[] = [];
-  if (Number(order.refund_amount ?? 0) <= 0) planned.push("refund_amount");
+  if (Number(order.amount_paid ?? 0) > 0 && Number(order.refund_amount ?? 0) <= 0) {
+    planned.push("refund_amount");
+  }
   if (Number(order.points_earned ?? 0) > 0 && !pointsLedgerReasons.has("order_refund_reversal")) {
     planned.push("points_reversal");
   }
@@ -103,7 +115,7 @@ export async function repairIncompleteRefunds(options?: {
 
   if (error) throw error;
 
-  const candidates = (data ?? []) as Array<RefundCandidate & { amount_paid: number | null }>;
+  const candidates = (data ?? []) as RefundCandidate[];
   result.scanned = candidates.length;
   if (candidates.length === 0) return result;
 

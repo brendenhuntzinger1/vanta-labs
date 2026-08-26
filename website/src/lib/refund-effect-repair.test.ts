@@ -13,6 +13,7 @@ describe("planRefundRepairs", () => {
     points_earned: 120,
     points_redeemed: 50,
     store_credit_redeemed_cents: 500,
+    amount_paid: 4999,
   };
 
   it("plans every effect when none has run", () => {
@@ -55,6 +56,44 @@ describe("planRefundRepairs", () => {
     expect(
       planRefundRepairs({ ...refunded, payment_status: "paid" }, new Set(), new Set()),
     ).toEqual([]);
+  });
+
+  // FIX ROUND 1 — retry-storm convergence for a legitimately $0 refund.
+  //
+  // A 100%-discount order that took no money at all can still be marked
+  // `refunded` (nothing was ever paid, but the payment lifecycle still
+  // resolves to that terminal status). Its refund_amount is 0 not because
+  // the effect never ran, but because there is nothing to record. Planning
+  // `refund_amount` for it anyway would never converge: the guarded UPDATE
+  // (`refund_amount = 0` WHERE `refund_amount = 0`) matches every time,
+  // rewrites 0 -> 0, and the sweep would replan and "repair" this same order
+  // on every tick forever — an unbounded stream of pointless writes and a
+  // `repaired` count that stops meaning "something was actually fixed".
+  it("plans no refund_amount for a legitimately $0 refund — this is the convergence proof", () => {
+    const zeroDollarOrder = {
+      ...refunded,
+      amount_paid: 0,
+      refund_amount: 0,
+      points_earned: 0,
+      points_redeemed: 0,
+      store_credit_redeemed_cents: 0,
+    };
+    expect(planRefundRepairs(zeroDollarOrder, new Set(), new Set())).not.toContain("refund_amount");
+    // Nothing at all to repair for an order that took no money and earned or
+    // redeemed nothing.
+    expect(planRefundRepairs(zeroDollarOrder, new Set(), new Set())).toEqual([]);
+  });
+
+  // The fix must not disable the effect it exists for: a normal refunded
+  // order that DID take money and has no refund_amount recorded yet must
+  // still plan refund_amount.
+  it("still plans refund_amount for a normal refunded order that took money and has none recorded", () => {
+    const plan = planRefundRepairs(
+      { ...refunded, amount_paid: 4999, refund_amount: 0 },
+      new Set(),
+      new Set(),
+    );
+    expect(plan).toContain("refund_amount");
   });
 });
 
