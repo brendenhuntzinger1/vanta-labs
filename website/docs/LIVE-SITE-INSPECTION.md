@@ -1804,3 +1804,199 @@ Exact, measured, and deliberately unflattering where relevant.
 | `/admin/**` ×24 | **NOT VERIFIED** — no credentials. Numbers reconciled via SQL instead (§2i) |
 | `/r/[code]` | **PARTIALLY VERIFIED** — invalid code 307s with no write (production); valid-code behaviour **HARNESS-PROVEN** (§2l) |
 | `/sitemap.xml`, `/robots.txt` | **PROVEN WORKING** |
+
+
+---
+
+## 5. THE ANSWERS
+
+### 1. What did I notice?
+
+It looks like a real company. The dark, restrained design holds up at every
+width from a 320 px phone to a 1920 px desktop, nothing overflows, nothing is
+broken, no page threw an uncaught error, and no 5xx appeared once. The age gate
+is thoughtful — four separate attestations rather than one lazy tick — and the
+cookie banner does exactly what its policy says. Add-to-cart, the cart, the
+drawer, filters, sorts, search, dose switching and cart persistence all simply
+work, including live sync across two tabs. That is better than most stores.
+
+What I noticed second is that **the store makes more promises than it can keep.**
+It tells you seven different times that it publishes a Certificate of Analysis
+for every batch, and it has published none. It tells you "over 70 % of customers
+add BAC Water" on the strength of six orders. It tells prospective ambassadors it
+has paid out $22,638 when it has paid out nothing. On one product page it claims
+≥99 % purity and, one tab across, prints "Purity Result: Pending".
+
+None of that is a bug. All of it is the thing that decides whether a careful
+buyer — the only kind this store sells to — trusts you.
+
+### 2. What is not working? Ranked by what it costs.
+
+1. **A real customer is failing to check out right now.** Three
+   `pending_payment` orders from one address in sixteen minutes this afternoon,
+   none completed, all holding stock. (LIVE-033)
+2. **The ambassador link is a checkout blocker below $100.** The cart promises
+   15 % off, applies nothing, and the pay button returns 400 with a minimum the
+   customer was never told about. 75 referral clicks in production, 0 referral
+   orders. (AFF-03)
+3. **A failed commission accrual is invisible.** Demonstrated: order paid, stock
+   committed, customer told success, ambassador earns nothing, one `console.error`
+   and no Sentry event. (AFF-09)
+4. **Seven surfaces promise published COAs; zero exist.** (LIVE-001)
+5. **Fabricated earnings recruit ambassadors.** (AFF-06)
+6. **The partner page contradicts itself** — 15 % in the benefits list, 10 % in
+   the calculator that produces the advertised income. (LIVE-016)
+7. **Marketing consent ships pre-ticked** on a store that sells to Canada.
+   (LIVE-010)
+8. **Sales tax is off in every state** while the cart says "calculated at
+   checkout". (LIVE-031)
+9. **Filters and sort are destroyed by the Back button.** (LIVE-028)
+10. **The pay button is never disabled** — empty form, invalid email, withheld
+    legal confirmation. (LIVE-032)
+11. Two Sentry alerts have gone unactioned for 21 hours and 6 hours; one names a
+    Shippo label whose postage is missing from profit. (LIVE-034, LIVE-035)
+
+### 3. Is the affiliate system correct?
+
+**The money is correct. The customer experience of it is broken.**
+
+Correct, with evidence:
+
+- The rate shown is the ambassador's own rate — 7 codes checked against the
+  `ambassadors` table, explicit rates and NULL-inherits-default both right, and
+  the `info_requested` ambassador correctly produces nothing. (AFF-01)
+- The discount arithmetic reconciles to exactly 15 % of the full subtotal at
+  every quantity once bundle pricing is accounted for. (AFF-02)
+- On the harness, a qualifying referred order produces commission **$15.30** on a
+  commissionable $101.97, written identically to `referral_orders` and
+  `commissions`, hold state `pending`/`unpaid`, inventory committed. A replayed
+  webhook changes nothing. Below the minimum the server refuses. An unapproved
+  code is stripped and accrues nothing. (HARN-01, HARN-02, HARN-04)
+- **The production constraint that once refused every accrual is genuinely
+  fixed** — proven by reproducing the original failure on a harness that still
+  carries the old narrow rule, then showing production's accepts exactly what
+  the code writes. (AFF-10)
+
+Not correct:
+
+- **AFF-03**, above. This is the whole channel.
+- **AFF-09** — the accrual has no alarm.
+- **AFF-06 / LIVE-016 / LIVE-017** — what ambassadors are told does not match
+  what they get or what the other page says.
+- **AFF-07** — `ambassadors` and `partners` are two base tables holding the same
+  rows with nothing enforcing agreement. They agree today.
+
+And the number that should worry you most: **zero commissions have ever been
+written in production, against 75 real referral clicks.**
+
+### 4. Would a stranger successfully buy from this store?
+
+Up to the pay button, yes, and pleasantly. They will hesitate in four places:
+
+- **At the proof.** They click "confirm it before you buy", reach the COA
+  Library, and find 36 rows of "not published yet".
+- **At the price.** Every card shows a struck-through price and a −12 % badge
+  that turns out to require a paid membership.
+- **At the shipping.** Bulk tiers show "Free ship" with no threshold stated
+  anywhere on the product page. (The cart does say $200 — the product page does
+  not.)
+- **At the referral discount**, if they came from an ambassador: promised 15 %,
+  charged full price, then blocked at the pay button.
+
+**Whether they can actually pay is NOT VERIFIED**, and LIVE-033 is a live reason
+to doubt it.
+
+### 5. Can the owner run it?
+
+**Unknown, and that is the honest answer** — no credentials were available, so
+all 24 admin screens are unseen. What can be said from the database:
+
+- The three revenue surfaces agree exactly with each other and with raw SQL.
+- All six paid orders reconcile to the cent.
+- The headline "revenue" is gross receipts: it includes $9.69 of sales tax owed
+  to states, $75 of shipping recovery, and $45.47 belonging to an order cancelled
+  after payment. Fine at six orders; wrong at a hundred a day.
+- 335 coupons are flagged active and have all expired.
+- `admin_partner_rollups()` returns only the 2 ambassadors with clicks, not all 8.
+- The monitoring is genuinely good — and two alerts have been ignored for a day,
+  which is the real risk at volume.
+
+### 6. What I would fix first, and why
+
+1. **Find out why that customer could not pay.** (LIVE-033) It is the only
+   finding costing money this hour.
+2. **Fix the referral path below $100.** (AFF-03) State the minimum in the cart,
+   do not announce a discount the basket does not qualify for, and never let an
+   ambassador's own code 400 the pay button. 75 clicks, 0 orders.
+3. **Make the claims true or remove them.** (LIVE-001, LIVE-002, AFF-06,
+   LIVE-016) This is copy, not engineering — a day's work that removes real
+   advertising exposure and the contradiction a careful buyer will find.
+4. **Put an alarm on commission accrual.** (AFF-09) One `Sentry.captureException`
+   in two catch blocks converts a silent, permanent loss into a page.
+5. **Untick the marketing consent box.** (LIVE-010) One character; removes a CASL
+   problem on a store that ships to Canada.
+
+### 7. What is still not verified, and what it would take
+
+| Not verified | What would close it |
+|---|---|
+| **The real-money lifecycle** — real card, real processor callback, real production order, real inventory decrement, real email, real label | A single small real order, placed deliberately and refunded |
+| **All 24 admin screens** | Admin credentials |
+| **All 15 account pages, signed-in pricing, membership pricing interaction** | A test account |
+| **Whether the advertising pixels fire** | A real browser; automated ones are refused by design (LIVE-038) |
+| **Email** — order confirmation, shipping, delivery, unsubscribe | Any real send |
+| **Fulfilment** — label purchase, carrier events, monotonic status | A real label |
+| **RLS policy correctness** | The harness runs as superuser |
+| **TLS 1.3 behaviour of the live site** | Not behind this proxy |
+| **Whether `/login` still authenticates** | Partner credentials |
+| **Why LIVE-033's customer failed** | The owner opening that order |
+
+---
+
+## 6. DO THE CORE SYSTEM PRINCIPLES HOLD?
+
+| Principle | Grade | Evidence |
+|---|---|---|
+| **PRODUCT TRUTH** | **DATABASE-PROVEN + BROWSER-PROVEN** | 36 cards = 36 enabled rows; every unpublished/archived slug 404s; `dsip` and `ss-31` prove a stocked dose is never hidden by a zero parent |
+| **PRICE TRUTH** | **DATABASE-PROVEN** | 48 dose prices match the DB; catalog = PDP = cart = checkout at qty 1 and 3; bulk tiers reconcile by per-unit floor rounding; client sends no prices |
+| **DISCOUNT TRUTH** | **PARTIAL — money PROVEN, communication FAILED** | Referral/bundle/membership arithmetic all reconcile; coupon-vs-referral exclusivity stated and enforced; **AFF-03/AFF-04** break the customer's understanding. Membership pricing interaction NOT VERIFIED |
+| **AFFILIATE TRUTH** | **HARNESS-PROVEN correct · NOT VERIFIED in production · one FAILED sub-claim** | One consistent financial event end to end; but AFF-09 means a silent failure is possible, and production has never run the path |
+| **INVENTORY TRUTH** | **HARNESS-PROVEN** | No negative stock; no double decrement on replay; two buyers cannot take the last unit; oversell refused; stocked doses purchasable at zero parent; failed payment releases and consumes nothing |
+| **PAYMENT / ORDER TRUTH** | **HARNESS-PROVEN · real processor NOT VERIFIED** | One payment → exactly one paid order; replay → no duplicate order, commission or decrement; a failed payment leaves a `canceled` order and no stock consumed |
+| **FULFILMENT TRUTH** | **NOT VERIFIED** | No label bought, no carrier event seen. LIVE-035 shows one real label already unattributed |
+| **COMMUNICATION TRUTH** | **NOT VERIFIED** | Email disabled throughout; not one message observed |
+| **ADMIN TRUTH** | **PARTIAL — DATABASE-PROVEN, screens NOT VERIFIED** | Rollups agree with raw SQL; no screen was seen; ADM-02 and ADM-05 are open questions |
+| **ACCOUNTING TRUTH** | **DATABASE-PROVEN at order level** | All six paid orders reconcile to the cent. Profit/COGS reporting NOT VERIFIED |
+| **AUTHORIZATION TRUTH** | **PROVEN** | 35 unauthenticated GETs all refused; no cost or margin data in the public API; client cannot set price, payment status, inventory or commission |
+| **FAILURE TRUTH** | **MIXED — one FAILED** | Payment failure recovers safely and tells the truth; operational alerts are well built and fire; **commission accrual fails silently (AFF-09)** |
+
+---
+
+## 7. IS THE COMBINED SYSTEM OPERATIONAL RIGHT NOW?
+
+These are two different claims and they get two different answers.
+
+**The live storefront is operational.** A stranger can arrive, pass the age gate
+on any device, browse 36 correctly-priced products, read the policies, select a
+dose, build a cart that survives refresh, back/forward, a second tab and a
+restart, apply an ambassador code, see a correct discount above $100, and reach
+a fully-populated checkout with correct shipping for the US and Canada. That is
+BROWSER-PROVEN across 66 URLs and 5 viewports, with no 5xx and no uncaught
+errors.
+
+**The complete transactional system is NOT proven operational.** Everything past
+the pay button — real card, real processor callback, real production order, real
+inventory decrement, real confirmation email, real label — **remains NOT
+VERIFIED.** It was proven on a harness this session, and the harness is not the
+store.
+
+Three facts stop me going further:
+
+1. **Zero referral orders and zero commissions have ever existed in production**,
+   against 75 real referral clicks.
+2. **A real customer made three payment attempts this afternoon and completed
+   none.**
+3. **The one path that pays ambassadors has no alarm on it.**
+
+The harness working does not convert any of those into a pass, and I have not
+converted them.
