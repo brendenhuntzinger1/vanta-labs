@@ -130,7 +130,7 @@ const describeDb = DATABASE_URL ? describe : describe.skip;
 if (!DATABASE_URL) {
   // Not a silent skip. A skipped suite that nobody notices is how a defect
   // reaches production behind a green run.
-  console.warn(
+  process.stderr.write(
     "\n[partner-identity-convergence] SKIPPED: set VANTA_TEST_DATABASE_URL to a " +
     "throwaway Postgres to run the identity-convergence proofs. These cover " +
     "audit finding F-009 and are NOT covered by any in-memory test.\n",

@@ -1379,55 +1379,57 @@ export async function createPartnerInvite(input: {
   }
 
   const partnerId = randomUUID();
-  const now = new Date().toISOString();
 
-  const { error } = await supabaseAdmin
-    .from("partners")
-    .insert({
-      id: partnerId,
-      name: input.name,
-      email: input.email,
-      referral_code: referralCode,
-      status: "pending",
-      commission_percent: input.commissionPercent,
-      auth_user_id: invitedUser.user?.id ?? null,
-      invited_at: now,
-      created_by: actorUserId,
-      updated_at: now,
-    });
+  // BOTH ROWS OR NEITHER, and identity is the person rather than the auth row.
+  //
+  // These used to be two separate inserts. Two PostgREST statements are two
+  // transactions, and `partners` has no unique email while `ambassadors` does --
+  // so inviting an address an admin had already pre-added committed the partners
+  // row and then failed on ambassadors_email_key, leaving an orphan partner
+  // holding a referral code that checkout would never honour. That orphan also
+  // defeated the F-009 adoption repair, because it matches on auth_user_id.
+  // See src/lib/sql/partner-invite-convergence.sql (audit finding F-013).
+  const { data: invited, error } = await supabaseAdmin.rpc("create_partner_invite", {
+    p_id: partnerId,
+    p_auth_user_id: invitedUser.user?.id ?? null,
+    p_name: input.name,
+    p_email: input.email,
+    p_referral_code: referralCode,
+    p_commission_percent: input.commissionPercent,
+    p_created_by: actorUserId,
+  });
 
   if (error) {
-    assertNoSupabaseError("partners.insert(create invite)", error);
+    assertNoSupabaseError("rpc.create_partner_invite", error);
   }
 
-  const { error: ambassadorInsertError } = await supabaseAdmin
-    .from("ambassadors")
-    .insert({
-      id: partnerId,
-      name: input.name,
-      email: input.email,
-      referral_code: referralCode,
-      status: "pending",
-      commission_percent: input.commissionPercent,
-      auth_user_id: invitedUser.user?.id ?? null,
-      invited_at: now,
-      created_by: actorUserId,
-      updated_at: now,
-    });
+  const result = (invited ?? {}) as {
+    partner_id?: string;
+    referral_code?: string;
+    commission_percent?: number | string;
+    adopted?: boolean;
+  };
 
-  if (ambassadorInsertError) {
-    assertNoSupabaseError("ambassadors.insert(create invite mirror)", ambassadorInsertError);
-  }
+  // Answer with the identity the database settled on, not the one generated
+  // here. On adoption the surviving row is the admin's -- with the referral code
+  // they already issued, which may be in circulation, and the rate they set.
+  const settledPartnerId = result.partner_id ?? partnerId;
+  const settledReferralCode = result.referral_code ?? referralCode;
+  const adopted = result.adopted === true;
 
   await supabaseAdmin.from("admin_audit_logs").insert({
     actor_user_id: actorUserId,
-    action: "partner_invited",
+    action: adopted ? "partner_invite_adopted" : "partner_invited",
     target_table: "ambassadors",
-    target_id: partnerId,
+    target_id: settledPartnerId,
     metadata: {
       email: input.email,
-      commissionPercent: input.commissionPercent,
-      referralCode,
+      commissionPercent: adopted ? Number(result.commission_percent) : input.commissionPercent,
+      referralCode: settledReferralCode,
+      // An adopted invite linked an ambassador the admin had already configured;
+      // the rate and code they see are that row's, not the ones typed into the
+      // invite form.
+      adopted,
       actorUsername: input.actorUsername ?? null,
       ipAddress: input.ipAddress ?? null,
       userAgent: input.userAgent ?? null,
@@ -1435,8 +1437,9 @@ export async function createPartnerInvite(input: {
   });
 
   return {
-    partnerId,
-    referralCode,
+    partnerId: settledPartnerId,
+    referralCode: settledReferralCode,
+    adopted,
   };
 }
 
