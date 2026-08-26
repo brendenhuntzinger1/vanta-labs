@@ -41,6 +41,7 @@ pasted verbatim.
 | K-16 | P1 | `SOURCE-INSPECTED` | Three live production ad pixel IDs are hardcoded as env fallbacks with no `VERCEL_ENV` guard, so a preview deployment reports into the real ad accounts |
 | K-17 | P1 | `SOURCE-INSPECTED` | Cancelling a paid order permanently destroys its stock, in the one case the codebase's own comment says should restock |
 | K-18 | P1 | `SOURCE-INSPECTED` | Four compliance attestations are collected and none is durably recorded on the card lane |
+| K-19 | P1 | `SOURCE-INSPECTED` | Every call to the payment processor has no timeout, while the ad pixels and the label printer all have one |
 
 ---
 
@@ -2819,6 +2820,171 @@ control: remove the write and confirm it fails on the null column.
 - The gate refuses entry until all four statements are individually acknowledged,
   and the decline path clears the legacy `localStorage` key and `vl_age_verified`
   cookie (`:387-394`) before navigating away.
+
+---
+
+---
+
+## K-19 — Every call to the payment processor has no timeout, while the ad pixels and the label printer all have one
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN
+**Area:** third-party degraded mode
+
+### What is wrong
+
+Eleven outbound `fetch` call sites in `src/lib/`. Four set a deadline. The four
+that do are the least consequential; the ones that talk to the payment processor
+do not.
+
+| call site | external system | what it does | timeout |
+|---|---|---|---|
+| `src/lib/payment-provider.ts:164` | **Veyra** | creates the customer's checkout session | **none** |
+| `src/lib/veyra-membership.ts:112` | **Veyra** | starts a membership — **a real charge** | **none** |
+| `src/lib/veyra-membership.ts:238` | **Veyra** | cancel / skip / pause | **none** |
+| `src/lib/express-reconcile.ts:68` | **Veyra** | polls session status **inside the cron sweep** | **none** |
+| `src/lib/email/providers/resend.ts:25` | Resend | sends transactional mail | **none** |
+| `src/lib/email/providers/sendgrid.ts:29` | SendGrid | sends transactional mail | **none** |
+| `src/lib/inventory-reservation-check.ts:60` | Supabase REST | reachability probe | **none** |
+| `src/lib/shippo/client.ts:264` | Shippo | rates and labels | ✅ 15s |
+| `src/lib/ads/tiktok-events-api.ts:186` | TikTok | conversion reporting | ✅ 8s |
+| `src/lib/ads/reddit-conversions.ts:189` | Reddit | conversion reporting | ✅ 8s |
+| `src/lib/ads/tiktok-ads-api.ts:79` | TikTok Ads | campaign management | ✅ |
+| `src/lib/ads/relay-client.ts:38` | first-party, browser | funnel relay | n/a |
+
+The Shippo client even states the rule (`shippo/client.ts:38-44`):
+
+> A hung connection must not hold an admin request open forever, and a label
+> purchase is a foreground action someone is waiting on. 15s is well past Shippo's
+> normal response time … while still failing fast enough to show a usable error.
+
+That reasoning applies with more force to creating a checkout session, which is a
+foreground action a *customer* is waiting on. It was applied to the label printer
+and to three advertising endpoints, and not to the processor.
+
+### The three that matter, in order
+
+**1. `payment-provider.ts:164` — the shopper's checkout session.**
+`/api/checkout/create-session` declares no `maxDuration`, so it inherits the
+platform default. A hung Veyra leaves the shopper watching a spinner until the
+platform kills the function, then shows whatever generic error that produces —
+after an order row may already have been written and inventory reserved.
+
+**2. `express-reconcile.ts:63-77` — inside the 60-second shared cron budget.**
+
+```ts
+async function fetchSessionStatus(sessionId: string): Promise<VeyraSessionStatus | null> {
+  try {
+    const response = await fetch(`${veyraApiBase()}/api/v1/checkout_sessions/${…}`, {
+      headers: { Authorization: `Bearer ${veyraSecretKey()}` },
+      cache: "no-store",
+    });
+    if (!response.ok) return null;
+    return (await response.json()) as VeyraSessionStatus;
+  } catch { return null; }
+}
+```
+
+No deadline, and a bare `catch { return null }`. This runs inside
+`reconcileVeyraPendingPayments`, which pages **newest-first, 10 pages × 50** — up
+to 500 sequential calls — against `maxDuration = 60`
+(`src/app/api/cron/sweep/route.ts:15`) shared with twelve other concurrent jobs.
+
+One slow Veyra response holds the slot with no bound. A whole-function kill raises
+no alert (the sweep's alert at `:91-101` fires only on a rejected promise, and the
+handler is never reached), so the job the file's own comment calls "the exact
+failure this file exists to prevent" — *money moved, order reads unpaid, stock
+released at reservation expiry* — silently stops running.
+
+The Phase 1 map's suggested proof for the sweep-visibility finding is literally
+"point `VEYRA_API_BASE` at a blackhole so `fetchSessionStatus` stalls". There is
+nothing in the code to stop that stall.
+
+**3. `catch { return null }` erases the distinction that matters.** A network
+error, a 500, a timeout and "no such session at Veyra" all produce `null`. The
+caller cannot tell "Veyra is down" from "this session does not exist", so a total
+processor outage is reported as a run in which every order was merely
+*unresolved*.
+
+**4. The two email providers** have no deadline either, and `retryPendingEmails`
+loops up to 50 rows sequentially inside the same 60-second budget. A slow SMTP
+provider consumes the whole sweep.
+
+### Impact
+
+The store's most important external dependency is the only one with no deadline.
+A degraded — not down, *degraded* — Veyra hangs customer checkouts, hangs the
+membership charge path, and silently disables the reconciliation job that is the
+only thing standing between a charged card and an order that reads unpaid forever.
+None of it alerts.
+
+### Reproduction
+
+Point `VEYRA_API_BASE` at a blackhole (an IP that accepts the connection and never
+responds — `nc -l` on an unused port) on the harness, then:
+
+1. `curl -H "Authorization: Bearer $CRON_SECRET" .../api/cron/sweep -w '%{time_total}'`
+   → observe the platform timeout, not a 60s graceful result. Then
+   `select * from system_alerts where type='cron_sweep_failed' order by created_at desc limit 5`
+   → **zero new rows**.
+2. `POST /api/checkout/create-session` from the storefront and time it → hangs to
+   the platform limit.
+3. Contrast: point `SHIPPO_API_BASE` at the same blackhole and buy a label →
+   fails in ~15s with a usable error, which is the behaviour every one of these
+   should have.
+
+### Smallest safe root-cause fix
+
+Give every outbound call a deadline, using the mechanism already in the codebase:
+
+```ts
+// src/lib/shippo/client.ts:279 — copy this
+signal: AbortSignal.timeout(TIMEOUT_MS),
+```
+
+Suggested values, matching the existing rationale: **10s** for the two
+foreground Veyra calls (checkout session, membership start — a customer is
+waiting), **5s** for `express-reconcile`'s poll (it is a background retry with up
+to 500 iterations in a 60s budget; failing fast and coming back in 30 minutes is
+strictly better than hanging), and **10s** for the two email providers.
+
+Then **stop collapsing the failure modes.** `fetchSessionStatus` should
+distinguish *unreachable* from *not found*:
+
+```ts
+catch (e) {
+  return { kind: "unreachable", error: String(e) };   // not the same as a 404
+}
+```
+
+so `reconcileVeyraPendingPayments` can raise a `recordSystemAlert` when the
+processor is unreachable rather than reporting a quiet run of `unresolved`.
+
+### Regression test to write
+
+A source-text test asserting every `fetch(` in `src/lib/**` (excluding
+`relay-client.ts`, which is browser-side and first-party) is accompanied by a
+`signal:` within its options object. This is the shape that keeps regressing —
+four call sites got it and seven did not — and a new call site added later would
+otherwise inherit the omission silently. Negative control: remove the signal from
+`shippo/client.ts` and confirm the test names that file.
+
+Plus a behavioural test with a stubbed `fetch` that never resolves, asserting
+`fetchSessionStatus` rejects or returns an `unreachable` result within the
+deadline. Negative control: remove the signal and confirm the test times out.
+
+### CROSS-BLOCK
+
+- `src/lib/email/providers/resend.ts` and `sendgrid.ts` — **Block C** owns
+  `src/lib/email/**`. Two one-line additions; flag it to them.
+- `src/lib/shippo/client.ts` — **Block D**, no change needed; it is the model.
+- `src/lib/payment-provider.ts`, `src/lib/veyra-membership.ts`,
+  `src/lib/express-reconcile.ts` — unowned. Block K can carry these.
+- **Block A** (concurrency/idempotency) should know that adding a timeout to
+  `payment-provider.ts:164` creates a new state — *the session may or may not have
+  been created at Veyra* — which is precisely the case
+  `reconcileVeyraPendingPayments` exists to settle. The timeout does not create
+  that risk (a platform kill already produces it, without the bound); it makes it
+  explicit and survivable. Worth their eyes on the ordering.
 
 ---
 
