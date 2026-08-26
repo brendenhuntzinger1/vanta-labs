@@ -38,6 +38,7 @@ pasted verbatim.
 | K-13 | P1 | `SOURCE-INSPECTED` | The "15-minute" inventory hold is really up to 45 minutes, and every way it can fail reports success |
 | K-14 | P1 | `SOURCE-INSPECTED` | Maintenance mode 503s the entire cron sweep and the one-click unsubscribe in already-delivered marketing email |
 | K-15 | P1 | `SOURCE-INSPECTED` | Rate limiting is a read-then-write with no claim and fails open silently, so the throttle does not hold under concurrent traffic |
+| K-16 | P1 | `SOURCE-INSPECTED` | Three live production ad pixel IDs are hardcoded as env fallbacks with no `VERCEL_ENV` guard, so a preview deployment reports into the real ad accounts |
 
 ---
 
@@ -2291,6 +2292,201 @@ carries `degraded: true`. Negative control: remove the flag and confirm it fails
 - Per-route fail-closed decisions touch `src/app/api/checkout/**` and
   `src/app/api/coupons/**`; those need the route owners' agreement, not a
   unilateral change from here.
+
+---
+
+---
+
+## K-16 — Three live production advertising pixel IDs are hardcoded as env fallbacks, with no `VERCEL_ENV` guard anywhere in the analytics path — so a preview deployment reports into the real ad accounts
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN
+**Area:** environment/config drift
+
+### What is wrong
+
+```ts
+// src/components/tiktok-pixel.tsx:24
+const PIXEL_ID = process.env.NEXT_PUBLIC_TIKTOK_PIXEL_ID ?? "D9SAES3C77U40SOI9D70";
+// src/lib/ads/tiktok-events-api.ts:27      (the SERVER leg, same literal)
+export const PIXEL_ID = process.env.NEXT_PUBLIC_TIKTOK_PIXEL_ID ?? "D9SAES3C77U40SOI9D70";
+// src/components/snap-pixel.tsx:37
+export const SNAP_PIXEL_ID = process.env.NEXT_PUBLIC_SNAP_PIXEL_ID ?? "b6e3f2b8-0d0a-4d4e-b547-24b5a20d2a6e";
+// src/lib/ads/reddit-pixel-id.ts:13
+export const REDDIT_PIXEL_ID = process.env.NEXT_PUBLIC_REDDIT_PIXEL_ID ?? "a2_jipuxv3ugrju";
+```
+
+These are not placeholders. They are the store's **live advertising account
+identifiers**, committed as the fallback for a missing environment variable.
+
+There is no environment guard. A repo-wide grep for `VERCEL_ENV` returns five
+hits, and **none is in an analytics path**:
+
+| hit | what it guards |
+|---|---|
+| `src/app/robots.ts:10` | crawlability |
+| `src/app/layout.tsx:116-119` | the `robots` meta tag |
+| `src/lib/sentry-privacy.ts:345-346` | error-report tagging |
+| `src/lib/ads/tracking-health-server.ts:73` | a *label* on a health readout, not a gate |
+
+The only counterweight to a non-production deployment reporting real conversions
+is `metadata.robots` — which stops crawlers, not pixels.
+
+### Why this bites during the audit itself
+
+The server legs use the *same* constant. `src/lib/ads/tiktok-events-api.ts:27` is
+`PIXEL_ID`, and the Purchase authority
+(`/api/ads/purchase-event/[orderId]`) sends TikTok and Reddit conversions with
+the order's real `amount_paid` as `value`.
+
+So a paid test order placed on a **Vercel preview** — which is exactly what
+`AUDIT-EXECUTION-PLAN.md` block M schedules as "Phase 20 — preview deployment
+verification" — posts a fabricated conversion into the production TikTok and
+Reddit ad accounts, at a real dollar value, and trains the bid optimiser on
+revenue that does not exist. Nothing in the code prevents it and nothing in the
+runbook warns about it.
+
+The same applies to a local run with `NEXT_PUBLIC_ENABLE_ANALYTICS` set, and to
+any fork of this repository, which ships someone else's advertising identity.
+
+### The credential check that can never fire
+
+The dangerous default also disables the guard that was written to catch it:
+
+```ts
+// src/lib/ads/tiktok-events-api.ts:147
+if (!PIXEL_ID) missing.push("NEXT_PUBLIC_TIKTOK_PIXEL_ID");
+```
+
+`PIXEL_ID` is `process.env.… ?? "D9SAES3C77U40SOI9D70"`, so it is **never falsy**
+and this branch is unreachable. `credentialStatus()` can therefore never report
+the pixel ID as missing — it will always say "configured", even on a deployment
+that has none of its own.
+
+Reddit has the identical shape:
+
+```ts
+// src/lib/ads/reddit-conversions.ts:66,70-72
+if (!resolvePixelId()) missing.push("NEXT_PUBLIC_REDDIT_PIXEL_ID");
+function resolvePixelId(): string | null { return REDDIT_PIXEL_ID.trim() || null; }
+```
+
+`REDDIT_PIXEL_ID` carries the same `??` fallback, so `resolvePixelId()` never
+returns null and the check is dead. The later `if (!pixelId) return done(…)` at
+`:176-177` is dead for the same reason.
+
+### Impact
+
+- **Polluted ad optimisation.** Preview and local traffic is indistinguishable
+  from production traffic inside TikTok, Snap and Reddit. Test purchases become
+  training data for bidding. This costs real ad spend to unwind and is not
+  reversible from the store's side.
+- **The health check lies.** Every "are the ads configured?" readout answers yes
+  regardless of the deployment's own configuration.
+- **A fork advertises for this store.** Anyone cloning the repository reports into
+  these accounts by default.
+
+### Reproduction
+
+1. On a Vercel **preview** deployment (`VERCEL_ENV="preview"`) with no
+   `NEXT_PUBLIC_TIKTOK_PIXEL_ID` set, accept cookies and load a product page in
+   Playwright.
+2. `browser_network_requests` → a request to `analytics.tiktok.com` carrying
+   `sdkid=D9SAES3C77U40SOI9D70`.
+3. `curl <preview>/api/ads/purchase-event/<a paid order>` and read
+   `serverDelivery` — it reports a send against the same pixel id.
+4. Confirm the event appears in the **production** TikTok Events Manager.
+
+Source-only confirmation (no network):
+`grep -rn "VERCEL_ENV" website/src` → five hits, none in `src/lib/ads/**`,
+`src/components/*-pixel.tsx`, or `src/app/api/ads/**`.
+
+### Smallest safe root-cause fix
+
+Two changes, and the first is the one that matters:
+
+**1. Gate the whole analytics path on the environment, not on the value.**
+
+```ts
+// one shared helper, e.g. src/lib/ads/ads-enabled.ts
+export const ADS_REPORTING_ENABLED =
+  (process.env.NEXT_PUBLIC_VERCEL_ENV ?? process.env.VERCEL_ENV) === "production";
+```
+
+Have every pixel component and both server legs early-return unless it is true.
+This is the same shape `robots.ts` and `layout.tsx` already use for crawlability;
+the decision was made correctly there and simply never extended to analytics.
+
+**2. Delete the fallbacks.**
+
+```ts
+const PIXEL_ID = process.env.NEXT_PUBLIC_TIKTOK_PIXEL_ID ?? "";
+```
+
+An unset pixel id should mean "this deployment does not report", not "report to
+production". Removing the literal also revives the `if (!PIXEL_ID)` checks at
+`tiktok-events-api.ts:147` and `reddit-conversions.ts:66`, which are dead today —
+so the health readout starts telling the truth as a side effect.
+
+Set the three real ids as Vercel environment variables **scoped to Production
+only**. Note that Vercel env vars default to *all* environments, so scoping is an
+explicit step; the same caution applies to `TIKTOK_EVENTS_API_ACCESS_TOKEN` and
+`REDDIT_CONVERSIONS_ACCESS_TOKEN`, which the Phase 1 map raises as an open
+question and which this session cannot answer without the Vercel dashboard.
+
+### Regression test to write
+
+A source-text test — the pattern this codebase already uses, and the one that
+caught a consent-copy regression (`src/components/cookie-consent.tsx:76-80`):
+assert that no file under `src/lib/ads/` or `src/components/*-pixel.tsx` contains
+a string literal matching a pixel-id shape as a `??` or `||` fallback. Negative
+control: restore one literal and confirm the test names that file.
+
+Plus a behavioural test that `credentialStatus()` reports `configured: false` when
+`NEXT_PUBLIC_TIKTOK_PIXEL_ID` is unset. That assertion fails today, which is the
+proof the check is dead.
+
+### CROSS-BLOCK
+
+- **Block M must not place a paid test order on a preview deployment until fix 1
+  lands.** Phase 20 of the execution plan schedules exactly that. This is the
+  most time-sensitive line in this file.
+- `src/app/api/ads/purchase-event/[orderId]/**` is unowned; the pixel components
+  and `src/lib/ads/**` likewise. Block K can carry the fix.
+
+### Also checked, and clear — the payment kill switches are correctly hardened
+
+Recorded as negative controls, because the Phase 1 map's "dangerous defaults"
+framing invites the assumption that everything in this area is loose. It is not:
+
+- `resolvePaymentProviderName` (`src/lib/payment-provider.ts:296-317`) throws
+  unconditionally on `PAYMENT_PROVIDER=mock` when `NODE_ENV === "production"`,
+  with **no escape hatch**. The comment records that `ALLOW_MOCK_PAYMENTS=true`
+  used to re-open it and was deliberately removed because "one mistyped Vercel
+  variable" should not stand between the store and a free-order endpoint.
+- `getBillingProvider` (`src/lib/billing-provider.ts:114+`) does the same for the
+  mock recurring gateway.
+- `ALLOW_MOCK_PAYMENTS` now appears **only** in tests and comments — 23 hits, zero
+  in live code — and `src/lib/mock-payment-lockout.test.ts:129-130` asserts the
+  escape hatch is absent from the source text of both providers. This is the
+  strongest guard pattern in the repository.
+- `isCheckoutOpen()` (`payment-provider.ts:331-336`) defaults **closed**, and the
+  express lane checks it too (`src/app/api/checkout/express/session/route.ts:78`)
+  in addition to its own flag — so closing checkout closes both lanes at the
+  server. I expected a hole here and there is not one.
+
+Two smaller notes from the same sweep, not raised as findings:
+
+- `EXPRESS_CHECKOUT_ENABLED` (`src/lib/express-checkout.ts:12-13`) reads
+  `NEXT_PUBLIC_EXPRESS_CHECKOUT_ENABLED` at **module scope**, and `NEXT_PUBLIC_*`
+  is inlined at build time. Changing it in Vercel therefore does nothing until a
+  rebuild — so the express lane **cannot be killed quickly in an incident**,
+  unlike `CHECKOUT_ENABLED`, which is read at call time. Worth knowing before it
+  is needed.
+- Four e2e suites set `process.env.ALLOW_MOCK_PAYMENTS = "true"` at module scope
+  (`checkout-acknowledgement-gate`, `manual-reimbursement`,
+  `commission-eligibility`, `commerce-journey`). That is now a no-op. Harmless,
+  but a reader would misjudge those tests' preconditions. **CROSS-BLOCK: Block E**
+  (test quality).
 
 ---
 
