@@ -62,22 +62,50 @@
 --      support to change. Recorded as such rather than reported as fixed.
 -- ===========================================================================
 
-alter default privileges in schema public
+-- ===========================================================================
+-- CORRECTED 2026-08-26 by the final verification session.
+--
+-- THE PREVIOUS VERSION OF THIS FILE COULD NOT RUN. It read:
+--
+--     alter default privileges in schema public
+--     do $rpc_lockdown$
+--
+-- `ALTER DEFAULT PRIVILEGES` was left without its action clause, so Postgres
+-- failed at the `do` that followed:
+--
+--     ERROR:  syntax error at or near "do"
+--
+-- and the dynamic statement inside the block was `revoke execute on functions
+-- from anon, authenticated`, which is not valid on its own either — REVOKE
+-- EXECUTE ON FUNCTIONS exists only as the action clause of ALTER DEFAULT
+-- PRIVILEGES. One statement had been split into two invalid halves.
+--
+-- Nothing was lost by this: the file had never been applied, so the default
+-- privilege was still armed exactly as the header describes. Verified against
+-- a throwaway PostgreSQL 16 before and after the correction.
+--
+-- The role guards are kept, and are now per-role rather than shared, because
+-- `anon` and `authenticated` are Supabase-managed and neither exists in a bare
+-- cluster; the previous version tested only for `anon` and would have skipped
+-- `authenticated` silently on a cluster that had one and not the other.
+-- ===========================================================================
+
 do $rpc_lockdown$
 begin
-  -- Guarded so this file also runs against a throwaway Postgres: anon,
-  -- authenticated and service_role are Supabase-managed roles that do not exist
-  -- in a bare cluster. Without this, a database-backed test executing this file
-  -- dies on the grant rather than on whatever it was testing.
-  if exists (select 1 from pg_roles where rolname='anon') then
-    execute $q$revoke execute on functions from anon, authenticated;$q$;
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    execute 'alter default privileges in schema public revoke execute on functions from anon';
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    execute 'alter default privileges in schema public revoke execute on functions from authenticated';
   end if;
 end
 $rpc_lockdown$;
 
-
--- Belt and braces for the sweep half: re-close anything that drifted open since
--- 20260825003037, leaving the one deliberately client-callable function alone.
+-- The sweep. Unchanged from the previous version, which was valid.
+--
+-- Closes any SECURITY DEFINER function in `public` that is currently reachable
+-- by `anon` or `authenticated`, except the one that is deliberately
+-- client-callable. Idempotent: a second run finds nothing to close.
 do $$
 declare
   fn record;
@@ -99,21 +127,3 @@ begin
   end loop;
 end;
 $$;
-
--- ---- verification: run this AFTER applying -------------------------------
--- Expect `armed = false`. If it is still true, the surviving grantor is
--- supabase_admin (see the limitation above).
---
---   select exists (
---     select 1 from pg_default_acl d
---     join pg_namespace n on n.oid = d.defaclnamespace
---     where n.nspname = 'public' and d.defaclobjtype = 'f'
---       and d.defaclacl::text ~ '(anon|authenticated)=X'
---   ) as armed;
---
--- And the surface itself — expect exactly one row, validate_referral_code:
---
---   select p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
---   where n.nspname='public' and p.prosecdef
---     and (has_function_privilege('anon', p.oid, 'EXECUTE')
---       or has_function_privilege('authenticated', p.oid, 'EXECUTE'));

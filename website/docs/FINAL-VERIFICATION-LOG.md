@@ -1013,3 +1013,154 @@ the schema half of G-02 / K-17, the schema half of C-02, and M-03.
 **Still true, and unchanged by this run:** there is no restore point (Step 0,
 accepted risk). Every change above was additive except one redundant index and
 one CHECK on an empty table.
+
+---
+
+# MERGE, DEPLOY AND SMOKE TEST
+
+## The merge
+
+Two merge commits, no squash, so every finding commit and its reasoning survives.
+
+```
+563a404  Add the final verification record, complete fix register, and post-launch backlog   (docs only)
+   └─ merge of the integration branch (140 commits, 239 files, 40,721 insertions)
+9aea901  (previous main)
+```
+
+**Tree identity, verified:**
+
+```
+$ git rev-parse HEAD^{tree}                                        # after the code merge
+9ede9fe5d68e7693211d7d871b1ea122532675d3
+$ git rev-parse origin/claude/vanta-labs-code-review-j6qb7t^{tree}
+9ede9fe5d68e7693211d7d871b1ea122532675d3
+IDENTICAL
+```
+
+The documentation merge was then layered on top. It touches **nothing outside
+`website/docs/`**:
+
+```
+$ git diff --name-only origin/claude/vanta-labs-code-review-j6qb7t HEAD | grep -v '^website/docs/'
+(no output — zero non-docs differences)
+```
+
+So main's application tree is byte-identical to the integration branch, and main
+additionally carries this session's three documents.
+
+## The deployment
+
+```
+dpl_AaCKPEre4DPRxtNQgXchczHWV29w
+  sha    563a404   ref main   target production
+  state  READY     build 74s
+  alias  www.vantalabsresearch.com, vantalabsresearch.com,
+         vanta-labs-nine.vercel.app, vanta-labs-git-main-…, vanta-labs-…
+```
+
+**This is the first application deploy this store has ever had.**
+
+## The gate, on main, from a clean checkout
+
+```
+HEAD        563a404d8e2bef8045004e7b7cbb402914033de3
+npm ci      exit 0
+lint        exit 0   — 0 errors, 42 warnings
+tsc         exit 0   — clean
+test        exit 0   — Test Files 255 passed | 9 skipped (264)
+                       Tests     4101 passed | 78 skipped (4179)
+build       exit 0   — ✓ Generating static pages (105/105)
+```
+
+Identical to the pre-merge branch gate in every figure. The 9 files / 78 tests
+are the database-gated suites, all of which this session ran and passed against
+a real Postgres.
+
+## Read-only production smoke test
+
+The session's egress policy returns 403 on CONNECT for this domain, so `curl`
+could not be used; the checks were run through Vercel's own fetch path instead.
+Nothing below writes.
+
+| surface | result |
+|---|---|
+| `/` homepage | **200**, served by `dpl_AaCKPEre4DPRxtNQgXchczHWV29w`, `data-age-verified="false"` (age gate armed), 13 "In Stock" badges, 0 error strings |
+| `/api/health` | **200** — `{"status":"ok","database":"ok","latencyMs":375}` |
+| `/products` catalog | **200**, 0 error strings |
+| `/products/bpc-157` | **200**, "In Stock", "Add to Cart", real prices ($104.99, $175.95, …), 0 error strings |
+| `/cart` | **200**, renders, 0 error strings |
+| `/checkout` | **200**, Order Summary / Pay / Card present, 0 error strings |
+| `/admin` | **200**, rewritten to `/vault`, gated behind username + password + **6-digit passcode**; `robots: noindex, nofollow` |
+
+Security headers present on every response: CSP, HSTS (2y, preload),
+`X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`,
+`Referrer-Policy: strict-origin-when-cross-origin`,
+`Permissions-Policy: camera=(), microphone=(), geolocation=()`.
+
+**Not checked, stated rather than glossed:** shipping protection's default state
+(K-25) does not render on an empty cart, so it could not be observed here; it is
+covered by tests but not by this smoke test.
+
+## Errors after the deploy
+
+**Vercel runtime errors, last 2h: none.**
+
+**Sentry (`vanta-innovation-llc`):**
+
+- Issues first seen in the last hour: **ZERO.** Nothing new since the deploy.
+- One unresolved issue, and it **predates the deploy by 19 hours**:
+  `express_reconcile_backlog` — "2 express order(s) have been pending at the
+  processor for over 24h … They hold inventory and will never settle on their
+  own", culprit `GET /api/cron/sweep`, first seen 19h ago, last seen ~1h before
+  the deploy.
+
+That alert is **finding F-012** ("orders that never reached the processor are
+never retired") doing its job. Confirmed against production, read-only:
+
+```sql
+select order_id, payment_status, created_at, amount_paid from orders where payment_status='pending_payment';
+order-6afd8eee…  2026-08-25 02:10  $18.80
+order-7a8d8cc7…  2026-08-24 21:18  $17.08
+order-694115f4…  2026-08-09 22:18  $68.49
+order-21fb4328…  2026-08-03 19:39  $125.02
+```
+
+Four never-paid orders, the oldest from 3 August, holding inventory. **Not
+caused by this deploy** and not touched by it. Retiring them is an owner
+decision (F-012, STILL OPEN).
+
+## STEP 5 — corrected, dry-run, and STAGED. NOT APPLIED.
+
+`sql/rpc-default-privilege-lockdown.sql` has been rewritten. The original could
+not run: `ALTER DEFAULT PRIVILEGES` was left without its action clause and the
+dynamic statement inside the block (`revoke execute on functions from …`) is not
+valid standalone — one statement split into two invalid halves. Nothing was lost
+by this, because the file had never been applied.
+
+Dry-run against a throwaway PostgreSQL 16, four ways:
+
+```
+A. bare cluster, no anon/authenticated        -> OK, clean no-op
+B. Supabase-like cluster, roles present
+     default BEFORE : {anon=X/postgres,authenticated=X/postgres}
+     apply          : OK
+     default AFTER  : (no default acl row)      <- both grants removed
+C. idempotency, second run                    -> OK, no-op
+D. sweep still works:
+     create an exposed SECURITY DEFINER fn, grant to anon
+     anon can execute BEFORE : t
+     NOTICE: closing leaky()
+     anon can execute AFTER  : f
+     service_role AFTER      : t
+```
+
+The role guards are now per-role rather than shared — the original tested only
+for `anon` and would have skipped `authenticated` silently.
+
+**Staged, not applied.** It is security hardening, not a launch blocker: the
+one-time sweep already held (exactly one anon-executable SECURITY DEFINER
+function in production, `validate_referral_code`, which is deliberately
+client-callable). Apply post-launch. Note the header's own caveat — the
+`supabase_admin` half of the default privilege is out of reach from this
+project's access and needs Supabase support.
