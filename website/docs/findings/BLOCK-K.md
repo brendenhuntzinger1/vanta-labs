@@ -34,6 +34,7 @@ pasted verbatim.
 | K-09 | P2 | `BEHAVIORAL-TEST-PROVEN` | Store credit is granted and spent on UTC calendar months, so it dies at 7 PM ET on the last day |
 | K-10 | P3 | `BEHAVIORAL-TEST-PROVEN` | The storefront offers bar says "Ends tonight" for a coupon that expires that morning, and for one a year away |
 | K-11 | P2 | `BEHAVIORAL-TEST-PROVEN` | `dollarsToPoints` floors a float, so 4.6% of points redemptions debit one point less than the discount given |
+| K-12 | P1 | `SOURCE-INSPECTED` | Store credit is decided at quote time and debited at settlement time, so a manual-payment order debits a different month — or nothing |
 
 ---
 
@@ -1607,6 +1608,170 @@ consistent" refactor cannot quietly ceil the earning leg.
 - `numeric(12,2)` headroom: the per-line cap is 99 units (`quote-order.ts`) with a
   500-unit order ceiling, so no realistic order approaches the
   `9,999,999,999.99` column limit. No overflow path found.
+
+---
+
+---
+
+## K-12 — Store credit is decided at quote time and debited at settlement time, so a manual-payment order routinely debits a different month — or nothing at all
+
+**Grade:** `SOURCE-INSPECTED` (full chain quoted) · **Severity:** P1 · **Status:** OPEN
+**Area:** time/date boundaries × money × third-party/manual settlement lag
+
+### What is wrong
+
+The **discount** is decided at quote time from the current month's window:
+
+```ts
+// src/lib/quote-order.ts:750-751
+if (!referral && memberPerks.storeCreditBalanceCents > 0 && Math.round(subtotal * 100) >= memberPerks.storeCreditMinOrderCents) {
+  storeCreditRedeemedCents = Math.max(0, Math.min(memberPerks.storeCreditBalanceCents, Math.round(totalBeforePoints * 100)));
+```
+
+That figure is frozen onto the order as `store_credit_redeemed_cents`, and the
+customer is charged the reduced `amount_paid`.
+
+The **ledger debit** happens much later, and re-derives the balance from scratch:
+
+```ts
+// src/lib/store-credit.ts:105-110
+export async function redeemStoreCredit(userId: string, amountCents: number, orderId: string): Promise<void> {
+  if (amountCents <= 0) return;
+  const liveBalance = await getStoreCreditBalanceCents(userId);
+  const toRedeem = Math.min(Math.abs(Math.round(amountCents)), liveBalance);
+  if (toRedeem <= 0) return;                       // <-- silent
+```
+
+`getStoreCreditBalanceCents` sums only rows `.gte("created_at", startOfCurrentMonthIso())`
+(`store-credit.ts:31`), and that boundary is a **UTC** month start (`:20-22`).
+
+### The clamp is right for the reason it was written, and wrong for this one
+
+`store-credit.ts:102-104` states the intent:
+
+> Capped to the LIVE remaining balance at redemption time, so two concurrent
+> pending orders that each froze the same balance can never over-spend it.
+
+That is a sound concurrency guard, and it should stay. The defect is that the
+**same clamp silently absorbs a completely different case** — where the balance
+is not "already spent" but "sitting in a different month bucket". The code
+cannot tell those apart, and its response to both is `return` with no throw, no
+log, and no `recordSystemAlert`.
+
+### Why the lag is routine, not an edge case
+
+`redeemStoreCredit` has two callers:
+
+- `src/lib/payment-webhook.ts:1543` — inside `processPaymentWebhook` (card lane).
+  Here the gap is seconds, so only a genuine month rollover bites — 7:00 PM
+  Eastern on the last day of the month, evening peak (see K-09).
+- `src/lib/payment-webhook.ts:1066` — inside `finalizeManualPayment`, whose
+  docblock (`:940-942`) describes it as the path that runs when an admin verifies
+  a Cash App / Zelle / PayPal transfer. It is invoked from
+  `src/app/api/admin/payments/[orderId]/route.ts:65`, i.e. **when a human gets
+  around to it**.
+
+Manual payment is a first-class method in this store. A transfer quoted on the
+28th and approved on the 2nd is ordinary operation, not an edge — and the two
+evaluations then land in different months **as a matter of course**.
+
+### Two outcomes, both wrong, neither visible
+
+| state at settlement | `liveBalance` | result |
+|---|---|---|
+| new month's grant already made | the **new** month's credit | debits credit the customer has not spent, for an order already discounted from last month's |
+| new month's grant not yet made (the sweep runs every 30 min) | `0` | `toRedeem <= 0` → **return with no ledger row at all** |
+
+In the second case the customer keeps a discount the ledger never records.
+
+### Impact
+
+- **The store gives away the credit twice, or gives it away for free.** On a tier
+  with `monthly_store_credit_cents = 7500`, that is $75 an order.
+- **Refunds silently fail to return it.** `refundStoreCreditForOrder`
+  (`store-credit.ts:126-140`) looks up rows by
+  `.eq("order_id", orderId).eq("reason", "membership_redemption")`. If no
+  redemption row was written, there is nothing to reverse, so a refunded order
+  returns no credit and no one is told.
+- **Admin reporting cannot see it.** `startOfCurrentMonthIso` is exported
+  specifically so "admin reporting uses the same boundary the customer's balance
+  uses" (`:16-18`) — so both agree, and both are wrong in the same direction.
+- `orders.store_credit_redeemed_cents` and `store_credit_ledger` disagree
+  permanently, with nothing to reconcile them against.
+
+### Reproduction
+
+1. Give a member $50 of store credit this month.
+2. Place a **manual-payment** order redeeming all $50. Confirm
+   `orders.store_credit_redeemed_cents = 5000` and `amount_paid` is $50 lower.
+3. Delete this month's grant rows (or wait for the UTC month to roll over
+   before the grant sweep runs) so the live balance is 0.
+4. Approve the payment: `PATCH /api/admin/payments/<orderId>`.
+5. Assert `select coalesce(sum(amount_cents),0) from store_credit_ledger where order_id='<id>'`
+   → **0**, with `orders.store_credit_redeemed_cents` still 5000, no
+   `system_alerts` row, and nothing in the logs.
+6. Then refund the order and confirm no credit is returned.
+
+### Smallest safe root-cause fix
+
+**Bind the redemption to the month the order was quoted in, not the month it
+settled in.** Pass the order's quote timestamp through:
+
+```ts
+export async function redeemStoreCredit(userId: string, amountCents: number, orderId: string, quotedAt: string): Promise<void> {
+  const liveBalance = await getStoreCreditBalanceCents(userId, quotedAt);   // .gte(startOfCurrentMonthIso(new Date(quotedAt)))
+```
+
+and write the debit row with `created_at` set inside the quote's month so it nets
+against the grant it was actually spent from.
+
+**Separately, and regardless: make the clamp audible.** When
+`toRedeem < amountCents`, the store has granted a discount it is not debiting.
+That is a money event and it must not be a bare `return`:
+
+```ts
+if (toRedeem < Math.abs(Math.round(amountCents))) {
+  await recordSystemAlert({
+    type: "store_credit_not_fully_debited",
+    severity: "critical",
+    message: `Order ${orderId} was discounted ${amountCents}c of store credit but only ${toRedeem}c could be debited.`,
+  });
+}
+```
+
+This is the change worth making even if the month binding is deferred: it turns
+an invisible loss into a visible one, and it keeps the concurrency guard's
+correct behaviour intact.
+
+If the business decides a cross-month settle should be **refused** rather than
+absorbed, refuse it explicitly and re-quote the order — but do not leave the
+current silent third option.
+
+### Regression test to write
+
+Stub the ledger. Quote an order in month M with a $50 balance, advance the clock
+into month M+1, settle it, and assert a redemption row exists for the **quote's**
+month equal to the frozen amount. Negative control: revert to
+`getStoreCreditBalanceCents(userId)` with no `quotedAt` and confirm the test
+fails on a missing row — not on a stub error.
+
+Second test: with a live balance below the frozen amount, assert a
+`system_alerts` row is written. Negative control: remove the alert and confirm it
+fails.
+
+### CROSS-BLOCK
+
+- `src/lib/payment-webhook.ts:1066` and `:1543` — **Block A+B.** Both call sites
+  need the extra `order.created_at` argument. `order.created_at` is not currently
+  in the `.select(...)` at `payment-webhook.ts:463`; it must be added there too.
+- `src/lib/quote-order.ts:750-751` — **shared file**, no change needed.
+- The fix body is in `src/lib/store-credit.ts`, which no block owns.
+
+*Relationship to K-09:* K-09 is the boundary being in the wrong **zone** (UTC
+rather than the business zone). K-12 is the balance being read at the wrong
+**time** (settlement rather than quote). Fixing either alone leaves the other:
+correcting the zone still breaks across a real month boundary, and binding to the
+quote month still uses a boundary five hours early. Both are needed.
 
 ---
 
