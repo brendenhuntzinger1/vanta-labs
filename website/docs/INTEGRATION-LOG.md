@@ -1758,3 +1758,80 @@ with the unreachability written into it.
 
 Evidence grade: **BEHAVIORAL-TEST-PROVEN** (the sweep really executes),
 schema claim **DATABASE-PROVEN** against production.
+
+### 6.7 K-04 (P1) — the affiliate link recorded consent-gated data before any consent
+
+`/r/[code]` is the public link an ambassador shares. On every click it wrote
+`utm_source`, `utm_medium`, `utm_campaign`, the referrer, the user agent and
+the raw IP address into `partner_clicks` **and** `referrals`, and set a 30-day
+`vl_referral_code` cookie — before the visitor had answered the banner, and
+regardless of what they answered.
+
+Three statements in the **published** Cookie Policy (read from the rendered
+`/legal/cookies`, not from a summary) that this contradicts:
+
+1. *"**Essential** — cart contents, checkout state, login sessions, and your age
+   confirmation."* A 30-day referral attribution cookie is not on that list.
+2. *"**Analytics — only if you accept.** … any campaign parameters from the
+   link you arrived through …"* — `utm_*` is named **explicitly**.
+3. *"Choosing Decline on the banner stops all non-essential storage."*
+
+**Root cause is architectural, not a missing `if`.** The banner stored the
+choice in `localStorage`, which no route handler can read. The route could not
+have honoured the policy however it was written.
+
+**Fix.** The banner now mirrors the same value into a `vl_cookie_consent`
+cookie — the literal string `accepted`/`declined`, no identifier — and a new
+`src/lib/cookie-consent-server.ts` reads it. `unset` is **not** consent: an
+unanswered banner and a blocked cookie are both treated exactly like a decline.
+The route builds the tracking fields only when consent was given. A backfill on
+mount publishes the cookie for anyone who answered before it existed —
+otherwise every existing visitor keeps the old behaviour forever, and a
+*declining* visitor stays indistinguishable from one who never answered.
+
+**What this deliberately does NOT decide.** Whether affiliate attribution
+itself — the `vl_referral_code` cookie and the click row that pays an
+ambassador — counts as essential storage is a **business and legal question for
+the owner**. Gating it would silently cut ambassador commissions. It is left
+working, and is listed under OPEN — OWNER DECISION. Fixed here is only the part
+with no trade-off: the fields the policy itemises as consent-gated.
+
+**Tests** — 18 across two suites. The split is the point:
+
+- `referral-click-consent.test.ts` (12) — the consent reader, and the shape of
+  the wiring.
+- `referral-click-consent-behaviour.test.ts` (6) — calls the **real route
+  handler** and inspects the rows it actually inserts.
+
+The second suite exists because of a mutation-testing failure, described below.
+
+**Mutation testing — 7 mutations, two rounds.**
+
+Round 1 killed 5 of 7. **Two survived, and neither was equivalent — they were
+real gaps in my own tests:**
+
+| # | Mutation | Round 1 | Round 2 |
+|---|---|---|---|
+| 1 | `hasAnalyticsConsent` returns `!== "declined"` | ☠ | ☠ |
+| 2 | Accept any unrecognised cookie value | ☠ | ☠ |
+| 3 | Prefix-match the cookie name (`..._backup` wins) | ☠ | ☠ |
+| 4 | **`const tracking = true ? {…}` — reinstate the exact defect** | **SURVIVED** | ☠ 2 tests |
+| 5 | Delete the backfill | ☠ | ☠ |
+| 6 | **Stop writing the cookie on a fresh choice** | **SURVIVED** | ☠ |
+| 7 | Gate on "not declined" at the call site | — | ☠ |
+
+Mutation 4 is the one worth dwelling on. It reinstates the defect verbatim, and
+every source-inspection assertion I had written still passed — because the
+string `analyticsConsented` was still present, just no longer load-bearing.
+Source matching cannot tell code that *honours* consent from code that merely
+*mentions* it. That is what forced the behavioural suite, which asserts on the
+inserted rows and kills it twice over.
+
+Mutation 6 passed round 1 for the same reason: a bare `document.cookie` check
+was satisfied by the backfill path alone, so deleting the write in `dismiss()`
+— which would make a first-time visitor's answer invisible to the server
+forever — went unnoticed.
+
+Both gaps were closed and re-run rather than being written up as equivalent.
+Evidence grade: **BEHAVIORAL-TEST-PROVEN**; policy text **SOURCE-INSPECTED**
+from the rendered page.
