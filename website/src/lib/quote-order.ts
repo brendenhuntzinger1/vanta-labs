@@ -295,6 +295,31 @@ async function validateReferralCode(
   };
 }
 
+/**
+ * Per-line COGS in cents, or null when no cost is on record.
+ *
+ * DELIBERATELY NEVER FALLS BACK TO THE PARENT PRODUCT COST.
+ * `products.product_cost_cents` holds costs inherited from EvoLabs, the former
+ * third-party fulfilment provider, superseded by the per-vial landed costs in
+ * sql/product-cogs.sql. On 36 of 38 published products the parent figure is
+ * 1.4x-6.8x the true dose cost. Substituting it does not make COGS more
+ * accurate; it makes a wrong number look like a known one.
+ *
+ * Returning null instead makes computeOrderProfit set `hasEstimatedCost`, so
+ * the order reports COGS as ESTIMATED. A visible estimate beats a confident
+ * wrong number.
+ */
+export function resolveUnitCostCents(
+  slug: string,
+  variantId: string | undefined,
+  unitCostByDoseId: Map<string, number>,
+  _unitCostBySlug: Map<string, number>,
+): number | null {
+  const doseCost = variantId ? unitCostByDoseId.get(variantId) : undefined;
+  if (doseCost && doseCost > 0) return Math.round(doseCost * 100);
+  return null;
+}
+
 export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // Whether a destination is known well enough to price shipping and tax.
   const destinationKnown = input.mode !== "address_optional";
@@ -816,14 +841,13 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // product's. If NEITHER is set we snapshot null (unknown) rather than the
   // guard's worst-case assumption, so profit reports show real cost when known
   // and flag an estimate when not — never presenting an assumption as fact.
-  const unitCostCentsForLine = (line: QuoteOrderLine): number | null => {
-    const slug = String(line.product.id).split("::")[0];
-    const doseCost = line.product.variantId ? unitCostByDoseId.get(line.product.variantId) : undefined;
-    if (doseCost && doseCost > 0) return Math.round(doseCost * 100);
-    const slugCost = unitCostBySlug.get(slug);
-    if (slugCost && slugCost > 0) return Math.round(slugCost * 100);
-    return null;
-  };
+  const unitCostCentsForLine = (line: QuoteOrderLine): number | null =>
+    resolveUnitCostCents(
+      String(line.product.id).split("::")[0],
+      line.product.variantId,
+      unitCostByDoseId,
+      unitCostBySlug,
+    );
 
   // The labelled breakdown a wallet sheet renders VERBATIM. Built here, on the
   // server, from the same numbers the charge is made of — a wallet client must
