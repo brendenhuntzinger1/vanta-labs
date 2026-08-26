@@ -4,3 +4,9 @@
 test-results/
 
 node_modules/
+
+# Stray Playwright screenshots written to the repo root when a custom
+# filename is passed to browser_take_screenshot. Also scratch, never source.
+*-mobile.png
+*-desktop.png
+page-*.png
