@@ -12,7 +12,7 @@ import { calculateShipping, DEFAULT_SHIPPING_CONFIG, type ShippingConfig } from 
 import { DEFAULT_SALES_TAX_CONFIG, type SalesTaxConfig } from "@/lib/sales-tax";
 import type { MembershipTierSummary } from "@/lib/member-pricing";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
-import { resolveCartDiscount } from "@/lib/discount-resolution";
+import { describeCouponOutcome, resolveCartDiscount, type CouponOutcome, type PriceControllingDiscount } from "@/lib/discount-resolution";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 
 type CouponDetails = {
@@ -89,6 +89,9 @@ type CartContextValue = {
   appliedDiscountLabel: string | null;
   /** True when the system auto-selected the best available discount. */
   autoBestDiscountApplied: boolean;
+  /** How the entered coupon actually fared against the winning discount.
+   *  Null when no coupon is entered. */
+  couponOutcome: CouponOutcome | null;
   total: number;
   isBuy3Get1FreeActive: boolean;
   isBuy3Get1FreeEligible: boolean;
@@ -799,6 +802,32 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     // reassurance line — their best discount was applied automatically.
     return winner === "member_pricing";
   }, [discountAmount, bestDiscount, quantityBundleSavings, couponDetails, referralDetails]);
+  // WHAT THE SHOPPER IS TOLD ABOUT THE CODE THEY ENTERED.
+  //
+  // The success message used to be the constant "Coupon applied.", set the
+  // moment the code validated — before anything knew whether it would actually
+  // win. A 10% code entered on the 12% bundle tier therefore reported itself as
+  // applied next to a total it had not moved. Derived here, from the same
+  // winner the price is derived from, so the copy cannot disagree with the maths.
+  const couponOutcome = useMemo<CouponOutcome | null>(() => {
+    if (!couponDetails) return null;
+    const winnerType: PriceControllingDiscount | null =
+      discountAmount > 0 && bestDiscount
+        ? bestDiscount.type
+        : quantityBundleSavings > 0
+          ? "bundle_pricing"
+          : null;
+    return describeCouponOutcome({
+      code: couponDetails.code,
+      offerLabel:
+        couponDetails.discountType === "fixed"
+          ? `${formatCurrency(couponDetails.discountValue)} off`
+          : `${couponDetails.discountValue}% off`,
+      winnerType,
+      winnerLabel: appliedDiscountLabel,
+    });
+  }, [couponDetails, discountAmount, bestDiscount, quantityBundleSavings, appliedDiscountLabel]);
+
   const bulkSavingsApplied = bestDiscount?.type === "bulk_savings";
   const ambassadorDiscountApplied = bestDiscount?.type === "ambassador_personal";
   const bulkSavingsProgress = useMemo(
@@ -1264,6 +1293,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     discountAmount,
     appliedDiscountLabel,
     autoBestDiscountApplied,
+    couponOutcome,
     total,
     isBuy3Get1FreeActive: bestDiscount?.type === "buy3get1",
     isBuy3Get1FreeEligible,

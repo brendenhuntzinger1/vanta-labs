@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCatalogProductBySlug } from "@/lib/catalog";
-import { BAC_WATER_SLUG } from "@/lib/bac-water";
+import { resolveBacWaterProduct } from "@/lib/bac-water";
 import { customerSafeMessage } from "@/lib/safe-error";
 
 export const dynamic = "force-dynamic";
@@ -10,7 +10,10 @@ export const dynamic = "force-dynamic";
 // lightweight lookup instead of pulling the whole catalog.
 export async function GET() {
   try {
-    const product = await getCatalogProductBySlug(BAC_WATER_SLUG);
+    // Whichever accepted slug the store publishes. Asking for a single
+    // hard-coded slug 404'd this endpoint on every page load for a catalogue
+    // that used the other one — see resolveBacWaterProduct.
+    const product = await resolveBacWaterProduct(getCatalogProductBySlug);
     if (!product) {
       return NextResponse.json({ success: false, error: "Not available" }, { status: 404 });
     }

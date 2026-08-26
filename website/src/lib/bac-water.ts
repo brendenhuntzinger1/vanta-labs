@@ -8,8 +8,25 @@ import type { Product, ProductDose } from "@/lib/catalog-types";
 // an admin price change propagates to every surface at once.
 // -------------------------------------------------------------------------
 
-/** The SKU the cross-sell offers. */
-export const BAC_WATER_SLUG = "bacteriostatic-water";
+/**
+ * THE SLUGS THAT IDENTIFY BACTERIOSTATIC WATER, IN PREFERENCE ORDER.
+ *
+ * This list used to exist twice: once here as a single offered slug, and once
+ * below as the exclusion set. The cross-sell LOOKUP asked for the single slug
+ * while `isBacWater` recognised the set, so a store publishing its BAC water
+ * under the other accepted slug served a 404 from /api/catalog/bac-water on
+ * every page load — silently, since the cart checkboxes and the accessory block
+ * simply do not render when the fetch fails. Reproduced in the browser: the
+ * same product 404'd as "bac-water-30ml" and resolved as "bacteriostatic-water"
+ * with no other change.
+ *
+ * One list now feeds both the recogniser and the resolver, so the two halves of
+ * the cross-sell cannot disagree about what this product is called.
+ */
+export const BAC_WATER_SLUG_CANDIDATES = ["bacteriostatic-water", "bac-water-30ml"] as const;
+
+/** The SKU the cross-sell offers when more than one is published. */
+export const BAC_WATER_SLUG = BAC_WATER_SLUG_CANDIDATES[0];
 
 /**
  * IS THIS PRODUCT ITSELF BACTERIOSTATIC WATER?
@@ -30,7 +47,7 @@ export const BAC_WATER_SLUG = "bacteriostatic-water";
  * Nothing here infers physical form, and nothing decides ELIGIBILITY from a
  * name, slug, category, strength or unit.
  */
-const BAC_WATER_SLUGS = new Set(["bacteriostatic-water", "bac-water-30ml"]);
+const BAC_WATER_SLUGS = new Set<string>(BAC_WATER_SLUG_CANDIDATES);
 
 export function isBacWater(product: { slug?: string; name?: string } | string | null | undefined) {
   const slug = (typeof product === "string" ? product : product?.slug ?? "").toLowerCase();
@@ -91,4 +108,33 @@ export function bacWaterAddOptions(product: Product, offer: BacWaterDoseOffer) {
     batchNumberOverride: offer.dose.batchNumber ?? product.batchNumber,
     stockStatusOverride: offer.dose.stockStatus ?? product.stockStatus,
   };
+}
+
+
+/**
+ * The published BAC water product, whichever accepted slug the store uses.
+ *
+ * Takes the lookup as an argument so this stays client-safe and directly
+ * testable — the route passes `getCatalogProductBySlug`, which already filters
+ * to active, enabled, published, non-archived rows and returns null otherwise.
+ *
+ * Candidates are tried in order and the first hit wins, so a store publishing
+ * both SKUs keeps offering the preferred one. A throwing lookup is treated as a
+ * miss rather than an error: a transient failure on the first slug must not
+ * take out a cross-sell the second slug could still serve.
+ */
+export async function resolveBacWaterProduct(
+  lookup: (slug: string) => Promise<Product | null>,
+): Promise<Product | null> {
+  for (const slug of BAC_WATER_SLUG_CANDIDATES) {
+    try {
+      const product = await lookup(slug);
+      if (product) {
+        return product;
+      }
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
 }
