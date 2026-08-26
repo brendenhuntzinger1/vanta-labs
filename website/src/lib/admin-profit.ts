@@ -157,6 +157,60 @@ function profitForOrder(
 
 const IN_CHUNK = 150; // keep each `.in(...)` well under the URL length limit
 
+// ---- Reading orders without silently losing some -------------------------
+//
+// Two different things can cut an orders read short, and neither announces
+// itself:
+//
+//   1. A `.limit()` in this file. `profitForPaidOrdersInRange` had none at all,
+//      which is worse, not better: it meant the figure depended entirely on (2).
+//   2. PostgREST's `db-max-rows`, a Supabase project setting this application
+//      cannot read, which caps EVERY response. Supabase's own default for it is
+//      1,000.
+//
+// Reproduced with 1,500 generated orders and a 1,000-row cap: the 30-day profit
+// tile reported 1,000 orders and a third less profit, with no error and no
+// warning. Under-reporting money is the worst direction to be wrong in, so the
+// number of rows actually read is compared against a COUNT — which is one round
+// trip and is not subject to the cap — and the shortfall is reported rather than
+// absorbed.
+const ORDER_PAGE_SIZE = 1000;
+const MAX_ORDER_PAGES = 50;
+
+/** An optional created_at window; omit both for "every order". */
+type OrderWindow = { fromIso?: string; toIso?: string };
+
+async function readOrdersPaged(window: OrderWindow, maxRows: number): Promise<{ rows: OrderRecord[]; truncated: boolean }> {
+  const rows: OrderRecord[] = [];
+  const pageLimit = Math.max(1, Math.min(MAX_ORDER_PAGES, Math.ceil(maxRows / ORDER_PAGE_SIZE)));
+
+  for (let page = 0; page < pageLimit; page += 1) {
+    let query = supabaseAdmin
+      .from("orders")
+      .select(ORDER_FIELDS)
+      .order("created_at", { ascending: false });
+    if (window.fromIso) query = query.gte("created_at", window.fromIso);
+    if (window.toIso) query = query.lte("created_at", window.toIso);
+
+    const { data } = await query.range(page * ORDER_PAGE_SIZE, page * ORDER_PAGE_SIZE + ORDER_PAGE_SIZE - 1);
+    const batch = (data ?? []) as OrderRecord[];
+    rows.push(...batch);
+    // A short page means the end of the table — or a server cap. The count
+    // below is what tells the two apart.
+    if (batch.length < ORDER_PAGE_SIZE) break;
+  }
+
+  let countQuery = supabaseAdmin.from("orders").select("id", { count: "exact", head: true });
+  if (window.fromIso) countQuery = countQuery.gte("created_at", window.fromIso);
+  if (window.toIso) countQuery = countQuery.lte("created_at", window.toIso);
+  const { count } = await countQuery;
+
+  // No count available (an older row source, or an error) means no evidence of
+  // a shortfall — report what was read rather than inventing a warning.
+  const total = typeof count === "number" ? count : rows.length;
+  return { rows, truncated: rows.length < total };
+}
+
 async function costLinesByOrderId(orderIds: string[]): Promise<Map<string, OrderProfitLine[]>> {
   const byOrder = new Map<string, OrderProfitLine[]>();
   if (orderIds.length === 0) return byOrder;
@@ -321,13 +375,15 @@ export async function getOrderProfitMap(orderIds: string[]): Promise<Map<string,
   return map;
 }
 
-async function profitForPaidOrdersInRange(fromIso: string, toIso: string): Promise<OrderProfit[]> {
-  const { data: orders } = await supabaseAdmin
-    .from("orders")
-    .select(ORDER_FIELDS)
-    .gte("created_at", fromIso)
-    .lte("created_at", toIso);
-  return computeProfitForOrders((orders ?? []) as OrderRecord[]);
+async function profitForPaidOrdersInRange(
+  fromIso: string,
+  toIso: string,
+): Promise<{ rows: OrderProfit[]; truncated: boolean }> {
+  const { rows, truncated } = await readOrdersPaged(
+    { fromIso, toIso },
+    ORDER_PAGE_SIZE * MAX_ORDER_PAGES,
+  );
+  return { rows: await computeProfitForOrders(rows), truncated };
 }
 
 export interface ProfitWindowMetrics {
@@ -336,6 +392,12 @@ export interface ProfitWindowMetrics {
   last30Days: number;
   ordersLast30Days: number;
   hasEstimatedCost: boolean;
+  /**
+   * True when the orders read came back short of what the table holds, so these
+   * figures are a floor rather than the total. Never let a smaller number be
+   * presented as the whole story.
+   */
+  truncated: boolean;
 }
 
 // True net profit for the dashboard, over today / 7d / 30d windows. Uses the
@@ -348,7 +410,7 @@ export async function getProfitWindowMetrics(nowMs: number = Date.now()): Promis
   const weekStart = nowMs - 7 * oneDay;
   const monthStart = nowMs - 30 * oneDay;
 
-  const rows = await profitForPaidOrdersInRange(fromIso, toIso);
+  const { rows, truncated } = await profitForPaidOrdersInRange(fromIso, toIso);
 
   let today = 0;
   let last7Days = 0;
@@ -373,7 +435,7 @@ export async function getProfitWindowMetrics(nowMs: number = Date.now()): Promis
   }
 
   const round = (v: number) => Math.round(v * 100) / 100;
-  return { today: round(today), last7Days: round(last7Days), last30Days: round(last30Days), ordersLast30Days, hasEstimatedCost };
+  return { today: round(today), last7Days: round(last7Days), last30Days: round(last30Days), ordersLast30Days, hasEstimatedCost, truncated };
 }
 
 export interface ProfitTrendPoint {
@@ -383,7 +445,7 @@ export interface ProfitTrendPoint {
 
 // Per-day net profit across a date range (Analytics profit trend).
 export async function getProfitTrend(fromIso: string, toIso: string): Promise<ProfitTrendPoint[]> {
-  const rows = await profitForPaidOrdersInRange(fromIso, toIso);
+  const { rows } = await profitForPaidOrdersInRange(fromIso, toIso);
   const byDay = new Map<string, number>();
 
   for (const row of rows) {
@@ -430,18 +492,15 @@ export interface ProfitDashboard {
   /** Orders whose profit is still estimated (exact shipping cost pending). */
   estimatedOrderCount: number;
   hasEstimatedProfit: boolean;
+  /** See ProfitWindowMetrics.truncated — these figures are a floor, not a total. */
+  truncated: boolean;
 }
 
 const MAX_DASHBOARD_ORDERS = 20000;
 
 export async function getProfitDashboard(nowMs: number = Date.now()): Promise<ProfitDashboard> {
-  const { data: orders } = await supabaseAdmin
-    .from("orders")
-    .select(ORDER_FIELDS)
-    .order("created_at", { ascending: false })
-    .limit(MAX_DASHBOARD_ORDERS);
-
-  const rows = await computeProfitForOrders((orders ?? []) as OrderRecord[]);
+  const { rows: orders, truncated } = await readOrdersPaged({}, MAX_DASHBOARD_ORDERS);
+  const rows = await computeProfitForOrders(orders);
 
   const now = new Date(nowMs);
   const startOfToday = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
@@ -522,6 +581,7 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
     },
     estimatedOrderCount,
     hasEstimatedProfit: estimatedOrderCount > 0,
+    truncated,
   };
 }
 

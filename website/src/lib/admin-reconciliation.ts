@@ -14,7 +14,8 @@ export type ReconciliationFlagType =
   | "total_mismatch"
   | "refund_exceeds_paid"
   | "paid_without_timestamp"
-  | "stale_pending";
+  | "stale_pending"
+  | "scan_truncated";
 
 export interface ReconciliationFlag {
   orderId: string;
@@ -29,6 +30,7 @@ const FLAG_LABELS: Record<ReconciliationFlagType, string> = {
   refund_exceeds_paid: "Refund amount exceeds amount paid",
   paid_without_timestamp: "Marked paid but has no paid_at timestamp",
   stale_pending: "Pending payment for over 24 hours",
+  scan_truncated: "Not every order could be checked — results are incomplete",
 };
 
 export const RECONCILIATION_FLAG_LABELS = FLAG_LABELS;
@@ -39,7 +41,7 @@ function roundMoney(value: number) {
 
 export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
   const BASE_COLUMNS =
-    "order_id, customer_email, subtotal, shipping_amount, discount_amount, tax_amount, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, refund_amount, payment_status, paid_at, created_at";
+    "order_id, customer_email, subtotal, shipping_amount, discount_amount, handling_fee, tax_amount, card_processing_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, refund_amount, payment_status, paid_at, created_at";
 
   // Typed explicitly because the column list is chosen at runtime, which defeats
   // supabase-js's inference from a literal select string.
@@ -49,6 +51,7 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
     subtotal: number | null;
     shipping_amount: number | null;
     discount_amount: number | null;
+    handling_fee: number | null;
     tax_amount: number | null;
     card_processing_fee: number | null;
     store_credit_redeemed_cents: number | null;
@@ -61,16 +64,38 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
     shipping_protection_fee?: number | null;
   };
 
+  // PAGED, AND CHECKED AGAINST THE REAL TOTAL.
+  //
+  // This used to be a bare `.limit(2000)` with no paging: past 2000 orders the
+  // screen silently stopped looking, and an order that was short by any amount
+  // simply never appeared. Reproduced with 2101 generated orders — a $114
+  // underpayment on the oldest one produced an EMPTY flag list.
+  //
+  // Two separate things can cut a read short, so the number of rows actually
+  // examined is compared against a COUNT of the table rather than inferred:
+  //   1. the page bound below, if the store ever outgrows it;
+  //   2. PostgREST's `db-max-rows`, a server setting this application cannot
+  //      see, which caps every response without telling the caller.
+  // Either way the operator is told, because this is the screen they open when
+  // they already suspect something is wrong, and a quietly incomplete answer
+  // there is worse than an error.
+  const PAGE_SIZE = 1000;
+  const MAX_PAGES = 50;
+
   const read = async (columns: string) => {
-    const result = await supabaseAdmin
-      .from("orders")
-      .select(columns)
-      .order("created_at", { ascending: false })
-      .limit(2000);
-    return {
-      data: result.data as unknown as ReconciliationRow[] | null,
-      error: result.error,
-    };
+    const rows: ReconciliationRow[] = [];
+    for (let page = 0; page < MAX_PAGES; page += 1) {
+      const result = await supabaseAdmin
+        .from("orders")
+        .select(columns)
+        .order("created_at", { ascending: false })
+        .range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
+      if (result.error) return { data: null, error: result.error };
+      const batch = (result.data ?? []) as unknown as ReconciliationRow[];
+      rows.push(...batch);
+      if (batch.length < PAGE_SIZE) break;
+    }
+    return { data: rows, error: null };
   };
 
   // Ask for the protection fee, and fall back to the original column set if the
@@ -96,12 +121,29 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
   const flags: ReconciliationFlag[] = [];
   const staleThreshold = Date.now() - 24 * 60 * 60 * 1000;
 
+  // How many orders exist, independently of how many were read. A count query
+  // is a single round trip and is not subject to db-max-rows.
+  const { count: totalOrders } = await supabaseAdmin
+    .from("orders")
+    .select("id", { count: "exact", head: true });
+  const examined = (data ?? []).length;
+  if (typeof totalOrders === "number" && examined < totalOrders) {
+    flags.push({
+      orderId: "",
+      customerEmail: null,
+      type: "scan_truncated",
+      detail: `Checked the ${examined.toLocaleString()} most recent of ${totalOrders.toLocaleString()} orders. Older orders were not checked.`,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
   for (const order of data ?? []) {
     const orderId = String(order.order_id);
     const customerEmail = order.customer_email ? String(order.customer_email) : null;
     const subtotal = roundMoney(Number(order.subtotal ?? 0));
     const shipping = roundMoney(Number(order.shipping_amount ?? 0));
     const discount = roundMoney(Number(order.discount_amount ?? 0));
+    const handlingFee = roundMoney(Number(order.handling_fee ?? 0));
     const tax = roundMoney(Number(order.tax_amount ?? 0));
     const cardFee = roundMoney(Number(order.card_processing_fee ?? 0));
     const storeCredit = roundMoney(Number(order.store_credit_redeemed_cents ?? 0) / 100);
@@ -119,7 +161,7 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
     const shippingProtection = protectionColumnPresent
       ? roundMoney(Number(order.shipping_protection_fee ?? 0))
       : 0;
-    const expectedTotal = expectedOrderTotal({ subtotal, shipping, tax, cardFee, discount, storeCredit, pointsDollars, shippingProtection });
+    const expectedTotal = expectedOrderTotal({ subtotal, shipping, tax, cardFee, discount, storeCredit, pointsDollars, shippingProtection, handlingFee });
     const maxProtection = protectionColumnPresent ? 0 : maxShippingProtectionFee(subtotal);
     const paymentStatus = String(order.payment_status ?? "");
     const createdAt = String(order.created_at);
@@ -171,6 +213,10 @@ export async function getReconciliationFlags(): Promise<ReconciliationFlag[]> {
 
 export async function getReconciliationFlagCount(): Promise<number> {
   const flags = await getReconciliationFlags();
-  const uniqueOrderIds = new Set(flags.map((flag) => flag.orderId));
-  return uniqueOrderIds.size;
+  // Counts DISTINCT ORDERS with a problem — an order can raise several flags.
+  // The truncation notice is not an order and carries no id, so it is counted
+  // once in its own right rather than folded into the empty-string bucket.
+  const uniqueOrderIds = new Set(flags.filter((flag) => flag.orderId).map((flag) => flag.orderId));
+  const truncated = flags.some((flag) => flag.type === "scan_truncated") ? 1 : 0;
+  return uniqueOrderIds.size + truncated;
 }

@@ -222,3 +222,168 @@ describeDb("financial reporting — what counts as an order", () => {
     expect((await getProfitWindowMetrics(NOW)).ordersLast30Days).toBe(2);
   });
 });
+
+describeDb("reconciliation — what the operator can actually see", () => {
+  beforeAll(async () => {
+    pg = new Pool({ connectionString: DATABASE_URL, max: 8 });
+    await pg.query(SERVICE_ROLE_DDL);
+    await pg.query(ORDERS_DDL);
+    await pg.query(readFileSync(join(SQL_DIR, "admin-dashboard-rollups.sql"), "utf8"));
+  }, 60_000);
+
+  afterAll(async () => {
+    await pg?.end();
+  });
+
+  beforeEach(async () => {
+    await reset();
+  });
+
+  it("does not accuse an order that carries a handling fee", async () => {
+    // Every writer sets handling_fee to 0 today, so this cannot happen yet —
+    // and that is exactly why it was never noticed. The column is
+    // `not null default 0`, the customer invoice renders a Handling line from
+    // it, and expectedOrderTotal used to omit it, so the first order to carry
+    // one would be reported as overpaying by exactly the handling fee.
+    await seed([
+      {
+        orderId: "order-handling", subtotal: 100, shipping: 15, handlingFee: 5,
+        tax: 0, cardFee: 0, amountPaid: 120, createdAt: iso(NOW),
+      },
+    ]);
+    const { getReconciliationFlags } = await import("@/lib/admin-reconciliation");
+    const flags = await getReconciliationFlags();
+    expect(flags.filter((f) => f.type === "total_mismatch")).toEqual([]);
+  });
+
+  it("still catches a genuine underpayment", async () => {
+    // The negative control for the test above, in the suite rather than as a
+    // one-off mutation: loosening the check until nothing is ever flagged would
+    // pass "does not accuse..." perfectly.
+    await seed([
+      {
+        orderId: "order-short", subtotal: 100, shipping: 15, tax: 8,
+        cardFee: 0, amountPaid: 100, createdAt: iso(NOW),
+      },
+    ]);
+    const { getReconciliationFlags } = await import("@/lib/admin-reconciliation");
+    const flags = await getReconciliationFlags();
+    expect(flags.map((f) => f.type)).toContain("total_mismatch");
+    expect(flags.find((f) => f.type === "total_mismatch")?.detail).toContain("Expected $123.00");
+  });
+
+  it("a broken order older than the newest 2000 is invisible to the operator", async () => {
+    // THE ROW CAP. getReconciliationFlags reads `.limit(2000)` ordered by
+    // created_at desc, with no paging and no signal that it truncated. This is
+    // the screen an operator opens when they already suspect a money problem,
+    // and past 2000 orders it silently stops looking.
+    //
+    // Production has 15 orders, so this is unreachable there and is generated
+    // here instead: 2100 clean orders, plus ONE underpaid order older than all
+    // of them.
+    const rows: SeedOrder[] = [
+      {
+        orderId: "order-oldest-broken", subtotal: 100, shipping: 15, tax: 8,
+        amountPaid: 1, createdAt: iso(NOW - 5000 * 60_000),
+      },
+    ];
+    for (let i = 0; i < 2100; i += 1) {
+      rows.push({
+        orderId: `order-clean-${i}`, subtotal: 100, shipping: 15,
+        amountPaid: 115, createdAt: iso(NOW - i * 60_000),
+      });
+    }
+    await seed(rows);
+    expect(Number((await pg.query("select count(*)::int as c from public.orders")).rows[0].c)).toBe(2101);
+
+    const { getReconciliationFlags } = await import("@/lib/admin-reconciliation");
+    const flags = await getReconciliationFlags();
+
+    // The order that is $114 short must be reported. Before the fix this was
+    // an empty array: the cap cut it off and nothing said so.
+    expect(flags.map((f) => f.orderId)).toContain("order-oldest-broken");
+  });
+
+  it("says so when it could not examine every order", async () => {
+    // Truncation must be visible rather than silent. Whatever bound exists, the
+    // operator has to know the screen is not showing them everything.
+    const rows: SeedOrder[] = [];
+    for (let i = 0; i < 100; i += 1) {
+      rows.push({ orderId: `order-c-${i}`, subtotal: 100, shipping: 15, amountPaid: 115, createdAt: iso(NOW - i * 60_000) });
+    }
+    await seed(rows);
+    holder.client = createPgSupabaseClient(pg, { maxRows: 40 });
+
+    const { getReconciliationFlags } = await import("@/lib/admin-reconciliation");
+    const flags = await getReconciliationFlags();
+    expect(flags.map((f) => f.type)).toContain("scan_truncated");
+  });
+});
+
+describeDb("row caps on the profit reads", () => {
+  beforeAll(async () => {
+    pg = new Pool({ connectionString: DATABASE_URL, max: 8 });
+    await pg.query(SERVICE_ROLE_DDL);
+    await pg.query(ORDERS_DDL);
+    await pg.query(readFileSync(join(SQL_DIR, "admin-dashboard-rollups.sql"), "utf8"));
+  }, 60_000);
+
+  afterAll(async () => {
+    await pg?.end();
+  });
+
+  beforeEach(async () => {
+    await reset();
+  });
+
+  /** 1,500 identical $100 sales in the last 30 days. Truth: $150,000, 1,500 orders. */
+  async function seed1500() {
+    const rows: SeedOrder[] = [];
+    for (let i = 0; i < 1500; i += 1) {
+      rows.push({
+        orderId: `order-s-${i}`, subtotal: 100, amountPaid: 100,
+        paymentMethod: "zelle", createdAt: iso(NOW - (i % 25) * DAY),
+      });
+    }
+    await seed(rows);
+  }
+
+  it("reports every order when the row source is not capped", async () => {
+    await seed1500();
+    const { getProfitWindowMetrics, getProfitDashboard } = await import("@/lib/admin-profit");
+    expect((await getProfitWindowMetrics(NOW)).ordersLast30Days).toBe(1500);
+    expect((await getProfitDashboard(NOW)).lifetime.orderCount).toBe(1500);
+  });
+
+  it("does not silently under-report when the row source caps the response", async () => {
+    // PostgREST applies `db-max-rows` when the project sets one, capping EVERY
+    // response without telling the caller. profitForPaidOrdersInRange (which
+    // drives the 30-day profit tile and the analytics trend) has no .limit()
+    // and no .range() at all, so it depends entirely on that setting being
+    // absent — and this application cannot see it.
+    //
+    // Production has 15 orders, so this is unreachable there. Simulated at
+    // 1,000 (Supabase's own documented default for the setting) against 1,500
+    // real rows: a third of the store's profit disappears from the tile with no
+    // error, no warning, and a confidently smaller number.
+    await seed1500();
+    holder.client = createPgSupabaseClient(pg, { maxRows: 1000 });
+
+    const { getProfitWindowMetrics } = await import("@/lib/admin-profit");
+    const metrics = await getProfitWindowMetrics(NOW);
+
+    expect(metrics.ordersLast30Days).toBe(1500);
+    expect(metrics.truncated).toBe(false);
+  });
+
+  it("says so when the profit figures are incomplete", async () => {
+    await seed1500();
+    holder.client = createPgSupabaseClient(pg, { maxRows: 500 });
+
+    const { getProfitWindowMetrics } = await import("@/lib/admin-profit");
+    const metrics = await getProfitWindowMetrics(NOW);
+    // Whatever bound applies, the operator must not be shown a smaller number
+    // as if it were the whole story.
+    expect(metrics.truncated).toBe(true);
+  });
+});
