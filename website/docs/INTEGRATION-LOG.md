@@ -1864,3 +1864,109 @@ would carry the defect.
 The remaining WORKLIST-2 entries are carried into the certification with their
 evidence grade, not silently dropped. **No entry is marked closed on the
 strength of a label.**
+
+---
+
+## Phase 7 — the zero-regression gate
+
+Run on the merged tree with **every** code change in place.
+
+| Gate | Result |
+|---|---|
+| `tsc --noEmit` | **clean** |
+| `eslint` | **0 errors**, 42 warnings (all `no-unused-vars`, 39 of them in test files) |
+| `vitest run` | **259 test files passed (259) · 4135 tests passed (4135)** |
+| **Skipped** | **0** |
+| `next build` (after `rm -rf .next`) | **exit 0** |
+
+**On the skips.** A first run reported *4060 passed, 75 skipped*. The 75 are
+DB-backed suites — `affiliate-concurrency`, `admin-financial-surfaces`,
+`financial-reporting-consistency` — which skip when `VANTA_TEST_DATABASE_URL`
+is unset. **They are not silent about it**; each prints why, and what is not
+being proved:
+
+> `[affiliate-concurrency] SKIPPED: … These cover double payout, the
+> exactly-once payout claim, and the auto-approve read/write race, and are NOT
+> covered by any in-memory test.`
+
+That is the F-014 property working. Rather than accept the skip, a throwaway
+Postgres was created and the suite re-run **with the database attached**: all
+75 run and pass, giving **4135/4135 and zero skips**. The concurrency proofs —
+double payout, exactly-once payout claim, the paid-side-effects claim under
+concurrent delivery — are therefore **executed**, not assumed.
+
+**One dead constant removed.** `MAX_PAGES` in `supabase-page.ts` went unused
+when `readAllRows` was deleted. It could never have been the binding ceiling:
+the bounded pager pushes the rows it received each iteration, so `rows.length`
+grows on any non-empty response and `maxRows` terminates the loop.
+
+---
+
+## Phase 6 (cont.) — COLD START re-verification
+
+Mandated by the addendum: after the last code change, rebuild and re-prove the
+purchase from a **genuinely clean browser**. `payment-service.ts`,
+`membership-billing.ts`, `cookie-consent.tsx`, `/r/[code]` and
+`supabase-page.ts` had all changed since the earlier run.
+
+`rm -rf .next && npm run build` → exit 0. Server restarted on that bundle.
+Harness tables truncated, stock reset to 25. Browser cookies **and**
+localStorage cleared, so the age gate and the cookie banner both returned.
+
+A local stand-in for `VeyraGate /api/v1/checkout_sessions` was stood up so the
+**real** payment-provider adapter runs — not the mock lane. It honours
+`Idempotency-Key` (same key → same session), as the real one must. The mock
+gateway's production hard-block was **not** weakened to make this convenient.
+
+**The journey, in order, exactly as a new customer meets it:**
+
+| Step | Result |
+|---|---|
+| Age gate | Appears on a clean browser; 4 confirmations required; consent banner's buttons are `visibility: hidden` beneath it, so the gate is the only interactive thing |
+| Cookie banner | Appears after the gate; **Decline** clicked |
+| Consent recorded | `localStorage vl_cookie_consent=declined` **and** cookie `vl_cookie_consent=declined` — the K-04 mirror working in a real browser |
+| Affiliate link `/r/EXPLICIT15?utm_source=tiktok&utm_medium=bio&utm_campaign=spring` | Redirects to `/products`; sets `vl_referral_code` |
+| **`partner_clicks` row** | `ambassador_id` ✅, `referral_code` EXPLICIT15 ✅, `landing_path` /products ✅ — and **`utm_source`, `utm_medium`, `utm_campaign`, `referrer`, `user_agent`, `ip_address` all NULL** despite the URL carrying them. Before the fix all six were populated |
+| PDP → cart | 2 × BPC-157 10mg, badge reads 2 |
+| Referral applied at checkout | *"Referral code applied — 15% off."* / *"Explicit Fifteen · 15% off"* |
+| Screen totals | Items 2 · Subtotal $131.10 · Shipping $15.00 · Ambassador −$13.80 · Service Fee (3%) +$3.97 · **TOTAL $136.27** — identical to the pre-change run |
+| `create-session` | **200.** Order `VL-31DB83A3`, `payment_id = cs_stub_2` **persisted on the row** — the session-id fix, proven live |
+| Order state | `pending_payment`, **not** cancelled — the G-03 happy path, confirmed in the browser rather than only by mutation 5 |
+| Reservation | `active`, `reserved_quantity` 2, `inventory_quantity` still 25 — stock is held, not yet deducted |
+| Pay page | Lands on-site at `/checkout/pay/<order>?cs=cs_stub_2`, polls `order-status`, and states plainly *"We couldn't load secure card entry. **Your card has not been charged.**"* — the correct degraded message, since the stub is not a real card-form host |
+| Webhook → paid | `paid`, `paid_at` set, `paid_side_effects_at` claimed, 1 `payment_events` |
+| **Inventory** | **25 → 23**, `reserved_quantity` 0, reservation `finalized`, `stock_status` In Stock |
+| Emails | 1 `order_email_log` + 1 `pending_emails` |
+| Fulfilment | `awaiting_fulfillment` |
+| **Commission** | `15.00%` · **$17.60** · `original_subtotal` 131.10 · `customer_discount` 13.80 · `amount_paid` **117.30** · `pending` |
+
+`131.10 − 13.80 = 117.30` ✅ · `15% × 117.30 = 17.595 → 17.60` ✅
+
+**Every figure matches the pre-change run to the cent.** The cold start is
+green.
+
+### Two suspicions I raised and then disproved on measurement
+
+Recorded because an audit that only reports confirmed hits is not measuring its
+own false-positive rate.
+
+1. **"The checkout page has continuous layout shift."** Playwright reported
+   *"element is not stable"* on repeated retries. Measured directly instead:
+   `scrollY` 468 and `scrollHeight` 2340, **unchanged across ten samples over
+   three seconds**. The page is completely stable. The real cause was that the
+   referral disclosure was collapsed (`aria-expanded="false"`) and the Apply
+   button sat inside the collapsed region — my automation error, not a defect.
+2. **"A fixed header intercepts clicks on checkout controls."** Measured: the
+   header's bottom edge is at y=81 and the Apply button at y=849. Not
+   overlapping. The interception reports were the collapsed-panel issue above.
+
+A third, earlier: **"the checkout total disagrees with the database"** — also
+disproved once the async payment-methods fetch resolved.
+
+### One genuine observation from the cold start
+
+The checkout form **correctly refused** to submit while the ZIP field held
+`19103EXPLICIT15` (a value my own automation had concatenated), showing
+*"Please complete all required fields before placing your order."* That is the
+validation doing its job on a malformed postal code, and it is recorded as a
+pass, not a finding.
