@@ -2792,3 +2792,43 @@ are worth spot-checking:
 
 Each was found because a mutation SURVIVED. If you read one test file, read the
 mutation tables in this log alongside it: they say what each test can detect.
+
+---
+
+## Checkout-flow lane merge, and a dropped deploy webhook
+
+**Merged:** `2eb82d3` — seven customer-facing money-presentation defects, found
+by a browser walkthrough and fixed with tests. The transaction core was already
+correct and is unchanged; so is the 3% Service Fee business rule, which this
+lane disclosed accurately rather than altering.
+
+Gates at merge: cold suite 4289 passing / 78 skipped, `tsc --noEmit` clean, 0
+lint errors, production build clean, and a browser re-walk reconciled line by
+line against the database (screen `Service Fee $9.35` = `card_processing_fee`
+9.35, `Total paid $320.87` = `amount_paid` 320.87, inventory 40 → 34).
+
+### The deploy did not happen on its own
+
+Pushing the merge to `main` raced another writer and printed:
+
+    ! [remote rejected] main -> main (cannot lock ref 'refs/heads/main':
+      is at 2eb82d3... but expected a204c72...)
+
+The ref update **landed** — `git ls-remote` and the GitHub API both show `main`
+at `2eb82d3` — but no Vercel deployment was ever created for it. Forty minutes
+later production was still serving `a204c72`, while three pushes to
+`claude/vanta-financial-reconciliation-4mg1li` in the same window each deployed
+within seconds. So the integration was healthy and specifically missed this ref
+update: the push event was dropped somewhere in that race.
+
+**Why re-pushing does not fix it.** `git push origin main` answers "Everything
+up-to-date" — no ref change, no push event, no deployment. A dropped webhook on
+an already-current ref cannot be recovered by pushing the same commit again.
+
+**Recovery, if this happens again.** Either redeploy the commit from the Vercel
+dashboard (deploys the exact reviewed SHA, no repo churn), or land a further
+commit on `main` so a fresh push event fires. Do **not** reach for a file-upload
+deploy: it produces a production deployment with no `githubCommitSha`, detached
+from the history, which is worse than the stale build it replaces.
+
+This entry is itself the second option, chosen by the owner.
