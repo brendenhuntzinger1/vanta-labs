@@ -6,7 +6,7 @@ import { getCatalogProductBySlug, getCatalogProductsByCategory } from "@/lib/cat
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getPublishedCoaDocumentsForProduct } from "@/lib/coa";
 import { getStorefrontCoupon } from "@/lib/coupons";
-import { BAC_WATER_SLUG, isBacWater } from "@/lib/bac-water";
+import { isBacWater, resolveBacWaterProduct } from "@/lib/bac-water";
 
 export const dynamic = "force-dynamic";
 
@@ -77,9 +77,11 @@ export default async function ProductDetailPage({
   // page. A failure resolves to null — no banner, never a broken product page.
   // BAC Water cross-sell (accessory block + Frequently Bought Together).
   // Null on the BAC Water page itself, or until the product exists in the DB.
+  // Resolved across every accepted slug: a single hard-coded slug silently
+  // dropped the accessory block on a catalogue publishing the other one.
   const bacWater = isBacWater(product.slug)
     ? null
-    : await getCatalogProductBySlug(BAC_WATER_SLUG).catch(() => null);
+    : await resolveBacWaterProduct(getCatalogProductBySlug).catch(() => null);
 
   // Product structured data for rich results (price / availability). Server-
   // controlled data only; escaped so it can never break out of the script tag.

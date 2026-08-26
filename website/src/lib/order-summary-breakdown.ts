@@ -23,7 +23,20 @@
  * future unmodelled amount must surface rather than silently break the sum. It
  * is only labelled "Shipping protection" when no recorded fee was supplied —
  * otherwise an unexplained remainder is exactly that, an adjustment.
+ *
+ * THE CARD SERVICE FEE IS A SECOND RECORDED CHARGE, AND IT IS NOT PROTECTION.
+ *
+ * `card_processing_fee` was missing from the terms below, so a 3% surcharge
+ * landed in the residual — and on the (overwhelmingly common) order that
+ * declined protection, the residual's fallback label announced it as
+ * "Shipping protection". Reproduced on VL-284C17AD: protection 0.00, card fee
+ * 10.35, receipt read "Shipping protection $10.35". A customer was told they
+ * held cover they had declined, and one who DID buy cover saw their fee as an
+ * unexplained "Adjustment". The two are separate charges everywhere now:
+ * separate columns, separate lines, separate labels.
  */
+
+import { DEFAULT_CARD_PROCESSING_FEE } from "@/lib/payment-methods";
 
 export type OrderAmounts = {
   /** `orders.amount_paid` — the settled charge. Authoritative. */
@@ -41,10 +54,22 @@ export type OrderAmounts = {
    * that order's fee still surfaces through the residual instead.
    */
   shippingProtection?: number;
+  /**
+   * `orders.card_processing_fee`. Optional and defaulting to 0 for the same
+   * reason as `shippingProtection`: an order written before the column existed
+   * still surfaces its charge through the residual.
+   */
+  cardProcessingFee?: number;
+  /**
+   * The store's own name for the card surcharge, when the caller has the
+   * payment-method config to hand. Defaults to the configured default so this
+   * module never invents a third name for a charge that already has one.
+   */
+  cardFeeLabel?: string;
 };
 
 export type SummaryLine = {
-  key: "subtotal" | "discount" | "shipping" | "handling" | "protection" | "adjustment" | "tax";
+  key: "subtotal" | "discount" | "shipping" | "handling" | "protection" | "cardFee" | "adjustment" | "tax";
   label: string;
   /** Signed dollars. Credits are negative. */
   amount: number;
@@ -95,15 +120,28 @@ export function buildOrderSummaryLines(amounts: OrderAmounts): SummaryLine[] {
     lines.push({ key: "protection", label: "Shipping protection", amount: round2(protection), tone: "muted" });
   }
 
-  const accounted = subtotal - discount + shipping + handling + tax + protection;
+  // The card surcharge, when there is one. Ordered after protection and before
+  // tax to match the invoice and the emailed receipt line-for-line.
+  const cardFee = clean(amounts.cardProcessingFee);
+  if (cardFee > CENT) {
+    lines.push({
+      key: "cardFee",
+      label: amounts.cardFeeLabel?.trim() || DEFAULT_CARD_PROCESSING_FEE.label,
+      amount: round2(cardFee),
+      tone: "muted",
+    });
+  }
+
+  const accounted = subtotal - discount + shipping + handling + tax + protection + cardFee;
   const residual = round2(total - accounted);
 
   if (residual > CENT) {
     // With a recorded fee already listed, a further remainder is NOT protection
     // — calling it that would invent a second protection charge. Only an order
-    // predating the column gets the old label.
+    // predating BOTH columns gets the old label; once either fee is recorded,
+    // this order is new enough that an unexplained remainder is an adjustment.
     lines.push(
-      protection > CENT
+      protection > CENT || cardFee > CENT
         ? { key: "adjustment", label: "Adjustment", amount: residual, tone: "muted" }
         : { key: "protection", label: "Shipping protection", amount: residual, tone: "muted" },
     );

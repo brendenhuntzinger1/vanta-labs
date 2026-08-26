@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useCart } from "@/components/cart-context";
+import { APPLE_PAY_VERSION, useApplePayOffered } from "@/components/use-apple-pay-offered";
 import {
   EXPRESS_CHECKOUT_ENABLED,
   isApplePlatform,
@@ -117,29 +118,9 @@ interface RatesResponse {
   error?: string;
 }
 
-/** PassKit API version. The constructor THROWS InvalidAccessError on any device
- *  that doesn't support it, so this is gated on supportsVersion() below rather
- *  than assumed. */
-const APPLE_PAY_VERSION = 6;
 
 const money = (cents: number) => (cents / 100).toFixed(2);
 
-// Platform support never changes within a page load, so there is nothing to
-// subscribe to — this exists only to read a browser fact without a
-// server/client hydration mismatch.
-const subscribeNever = () => () => {};
-const getPlatformSupportServer = () => false;
-const getPlatformSupport = () =>
-  EXPRESS_CHECKOUT_ENABLED &&
-  isApplePlatform(window.navigator.userAgent) &&
-  typeof window.ApplePaySession !== "undefined" &&
-  // Below iOS 13.4 / macOS 10.15.4 the v6 CONSTRUCTOR throws rather than
-  // returning anything, so this has to be checked before the button renders —
-  // not caught at tap time, by which point the shopper has already committed.
-  typeof window.ApplePaySession.supportsVersion === "function" &&
-  window.ApplePaySession.supportsVersion(APPLE_PAY_VERSION) &&
-  window.ApplePaySession.canMakePayments() &&
-  isRegisteredApplePayHost(window.location.hostname);
 
 /** Apple rejects a negative lineItem amount, so a credit is shown as one. */
 const toSheetLineItem = (item: ServerLineItem): ApplePayLineItem => ({
@@ -210,7 +191,7 @@ export function ExpressApplePayButton({ acknowledged, acknowledgements, onUnavai
   // check matters just as much: native Apple Pay validates the exact serving
   // host, and an unregistered one fails merchant validation with an opaque
   // error on a page that otherwise looks fine.
-  const platformOk = useSyncExternalStore(subscribeNever, getPlatformSupport, getPlatformSupportServer);
+  const platformOk = useApplePayOffered();
 
   useEffect(() => {
     if (!platformOk) onUnavailable?.();

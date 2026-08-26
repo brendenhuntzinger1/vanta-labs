@@ -8,7 +8,7 @@ import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { readAttributionForCheckout } from "@/lib/attribution-client";
 import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
 import { resolveSalesTax } from "@/lib/sales-tax";
-import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
+import { useApplePayOffered } from "@/components/use-apple-pay-offered";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
@@ -232,7 +232,7 @@ export default function CheckoutPage() {
     couponCode,
     couponDetails,
     couponError,
-    couponSuccess,
+    couponOutcome,
     applyCouponCode,
     clearCouponCode,
     isApplyingCoupon,
@@ -260,6 +260,10 @@ export default function CheckoutPage() {
     setShippingProtectionEnabled,
     shippingProtectionFee,
   } = useCart();
+
+  // Whether Apple Pay may be advertised at all — the same predicate the express
+  // button uses to decide whether to render.
+  const applePayOffered = useApplePayOffered();
 
   const [acknowledgements, setAcknowledgements] =
     useState<ComplianceAcknowledgements>(defaultAcknowledgements);
@@ -1086,9 +1090,17 @@ export default function CheckoutPage() {
                         </button>
                       </div>
                     )}
-                    {couponSuccess ? <p className="mt-2 text-xs text-emerald-300">{couponSuccess}</p> : null}
+                    {couponOutcome ? (
+                      <p className={`mt-2 text-xs ${couponOutcome.controlsPrice ? "text-emerald-300" : "text-amber-300/90"}`}>
+                        {couponOutcome.message}
+                      </p>
+                    ) : null}
                     {couponError ? <p className="mt-2 text-xs text-rose-300">{couponError}</p> : null}
-                    {couponDetails ? (
+                    {/* The headline offer is shown ONLY while the coupon is the
+                        discount actually controlling the price. Quoting "10% off"
+                        beside a total the code did not move is what made the old
+                        copy misleading. */}
+                    {couponDetails && couponOutcome?.controlsPrice ? (
                       <p className="mt-2 text-xs text-white/45">{couponDetails.code} · {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off</p>
                     ) : null}
                     {couponCode && !isBuy3Get1FreeActive ? (
@@ -1331,7 +1343,11 @@ export default function CheckoutPage() {
             {ctaLabel}
           </button>
           <p className="mt-2 text-center text-[10px] text-white/25">
-            {EXPRESS_CHECKOUT_ENABLED ? "Apple Pay · Visa · Mastercard · Amex · Discover" : "Visa · Mastercard · Amex · Discover"}
+            {/* Gated on the SAME predicate as the express button. Keying this
+                off the feature flag alone advertised Apple Pay on desktop
+                Chrome and, worse, to an iPhone on an unregistered host where
+                no button ever renders. */}
+            {applePayOffered ? "Apple Pay · Visa · Mastercard · Amex · Discover" : "Visa · Mastercard · Amex · Discover"}
           </p>
         </div>
       ) : null}
