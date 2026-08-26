@@ -45,6 +45,7 @@ pasted verbatim.
 | K-20 | P2 | `SOURCE-INSPECTED` | Four tables are written and never read, and two double the visitor data retained for no benefit |
 | K-21 | P1 | `SOURCE-INSPECTED` | The homepage hardcodes the "99%" the trust-claims module says never appears, and checkout makes a different fulfilment promise from the rest of the site |
 | K-22 | P2 | `BEHAVIORAL-TEST-PROVEN` | A coupon that loses the discount competition is still recorded and still redeemed, burning a one-shot code for nothing |
+| — | none | `SOURCE-INSPECTED` | *Dead-code sweep part 2: API routes. Two money-spending orphans investigated and cleared — recorded so the next session does not re-derive the false start.* |
 
 ---
 
@@ -3567,6 +3568,90 @@ This closes the `NOT VERIFIED` item on `resolveCartDiscount`'s float compare:
 
 ---
 
+---
+
+## Dead-code sweep, part 2 — API routes, and why the two money-spending orphans are NOT a finding
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** none · **Status:** NOT A DEFECT
+**Area:** dead/legacy/dormant code
+
+Recorded because it looked like a serious finding for three steps and is not, and
+because the next session will otherwise re-derive the same false start.
+
+### Method
+
+All 141 route files under `src/app/api` enumerated, then matched against every
+textual reference in `src/`. Twelve had no literal match; each was re-checked by
+hand, because most are called through template literals
+(`` fetch(`/api/admin/orders/${orderId}/…`) ``) that a literal match cannot see.
+Ten resolved to real callers. Two did not:
+
+```
+/api/admin/orders/[orderId]/shipping/rates    no UI caller
+/api/admin/orders/[orderId]/shipping/label    no UI caller  (POST buys postage, DELETE voids it)
+```
+
+### Why they look alarming
+
+`src/lib/shippo/push-trigger.test.ts:90-100` documents their removal from the UI:
+
+> Each of these was a control that duplicated Shippo. **Hiding them would leave
+> the endpoints reachable and the page heavy; they are gone.**
+
+The *controls* are gone; the *endpoints* are still there. The stated reason for
+removing rather than hiding was endpoint reachability, and the endpoints remain
+reachable. The route's own docblock adds that these are "**the only two endpoints
+in this codebase that spend money at a carrier**" and that "there is no role gate
+beyond 'is an admin'".
+
+### Why it is nonetheless not a defect
+
+The money is gated off, one level below the route, where every caller inherits it:
+
+```ts
+// src/lib/shippo/service.ts:1074-1076
+export function labelPurchasingEnabled(): boolean {
+  return String(process.env.SHIPPO_ALLOW_LABEL_PURCHASE ?? "").trim().toLowerCase() === "true";
+}
+// …and inside purchaseLabelForOrder, at "1b. POLICY GATE — placed exactly here,
+//    and the position is the point."
+```
+
+Default **off**. And the refusal is operator-friendly rather than a bare error
+(`:1071-1072`):
+
+> "Vanta does not buy postage. Purchase this label in Shippo — it will sync back
+> here automatically with its tracking number and real carrier cost."
+
+Label purchasing also is not dead overall: `src/lib/fulfillment-labels.ts:285`
+drives it from the batch workstation via `/api/admin/fulfillment/labels`. So these
+two per-order routes are **superseded duplicates**, not an orphaned feature — and
+the gate they would have to pass is the same one the live path passes.
+
+### What is still worth doing, and for whom
+
+- Delete the two route files. They are duplicates of a live path, they carry the
+  only DELETE that voids a label, and the test that documents the cleanup names
+  endpoint reachability as the reason it was done. Finishing the cleanup matches
+  its own stated intent.
+- **CROSS-BLOCK: Block I.** "Capability gates on money-spending admin routes" is
+  explicitly their scope. The route states plainly that any admin — including
+  staff — can buy or void postage, with the rationale that "making staff wait for
+  a manager to void a mis-bought label would leave a wrong label live". That is a
+  defensible argument, and it is theirs to accept or reject; it is recorded here
+  rather than judged. Note the same reasoning is not applied elsewhere:
+  `canManageCoupons` gates even *reading* the coupon list.
+
+### The other ten, resolved
+
+`coa/[coaId]/file`, `admin/coa/[coaId]/file`, `coupons/[couponId]/announce`,
+`email/campaigns/[campaignId]/send` and `/stop`, `orders/[orderId]/communications`,
+`orders/[orderId]/packing-slip`, `shipping/label/print`, `shipping/sync`,
+`products/[productId]/duplicate` — all called from components via template
+literals. No action.
+
+---
+
 # Block K — coverage and handoff
 
 ## Coverage against the seven assigned areas
@@ -3578,7 +3663,7 @@ a reason. Nothing below is graded higher than its evidence.
 |---|---|---|---|
 | **Time / date / timezone** | ✅ | 8 findings (K-01, K-03, K-05, K-07, K-08, K-09, K-10, K-12). Every customer-facing date formatter swept; coupon `starts_at`/`ends_at`, membership grace/renewal/skip, store-credit month, birthday, offers-bar urgency all exercised. Five probes run. | Nothing material. DST-specific behaviour is inherently covered by the instant-comparison style used throughout, and the one `+365d` annual term drifts a day per leap year — noted, too small to number. |
 | **Money / numeric precision** | 🟨 | K-11 (points round-trip, exhaustive probe over 100k values) and K-22 (a losing coupon is still redeemed). Disproved the Phase 1 Buy-3-Get-1 P1 lead in writing, and closed the `resolveCartDiscount` float-compare question as a negative result. Verified `bundle-pricing.ts` and `calculateCardProcessingFee` are correct. Ruled out `numeric(12,2)` overflow. | **`NOT VERIFIED`: sales-tax rounding** (per-line vs on-total, and whether `admin-tax-report` re-derives it the same way) — belongs with Block F, who own `admin-tax-report.ts`. **`NOT VERIFIED`: percent round-trip through `numeric(5,2)`** — needs a database. |
-| **Dead / legacy / dormant code** | 🟨 | K-20, from a full 61-table read/write classification. Confirmed the `product_subscriptions` lead, corrected the map on `referrals`, cleared `partner_program_stats`. | **`NOT VERIFIED`: unreferenced exports, uncalled API routes, unimported components, SQL columns no TS reads.** The table sweep was run; these four were not. |
+| **Dead / legacy / dormant code** | 🟨 | K-20, from a full 61-table read/write classification (confirmed the `product_subscriptions` lead, corrected the map on `referrals`, cleared `partner_program_stats`), plus a full 141-route sweep — 2 orphans found, investigated and cleared as not-a-defect. | **`NOT VERIFIED`: unreferenced exports, unimported components, SQL columns no TS reads.** The table and route sweeps were run; these three were not. |
 | **Environment / config drift** | ✅ | K-06 (the `admin_control` reader table, all ten) and K-16 (pixel-ID defaults, plus four negative controls on the payment kill switches). Full `process.env` enumeration done. | The Vercel-side question — whether `TIKTOK_EVENTS_API_ACCESS_TOKEN` and `REDDIT_CONVERSIONS_ACCESS_TOKEN` are scoped per-environment — **cannot be answered from source**. It needs the dashboard, and it decides how bad K-16 is in practice. |
 | **Legal / policy** | ✅ | K-04, K-17, K-18, K-21. Every policy DEFAULT read and checked against behaviour; age gate, compliance attestations, trust claims, consent, cancellation promise. | **`NOT VERIFIED`: the shipping and terms policies** were read but not line-by-line reconciled against `getShippingConfig`/`calculateShipping`. Lower value than the four found, but not done. |
 | **Third-party degraded mode** | ✅ | K-13, K-15, K-19. Every dependency classified fail-open/fail-closed; all 11 outbound `fetch` sites tabulated for timeouts. | **`NOT VERIFIED`: retry semantics on non-idempotent operations.** Timeouts were swept; retry-of-a-charge was not traced end to end. |
