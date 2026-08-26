@@ -10,6 +10,7 @@ import { resolveCarrier } from "@/lib/tracking-url";
 import { getSiteUrl } from "@/lib/env";
 import { normalizeUsState } from "@/lib/sales-tax";
 import { parseOrderItemRef } from "@/lib/inventory-fulfillment";
+import { returnInventoryForCancelledOrder } from "@/lib/order-cancellation-inventory";
 import {
   FULFILLMENT_STATUS_LABELS,
   applyTransition,
@@ -1959,6 +1960,16 @@ async function markEventProcessed(eventKey: string): Promise<void> {
 }
 
 /**
+ * States a cancel can be reached FROM where the label is already paid for.
+ *
+ * Derived from FULFILLMENT_TRANSITIONS, not assumed: `label_purchased` is the
+ * only state carrying a `cancelled` edge whose postage has been bought. Every
+ * other source of that edge (awaiting_payment, paid, ready_to_fulfill, packed)
+ * genuinely is pre-carrier.
+ */
+const LABEL_BOUGHT_STATUSES = new Set<string>(["label_purchased"]);
+
+/**
  * Record a status change a human made, under the same rules the webhook path
  * obeys. Kept here so every write to fulfillment_status in the shipping flow
  * goes through one transition function and one history table.
@@ -2005,5 +2016,55 @@ export async function setOrderFulfillmentStatus(input: {
   }
 
   await recordStatusHistory(transition.history);
+
+  // RETURN THE STOCK, HERE, BECAUSE THIS IS THE ONLY WRITER.
+  //
+  // K-17 put this call in ONE of the three code paths that reach `cancelled`.
+  // The other two — the bulk action (admin-orders.ts, which does not import the
+  // inventory module at all) and the status dropdown on the single-order screen
+  // — wrote the status and permanently wrote off the units, which is the exact
+  // loss K-17 exists to prevent. The single-order screen shipped both: a
+  // "Cancel" button that restocked and a "Cancelled" dropdown option one row
+  // over that did not, with nothing to tell the operator apart.
+  //
+  // order-cancellation-inventory.ts told the next author to look for callers in
+  // `order-pipeline.ts`. That file writes nothing — its own header says
+  // "Everything here is PURE: no database, no network, no clock". Following the
+  // instruction found no callers to check, which is why two drifted unnoticed.
+  //
+  // Putting it at the chokepoint makes "every path that cancels returns the
+  // stock" true by construction. It is idempotent behind the same
+  // inventory_restocked_at claim, so a caller that also asks explicitly is a
+  // no-op rather than a double-return.
+  if (transition.next === "cancelled") {
+    if (LABEL_BOUGHT_STATUSES.has(transition.from)) {
+      // NOT pre-carrier, whatever the K-17 docblock says. FULFILLMENT_TRANSITIONS
+      // really does allow label_purchased -> cancelled, and the workstation
+      // renders a dedicated queue for these orders — so postage is paid and the
+      // parcel may already be in the carrier's hands. Restocking would INVENT
+      // units. A human has to decide, and has to be told there is a decision.
+      await recordSystemAlert({
+        type: "cancellation_after_label_purchase",
+        severity: "warning",
+        message:
+          `Order ${order.order_id} was cancelled from ${transition.from}, so its label is already bought. `
+          + "Stock was NOT returned automatically because the parcel may already be with the carrier. "
+          + "Void the label if it has not shipped, then adjust the count by hand.",
+        context: { orderId: order.order_id, from: transition.from },
+      }).catch((alertError) => {
+        console.error("Unable to record a post-label cancellation alert", order.order_id, alertError);
+      });
+    } else {
+      // Never fails the status change: the cancellation is already recorded and
+      // the customer has been told. returnInventoryForCancelledOrder raises its
+      // own critical alert for anything it cannot resolve.
+      try {
+        await returnInventoryForCancelledOrder(order.order_id);
+      } catch (inventoryError) {
+        console.error("Unable to return inventory for cancelled order", order.order_id, inventoryError);
+      }
+    }
+  }
+
   return { ok: true, data: { from: transition.from, to: transition.next } };
 }

@@ -2526,3 +2526,118 @@ from `scripts/start-test-postgres.sh` was up for every run recorded here.
   withdrawn.** It was proven against doubles that could not fail.
 
 No grade anywhere was upgraded. Two were downgraded.
+
+## BLOCK N — THE CROSS-MODULE ASSUMPTION SWEEP
+
+The reviewer's closing observation was that both P0s were the same shape — **a
+new module confidently asserting, in a comment, an invariant another module was
+already known to violate** — and that the thing to grep for is not bad logic but
+confident prose about someone else's file.
+
+Run as a fan-out: six subsystem finders, then every claim they surfaced handed to
+an independent verifier told to go and check it against the named target and to
+default to "holds" unless it found concrete contradicting evidence. **47 claims
+checked.** Most held. The ones that did not are recorded below.
+
+### N-07 (P1) — the restock was wired into ONE of THREE cancel paths
+
+**FOUND, and it is the same K-17 stock write-off through different buttons.**
+`order-cancellation-inventory.ts` closed with its own instruction for staying
+correct:
+
+> "Any future path that cancels an order must call this. The pipeline is the only
+> writer of the `cancelled` transition, so that is the place to look for callers."
+
+**Both halves false.** `order-pipeline.ts` writes nothing — its own header says
+"Everything here is PURE: no database, no network, no clock". It is a decision
+table. The real writer is `setOrderFulfillmentStatus` (shippo/service.ts:1966),
+and it had three callers able to pass `cancelled`:
+
+| path | restocked? |
+|---|---|
+| `api/admin/orders/[orderId]` action `cancel` | yes |
+| `api/admin/orders/[orderId]` action `update_status` → `cancelled` | **no** |
+| `lib/admin-orders.ts` bulk `cancel` | **no** |
+
+`admin-orders.ts` does not import the inventory module at all. So bulk-cancelling
+paid orders permanently wrote off their units. The single-order screen shipped
+**both behaviours side by side**: a "Cancel" button that restocked and a
+"Cancelled" option in the dropdown one row over that did not, with nothing to
+tell the operator apart — and the dropdown is the faster path.
+
+**I got this wrong in the review.** I grepped `fulfillment_status` filtered by
+"cancel", concluded "only the admin route writes cancellations", and moved on.
+The bulk path assigns through a variable (`nextStatus = "cancelled"`), so the
+literal never appears next to the column and the grep could not see it. A
+narrower version of the same mistake the finding is about.
+
+**SECOND DEFECT IN THE SAME COMMENT.** "FULFILLMENT_TRANSITIONS reaches
+`cancelled` only from awaiting_payment, paid, ready_to_fulfill and packed — every
+one pre-carrier." False: `label_purchased` carries a `cancelled` edge
+(order-pipeline.ts:271-280), and the app knows it — `fulfillment-workstation`
+renders a dedicated "cancelled orders with a purchased label" queue. Restocking
+there would INVENT units whose parcel may already be with the carrier — the
+failure that docblock claims to prevent, reached through its own wrong premise.
+
+**FIXED AT THE CHOKEPOINT, not with a fourth call site.** The restock now lives
+in `setOrderFulfillmentStatus`, the sole writer, so every present and future path
+inherits it by construction rather than by memory. Idempotent behind the same
+`inventory_restocked_at` claim, so the route's explicit call was removed rather
+than left to double up. Cancelling from `label_purchased` deliberately does NOT
+restock and raises a warning alert instead — a human decides.
+
+**A PLACEBO TEST DELETED, NOT REPAIRED.** `order-cancellation-inventory.test.ts`
+carried "the admin cancel action calls it", which read the route file as TEXT and
+asserted it contained the string `returnInventoryForCancelledOrder`. It did
+active harm: it could only see ONE file, so it certified one path while two
+others silently destroyed stock, and because it asserted a CALL SITE rather than
+an OUTCOME it FAILED when the code was fixed. A test that breaks when the code
+gets better is worse than no test.
+
+**MUTATIONS:**
+
+| mutation | test that caught it |
+|---|---|
+| remove the chokepoint restock | *restocks at the chokepoint* + *covers the BULK cancel* + *does not restock twice* |
+| restock even after the label is bought | *does NOT restock — the parcel may be with the carrier* + *says so* |
+| restock on every transition, not just cancel | *leaves a non-cancel transition alone* |
+
+### Other claims that did not hold — REPORTED, NOT FIXED
+
+Surfaced and verified, but outside the six findings. Recorded for the owner
+rather than changed unilaterally, because each is a judgement call about intent:
+
+- **`payment-mock.ts:6`** — claims the mock payment body differs from the live
+  VeyraGate callback only in "where the event originates". It does not: the mock
+  re-reads customer identity straight out of the database, while a live envelope
+  carries a charge and no shopper. **A passing mock payment does not certify the
+  live callback path**, and two paths (the `payment_id` join, and the
+  `isRecognisedMoneyEvent` guard standing between a `'*'` notification and a paid
+  order being demoted) have zero mock coverage.
+- **`shippo/config.ts:49`** — "Every money-spending path checks this."
+  `isShippoLive()` has **zero callers**.
+- **`shippo/client.ts:472`** — "there must be exactly ONE system that can buy a
+  label, and that system is now Vanta." The named target says the opposite today.
+- **`shippo/service.ts:115`** — `label` "set only by the two post-purchase
+  failures". More constructors set it.
+- **`shippo/parcel.ts:19`** — the default weight "matches the
+  `products.shipping_weight_oz` column default" and MUST stay in sync. The two
+  disagree.
+- **`email/retry-queue.ts:216`** — "`pending_emails` carries no order id by
+  design." Contradicted 150 lines earlier **in the same file**, which inserts
+  `order_id` and `email_kind`.
+- **`email/audience.ts:234`** — `order_items.product_id` "holds the product SLUG
+  (verified against live rows)". Half true; the product_id half is not.
+- **`cart-recovery.ts:215`** — "Same predicate the checkout will run." The
+  recovery predicate is strictly weaker than `validateCoupon`, so a recovery
+  email can carry a coupon the till then refuses.
+- **`membership-billing.ts:1342`** — claims the store-credit rule "mirrors the
+  bulk-savings rule". The outcome is right; the two rules do not mirror.
+- **`admin-auth.ts:220`** — claims the login route answers every failure with one
+  generic message. It does not on every branch.
+
+None is a silent money-loss defect of the N-01/N-02 class. Several are
+one-line comment corrections; `cart-recovery.ts:215` and `payment-mock.ts:6` are
+the two worth real attention.
+
+**GATE.** 264 files / 4179 tests green. Lint and `tsc` clean.

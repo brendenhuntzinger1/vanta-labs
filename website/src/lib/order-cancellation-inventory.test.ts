@@ -192,20 +192,26 @@ describe("returnInventoryForCancelledOrder", () => {
   });
 });
 
-describe("the admin cancel action calls it", () => {
-  const read = (p: string) =>
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    (require("node:fs") as typeof import("node:fs")).readFileSync(p, "utf8");
+// ---------------------------------------------------------------------------
+// REMOVED: "the admin cancel action calls it".
+//
+// It read src/app/api/admin/orders/[orderId]/route.ts as TEXT and asserted the
+// file contained the string "returnInventoryForCancelledOrder", plus that the
+// substring appeared after "if (!cancelled.ok)". A grep, not a behaviour test —
+// the exact placebo shape the review called out, and it did real damage rather
+// than merely no good:
+//
+//   * It could only ever look at ONE file, so it certified one of the THREE
+//     paths that reach `cancelled`. The bulk action (admin-orders.ts) and the
+//     status dropdown (the same route's `update_status` branch) both wrote the
+//     status and permanently wrote off the units, and this test stayed green
+//     through all of it.
+//
+//   * It asserted a CALL SITE rather than an OUTCOME, so moving the restock to
+//     the chokepoint — which is what finally made every path correct — broke it.
+//     A test that fails when the code gets better is worse than no test.
+//
+// Replaced by src/lib/cancel-restocks-every-path.test.ts, which drives the real
+// writer and the real bulk action and asserts on the stock.
+// ---------------------------------------------------------------------------
 
-  it("wires the return into the cancel branch, after the transition succeeds", () => {
-    const source = read("src/app/api/admin/orders/[orderId]/route.ts");
-    expect(source).toContain("returnInventoryForCancelledOrder");
-    // It must run only once the pipeline has ACCEPTED the transition — the
-    // pipeline is what refuses a cancel after shipping, and returning stock for a
-    // refused cancel would invent it.
-    const guard = source.indexOf("if (!cancelled.ok)");
-    const call = source.indexOf("returnInventoryForCancelledOrder(orderId)");
-    expect(guard).toBeGreaterThan(-1);
-    expect(call).toBeGreaterThan(guard);
-  });
-});

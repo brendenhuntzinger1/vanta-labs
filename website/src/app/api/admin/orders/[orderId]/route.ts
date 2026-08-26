@@ -1,6 +1,5 @@
 import { NextResponse, after } from "next/server";
 import { setOrderFulfillmentStatus } from "@/lib/shippo/service";
-import { returnInventoryForCancelledOrder } from "@/lib/order-cancellation-inventory";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds, canViewProfit } from "@/lib/admin-roles";
 import { recordActualShippingCost } from "@/lib/admin-profit";
@@ -631,19 +630,15 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
           return NextResponse.json({ success: false, error: cancelled.message }, { status: 400 });
         }
 
-        // K-17. Return the stock this order was holding. Only AFTER the pipeline
-        // has accepted the transition — it is what refuses a cancel once the
-        // goods have shipped, and returning stock for a refused cancel would
-        // invent it.
+        // The stock comes back inside setOrderFulfillmentStatus, which is the
+        // sole writer of this transition and therefore the only place the
+        // restock cannot be forgotten. It used to be called here, and here
+        // ONLY — so the bulk action and the status dropdown one row over
+        // cancelled orders and wrote off their units in silence.
         //
-        // Deliberately NOT the same decision as the refund action above: that one
-        // leaves stock alone because a RETURNED vial's condition is unknown. A
-        // cancel is pre-carrier by construction (FULFILLMENT_TRANSITIONS reaches
-        // `cancelled` only from awaiting_payment/paid/ready_to_fulfill/packed),
-        // so the goods never left. See returnInventoryForCancelledOrder for how
-        // paid and unpaid orders differ, and why restocking an unpaid one would
-        // create phantom stock.
-        await returnInventoryForCancelledOrder(orderId);
+        // The pre-carrier reasoning that used to sit here was also wrong:
+        // FULFILLMENT_TRANSITIONS allows label_purchased -> cancelled, and the
+        // chokepoint handles that case by alerting rather than inventing stock.
       }
 
       if (action === "resend_confirmation") {
