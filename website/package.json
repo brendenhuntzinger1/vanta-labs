@@ -7,7 +7,9 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "vitest run"
+    "test": "vitest run",
+    "harness:build": "NODE_ENV=test next build",
+    "harness:start": "NODE_ENV=test node scripts/harness-server.mjs"
   },
   "dependencies": {
     "@basis-theory/basis-theory-js": "^4.30.2",
