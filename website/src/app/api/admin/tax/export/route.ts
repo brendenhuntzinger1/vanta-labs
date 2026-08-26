@@ -2,11 +2,7 @@ import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canViewProfit } from "@/lib/admin-roles";
 import { getSalesTaxReport } from "@/lib/admin-tax-report";
-
-function csvEscape(value: unknown) {
-  const text = String(value ?? "");
-  return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
-}
+import { csvSafeCell } from "@/lib/csv-safe";
 
 // Sales-tax export for filing: a per-state summary (what you remit to each
 // state) followed by the per-order detail backing it. ?year=2026 restricts to
@@ -28,9 +24,9 @@ export async function GET(request: Request) {
   lines.push("SALES TAX BY STATE" + (year ? ` — ${year}` : " — all time"));
   lines.push(["State", "Orders", "Taxable Sales", "Tax Collected", "Tax Refunded", "Net Tax Due"].join(","));
   for (const s of report.byState) {
-    lines.push([s.state, s.orders, s.taxableSales.toFixed(2), s.taxCollected.toFixed(2), s.taxRefunded.toFixed(2), s.netTax.toFixed(2)].map(csvEscape).join(","));
+    lines.push([s.state, s.orders, s.taxableSales.toFixed(2), s.taxCollected.toFixed(2), s.taxRefunded.toFixed(2), s.netTax.toFixed(2)].map(csvSafeCell).join(","));
   }
-  lines.push(["TOTAL", report.totals.orders, "", report.totals.taxCollected.toFixed(2), report.totals.taxRefunded.toFixed(2), report.totals.netTax.toFixed(2)].map(csvEscape).join(","));
+  lines.push(["TOTAL", report.totals.orders, "", report.totals.taxCollected.toFixed(2), report.totals.taxRefunded.toFixed(2), report.totals.netTax.toFixed(2)].map(csvSafeCell).join(","));
 
   lines.push("");
   lines.push("ORDER DETAIL");
@@ -44,7 +40,7 @@ export async function GET(request: Request) {
       r.taxableSales.toFixed(2),
       r.taxCollected.toFixed(2),
       r.paymentStatus,
-    ].map(csvEscape).join(","));
+    ].map(csvSafeCell).join(","));
   }
 
   return new NextResponse(lines.join("\n"), {
