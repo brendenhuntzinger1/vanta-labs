@@ -699,6 +699,364 @@ promotions when zero are redeemable. Verified against the admin screen in §ADMI
   rounding — see LIVE-004.
 - **Self-referral.** `quote-order.ts:577` blocks it by both email and account id.
 
+## 2d. CONTENT, CLAIMS AND CONSISTENCY
+
+### LIVE-016 — **DEFECT** — the partner page contradicts itself on the commission rate
+
+**Severity:** P1 · INCORRECT / recruiting on wrong numbers
+**Status:** CONFIRMED · BROWSER-PROVEN + DATABASE-PROVEN
+**Cross-reference:** NEW.
+
+On `/partner`, in the same scroll:
+
+| Where on the page | Rate stated |
+|---|---|
+| WHAT YOU GET → Benefits | "A **15% commission** on every completed order placed with your code." |
+| Earnings Calculator input | "Commission percentage **10%**" |
+| Earnings Calculator footnote | "Commission rate used: **10%**" |
+
+The projected figure the calculator advertises ($702/mo, $8,424/yr) is therefore
+computed at 10% while the bullet above it promises 15%.
+
+Reality: `default_commission_percent = 10`; live ambassadors are set to 10, 10,
+15, 15, 15, 15 and 20. So neither number is "the" rate — but the page presents
+both as fact, twice, without qualification.
+
+`/ambassador` states "**15% Base Commission**" and "You earn **15%**", agreeing
+with the benefits bullet and disagreeing with the calculator.
+
+### LIVE-017 — **DEFECT** — two landing pages for one programme, telling different stories
+
+**Severity:** P2 · INCONSISTENT
+**Status:** CONFIRMED · BROWSER-PROVEN
+**Cross-reference:** NEW.
+
+`/partner` ("VANTA LABS PARTNER PROGRAM") and `/ambassador` ("VANTA AMBASSADOR
+NETWORK") are both linked from the footer and both describe the same programme.
+They disagree on:
+
+| | `/partner` | `/ambassador` |
+|---|---|---|
+| Approval time | "Average approval time: **11.0 hours**" | "Most qualified applications are reviewed in **under 24 hours**" |
+| Commission | 15% (bullet) / 10% (calculator) | 15% |
+| Payout minimum | not mentioned | "**$100 payout minimum**" |
+| Minimum order | not mentioned | "**$100 minimum order**" ✅ matches config |
+| Hold period | "payable 14 days after an order completes" ✅ | "**14-day hold**" ✅ |
+| Apply flow | "Sign in or create your free account, then come back here to apply" | name + email form → "CONTINUE IN PARTNER PORTAL" |
+
+A prospective ambassador can land on either and come away with a different
+understanding of what they earn and how fast they are approved.
+
+Also: `/ambassador` says "Commission is calculated on the order subtotal after
+the customer's **10%** discount". The code does compute commission on the
+post-discount subtotal (`payment-webhook.ts:721`) ✅ — but the discount is 15%
+for four of the seven approved ambassadors, so the stated percentage is wrong
+for the majority of them.
+
+### LIVE-018 — **DEFECT** — the legal pages render raw Markdown
+
+**Severity:** P2 · VISUAL / UNPOLISHED, on the pages that carry the promises
+**Status:** CONFIRMED · BROWSER-PROVEN
+**Where:** `/legal/shipping`, `/legal/refund` (both read via `innerText`, so the
+characters below are literally on the page).
+
+`/legal/shipping`:
+```
+**What it covers:** with protection added, if your order is lost in transit…
+**What it does not cover:** orders shipped to an incorrect or incomplete address…
+**How to file a claim:** contact support@… within 14 days…
+```
+
+`/legal/refund`:
+```
+- have its return requested within **14 days of delivery** - be unused and
+unopened - retain its **original factory cap/seal, fully intact** - be in its
+original condition
+```
+
+Asterisks are shown as asterisks, and the bullet list has collapsed into a
+single run-on line with stray hyphens. These are the two pages a cautious buyer
+reads before paying. They currently look like an unrendered draft.
+
+### LIVE-019 — the shipping policy is silent where the store is specific, and describes shipping it does not offer
+
+**Severity:** P2 · INCONSISTENT
+**Status:** CONFIRMED · BROWSER-PROVEN + DATABASE-PROVEN
+
+`/legal/shipping` says:
+
+> "Rates — Domestic shipping is free over the current threshold; otherwise, a
+> flat fee applies. **International shipping has its own threshold and flat
+> fee.** Exact shipping is shown at checkout before you pay."
+
+Two problems:
+
+1. **No numbers.** Every other surface states them — cart "Free shipping at
+   $200.00", checkout "free at $200.00+, otherwise $15.00", Canada "$400.00+,
+   otherwise $25.00". The policy page, the one a careful buyer opens, states
+   none of them.
+2. **International shipping is described but not sold.** The checkout country
+   selector offers **United States and Canada only**; the shipping block says
+   "Ships to the United States and Canada." Config does carry
+   `internationalFee: 60 / internationalFreeShippingThreshold: 600`, but no
+   customer can select an international destination.
+
+Third: the policy's Processing clause says only "Orders are prepared after
+payment is verified". **Same-day dispatch is promised on the homepage, the
+catalog strip, every product page, the cart, the checkout and the footer** —
+"Order by 2PM ET, ships same day (Mon–Fri)" — and the shipping policy commits to
+nothing. The one page a customer would cite makes no dispatch promise at all.
+
+### LIVE-020 — COA claims, complete list of surfaces
+
+Extending LIVE-001, the claim appears on **seven** customer-facing surfaces:
+
+1. `/` testing section — "We publish the proof… maps to its Certificate of Analysis"
+2. `/` trust tile — "Batch-to-COA mapping… confirm it before you buy"
+3. `/products` header strip — "PUBLISHED COAS"
+4. every product `description` (36 rows) — "ships with a Certificate of Analysis"
+5. `/research/purity-and-third-party-testing` — "We publish COAs per batch"
+6. **`/wholesale`** — "The same certificates of analysis **we publish**, on every wholesale lot."
+7. **`/account/login`** side panel — "Third-party tested — **COA on every batch**"
+
+### LIVE-021 — a configured $1 introductory membership is never shown
+
+**Severity:** P2 · DEAD FEATURE / lost conversion
+**Status:** CONFIRMED · BROWSER-PROVEN + API-PROVEN
+
+`GET /api/catalog/promotions` returns, for all three tiers:
+
+```json
+"introPriceCents": 100, "introDurationDays": 7, "introOfferEnabled": true
+```
+
+A $1-for-7-days trial is enabled on Pro, Elite and Black. **The `/membership`
+page never mentions it.** It shows "$39.99 → $24.99/mo", "$59.99 → $39.99/mo",
+"$149.99 → $89.99/mo" and three "JOIN" buttons. The single strongest conversion
+lever the membership has is configured and invisible.
+
+(The three struck-through prices are compare-at values; the live prices $24.99 /
+$39.99 / $89.99 match `monthlyPriceCents` 2499 / 3999 / 8999 exactly.)
+
+### LIVE-022 — `/login` is a second, orphaned partner sign-in page
+
+**Severity:** P2 · DEAD FEATURE / two auth entry points
+**Status:** CONFIRMED · BROWSER-PROVEN
+
+- `/partner/login` **redirects to `/account/login`** — the customer sign-in
+  ("Sign in to Vanta Labs", with account/membership/rewards copy).
+- `/login` still serves a **separate** page headed "PARTNER PORTAL — Secure
+  Login · Use your approved partner credentials to access real-time commissions
+  and referral performance", with its own email/password form.
+
+Two different sign-in pages for the same people, one of them no longer linked
+from the flow that replaced it. Either it works (and is a second, unmaintained
+auth surface) or it does not (and is a dead end an ambassador may have
+bookmarked). **Whether `/login` actually authenticates is NOT VERIFIED** — no
+credentials, and submitting is a write.
+
+### LIVE-023 — `/vault` took 22.8 seconds to become interactive
+
+**Severity:** P2 · SLOW, on the owner's front door
+**Status:** CONFIRMED (single observation) · BROWSER-PROVEN
+
+`/vault` — `domcontentloaded` → `networkidle` measured at **22,830 ms**, against
+2.7–5.4 s for every other page in the same sweep. It fires
+`GET /api/admin/auth/session` → 401 for an anonymous visitor.
+
+One observation only, so this may be a cold start on a rarely-hit route rather
+than a steady-state cost. Recorded as **CONFIRMED slow once, cause NOT
+DIAGNOSED**. It is the page the owner opens to start work.
+
+---
+
+## 2e. MOBILE (390×844 and 320×568)
+
+### LIVE-024 — adding to the cart shows a third BAC-water ask, with no way to check out
+
+**Severity:** P2 · FRICTION
+**Status:** CONFIRMED · BROWSER-PROVEN
+
+Tapping ADD TO CART on `/products/glp-1` at 390×844 opens a modal:
+
+> LABORATORY SUPPLIES — **Need bacteriostatic water?** … [BAC Water 10 mL +$14.99] [No thanks, continue shopping]
+
+The item *is* added (verified: cart 0 → 1, badge "Open cart with 1 items"), but
+the modal offers only "add water" or "continue shopping" — **no View Cart, no
+Checkout**. The customer who just decided to buy is handed an upsell and then
+sent back to browsing.
+
+It is also the **third** ask for the same product on that page, after
+"FREQUENTLY PURCHASED TOGETHER" and "FREQUENTLY BOUGHT TOGETHER" (LIVE-005).
+
+The modal appears for the in-page button but **not** for the sticky bottom-bar
+button on the same page — two controls, two behaviours.
+
+### LIVE-025 — touch targets below the 24px minimum on the purchase flow
+
+**Severity:** P2 · accessibility (WCAG 2.2 SC 2.5.8), mobile
+**Status:** CONFIRMED · BROWSER-PROVEN · measured at 390×844
+
+| Control | Size | Where |
+|---|---|---|
+| consent / shipping-protection checkboxes | **18 × 18** | `/checkout` (×3) |
+| "Sign in" link | **37 × 17** | `/checkout` rewards row |
+| quantity − / + | 32 × 32 | `/checkout` summary |
+| "Remove" | 67 × 32 | `/checkout` summary |
+| footer links | ~24 high | every page |
+| cookie Decline / Accept | 70 × 32 / 68 × 32 | every page |
+
+The 18×18 checkboxes and the 17px-tall "Sign in" fail the 24×24 AA minimum
+outright; the 32px controls pass AA but sit well under the 44×44 both Apple and
+Google recommend. These are on the checkout, being tapped by a thumb.
+
+### LIVE-026 — an accidental double-tap silently buys two
+
+**Severity:** P3 · FRICTION
+**Status:** CONFIRMED · BROWSER-PROVEN
+
+A double click on ADD TO CART (40 ms apart) took the cart from 2 units to 4.
+There is no debounce and no "already in your cart" feedback, so a fat-fingered
+tap on a phone adds a second $44.99 vial with only the header badge to show for
+it.
+
+### Checked on mobile and NOT a defect (recorded so it is not re-raised)
+
+- **The age gate is reachable at 390×844 and at 320×568.** The dialog is 1210 px
+  tall against an 844 px viewport and `documentElement.scrollHeight` equals the
+  viewport (`body { overflow: hidden }`), which looks unreachable — but the gate's
+  own container is `fixed inset-0 overflow-y: auto` with `scrollHeight 1298`.
+  A plain wheel/flick scroll moved "Continue as guest" from y=939 to y=518
+  (`reachable: true`), all four boxes ticked, and the gate was passed. Same at
+  320×568 (button ends at y=558 in a 568 px viewport — only 10 px of margin, but
+  reachable). **This is exactly the false P0 the earlier audit was burned by; it
+  is not one.**
+- **Nothing intercepts ADD TO CART.** The fixed `.vl2-lab-sweep` decorative layer
+  that overlaps the button is `pointer-events: none; z-index: -1`, and
+  `elementFromPoint` returns the button itself at 10 %, 25 %, 50 %, 75 % and 90 %
+  of its width.
+- **No horizontal scroll** at 390 or 320 on home, catalog, PDP, cart or checkout.
+- **Mobile navigation** is a fixed bottom bar (`.vl-bottom-bar`, 390×82), not a
+  hamburger — there is no hamburger and none is needed. On a product page the bar
+  carries the product name, price and its own ADD TO CART.
+- **Dose switching updates the price correctly**: GLP-1 5mg $44.99 → 20mg $114.99
+  → 30mg $144.99, matching `product_doses.price_cents` 4499 / 11499 / 14499.
+- **The cart drawer, empty state and quantity controls** all render and behave.
+
+---
+
+## 2f. TRUTH CHECKS THAT PASSED
+
+Recorded with evidence because "we checked and it was right" is a result.
+
+### PRODUCT TRUTH — PASS · DATABASE-PROVEN + BROWSER-PROVEN
+
+- `/products` renders exactly **36** cards; the database has 36 published *and*
+  enabled products. The two `is_published = true, is_enabled = false` rows
+  (`cerebrolysin`, `pinealon`) are correctly absent.
+- Direct URLs for every unpublished or archived slug return **404**:
+  `cerebrolysin`, `pinealon`, `hgh-191aa`, `mt-2`, `nad-plus`,
+  `cjc-1295-ipamorelin-blend`, and a nonsense slug.
+- **The parent-zero / dose-stocked invariant holds.** `dsip` and `ss-31` carry
+  `products.stock_status = 'Out of Stock'` with `inventory_quantity = 0`, and a
+  dose holding 19 units. Both render **In Stock**, both show an enabled ADD TO
+  CART on the catalog and the product page, and `/api/catalog/products` reports
+  `stockStatus: "In Stock"` for both. **No stocked dose is hidden by a zero
+  parent.**
+- 31 of the 36 have `parent_inv = 0` with stocked doses; all 36 are purchasable.
+
+### PRICE TRUTH — PASS · DATABASE-PROVEN
+
+Every price on every surface was reconciled to `product_doses.price_cents`:
+
+- **48 dose prices** in `/api/catalog/products` match the database exactly
+  (spot-checked in full: GLP-1 10mg $64.99 = 6499, GLP-2 30mg $144.99 = 14499,
+  GLP-3 30mg $169.99 = 16999, NAD 1000mg $94.99 = 9499, HGH 36iu $84.99 = 8499,
+  Thymosin $60.00 = 6000).
+- Catalog card price = default dose price = parent price for all 36.
+- Product page dose switching produces the stored dose price.
+- **Cart and checkout agree exactly**, with nothing entered:
+  | Qty | Cart | Checkout |
+  |---|---|---|
+  | 1 | Subtotal $39.99 · Shipping $15.00 · Final total **$54.99** | Subtotal $39.99 · Shipping $15.00 |
+  | 3 | Subtotal $110.37 · Shipping $15.00 · Final total **$125.37** | Subtotal $110.37 · Shipping $15.00 |
+- Bulk tiers reconcile by per-unit floor rounding at 2 / 3 / 5 / 10 units.
+
+**The browser is not the authority** — `quote-order.ts` recomputes everything
+server-side; the client mirrors it. That is code-read, not runtime-proven, since
+no order was placed.
+
+### PERSISTENCE / RETURNING CUSTOMER — PASS · BROWSER-PROVEN
+
+| Step | Cart | Badge |
+|---|---|---|
+| add | 1 unit | "Open cart with 1 items" |
+| refresh | 1 | 1 |
+| navigate to `/cart` | 1 | 1 |
+| back ×2 | 1 | 1 |
+| forward | 1 | 1 |
+| **second tab** | 1 | 1 — and the age gate is *not* re-shown |
+| add in tab 2 | 2 | **tab 1 updated to 2 with no reload** (live cross-tab sync) |
+| fresh browser session | gate shown again ✅ (sessionStorage, by design) |
+
+Prices were still correct after every one of those transitions.
+
+### AUTHORIZATION TRUTH — PASS · BROWSER/HTTP-PROVEN
+
+35 unauthenticated GETs. Every privileged surface refuses:
+
+```
+/api/admin/{metrics,inventory,products,partners,coupons,settings,control,team,
+            customers/export,orders/export,cart-recovery,shipping/origin,
+            fulfillment/queues,membership/customers,
+            ambassadors/payouts,ambassadors/settings}   401
+/api/admin/auth/session                                 401 {"authenticated":false}
+/api/partner/{me,summary}                               401
+/api/account/{me,wishlist}                              401
+/api/cron/sweep                                         401
+/api/ads/tracking-health                                401 "admin session required"
+/admin, /admin/orders, /admin/revenue, /admin/settings  307 (redirect away)
+```
+
+Public by design and correct: `/api/health`, `/api/catalog/products`,
+`/api/coupons/featured`, `/api/storefront/offers`, `/vault` (the login door).
+
+**No cost data leaks.** `/api/catalog/products` exposes no `product_cost_cents`,
+`min_profit_*`, `suggested_retail_cents`, supplier or margin field — checked key
+by key on product and dose objects.
+
+`/api/admin/orders`, `/api/admin/account` and `/api/account/addresses` return
+**405** rather than 401 to an unauthenticated GET, i.e. method routing runs
+before authorization. No data is returned; P3 note only.
+
+### LIVE-027 — inventory is capped at 10 in the public API, so low stock can never be shown
+
+**Severity:** P3 · MISSING STATE (and a trap for future work)
+**Status:** CONFIRMED · DATABASE-PROVEN
+
+`/api/catalog/products` reports `availableQuantity: 10` for **every** product and
+**every** dose. Real stock ranges from 15 to 146. The cap is sensible (it stops
+competitors reading inventory), but it has two consequences:
+
+- **No scarcity signal is possible from this API.** `selank` holds 15 units
+  against a `low_stock_threshold` of 5; nothing on the site says so. There is no
+  "only N left", no low-stock badge and no out-of-stock state anywhere on the
+  storefront today.
+- Any future low-stock UI driven from this endpoint will be **wrong by
+  construction**, because 10 is a constant, not a measurement.
+
+### Crawl surfaces — PASS
+
+`robots.txt` correctly disallows `/admin`, `/vault`, `/api`, `/account`,
+`/checkout`, `/cart`, `/pay`, `/maintenance`, `/r/` and points at the sitemap.
+`sitemap.xml` (200, 7.4 KB) lists 1 home + 37 products (`/products` + 36 pages) +
+5 research + 6 legal + membership, ambassador, partner, wholesale, contact,
+coa-library. No unpublished slug appears.
+
+`/r/NOTACODE-XYZ` returns 307 to `/products` with no attribution and **no write**
+(`resolveReferralCode` returns null before the insert) — the one referral URL it
+was safe to request.
+
 _(walk continues)_
 
 ---
