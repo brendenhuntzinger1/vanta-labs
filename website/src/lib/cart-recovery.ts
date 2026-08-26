@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getCartRecoveryControlConfig } from "@/lib/admin-control";
 import { getSiteUrl } from "@/lib/env";
+import { formatDisplayDate } from "@/lib/format-date";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import {
   cartRecoveryT30mTemplate,
@@ -123,11 +124,11 @@ function generateCouponCode(): string {
   return `SAVE-${crypto.randomBytes(5).toString("hex").toUpperCase()}`;
 }
 
-export async function mintCartRecoveryCoupon(email: string, discountPercent: number, expiresInHours: number): Promise<{ code: string; expiresAt: string } | null> {
+export async function mintCartRecoveryCoupon(email: string, discountPercent: number, expiresInHours: number): Promise<{ id: string | null; code: string; expiresAt: string } | null> {
   const code = generateCouponCode();
   const expiresAt = new Date(Date.now() + expiresInHours * HOUR_MS).toISOString();
 
-  const { error } = await supabaseAdmin.from("coupons").insert({
+  const { data: insertedCoupon, error } = await supabaseAdmin.from("coupons").insert({
     code,
     discount_type: "percent",
     discount_value: discountPercent,
@@ -138,14 +139,79 @@ export async function mintCartRecoveryCoupon(email: string, discountPercent: num
     assigned_email: email.trim().toLowerCase(),
     source: "cart_recovery",
     created_at: new Date().toISOString(),
-  });
+  }).select("id").maybeSingle();
 
   if (error) {
     console.error("Unable to mint cart recovery coupon:", error);
     return null;
   }
 
-  return { code, expiresAt };
+  // The id is what abandoned_cart_emails.coupon_id records, so the t72h stage can
+  // load THIS coupon rather than describing one from memory (see resolveLastChanceCoupon).
+  return { id: (insertedCoupon as { id?: string } | null)?.id ?? null, code, expiresAt };
+}
+
+/**
+ * The coupon the LAST-CHANCE email may advertise.
+ *
+ * K-05. The t72h stage is right not to mint a second code for a cart — one cart,
+ * one code. It was wrong about what to do instead: it invented
+ * `{ code: "SEE PREVIOUS EMAIL", expiresAt: now + couponExpirationHours }`, so
+ * the customer was shown a literal placeholder where a code belongs and an
+ * expiry no row in the database held.
+ *
+ * Under the shipped defaults that expiry was not merely unverified, it was
+ * false by 48 hours: the t24h and t72h stages are 48h apart on the fixed
+ * every-30-minute cron, and couponExpirationHours defaults to 48, so the t24h
+ * coupon dies on the very tick that sends this mail.
+ *
+ * So: load the real coupon this cart was given, and use it ONLY if it is still
+ * live. If it has expired, or cannot be found (a row written before coupon_id
+ * was recorded, or a coupon since deleted), mint a fresh one. The email then
+ * always carries a code that `validateCoupon` will accept and a date the
+ * database will honour — which is the only honest thing to put in it.
+ *
+ * Never describe a coupon that was not read back from the database.
+ */
+async function resolveLastChanceCoupon(
+  cartId: string,
+  email: string,
+  discountPercent: number,
+  expiresInHours: number,
+): Promise<{ id: string | null; code: string; expiresAt: string } | null> {
+  const { data: priorStage } = await supabaseAdmin
+    .from("abandoned_cart_emails")
+    .select("coupon_id")
+    .eq("abandoned_cart_id", cartId)
+    .eq("stage", "t24h")
+    .maybeSingle();
+
+  const priorCouponId = (priorStage as { coupon_id?: string | null } | null)?.coupon_id ?? null;
+
+  if (priorCouponId) {
+    const { data: existing } = await supabaseAdmin
+      .from("coupons")
+      .select("id, code, ends_at, active")
+      .eq("id", priorCouponId)
+      .maybeSingle();
+
+    const row = existing as { id: string; code: string; ends_at: string | null; active: boolean } | null;
+    // Same predicate the checkout will run (coupons.ts validateCoupon): active,
+    // and not past ends_at. Anything this rejects would be rejected at the till.
+    const stillLive = Boolean(
+      row
+      && row.active
+      && row.ends_at
+      && new Date(row.ends_at).getTime() > Date.now(),
+    );
+    if (stillLive && row) {
+      return { id: row.id, code: row.code, expiresAt: row.ends_at as string };
+    }
+  }
+
+  // Expired, missing, or never recorded. A fresh code is the only way to keep
+  // the promise the email is about to make.
+  return mintCartRecoveryCoupon(email, discountPercent, expiresInHours);
 }
 
 interface DueCartRow {
@@ -300,13 +366,19 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
           email: row.email,
           campaignType: "cart_recovery_t24h",
           templateKey: "cartRecoveryT24hTemplate",
+          // Recorded so the t72h stage can load THIS coupon instead of
+          // describing one from memory. reserveAndSendStage already writes
+          // coupon_id; this call site simply never supplied it (K-05).
+          couponId: coupon.id,
           buildTemplate: (url) => cartRecoveryT24hTemplate({
             name,
             items,
             cartValueCents: row.cart_value_cents,
             restoreUrl: url,
             couponCode: coupon.code,
-            expiresAt: new Date(coupon.expiresAt).toLocaleString("en-US"),
+            // K-01. Vercel runs UTC, so a bare toLocaleString told a Pacific
+            // customer 10 PM for a code that died at 3 PM their time.
+            expiresAt: formatDisplayDate(coupon.expiresAt, "datetime") ?? "",
           }),
         });
         if (sent) result.t24hSent += 1;
@@ -314,24 +386,25 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
     }
 
     if (config.t72hEnabled && elapsedMs >= 72 * HOUR_MS) {
-      const alreadyHasCoupon = await hasSentStage(row.id, "t24h");
-      const coupon = alreadyHasCoupon ? null : await mintCartRecoveryCoupon(row.email, config.discountPercent, config.couponExpirationHours);
+      const couponForEmail = await resolveLastChanceCoupon(
+        row.id, row.email, config.discountPercent, config.couponExpirationHours,
+      );
 
-      if (alreadyHasCoupon || coupon) {
-        const couponForEmail = coupon ?? { code: "SEE PREVIOUS EMAIL", expiresAt: new Date(now + config.couponExpirationHours * HOUR_MS).toISOString() };
+      if (couponForEmail) {
         const sent = await reserveAndSendStage({
           cartId: row.id,
           stage: "t72h",
           email: row.email,
           campaignType: "cart_recovery_t72h",
           templateKey: "cartRecoveryT72hTemplate",
+          couponId: couponForEmail.id,
           buildTemplate: (url) => cartRecoveryT72hTemplate({
             name,
             items,
             cartValueCents: row.cart_value_cents,
             restoreUrl: url,
             couponCode: couponForEmail.code,
-            expiresAt: new Date(couponForEmail.expiresAt).toLocaleString("en-US"),
+            expiresAt: formatDisplayDate(couponForEmail.expiresAt, "datetime") ?? "",
           }),
         });
         if (sent) result.t72hSent += 1;
