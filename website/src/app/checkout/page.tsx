@@ -9,6 +9,7 @@ import { readAttributionForCheckout } from "@/lib/attribution-client";
 import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
 import { resolveSalesTax } from "@/lib/sales-tax";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
+import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
 import {
@@ -179,20 +180,35 @@ function CheckoutProgress({ onPayment }: { onPayment: boolean }) {
   );
 }
 
-const TRUST_POINTS = [
-  { label: "256-bit SSL encrypted", icon: <><path d="M6 10V8a6 6 0 1 1 12 0v2M5 10h14v10H5z" strokeLinejoin="round" /></> },
-  { label: "Secure payment processing", icon: <><path d="M12 3 5 6v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z" strokeLinejoin="round" /><path d="m9 12 2 2 4-4" strokeLinecap="round" strokeLinejoin="round" /></> },
-  { label: "Full batch traceability", icon: <><path d="M9 3h6M10 3v5l-4 9a2 2 0 0 0 1.8 2.9h8.4A2 2 0 0 0 18 17l-4-9V3" strokeLinejoin="round" /></> },
-  { label: "Ships within 1 business day", icon: <><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z" strokeLinejoin="round" /><circle cx="7" cy="17" r="1.6" /><circle cx="17.5" cy="17" r="1.6" /></> },
-];
+/**
+ * K-21. The CLAIMS come from @/lib/trust-claims; only the icons live here.
+ *
+ * This array had drifted furthest, and on the worst screen to drift on — the last
+ * one before payment, whose wording a customer would quote in a dispute. It
+ * carried a one-business-day dispatch promise (word for word one of the four
+ * variants trust-claims.ts's header names as the reason it exists; the canonical
+ * promise is FULFILMENT_DETAIL, and the two resolve differently for a 3pm Friday
+ * order), a cipher-strength assertion the module deliberately declines to make,
+ * and a batch-traceability claim stronger than COA_SHORT made site-wide with zero
+ * certificates on file (ledger F-006).
+ *
+ * Paraphrased, not quoted: trust-claims-single-source.test.ts scans this file for
+ * the retired strings.
+ */
+const TRUST_ICONS: Record<string, React.ReactNode> = {
+  [TESTING_SHORT]: <><path d="M12 3 5 6v5c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6z" strokeLinejoin="round" /><path d="m9 12 2 2 4-4" strokeLinecap="round" strokeLinejoin="round" /></>,
+  [COA_SHORT]: <><path d="M9 3h6M10 3v5l-4 9a2 2 0 0 0 1.8 2.9h8.4A2 2 0 0 0 18 17l-4-9V3" strokeLinejoin="round" /></>,
+  [CHECKOUT_SHORT]: <><path d="M6 10V8a6 6 0 1 1 12 0v2M5 10h14v10H5z" strokeLinejoin="round" /></>,
+  [FULFILMENT_SHORT]: <><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z" strokeLinejoin="round" /><circle cx="7" cy="17" r="1.6" /><circle cx="17.5" cy="17" r="1.6" /></>,
+};
 
 function TrustRow({ className = "" }: { className?: string }) {
   return (
     <div className={`grid grid-cols-2 gap-x-4 gap-y-3 ${className}`}>
-      {TRUST_POINTS.map((point) => (
-        <div key={point.label} className="flex items-center gap-2.5">
-          <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-gold)" strokeWidth="1.4" className="h-4 w-4 flex-shrink-0 opacity-70" aria-hidden>{point.icon}</svg>
-          <span className="text-[11px] leading-tight text-white/45">{point.label}</span>
+      {trustPoints().map((label: string) => (
+        <div key={label} className="flex items-center gap-2.5">
+          <svg viewBox="0 0 24 24" fill="none" stroke="var(--accent-gold)" strokeWidth="1.4" className="h-4 w-4 flex-shrink-0 opacity-70" aria-hidden>{TRUST_ICONS[label] ?? null}</svg>
+          <span className="text-[11px] leading-tight text-white/45">{label}</span>
         </div>
       ))}
     </div>

@@ -5,49 +5,60 @@ import { ProductCard } from "@/components/product-card";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getCatalogProducts } from "@/lib/catalog";
-import { FULFILMENT_SHORT } from "@/lib/trust-claims";
+import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 
 export const dynamic = "force-dynamic";
 
-const TRUST_POINTS = [
-  {
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-        <path d="M9 2h6M10 2v6.2a2 2 0 0 1-.34 1.12L4.9 17.2A2.4 2.4 0 0 0 6.9 21h10.2a2.4 2.4 0 0 0 2-3.8l-4.76-7.88A2 2 0 0 1 14 8.2V2" />
-      </svg>
-    ),
-    label: "Based in the USA",
-  },
-  {
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-        <circle cx="12" cy="12" r="9" />
-        <path d="m8.5 12.5 2.4 2.4L16 9.6" />
-      </svg>
-    ),
-    label: "99%+ Purity",
-  },
-  {
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-        <path d="M2 8h11v8H2z" />
-        <path d="M13 11h4l4 3v2h-8z" />
-        <circle cx="6.5" cy="18.5" r="1.6" />
-        <circle cx="17" cy="18.5" r="1.6" />
-      </svg>
-    ),
-    label: FULFILMENT_SHORT,
-  },
-  {
-    icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
-        <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
-        <path d="m9 12 2 2 4-4" />
-      </svg>
-    ),
-    label: "Third-Party Batch Verified",
-  },
-];
+/**
+ * K-21. The CLAIMS come from @/lib/trust-claims — the single source, with
+ * recorded provenance for each one. Only the icons live here, because an icon is
+ * this page's design and not an assertion about the product.
+ *
+ * This array used to hard-code its own claims and had drifted: a purity
+ * percentage (trust-claims.ts's TESTING block states no such figure appears
+ * anywhere in the UI, because a purity number is a statement about a specific
+ * vial and is rendered only from that product's own purityResult and COA), a
+ * batch-verification wording stronger than the canonical TESTING_SHORT, and a
+ * country-of-origin claim with no recorded provenance in the repo.
+ *
+ * Paraphrased rather than quoted: trust-claims-single-source.test.ts scans this
+ * file for the retired strings, and it caught an earlier version of this comment.
+ */
+const TRUST_ICONS: Record<string, React.ReactNode> = {
+  [TESTING_SHORT]: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+      <circle cx="12" cy="12" r="9" />
+      <path d="m8.5 12.5 2.4 2.4L16 9.6" />
+    </svg>
+  ),
+  [COA_SHORT]: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+      <path d="M9 2h6M10 2v6.2a2 2 0 0 1-.34 1.12L4.9 17.2A2.4 2.4 0 0 0 6.9 21h10.2a2.4 2.4 0 0 0 2-3.8l-4.76-7.88A2 2 0 0 1 14 8.2V2" />
+    </svg>
+  ),
+  [CHECKOUT_SHORT]: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+      <path d="M12 2 4 5v6c0 5 3.4 8.7 8 11 4.6-2.3 8-6 8-11V5z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  ),
+  [FULFILMENT_SHORT]: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+      <path d="M2 8h11v8H2z" />
+      <path d="M13 11h4l4 3v2h-8z" />
+      <circle cx="6.5" cy="18.5" r="1.6" />
+      <circle cx="17" cy="18.5" r="1.6" />
+    </svg>
+  ),
+};
+
+/**
+ * The hero pill row. These rest on the owner attestation recorded in
+ * trust-claims.ts's TESTING block. The COA line that used to sit alongside them
+ * asserted that documents EXIST, which ledger finding F-006 disproved, so it is
+ * appended from the evidence gate at the render site instead of typed here.
+ */
+const HERO_ATTESTATIONS = ["Third-party batch tested", "99%+ purity", "Ships from the USA"] as const;
 
 const BRAND_PILLARS = [
   {
@@ -164,7 +175,7 @@ export default async function HomePage() {
             {/* Inline trust strip — factual claims only, right under the CTA so
                 purchase confidence lands before the fold on mobile. */}
             <ul className="mt-7 flex flex-wrap items-center gap-x-5 gap-y-2 text-xs text-white/65 sm:mt-8 sm:text-[0.8rem]">
-              {["Third-party batch tested", "99%+ purity", "COA on every lot", "Ships from the USA"].map((claim) => (
+              {[...HERO_ATTESTATIONS, ...trustPoints().filter((p: string) => p === COA_SHORT)].map((claim) => (
                 <li key={claim} className="inline-flex items-center gap-1.5">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3.5 w-3.5 text-[color:var(--accent-gold)]">
                     <path d="m5 12 4 4 10-10" />
@@ -186,10 +197,10 @@ export default async function HomePage() {
         <div className="mx-auto max-w-[1440px] px-4 sm:px-6 lg:px-12">
           <ScrollReveal>
             <div className="vl2-trust-row justify-center">
-              {TRUST_POINTS.map((point) => (
-                <div key={point.label} className="flex items-center gap-2.5 text-white/60">
-                  <span aria-hidden="true">{point.icon}</span>
-                  <span className="text-[0.72rem] font-medium uppercase tracking-[0.14em]">{point.label}</span>
+              {trustPoints().map((label: string) => (
+                <div key={label} className="flex items-center gap-2.5 text-white/60">
+                  <span aria-hidden="true">{TRUST_ICONS[label] ?? null}</span>
+                  <span className="text-[0.72rem] font-medium uppercase tracking-[0.14em]">{label}</span>
                 </div>
               ))}
             </div>

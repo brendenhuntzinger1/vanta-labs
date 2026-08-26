@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { RESEARCH_USE_SENTENCE, TRUST_POINTS } from "@/lib/trust-claims";
+import { RESEARCH_USE_SENTENCE, trustPoints } from "@/lib/trust-claims";
 
 const FOOTER_COLUMNS = {
   shop: [
@@ -64,7 +64,9 @@ export function SiteFooter() {
     <footer className="border-t border-white/10 bg-[#0b0b0b]">
       <div className="border-b border-white/10">
         <div className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-center gap-2.5 px-4 py-5 sm:gap-3 sm:px-6 sm:py-6 lg:px-12">
-          {TRUST_POINTS.map((point) => (
+          {/* K-21. The footer cannot show a COA, so it does not claim one. The point
+      // returns by itself once the COA Library is non-empty. */}
+        {trustPoints().map((point: string) => (
             <span key={point} className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[0.66rem] font-medium uppercase tracking-[0.14em] text-white/55">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-3 w-3 text-emerald-300/80"><path d="m5 12 4 4 10-10" /></svg>
               {point}
