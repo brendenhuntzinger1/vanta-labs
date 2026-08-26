@@ -3,6 +3,8 @@
 import Script from "next/script";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+
+import { browserAdsReportingAllowed } from "@/lib/ads/ads-environment";
 import { countSnapPageView } from "@/lib/ads/snap-health-browser";
 
 /**
@@ -56,6 +58,25 @@ function hasAccepted(): boolean {
 
 export function SnapPixel() {
   const [accepted, setAccepted] = useState(false);
+  /**
+   * K-16. Consent is necessary and NOT sufficient: a preview deployment, a local
+   * run, a CI job or a Playwright script must never reach the live ad account,
+   * because the pixel ids fall back to production values. See
+   * src/lib/ads/ads-environment.ts.
+   *
+   * Resolved in an effect rather than during render, and starting FALSE, for the
+   * same reason `accepted` is: two of its inputs (location.hostname,
+   * navigator.webdriver) exist only in the browser, so deciding during render
+   * would make the server and the client disagree and React would hydrate onto
+   * different markup. Starting closed also means the safe answer is the one that
+   * survives a hydration failure.
+   */
+  const [adsAllowed, setAdsAllowed] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAdsAllowed(browserAdsReportingAllowed().allowed);
+  }, []);
   const pathname = usePathname();
   const searchParams = useSearchParams();
   // The inline snippet fires PAGE_VIEW once on load. Skipping that first
@@ -77,7 +98,7 @@ export function SnapPixel() {
   // document, so without this every visit would report exactly one page view
   // however much of the site someone read.
   useEffect(() => {
-    if (!accepted) return;
+    if (!adsAllowed || !accepted) return;
     if (!initialPageSent.current) {
       initialPageSent.current = true;
       // The snippet's own PAGE_VIEW, tallied here rather than in the snippet so
@@ -89,8 +110,9 @@ export function SnapPixel() {
     }
     window.snaptr?.("track", "PAGE_VIEW");
     countSnapPageView();
-  }, [accepted, pathname, searchParams]);
+  }, [adsAllowed, accepted, pathname, searchParams]);
 
+  if (!adsAllowed) return null;
   if (!accepted) return null;
 
   return (
