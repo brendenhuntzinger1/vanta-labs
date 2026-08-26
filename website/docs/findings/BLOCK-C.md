@@ -221,3 +221,276 @@ lands.
 - Are there `order_email_log` rows at `status='failed'` whose orders did receive
   a receipt via the sweep? Those are the orders currently exposed to a duplicate
   on any webhook replay.
+
+---
+
+## C-03 — The admin order page's shipping-email branch is dead code, and picks the wrong template when it does fire
+
+| | |
+|---|---|
+| **Severity** | P1 |
+| **Evidence grade** | A — provable by inspection; the variable it reads is never assigned |
+| **Status** | `CONFIRMED — CROSS-BLOCK (block I owns src/app/api/admin/**)` |
+
+### Evidence
+
+`src/app/api/admin/orders/[orderId]/route.ts:222`:
+
+```ts
+const newStatus = String(updatePayload.fulfillment_status ?? priorStatus);
+...
+const statusTransitioned = newStatus !== priorStatus && NOTIFY_STATUSES.has(newStatus.toLowerCase());
+```
+
+`updatePayload` is assigned in exactly two places in the whole file —
+`payment_status` (:143) and `tracking_number` (:146). `fulfillment_status` is
+never assigned, deliberately:
+
+> `// fulfillment_status is DELIBERATELY not in this payload any more.`  (:132)
+
+The status is now moved by `setOrderFulfillmentStatus()` (:162), which sends no
+email. So `newStatus === priorStatus` **always**, `statusTransitioned` is
+**always false**, and the only surviving trigger is `trackingAddedOrChanged`.
+
+Two customer-visible consequences:
+
+1. **An admin marking an order shipped or delivered from the order page emails
+   nothing.** The status advances, `order_status_history` gains a row, the
+   customer hears nothing. (The bulk "mark shipped" action on a different code
+   path does still email — so the same operator intent notifies or does not
+   depending on which screen it was expressed from.)
+2. **When it does fire, it picks the template from the OLD status.**
+   `newStatus.toLowerCase() === "delivered"` (:247) is testing `priorStatus`.
+   Move an order to `delivered` while adding a tracking number and the customer
+   gets the generic *"Shipping Update"*; add tracking to an already-`delivered`
+   order and they get a second *"Delivered"* email.
+
+The same block also reads the status from a second place — line 252 uses
+`order.fulfillment_status`, re-fetched **after** the transition, so it holds the
+**new** status. One email therefore chooses its template from the old status and
+prints the new one in its body.
+
+### Fix
+
+`CROSS-BLOCK: src/app/api/admin/orders/[orderId]/route.ts:215-262 — take the status from the transition result, not from updatePayload.`
+`setOrderFulfillmentStatus` already returns the transition; use its `to` value
+for both `statusTransitioned` and the template choice. Better still, route the
+decision through `notificationFor()` in `shippo/service.ts`, which is the
+function that already owns "which email does this move earn" — see C-04.
+
+---
+
+## C-04 — Two shipping emails for one parcel: the admin path and the carrier scan do not know about each other
+
+| | |
+|---|---|
+| **Severity** | P1 |
+| **Evidence grade** | B — established by inspection across three call sites; not yet driven end to end |
+| **Status** | `CONFIRMED — CROSS-BLOCK (blocks I and D)` |
+
+### Evidence
+
+Three independent code paths send `shippingUpdateTemplate`:
+
+| Path | File | Consults `notificationFor()` | Records the send |
+|---|---|---|---|
+| Admin adds/changes a tracking number | `app/api/admin/orders/[orderId]/route.ts:262` | no | no |
+| Admin bulk "mark shipped" | `lib/admin-orders.ts:288` | no | no |
+| Carrier scan (Shippo webhook) | `lib/shippo/service.ts:1829` | **yes** | `shippo_webhook_events` |
+
+`shippo/service.ts` reasons carefully about this — `IN_CARRIER_NETWORK` and
+`notificationFor()` exist precisely so that "entering the carrier network is one
+event no matter how many scans describe it". That reasoning covers Shippo events
+against each other. It cannot cover the two admin paths, which never call it and
+leave no trace for it to find.
+
+The ordinary operator sequence — enter the tracking number in admin, then the
+carrier's first TRANSIT scan arrives — sends **two** "Shipping Update" emails for
+one parcel. `shippo_webhook_events` dedupes Shippo against Shippo; nothing
+dedupes admin against Shippo.
+
+### Fix
+
+`CROSS-BLOCK: src/lib/shippo/service.ts — export a single sendShippingNotification(orderId, from, to, ctx) that consults notificationFor() AND records the send.`
+`CROSS-BLOCK: src/app/api/admin/orders/[orderId]/route.ts:236-262 and src/lib/admin-orders.ts:288 — call it instead of rendering and sending directly.`
+
+The recording half matters as much as the routing half: until an
+admin-originated shipping email leaves a row somewhere, no later path can know it
+happened. `order_email_log` already has the right shape — `OrderEmailKind` would
+gain `shipping_update` / `delivery_confirmation` and these sends would go through
+`sendOrderEmailOnce`, which is the mechanism the codebase already built for
+exactly this question.
+
+---
+
+## C-05 — The refund email cannot be retried, cannot be deduped, and its failure leaves no trace at all
+
+| | |
+|---|---|
+| **Severity** | P1 |
+| **Evidence grade** | A — provable by inspection |
+| **Status** | `CONFIRMED — CROSS-BLOCK (block A+B owns payment-webhook.ts)` |
+
+### Evidence
+
+`src/lib/payment-webhook.ts:1735-1750`:
+
+```ts
+// Best-effort — never block webhook processing; sendEmail queues/retries on failure.
+if (orderRecord?.customer_email) {
+  try {
+    const refundEmail = refundConfirmationTemplate({ ... });
+    await sendEmail({ to: String(orderRecord.customer_email), ...refundEmail });
+  } catch (refundEmailError) {
+    console.error("Unable to send refund confirmation email for order", orderId, refundEmailError);
+  }
+}
+```
+
+Three defects in sixteen lines:
+
+1. **The comment is false.** `sendEmail` does not queue and does not retry —
+   `src/lib/email/send.ts` calls the provider once and returns. Queueing is
+   `enqueueFailedEmail`, which is imported in this very file (:7) and used for
+   order confirmations (:1113, :1619) but **not here**.
+2. **The `catch` is unreachable.** `sendEmail` is documented "Never throws" and
+   its body wraps everything in try/catch, returning `{ success: false }`. So the
+   `console.error` never runs, and the returned `EmailSendResult` is discarded
+   without being read. A refund email that fails produces **no queue row, no log
+   row, no console line, no alert** — nothing, anywhere.
+3. **No dedupe.** `OrderEmailKind` already declares `"refund_confirmation"` and
+   `sendOrderEmailOnce` already supports it — with **no caller**. A processor
+   refund followed by a chargeback event, or any webhook replay that re-enters
+   this branch, sends a second "Refund processed" notice.
+
+A customer who is told their refund was processed, and one who is told twice,
+are both worse off than the ledger suggests: this is the message people forward
+to their bank.
+
+### Fix
+
+`CROSS-BLOCK: src/lib/payment-webhook.ts:1735-1750 — replace the raw sendEmail with sendOrderEmailOnce({ kind: "refund_confirmation" }), enqueueFailedEmail on failure, and delete the false comment.`
+
+The declared-but-uncalled `refund_confirmation` kind means this is a three-line
+change, not a design question. Note that it depends on C-02: until the sweep
+closes the send-once slot, adding `refund_confirmation` to `order_email_log`
+inherits the same one-way guarantee.
+
+---
+
+## C-06 — Every failed send mints another live, redeemable coupon
+
+| | |
+|---|---|
+| **Severity** | P1 (money) |
+| **Evidence grade** | A — reproduced by test |
+| **Status** | `CONFIRMED — CROSS-BLOCK (cart-recovery.ts)` |
+| **Regression test** | `website/src/lib/email/cart-recovery-coupon-leak.test.ts` (2 of 3 RED) |
+
+### Reproduction
+
+`npx vitest run src/lib/email/cart-recovery-coupon-leak.test.ts`
+
+One abandoned cart, 25 hours old, t24h stage enabled:
+
+| Provider | Sweeps | Coupons created | Emails delivered |
+|---|---|---|---|
+| working | 3 | **1** ✅ | 1 |
+| failing | 3 | **3** ❌ | 0 |
+| failing | 2 | **2** ❌ | 0 |
+
+### Root cause
+
+`cart-recovery.ts` already carries a fix for minting-per-sweep, with this comment:
+
+> Mint a coupon only if this cart hasn't already had its t24h email — the sweep
+> runs repeatedly, so minting before the send-dedup check (as this did)
+> re-created a fresh SAVE-… code on every pass ... means each forgotten cart gets
+> exactly one recovery code.
+
+The guard (`hasSentStage`) reads `abandoned_cart_emails`. But
+`reserveAndSendStage` **deletes its reservation row when the send fails**
+(:214), "so a later sweep pass can retry" — and the mint happens *before* the
+reservation. So on every failed send the guard is wiped and the next pass mints
+again. The two fixes cancel each other out.
+
+This is not an edge case. **Email is disabled by default** and `NoopEmailProvider`
+returns `success: false`, so "the send fails" is the application's shipped state.
+The sweep runs every 30 minutes and scans carts up to 96h old, so a single
+abandoned cart with email off produces on the order of **140 live coupon rows** —
+each `active: true`, `discount_type: 'percent'`, `max_redemptions: 1`,
+`assigned_email` set to a real shopper. They are redeemable.
+
+### The wider defect underneath it
+
+`NoopEmailProvider` reporting `success: false` makes "email is off" indistinguishable
+from "the provider rejected it", and two comments in the codebase say otherwise:
+
+- `email/provider.ts:12` — "Email is DISABLED by default ... so nothing is sent
+  and **no email-triggering action ever fails**". Every caller sees a failure.
+- `email/providers/noop.ts:3` — "Used when EMAIL_PROVIDER is set to an
+  unrecognized value". It is also the default path for the entire application.
+
+Three dedupe stores are poisoned by that single result, this being the worst:
+
+1. **Cart recovery** — reservation rolled back, coupon re-minted (above).
+2. **Order confirmations** — every one enqueues to `pending_emails`, burns five
+   attempts over ~2h of sweeps, then raises an `email_undeliverable` alert of
+   severity `warning` (admin-panel only, no email — and it could not send one).
+3. **Automations** — `sendMarketingEmail` writes `email_send_log{status:'failed'}`,
+   which `loadAlreadySent` excludes, so the same recipients are re-attempted every
+   30 minutes indefinitely (see C-08).
+
+### Fix
+
+`CROSS-BLOCK: src/lib/cart-recovery.ts:294-300 — mint the coupon only after the stage reservation is held, and do not delete the reservation on a send failure; mark it instead (e.g. status/attempts on abandoned_cart_emails) so hasSentStage still sees it and the retry does not re-mint.`
+
+Separately, in block C's own files: `NoopEmailProvider` should return a result
+callers can distinguish — a `skipped: true` / `reason: "disabled"` field —
+so "not configured" stops being processed as "provider rejected it". That is a
+type change across `EmailSendResult` consumers and is recorded here rather than
+made unilaterally, because C-02's fix touches the same result type.
+
+---
+
+## C-07 — `vitest.setup.ts` globally stubs whole subsystems, so tests of them cannot fail
+
+| | |
+|---|---|
+| **Severity** | P1 (test integrity) |
+| **Evidence grade** | A — hit directly while writing C-06 |
+| **Status** | `CONFIRMED — CROSS-BLOCK (block E owns test quality)` |
+
+### Evidence
+
+`website/vitest.setup.ts` applies `vi.mock` to eleven modules for **every suite
+in the repository**, including:
+
+```ts
+vi.mock("@/lib/cart-recovery", () => ({
+  runAbandonedCartSweep: async () => ({ t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0 }),
+  mintCartRecoveryCoupon: async () => null,
+  ...
+}));
+vi.mock("@/lib/email/send", () => ({ sendEmail: async () => ({ success: true }) }));
+```
+
+C-06's test was written correctly, ran green, and was testing **nothing** — the
+sweep it called was the stub, which returns zeros and touches no database. It
+only became a real test after adding `vi.unmock("@/lib/cart-recovery")`. Any
+existing suite that exercises the cart-recovery sweep, or that believes it has
+observed an email send, is in that same position unless it re-mocks locally.
+
+The `sendEmail` stub is the more dangerous of the two: it returns
+`{ success: true }` unconditionally, so **no suite can observe a send failure**
+without overriding it — and every failure path in this block (C-02, C-05, C-06)
+lives behind exactly that result.
+
+### Fix
+
+`CROSS-BLOCK: website/vitest.setup.ts — global module stubs belong in the suites that need them, not in a repo-wide setup file.`
+For block E specifically: the flagged "email dedupe" cluster cannot be
+mutation-tested while this file is in place — mutating the code under test will
+not fail a test that is calling a stub. Auditing which existing suites are
+silently hollowed by these eleven mocks is squarely block E's mandate and is
+handed over rather than done here.
