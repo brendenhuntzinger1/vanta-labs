@@ -29,6 +29,9 @@ pasted verbatim.
 | K-04 | P1 | `SOURCE-INSPECTED` | The affiliate link records IP, UA and campaign parameters and sets a 30-day identifier before consent is asked, contradicting three published promises |
 | K-05 | P1 | `BEHAVIORAL-TEST-PROVEN` | The 72h "last chance" recovery email ships a dead coupon code, and prints the literal string `SEE PREVIOUS EMAIL` |
 | K-06 | P2 | `BEHAVIORAL-TEST-PROVEN` | One config module, ten numeric readers, three idioms, four hand-copies of the same guard — and the unguarded one controls coupon money |
+| K-07 | P1 | `BEHAVIORAL-TEST-PROVEN` | The "one skip per paid period" cap allows two skips, in exactly the window the reminder email targets |
+| K-08 | P2 | `BEHAVIORAL-TEST-PROVEN` | The birthday bonus is decided in UTC, so a Pacific member who opens their account on their birthday never gets it |
+| K-09 | P2 | `BEHAVIORAL-TEST-PROVEN` | Store credit is granted and spent on UTC calendar months, so it dies at 7 PM ET on the last day |
 
 ---
 
@@ -1017,3 +1020,342 @@ blank and `"abc"` rows fail.
 - `src/lib/admin-control.ts` is read by nearly every block. The hoist touches ten
   call sites in one file — **best done once, by block M, after the other blocks
   have landed**, rather than by whoever gets there first.
+
+---
+
+## K-07 — The "one skip per paid period" cap allows two skips, and the window in which it does is exactly the window the reminder email targets
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P1 · **Status:** OPEN
+**Area:** time/date boundaries (membership)
+
+### The invariant this breaks
+
+`src/lib/membership-billing.ts:1023-1026` states it plainly:
+
+> Cap to **ONE skip per paid period**. Without this a member could POST skip in a
+> loop, pushing `next_billing_at` years out while staying "active" — keeping all
+> perks and monthly store credit forever for a single charge.
+
+### What is wrong — the threshold and the step disagree by three days
+
+```ts
+// membership-billing.ts:1027  — the cap
+if (existing.next_billing_at && new Date(existing.next_billing_at as string).getTime() > now.getTime() + 33 * ONE_DAY_MS) {
+  throw new Error("You've already skipped a charge this cycle …");
+}
+// membership-billing.ts:1046-1053  — the advance
+const base = existing.next_billing_at ? new Date(existing.next_billing_at as string) : now;
+const from = base.getTime() <= now.getTime() ? now : base;
+… : new Date(from.getTime() + 30 * ONE_DAY_MS);
+```
+
+The refusal threshold is **33** days; the step is **30**. The comparison is a
+strict `>`. So a first skip from any `next_billing_at ≤ now + 3d` lands on
+`≤ now + 33d`, which does **not** satisfy `> now + 33d`, and a second skip is
+accepted.
+
+### The boundary is not arbitrary — it is the reminder window, exactly
+
+`runMembershipBillingSweep:1243` — `const in3Days = new Date(now.getTime() + 3 * ONE_DAY_MS);`
+Step 4 emails *"your renewal is in 3 days"* for exactly `next_billing_at ≤ now + 3d`.
+
+Solving the cap algebraically: a double skip needs `base + 30d ≤ now + 33d`, i.e.
+`base ≤ now + 3d`. **The same bound.** Every member who receives the renewal
+reminder is, at that moment, in the state where Skip works twice — and the
+reminder is what prompts them to click Skip.
+
+### Evidence — probe, run in this session
+
+```
+$ TZ=UTC npx vitest run scratchpad/k-skip.test.ts
+  next_billing_at = now +  0d (2026-09-01T12:00:00.000Z) -> 2 skips accepted
+  next_billing_at = now +  1d (2026-09-02T12:00:00.000Z) -> 2 skips accepted
+  next_billing_at = now +  2d (2026-09-03T12:00:00.000Z) -> 2 skips accepted
+  next_billing_at = now +  3d (2026-09-04T12:00:00.000Z) -> 2 skips accepted
+  next_billing_at = now +  4d -> 1 skip accepted
+  next_billing_at = now +  7d -> 1 skip accepted
+  next_billing_at = now + 10d -> 1 skip accepted
+  next_billing_at = now + 29d -> 1 skip accepted
+  Step 4 emails 'renewal in 3 days' for next_billing_at <= 2026-09-04T12:00:00.000Z
+  double-skip is possible for       next_billing_at <= 2026-09-04T12:00:00.000Z
+  paid period ended        2026-09-04T12:00:00.000Z
+  after skip #1            2026-10-04T12:00:00.000Z  (+33d from now)
+  after skip #2            2026-11-03T12:00:00.000Z  (+63d from now)
+  perks retained for       60 days beyond the paid period, on one charge
+
+ Test Files  1 passed (1)   Tests  4 passed (4)
+```
+
+The 4-days-out rows are the control: the cap works exactly as designed there,
+which is what makes this an off-by-three rather than a missing guard.
+
+### Impact
+
+Sixty days of a paid membership on one charge. `status` stays `"active"`
+throughout, so `isMembershipActive` (`src/lib/membership-status.ts:51-63`) keeps
+every perk on: member pricing, free/priority shipping, the tier's bonus points
+rate.
+
+And the store credit the cap was explicitly written to protect keeps flowing.
+`grantMonthlyStoreCreditSweep` filters on nothing but
+`.eq("status", "active")` and `.not("next_billing_at", "is", null)`
+(`membership-billing.ts:1214, 1218`) — no billing-anniversary check — so the
+deferred member collects **two extra monthly grants** across those sixty days.
+On a tier with `monthly_store_credit_cents = 7500` that is $150 of store credit
+plus two months of perks for one month's payment.
+
+Discovery cost: click Skip twice on the reminder email. Repeatable every cycle,
+because once the charge finally lands the member is back in the same state.
+
+### Reproduction
+
+1. Seed an active monthly membership, `veyra_membership_id` NULL (so the Veyra
+   branch at `:1034-1044` is skipped and the local `+30d` arithmetic is used),
+   `cancel_at_period_end` false, `next_billing_at = now() + interval '2 days'`.
+2. `POST /api/membership/skip` as that customer → 200, `next_billing_at` ≈ +32d.
+3. `POST /api/membership/skip` again → **200**, `next_billing_at` ≈ +62d.
+4. Third call → 400 *"You've already skipped a charge this cycle"*.
+5. Run the sweep twice across two UTC month rollovers and confirm two additional
+   `store_credit_ledger` grant rows for that user.
+
+### Smallest safe root-cause fix
+
+Make the cap agree with the step and close the boundary:
+
+```ts
+if (existing.next_billing_at && new Date(existing.next_billing_at as string).getTime() >= now.getTime() + 30 * ONE_DAY_MS) {
+```
+
+`>= now + 30d` cannot be re-satisfied by `base + 30d` for any `base ≥ now`, which
+is the property the 33-day version lacks.
+
+Better, and worth doing instead: gate on a **per-period marker** rather than a
+date distance — a `skipped_at` (or `skips_this_period`) column cleared by the
+renewal in Step 5 (`membership-billing.ts:1500-1511`). A date-distance heuristic
+will keep being fragile every time the cycle length or the reminder window moves,
+and the two constants live 200 lines apart with nothing tying them together.
+
+Note the Veyra branch (`:1050-1053`) prefers Veyra's returned date over the local
+`+30d`, so for Veyra-backed memberships the advance is whatever Veyra says. The
+cap at `:1027` is still local and still 33 days, so the same off-by-three applies
+with an even less predictable step. Fixing the cap fixes both.
+
+### Regression test to write
+
+Property test over `next_billing_at ∈ {now-1d … now+40d}`: assert the number of
+accepted consecutive skips is **exactly 1** for every value. Negative control:
+restore `> now + 33d` and confirm the `now+0d … now+3d` rows fail with 2.
+
+Add an assertion tying the two constants together — that the cap's threshold is
+`≥` the skip step — so the next person to change either notices.
+
+### CROSS-BLOCK
+
+None. `src/lib/membership-billing.ts` `skipNextBilling` is not on another block's
+primary-file list. Block G+H will exercise membership in the browser and should
+be told to try Skip twice.
+
+---
+
+## K-08 — The birthday bonus is decided in UTC, so a Pacific member who opens their account on their actual birthday never gets it
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P2 · **Status:** OPEN
+**Area:** time/date/timezone
+
+### What is wrong
+
+`src/lib/membership.ts:606-608`:
+
+```ts
+const today = new Date();
+const birthdayDate = new Date(birthday);
+const isBirthdayToday = today.getUTCMonth() === birthdayDate.getUTCMonth()
+                     && today.getUTCDate() === birthdayDate.getUTCDate();
+```
+
+The stored side is fine: the column is `birthday date`
+(`src/lib/sql/membership-rewards.sql:80`) and the API validates
+`^\d{4}-\d{2}-\d{2}$` (`src/app/api/account/birthday/route.ts:17`), so
+`new Date("1990-05-14")` is UTC midnight and `getUTCMonth/getUTCDate` read it
+back correctly. **The bug is entirely on the `today` side**: the member's *now*
+is bucketed into a UTC calendar day while every other date in this codebase is
+pinned to `America/New_York` (`src/lib/format-date.ts:25`).
+
+The year guard has the same defect — `const currentYear = today.getUTCFullYear();`
+(`:613`), checked against `birthday_bonus_year` at `:620`.
+
+### Evidence — probe, run in this session
+
+```
+$ TZ=UTC npx vitest run scratchpad/k-bday.test.ts
+  2026-05-14T16:00:00Z  ET May 14, 2026, 12:00 PM   PT May 14, 2026, 9:00 AM    -> true
+  2026-05-15T00:30:00Z  ET May 14, 2026, 8:30 PM    PT May 14, 2026, 5:30 PM    -> false
+  2026-05-15T02:00:00Z  ET May 14, 2026, 10:00 PM   PT May 14, 2026, 7:00 PM    -> false
+  2026-05-15T06:30:00Z  ET May 15, 2026, 2:30 AM    PT May 14, 2026, 11:30 PM   -> false
+  2026-05-14T02:00:00Z  ET May 13, 2026, 10:00 PM -> true
+  Eastern  eligible from May 13, 2026, 8:00 PM to May 14, 2026, 7:59 PM
+  Pacific  eligible from May 13, 2026, 5:00 PM to May 14, 2026, 4:59 PM
+
+ Test Files  1 passed (1)   Tests  3 passed (3)
+```
+
+Rows 2–4 are still the member's birthday in their own zone, and the check returns
+false. Row 5 is the **evening before** and returns true.
+
+### Why missing it is permanent, not late
+
+The check is lazy — it runs only when the customer loads their dashboard
+(`src/app/account/(dashboard)/page.tsx:93`). There is no catch-up. A member who
+opens their account at 6 PM Pacific on their birthday is outside the window, and
+by the next morning it is a different UTC day. The next opportunity is **twelve
+months later**.
+
+Worse, the mirror case burns the once-a-year guard: a member who browses at 9 PM
+ET the evening *before* is inside the UTC window, is awarded a day early, and
+`birthday_bonus_year` is stamped — so on their actual birthday the check returns
+false at `:620` even if they visit at noon.
+
+### The stated reason for the lazy design is no longer true
+
+`src/lib/membership.ts:593-595`:
+
+> Lazy check meant to run whenever a customer visits their dashboard: **since
+> there's no scheduled job runner in this app**, birthdays are checked on-demand
+> rather than by a daily cron.
+
+There is a scheduled job runner: `src/app/api/cron/sweep/route.ts`, thirteen jobs
+on a `*/30 * * * *` schedule (`website/vercel.json`). The comment predates it.
+Recorded because it changes what the right fix is — a sweep job is available, and
+the comment says it is not.
+
+### Impact
+
+An advertised perk that silently does not arrive. The account settings screen
+offers it in the store's own words — *"Optional — add your birthday for a rewards
+bonus on the day"* (`src/components/account-settings-client.tsx:225`) — and the
+default award is 150 points. Evening is when consumers browse, so the missing
+window covers a large share of the traffic that would trigger it, and Pacific
+members lose almost the whole waking day. It generates a support contact the code
+cannot satisfy, because by the time anyone looks it is the wrong UTC day.
+
+### Smallest safe root-cause fix
+
+Compare calendar days in the display zone, using the technique
+`src/lib/format-date.ts:74-82` already uses:
+
+```ts
+const todayInZone = new Intl.DateTimeFormat("en-CA", {
+  timeZone: DISPLAY_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit",
+}).format(new Date());                       // "2026-05-14"
+const isBirthdayToday = todayInZone.slice(5) === birthday.slice(5);   // MM-DD
+const currentYear = Number(todayInZone.slice(0, 4));
+```
+
+Comparing the two `YYYY-MM-DD` strings directly avoids parsing either side into a
+`Date`, which is where the zone crept in. Derive `currentYear` from the same
+zoned value so the guard and the check cannot disagree.
+
+Separately: now that a sweep exists, awarding birthdays from a sweep job would
+remove the "only if they happen to visit" dependency entirely. Out of scope for
+the fix; worth raising to the owner.
+
+### CROSS-BLOCK
+
+None for the fix. `src/lib/membership.ts` is not on another block's primary list.
+Block G+H should confirm the award appears on the dashboard when the zone is
+correct.
+
+---
+
+## K-09 — Store credit is granted and spent on UTC calendar months, so a member's advertised monthly credit dies at 7 PM their time on the last day
+
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P2 · **Status:** OPEN
+**Area:** time/date/timezone × money
+
+### What is wrong
+
+Both halves of the store-credit model bucket on the **UTC** month:
+
+```ts
+// src/lib/store-credit.ts:10-12 — the grant's dedupe key
+function currentPeriodMonth(now = new Date()): string {
+  return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+// src/lib/store-credit.ts:20-22 — the spendable window's lower bound
+new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
+```
+
+`period_month` is what the grant's unique index dedupes on (`:52`);
+`startOfCurrentMonthIso` is the `.gte("created_at", …)` bound on the balance
+query (`:31`).
+
+UTC month rollover is **7:00 PM America/New_York / 4:00 PM Pacific** on the last
+day of the month.
+
+### Evidence — probe (from the parallel investigation, re-derived here)
+
+```
+startOfCurrentMonthIso @ 2026-01-31T23:55Z = 2026-01-01T00:00:00.000Z
+startOfCurrentMonthIso @ 2026-02-01T00:05Z = 2026-02-01T00:00:00.000Z
+2026-02-01T00:05Z is local ET: Saturday, January 31, 2026 at 7:05 PM
+grant period_month @ Jan 31 = 2026-01 | @ Feb 1 = 2026-02  => two grants ~10 min apart
+```
+
+Two sweep ticks ten minutes apart, both at ~7 PM ET on January 31 from the
+customer's point of view, land in different month buckets.
+
+### Two consequences
+
+**The credit disappears five hours early.** A member shopping at 8 PM ET on the
+31st has already rolled into next month. Whatever they were granted for the month
+they are still living in is outside the `.gte` window, so
+`storeCreditBalanceCents` is 0 (or is next month's grant, if the sweep has run) —
+and `quote-order.ts:750` gates the discount on `storeCreditBalanceCents > 0`, so
+it silently drops off the quote mid-checkout.
+
+The store tells them otherwise. `src/components/membership-landing.tsx:442`:
+*"Store credit is granted monthly and does not roll over."* A member reading that
+expects it to last until the end of the day on the 31st, in their own calendar.
+
+**Double grants near the boundary.** `grantMonthlyStoreCreditSweep` runs every 30
+minutes and grants to any row that is merely `.eq("status", "active")` with
+`.not("next_billing_at", "is", null)` (`membership-billing.ts:1214, 1218`) —
+there is no billing-anniversary check. A member who activates in the last hours of
+a UTC month gets the grant on the next tick and again after the rollover, under
+two different `period_month` values, so the unique index does not stop the second.
+They never *hold* two months' worth (the window moves with the rollover), but
+`store_credit_ledger` records two grants — overstating issued credit 2× for every
+such member, in exactly the liability figure the module exists to keep straight.
+
+### Smallest safe root-cause fix
+
+Bucket on the **display zone's** calendar month, not UTC — the same decision
+`format-date.ts` already made for every customer-facing date:
+
+```ts
+const ym = new Intl.DateTimeFormat("en-CA", {
+  timeZone: DISPLAY_TIME_ZONE, year: "numeric", month: "2-digit",
+}).format(now);                                   // "2026-01"
+```
+
+and derive `startOfCurrentMonthIso` as the UTC instant of that zone's month start.
+Both functions must use the same derivation or the grant and the spend window can
+disagree — which is the whole defect in a different shape.
+
+`DISPLAY_TIME_ZONE` is already the store's stated business zone, so this makes the
+credit month mean what the customer and the marketing copy both assume.
+
+### CROSS-BLOCK
+
+- `src/lib/quote-order.ts:750-751` — **shared file, earlier-lettered block wins.**
+  The gate that drops the discount lives there; no change is needed for this fix,
+  but block M should confirm the quote path sees the corrected balance.
+- `src/lib/membership-billing.ts:1211-1232` — the sweep's grant loop. Unowned; the
+  billing-anniversary question below belongs with it.
+
+*Open question for the owner:* should the monthly grant follow the **calendar
+month** or the **member's billing anniversary**? The sweep implements calendar
+month with no anniversary check, which is why a member who joins on the 30th gets
+a full month's credit for one day of membership. That is a product decision, not a
+defect, and it is worth settling before the boundary fix goes in — the fix is
+different for each answer.
