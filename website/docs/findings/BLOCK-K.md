@@ -35,6 +35,8 @@ pasted verbatim.
 | K-10 | P3 | `BEHAVIORAL-TEST-PROVEN` | The storefront offers bar says "Ends tonight" for a coupon that expires that morning, and for one a year away |
 | K-11 | P2 | `BEHAVIORAL-TEST-PROVEN` | `dollarsToPoints` floors a float, so 4.6% of points redemptions debit one point less than the discount given |
 | K-12 | P1 | `SOURCE-INSPECTED` | Store credit is decided at quote time and debited at settlement time, so a manual-payment order debits a different month — or nothing |
+| K-13 | P1 | `SOURCE-INSPECTED` | The "15-minute" inventory hold is really up to 45 minutes, and every way it can fail reports success |
+| K-14 | P1 | `SOURCE-INSPECTED` | Maintenance mode 503s the entire cron sweep and the one-click unsubscribe in already-delivered marketing email |
 
 ---
 
@@ -1772,6 +1774,330 @@ rather than the business zone). K-12 is the balance being read at the wrong
 **time** (settlement rather than quote). Fixing either alone leaves the other:
 correcting the zone still breaks across a real month boundary, and binding to the
 quote month still uses a boundary five hours early. Both are needed.
+
+---
+
+---
+
+## K-13 — The "15-minute" inventory hold is really up to 45 minutes, and every way it can fail reports success
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN
+**Area:** background jobs (cadence vs semantics) × degraded mode
+
+### The store's own status page calls this launch-blocking
+
+`src/lib/system-status.ts:152-165` is unusually explicit:
+
+```ts
+// Scheduled jobs (cron) — CRON_SECRET presence is our proxy for "armed".
+const cronConfigured = Boolean((process.env.CRON_SECRET ?? "").trim());
+out.push({
+  key: "cron",
+  detail: cronConfigured ? "CRON_SECRET set — timer armed" : "CRON_SECRET missing — …",
+  // Launch-blocking: expireStaleReservations() runs only from the cron sweep.
+  // Without it, every abandoned/failed checkout's 15-min hold never releases,
+  // silently removing scarce stock from sale.
+  blocksLaunch: true,
+});
+```
+
+The risk is correctly identified and correctly graded. The **check** is
+`Boolean(process.env.CRON_SECRET)` — which cannot detect a single one of the ways
+this actually fails.
+
+### Defect 1 — the TTL and the sweep cadence disagree by 3×
+
+```ts
+// src/lib/inventory-reservation.ts:10-11
+// A card/instant checkout must complete within 15 minutes of the hold.
+export const DEFAULT_RESERVATION_MINUTES = 15;
+```
+
+```json
+// website/vercel.json — the only schedule in the repo
+"schedule": "*/30 * * * *"
+```
+
+Availability is computed from a **materialised counter**, not from the
+reservation's expiry:
+
+```sql
+-- src/lib/sql/inventory-reservations.sql:100-104 (reserve_inventory)
+update public.products
+   set reserved_quantity = reserved_quantity + p_quantity, updated_at = now()
+ where slug = p_slug
+   and track_inventory = true
+   and inventory_quantity - reserved_quantity >= p_quantity;
+```
+
+Nothing in that predicate consults `expires_at`. The counter comes back down in
+exactly one unattended place — `expire_stale_reservations()`
+(`inventory-reservations.sql:238-256`), which decrements
+`reserved_quantity` and flips the row to `released` — and that runs only from the
+sweep.
+
+So a hold that expires at T+15 is reclaimed on the next tick, up to 30 minutes
+later. **A "15-minute" hold takes stock off sale for up to 45 minutes**, three
+times the number the comment promises. On this catalogue that is not academic:
+ledger finding F-001 established that 31 of 36 storefront-eligible products carry
+their stock at the dose level in small quantities, so a single abandoned checkout
+can be the difference between In Stock and Sold Out for three quarters of an hour.
+
+### Defect 2 — the wrapper reports "nothing was due" for every possible failure
+
+```ts
+// src/lib/inventory-reservation.ts:185-196
+export async function expireStaleReservations(): Promise<number> {
+  try {
+    const { data, error } = await supabaseAdmin.rpc("expire_stale_reservations", {});
+    if (error) return 0;
+    if (Number(data ?? 0) > 0) invalidateCatalogCache();
+    return Number(data ?? 0);
+  } catch {
+    return 0;
+  }
+}
+```
+
+`if (error) return 0` and a bare `catch { return 0 }`. A missing RPC (the ledger's
+F-011 records that three safety-critical functions exist **only in production** and
+were never committed), a revoked `execute` grant, a statement timeout, and
+"nothing was due" are **all indistinguishable**: the sweep's JSON body reports
+`reservationsExpired: 0` in every case.
+
+And because the function returns rather than throws, `Promise.allSettled` sees a
+**fulfilled** promise, so the sweep's alert at
+`src/app/api/cron/sweep/route.ts:91-101` — which fires only for
+`status === 'rejected'` — never fires either.
+
+### Defect 3 — nothing records that the sweep ran
+
+No last-successful-run timestamp is persisted anywhere. If Vercel stops invoking
+the cron entirely, `CRON_SECRET` is still set, so the status page still reads
+**"CRON_SECRET set — timer armed"** and the launch-blocking check still passes.
+
+### Impact
+
+Three independent failure modes for a job the store itself calls launch-blocking,
+and its health indicator is green in all three:
+
+| failure | status page says | sweep body says | alert |
+|---|---|---|---|
+| RPC missing / grant revoked / timeout | timer armed | `reservationsExpired: 0` | none |
+| Vercel stops invoking the cron | timer armed | *(no response at all)* | none |
+| maintenance mode on (K-14) | timer armed | *(503, never reaches the handler)* | none |
+
+In each, `reserved_quantity` climbs monotonically and never comes down. Stock
+disappears from a storefront that reports itself healthy, and the first signal is
+a customer saying a product they can see is sold out.
+
+### Reproduction
+
+**Cadence (no failure required):** place a card checkout on a tracked, low-stock
+dose, abandon it, and record the wall-clock time from `expires_at` until
+`products.reserved_quantity` (or `product_doses.reserved_quantity`) drops. On the
+`*/30` schedule the expectation is a uniform 0–30 minutes **after** the 15-minute
+TTL.
+
+**Invisible failure:** `revoke execute on function public.expire_stale_reservations() from service_role;`
+on the harness, seed a few `inventory_reservations` rows with `status='active'`
+and `expires_at < now()`, then
+`curl -H "Authorization: Bearer $CRON_SECRET" /api/cron/sweep`. Assert all three:
+the body reports `reservationsExpired: 0`; `select count(*) from system_alerts
+where type='cron_sweep_failed' and created_at > now() - interval '5 minutes'` is
+**0**; and the reservations are still `active` with `reserved_quantity` unchanged.
+Then load `/admin/status` and confirm the cron row still reads "timer armed".
+
+### Smallest safe root-cause fix
+
+Three changes, independent, in value order:
+
+1. **Make the failure loud.** Distinguish the cases:
+   ```ts
+   const { data, error } = await supabaseAdmin.rpc("expire_stale_reservations", {});
+   if (error) throw error;      // let Promise.allSettled see it and alert
+   ```
+   Removing the bare `catch` costs nothing — the sweep already isolates each job
+   — and converts a silent stock leak into the critical alert
+   `recordSystemAlert` was written to send.
+
+2. **Persist a heartbeat.** Write a `last_run_at` (and per-job outcome) row at the
+   end of the sweep, and have `system-status.ts` read *that* rather than
+   `Boolean(process.env.CRON_SECRET)`. "A secret is configured" and "the job ran"
+   are different claims, and only the second is the one being made to the operator.
+
+3. **Reconcile the TTL with the cadence.** Either state the real number
+   (`DEFAULT_RESERVATION_MINUTES` + the sweep period) or stop depending on the
+   sweep for availability — have `reserve_inventory`'s predicate discount holds
+   whose `expires_at` has passed, so an expired hold stops blocking a sale the
+   moment it expires and the sweep becomes pure cleanup. The second is the real
+   fix; the first is honest in the meantime.
+
+### Regression test to write
+
+Assert `DEFAULT_RESERVATION_MINUTES * 60_000` is greater than the sweep period
+parsed from `website/vercel.json`, so the two constants can never silently drift
+apart again — they live in different files with nothing tying them together, which
+is how they got here. Negative control: set the schedule to `*/30` with a 15-minute
+TTL and confirm the test fails.
+
+Separately, a unit test that `expireStaleReservations` **rejects** when the RPC
+errors. Negative control: restore `return 0` and confirm it fails.
+
+### CROSS-BLOCK
+
+- `src/lib/inventory-reservation.ts` — **Block D** owns `inventory-*.ts`. The
+  wrapper change (fix 1) is theirs; flag it to them as a *visibility* fix, not an
+  inventory-logic change.
+- `src/lib/sql/inventory-reservations.sql` — **Block D**, for fix 3.
+- `src/lib/system-status.ts` and the sweep heartbeat (fix 2) are unowned; Block K
+  can carry them.
+- **Block A** (concurrency/idempotency) will reach `reserve_inventory` from the
+  race angle. The atomic gate itself is sound — a single row-locked
+  `UPDATE … WHERE inventory_quantity - reserved_quantity >= p_quantity` with an
+  idempotency pre-check at `:76-85`. This finding is about the *release* leg, not
+  the hold, and does not overlap.
+
+---
+
+## K-14 — Maintenance mode 503s the entire cron sweep and the one-click unsubscribe link in already-delivered marketing email
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN
+**Area:** background jobs × config × legal/policy
+
+### What is wrong
+
+`middleware.ts:65-82` enumerates what survives maintenance mode:
+
+```ts
+function pathBypassesMaintenance(pathname: string) {
+  return (
+    pathname === "/maintenance"
+    || pathname.startsWith("/.well-known/")
+    || pathname.startsWith("/vault")
+    || pathname.startsWith("/admin")
+    || pathname.startsWith("/api/admin")
+    || pathname.startsWith("/api/webhooks")
+    || pathname.startsWith("/api/analytics/track")
+    || isStaticAsset(pathname)
+  );
+}
+```
+
+`/api/cron` is not on the list. Vercel's cron invocation carries no
+`vl_admin_session` cookie, so `hasValidAdminSession` (`:315`) is false and the
+request falls through to:
+
+```ts
+// middleware.ts:320-327
+if (pathname.startsWith("/api/")) {
+  return applySecurityHeaders(
+    NextResponse.json({ success: false, error: "Maintenance mode enabled" }, { status: 503 }),
+  );
+}
+```
+
+### What stops, for as long as maintenance mode is on
+
+All thirteen jobs, because the 503 is returned by the middleware — the route
+handler, and therefore `recordSystemAlert`, is never reached:
+
+- `expireStaleReservations` — **stock stays locked and accumulates** (K-13)
+- `reconcileVeyraPendingPayments` — the module's own comment
+  (`src/app/api/cron/sweep/route.ts:45-47`) calls it "the only thing standing
+  between a charged card and an order that reads unpaid forever, so a failure
+  here is genuinely critical". A customer's card is charged and the order stays
+  `pending_payment`.
+- `retryPendingEmails` — receipts and shipping notices stop retrying
+- `runMembershipBillingSweep`, `autoApproveEligibleCommissions`, both Shippo
+  sweeps, cart recovery, store credit, campaigns, automations
+
+`/api/webhooks` **is** bypassed, so live payment webhooks still land. That makes
+the gap sharper, not smaller: the fast path keeps writing orders while the
+reconciliation path that catches its misses is switched off.
+
+### The legal one — `/api/unsubscribe`
+
+`/api/unsubscribe` is not bypassed either. It is the HMAC-signed one-click opt-out
+embedded in **every** marketing email:
+
+```ts
+// src/lib/email/marketing.ts:31
+const unsubscribeUrl = `${getSiteUrl()}/api/unsubscribe?email=${encodeURIComponent(email)}&token=${token}`;
+```
+
+Those emails are already in inboxes and cannot be recalled. While maintenance mode
+is on, every recipient who clicks Unsubscribe gets
+`503 {"error":"Maintenance mode enabled"}` — a JSON error, not even a page.
+
+An opt-out mechanism that does not work is a **CAN-SPAM** exposure (the statute
+requires the mechanism to be operational for 30 days after sending), and it is the
+kind that generates a complaint rather than a bug report. Also blocked:
+`/api/coa/[coaId]/file` (the store's published evidence that a batch was tested)
+and `/api/health`.
+
+### Impact
+
+Maintenance mode reads as a front-of-house switch — "the storefront is down for a
+few minutes". It is actually a switch that silently stops every background job,
+disables the legally-required opt-out, and hides the store's compliance documents,
+while `/admin/status` continues to report scheduled jobs as **"timer armed"**
+(K-13) because `CRON_SECRET` is still set.
+
+Nothing bounds it. There is no timer, no reminder, and no alert if it is left on
+overnight — and every minute it is on, abandoned holds accumulate and charged
+cards go unreconciled.
+
+### Reproduction
+
+Enable maintenance from `/admin`, then from a shell with no cookies:
+
+```
+curl -i -H "Authorization: Bearer $CRON_SECRET" http://localhost:3000/api/cron/sweep
+curl -i 'http://localhost:3000/api/unsubscribe?email=a@b.com&token=<valid>'
+curl -i http://localhost:3000/api/health
+```
+
+All three return `503 {"success":false,"error":"Maintenance mode enabled"}`. Then
+confirm `select count(*) from inventory_reservations where status='active' and expires_at < now()`
+grows across the window, and that `system_alerts` gains nothing.
+
+### Smallest safe root-cause fix
+
+Add the paths that must never be gated by a front-of-house switch:
+
+```ts
+|| pathname.startsWith("/api/cron")        // Bearer CRON_SECRET is its own auth
+|| pathname.startsWith("/api/unsubscribe") // legally required to keep working
+|| pathname.startsWith("/api/coa")         // published compliance evidence
+|| pathname === "/api/health"              // must answer while degraded
+```
+
+`/api/cron` is safe to bypass: it authenticates with a constant-time `CRON_SECRET`
+compare (`src/app/api/cron/sweep/route.ts:69-79`) and is not a customer surface.
+`/api/unsubscribe` verifies an HMAC token before doing anything.
+
+The `.well-known` entry in that same function carries a comment recording that
+Apple Pay "silently died sitewide" from exactly this class of omission. The list
+is one-by-one and reactive; a comment naming the *rule* — front-of-house only,
+never machine or compliance endpoints — would stop the next one.
+
+### Regression test to write
+
+A table over every route under `src/app/api/`, asserting that each is either
+explicitly bypassed or explicitly declared customer-facing. A **new** route added
+later then has to make that choice deliberately rather than inheriting a 503.
+Negative control: remove `/api/cron` from the bypass list and confirm the test
+fails naming it.
+
+### CROSS-BLOCK
+
+- `middleware.ts` — **Block I** owns it. This is their edit. Block I is also
+  auditing `CSRF_PROTECTED_PREFIXES` in the same file (`:292`), which excludes the
+  entire checkout — **one pass over both lists is better than two sessions
+  touching `middleware.ts`.**
+- The Phase 1 map spotted only the express-shipping-callback case. The cron and
+  unsubscribe cases are additional and, for cron, larger.
 
 ---
 
