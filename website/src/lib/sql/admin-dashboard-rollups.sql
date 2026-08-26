@@ -8,9 +8,15 @@
 -- fast at 100k+ orders / 50k+ customers.
 --
 -- Every function mirrors the JS logic it replaces EXACTLY (same status filters,
--- same net-of-refund revenue, same buckets). The app falls back to the legacy
--- JS path if a function is absent, so deploying the code before/after running
--- this migration is safe. Safe to run more than once.
+-- same net-of-refund revenue, same buckets, same order_type exclusions). The app
+-- falls back to the legacy JS path if a function is absent, so deploying the
+-- code before/after running this migration is safe. Safe to run more than once.
+--
+-- DEPLOYMENT ORDER NOTE. The revenue functions below now exclude
+-- order_type='replacement' so /admin/revenue counts the same sales the profit
+-- dashboard does. The JS fallback applies the same exclusion, so the app is
+-- correct either way — but an instance still running the OLD function bodies
+-- keeps over-counting until this file is re-applied.
 -- ============================================================================
 
 -- ---------------------------------------------------------------------------
@@ -39,6 +45,7 @@ as $$
       paid_at
     from public.orders
     where payment_status in ('paid', 'completed', 'succeeded')
+      and coalesce(order_type, 'product') <> 'replacement'
   )
   select
     coalesce(sum(net), 0) as total_paid_revenue,
@@ -66,6 +73,7 @@ as $$
     count(*) as orders
   from public.orders
   where payment_status in ('paid', 'completed', 'succeeded')
+    and coalesce(order_type, 'product') <> 'replacement'
   group by coalesce(payment_method, '')
   order by revenue desc;
 $$;

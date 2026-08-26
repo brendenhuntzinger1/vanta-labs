@@ -3,7 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
-import { isPaidOrderStatus, isEarnedCommission } from "@/lib/ledger";
+import { isPaidOrderStatus, isEarnedCommission, isSaleOrder } from "@/lib/ledger";
 
 // The order fields profit needs. Everything is stored on the order at checkout,
 // so profit is computed from the record — not from today's live product cost.
@@ -361,7 +361,11 @@ export async function getProfitWindowMetrics(nowMs: number = Date.now()): Promis
     if (!Number.isFinite(eventTime)) continue;
     if (eventTime >= monthStart) {
       last30Days += row.profit;
-      ordersLast30Days += 1;
+      // A reship's COST belongs in the profit above; the reship itself is not a
+      // sale and must not be counted as one here either. isSaleOrder is the same
+      // predicate the lifetime dashboard uses, so the two tiles on this page can
+      // no longer report different order counts for the same store.
+      if (isSaleOrder(row.orderType)) ordersLast30Days += 1;
       if (row.profitStatus === "estimated") hasEstimatedCost = true;
     }
     if (eventTime >= weekStart) last7Days += row.profit;
@@ -467,10 +471,10 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
     // A replacement's COSTS are counted below exactly like any other order's —
     // the merchandise and the postage were really spent. Only the sale count
     // excludes it, because no customer bought anything.
-    if (String(row.orderType ?? "").toLowerCase() === "replacement") {
-      replacementCount += 1;
-    } else {
+    if (isSaleOrder(row.orderType)) {
       orderCount += 1;
+    } else {
+      replacementCount += 1;
     }
     profit.lifetime += row.profit;
     grossRevenue += row.grossRevenue;

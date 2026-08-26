@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { PAID_ORDER_STATUSES, netOrderRevenue } from "@/lib/ledger";
+import { PAID_ORDER_STATUSES, netOrderRevenue, NON_SALE_ORDER_TYPES } from "@/lib/ledger";
 
 export interface RevenueByMethod {
   method: string;
@@ -89,11 +89,15 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
   } else {
     // Fallback: RPC not present — legacy 10k-capped scan + JS aggregation
     // (identical math). Run the migration to remove the cap at scale.
-    const paidResult = await supabaseAdmin
+    // Reshipments are paid rows with amount_paid 0. They add nothing to revenue
+    // and a $0 denominator to average order value, so they are not sales here
+    // either — the same exclusion the rollup function applies.
+    let paidQuery = supabaseAdmin
       .from("orders")
       .select("amount_paid, refund_amount, payment_method, card_processing_fee, paid_at")
-      .in("payment_status", Array.from(PAID_ORDER_STATUSES))
-      .limit(10000);
+      .in("payment_status", Array.from(PAID_ORDER_STATUSES));
+    for (const orderType of NON_SALE_ORDER_TYPES) paidQuery = paidQuery.neq("order_type", orderType);
+    const paidResult = await paidQuery.limit(10000);
     if (paidResult.error) {
       throw paidResult.error;
     }

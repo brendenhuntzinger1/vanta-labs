@@ -24,6 +24,21 @@ export function isPaidOrderStatus(status: string | null | undefined): boolean {
   return PAID_ORDER_STATUSES.has(String(status ?? "").toLowerCase());
 }
 
+// The order types that are NOT sales. A `replacement` is an outbound reshipment
+// the store paid for itself: payment_status is "paid" and amount_paid is 0, so
+// every count that filters on status alone counts it as an order and divides
+// revenue by a denominator that includes it — 100 sales plus 3 reships reports
+// 103 orders and drags average order value down with three $0 denominators.
+//
+// A `membership` IS a sale (real money, real revenue). It is excluded from
+// FULFILLMENT because nothing ships, which is a different question answered by
+// a different filter. Nothing here may be used to drop it from revenue.
+export const NON_SALE_ORDER_TYPES = new Set(["replacement"]);
+
+export function isSaleOrder(orderType: string | null | undefined): boolean {
+  return !NON_SALE_ORDER_TYPES.has(String(orderType ?? "product").toLowerCase());
+}
+
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
