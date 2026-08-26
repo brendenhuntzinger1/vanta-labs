@@ -23,7 +23,7 @@ import { CoaLibraryNotice } from "@/components/coa-library-notice";
 import { formatCoaTestDate } from "@/lib/coa-format";
 import type { PublicCoaDocument } from "@/lib/coa-types";
 import Image from "next/image";
-import { FULFILMENT_DETAIL, FULFILMENT_SENTENCE, FULFILMENT_SHORT, RESEARCH_USE_SENTENCE, TESTING_DETAIL } from "@/lib/trust-claims";
+import { FULFILMENT_DETAIL, FULFILMENT_SENTENCE, FULFILMENT_SHORT, RESEARCH_USE_SENTENCE, TESTING_DETAIL, TESTING_SHORT } from "@/lib/trust-claims";
 
 function parseDose(slug: string) {
   const match = slug.match(/(\d+(?:\.\d+)?(?:mg|iu|mcg|g|ml))$/i);
@@ -86,7 +86,12 @@ const TRUST_ROW = [
         <path d="m8.5 12.5 2.4 2.4L16 9.6" />
       </svg>
     ),
-    label: "COA Verified",
+    // K-21. This badge used to assert that a certificate had been verified for
+    // the product — the strongest COA claim on the site, shown for every product
+    // while zero certificates exist (ledger F-006). The per-product COA action is
+    // separately gated behind hasCoa(), so a product with a real document still
+    // shows one; this was the ungated copy sitting beside it.
+    label: TESTING_SHORT,
     detail: TESTING_DETAIL,
   },
   {
@@ -95,8 +100,8 @@ const TRUST_ROW = [
         <path d="M9 2h6M10 2v6.2a2 2 0 0 1-.34 1.12L4.9 17.2A2.4 2.4 0 0 0 6.9 21h10.2a2.4 2.4 0 0 0 2-3.8l-4.76-7.88A2 2 0 0 1 14 8.2V2" />
       </svg>
     ),
-    label: "Based in the USA",
-    detail: "U.S.-based fulfillment & support",
+    label: "U.S. fulfillment",
+    detail: "Fulfilled and supported from the United States",
   },
 ] as const;
 

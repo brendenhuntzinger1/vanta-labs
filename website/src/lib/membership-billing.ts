@@ -12,7 +12,7 @@ import {
 } from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase, membershipTermPlan } from "@/lib/membership-billing-math";
-import { PAID_EVENT_TYPES } from "@/lib/membership-status";
+import { PAID_EVENT_TYPES, skipUsedThisPaidPeriod } from "@/lib/membership-status";
 import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
 import { sendMarketingEmail } from "@/lib/email/marketing";
@@ -1048,6 +1048,54 @@ export async function resumeMembership(userId: string): Promise<MembershipSchedu
 
 // Skip the next monthly charge: push the next-billing date forward one cycle
 // (30 days) so exactly one renewal is skipped, and re-arm the renewal reminder.
+/**
+ * Has this member already used their skip for the period they are currently in?
+ *
+ * K-07. The old guard asked a DATE-DISTANCE question — "is next_billing_at more
+ * than 33 days out?" — as a proxy for "has a skip happened?". It was wrong by
+ * three days (the advance is +30d, the threshold was >33d, and the comparison was
+ * strict), so any renewal within 3 days could be skipped TWICE: about 60 days of
+ * perks and two extra monthly store-credit grants on one charge. And the window
+ * in which it worked was exactly the window Step 4's "your renewal is in 3 days"
+ * reminder targets, so the email put members into it.
+ *
+ * Moving the constant would fix today's arithmetic and leave the shape wrong: the
+ * threshold and the advance live 200 lines apart with nothing tying them
+ * together, and the reminder window is a third constant elsewhere again.
+ *
+ * So ask the real question instead. skipNextBilling already writes a `skip` row
+ * to membership_billing_events, and PAID_EVENT_TYPES already names the events
+ * that BEGIN a paid period. One skip since the last of those. A renewal starts a
+ * new period and restores the entitlement; a failed or zero-amount event does
+ * not, because membership-status.ts is explicit that lifecycle rows carry
+ * status "succeeded" with amount_cents 0 for operations nobody paid for.
+ *
+ * A member with no paid event at all (an admin comp) gets one skip ever, which is
+ * the conservative reading of "one per paid period" when no period was paid for.
+ */
+async function hasSkippedThisPaidPeriod(userId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from("membership_billing_events")
+    .select("event_type, amount_cents, status, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  // Fail CLOSED on a read error. Being unable to tell whether the entitlement is
+  // spent must not spend it again — the failure this guard exists to prevent is
+  // unbounded, and refusing costs the member one cycle's convenience.
+  if (error) throw error;
+
+  const rows = (data ?? []) as Array<{ event_type: string; amount_cents: number; status: string }>;
+  return skipUsedThisPaidPeriod(
+    rows.map((row) => ({
+      eventType: row.event_type,
+      status: row.status,
+      amountCents: Number(row.amount_cents ?? 0),
+    })),
+  );
+}
+
 export async function skipNextBilling(userId: string): Promise<MembershipScheduleResult> {
   const { data: existing, error } = await supabaseAdmin
     .from("customer_memberships")
@@ -1061,11 +1109,20 @@ export async function skipNextBilling(userId: string): Promise<MembershipSchedul
   if (existing.cancel_at_period_end) throw new Error("This membership is already set to end.");
 
   const now = new Date();
-  // Cap to ONE skip per paid period. Without this a member could POST skip in a
-  // loop, pushing next_billing_at years out while staying "active" — keeping all
-  // perks and monthly store credit forever for a single charge. If the next
-  // charge is already deferred more than a cycle out, they've already skipped.
-  if (existing.next_billing_at && new Date(existing.next_billing_at as string).getTime() > now.getTime() + 33 * ONE_DAY_MS) {
+
+  // ONE SKIP PER PAID PERIOD, asked as a fact rather than inferred from a date.
+  // See hasSkippedThisPaidPeriod: the ledger already records every skip and every
+  // paid event, so the entitlement is a query, not arithmetic.
+  if (await hasSkippedThisPaidPeriod(userId)) {
+    throw new Error("You've already skipped a charge this cycle — your next billing is already deferred.");
+  }
+
+  // Defence in depth, and the reason it is `>=` and `30` rather than `> 33`:
+  // the advance below is `from + 30 days`, so any threshold above 30 can be
+  // re-satisfied by the result of a skip. `>= 30d` cannot. This catches a
+  // deferral that arrived some other way (a Veyra-side skip, a manual date edit)
+  // without depending on the ledger.
+  if (existing.next_billing_at && new Date(existing.next_billing_at as string).getTime() >= now.getTime() + 30 * ONE_DAY_MS) {
     throw new Error("You've already skipped a charge this cycle — your next billing is already deferred.");
   }
 

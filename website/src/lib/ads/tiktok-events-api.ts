@@ -1,4 +1,5 @@
 import "server-only";
+import { serverAdsReportingAllowed } from "@/lib/ads/ads-environment";
 
 import { createHash } from "node:crypto";
 
@@ -170,6 +171,16 @@ export async function sendServerEvents(
     delivered: false, tiktokCode: null, tiktokMessage: null, requestId: null,
     httpStatus: null, transportError: null, eventCount: events.length, durationMs: 0,
   };
+
+  // K-16. Refuse before the token is even read. PIXEL_ID falls back to the live
+  // production pixel, so a preview deployment, a local run or a CI job that
+  // happens to carry a token would post real Purchase conversions — carrying real
+  // order values — into the production ad account. Deny by default; see
+  // src/lib/ads/ads-environment.ts.
+  const environment = serverAdsReportingAllowed();
+  if (!environment.allowed) {
+    return { ...base, transportError: `ads reporting disabled: ${environment.reason}`, durationMs: Date.now() - started };
+  }
 
   const token = process.env.TIKTOK_EVENTS_API_ACCESS_TOKEN?.trim();
   if (!token) {

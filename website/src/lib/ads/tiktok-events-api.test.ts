@@ -28,9 +28,22 @@ const purchase: ServerEvent = {
 
 beforeEach(() => {
   process.env.TIKTOK_EVENTS_API_ACCESS_TOKEN = TOKEN;
+  // sendServerEvents now refuses to send from any non-production environment
+  // (audit K-16 — the pixel id falls back to the live production account, so a
+  // preview, a local run or CI would report real conversions into it). These
+  // tests exercise the DELIVERY path, so they must present the one environment
+  // where delivery is permitted. Without this they assert against a gate that
+  // did not exist when they were written.
+  //
+  // The gate itself is covered by ads-environment.test.ts and
+  // ads-environment-enforcement.test.ts; nothing here re-tests it.
+  vi.stubEnv("VERCEL_ENV", "production");
+  vi.stubEnv("NODE_ENV", "production");
+  vi.stubEnv("CI", "");
 });
 afterEach(() => {
   delete process.env.TIKTOK_EVENTS_API_ACCESS_TOKEN;
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });

@@ -1,4 +1,5 @@
 import "server-only";
+import { serverAdsReportingAllowed } from "@/lib/ads/ads-environment";
 
 import { hashRedditEmail, hashRedditExternalId } from "@/lib/ads/reddit-matching";
 import type { RedditEvent } from "@/lib/ads/reddit-events";
@@ -169,6 +170,13 @@ export async function sendRedditConversion(input: {
   const done = (patch: Partial<RedditSendOutcome>): RedditSendOutcome => ({
     ...base, ...patch, durationMs: Date.now() - started,
   });
+
+  // K-16. Refuse before the token is read. REDDIT_PIXEL_ID falls back to the live
+  // production pixel, so a preview deployment, a local run or a CI job carrying a
+  // token would post real conversions into the production ad account. Deny by
+  // default; see src/lib/ads/ads-environment.ts.
+  const environment = serverAdsReportingAllowed();
+  if (!environment.allowed) return done({ transportError: `ads reporting disabled: ${environment.reason}` });
 
   const token = process.env.REDDIT_CONVERSIONS_ACCESS_TOKEN?.trim();
   if (!token) return done({ transportError: "REDDIT_CONVERSIONS_ACCESS_TOKEN is not set" });
