@@ -1254,3 +1254,28 @@ low server cap makes the audience builder *refuse*. It does not, and should not 
 the whole point of the bounded pager is that a low cap is survivable. What it
 must do is return the **complete** list, which is what is asserted now, with the
 ceiling-refusal wiring proven separately.
+
+## 4.8 K-13 — inventory failures that looked like inventory doing nothing
+
+Three silent swallows in one module:
+
+| function | on failure | why that is dangerous |
+|---|---|---|
+| `finalizeInventoryForOrder` | `{ finalized: 0, degraded: true }`, **no log at all** | the caller's fallback then calls `adjust_inventory_on_sale`, which does not exist in production (G-04) and swallows *its* error too — a broken paid-path stock movement was invisible end to end |
+| `expireStaleReservations` | `0` | **indistinguishable from "nothing was due"** — the sweep reports a clean run for ever while every expired hold stays on the shelf and its units stay unsellable |
+| `releaseInventoryForOrder` | `console.error` only | no alert |
+
+**The degradation is kept** — a paid order must never be stranded by an inventory
+RPC, and that is deliberate. It stops being silent: a `critical`
+`inventory_rpc_failed` alert, throttled **per RPC** so an outage does not bury its
+own signal and so a second failing RPC still gets its own alarm.
+
+| mutation | result |
+|---|---|
+| finalize degrades in silence again | **3 failures** |
+| the sweep reports a clean run again | **2 failures** |
+| alert on every order (bury the signal) | **1 failure** |
+| throttle globally, muting a second RPC | **1 failure** |
+
+A genuine zero from the sweep is asserted **not** to alert — otherwise the signal
+would mean nothing.
