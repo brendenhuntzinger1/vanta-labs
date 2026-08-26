@@ -27,6 +27,7 @@ export class SendgridEmailProvider implements EmailProvider {
 
     try {
       const response = await fetch("https://api.sendgrid.com/v3/mail/send", {
+        signal: AbortSignal.timeout(10_000),
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,

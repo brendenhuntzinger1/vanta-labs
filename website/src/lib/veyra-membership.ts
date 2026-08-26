@@ -102,6 +102,17 @@ function veyraSecret(): string {
  * between "let the shopper retry" and "alert an operator", which are different
  * outcomes and must not collapse into one generic error.
  */
+/**
+ * K-19. Every outbound call in this file had no timeout, while the ad pixels and
+ * the label printer — neither of which takes money — both had one. A hung
+ * processor held a checkout or a renewal open until the platform killed it.
+ *
+ * 15s matches SHIPPO_REQUEST_TIMEOUT_MS, the timeout this codebase already chose
+ * for a third party on a request path. AbortSignal.timeout rejects with a
+ * TimeoutError, which every catch below already handles as a failed call.
+ */
+const VEYRA_REQUEST_TIMEOUT_MS = 15_000;
+
 export async function startVeyraMembership(
   input: StartVeyraMembershipInput,
 ): Promise<StartVeyraMembershipResult> {
@@ -110,6 +121,7 @@ export async function startVeyraMembership(
 
   try {
     res = await fetch(`${veyraBase()}/api/v1/membership`, {
+      signal: AbortSignal.timeout(VEYRA_REQUEST_TIMEOUT_MS),
       method: "POST",
       headers: {
         Authorization: `Bearer ${veyraSecret()}`,
@@ -236,6 +248,7 @@ export type VeyraLifecycleResult =
 async function veyraPost(path: string, body: unknown): Promise<VeyraLifecycleResult> {
   try {
     const res = await fetch(`${veyraBase()}/api/v1/membership/${path}`, {
+      signal: AbortSignal.timeout(VEYRA_REQUEST_TIMEOUT_MS),
       method: "POST",
       headers: {
         Authorization: `Bearer ${veyraSecret()}`,

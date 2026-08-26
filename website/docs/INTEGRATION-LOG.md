@@ -1069,3 +1069,75 @@ Historical refunds are **not** replayed. Orders refunded before this runs have
 already lost their units and will read `inventory_restocked_at IS NULL`, which is
 true. Restoring those counts is a data decision — which orders, and does the
 physical shelf agree — not a migration. The query to list them is in the file.
+
+## 4.4 K-14 and K-19 — the two that stop the machinery
+
+### K-14 — maintenance mode 503s the machinery behind the shop front
+
+`pathBypassesMaintenance` did not list five routes that must never be rewritten:
+
+| route | what turning maintenance mode on did to it |
+|---|---|
+| `/api/cron` | **503'd the entire sweep** — all thirteen jobs, including reservation expiry, payment reconciliation and the email retry queue. Authenticated by `CRON_SECRET`, so nothing human reaches it anyway |
+| `/api/unsubscribe` | broke the one-click link in marketing mail **already delivered** |
+| `/api/veyra` | dropped processor callbacks — the sibling of `/api/webhooks`, which was already listed |
+| `/api/coa` | stopped serving published certificates, a compliance document |
+| `/api/health` | removed the only way to tell the site is up |
+
+`maintenance-bypass.test.ts` (17 tests) drives the **real predicate**, lifted out
+of `middleware.ts` and evaluated, rather than asserting on its source — so a
+rename or a reordering cannot make it pass hollowly. It asserts what must get
+through **and** what must still be held back.
+
+| mutation | result |
+|---|---|
+| remove `/api/cron` | **2 failures** |
+| remove `/api/unsubscribe` | **2 failures** |
+| `return (true \|\| …)` — a bypass list that is not a list | **7 failures** |
+
+One thing recorded rather than changed: `startsWith("/api/cron")` also passes
+`/api/cron-not-a-real-route`. No such route exists, and tightening it to a
+segment boundary is a change with no defect behind it. The test says so, and is
+where to notice if one is ever added.
+
+### K-19 — the calls that take money had no deadline
+
+Eleven outbound `fetch` sites were tabulated. The ad pixels and the label printer
+had timeouts. **The payment processor, the membership processor and both email
+providers did not** — the three that move money and the one that tells the
+customer it happened. A `fetch` with no signal waits as long as the other end
+wants; on a request path the shopper sits on "Processing…" until the platform
+kills the function.
+
+All four now carry `AbortSignal.timeout`. 15s for the two processors, matching
+`SHIPPO_REQUEST_TIMEOUT_MS` — the timeout this codebase already chose for a third
+party on a request path — and 10s for email, which is not on a request path.
+
+**A timeout on the checkout call is only safe because the retry returns the same
+session.** `"Idempotency-Key": input.orderId` is what makes timing out unable to
+double-charge, so the test asserts the two together and will fail if either is
+removed.
+
+| mutation | result |
+|---|---|
+| remove the checkout timeout | **1 failure** |
+| remove one of the two Veyra timeouts | **1 failure** |
+| remove the Resend timeout | **1 failure** |
+| drop the idempotency key that makes a timeout safe | **1 failure** |
+
+`third-party-timeouts.test.ts` is a source-text test and says so in its own
+header, with the reason: it asserts a property of the **call site** — "this fetch
+was given a deadline" — which no behavioural test can observe without a hanging
+server per provider. It is a completeness check over a list, not a substitute for
+testing what those modules do. Its matcher balances to the call's closing paren
+rather than taking a fixed window (a fixed one either misses a long options
+object or spills into the next call), and it carries three controls proving the
+matcher discriminates: timed vs untimed, one timed call not vouching for an
+untimed one beside it, and a comment between the call and its options not hiding
+the option.
+
+### Already closed by the merge
+
+**K-27** — `partially_refunded` orders are no longer dropped from the sales-tax
+report; the Block F merge resolution covers it. **K-26 remains open**:
+`taxableSales` is still `subtotal − discount` and does not include taxed shipping.

@@ -77,6 +77,26 @@ function pathBypassesMaintenance(pathname: string) {
     || pathname.startsWith("/api/admin")
     || pathname.startsWith("/api/webhooks")
     || pathname.startsWith("/api/analytics/track")
+    // K-14. Maintenance mode is a shop-front notice, not a kill switch for the
+    // machinery behind it. Without these, turning it on:
+    //
+    //   /api/cron        503s the ENTIRE sweep — all thirteen jobs, including
+    //                    reservation expiry, payment reconciliation and the
+    //                    email retry queue. Authenticated by CRON_SECRET, not a
+    //                    session, so nothing human reaches it anyway.
+    //   /api/unsubscribe breaks the one-click unsubscribe link in marketing mail
+    //                    that has ALREADY been delivered. That link has to work
+    //                    whatever the storefront is doing.
+    //   /api/veyra       is a processor callback, exactly like /api/webhooks
+    //                    beside it. Dropping it loses membership events.
+    //   /api/coa         serves published certificates — a compliance document,
+    //                    not a shopping page.
+    //   /api/health      is how anyone finds out the site is up at all.
+    || pathname.startsWith("/api/cron")
+    || pathname.startsWith("/api/unsubscribe")
+    || pathname.startsWith("/api/veyra")
+    || pathname.startsWith("/api/coa")
+    || pathname.startsWith("/api/health")
     || isStaticAsset(pathname)
   );
 }

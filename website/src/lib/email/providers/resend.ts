@@ -23,6 +23,7 @@ export class ResendEmailProvider implements EmailProvider {
 
     try {
       const response = await fetch("https://api.resend.com/emails", {
+        signal: AbortSignal.timeout(10_000),
         method: "POST",
         headers: {
           Authorization: `Bearer ${apiKey}`,
