@@ -1605,3 +1605,72 @@ so the fix cannot cancel orders that succeeded.
 
 Evidence grade: **BROWSER-PROVEN**, reproduced and re-verified against the same
 live failure.
+
+### 6.4 Full store crawl
+
+**Route inventory.** 66 `page.tsx` routes. HTTP sweep of every public route:
+all 200, and `/legal/does-not-exist`, `/products/does-not-exist`,
+`/research/does-not-exist` correctly 404 rather than 500 or a blank 200.
+
+**Mobile, 390×844** — 16 customer routes crawled in a production build.
+**No horizontal overflow on any of them** (`documentElement.scrollWidth`
+measured against `innerWidth`, with the widest offending element reported if
+any). Most traffic is mobile and this is the layout failure that matters most;
+it is clean.
+
+**Console errors, all routes.** Three classes, all run down rather than listed:
+
+| Observed | Verdict |
+|---|---|
+| `401 /api/account/me` on every route | **Not a defect.** `cart-context.tsx` probes identity app-wide; both callers handle it (`if (!response.ok) return`). A 401 always prints a browser-native console line — the only way to silence it is to answer an identity probe with 200, which would make a genuine auth failure indistinguishable from "guest". Left alone deliberately. Cost recorded: two console lines per guest page-view, and noise in any client-side error reporting. |
+| `400 /_next/image?url=/img/p1.png` | **Harness seed artefact.** The seed row points at an image that does not exist locally. Not a product defect. |
+| `REQFAIL` on `?_rsc=` prefetches and `/videos/vanta-labs-hero-opt.mp4` | **Crawler artefact.** These are in-flight prefetches and a large hero video cancelled when the crawler navigated on. The video is present in `public/videos/`. Not a defect. |
+
+**`/vault` "never reached network idle"** — chased rather than reported. A
+`waitUntil: 'networkidle'` goto timed out at 25s, which would be a polling
+loop. Measured directly: 10 requests over 8 seconds, each fired exactly once,
+`curl` serves the route in 55 ms. The timeout was the previous page's video
+still downloading. **No polling loop. Not a defect.**
+
+### 6.5 Admin operation, end to end
+
+Admin auth uses its own scrypt credential store (`admin_credentials`), not
+GoTrue, so unlike customer accounts it **does** work against the harness. A
+credential was provisioned with `scripts/create-admin-credential.mjs` and login
+driven through `/vault` in the browser: `200 {"ok":true,"passcodeConfigured":true}`,
+redirected to the admin console.
+
+**All 26 admin routes crawled.** Every one renders. No navigation failures, no
+5xx, no on-screen error state, no API error other than the guest 401 above.
+(Realtime WebSocket fails — the shim has no realtime. Graded **NOT VERIFIED**,
+not counted as passing.)
+
+**The paid order, followed across every operator surface** — this is the other
+half of the headline test, the screen rather than the table:
+
+| Surface | What it shows |
+|---|---|
+| `/admin/orders` | `VL-C3CFEA58 · harness.buyer@example.test · 2 · $136.27 · EXPLICIT15 · paid · awaiting_fulfillment` — matches the order row field for field |
+| `/admin/orders` | "1 active order — abandoned / unpaid checkouts are hidden" — the G-03 order cancelled minutes earlier is correctly **not** in the default view |
+| `/admin/fulfillment` | `VL-C3CFEA58` **Ready to fulfill**, correct ship-to, `BPC-157 10mg (10mg) × 2`, Payment: Card |
+| `/admin/partners` | Ambassador Sales **$136.27**, Ambassador Orders **1**, Commission Owed **$17.60** — "$0.00 ready · $17.60 holding" |
+| `/admin/partners` | Payout Queue $0.00 owed, min payout $100.00, "No commissions have cleared the hold period yet" — correct, the commission is `pending` |
+| `/admin/reconciliation` | All five ledger checks **0**, "No inconsistencies found", and the incompleteness counter reads 0 rather than being absent |
+
+That last row matters: the reconciliation page reports *"not every order could be
+checked — results are incomplete: 0"* as its own visible counter. A reconciler
+that cannot say when it failed to look is worse than none, and this one says it.
+
+**Two admin readings chased down and cleared, rather than filed:**
+
+- *"Active Ambassadors 1"* above *"2 approved"* reads like a mismatch. It is
+  not: `activeCount` is `approved && totalOrders > 0`, and the sub-label is the
+  disambiguation. Working as designed.
+- `/admin/status` warns *"Running on the legacy 1,500-row window. Apply
+  admin-control-current-view.sql."* That looked like a gap in the deployment
+  sequence. **Measured against production instead of assumed:**
+  `to_regclass('public.admin_control_current') is not null` → **true**. The view
+  is already applied in production, so its absence from `DEPLOYMENT-ORDER.md` is
+  correct. The warning is a harness-only artefact. Production also carries only
+  903 audit rows (805 control writes, 114 distinct settings) — well inside the
+  1,500 window it would need to exceed for the legacy path to misread anyway.
