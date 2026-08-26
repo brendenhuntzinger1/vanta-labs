@@ -387,3 +387,103 @@ describeDb("row caps on the profit reads", () => {
     expect(metrics.truncated).toBe(true);
   });
 });
+
+describeDb("sales tax — the number filed with each state", () => {
+  beforeAll(async () => {
+    pg = new Pool({ connectionString: DATABASE_URL, max: 8 });
+    await pg.query(SERVICE_ROLE_DDL);
+    await pg.query(ORDERS_DDL);
+    await pg.query(readFileSync(join(SQL_DIR, "admin-dashboard-rollups.sql"), "utf8"));
+  }, 60_000);
+
+  afterAll(async () => {
+    await pg?.end();
+  });
+
+  beforeEach(async () => {
+    await reset();
+  });
+
+  it("counts a fully paid order's tax in full", async () => {
+    await seed([{
+      orderId: "order-paid", state: "PA", taxState: "PA", taxRatePercent: 6,
+      subtotal: 100, tax: 6, amountPaid: 121, paymentStatus: "paid", createdAt: iso(NOW),
+    }]);
+    const { getSalesTaxReport } = await import("@/lib/admin-tax-report");
+    const report = await getSalesTaxReport();
+    expect(report.totals.taxCollected).toBe(6);
+    expect(report.totals.netTax).toBe(6);
+  });
+
+  it("offsets a fully refunded order's tax", async () => {
+    await seed([{
+      orderId: "order-refunded", state: "PA", taxState: "PA", taxRatePercent: 6,
+      subtotal: 100, tax: 6, amountPaid: 121, refundAmount: 121,
+      paymentStatus: "refunded", createdAt: iso(NOW),
+    }]);
+    const { getSalesTaxReport } = await import("@/lib/admin-tax-report");
+    const report = await getSalesTaxReport();
+    expect(report.totals.taxRefunded).toBe(6);
+    expect(report.totals.netTax).toBe(0);
+  });
+
+  it("still owes the state the tax on a PARTIALLY refunded order", async () => {
+    // THE DEFECT. `const refunded = status === "refunded"` is the only refund
+    // test in the file, and "partially_refunded" is in neither
+    // PAID_ORDER_STATUSES nor that comparison — so the order fell through
+    // `if (!paid && !refunded) continue` and vanished from the report entirely.
+    //
+    // The store collected $6.00 of Pennsylvania sales tax, refunded half the
+    // order, and still owes the state the tax on the half the customer kept.
+    // The filing showed $0.00 for that order. `orders.refund_amount` is never
+    // read anywhere in the file.
+    await seed([{
+      orderId: "order-partial", state: "PA", taxState: "PA", taxRatePercent: 6,
+      subtotal: 100, tax: 6, amountPaid: 121, refundAmount: 60.50,
+      paymentStatus: "partially_refunded", createdAt: iso(NOW),
+    }]);
+    const { getSalesTaxReport } = await import("@/lib/admin-tax-report");
+    const report = await getSalesTaxReport();
+
+    expect(report.rows).toHaveLength(1);
+    expect(report.rows[0].paymentStatus).toBe("partially_refunded");
+    // Half the order came back, so half the tax did too: $3.00 retained.
+    expect(report.totals.taxCollected).toBe(6);
+    expect(report.totals.taxRefunded).toBe(3);
+    expect(report.totals.netTax).toBe(3);
+  });
+
+  it("attributes a partial refund to the right state", async () => {
+    await seed([
+      {
+        orderId: "order-pa", state: "PA", taxState: "PA", taxRatePercent: 6,
+        subtotal: 100, tax: 6, amountPaid: 121, refundAmount: 60.50,
+        paymentStatus: "partially_refunded", createdAt: iso(NOW),
+      },
+      {
+        orderId: "order-ny", state: "NY", taxState: "NY", taxRatePercent: 8,
+        subtotal: 100, tax: 8, amountPaid: 123, paymentStatus: "paid", createdAt: iso(NOW),
+      },
+    ]);
+    const { getSalesTaxReport } = await import("@/lib/admin-tax-report");
+    const report = await getSalesTaxReport();
+    const byState = Object.fromEntries(report.byState.map((row) => [row.state, row]));
+    expect(byState.PA.netTax).toBe(3);
+    expect(byState.NY.netTax).toBe(8);
+    expect(report.totals.netTax).toBe(11);
+  });
+
+  it("never reports a negative liability when a refund exceeds what was paid", async () => {
+    // A data-entry slip or a duplicated refund must not turn into a credit the
+    // state never gave. The proportion is clamped to [0, 1].
+    await seed([{
+      orderId: "order-over", state: "PA", taxState: "PA", taxRatePercent: 6,
+      subtotal: 100, tax: 6, amountPaid: 121, refundAmount: 500,
+      paymentStatus: "partially_refunded", createdAt: iso(NOW),
+    }]);
+    const { getSalesTaxReport } = await import("@/lib/admin-tax-report");
+    const report = await getSalesTaxReport();
+    expect(report.totals.netTax).toBe(0);
+    expect(report.totals.taxRefunded).toBe(6);
+  });
+});
