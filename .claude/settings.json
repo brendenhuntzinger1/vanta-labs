@@ -2,7 +2,6 @@
   "enableAllProjectMcpServers": true,
   "permissions": {
     "allow": [
-      "mcp__Supabase__execute_sql",
       "mcp__Supabase__list_tables",
       "mcp__Supabase__list_migrations",
       "mcp__Supabase__list_extensions",
