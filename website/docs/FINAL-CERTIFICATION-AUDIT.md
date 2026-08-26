@@ -843,6 +843,75 @@ identity breaks the `payouts` mirror, not `partner_payouts`. The ordering risk
 itself (status flipped to `paid` before the payout rows are inserted, with no
 transaction) is **unchanged and still open** — see NOT VERIFIED below.
 
+### F-017 — Historical defect #3: the approval email quotes a commission the ambassador does not earn
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P0 · **Status:** REPAIRED IN REPO — **no production change needed** (application code only)
+
+The referral-code-assigned email was repaired after MIZZY was emailed "0%" with
+15.00 stored. Its header says, in capitals, that telling an ambassador they earn
+0% is worse than not writing, and it resolves the rate through
+`firstFinitePercent([rate set now, stored rate, program default])`.
+
+The comment 30 lines above it claims the **approval** email "resolves it inside
+`sendPartnerStatusEmail` … a caller that forgets cannot reintroduce a hole."
+**It did not, and the caller did.** `updatePartnerStatus` passed:
+
+```ts
+commissionPercent: existingPartner.commission_percent != null
+  ? Number(existingPartner.commission_percent) : undefined,
+```
+
+`existingPartner` is a snapshot of the **`partners`** row taken *before* the
+update — the table this same function calls "the mirror" and "a display copy",
+because `ambassadors` is what checkout and commission accrual read. So:
+
+| Situation | What the ambassador was told | What they actually earn |
+|---|---|---|
+| Approve **and** set the rate in one action (the normal way) | the **previous** rate | the new rate |
+| The two tables have drifted | the **display copy** | the `ambassadors` value |
+| `partners` holds 0 while `ambassadors` holds a real rate | **"0%"** | their real rate |
+
+The third row is historical defect #3 exactly, reachable through the other door.
+
+**RED before / GREEN after:** `4 failed | 2 passed (6)` → `6 passed (6)`.
+
+**The repair.** Read the rate back from `ambassadors` **after** the write and
+quote that — the number the ambassador will actually be paid — falling back to
+the program default, and leaving the value unset (so the template's own default
+applies) when nothing is configured anywhere. An explicit 0 is still honoured;
+`null`, `undefined` and `""` mean "look further", never "email them zero". The
+rate typed into the request needs no separate slot: the authoritative row is
+read after the write, so it already carries it — and quoting the database rather
+than the request means a write that silently matched no rows cannot produce an
+email promising a rate nobody holds.
+
+**Negative controls:**
+
+| Mutation | Result |
+|---|---|
+| A: read the pre-update `partners` copy again (the original defect) | the 4 tests for same-submission rate, authoritative rate, DB agreement and explicit 0 fail |
+| B: read `ambassadors` *before* the write instead of after | 5 of 6 fail — the read's timing is load-bearing, not incidental |
+| C: coerce a missing rate to 0 instead of the program default | only *"falls back to the program default"* fails |
+| restored | all 6 green |
+
+**Two false passes found and fixed along the way — both worth more than the fix.**
+
+1. **My own first fake returned live row references.** PostgREST returns JSON
+   over HTTP, so a row read earlier does not change when the table is updated
+   later. Handing back the stored object made two tests **pass against the
+   unfixed code** — the caller's `existingPartner` appeared to pick up the new
+   rate by itself. Corrected to return snapshots, at which point the defect
+   appeared. Recorded because it is precisely the failure mode this audit
+   exists to find, and it happened *inside the audit*.
+
+2. **`referral-code-email-wiring.test.ts` — the file whose header reads "THE
+   TEST THAT WOULD HAVE CAUGHT IT" — could not have caught this half.** Its fake
+   answered `null` for every `ambassadors` read and had no store behind the
+   `ambassadors` update, so the scenario in its own header ("15.00 stored on
+   **both** tables") was only ever half modelled. A fake that cannot represent
+   the authoritative rate cannot catch an email quoting the wrong one. Now
+   models the row and lets the write land. **This is a concrete, named instance
+   of the Phase 15 "mock-shape drift" P0.**
+
 ### F-011 — Three safety-critical database functions exist only in production
 **Grade:** `DATABASE-PROVEN` · **Severity:** P1 · **Status:** BASELINE CAPTURED
 
@@ -929,7 +998,7 @@ Issues found:
 |---|---|---|---|
 | 1 | 15% discount displayed as 10% | **Server side PASS.** `validate_referral_code('MIZZY')` returns `customer_discount_percent: 15`; NULL passes through un-coerced for inheritors. Cart calls the same `resolveAmbassadorCustomerDiscount` as the server. **Browser proof still owed.** | `DATABASE-PROVEN` + `SOURCE-INSPECTED` |
 | 2 | Mystery $100 affiliate minimum | Not yet assessed. `DEFAULT_MINIMUM_QUALIFYING_ORDER` exists; `/api/catalog/promotions` swallows a settings failure with `.catch(() => ({ minimumQualifyingOrder: DEFAULT }))` — a silent fallback to watch. | `NOT VERIFIED` |
-| 3 | 0% commission approval email | Not yet assessed. | `NOT VERIFIED` |
+| 3 | 0% commission approval email | **FAIL → REPAIRED (repo).** The referral-code email was fixed; the APPROVAL email still passed the pre-update `partners` copy, so approving and rate-setting in one action emailed the old number, and a `partners`-0 / `ambassadors`-real drift emailed "0%". 6 tests red→green, 3 negative controls. Two false passes found and fixed, one of them in the test named "THE TEST THAT WOULD HAVE CAUGHT IT". | `BEHAVIORAL-TEST-PROVEN` |
 | 4 | Brutus/Paul duplicate identity | **TWO DOORS. Self-service (F-009): REPAIRED & LIVE** — reproduced in a replica, 7 tests red→green, 4 negative controls, applied to production and proven there by a rolled-back probe. **Admin invite (F-013): REPRODUCED & REPAIRED IN REPO, not yet applied to production** — the same orphan, and it silently defeats the F-009 repair; 7 tests red→green, 5 negative controls. Browser proof still owed for both. | `PRODUCTION-PROVEN` (F-009) + `BEHAVIORAL-TEST-PROVEN` (F-013) |
 | 5 | Elijah status drift | **PASS (behavioural).** `validate_referral_code('ELIJAH-AB78AE')` → `{valid:false}` because the RPC filters `status='approved'`. Both tables show `info_requested`. | `DATABASE-PROVEN` |
 | 6 | Affiliate money chain | Not yet assessed. `commissions`, `payouts`, `partner_payouts`, `referral_orders` are all **0 rows** — no production money has ever flowed, so all proof must be behavioural. | `NOT VERIFIED` |

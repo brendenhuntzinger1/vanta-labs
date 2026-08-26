@@ -31,7 +31,7 @@ disappears because the audit got long — which the brief explicitly warns about
 | 5 | Inventory / catalog | 🟨 | 1 P0, 5 P1 recorded. F-001 (31 of 36 products parent-zero) needs browser proof |
 | 6 | Affiliate / ambassador | 🟨 | **F-009 and F-013 both fixed and LIVE in production; F-016 fixed in repo.** Remaining P0s: `markCommissionsPaid` ordering, `updatePartnerStatus` no-op, accrual/payout gated by different tables |
 | 7 | Discounts / promotions / memberships | 🟨 | 1 P0, 5 P1. Includes the dormant Buy-3-Get-1 + coupon interaction |
-| 8 | Emails | 🟨 | 2 P0, 5 P1. **Includes historical defect #3 (0% commission email) — map says still suspect** |
+| 8 | Emails | 🟨 | **F-017: historical defect #3 reproduced and repaired** — approval email quoted the pre-update `partners` copy. **Still NOT VERIFIED:** the `pending_emails` retry sweep P0 (sweep-then-retry can send a customer a second receipt), duplicate shipping emails, refund-confirmation dedupe |
 | 9 | Fulfillment / Shippo / replacements | 🟨 | 2 P0, 4 P1. Replacements had no mapper — critic caught it |
 | 10 | Financial reporting | 🟨 | No mapper owned it. Critic found 4 surfaces disagreeing on "an order", and a 4th hand-copy of the total formula |
 | 11 | Admin | 🟨 | 4 P1 recorded. Not exercised as an operator |

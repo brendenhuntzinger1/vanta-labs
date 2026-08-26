@@ -211,7 +211,16 @@ async function sendPartnerStatusEmail(input: {
   name: string;
   status: "approved" | "rejected";
   referralCode?: string;
-  commissionPercent?: number;
+  /**
+   * The ambassador's rate as stored in `ambassadors` — the table checkout and
+   * commission accrual read — as it stands AFTER the update this email is
+   * announcing. The caller used to pass the `partners` copy, which this same
+   * function calls "the mirror" and "a display copy", from a snapshot taken
+   * BEFORE the update. So approving and setting a rate in one action emailed
+   * the previous number, and any drift between the two tables emailed the one
+   * that does not govern the money.
+   */
+  commissionPercent?: number | string | null;
 }) {
   let template;
   if (input.status === "approved") {
@@ -221,11 +230,31 @@ async function sendPartnerStatusEmail(input: {
       getReferralProgramConfig().catch(() => null),
       getAmbassadorProgramSettings().catch(() => null),
     ]);
+    // What the ambassador will ACTUALLY be paid, then the program default —
+    // the resolution sendReferralCodeAssignedEmail's header has always claimed
+    // this email used. The rate typed into this request needs no separate slot:
+    // the authoritative row is read back AFTER the write, so it already carries
+    // it. Quoting the database rather than the request also means a write that
+    // silently matched no rows cannot produce an email promising a rate nobody
+    // holds.
+    // An explicit 0 is honoured — an owner may genuinely run a 0% ambassador —
+    // but null/undefined/"" means "look further", never "email them zero".
+    // When nothing at all is known the value stays undefined so the template's
+    // own default applies, rather than asserting a rate nobody configured.
+    const rateCandidates = [
+      input.commissionPercent,
+      referralProgram?.defaultCommissionPercent,
+    ];
+    const haveRate = rateCandidates.some((candidate) =>
+      candidate !== null && candidate !== undefined
+      && !(typeof candidate === "string" && candidate.trim() === "")
+      && Number.isFinite(Number(candidate)));
+
     template = ambassadorApprovedTemplate({
       name: input.name,
       referralCode: input.referralCode,
       dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
-      commissionPercent: input.commissionPercent ?? referralProgram?.defaultCommissionPercent,
+      commissionPercent: haveRate ? firstFinitePercent(rateCandidates) : undefined,
       personalDiscountPercent: referralProgram?.personalDiscountPercent,
       referralDiscountPercent: referralProgram?.discountPercent,
       holdDays: ambassadorSettings?.commissionHoldDays,
@@ -1645,12 +1674,21 @@ export async function updatePartnerStatus(input: {
         },
       );
 
+      // Read the rate back from the AUTHORITATIVE table, after the write. That
+      // is the number this ambassador will actually be paid, and therefore the
+      // only number worth putting in an email that tells them what they earn.
+      const { data: authoritative } = await supabaseAdmin
+        .from("ambassadors")
+        .select("commission_percent")
+        .eq("id", input.partnerId)
+        .maybeSingle();
+
       const emailSent = await sendPartnerStatusEmail({
         to: existingPartner.email,
         name: existingPartner.name,
         status: input.status,
         referralCode: finalReferralCode,
-        commissionPercent: existingPartner.commission_percent != null ? Number(existingPartner.commission_percent) : undefined,
+        commissionPercent: authoritative?.commission_percent ?? null,
       });
 
       if (emailSent && queueRowId) {
