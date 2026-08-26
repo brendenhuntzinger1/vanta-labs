@@ -1534,3 +1534,74 @@ This is the single clearest argument in this audit for the browser phase
 existing at all. Unit tests, the migration's own output, and source inspection
 all reported healthy. Only a real purchase through a real browser against a
 real database showed the commission was missing.
+
+### 6.3 G-03 — a checkout that dies at the processor left the order and the stock behind
+
+**Reproduced in the browser first**, per the repo's own rule. Production build,
+Veyra pointed at an unreachable host. A real purchase was driven through the
+form. Result:
+
+```
+orders              VL-????????  payment_status pending_payment   <-- orphan
+inventory_reservations           status reserved (15-minute hold) <-- stock held
+screen              "No charge was made and no order was placed — please try again in a moment."
+server              [checkout/create-session] TypeError: fetch failed
+                      cause: connect ECONNREFUSED 127.0.0.1:59999
+```
+
+The order row, its items and the stock hold are all written **before**
+`provider.createCheckoutSession` is called. The reservation-shortfall branch
+immediately above already cancels the order when stock is short; the provider
+call had no equivalent, so a processor failure fell straight through to
+`route.ts`'s catch.
+
+Three costs, worst first:
+
+1. **Denial of inventory.** The route invites the customer to "try again in a
+   moment" and each attempt takes another 15-minute hold on the same units. A
+   processor outage therefore drains sellable stock at the rate customers
+   retry, and the last units of a scarce dose can be locked out of the
+   catalogue by shoppers who were never able to buy them.
+2. **Orphan orders.** Every failure leaves a `pending_payment` row no webhook
+   will settle, visible to reconciliation and inflating the pending-order count
+   an operator uses to judge whether checkout is healthy.
+3. **A false statement to the customer** — the one an operator learns about
+   from a support ticket rather than a dashboard.
+
+**Fix** (`src/lib/payment-service.ts`): wrap the provider call; on failure
+release the hold and cancel the order, then rethrow so checkout still fails.
+Release is `.catch()`-guarded so a broken cleanup cannot mask the processor
+error that is actually worth diagnosing. No new machinery — the same treatment
+the shortfall branch already applies.
+
+**Tests** — `src/lib/checkout-session-failure-cleanup.test.ts`, 5 behavioural
+tests driving the real `createCheckoutSession`. Red before the fix for the
+right reason (`expected 'pending_payment' to be 'canceled'`; release called 0
+times).
+
+**Mutation testing** — 5 mutations, all killed, each by the test that should
+catch it:
+
+| # | Mutation | Killed by |
+|---|---|---|
+| 1 | Delete the release call | *gives the reserved stock back* |
+| 2 | Delete the cancel update | *does not leave the order sitting in pending_payment* |
+| 3 | Swallow the error, return a fake session | 4 tests, incl. *cleanup is not a way to pretend it worked* |
+| 4 | Drop the `.catch()` guarding release | *survives a cleanup that itself fails* |
+| 5 | Run cleanup unconditionally, not only on failure | *does not cancel or release when the provider succeeds* |
+
+Mutation 5 is the one that matters most: it proves the happy path is guarded,
+so the fix cannot cancel orders that succeeded.
+
+**Re-verified in the browser after the fix**, same reproduction:
+
+| | Before | After |
+|---|---|---|
+| Order | `pending_payment` (orphan) | `canceled` ✅ |
+| Reservation | held 15 min | `released` ✅ |
+| `reserved_quantity` | held | 0 ✅ |
+| `inventory_quantity` | 23 | 23 (untouched) ✅ |
+| Customer message | false | now true ✅ |
+
+Evidence grade: **BROWSER-PROVEN**, reproduced and re-verified against the same
+live failure.

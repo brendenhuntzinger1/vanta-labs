@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
-import { reserveInventoryForOrder, describeUnavailable, DEFAULT_RESERVATION_MINUTES, MANUAL_RESERVATION_MINUTES } from "@/lib/inventory-reservation";
+import { reserveInventoryForOrder, releaseInventoryForOrder, describeUnavailable, DEFAULT_RESERVATION_MINUTES, MANUAL_RESERVATION_MINUTES } from "@/lib/inventory-reservation";
 import { getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import {
   buildOrderRow,
@@ -312,7 +312,21 @@ export async function createCheckoutSession(
  let hostedCheckoutUrl = "";
 
  if (!isManual) {
-   const checkout = await provider.createCheckoutSession({
+   // The order row, its items and a live stock hold all exist by now. If the
+   // processor call fails, every one of them has to be undone — otherwise the
+   // customer is told "no order was placed" (route.ts's catch) while a
+   // pending_payment row sits in the table holding their units for the full
+   // reservation window. Worse, that route invites them to "try again in a
+   // moment", and each retry takes another hold: a processor outage then drains
+   // sellable stock at exactly the rate customers retry it.
+   //
+   // Same treatment the reservation-shortfall branch above already gives:
+   // cancel the order, release the hold, then rethrow so the customer still
+   // sees a failed checkout. Cleanup never swallows the original error — the
+   // processor's failure is the one worth diagnosing.
+   let checkout: { paymentId: string; hostedCheckoutUrl: string };
+   try {
+     checkout = await provider.createCheckoutSession({
    orderId,
    customerEmail: payload.customer.email,
    // Minor units (cents) — the standard for card processors (Stripe/Square).
@@ -344,7 +358,21 @@ export async function createCheckoutSession(
    customerEmail: payload.customer.email,
    customerUserId: payload.customerUserId ?? "",
    },
-   });
+     });
+   } catch (error) {
+     await releaseInventoryForOrder(orderId).catch((releaseError: unknown) => {
+       console.error("Unable to release inventory for failed checkout session", orderId, releaseError);
+     });
+     const { error: cancelError } = await supabaseAdmin
+       .from("orders")
+       .update({ payment_status: "canceled", updated_at: new Date().toISOString() })
+       .eq("order_id", orderId);
+     if (cancelError) {
+       console.error("Unable to cancel order after failed checkout session", orderId, cancelError);
+     }
+     throw error;
+   }
+
    paymentId = checkout.paymentId;
    hostedCheckoutUrl = checkout.hostedCheckoutUrl;
 
