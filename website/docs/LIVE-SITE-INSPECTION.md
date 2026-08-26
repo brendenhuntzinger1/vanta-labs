@@ -365,6 +365,340 @@ twice under two different `_rsc` tokens.
 Aborted prefetch is normal in small numbers. 142 on one screen is a lot of radio time
 for a store whose traffic is mostly mobile. Worth capping prefetch on the card grid.
 
+## 2b. THE AFFILIATE SYSTEM
+
+**Method note.** `/r/[code]` is NOT a read-only route: it `INSERT`s into
+`partner_clicks` **and** `referrals` on every hit (`src/app/r/[code]/route.ts`).
+It was therefore never requested against production in this session. The
+customer-visible half of the chain was exercised instead by placing the code in
+the browser's own cart state — which is exactly the state `/r/[code]` leaves
+behind — and reading the result off the screen. That path calls the read-only
+Postgres RPC `validate_referral_code` from the browser and writes nothing.
+
+### Program configuration, as actually stored
+
+`GET /api/catalog/promotions` (live) and the `referral` section of
+`admin_audit_logs`:
+
+```
+referralDiscountPercent : 10     (program default customer discount)
+referralMinimumOrder    : 100    ($100 merchandise subtotal, bundle-adjusted)
+personal_discount_percent: 20    (ambassador's own order)
+default_commission_percent: 10
+enabled: true   commissions_paused: false
+freeShippingThreshold: 200 (US) / 400 (CA)   flat: $15 (US) / $25 (CA)
+```
+
+Note the program's **customer** discount percent has never been written in the
+control centre — there is no `referral/discount_percent` audit row — so it is
+running on the code default of 10.
+
+### AFF-01 — the rate shown is the ambassador's own rate, and it is right
+
+**Status:** CONFIRMED CORRECT · BROWSER-PROVEN + DATABASE-PROVEN
+
+Seven codes, cart screen vs `ambassadors` row:
+
+| Code | Ambassador | `customer_discount_percent` | Cart shows | Verdict |
+|---|---|---|---|---|
+| `SMOKE` | Xavier Martinez | 15.00 | "15% customer discount" | ✅ |
+| `MIZZY` | Jaeley Reynolds | 15.00 | "15% customer discount" | ✅ |
+| `BRUTUS` | Paul huntzinger | **NULL** | "10% customer discount" | ✅ inherits program default |
+| `ZAIN` | zain | **NULL** (commission 20) | "10% customer discount" | ✅ inherits; commission not leaked |
+| `ELOA` | Eloa wolf | **NULL** | "10% customer discount" | ✅ |
+| `ELIJAH-AB78AE` | Elijah Lagrama, `info_requested` | 10.00 | **no discount, code rejected** | ✅ required behaviour |
+| `NOTACODE` | — | — | no discount | ✅ |
+
+`validate_referral_code` run directly against production returns
+`{"valid": false}` for the `info_requested` ambassador and for the unknown code,
+and the real rate (or `null` to inherit) for the five approved ones. **The
+explicit-rate vs NULL-inherits-default distinction is correct on both sides.**
+
+### AFF-02 — the discount arithmetic is correct at every quantity
+
+**Status:** CONFIRMED CORRECT · BROWSER-PROVEN
+
+`SMOKE` (15%) on BPC-157 5mg @ $39.99, read off the live cart:
+
+| Qty | Full | Bundle subtotal | Bundle saved | 15% of full | Shown as | Check |
+|---|---|---|---|---|---|---|
+| 3 | 119.97 | 110.37 | 9.60 | 18.00 | −$8.40 | 9.60+8.40 = 18.00 ✅ |
+| 5 | 199.95 | 175.95 | 24.00 | 29.99 | −$5.99 | 24.00+5.99 = 29.99 ✅ |
+| 6 | 239.94 | 211.14 | 28.80 | 35.99 | −$7.19 | 28.80+7.19 = 35.99 ✅ |
+
+The store gives **one** discount per order and the referral must beat the bundle
+pricing already inside the subtotal, so the line shows only the *incremental*
+saving. Every figure reconciles to exactly 15% of the full subtotal. Free
+shipping flipped to $0.00 at qty 6 ($211.14 ≥ $200) exactly as configured.
+
+Checkout carries it through: `/checkout` showed "Xavier Martinez · 15% off",
+"Remove code", and disabled the coupon box with "A referral code is applied.
+Remove it to use a coupon instead." Coupon/referral exclusivity is stated
+plainly. Zero console errors, zero failed requests on `/checkout`.
+
+### AFF-03 — **DEFECT** — a referral link below $100 promises a discount it will never give
+
+**Severity:** P1 · SILENT FAILURE / INCONSISTENT (two code paths, two answers)
+**Status:** CONFIRMED · BROWSER-PROVEN
+**Cross-reference:** NEW.
+**Where:** `/cart`, any viewport, any approved code, merchandise subtotal < $100.
+
+Same basket ($39.99), same code (`SMOKE`), two ways in:
+
+| Entry path | What the cart says |
+|---|---|
+| **Code restored** from cart state (i.e. arriving from a real ambassador link) | "Ambassador Xavier Martinez • **15% customer discount**" — and the totals are Subtotal $39.99, Shipping $15.00, **Final total $54.99. No discount line. No reduction. No explanation.** |
+| **Code typed** into the cart's REFERRAL CODE box | "**Referral codes require a minimum order of $100.00. Add more items to use one.**" — correct, clear, actionable. |
+
+Root cause, located in `src/components/cart-context.tsx`:
+
+- `applyReferralCode` (line 1078) checks `subtotal < referralMinimumOrder` **before**
+  validating, and sets a precise error.
+- the restore effect (line ~556) that rehydrates a persisted/linked code performs
+  **no minimum check at all** — it validates the code and sets
+  `referralDetails`, which is what renders the "• 15% customer discount" line.
+- `promoDiscount` (line 724) *then* correctly returns `null` below the minimum,
+  so the money is right and the message is wrong.
+
+**Why this matters more than it looks.** This is the *only* path a real referred
+customer takes. Nobody types an ambassador's code — they click her link. So the
+broken message is the one every referred customer sees, and the correct message
+is the one almost nobody sees. The ambassador is told her audience gets 15% off;
+her audience is shown "15% customer discount" and charged full price with no
+reason given. The likeliest outcome is an abandoned cart and an ambassador who
+believes her link is broken.
+
+**Server behaviour is correct and consistent** — `quote-order.ts:569` throws
+below the same minimum, comparing the same bundle-adjusted subtotal
+(`quote-order.ts:476` vs `cart-context.tsx:595`). There is no client/server
+divergence in the *money*. The defect is entirely in what the customer is told.
+
+### AFF-04 — **DEFECT** — "15% customer discount" next to a line reading −7.6%
+
+**Severity:** P2 · CONFUSING (trust)
+**Status:** CONFIRMED · BROWSER-PROVEN
+**Cross-reference:** NEW.
+**Where:** `/cart` with any referral code and any multi-unit basket.
+
+At qty 3 the cart simultaneously displays:
+
+```
+Subtotal                 $110.37
+Ambassador code SMOKE     -$8.40      <- 7.6% of the subtotal shown
+...
+Ambassador Xavier Martinez • 15% customer discount
+```
+
+Both are true (see AFF-02) — $9.60 of the 15% is already inside the $110.37
+through bundle pricing — but **nothing on the screen says so.** There is no
+"Bundle pricing −$9.60" line; the bundle saving is invisible. The customer sees
+a 15% promise and a 7.6% deduction and has no way to reconcile them.
+
+This is the finding most likely to generate ambassador support tickets ("your
+code only gave me 7% off"). Showing the bundle saving as its own line, or
+labelling the referral line "additional saving", resolves it without changing a
+single number.
+
+### AFF-05 — no affiliate money has ever moved through production
+
+**Status:** DATABASE-PROVEN · not a defect, a coverage statement
+
+```
+referral_orders                      0
+commissions                          0
+orders where referral_code is not null  0
+orders (all)                        15
+```
+
+Every repair the audit made to accrual, hold state, payout and reversal is
+therefore **NOT VERIFIED in production**. The first real ambassador sale will be
+the first execution of that path on this database. Anything proven about it is
+proven on the harness only.
+
+### AFF-06 — **DEFECT** — the partner program advertises earnings that do not exist
+
+**Severity:** P1 · fabricated financial claims used to recruit
+**Status:** CONFIRMED (data) · DATABASE-PROVEN — page rendering verified separately below
+**Cross-reference:** NEW.
+
+`partner_program_stats` holds:
+
+```
+total_commissions_paid_base    22,638.00
+average_partner_earnings_base   1,918.00
+top_partner_payout_base         4,829.00
+average_approval_time_hours_base   24.00
+```
+
+against `commissions` = **0 rows** and `referral_orders` = **0 rows**. Not one
+cent of commission has ever been accrued, let alone paid. These are seeded
+baseline numbers presented as programme performance to people deciding whether
+to promote the brand. Earnings claims to prospective affiliates are exactly the
+category regulators treat most harshly.
+
+### AFF-07 — `ambassadors` and `partners` are two base tables holding the same rows
+
+**Severity:** P2 · structural risk (two sources of truth)
+**Status:** CONFIRMED · DATABASE-PROVEN
+**Cross-reference:** NEW.
+
+```sql
+select table_name, table_type from information_schema.tables
+ where table_schema='public' and table_name in ('partners','ambassadors');
+-- ambassadors | BASE TABLE
+-- partners    | BASE TABLE
+```
+
+Neither is a view. Both currently hold the **same 8 rows with the same UUIDs and
+identical `commission_percent`, `customer_discount_percent`, `status` and
+`referral_code` values** — so today they agree. Nothing in the schema forces
+them to keep agreeing. Different modules read different ones
+(`referral-client.ts` falls back to `ambassadors`; `partner-portal.ts` reads
+`partner`), so a write that lands on one and not the other produces a store
+where the cart and the portal quote different rates for the same person.
+
+They agree today. That is a fact about the current data, not a guarantee.
+
+### AFF-08 — consent on a referral click: fixed, and honestly flagged
+
+**Status:** CONFIRMED FIXED (code) · NOT VERIFIED live (route writes; not called)
+**Cross-reference:** matches the fix described in COMPLETE-FIX-REGISTER; re-read here.
+
+`src/app/r/[code]/route.ts` now gates `utm_source/medium/campaign`, `referrer`,
+`user_agent` and `ip_address` behind `hasAnalyticsConsent(request)`, with
+`unset` counting as no. The attribution itself — ambassador id, code, landing
+path — is still written either way, and the code says so out loud rather than
+hiding it:
+
+> "whether THAT is essential storage is the owner's call, not a decision to make
+> silently inside a bug fix. Flagged, not changed."
+
+**That remains an open owner decision**, and the Cookie Policy wording should be
+checked against it (§ content review). The 30-day `vl_referral_code` cookie is
+set on every referral click regardless of consent.
+
+---
+
+## 2c. CHECKOUT
+
+### LIVE-010 — **DEFECT** — the marketing opt-in is pre-ticked
+
+**Severity:** P1 · consent / CASL exposure (the store ships to Canada)
+**Status:** CONFIRMED · BROWSER-PROVEN
+**Cross-reference:** NEW.
+**Where:** `/checkout`, step 04.
+
+```html
+<input type="checkbox" class="… accent-[color:var(--accent-gold)]" checked="">
+```
+→ "Email me exclusive offers, coupons & restock alerts. Optional — unsubscribe anytime."
+
+`checked` is in the **markup** (`defaultChecked: true`), `:checked` matches, and
+an element screenshot shows the gold ticked control (the unticked shipping-
+protection box beside it renders empty). Stable at 300 ms, 1.5 s and 4 s.
+
+Checkout offers **United States and Canada**. Canada's CASL requires express
+consent; a pre-ticked box is the textbook example of what does not qualify.
+
+**It also contradicts this store's own stated design.** The age gate deliberately
+requires four separate, individually unticked attestations, and the code
+explains why:
+
+> "a single combined tick is one click that stands for four different
+> representations, which is exactly the assent a regulator would question"
+
+The same reasoning applies to a pre-ticked marketing consent one page later.
+
+### LIVE-011 — the two legal confirmations are also pre-ticked
+
+**Severity:** P2 · consent quality
+**Status:** CONFIRMED · BROWSER-PROVEN
+**Where:** `/checkout` step 04, "Required confirmations · 2 of 2".
+
+"Research & Compliance" (21+, research-use-only, terms) and "Return &
+Reimbursement Policy" both ship `checked` in the markup, with the instruction
+"Untick either one to withhold it."
+
+Opt-out consent for an age and research-use attestation is weaker than the
+opt-in the age gate already collected, and weaker than this codebase argues for
+elsewhere. Lower severity than LIVE-010 only because the equivalent attestation
+*was* actively made at the gate.
+
+### LIVE-012 — **DEFECT** — no visible focus indicator on any checkout input
+
+**Severity:** P2 · accessibility (WCAG 2.2 SC 2.4.11/2.4.13), on the purchase flow
+**Status:** CONFIRMED · BROWSER-PROVEN
+**Where:** `/checkout`, every text input and select.
+
+Focused email field, computed style:
+
+```
+outline-style : none
+outline-width : 0px
+box-shadow    : … rgba(255, 255, 255, 0.05) 0px 0px 0px 4px
+border-color  : rgba(255, 255, 255, 0.4)
+```
+
+The only focus affordance is a 4px ring at **5% white opacity** over a near-black
+surface — far below the 3:1 contrast a focus indicator requires, and invisible in
+the screenshots. Buttons and links are fine (`outline: solid 2px`); it is the 15
+form fields that are not. A keyboard or switch user filling in this form cannot
+see where they are.
+
+### LIVE-013 — the cart quotes shipping protection at "+$0.00", checkout at "+$4.41"
+
+**Severity:** P3 · CONFUSING
+**Status:** CONFIRMED · BROWSER-PROVEN
+
+`/cart`: "Shipping Protection (Recommended) · optional … **+$0.00**"
+`/checkout`: "Shipping protection · Protect against loss, theft, or damage … **+$4.41**"
+
+Same unticked add-on, same basket. The cart is showing its *current contribution
+to the total* where the customer reads it as *the price*, so an optional paid
+extra is advertised as free one screen before it costs $4.41.
+
+### LIVE-014 — the coupon box suggests a code that will be refused
+
+**Severity:** P3 · polish
+**Status:** CONFIRMED · BROWSER-PROVEN + DATABASE-PROVEN
+
+Checkout placeholders are `VANTA10` (referral) and `SAVE10` (coupon).
+`VANTA10` does not exist in `coupons`; `SAVE10` exists with `active = false`.
+A customer who reads the placeholder as a hint and types `SAVE10` is told the
+code is not valid.
+
+### LIVE-015 — 335 "active" coupons that all expired
+
+**Severity:** P2 · admin truth
+**Status:** CONFIRMED · DATABASE-PROVEN
+
+```
+source=cart_recovery  active=true  n=335  email_bound=335  expired=335
+source=null           active=false n=30 (percent) + 2 (fixed)
+```
+
+Every one of the 335 cart-recovery coupons has `active = true` **and** an
+`ends_at` in the past. Redemption is presumably safe (validation checks dates),
+but any count of "active coupons" — admin dashboard included — reports 335 live
+promotions when zero are redeemable. Verified against the admin screen in §ADMIN.
+
+### Checked and NOT a defect (recorded so it is not re-raised)
+
+- **Canada province field.** Selecting Canada removes the US state `<select>` and
+  renders a free-text **"Province / region"** input carrying
+  `autocomplete="shipping address-level1"`. An earlier read of the select count
+  suggested the field vanished; it does not. The only note is asymmetry: US is a
+  constrained dropdown, Canada is free text, so a mistyped province reaches the
+  label unvalidated. P3 at most.
+- **Canada shipping.** "Secure Canada shipping — free at $400.00+, otherwise
+  $25.00" matches `northAmericaFee: 25` / `northAmericaFreeShippingThreshold: 400`.
+- **Form semantics.** 17 fields, **0 unlabelled**, correct `autocomplete` tokens
+  throughout (`shipping address-line1`, `billing postal-code`, …), `inputmode`
+  on email/tel/ZIP. This is better than most stores.
+- **Bulk tier maths.** Reconciles exactly at every tier via per-unit floor
+  rounding — see LIVE-004.
+- **Self-referral.** `quote-order.ts:577` blocks it by both email and account id.
+
 _(walk continues)_
 
 ---
