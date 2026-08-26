@@ -425,3 +425,96 @@ fixing. Two blocks editing one file were fixing different bugs; "newest wins"
 deletes one of them.**
 
 ---
+
+# PHASE 2 — MERGE
+
+Baseline before any merge, at `9aea901` + this file:
+**201 files / 3566 tests / 0 skipped / 0 failing.**
+
+| # | merged | conflicts | tests after | notes |
+|---|---|---|---|---|
+| 1 | `audit-superpowers-playwright-extension-c2oyhm` (audit base) | none | 203 files / **3579** (7 skipped) | matches the ledger's recorded Phase 19 baseline exactly |
+| 2 | `vanta-labs-audit-resume-754dol` (A+B) | none | 207 files / **3607** (29 skipped) | skips are the four database-gated suites |
+| 3 | `browser-testing-blocks-gh-egmzo3` (G+H) | none | — | scripts + harness SQL only |
+| 4 | `block-ab-audit-6fogsm` (I) | none | 217 files / **3700** (29 skipped) | |
+| 5 | `block-ab-audit-8xz6fb` (D+J) | none | — | **`admin-products.ts` verified: both anchors present** — `editableDoseValues` ×4 (D) and `sniffImageType` ×2 (I) |
+| 6 | `block-ab-audit-zuuyuz` (C + E-A) | none mechanically; **2 semantic** | 227 files / **3712** (29 skipped), 3 failing | see below |
+
+## 2.1 The merge conflicts that git did not report
+
+Both Block F branches, Block C and Block E-A wrote their fakes against
+`partner-portal.ts` **as it was before Block A+B landed**. A+B then hardened three
+call sites. Git merged the files cleanly because they are different files — the
+collision is behavioural, and only the test run finds it.
+
+This is the exact failure mode the brief warns about: *a clean-looking merge is
+not proof nothing was lost.* Nothing was lost here — but three suites started
+failing for reasons unrelated to the defects they were written to catch, and a
+careless resolution would have "fixed" them by weakening the assertions.
+
+### 2.1.a `payout-authority-guards.test.ts` — 3 failures, product code CORRECT
+
+`autoApproveEligibleCommissions` now requires **both** `ambassadors.status` and
+`partners.status` to be `approved` (A+B's **F-019**), and claims its rows with
+`.eq("payment_status","pending").select(...)` (A+B's **F-016**). Block E-A's fake
+seeded only `ambassadors` and its `update` chain ended at `.in()`.
+
+**Resolution: the fixture was wrong, not the code.** The fake now
+- serves a `partners` table alongside `ambassadors`;
+- models the **claim-guarded** update — `.in().eq().select()` returns only rows
+  that still hold the guarded value.
+
+Three new tests were added, each of which the old fake could not have expressed:
+
+| new test | proves |
+|---|---|
+| refuses a ripe commission when only `ambassadors` says approved | F-019 |
+| refuses a ripe commission when only `partners` says approved | F-019 |
+| does not re-approve a commission reversed between the read and the write | **F-016** |
+
+**Mutation controls (run, recorded):**
+
+| mutation | result |
+|---|---|
+| delete the hold-period comparison (**M07**) | **3 failures** — matches Block E-A's recorded control exactly |
+| drop the `partners` half of the two-table gate | **1 failure** |
+| drop `.eq("payment_status","pending")` from the approval update | **1 failure** — *this survived before the new test; it is the gap the merge exposed* |
+
+`12 passed (12)`.
+
+### 2.1.b `approval-email-commission-rate.test.ts` — 6 failures, and **C-01 is CLOSED**
+
+Block C committed these RED as evidence for **historical defect #3**, stating the
+fix belonged to A+B. **A+B had already written it** (F-017: read the rate back
+from the authoritative `ambassadors` row *after* the write; F-018: an update
+matching zero rows is not success). The two branches never saw each other.
+
+Block C's fake swallowed writes and ended its update chain at `.eq()`, so the
+tests crashed on `.select is not a function` before they could observe the fix.
+
+**Resolution: the fixture now applies writes** and supports `.eq().select()`, so
+the post-write read-back can be observed at all. **No assertion was changed.**
+All six turn green — which is precisely the acceptance criterion Block C set.
+
+One new negative control was added for F-018: approving someone with no
+`ambassadors` row must reject and send nothing.
+
+**Mutation controls (run, recorded):**
+
+| mutation | result |
+|---|---|
+| read the rate from the pre-write `partners` mirror (**the original defect #3**) | **4 failures** |
+| drop the zero-rows-is-not-success guard (F-018) | **1 failure** |
+| re-send the approval email on a non-transition | **1 failure** |
+
+`7 passed (7)`. **Historical defect #3 is closed, with an independent test from a
+block that did not write the fix.**
+
+### 2.1.c `order-email-sweep-duplicate.test.ts` — 3 failures, GENUINE, carried to Phase 4
+
+C-02 is a real unfixed defect: the retry sweep delivers a receipt without closing
+the send-once slot, so a later caller can claim the released slot and send the
+customer a second one. These stay RED until Phase 4 fixes them.
+
+**Running total after merge 6: 227 files / 3712 tests, 3 failing — all three are
+C-02, all three deliberate.**

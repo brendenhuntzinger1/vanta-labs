@@ -48,6 +48,21 @@ const db = {
   referralOrders: [] as ReferralOrder[],
   orders: [] as Array<{ order_id: string; payment_status: string }>,
   ambassadors: [] as Array<{ id: string; status: string }>,
+  /**
+   * `partners` is a separate gate. F-019 (block A+B) made auto-approval require
+   * BOTH tables to say "approved"; before that, accrual read `ambassadors` and
+   * payout read `partners`, so a drift between them half-broke the pipeline in
+   * either direction. Seeding only one table here would silently stop testing
+   * the hold period and start testing the drift guard instead.
+   */
+  partners: [] as Array<{ id: string; status: string }>,
+  /**
+   * Fired once, immediately after the pending-commission SELECT resolves, to
+   * model something landing between the read and the write — a refund reversing
+   * a row, an admin releasing a payout, a second sweep still running. F-016's
+   * claim guard exists for exactly this window and nothing crossed it before.
+   */
+  mutateAfterRead: null as null | (() => void),
   /** Every UPDATE applied to referral_orders, so we can see what was approved. */
   approvals: [] as Array<{ ids: string[]; status: string }>,
 };
@@ -91,18 +106,59 @@ vi.mock("@/lib/supabase-server", () => {
         },
         then(resolve: (v: unknown) => unknown) {
           const statuses = (b as { _statuses: string[] })._statuses;
-          const rows = db.referralOrders.filter((r) => statuses.includes(r.payment_status));
+          // Snapshot: the caller holds these rows even if the table moves on.
+          const rows = db.referralOrders
+            .filter((r) => statuses.includes(r.payment_status))
+            .map((r) => ({ ...r }));
+          const hook = db.mutateAfterRead;
+          db.mutateAfterRead = null;
+          hook?.();
           return Promise.resolve(resolve({ data: rows, error: null }));
         },
-        update: (payload: { payment_status?: string }) => ({
-          in(_column: string, ids: string[]) {
-            db.approvals.push({ ids: [...ids], status: String(payload.payment_status ?? "") });
-            for (const row of db.referralOrders) {
-              if (ids.includes(row.id) && payload.payment_status) row.payment_status = payload.payment_status;
-            }
-            return Promise.resolve({ error: null });
-          },
-        }),
+        /**
+         * Models the CLAIM-GUARDED update F-016 introduced:
+         *   .update(...).in("id", ids).eq("payment_status", "pending").select(...)
+         * Only rows that STILL hold the guarded value are claimed, and only the
+         * claimed rows come back. A fake that ignored `.eq` would let this suite
+         * pass while the guard that stops a double payout was missing.
+         */
+        update: (payload: { payment_status?: string }) => {
+          const pending: { ids: string[]; guard?: { column: string; value: string } } = { ids: [] };
+          const chain: Record<string, unknown> = {
+            in(_column: string, ids: string[]) {
+              pending.ids = [...ids];
+              return chain;
+            },
+            eq(column: string, value: string) {
+              pending.guard = { column, value };
+              return chain;
+            },
+            apply() {
+              const claimed = db.referralOrders.filter(
+                (row) =>
+                  pending.ids.includes(row.id) &&
+                  (!pending.guard ||
+                    (row as unknown as Record<string, string>)[pending.guard.column] === pending.guard.value),
+              );
+              db.approvals.push({
+                ids: claimed.map((row) => row.id),
+                status: String(payload.payment_status ?? ""),
+              });
+              for (const row of claimed) {
+                if (payload.payment_status) row.payment_status = payload.payment_status;
+              }
+              return claimed.map((row) => ({ id: row.id, order_id: row.order_id }));
+            },
+            select() {
+              return Promise.resolve({ data: (chain as { apply: () => unknown[] }).apply(), error: null });
+            },
+            then(resolve: (v: unknown) => unknown) {
+              (chain as { apply: () => unknown[] }).apply();
+              return Promise.resolve(resolve({ error: null }));
+            },
+          };
+          return chain;
+        },
       };
       return b;
     }
@@ -116,20 +172,24 @@ vi.mock("@/lib/supabase-server", () => {
       return b;
     }
 
-    if (table === "ambassadors") {
+    if (table === "ambassadors" || table === "partners") {
+      const rows = table === "ambassadors" ? () => db.ambassadors : () => db.partners;
       const b: Record<string, unknown> = {
         select: () => b,
         in: () => b,
-        then: (resolve: (v: unknown) => unknown) => Promise.resolve(resolve({ data: db.ambassadors, error: null })),
+        then: (resolve: (v: unknown) => unknown) => Promise.resolve(resolve({ data: rows(), error: null })),
       };
       return b;
     }
 
+    // Any other table (notably `commissions`, the mirror ledger) accepts the
+    // full chain and records nothing. It must be chainable through
+    // .update().in().eq() or the mirror write throws instead of being ignored.
     const noop: Record<string, unknown> = {
       select: () => noop,
       eq: () => noop,
       in: () => noop,
-      update: () => ({ in: async () => ({ error: null }), eq: async () => ({ error: null }) }),
+      update: () => noop,
       then: (resolve: (v: unknown) => unknown) => Promise.resolve(resolve({ data: [], error: null })),
     };
     return noop;
@@ -159,7 +219,9 @@ beforeEach(() => {
   db.referralOrders = [];
   db.orders = [];
   db.ambassadors = [{ id: "amb-1", status: "approved" }];
+  db.partners = [{ id: "amb-1", status: "approved" }];
   db.approvals = [];
+  db.mutateAfterRead = null;
   vi.clearAllMocks();
 });
 
@@ -232,6 +294,54 @@ describe("the commission hold period is enforced (kills M07)", () => {
     await autoApproveEligibleCommissions();
 
     expect(statusOf("ripe")).toBe("approved_for_payout");
+  });
+
+  /**
+   * F-019's own guarantee, asserted here because this suite is the only place
+   * that drives the real autoApproveEligibleCommissions. Accrual and payout
+   * release used to read different tables; a commission could reach
+   * approved_for_payout for someone the payout gate would then refuse forever.
+   * Either table saying "not approved" must stop it.
+   */
+  it("refuses a ripe commission when only `ambassadors` says approved", async () => {
+    db.partners = [{ id: "amb-1", status: "pending" }];
+    db.referralOrders = [seedCommission("ripe", HOLD_DAYS + 1)];
+    db.orders = [{ order_id: "order-ripe", payment_status: "paid" }];
+
+    await autoApproveEligibleCommissions();
+
+    expect(statusOf("ripe")).toBe("pending");
+    expect(db.approvals).toHaveLength(0);
+  });
+
+  it("refuses a ripe commission when only `partners` says approved", async () => {
+    db.ambassadors = [{ id: "amb-1", status: "pending" }];
+    db.referralOrders = [seedCommission("ripe", HOLD_DAYS + 1)];
+    db.orders = [{ order_id: "order-ripe", payment_status: "paid" }];
+
+    await autoApproveEligibleCommissions();
+
+    expect(statusOf("ripe")).toBe("pending");
+    expect(db.approvals).toHaveLength(0);
+  });
+
+  /**
+   * F-016. The select and the update are separate requests. Without
+   * `.eq("payment_status", "pending")` on the update, a commission reversed in
+   * that window is dragged back into the payout queue and paid a second time.
+   */
+  it("does not re-approve a commission reversed between the read and the write", async () => {
+    db.referralOrders = [seedCommission("ripe", HOLD_DAYS + 1)];
+    db.orders = [{ order_id: "order-ripe", payment_status: "paid" }];
+    db.mutateAfterRead = () => {
+      const row = db.referralOrders.find((r) => r.id === "ripe");
+      if (row) row.payment_status = "reversed";
+    };
+
+    await autoApproveEligibleCommissions();
+
+    expect(statusOf("ripe")).toBe("reversed");
+    expect(db.approvals).toEqual([{ ids: [], status: "approved_for_payout" }]);
   });
 
   it("approves only the aged commission when fresh ones sit beside it", async () => {

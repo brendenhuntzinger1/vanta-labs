@@ -37,6 +37,8 @@ const state = {
   /** ambassadors.commission_percent — authoritative; what checkout pays. */
   ambassadorsCommission: "25.00" as string | number | null,
   programDefaultCommission: 10,
+  /** F-018: an update that matches no `ambassadors` row must not report success. */
+  ambassadorsRowExists: true,
 };
 
 const sent: Array<{ to: string; subject: string; html: string; text?: string }> = [];
@@ -69,6 +71,43 @@ vi.mock("@/lib/ambassador-settings", () => ({
   getAmbassadorMarketingResources: async () => [],
 }));
 
+/**
+ * A writable update builder.
+ *
+ * updatePartnerStatus writes the new rate and then reads it back from the
+ * AUTHORITATIVE table before composing the email (block A+B, F-017), and it
+ * treats an update that matched zero rows as a hard failure (F-018), which is
+ * why the chain has to support `.eq(...).select(...)` and why the write has to
+ * actually land in `state`. A fake that swallowed writes would let this file
+ * pass while the email quoted a number nobody was ever paid.
+ */
+function updateBuilder(apply: (payload: Record<string, unknown>) => void) {
+  return (payload: Record<string, unknown>) => {
+    let applied = false;
+    const run = () => {
+      if (!applied) {
+        applied = true;
+        apply(payload);
+      }
+    };
+    const chain: Record<string, unknown> = {
+      eq() { return chain; },
+      select() {
+        run();
+        return Promise.resolve({
+          data: state.ambassadorsRowExists ? [{ id: PARTNER_ID }] : [],
+          error: null,
+        });
+      },
+      then(resolve: (v: unknown) => unknown) {
+        run();
+        return Promise.resolve(resolve({ error: null }));
+      },
+    };
+    return chain;
+  };
+}
+
 vi.mock("@/lib/supabase-server", () => {
   const from = (table: string) => {
     if (table === "partners") {
@@ -100,7 +139,12 @@ vi.mock("@/lib/supabase-server", () => {
           };
           return b;
         },
-        update: () => ({ eq: async () => ({ error: null }) }),
+        update: updateBuilder((payload) => {
+          if (payload.commission_percent !== undefined) {
+            state.partnersCommission = payload.commission_percent as string | number | null;
+          }
+          if (payload.status !== undefined) state.status = payload.status as string;
+        }),
       };
     }
     if (table === "ambassadors") {
@@ -116,7 +160,11 @@ vi.mock("@/lib/supabase-server", () => {
             },
           }),
         }),
-        update: () => ({ eq: async () => ({ error: null }) }),
+        update: updateBuilder((payload) => {
+          if (payload.commission_percent !== undefined) {
+            state.ambassadorsCommission = payload.commission_percent as string | number | null;
+          }
+        }),
       };
     }
     const noop: Record<string, unknown> = {
@@ -130,7 +178,14 @@ vi.mock("@/lib/supabase-server", () => {
         select: () => ({ single: async () => ({ data: { id: "queue-1" }, error: null }) }),
         then: (resolve: (v: unknown) => unknown) => Promise.resolve(resolve({ error: null })),
       }),
-      update: () => ({ eq: async () => ({ error: null }) }),
+      update: () => {
+        const chain: Record<string, unknown> = {
+          eq: () => chain,
+          select: () => Promise.resolve({ data: [], error: null }),
+          then: (resolve: (v: unknown) => unknown) => Promise.resolve(resolve({ error: null })),
+        };
+        return chain;
+      },
     };
     return noop;
   };
@@ -157,6 +212,7 @@ beforeEach(() => {
   state.partnersCommission = "10.00";
   state.ambassadorsCommission = "25.00";
   state.programDefaultCommission = 10;
+  state.ambassadorsRowExists = true;
   sent.length = 0;
   vi.clearAllMocks();
 });
@@ -217,6 +273,21 @@ describe("negative controls", () => {
     await updatePartnerStatus({ partnerId: PARTNER_ID, status: "approved" });
 
     expect(quotedPercent()).toBe(12);
+  });
+
+  /**
+   * F-018 (block A+B). Approving someone with no `ambassadors` row used to
+   * return 200, send them an approval email and write an audit row naming a
+   * table it never touched. It must now refuse, and send nothing.
+   */
+  it("refuses, and sends nothing, when no ambassadors row was matched", async () => {
+    state.ambassadorsRowExists = false;
+
+    await expect(
+      updatePartnerStatus({ partnerId: PARTNER_ID, status: "approved", commissionPercent: 20 }),
+    ).rejects.toThrow(/no record in the ambassadors table/i);
+
+    expect(approvalEmail()).toBeUndefined();
   });
 
   /** A rate edit that is not a transition must not re-send the approval email. */
