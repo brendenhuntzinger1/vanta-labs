@@ -4,6 +4,7 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { createServerClient, supabaseAdmin } from "@/lib/supabase-server";
 import { awardReferralSignupBonus, awardSignupBonusIfNeeded } from "@/lib/membership";
 import { getUserIdByReferralCode, setReferredByCode } from "@/lib/customer-account";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 export async function POST(request: Request) {
   try {
@@ -73,7 +74,13 @@ export async function POST(request: Request) {
 
     return response;
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to set session";
+    // Sanitised rather than echoed. safe-error.ts:5-16 is explicit that a raw
+    // message hands a shopper a vendor hostname, a Postgres relation/column
+    // name or an env-var name. Logged in full server-side, so no diagnostic
+    // is lost; a genuinely shopper-written message still passes through,
+    // because the sanitiser is a deny-list.
+    console.error("[auth/session]", error);
+    const message = customerSafeMessage(error, "Unable to set session");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }

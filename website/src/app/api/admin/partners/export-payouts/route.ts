@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds } from "@/lib/admin-roles";
+// Partner name, email and referral code come from the PUBLIC application form.
+// This escaper neutralises a leading formula character; the local one it
+// replaced only quoted, which a spreadsheet strips before evaluating.
+import { csvSafeCell } from "@/lib/csv-safe";
 import { getAdminPartnerRows } from "@/lib/partner-portal";
-
-function escapeCsv(value: string) {
-  return `"${value.replace(/"/g, '""')}"`;
-}
 
 export async function GET(request: Request) {
   const session = await verifyAdminSessionFromRequest(request);
@@ -40,10 +40,10 @@ export async function GET(request: Request) {
 
     for (const row of rows) {
       lines.push([
-        escapeCsv(row.name),
-        escapeCsv(row.email ?? ""),
-        escapeCsv(row.referralCode),
-        escapeCsv(row.status),
+        csvSafeCell(row.name),
+        csvSafeCell(row.email ?? ""),
+        csvSafeCell(row.referralCode),
+        csvSafeCell(row.status),
         row.commissionPercent.toFixed(2),
         row.totalRevenue.toFixed(2),
         String(row.totalOrders),

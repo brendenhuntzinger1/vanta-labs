@@ -2,8 +2,31 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import { CONSENT_COOKIE_NAME } from "@/lib/cookie-consent-server";
 
 const STORAGE_KEY = "vl_cookie_consent";
+const CONSENT_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
+
+/**
+ * Publish the choice where the SERVER can see it.
+ *
+ * localStorage alone is invisible to route handlers, and `/r/[code]` was
+ * recording consent-gated data (utm_*, referrer, user agent, IP) because of it
+ * — see src/lib/cookie-consent-server.ts. The cookie holds the same literal
+ * "accepted"/"declined" string and no identifier of any kind; storing a
+ * visitor's own privacy preference is essential storage under any reading of
+ * the policy.
+ */
+function publishConsentCookie(choice: "accepted" | "declined") {
+  try {
+    document.cookie =
+      `${CONSENT_COOKIE_NAME}=${choice}; path=/; max-age=${CONSENT_COOKIE_MAX_AGE}; samesite=lax`
+      + (window.location.protocol === "https:" ? "; secure" : "");
+  } catch {
+    /* no-op — a browser that refuses the cookie is read as "unset", which is
+       treated exactly like a decline. */
+  }
+}
 
 // Analytics remains disabled until the visitor explicitly accepts. Essential
 // store/session cookies continue to work regardless of this preference.
@@ -12,9 +35,21 @@ export function CookieConsent() {
 
   useEffect(() => {
     try {
-      if (!window.localStorage.getItem(STORAGE_KEY)) {
+      const stored = window.localStorage.getItem(STORAGE_KEY);
+      if (!stored) {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setVisible(true);
+      } else if (stored === "accepted" || stored === "declined") {
+        // BACKFILL for anyone who answered before the cookie existed.
+        //
+        // Without this they keep the old behaviour forever: they have a
+        // localStorage answer, so the banner never reappears, so the cookie is
+        // never written, so every server route keeps reading "unset". That
+        // would leave an accepting visitor under-served and, worse, leave a
+        // DECLINING visitor indistinguishable from one who never answered.
+        if (!document.cookie.split(";").some((c) => c.trim().startsWith(`${CONSENT_COOKIE_NAME}=`))) {
+          publishConsentCookie(stored);
+        }
       }
     } catch {
       // If storage is unavailable, don't nag.
@@ -49,6 +84,7 @@ export function CookieConsent() {
     } catch {
       /* no-op */
     }
+    publishConsentCookie(choice);
     window.dispatchEvent(new Event("vanta:cookie-consent"));
     setVisible(false);
   };

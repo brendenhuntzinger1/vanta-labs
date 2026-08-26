@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { computeOrderProfit } from "@/lib/order-profit";
 import { buildReplacementItems } from "@/lib/admin-replacements";
+import { isSaleOrder } from "@/lib/ledger";
 
 // ===========================================================================
 // A REPLACEMENT IS NOT A SALE AND NOT A REFUND.
@@ -132,13 +133,47 @@ describe("quantities cannot exceed what was purchased", () => {
 });
 
 describe("a replacement is not counted as a sale", () => {
-  it("the dashboard counts sales and reshipments separately", () => {
-    // THE DEFECT: `orderCount += 1` fired for replacements too, so 100 sales
-    // plus 3 reships reported 103 orders — and average order value and average
-    // profit per order were divided by three extra $0 denominators.
-    expect(profitLib).toContain('String(row.orderType ?? "").toLowerCase() === "replacement"');
-    expect(profitLib).toContain("replacementCount += 1");
-    expect(profitLib).toContain("replacementCount,");
+  // WAS A PLACEBO. This describe used to assert that admin-profit.ts CONTAINED
+  // the literal 'String(row.orderType ?? "").toLowerCase() === "replacement"'.
+  // That grep cannot fail for the defect its own comment describes: rewriting
+  // the branch to `orderCount += 1` while leaving the string anywhere in the
+  // file — in a comment, in an unused local — passes. It did fail, once: on a
+  // behaviour-preserving refactor that moved the rule into ledger.ts. A test
+  // that goes red on a safe refactor and stays green on the real bug is worse
+  // than no test.
+  //
+  // The rule now lives in ONE place, so it can be exercised directly, and the
+  // end-to-end count is pinned behaviourally against a real Postgres in
+  // src/lib/admin-financial-surfaces.test.ts ("every surface counts the same
+  // 102 sales, and never counts a reship as one").
+  it("the ledger predicate says a reship is not a sale", () => {
+    expect(isSaleOrder("replacement")).toBe(false);
+    // Everything else is. A membership is a real paid sale that simply never
+    // ships; excluding it here would erase real revenue from the books.
+    expect(isSaleOrder("product")).toBe(true);
+    expect(isSaleOrder("membership")).toBe(true);
+    // An order predating the column, or with junk in it, is a sale by default —
+    // failing open on the count is safer than silently dropping real revenue.
+    expect(isSaleOrder(null)).toBe(true);
+    expect(isSaleOrder(undefined)).toBe(true);
+    expect(isSaleOrder("PRODUCT")).toBe(true);
+    // Case-insensitive, so a differently-cased writer cannot smuggle one in.
+    expect(isSaleOrder("Replacement")).toBe(false);
+  });
+
+  it("100 sales and 3 reships is 100 sales, not 103", () => {
+    // The arithmetic the defect got wrong, computed here rather than grepped
+    // for: the denominator behind average order value.
+    const orderTypes = [
+      ...Array.from({ length: 100 }, () => "product"),
+      ...Array.from({ length: 3 }, () => "replacement"),
+    ];
+    const sales = orderTypes.filter(isSaleOrder).length;
+    const reships = orderTypes.length - sales;
+    expect(sales).toBe(100);
+    expect(reships).toBe(3);
+    // $21,500 over 100 sales, not over 103 rows.
+    expect(Math.round((21500 / sales) * 100) / 100).toBe(215);
   });
 
   it("but its COSTS are still counted, because they were really spent", () => {

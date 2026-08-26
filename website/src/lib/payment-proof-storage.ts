@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { imageExtensionFor, sniffImageType } from "@/lib/image-upload-safety";
 
 export const PAYMENT_PROOF_BUCKET = "payment-proofs";
 
@@ -28,38 +29,13 @@ async function ensureBucket() {
   ensuredBucket = true;
 }
 
-// Sniffs the leading bytes to confirm the file really is one of the allowed
-// image types, rather than trusting the client-supplied Content-Type.
-function detectImageType(bytes: Uint8Array): string | null {
-  if (bytes.length < 12) return null;
-  // PNG: 89 50 4E 47
-  if (bytes[0] === 0x89 && bytes[1] === 0x50 && bytes[2] === 0x4e && bytes[3] === 0x47) return "image/png";
-  // JPEG: FF D8 FF
-  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) return "image/jpeg";
-  // GIF: 47 49 46 38
-  if (bytes[0] === 0x47 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x38) return "image/gif";
-  // WEBP: RIFF....WEBP
-  if (
-    bytes[0] === 0x52 && bytes[1] === 0x49 && bytes[2] === 0x46 && bytes[3] === 0x46 &&
-    bytes[8] === 0x57 && bytes[9] === 0x45 && bytes[10] === 0x42 && bytes[11] === 0x50
-  ) {
-    return "image/webp";
-  }
-  return null;
-}
-
-function extensionForType(type: string) {
-  switch (type) {
-    case "image/png":
-      return "png";
-    case "image/webp":
-      return "webp";
-    case "image/gif":
-      return "gif";
-    default:
-      return "jpg";
-  }
-}
+// This file had its own copy of the sniffer, and it was correct -- but a third
+// upload path had none at all, so the sniffer moved to image-upload-safety.ts
+// and this delegates to it. Behaviour here is unchanged: ALLOWED_MIME above
+// still runs first and still excludes AVIF, so the shared sniffer's wider type
+// list cannot widen this gate.
+const detectImageType = sniffImageType;
+const extensionForType = imageExtensionFor;
 
 export interface PaymentProofUploadResult {
   /** Storage path (NOT a public URL). Persist this on the order. */

@@ -46,7 +46,9 @@ vi.mock("@/lib/email/retry-queue", () => ({ enqueueFailedEmail }));
 vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://example.test" }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: vi.fn(async () => {}) }));
 
-vi.mock("@/lib/supabase-server", () => {
+vi.mock("@/lib/supabase-server", async () => {
+  // Postgres-faithful update semantics: see the double's own header.
+  const { ordersUpdateDouble } = await import("./test-support/orders-table-double");
   const from = (table: string) => {
     if (table === "shippo_webhook_events") {
       return {
@@ -60,9 +62,15 @@ vi.mock("@/lib/supabase-server", () => {
         },
         update: () => ({ eq: async () => ({ error: null }) }),
         delete: () => ({
-          eq: async (_c: string, v: string) => {
-            state.claimedKeys.delete(v);
-            return { error: null };
+          eq: (_c: string, v: string) => {
+            const done = () => {
+              state.claimedKeys.delete(v);
+              return { error: null };
+            };
+            return {
+              is: async () => done(),
+              then: (r: (x: { error: null }) => unknown) => Promise.resolve(done()).then(r),
+            };
           },
         }),
       };
@@ -92,14 +100,14 @@ vi.mock("@/lib/supabase-server", () => {
           };
           return b;
         },
-        update: (payload: Record<string, unknown>) => ({
-          eq: async () => {
+        update: ordersUpdateDouble({
+          currentStatus: () => state.fulfillmentStatus,
+          onCommit: (payload) => {
             state.updates.push(payload);
             if (typeof payload.fulfillment_status === "string") {
               state.fulfillmentStatus = payload.fulfillment_status;
             }
             if (payload.shipped_at) state.shippedAt = String(payload.shipped_at);
-            return { error: null };
           },
         }),
       };

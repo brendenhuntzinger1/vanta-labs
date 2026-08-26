@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { createAdminProduct, updateAdminProduct, listAdminProducts } from "@/lib/admin-products";
+import { csvSafeCell } from "@/lib/csv-safe";
 
 const CSV_COLUMNS = [
   "slug",
@@ -20,14 +21,6 @@ const CSV_COLUMNS = [
   "batchNumber",
   "coaUrl",
 ] as const;
-
-function csvEscape(value: unknown) {
-  const text = String(value ?? "");
-  if (/[",\n]/.test(text)) {
-    return `"${text.replaceAll("\"", "\"\"")}"`;
-  }
-  return text;
-}
 
 function toDollarsString(currencyString: string | undefined) {
   if (!currencyString) return "";
@@ -60,7 +53,7 @@ export async function exportProductsCsv(): Promise<string> {
 
   return [
     CSV_COLUMNS.join(","),
-    ...rows.map((row) => CSV_COLUMNS.map((key) => csvEscape(row[key as keyof typeof row])).join(",")),
+    ...rows.map((row) => CSV_COLUMNS.map((key) => csvSafeCell(row[key as keyof typeof row])).join(",")),
   ].join("\n");
 }
 

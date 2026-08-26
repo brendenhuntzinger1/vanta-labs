@@ -12,6 +12,30 @@ import type { EmailSendResult, EmailTemplate } from "@/lib/email/types";
 // updates, billing confirmations/reminders) must keep using sendEmail()
 // directly - they're never suppressible, per the transactional carve-out
 // most email marketing laws (CAN-SPAM, etc.) allow.
+/**
+ * Is this address unsubscribed from marketing email?
+ *
+ * sendMarketingEmail applies this same gate internally, but it reports the
+ * result as `{ success: false, suppressed: true }` — indistinguishable, to a
+ * caller that only checks `success`, from a provider outage. Callers that do
+ * work BEFORE sending (minting a coupon, reserving a slot) need to know the
+ * difference in advance, because "this person will never receive it" and "this
+ * person might receive it on a retry" call for opposite behaviour.
+ *
+ * See finding C-06: cart recovery treated a suppressed recipient as a retryable
+ * failure and re-minted a coupon for them on every sweep, for ever.
+ */
+export async function isMarketingSuppressed(to: string): Promise<boolean> {
+  const email = to.trim().toLowerCase();
+  if (!email) return false;
+  const { data } = await supabaseAdmin
+    .from("email_suppressions")
+    .select("email")
+    .eq("email", email)
+    .maybeSingle();
+  return Boolean(data);
+}
+
 export async function sendMarketingEmail(
   input: { to: string; campaignType: string; referenceId?: string; templateKey: string; openTrackingPixelUrl?: string } & EmailTemplate,
 ): Promise<EmailSendResult & { suppressed?: boolean }> {

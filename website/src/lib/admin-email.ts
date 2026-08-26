@@ -1,11 +1,11 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { isPaidOrderStatus, netOrderRevenue } from "@/lib/ledger";
+import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
 import { loadConsentedAudience } from "@/lib/email/audience";
 import { isSafeSitePath } from "@/lib/email/cta-path";
 import { getSiteUrl } from "@/lib/env";
-import { readAllRows } from "@/lib/supabase-page";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 
 /**
  * Reporting for the admin Email tab.
@@ -68,19 +68,25 @@ export async function getEmailDashboard(): Promise<EmailDashboard> {
       .select("id, name, subject, segment, segment_param, status, created_at, scheduled_at, completed_at, recipient_count")
       .order("created_at", { ascending: false })
       .limit(100),
-    readAllRows<{ campaign_id: string; status: string; opened_at: string | null; clicked_at: string | null }>(
+    // Reporting, not sending — a short read here misstates open rates rather
+    // than mailing anyone, so it is bounded but not fatal (F-A-19).
+    readAllRowsBounded<{ campaign_id: string; status: string; opened_at: string | null; clicked_at: string | null }>(
       (from, to) => supabaseAdmin
         .from("email_campaign_recipients")
         .select("campaign_id, status, opened_at, clicked_at")
+        .order("campaign_id", { ascending: true })
         .range(from, to),
-    ),
-    readAllRows<{ attributed_campaign_id: string; payment_status: string; amount_paid: number | null; refund_amount: number | null }>(
+      { maxRows: 500_000, label: "campaign recipient read" },
+    ).then((r) => r.rows),
+    readAllRowsBounded<{ attributed_campaign_id: string; payment_status: string; order_type: string | null; amount_paid: number | null; refund_amount: number | null }>(
       (from, to) => supabaseAdmin
         .from("orders")
-        .select("attributed_campaign_id, payment_status, amount_paid, refund_amount")
+        .select("attributed_campaign_id, payment_status, order_type, amount_paid, refund_amount")
         .not("attributed_campaign_id", "is", null)
+        .order("attributed_campaign_id", { ascending: true })
         .range(from, to),
-    ),
+      { maxRows: 500_000, label: "campaign attribution read" },
+    ).then((r) => r.rows),
   ]);
 
   type Tally = { sent: number; failed: number; suppressed: number; pending: number; cancelled: number; opened: number; clicked: number };
@@ -108,7 +114,14 @@ export async function getEmailDashboard(): Promise<EmailDashboard> {
 
   const revenueByCampaign = new Map<string, { orders: number; revenue: number }>();
   for (const row of orderRows) {
-    if (!isPaidOrderStatus(row.payment_status as string | null)) continue;
+    // The canonical revenue rule, not the narrower "captured" one (review
+    // finding 4). A campaign that drove a $200 order later refunded by $50
+    // earned $150, and reported $0 here while the revenue page said $150.
+    // isSaleOrder additionally keeps free replacement reships out of the ORDER
+    // COUNT — they contribute no revenue but silently pad the denominator of
+    // any revenue-per-order figure read off this dashboard.
+    if (!isRevenueOrderStatus(row.payment_status as string | null)) continue;
+    if (!isSaleOrder((row as { order_type?: string | null }).order_type)) continue;
     const id = String(row.attributed_campaign_id ?? "");
     if (!id) continue;
     const entry = revenueByCampaign.get(id) ?? { orders: 0, revenue: 0 };

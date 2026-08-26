@@ -44,3 +44,10 @@ next-env.d.ts
 
 # local test-rig stub (Postgres shim used by the audit harness)
 .pgrst-shim.mjs
+.env.test
+
+# Audit probe scratch - agent working files, never part of the suite.
+# NOTE: .gitignore does NOT keep these out of vitest, which does not consult it.
+# vitest.config.ts excludes scratchpad separately; both are required.
+/scratchpad/*.test.ts
+/scratch-verify/

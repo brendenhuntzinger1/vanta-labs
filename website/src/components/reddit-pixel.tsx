@@ -3,6 +3,8 @@
 import Script from "next/script";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+
+import { browserAdsReportingAllowed } from "@/lib/ads/ads-environment";
 import { REDDIT_PIXEL_ID } from "@/lib/ads/reddit-pixel-id";
 
 /**
@@ -71,6 +73,25 @@ const MATCH_KEY_TIMEOUT_MS = 1500;
 
 export function RedditPixel() {
   const [accepted, setAccepted] = useState(false);
+  /**
+   * K-16. Consent is necessary and NOT sufficient: a preview deployment, a local
+   * run, a CI job or a Playwright script must never reach the live ad account,
+   * because the pixel ids fall back to production values. See
+   * src/lib/ads/ads-environment.ts.
+   *
+   * Resolved in an effect rather than during render, and starting FALSE, for the
+   * same reason `accepted` is: two of its inputs (location.hostname,
+   * navigator.webdriver) exist only in the browser, so deciding during render
+   * would make the server and the client disagree and React would hydrate onto
+   * different markup. Starting closed also means the safe answer is the one that
+   * survives a hydration failure.
+   */
+  const [adsAllowed, setAdsAllowed] = useState(false);
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAdsAllowed(browserAdsReportingAllowed().allowed);
+  }, []);
   // undefined = still deciding, null = resolved with no keys (guest, error or
   // timeout). The script waits only for the transition out of undefined.
   const [matchKeys, setMatchKeys] = useState<MatchKeys | null | undefined>(undefined);
@@ -95,7 +116,7 @@ export function RedditPixel() {
   // navigation: init happens once, so a later answer could not be applied
   // without a second init, and a second init double-counts.
   useEffect(() => {
-    if (!accepted) return;
+    if (!adsAllowed || !accepted) return;
     let cancelled = false;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), MATCH_KEY_TIMEOUT_MS);
@@ -116,20 +137,21 @@ export function RedditPixel() {
       clearTimeout(timer);
       controller.abort();
     };
-  }, [accepted]);
+  }, [adsAllowed, accepted]);
 
   // A single-page app: after the first load, navigation never reloads the
   // document, so without this every visit would report exactly one page view
   // however much of the site someone read.
   useEffect(() => {
-    if (!accepted) return;
+    if (!adsAllowed || !accepted) return;
     if (!initialPageSent.current) {
       initialPageSent.current = true;
       return;
     }
     window.rdt?.("track", "PageVisit");
-  }, [accepted, pathname, searchParams]);
+  }, [adsAllowed, accepted, pathname, searchParams]);
 
+  if (!adsAllowed) return null;
   if (!accepted) return null;
   // Still waiting on the lookup. It resolves within MATCH_KEY_TIMEOUT_MS in
   // every case including failure, so this is a brief delay, never a dead end.

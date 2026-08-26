@@ -1,4 +1,4 @@
-// ============================================================================
+// =====================================================================
 // CANONICAL LEDGER PREDICATES — the single source of truth every report,
 // dashboard, and aggregation MUST use so no two surfaces ever disagree on what
 // "paid", "earned commission", or "revenue" means. Before this module, the
@@ -24,13 +24,52 @@ export function isPaidOrderStatus(status: string | null | undefined): boolean {
   return PAID_ORDER_STATUSES.has(String(status ?? "").toLowerCase());
 }
 
+// The order payment states that CONTRIBUTE REVENUE — captured money, plus the
+// money RETAINED on an order that was only partly refunded.
+//
+// Owner's decision, recorded because reports had disagreed about it: a $200
+// order refunded by $50 is $150 of revenue. It is still an order, it still
+// counts, and what the customer kept paying for is still the store's. Only the
+// $50 goes away.
+//
+// This is deliberately WIDER than PAID_ORDER_STATUSES. A fully refunded order
+// is excluded here because netOrderRevenue() would give it 0 anyway, and
+// counting it would drag average order value down with a $0 denominator. The
+// difference between the two sets is exactly `partially_refunded`.
+//
+// MIRRORED IN SQL: src/lib/sql/admin-dashboard-rollups.sql. The two are kept in
+// step by ledger-sql-parity.test.ts, which fails if either side changes alone.
+export const REVENUE_ORDER_STATUSES = new Set([...PAID_ORDER_STATUSES, "partially_refunded"]);
+
+export function isRevenueOrderStatus(status: string | null | undefined): boolean {
+  return REVENUE_ORDER_STATUSES.has(String(status ?? "").toLowerCase());
+}
+
+// The order types that are NOT sales. A `replacement` is an outbound reshipment
+// the store paid for itself: payment_status is "paid" and amount_paid is 0, so
+// every count that filters on status alone counts it as an order and divides
+// revenue by a denominator that includes it — 100 sales plus 3 reships reports
+// 103 orders and drags average order value down with three $0 denominators.
+//
+// A `membership` IS a sale (real money, real revenue). It is excluded from
+// FULFILLMENT because nothing ships, which is a different question answered by
+// a different filter. Nothing here may be used to drop it from revenue.
+export const NON_SALE_ORDER_TYPES = new Set(["replacement"]);
+
+export function isSaleOrder(orderType: string | null | undefined): boolean {
+  return !NON_SALE_ORDER_TYPES.has(String(orderType ?? "product").toLowerCase());
+}
+
 function round2(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-// NET revenue for a captured order = money actually kept after refunds. Gross
-// `amount_paid` overstates revenue whenever a PARTIAL refund left the order in
-// "paid" (a full refund flips status out of "paid" and is excluded upstream).
+// NET revenue for an order = money actually kept after refunds. Gross
+// `amount_paid` overstates revenue whenever any refund has been issued.
+//
+// This is THE definition of revenue for the whole system — a $200 order refunded
+// by $50 is $150 — and every reporting surface must reach it, either through
+// this function or through the identical expression in the SQL rollups.
 export function netOrderRevenue(order: { amount_paid?: number | null; refund_amount?: number | null }): number {
   const paid = Number(order.amount_paid ?? 0);
   const refunded = Number(order.refund_amount ?? 0);

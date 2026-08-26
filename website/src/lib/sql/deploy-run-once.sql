@@ -819,7 +819,18 @@ begin
   return jsonb_build_object('redeemed', true, 'redemptions_count', new_count);
 end;
 $$;
-grant execute on function public.redeem_coupon(text) to service_role;
+do $rpc_lockdown$
+begin
+  -- Guarded so this file also runs against a throwaway Postgres: anon,
+  -- authenticated and service_role are Supabase-managed roles that do not exist
+  -- in a bare cluster. Without this, a database-backed test executing this file
+  -- dies on the grant rather than on whatever it was testing.
+  if exists (select 1 from pg_roles where rolname='service_role') then
+    execute $q$grant execute on function public.redeem_coupon(text) to service_role;$q$;
+  end if;
+end
+$rpc_lockdown$;
+
 
 create or replace function public.validate_referral_code(input_code text)
 returns jsonb
@@ -851,7 +862,18 @@ begin
   return result;
 end;
 $$;
-grant execute on function public.validate_referral_code(text) to anon, authenticated;
+do $rpc_lockdown$
+begin
+  -- Guarded so this file also runs against a throwaway Postgres: anon,
+  -- authenticated and service_role are Supabase-managed roles that do not exist
+  -- in a bare cluster. Without this, a database-backed test executing this file
+  -- dies on the grant rather than on whatever it was testing.
+  if exists (select 1 from pg_roles where rolname='anon') then
+    execute $q$grant execute on function public.validate_referral_code(text) to anon, authenticated;$q$;
+  end if;
+end
+$rpc_lockdown$;
+
 
 
 -- ==================== CHUNK 4 — SECURITY HARDENING (2025 audit) ==============
@@ -974,4 +996,56 @@ begin
   return moved > 0;
 end;
 $$;
-grant execute on function public.adjust_inventory_on_sale(text, text, integer) to service_role;
+do $rpc_lockdown$
+begin
+  -- Guarded so this file also runs against a throwaway Postgres: anon,
+  -- authenticated and service_role are Supabase-managed roles that do not exist
+  -- in a bare cluster. Without this, a database-backed test executing this file
+  -- dies on the grant rather than on whatever it was testing.
+  if exists (select 1 from pg_roles where rolname='service_role') then
+    execute $q$grant execute on function public.adjust_inventory_on_sale(text, text, integer) to service_role;$q$;
+  end if;
+end
+$rpc_lockdown$;
+
+
+-- ---------------------------------------------------------------------------
+-- I-11 — close these to anon on creation, rather than sweeping up afterwards.
+--
+-- Supabase's default privilege grants EXECUTE on every function created in
+-- `public` to `anon` and `authenticated`. A SECURITY DEFINER function is
+-- therefore reachable by anyone holding the public anon key the moment it
+-- exists. That is exactly how `create_partner_invite` became an
+-- unauthenticated, RLS-bypassing write into the affiliate money tables (I-07).
+--
+-- Production is currently clean, because migration 20260825003037 swept every
+-- function that existed at that moment. But a sweep is point-in-time and the
+-- default is still armed — HALF of it cannot even be disarmed from this
+-- project's access (see sql/rpc-default-privilege-lockdown.sql for the proof).
+-- So re-running this file in a fresh environment would create these
+-- world-executable, and the sweep would have to be remembered again.
+--
+-- rpc-security-posture.test.ts fails the build if a new function arrives here
+-- without one of these lines.
+-- ---------------------------------------------------------------------------
+do $rpc_lockdown$
+begin
+  -- Guarded so this file also runs against a throwaway Postgres: anon,
+  -- authenticated and service_role are Supabase-managed roles that do not exist
+  -- in a bare cluster. Without this, a database-backed test executing this file
+  -- dies on the grant rather than on whatever it was testing.
+  if exists (select 1 from pg_roles where rolname='anon') then
+    execute $q$revoke all on function public.adjust_inventory_on_sale(text, text, integer) from public, anon, authenticated;$q$;
+  end if;
+  if exists (select 1 from pg_roles where rolname='service_role') then
+    execute $q$grant execute on function public.adjust_inventory_on_sale(text, text, integer) to service_role;$q$;
+  end if;
+  if exists (select 1 from pg_roles where rolname='anon') then
+    execute $q$revoke all on function public.redeem_coupon(text) from public, anon, authenticated;$q$;
+  end if;
+  if exists (select 1 from pg_roles where rolname='service_role') then
+    execute $q$grant execute on function public.redeem_coupon(text) to service_role;$q$;
+  end if;
+end
+$rpc_lockdown$;
+

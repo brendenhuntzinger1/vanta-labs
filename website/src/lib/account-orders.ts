@@ -43,6 +43,10 @@ export interface AccountOrder {
   subtotal: number;
   shippingAmount: number;
   handlingFee: number;
+  cardProcessingFee: number;
+  shippingProtectionFee: number;
+  storeCreditRedeemedCents: number;
+  pointsRedeemed: number;
   taxAmount: number;
   discountAmount: number;
   amountPaid: number;
@@ -61,7 +65,7 @@ export interface AccountOrder {
 }
 
 const ORDER_SELECT =
-  "order_id, order_number, created_at, paid_at, payment_status, fulfillment_status, currency, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, amount_paid, refund_amount, customer_name, customer_email, customer_user_id, shipping_address, city, state, postal_code, country, phone, payment_method, tracking_number, order_items(product_id, product_name, quantity, unit_price, line_total)";
+  "order_id, order_number, created_at, paid_at, payment_status, fulfillment_status, currency, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, card_processing_fee, shipping_protection_fee, store_credit_redeemed_cents, points_redeemed, amount_paid, refund_amount, customer_name, customer_email, customer_user_id, shipping_address, city, state, postal_code, country, phone, payment_method, tracking_number, order_items(product_id, product_name, quantity, unit_price, line_total)";
 
 type OrderRow = {
   order_id: string;
@@ -74,6 +78,12 @@ type OrderRow = {
   subtotal: number | null;
   shipping_amount: number | null;
   handling_fee: number | null;
+  // Part of amount_paid, and previously read by nothing on this page — which is
+  // why the invoice did not add up. All four exist in production.
+  card_processing_fee: number | null;
+  shipping_protection_fee: number | null;
+  store_credit_redeemed_cents: number | null;
+  points_redeemed: number | null;
   tax_amount: number | null;
   discount_amount: number | null;
   amount_paid: number | null;
@@ -164,6 +174,10 @@ function mapRow(row: OrderRow, items: AccountOrderItem[], shipment: AccountOrder
     subtotal: Number(row.subtotal ?? 0),
     shippingAmount: Number(row.shipping_amount ?? 0),
     handlingFee: Number(row.handling_fee ?? 0),
+    cardProcessingFee: Number(row.card_processing_fee ?? 0),
+    shippingProtectionFee: Number(row.shipping_protection_fee ?? 0),
+    storeCreditRedeemedCents: Number(row.store_credit_redeemed_cents ?? 0),
+    pointsRedeemed: Number(row.points_redeemed ?? 0),
     taxAmount: Number(row.tax_amount ?? 0),
     discountAmount: Number(row.discount_amount ?? 0),
     amountPaid: Number(row.amount_paid ?? 0),

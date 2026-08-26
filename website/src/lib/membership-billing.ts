@@ -8,10 +8,11 @@ import {
   cancelVeyraMembership,
   skipVeyraMembershipCycle,
   updateVeyraMembershipCard,
+  changeVeyraMembershipPlan,
 } from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase, membershipTermPlan } from "@/lib/membership-billing-math";
-import { PAID_EVENT_TYPES } from "@/lib/membership-status";
+import { PAID_EVENT_TYPES, skipUsedThisPaidPeriod } from "@/lib/membership-status";
 import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
 import { sendMarketingEmail } from "@/lib/email/marketing";
@@ -567,6 +568,46 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
       introPriceCents: tier.intro_price_cents,
     });
 
+    // REPRICE AT VEYRA FIRST, AND ONLY MOVE THE MEMBER IF IT TAKES.
+    //
+    // Veyra owns the subscription and the amount it charges. This branch used to
+    // write tier_id and next_billing_amount_cents locally and stop, so the perks
+    // switched immediately while the card kept being billed the OLD tier's price
+    // — an upgrade undercharged forever, a downgrade overcharged forever, and
+    // every membership.renewed webhook carried the stale amount.
+    //
+    // A member with no veyra_membership_id has no ongoing subscription billing
+    // them at all (charged once, nothing at the processor), so there is nothing
+    // to keep in sync and the local change stands on its own.
+    const veyraMembershipId = (existingMembership as { veyra_membership_id?: string | null })
+      .veyra_membership_id;
+
+    if (veyraMembershipId) {
+      const repricedAtProcessor = await changeVeyraMembershipPlan(veyraMembershipId, {
+        amountCents: repriced.nextBillingAmountCents,
+        interval: changedCycle === "annual" ? "annual" : "monthly",
+      });
+
+      if (!repricedAtProcessor.ok) {
+        // Leave the member exactly where they were. Granting the new tier's
+        // perks while the old price is still what gets charged is the bug this
+        // guard exists to prevent.
+        console.error(
+          "Could not reprice a membership at Veyra; tier change refused",
+          input.userId,
+          repricedAtProcessor.message,
+        );
+        await recordBillingEvent({
+          userId: input.userId,
+          tierId: tier.id,
+          eventType: "tier_change",
+          amountCents: 0,
+          status: "failed",
+        });
+        return { success: false, changed: false, error: repricedAtProcessor.message };
+      }
+    }
+
     await supabaseAdmin
       .from("customer_memberships")
       .update({
@@ -1007,6 +1048,54 @@ export async function resumeMembership(userId: string): Promise<MembershipSchedu
 
 // Skip the next monthly charge: push the next-billing date forward one cycle
 // (30 days) so exactly one renewal is skipped, and re-arm the renewal reminder.
+/**
+ * Has this member already used their skip for the period they are currently in?
+ *
+ * K-07. The old guard asked a DATE-DISTANCE question — "is next_billing_at more
+ * than 33 days out?" — as a proxy for "has a skip happened?". It was wrong by
+ * three days (the advance is +30d, the threshold was >33d, and the comparison was
+ * strict), so any renewal within 3 days could be skipped TWICE: about 60 days of
+ * perks and two extra monthly store-credit grants on one charge. And the window
+ * in which it worked was exactly the window Step 4's "your renewal is in 3 days"
+ * reminder targets, so the email put members into it.
+ *
+ * Moving the constant would fix today's arithmetic and leave the shape wrong: the
+ * threshold and the advance live 200 lines apart with nothing tying them
+ * together, and the reminder window is a third constant elsewhere again.
+ *
+ * So ask the real question instead. skipNextBilling already writes a `skip` row
+ * to membership_billing_events, and PAID_EVENT_TYPES already names the events
+ * that BEGIN a paid period. One skip since the last of those. A renewal starts a
+ * new period and restores the entitlement; a failed or zero-amount event does
+ * not, because membership-status.ts is explicit that lifecycle rows carry
+ * status "succeeded" with amount_cents 0 for operations nobody paid for.
+ *
+ * A member with no paid event at all (an admin comp) gets one skip ever, which is
+ * the conservative reading of "one per paid period" when no period was paid for.
+ */
+async function hasSkippedThisPaidPeriod(userId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from("membership_billing_events")
+    .select("event_type, amount_cents, status, created_at")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false })
+    .limit(200);
+
+  // Fail CLOSED on a read error. Being unable to tell whether the entitlement is
+  // spent must not spend it again — the failure this guard exists to prevent is
+  // unbounded, and refusing costs the member one cycle's convenience.
+  if (error) throw error;
+
+  const rows = (data ?? []) as Array<{ event_type: string; amount_cents: number; status: string }>;
+  return skipUsedThisPaidPeriod(
+    rows.map((row) => ({
+      eventType: row.event_type,
+      status: row.status,
+      amountCents: Number(row.amount_cents ?? 0),
+    })),
+  );
+}
+
 export async function skipNextBilling(userId: string): Promise<MembershipScheduleResult> {
   const { data: existing, error } = await supabaseAdmin
     .from("customer_memberships")
@@ -1020,11 +1109,20 @@ export async function skipNextBilling(userId: string): Promise<MembershipSchedul
   if (existing.cancel_at_period_end) throw new Error("This membership is already set to end.");
 
   const now = new Date();
-  // Cap to ONE skip per paid period. Without this a member could POST skip in a
-  // loop, pushing next_billing_at years out while staying "active" — keeping all
-  // perks and monthly store credit forever for a single charge. If the next
-  // charge is already deferred more than a cycle out, they've already skipped.
-  if (existing.next_billing_at && new Date(existing.next_billing_at as string).getTime() > now.getTime() + 33 * ONE_DAY_MS) {
+
+  // ONE SKIP PER PAID PERIOD, asked as a fact rather than inferred from a date.
+  // See hasSkippedThisPaidPeriod: the ledger already records every skip and every
+  // paid event, so the entitlement is a query, not arithmetic.
+  if (await hasSkippedThisPaidPeriod(userId)) {
+    throw new Error("You've already skipped a charge this cycle — your next billing is already deferred.");
+  }
+
+  // Defence in depth, and the reason it is `>=` and `30` rather than `> 33`:
+  // the advance below is `from + 30 days`, so any threshold above 30 can be
+  // re-satisfied by the result of a skip. `>= 30d` cannot. This catches a
+  // deferral that arrived some other way (a Veyra-side skip, a manual date edit)
+  // without depending on the ledger.
+  if (existing.next_billing_at && new Date(existing.next_billing_at as string).getTime() >= now.getTime() + 30 * ONE_DAY_MS) {
     throw new Error("You've already skipped a charge this cycle — your next billing is already deferred.");
   }
 
@@ -1170,6 +1268,41 @@ export async function updatePaymentMethod(userId: string, paymentMethodRef: stri
     .eq("user_id", userId);
 
   if (error) throw error;
+}
+
+// A charge succeeded and the row must now be moved off "due". If that write
+// fails the money has already moved, so this is never a silent path: the
+// schedule still says the member owes for a period they have paid, and the
+// next sweep will pick the same row up again.
+//
+// The idempotency key below is what stops that re-attempt becoming a second
+// charge, and this alert is what stops the underlying breakage going unnoticed
+// while the key quietly absorbs it. Both are needed; neither substitutes for
+// the other.
+async function advanceScheduleAfterCharge(
+  userId: string,
+  payload: Record<string, unknown>,
+  context: { tierId: string; amountCents: number; eventType: string; providerChargeId?: string },
+): Promise<void> {
+  const { error } = await supabaseAdmin
+    .from("customer_memberships")
+    .update(payload)
+    .eq("user_id", userId);
+  if (!error) return;
+
+  console.error("Charged a member but could not advance their billing schedule", userId, error);
+  try {
+    await recordSystemAlert({
+      type: "membership_schedule_not_advanced",
+      severity: "critical",
+      message:
+        `Charged ${userId} ${(context.amountCents / 100).toFixed(2)} for ${context.eventType} ` +
+        "but could not advance next_billing_at. The member reads as still due and will be re-attempted.",
+      context: { userId, ...context, error: error.message ?? String(error) },
+    });
+  } catch {
+    // The alert is best-effort; the console line above is the floor.
+  }
 }
 
 interface DueMembershipRow {
@@ -1336,9 +1469,13 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
 
       if (chargeResult.success) {
         const nextBillingAt = new Date(now.getTime() + 30 * ONE_DAY_MS);
-        await supabaseAdmin
-          .from("customer_memberships")
-          .update({
+        // Same exposure as the renewal below: this write is what moves the row
+        // off "due". Its idempotency key is already period-stable, so a failure
+        // here does not double-charge — but it does strand the member mid-
+        // conversion, and that must not happen quietly.
+        await advanceScheduleAfterCharge(
+          row.user_id,
+          {
             intro_status: "converted",
             status: "active",
             next_billing_at: nextBillingAt.toISOString(),
@@ -1346,8 +1483,9 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
             renews_at: nextBillingAt.toISOString(),
             renewal_reminder_sent_at: null,
             updated_at: now.toISOString(),
-          })
-          .eq("user_id", row.user_id);
+          },
+          { tierId: tier.id, amountCents, eventType: "first_month_remainder", providerChargeId: chargeResult.providerChargeId },
+        );
 
         await recordBillingEvent({ userId: row.user_id, tierId: tier.id, eventType: "first_month_remainder", amountCents, status: "succeeded", providerChargeId: chargeResult.providerChargeId });
 
@@ -1494,21 +1632,35 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
         amountCents,
         currency: "usd",
         description: `${tier.name} - monthly renewal`,
-        idempotencyKey: `renewal-${row.user_id}-${tier.id}-${now.toISOString().slice(0, 10)}`,
+        // KEYED TO THE PERIOD BEING BILLED, NOT TO THE DAY THE SWEEP RAN.
+        //
+        // This was `now.toISOString().slice(0, 10)` — today's UTC date. That
+        // identifies WHEN the attempt happened rather than WHICH renewal it
+        // pays for, so two attempts at the same renewal ninety seconds apart
+        // either side of UTC midnight carried two different keys, and the
+        // processor's idempotency — the last thing between a retry and a
+        // second charge — did not fire.
+        //
+        // The row's own next_billing_at is the period. It is stable across
+        // every retry of that renewal no matter when the sweep runs, and it
+        // still changes next month, so a legitimate later renewal is not
+        // deduped away.
+        idempotencyKey: `renewal-${row.user_id}-${tier.id}-${row.next_billing_at ?? "unscheduled"}`,
       });
 
       if (chargeResult.success) {
         const nextBillingAt = new Date(now.getTime() + 30 * ONE_DAY_MS);
-        await supabaseAdmin
-          .from("customer_memberships")
-          .update({
+        await advanceScheduleAfterCharge(
+          row.user_id,
+          {
             next_billing_at: nextBillingAt.toISOString(),
             next_billing_amount_cents: tier.monthly_price_cents,
             renews_at: nextBillingAt.toISOString(),
             renewal_reminder_sent_at: null,
             updated_at: now.toISOString(),
-          })
-          .eq("user_id", row.user_id);
+          },
+          { tierId: tier.id, amountCents, eventType: "renewal", providerChargeId: chargeResult.providerChargeId },
+        );
 
         await recordBillingEvent({ userId: row.user_id, tierId: tier.id, eventType: "renewal", amountCents, status: "succeeded", providerChargeId: chargeResult.providerChargeId });
 

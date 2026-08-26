@@ -4,7 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { couponAnnouncementTemplate } from "@/lib/email/templates";
 import { getSiteUrl } from "@/lib/env";
-import { readAllRows } from "@/lib/supabase-page";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 import type { AdminCoupon } from "@/lib/admin-coupons";
 
 // Emails of customers who opted into marketing (the "Marketing emails" toggle
@@ -56,11 +56,21 @@ export async function getMarketingRecipientEmails(): Promise<string[]> {
   try {
     // Paged: past the server's row cap an unpaged read silently returns a
     // short list, so the broadcast would skip subscribers without any error.
-    const subs = await readAllRows<{ email: string }>((from, to) => supabaseAdmin
-      .from("marketing_subscribers")
-      .select("email")
-      .is("unsubscribed_at", null)
-      .range(from, to));
+    const { rows: subs, truncated } = await readAllRowsBounded<{ email: string }>(
+      (from, to) => supabaseAdmin
+        .from("marketing_subscribers")
+        .select("email")
+        .is("unsubscribed_at", null)
+        .order("email", { ascending: true })
+        .range(from, to),
+      { maxRows: 500_000, label: "broadcast subscriber read" },
+    );
+    // The catch below exists for "the table is not created yet". A read that
+    // came back SHORT is a different thing and must not be absorbed by it:
+    // this list decides who gets the mail (F-A-19).
+    if (truncated) {
+      throw new Error("Could not read the whole subscriber list; the broadcast was refused rather than sent to part of it.");
+    }
     for (const row of subs) {
       const email = String(row.email ?? "").trim().toLowerCase();
       if (email) emails.add(email);

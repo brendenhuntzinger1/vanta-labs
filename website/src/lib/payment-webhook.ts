@@ -590,6 +590,54 @@ async function upsertOrderItems(orderId: string, items?: Array<{
   }
 }
 
+/**
+ * Accrue the commission for an order that is ALREADY PAID, from the order row.
+ *
+ * The repair sweep's entry point (review finding 1). Both paid lanes derive the
+ * accrual's two money inputs identically and from nothing but the order:
+ *
+ *   qualifyingSubtotal   = orders.subtotal                      (what checkout gated on)
+ *   commissionableSubtotal = orders.subtotal - orders.discount_amount
+ *
+ * That is the whole reason a repair is possible without a new column or a new
+ * migration: `orders` is already the durable record of what is owed, and has
+ * been since checkout wrote it. A missing `referral_orders` row is therefore
+ * always reconstructable, never lost.
+ *
+ * Eligibility is re-evaluated at repair time, not frozen at payment time — the
+ * same defence-in-depth `ensureCommissionRecord` has always applied. An
+ * ambassador deactivated between the payment and the repair accrues a row with
+ * commission 0 and an ineligible_reason, which is the correct conservative
+ * answer and is still strictly better than no row at all.
+ */
+export async function accrueCommissionForPaidOrder(order: {
+  order_id: unknown;
+  ambassador_id?: unknown;
+  referral_code?: unknown;
+  subtotal?: unknown;
+  discount_amount?: unknown;
+  customer_email?: unknown;
+  shipping_address?: unknown;
+  city?: unknown;
+  postal_code?: unknown;
+}): Promise<{ id: string } | null> {
+  const subtotal = roundMoney(Number(order.subtotal ?? 0));
+  const discountAmount = roundMoney(Number(order.discount_amount ?? 0));
+
+  return ensureCommissionRecord({
+    orderId: String(order.order_id),
+    ambassadorId: order.ambassador_id ? String(order.ambassador_id) : undefined,
+    referralCode: order.referral_code ? String(order.referral_code) : undefined,
+    commissionableSubtotal: roundMoney(Math.max(0, subtotal - discountAmount)),
+    qualifyingSubtotal: subtotal,
+    paymentStatus: "paid",
+    customerEmail: order.customer_email ? String(order.customer_email) : null,
+    shippingAddress: order.shipping_address ? String(order.shipping_address) : null,
+    city: order.city ? String(order.city) : null,
+    postalCode: order.postal_code ? String(order.postal_code) : null,
+  });
+}
+
 async function ensureCommissionRecord(input: {
   orderId: string;
   ambassadorId?: string;
@@ -682,6 +730,16 @@ async function ensureCommissionRecord(input: {
     throw commissionLookupError;
   }
 
+  // The dollars the referral took off, derived from the two subtotals already
+  // in hand: what checkout gated on, less what is commissionable. On the order
+  // Block G+H drove through the browser that is 131.10 - 117.30 = 13.80, which
+  // is the "Ambassador code EXPLICIT15 -$13.80" line the shopper actually saw.
+  //
+  // Clamped at zero. qualifyingSubtotal falls back to commissionableSubtotal, so
+  // a caller passing a smaller one would otherwise produce a negative — and
+  // referral_orders_customer_discount_check refuses that.
+  const customerDiscountAmount = roundMoney(Math.max(0, qualifyingSubtotal - commissionableSubtotal));
+
   const basePayload = {
     order_id: input.orderId,
     ambassador_id: input.ambassadorId,
@@ -689,6 +747,13 @@ async function ensureCommissionRecord(input: {
     commission_percent: commissionPercent,
     customer_discount_percent: customerDiscountPercent,
     commission_amount: commissionAmount,
+    // NOT NULL in production, with no default, and never sent until now — so
+    // EVERY accrual insert was refused with 23502 before it could even reach the
+    // payment_status CHECK. Zero commissions exist in production as a result.
+    // original_subtotal is the pre-discount merchandise subtotal, the same
+    // number the minimum-qualifying-order check uses.
+    original_subtotal: qualifyingSubtotal,
+    customer_discount: customerDiscountAmount,
     amount_paid: commissionableSubtotal,
     payment_id: null,
     payment_status: "pending",
@@ -1016,26 +1081,48 @@ export async function finalizeManualPayment(
   const referralCode = order.referral_code ? String(order.referral_code) : undefined;
   const ambassadorId = order.ambassador_id ? String(order.ambassador_id) : undefined;
 
-  await ensureCommissionRecord({
-    orderId,
-    ambassadorId,
-    referralCode,
-    commissionableSubtotal,
-    qualifyingSubtotal: subtotal,
-    paymentStatus: "paid",
-    customerEmail: order.customer_email ? String(order.customer_email) : null,
-    shippingAddress: order.shipping_address ? String(order.shipping_address) : null,
-    city: order.city ? String(order.city) : null,
-    postalCode: order.postal_code ? String(order.postal_code) : null,
-  });
+  // BEST-EFFORT, LIKE EVERY OTHER SIDE EFFECT ON THIS PATH (review finding 1).
+  //
+  // This used to be unguarded, and the claim above is single-use: the UPDATE
+  // carries `.eq("payment_status", <what we read>)`, so once it lands a retry
+  // matches zero rows and returns alreadyPaid. An accrual that threw therefore
+  // took out everything BELOW it as well — analytics, coupon redemption,
+  // abandoned-cart recovery, points earned and redeemed, the confirmation
+  // email, membership activation and, worst of all, `finalizeInventoryForOrder`.
+  // The customer paid, the units stayed on the shelf, and the store went on
+  // selling stock it no longer had. None of it re-ran, ever.
+  //
+  // The commission itself is not dropped by catching here: repairMissingCommissionAccruals
+  // re-derives it from the order row, which carries everything the accrual needs.
+  try {
+    await ensureCommissionRecord({
+      orderId,
+      ambassadorId,
+      referralCode,
+      commissionableSubtotal,
+      qualifyingSubtotal: subtotal,
+      paymentStatus: "paid",
+      customerEmail: order.customer_email ? String(order.customer_email) : null,
+      shippingAddress: order.shipping_address ? String(order.shipping_address) : null,
+      city: order.city ? String(order.city) : null,
+      postalCode: order.postal_code ? String(order.postal_code) : null,
+    });
+  } catch (commissionError) {
+    console.error("Unable to record commission for manually approved order", orderId, commissionError);
+  }
 
-  await logCommerceAnalyticsEvent({
-    eventType: "purchase",
-    orderId,
-    amountPaid,
-    referralCode,
-    ambassadorId,
-  });
+  try {
+    await logCommerceAnalyticsEvent({
+      eventType: "purchase",
+      orderId,
+      amountPaid,
+      referralCode,
+      ambassadorId,
+    });
+  } catch (analyticsError) {
+    // Same reasoning: an analytics write is never worth an unfulfilled order.
+    console.error("Unable to log purchase analytics for manually approved order", orderId, analyticsError);
+  }
 
   if (order.coupon_code) {
     try {
@@ -1110,7 +1197,14 @@ export async function finalizeManualPayment(
       });
       if (emailResult.attempted && !emailResult.sent) {
         console.error("Order confirmation email not sent for order", orderId, emailResult.error);
-        await enqueueFailedEmail({ to: String(order.customer_email), subject: template.subject, html: template.html, text: template.text }, emailResult.error);
+        // The (orderId, kind) pair lets the sweep close this send-once slot when
+        // it delivers (C-02). Without it the retry succeeds, the log row stays
+        // 'failed', and the next caller sends the customer a second receipt.
+        await enqueueFailedEmail(
+          { to: String(order.customer_email), subject: template.subject, html: template.html, text: template.text },
+          emailResult.error,
+          { orderId, kind: "order_confirmation" },
+        );
       }
     } catch {
       // Confirmation email is best-effort; approval already succeeded.
@@ -1143,6 +1237,40 @@ export async function finalizeManualPayment(
     // click deserves the same protection from a slow third party as a shopper
     // waiting on checkout.
     scheduleShippoSync(orderId);
+  }
+
+  // RECORD THAT THE PAID SIDE EFFECTS RAN (review finding 2).
+  //
+  // `paid_side_effects_at` is the vocabulary the two paid lanes share, and until
+  // now only the card lane spoke it — it was written in exactly ONE place in the
+  // repository, inside processPaymentWebhook. This lane runs the identical side
+  // effects behind its own single-use claim (the conditional payment_status
+  // flip) and left the latch NULL forever.
+  //
+  // Anything downstream asking "were this order's units decremented?" therefore
+  // got "no" for every manually-paid order. returnInventoryForCancelledOrder
+  // asks exactly that, and answered it by releasing a reservation that was
+  // already finalized — a no-op — so cancelling a manually-paid order destroyed
+  // its stock and reported "released".
+  //
+  // WRITTEN LAST, NOT AS PART OF THE CLAIM. The latch has to mean "the decrement
+  // happened", not "the decrement was about to be attempted". Setting it up with
+  // the paid-flip would mark stock as decremented before finalizeInventoryForOrder
+  // ran, and a crash in between would let a later cancel restock units that were
+  // never removed — inventing stock, which oversells. Failing the other way round
+  // (latch NULL, stock already moved) merely repeats the old conservative
+  // behaviour for one narrow window, and this codebase's stated rule for
+  // inventory ambiguity is to never guess in the direction that invents units.
+  const { error: latchError } = await supabaseAdmin
+    .from("orders")
+    .update({ paid_side_effects_at: new Date().toISOString() })
+    .eq("order_id", orderId)
+    .is("paid_side_effects_at", null);
+
+  if (latchError) {
+    // Never fails the approval — the payment is verified and the stock has
+    // moved. But a cancel will now under-restock, so say so.
+    console.error("Unable to record paid_side_effects_at for manual order", orderId, latchError);
   }
 
   return { orderId, alreadyPaid: false, status: "paid" };
@@ -1616,7 +1744,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
             // Never throw (order is already paid), but make a silent miss visible
             // and queue it for durable retry by the sweep.
             console.error("Order confirmation email not sent for order", orderId, emailResult.error);
-            await enqueueFailedEmail({ to: buyerEmail, subject: template.subject, html: template.html, text: template.text }, emailResult.error);
+            await enqueueFailedEmail(
+              { to: buyerEmail, subject: template.subject, html: template.html, text: template.text },
+              emailResult.error,
+              { orderId, kind: "order_confirmation" },
+            );
           }
         } catch (emailError) {
           console.error("Unable to send order confirmation email for order", orderId, emailError);
@@ -1709,7 +1841,10 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // Atomic exactly-once claim: only the FIRST refund/cancel event for this
       // order restocks; a concurrent chargeback or replayed event loses the
       // claim and skips, so stock is never returned twice.
-      if (!isMembershipOrder && await claimInventoryRestock(orderId)) {
+      // Only the caller that WON the claim restocks. "already_claimed" means
+      // somebody else returned these units; "unavailable" means the claim could
+      // not be evaluated, and restocking blind could double-return them.
+      if (!isMembershipOrder && await claimInventoryRestock(orderId) === "claimed") {
         const { data: refundItems } = await supabaseAdmin
           .from("order_items")
           .select("product_id, quantity")

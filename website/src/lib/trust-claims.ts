@@ -114,20 +114,47 @@ export const RESEARCH_USE_SENTENCE =
  * actually wants to know: is it tested, can I see the paperwork, is my card
  * safe, when does it leave.
  */
-export const TRUST_POINTS: readonly string[] = [
-  TESTING_SHORT,
-  COA_SHORT,
-  CHECKOUT_SHORT,
-  FULFILMENT_SHORT,
-];
+export interface TrustEvidence {
+  /** True only when at least one COA is published and publicly resolvable. */
+  coaPublished?: boolean;
+}
 
-/** The same four with their supporting line, for surfaces that have room. */
-export const TRUST_POINTS_DETAILED: readonly { label: string; detail: string }[] = [
-  { label: TESTING_SHORT, detail: TESTING_DETAIL },
-  { label: COA_SHORT, detail: COA_DETAIL },
-  { label: CHECKOUT_SHORT, detail: CHECKOUT_DETAIL },
-  { label: FULFILMENT_SHORT, detail: FULFILMENT_DETAIL },
-];
+/**
+ * K-21. These were two constants, and two pages copied them, drifted, and began
+ * asserting things nothing substantiated — a hard-coded "99%+ Purity" that this
+ * file's own TESTING comment says appears nowhere in the UI, "Full batch
+ * traceability", a cipher strength, and a fulfilment promise that contradicted
+ * every other page, on the last screen before payment.
+ *
+ * A constant also cannot express the rule that matters most here: "COA
+ * Documented" asserts that documents EXIST. Today none do (ledger F-006), while
+ * this strip said so on every page and on the age gate — the first screen a
+ * visitor sees. So the strip is now a function of what the caller can actually
+ * show, and a caller that cannot show a COA does not claim one. It returns on
+ * its own the day the COA Library is non-empty: no code change, no copy change,
+ * and no window in which the site claims more than it can prove.
+ *
+ * TESTING_SHORT stays unconditional on purpose. It is a statement about the
+ * PROGRAMME, recorded as an owner attestation above, not about a document —
+ * which is exactly the distinction that makes the site-wide strings weaker than
+ * the per-product ones.
+ */
+export function trustPointsDetailed(
+  evidence: TrustEvidence = {},
+): readonly { label: string; detail: string }[] {
+  return [
+    { label: TESTING_SHORT, detail: TESTING_DETAIL },
+    // Absent unless something can show one. Not "off by default" — unclaimable.
+    ...(evidence.coaPublished ? [{ label: COA_SHORT, detail: COA_DETAIL }] : []),
+    { label: CHECKOUT_SHORT, detail: CHECKOUT_DETAIL },
+    { label: FULFILMENT_SHORT, detail: FULFILMENT_DETAIL },
+  ];
+}
+
+/** The labels alone, for surfaces without room for the supporting line. */
+export function trustPoints(evidence: TrustEvidence = {}): readonly string[] {
+  return trustPointsDetailed(evidence).map((point) => point.label);
+}
 
 // ---------------------------------------------------------------------------
 // THE CATALOG RAIL.

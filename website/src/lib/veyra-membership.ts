@@ -102,6 +102,17 @@ function veyraSecret(): string {
  * between "let the shopper retry" and "alert an operator", which are different
  * outcomes and must not collapse into one generic error.
  */
+/**
+ * K-19. Every outbound call in this file had no timeout, while the ad pixels and
+ * the label printer — neither of which takes money — both had one. A hung
+ * processor held a checkout or a renewal open until the platform killed it.
+ *
+ * 15s matches SHIPPO_REQUEST_TIMEOUT_MS, the timeout this codebase already chose
+ * for a third party on a request path. AbortSignal.timeout rejects with a
+ * TimeoutError, which every catch below already handles as a failed call.
+ */
+const VEYRA_REQUEST_TIMEOUT_MS = 15_000;
+
 export async function startVeyraMembership(
   input: StartVeyraMembershipInput,
 ): Promise<StartVeyraMembershipResult> {
@@ -110,6 +121,7 @@ export async function startVeyraMembership(
 
   try {
     res = await fetch(`${veyraBase()}/api/v1/membership`, {
+      signal: AbortSignal.timeout(VEYRA_REQUEST_TIMEOUT_MS),
       method: "POST",
       headers: {
         Authorization: `Bearer ${veyraSecret()}`,
@@ -236,6 +248,7 @@ export type VeyraLifecycleResult =
 async function veyraPost(path: string, body: unknown): Promise<VeyraLifecycleResult> {
   try {
     const res = await fetch(`${veyraBase()}/api/v1/membership/${path}`, {
+      signal: AbortSignal.timeout(VEYRA_REQUEST_TIMEOUT_MS),
       method: "POST",
       headers: {
         Authorization: `Bearer ${veyraSecret()}`,
@@ -302,6 +315,34 @@ export function skipVeyraMembershipCycle(
 ): Promise<VeyraLifecycleResult> {
   return veyraPost(`${encodeURIComponent(veyraMembershipId)}/skip_cycle`, {
     ...(reason ? { reason: reason.slice(0, 200) } : {}),
+  });
+}
+
+/**
+ * Reprice the subscription Veyra actually bills, on an upgrade or downgrade.
+ *
+ * 🔴 WHY THIS EXISTS. A tier change used to update tier_id and
+ * next_billing_amount_cents in customer_memberships and stop there. Veyra owns
+ * the subscription and its amount, so the member's perks switched to the new
+ * tier immediately while their card kept being charged the OLD tier's price —
+ * an upgrade undercharged forever and a downgrade overcharged forever, and every
+ * membership.renewed webhook carried the stale amount.
+ *
+ * Exactly the same failure shape as the pause, cancel and card-update holes
+ * above: local-only state for a subscription somebody else owns. The `change`
+ * endpoint was there the whole time (verified 2026-08-03: cancel / skip_cycle /
+ * change / card / retention); it simply had no wrapper.
+ *
+ * The caller must not move the member onto the new tier unless this succeeds.
+ */
+export function changeVeyraMembershipPlan(
+  veyraMembershipId: string,
+  input: { amountCents: number; interval?: VeyraMembershipInterval; planCode?: string },
+): Promise<VeyraLifecycleResult> {
+  return veyraPost(`${encodeURIComponent(veyraMembershipId)}/change`, {
+    amount_cents: Math.max(0, Math.round(input.amountCents)),
+    ...(input.interval ? { interval: input.interval } : {}),
+    ...(input.planCode ? { plan_code: input.planCode } : {}),
   });
 }
 

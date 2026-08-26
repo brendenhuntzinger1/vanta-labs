@@ -1,0 +1,165 @@
+import { describe, expect, it, vi } from "vitest";
+vi.mock("server-only", () => ({}));
+import { readAllRowsBounded } from "@/lib/supabase-page";
+
+// ---------------------------------------------------------------------------
+// BLOCK F — the bounded paged read the financial surfaces use.
+//
+// readAllRows (same module) stops when a page comes back shorter than its page
+// size, which is sound while Supabase's max-rows is exactly 1000. This variant
+// cannot rely on that, because its callers produce filing figures and lifetime
+// totals: a report that is quietly short is worse than one that says it is.
+//
+// Everything here is about the difference between "short" and "empty".
+// ---------------------------------------------------------------------------
+
+/**
+ * A table of `total` rows behind a server that returns at most `cap` rows in
+ * any single response — PostgREST's db-max-rows.
+ */
+function source(total: number, cap: number | null = null) {
+  const calls: Array<[number, number]> = [];
+  const page = (from: number, to: number) => {
+    calls.push([from, to]);
+    const wanted = Math.max(0, Math.min(to - from + 1, total - from));
+    const size = cap === null ? wanted : Math.min(wanted, cap);
+    return Promise.resolve({
+      data: Array.from({ length: Math.max(0, size) }, (_, i) => ({ n: from + i })),
+      error: null,
+    });
+  };
+  return { page, calls };
+}
+
+const ids = (rows: Array<{ n: number }>) => rows.map((r) => r.n);
+
+describe("readAllRowsBounded — short pages are not the end", () => {
+  it("returns every row when the source caps responses BELOW the page size", async () => {
+    // The case readAllRows gets wrong: a cap of 250 makes every page short, so
+    // a stop-on-short loop would return 250 of 2,500.
+    const { page } = source(2500, 250);
+    const { rows, truncated } = await readAllRowsBounded(page, { maxRows: 100_000 });
+
+    expect(rows).toHaveLength(2500);
+    expect(truncated).toBe(false);
+    // No gaps and no repeats — the offset followed the rows received, not the
+    // page size, so nothing between the cap and the page size was skipped.
+    expect(new Set(ids(rows)).size).toBe(2500);
+    expect(Math.min(...ids(rows))).toBe(0);
+    expect(Math.max(...ids(rows))).toBe(2499);
+  });
+
+  it("survives a cap that is not a multiple of the page size", async () => {
+    const { page } = source(2500, 337);
+    const { rows } = await readAllRowsBounded(page, { maxRows: 100_000 });
+    expect(new Set(ids(rows)).size).toBe(2500);
+  });
+
+  it("costs one extra request to prove it reached the end, and strides by rows received", async () => {
+    const { page, calls } = source(2500);
+    await readAllRowsBounded(page, { maxRows: 100_000 });
+
+    // Three pages, then the empty one that ends it. Note the FOURTH request
+    // starts at 2500, not 3000: the third page returned 500 rows, so the offset
+    // advanced by 500. A fixed page-size stride would have asked from 3000 and
+    // skipped nothing here — but under a source cap it would skip exactly the
+    // rows the cap held back, which is the bug this stride exists to avoid.
+    expect(calls).toEqual([[0, 999], [1000, 1999], [2000, 2999], [2500, 3499]]);
+  });
+
+  it("reports truncation when the ceiling stops it short", async () => {
+    const { rows, truncated } = await readAllRowsBounded(source(2500).page, { maxRows: 1000 });
+    expect(rows).toHaveLength(1000);
+    expect(truncated).toBe(true);
+  });
+
+  it("does not claim truncation when the ceiling lands exactly on the last row", async () => {
+    // 2,500 rows and a ceiling of 2,500: the probe finds nothing, so the answer
+    // is complete. Reporting it as truncated would cry wolf on every report
+    // that happens to fit.
+    const { rows, truncated } = await readAllRowsBounded(source(2500).page, { maxRows: 2500 });
+    expect(rows).toHaveLength(2500);
+    expect(truncated).toBe(false);
+  });
+
+  it("handles an empty table in one request", async () => {
+    const { page, calls } = source(0);
+    const { rows, truncated } = await readAllRowsBounded(page, { maxRows: 100_000 });
+    expect(rows).toEqual([]);
+    expect(truncated).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("throws on a page error rather than returning a short result", async () => {
+    // A swallowed error would look exactly like a small store.
+    const page = vi.fn().mockResolvedValue({ data: null, error: new Error("connection lost") });
+    await expect(readAllRowsBounded(page, { maxRows: 10, label: "profit read" }))
+      .rejects.toThrow("profit read failed: connection lost");
+  });
+
+  it("throws even after some pages have already succeeded", async () => {
+    let call = 0;
+    const page = vi.fn().mockImplementation(() => {
+      call += 1;
+      if (call === 1) return Promise.resolve({ data: Array.from({ length: 1000 }, (_, i) => ({ n: i })), error: null });
+      return Promise.resolve({ data: null, error: new Error("timeout") });
+    });
+    await expect(readAllRowsBounded(page, { maxRows: 100_000 })).rejects.toThrow("timeout");
+  });
+
+  it("cannot loop forever against a source that ignores the range", async () => {
+    // maxRows is the backstop: a server replying with a full page every time
+    // stops at the ceiling instead of running until memory gives out.
+    const page = vi.fn().mockResolvedValue({
+      data: Array.from({ length: 1000 }, (_, i) => ({ n: i })),
+      error: null,
+    });
+    const { rows, truncated } = await readAllRowsBounded(page, { maxRows: 5000 });
+    expect(rows).toHaveLength(5000);
+    expect(truncated).toBe(true);
+  });
+
+  // ---- ported from supabase-page.test.ts, which tested the deleted helper ----
+  //
+  // `readAllRows` is gone (F-A-19: its short-page termination is only safe while
+  // the server's cap is exactly the page size, and the app cannot read that
+  // setting). These three cases were the ones its suite covered that this one
+  // did not, and they are just as true of the pager that survived.
+
+  /** A fake table of `total` rows that never returns more than 1000 at a time. */
+  function cappedTable(total: number) {
+    const calls: Array<[number, number]> = [];
+    const page = (from: number, to: number) => {
+      calls.push([from, to]);
+      const size = Math.min(to - from + 1, 1000);
+      const rows: Array<{ email: string }> = [];
+      for (let i = from; i < Math.min(from + size, total); i++) rows.push({ email: `person${i}@example.com` });
+      return Promise.resolve({ data: rows, error: null });
+    };
+    return { page, calls };
+  }
+
+  it("returns all 2,500 rows — the case an unpaged read truncates to 1,000", async () => {
+    const { page } = cappedTable(2500);
+    const { rows, truncated } = await readAllRowsBounded(page, { maxRows: 500_000 });
+    expect(rows).toHaveLength(2500);
+    expect(truncated).toBe(false);
+    // No gaps and no repeats: every row appears exactly once.
+    expect(new Set(rows.map((r) => (r as { email: string }).email)).size).toBe(2500);
+  });
+
+  it("asks for contiguous, non-overlapping ranges", async () => {
+    const { page, calls } = cappedTable(2500);
+    await readAllRowsBounded(page, { maxRows: 500_000 });
+    expect(calls.slice(0, 3)).toEqual([[0, 999], [1000, 1999], [2000, 2999]]);
+  });
+
+  it("asks once more when the table is EXACTLY one page", async () => {
+    // The boundary a naive "stop when short" loop gets wrong in the other
+    // direction: 1000 rows is a full page, so the end is not yet proven.
+    const { page, calls } = cappedTable(1000);
+    const { rows } = await readAllRowsBounded(page, { maxRows: 500_000 });
+    expect(rows).toHaveLength(1000);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+  });
+});

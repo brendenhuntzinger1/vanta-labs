@@ -629,6 +629,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         if (!cancelled.ok) {
           return NextResponse.json({ success: false, error: cancelled.message }, { status: 400 });
         }
+
+        // The stock comes back inside setOrderFulfillmentStatus, which is the
+        // sole writer of this transition and therefore the only place the
+        // restock cannot be forgotten. It used to be called here, and here
+        // ONLY — so the bulk action and the status dropdown one row over
+        // cancelled orders and wrote off their units in silence.
+        //
+        // The pre-carrier reasoning that used to sit here was also wrong:
+        // FULFILLMENT_TRANSITIONS allows label_purchased -> cancelled, and the
+        // chokepoint handles that case by alerting rather than inventing stock.
       }
 
       if (action === "resend_confirmation") {

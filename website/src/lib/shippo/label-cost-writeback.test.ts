@@ -30,16 +30,20 @@ const state: {
   costCalls: { orderId: string; amountCents: number; source: string }[];
 } = { order: null, updates: [], costCalls: [] };
 
-vi.mock("@/lib/supabase-server", () => {
+vi.mock("@/lib/supabase-server", async () => {
+  // Postgres-faithful update semantics: see the double's own header.
+  const { ordersUpdateDouble } = await import("./test-support/orders-table-double");
   const from = (table: string) => {
     if (table === "orders") {
       return {
         select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: state.order }) }) }),
-        update: (payload: Record<string, unknown>) => {
-          state.updates.push(payload);
-          if (state.order) Object.assign(state.order, payload);
-          return { eq: async () => ({ error: null }) };
-        },
+        update: ordersUpdateDouble({
+          currentStatus: () => (state.order?.fulfillment_status as string | null) ?? null,
+          onCommit: (payload) => {
+            state.updates.push(payload);
+            if (state.order) Object.assign(state.order, payload);
+          },
+        }),
       };
     }
     return {

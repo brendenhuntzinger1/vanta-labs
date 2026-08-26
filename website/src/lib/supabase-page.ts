@@ -25,27 +25,79 @@ import "server-only";
  */
 const PAGE_SIZE = 1000;
 
-/** Guard against an unbounded loop if a server ever ignores `range`. */
-const MAX_PAGES = 1000;
+// (There was a MAX_PAGES page-count guard here, for "a server that ignores
+// `range`". It went with readAllRows. The bounded pager cannot loop forever
+// without it: every iteration pushes the rows it received, so `rows.length`
+// grows on any non-empty response and `maxRows` terminates the loop. A page
+// budget on top of a row budget was a second ceiling that could never be the
+// binding one.)
 
-export async function readAllRows<T>(
+// ---------------------------------------------------------------------------
+// ONE PAGER, AND WHY THE OTHER ONE IS GONE.
+//
+// There used to be a second helper here, `readAllRows`, which stopped as soon as
+// a page came back shorter than PAGE_SIZE. Its docblock argued that was sound
+// because the page size equals Supabase's default cap, so "short means finished".
+//
+// That reasoning holds exactly as long as the cap IS 1000. It is a project API
+// setting, this module cannot observe it, and if it were ever set BELOW the page
+// size then every page arrives short, the loop stops on the first one, and an
+// arbitrarily large table is read as one page — silently. The fixed stride
+// compounded it: the next request started a full PAGE_SIZE on, skipping whatever
+// the cap had held back.
+//
+// Block F recorded that as F-19 and left both functions in place, because
+// changing termination semantics under another block's callers was not its call.
+// It IS this block's call, the callers have been moved, and a helper with a
+// silent-truncation mode sitting next to one without it is an invitation. The
+// last five callers were an audience read, a broadcast recipient list and a
+// SUPPRESSION list — where a short read does not fail, it just stops mentioning
+// some of the people who unsubscribed, and the next campaign mails them.
+//
+// So there is one pager, and it:
+//
+//   * stops only on an EMPTY page, never a short one;
+//   * advances by the rows actually RECEIVED, so a capped page is resumed
+//     rather than skipped;
+//   * bounds memory with maxRows and REPORTS reaching it, instead of returning
+//     a smaller number as though it were the answer.
+//
+// The cost is one extra request per read.
+// ---------------------------------------------------------------------------
+
+export interface BoundedRead<T> {
+  rows: T[];
+  /** True when `maxRows` stopped the read before the source was exhausted. */
+  truncated: boolean;
+}
+
+export async function readAllRowsBounded<T>(
   page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
-): Promise<T[]> {
-  const all: T[] = [];
+  options: { maxRows: number; pageSize?: number; label?: string },
+): Promise<BoundedRead<T>> {
+  const pageSize = Math.max(1, options.pageSize ?? PAGE_SIZE);
+  const rows: T[] = [];
+  let from = 0;
 
-  for (let index = 0; index < MAX_PAGES; index++) {
-    const from = index * PAGE_SIZE;
-    const { data, error } = await page(from, from + PAGE_SIZE - 1);
-    // Surfacing the error is the caller's job — some callers must fail loudly
-    // (an audience read that silently returns fewer people is the bug this
-    // module exists to prevent), so the error is rethrown rather than swallowed
-    // into a short result that looks like a complete one.
-    if (error) throw error;
-    const rows = data ?? [];
-    all.push(...rows);
-    if (rows.length < PAGE_SIZE) return all;
+  const fetchPage = async (start: number, end: number) => {
+    const { data, error } = await page(start, end);
+    if (error) {
+      const message = (error as { message?: string })?.message ?? String(error);
+      throw new Error(`${options.label ?? "paged read"} failed: ${message}`);
+    }
+    return data ?? [];
+  };
+
+  while (rows.length < options.maxRows) {
+    const want = Math.min(pageSize, options.maxRows - rows.length);
+    const batch = await fetchPage(from, from + want - 1);
+    if (batch.length === 0) return { rows, truncated: false };
+    rows.push(...batch);
+    from += batch.length;
   }
 
-  console.warn(`readAllRows: stopped at ${MAX_PAGES} pages; the result may be incomplete.`);
-  return all;
+  // At the ceiling. One more row settles whether anything was left behind, so
+  // `truncated` is observed rather than assumed.
+  const probe = await fetchPage(from, from);
+  return { rows, truncated: probe.length > 0 };
 }

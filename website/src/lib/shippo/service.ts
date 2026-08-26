@@ -10,6 +10,7 @@ import { resolveCarrier } from "@/lib/tracking-url";
 import { getSiteUrl } from "@/lib/env";
 import { normalizeUsState } from "@/lib/sales-tax";
 import { parseOrderItemRef } from "@/lib/inventory-fulfillment";
+import { returnInventoryForCancelledOrder } from "@/lib/order-cancellation-inventory";
 import {
   FULFILLMENT_STATUS_LABELS,
   applyTransition,
@@ -92,6 +93,11 @@ export type ShippoServiceErrorCode =
   | "db_error"
   /** The caller passed something unusable. */
   | "invalid_request"
+  /**
+   * The order's fulfillment_status changed between the read this request was
+   * decided against and the write. NOTHING WAS WRITTEN. Re-read and decide again.
+   */
+  | "status_conflict"
   /**
    * BUYING POSTAGE FROM VANTA IS TURNED OFF. Labels are purchased in Shippo.
    * Nothing was bought and no claim was taken. Retrying will not help.
@@ -1198,7 +1204,30 @@ export async function purchaseLabelForOrder(
   // carrier has already scanned must not drag it backwards.
   if (transition.ok) update.fulfillment_status = transition.next;
 
-  const { error } = await supabaseAdmin.from("orders").update(update).eq("order_id", order.order_id);
+  // The status half of this write is a pipeline decision made against a status
+  // read earlier, so it is applied only while that status still holds. The label
+  // half is a fact about money already spent and must land either way.
+  const { fulfillment_status: decidedStatus, ...labelFacts } = update;
+  let error: unknown = null;
+  let statusApplied = decidedStatus !== undefined;
+
+  if (decidedStatus === undefined) {
+    ({ error } = await supabaseAdmin.from("orders").update(labelFacts).eq("order_id", order.order_id));
+  } else {
+    const write = await updateOrderGuardedByStatus(order.order_id, order.fulfillment_status, update);
+    error = write.error;
+    if (!error && !write.won) {
+      // A carrier scan moved the order between our read and this write. The
+      // status is no longer ours to set, but POSTAGE IS ALREADY CHARGED, so the
+      // label facts are recorded without it. Losing the status is survivable;
+      // losing a paid label is not.
+      statusApplied = false;
+      console.warn("Label purchase lost a concurrent status write; recording label facts only", order.order_id);
+      const retry = await supabaseAdmin.from("orders").update(labelFacts).eq("order_id", order.order_id);
+      error = retry.error;
+    }
+  }
+
   if (error) {
     // POSTAGE WAS CHARGED and we could not record it. The label still travels
     // back so it can be printed; nothing about this invites a retry.
@@ -1228,7 +1257,8 @@ export async function purchaseLabelForOrder(
     });
   }
 
-  if (transition.ok) {
+  // Only claim the transition happened if the guarded write actually applied it.
+  if (transition.ok && statusApplied) {
     await recordStatusHistory(transition.history);
     await upsertShipment({
       orderId: order.order_id,
@@ -1257,7 +1287,8 @@ export async function purchaseLabelForOrder(
       labelUrl: label.labelUrl || null,
       postageCostCents: label.postageCostCents,
       purchasedAt: now,
-      fulfillmentStatus: transition.ok ? transition.next : String(order.fulfillment_status ?? ""),
+      fulfillmentStatus:
+        transition.ok && statusApplied ? transition.next : String(order.fulfillment_status ?? ""),
       reused: false,
     },
   };
@@ -1391,7 +1422,26 @@ export async function voidLabelForOrder(
     update.shipped_at = null;
   }
 
-  const { error } = await supabaseAdmin.from("orders").update(update).eq("order_id", order.order_id);
+  // Same split as the purchase path: the refund is a fact, the status is a
+  // decision. Never let a stale status decision overwrite a newer scan, but
+  // never lose the record of a voided label either.
+  const { fulfillment_status: voidStatus, ...voidFacts } = update;
+  let error: unknown = null;
+  let voidStatusApplied = voidStatus !== undefined;
+
+  if (voidStatus === undefined) {
+    ({ error } = await supabaseAdmin.from("orders").update(voidFacts).eq("order_id", order.order_id));
+  } else {
+    const write = await updateOrderGuardedByStatus(order.order_id, order.fulfillment_status, update);
+    error = write.error;
+    if (!error && !write.won) {
+      voidStatusApplied = false;
+      console.warn("Label void lost a concurrent status write; recording void facts only", order.order_id);
+      const retry = await supabaseAdmin.from("orders").update(voidFacts).eq("order_id", order.order_id);
+      error = retry.error;
+    }
+  }
+
   if (error) {
     console.error("Voided a Shippo label but could not update the order", order.order_id, error);
     await recordSystemAlert({
@@ -1405,7 +1455,8 @@ export async function voidLabelForOrder(
 
   await reverseRecordedShippingCost(order.order_id, actor);
 
-  if (transition.ok) {
+  // Only claim the transition happened if the guarded write actually applied it.
+  if (transition.ok && voidStatusApplied) {
     await recordStatusHistory(transition.history);
     await upsertShipment({
       orderId: order.order_id,
@@ -1420,7 +1471,7 @@ export async function voidLabelForOrder(
     data: voidedLabel(
       result.data.pending,
       false,
-      transition.ok ? transition.next : String(order.fulfillment_status ?? ""),
+      transition.ok && voidStatusApplied ? transition.next : String(order.fulfillment_status ?? ""),
     ),
   };
 }
@@ -1521,6 +1572,37 @@ export function buildTrackingEventKey(payload: ShippoWebhookPayload): string | n
 
   const statusDate = text(data?.tracking_status?.status_date) ?? "";
   return `${parcel}:${status}:${statusDate}`.slice(0, 250);
+}
+
+/**
+ * Write to an order whose new fulfillment_status was decided against a status
+ * read a moment earlier.
+ *
+ * order-pipeline.ts already refuses to walk an order backwards, but it can only
+ * judge the snapshot it was handed. Between that read and this write another
+ * carrier scan can commit, and an unguarded `.eq("order_id", ...)` would then
+ * overwrite a newer status with a stale decision - delivered back to in_transit,
+ * exactly what the pipeline exists to prevent.
+ *
+ * So the row is claimed the way the rest of this file claims things: Postgres
+ * applies the update only while fulfillment_status still holds the value the
+ * decision was based on, and tells us whether it matched anything. A writer that
+ * matched nothing lost the race and must not go on to record history or email.
+ */
+async function updateOrderGuardedByStatus(
+  orderId: string,
+  expectedStatus: string | null | undefined,
+  update: Record<string, unknown>,
+): Promise<{ error: unknown; won: boolean }> {
+  const base = supabaseAdmin.from("orders").update(update).eq("order_id", orderId);
+  const guarded =
+    expectedStatus === null || expectedStatus === undefined
+      ? base.is("fulfillment_status", null)
+      : base.eq("fulfillment_status", expectedStatus);
+
+  const { data, error } = await guarded.select("order_id");
+  if (error) return { error, won: false };
+  return { error: null, won: Array.isArray(data) ? data.length > 0 : Boolean(data) };
 }
 
 async function recordStatusHistory(record: OrderStatusHistoryRecord): Promise<void> {
@@ -1807,13 +1889,23 @@ export async function applyTrackingUpdate(payload: ShippoWebhookPayload): Promis
     update.delivered_at = now;
   }
 
-  const { error: updateError } = await supabaseAdmin.from("orders").update(update).eq("order_id", order.order_id);
-  if (updateError) {
-    console.error("Unable to apply a tracking update", order.order_id, updateError);
+  const write = await updateOrderGuardedByStatus(order.order_id, order.fulfillment_status, update);
+  if (write.error) {
+    console.error("Unable to apply a tracking update", order.order_id, write.error);
     // Leave the event unprocessed AND release the key, so Shippo's retry can
     // genuinely re-run it.
     await releaseWebhookClaim(eventKey);
     return fail("db_error", "Could not apply this tracking update to the order.");
+  }
+  if (!write.won) {
+    // Another scan moved this order between our read and our write, so the
+    // transition above was decided against a status that no longer exists.
+    // Nothing is written, no history row, no email. Releasing the claim lets
+    // Shippo's retry re-decide against the current status - where the pipeline
+    // will reject it as a regression if that is what it now is.
+    console.warn("A tracking update lost a concurrent write and will be retried", order.order_id);
+    await releaseWebhookClaim(eventKey);
+    return fail("db_error", "This order changed while the tracking update was being applied.");
   }
 
   await recordStatusHistory(transition.history);
@@ -1868,6 +1960,16 @@ async function markEventProcessed(eventKey: string): Promise<void> {
 }
 
 /**
+ * States a cancel can be reached FROM where the label is already paid for.
+ *
+ * Derived from FULFILLMENT_TRANSITIONS, not assumed: `label_purchased` is the
+ * only state carrying a `cancelled` edge whose postage has been bought. Every
+ * other source of that edge (awaiting_payment, paid, ready_to_fulfill, packed)
+ * genuinely is pre-carrier.
+ */
+const LABEL_BOUGHT_STATUSES = new Set<string>(["label_purchased"]);
+
+/**
  * Record a status change a human made, under the same rules the webhook path
  * obeys. Kept here so every write to fulfillment_status in the shipping flow
  * goes through one transition function and one history table.
@@ -1898,12 +2000,71 @@ export async function setOrderFulfillmentStatus(input: {
   if (transition.next === "packed" && !order.packed_at) update.packed_at = now;
   if (transition.next === "shipped" && !order.shipped_at) update.shipped_at = now;
 
-  const { error } = await supabaseAdmin.from("orders").update(update).eq("order_id", order.order_id);
-  if (error) {
-    console.error("Unable to set the fulfillment status", order.order_id, error);
+  const write = await updateOrderGuardedByStatus(order.order_id, order.fulfillment_status, update);
+  if (write.error) {
+    console.error("Unable to set the fulfillment status", order.order_id, write.error);
     return fail("db_error", "Could not update this order's status.");
+  }
+  if (!write.won) {
+    // The order moved while the admin's request was in flight. Applying it now
+    // would silently undo whatever landed first, so it is refused and the
+    // operator can re-read and decide again.
+    return fail(
+      "status_conflict",
+      "This order changed while your request was being applied. Reload and try again.",
+    );
   }
 
   await recordStatusHistory(transition.history);
+
+  // RETURN THE STOCK, HERE, BECAUSE THIS IS THE ONLY WRITER.
+  //
+  // K-17 put this call in ONE of the three code paths that reach `cancelled`.
+  // The other two — the bulk action (admin-orders.ts, which does not import the
+  // inventory module at all) and the status dropdown on the single-order screen
+  // — wrote the status and permanently wrote off the units, which is the exact
+  // loss K-17 exists to prevent. The single-order screen shipped both: a
+  // "Cancel" button that restocked and a "Cancelled" dropdown option one row
+  // over that did not, with nothing to tell the operator apart.
+  //
+  // order-cancellation-inventory.ts told the next author to look for callers in
+  // `order-pipeline.ts`. That file writes nothing — its own header says
+  // "Everything here is PURE: no database, no network, no clock". Following the
+  // instruction found no callers to check, which is why two drifted unnoticed.
+  //
+  // Putting it at the chokepoint makes "every path that cancels returns the
+  // stock" true by construction. It is idempotent behind the same
+  // inventory_restocked_at claim, so a caller that also asks explicitly is a
+  // no-op rather than a double-return.
+  if (transition.next === "cancelled") {
+    if (LABEL_BOUGHT_STATUSES.has(transition.from)) {
+      // NOT pre-carrier, whatever the K-17 docblock says. FULFILLMENT_TRANSITIONS
+      // really does allow label_purchased -> cancelled, and the workstation
+      // renders a dedicated queue for these orders — so postage is paid and the
+      // parcel may already be in the carrier's hands. Restocking would INVENT
+      // units. A human has to decide, and has to be told there is a decision.
+      await recordSystemAlert({
+        type: "cancellation_after_label_purchase",
+        severity: "warning",
+        message:
+          `Order ${order.order_id} was cancelled from ${transition.from}, so its label is already bought. `
+          + "Stock was NOT returned automatically because the parcel may already be with the carrier. "
+          + "Void the label if it has not shipped, then adjust the count by hand.",
+        context: { orderId: order.order_id, from: transition.from },
+      }).catch((alertError) => {
+        console.error("Unable to record a post-label cancellation alert", order.order_id, alertError);
+      });
+    } else {
+      // Never fails the status change: the cancellation is already recorded and
+      // the customer has been told. returnInventoryForCancelledOrder raises its
+      // own critical alert for anything it cannot resolve.
+      try {
+        await returnInventoryForCancelledOrder(order.order_id);
+      } catch (inventoryError) {
+        console.error("Unable to return inventory for cancelled order", order.order_id, inventoryError);
+      }
+    }
+  }
+
   return { ok: true, data: { from: transition.from, to: transition.next } };
 }

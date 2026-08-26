@@ -843,7 +843,16 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // its fee, and one untick removes it (still strictly optional). Fee is a
   // percentage of the merchandise subtotal (shipping-protection.ts), mirrored
   // exactly by the server (payment-service) so preview == charge.
-  const [shippingProtectionEnabled, setShippingProtectionEnabled] = useState(true);
+  // OFF BY DEFAULT, because the published Shipping Policy says so in the store's
+  // own words: Shipping Protection "is off by default and never pre-selected".
+  // This was useState(true), so a paid add-on was pre-ticked on every cart and
+  // added shipping_protection_fee to the total unless the shopper noticed and
+  // unticked it - a specific negative promise contradicted by the code, on a
+  // control that takes the customer's money.
+  //
+  // If the business wants it pre-selected, that is a product decision AND an edit
+  // to legal-content.ts's shipping policy, made together. Not one without the other.
+  const [shippingProtectionEnabled, setShippingProtectionEnabled] = useState(false);
   const shippingProtectionFee = shippingProtectionEnabled ? calculateShippingProtectionFee(subtotal) : 0;
 
   const total = Math.max(0, totalAfterCredit - pointsRedeemedDiscount) + shippingProtectionFee;

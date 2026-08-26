@@ -2,6 +2,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
 import { recordSystemAlert } from "@/lib/monitoring";
 import type { EmailTemplate } from "@/lib/email/types";
+import type { OrderEmailKind } from "@/lib/email/order-email-once";
 
 // Durable retry for TRANSACTIONAL emails (receipts, shipping notices). A
 // transactional send that fails (provider outage) is enqueued here and drained
@@ -12,24 +13,98 @@ const MAX_ATTEMPTS = 5;
 
 type QueuedEmail = { to: string; replyTo?: string } & EmailTemplate;
 
+/**
+ * Which send-once slot this queued email belongs to, when the caller knows.
+ *
+ * C-02. `order_email_log` releases a slot on a FAILED send so a retry can still
+ * get the receipt out. That is only safe if whoever completes the retry closes
+ * the slot again — and the sweep could not, because `pending_emails` held no
+ * order id. It delivered the receipt, left the log row at 'failed', and the next
+ * caller claimed the released slot and sent a second one.
+ */
+export interface QueuedEmailContext {
+  orderId: string;
+  kind: OrderEmailKind;
+}
+
+/** True for "this column/table is not in the schema", not for a real failure. */
+function isMissingSchema(error: { code?: string; message?: string } | null | undefined): boolean {
+  const message = String(error?.message ?? "").toLowerCase();
+  return error?.code === "PGRST204"
+    || error?.code === "42703"
+    || message.includes("does not exist")
+    || message.includes("schema cache");
+}
+
 // Best-effort enqueue: if the pending_emails table isn't migrated (or the insert
 // fails) this no-ops — the caller has already logged the failure — never throws.
-export async function enqueueFailedEmail(message: QueuedEmail, error?: string): Promise<void> {
+export async function enqueueFailedEmail(
+  message: QueuedEmail,
+  error?: string,
+  context?: QueuedEmailContext,
+): Promise<void> {
+  const base = {
+    to_email: message.to,
+    subject: message.subject,
+    html: message.html ?? null,
+    text_body: message.text ?? null,
+    reply_to: message.replyTo ?? null,
+    attempts: 1,
+    status: "pending",
+    last_error: error ?? null,
+    // First retry in 5 minutes.
+    next_attempt_at: new Date(Date.now() + 5 * 60_000).toISOString(),
+  };
   try {
-    await supabaseAdmin.from("pending_emails").insert({
-      to_email: message.to,
-      subject: message.subject,
-      html: message.html ?? null,
-      text_body: message.text ?? null,
-      reply_to: message.replyTo ?? null,
-      attempts: 1,
-      status: "pending",
-      last_error: error ?? null,
-      // First retry in 5 minutes.
-      next_attempt_at: new Date(Date.now() + 5 * 60_000).toISOString(),
-    });
+    if (!context) {
+      await supabaseAdmin.from("pending_emails").insert(base);
+      return;
+    }
+    // Written to degrade: the order link is only useful once
+    // sql/pending-emails-order-link.sql has run, and losing a customer's receipt
+    // because the column is not there yet would be a far worse trade than losing
+    // the write-back. So the code is safe to deploy in either order.
+    const { error: linkError } = await supabaseAdmin
+      .from("pending_emails")
+      .insert({ ...base, order_id: context.orderId, email_kind: context.kind });
+    if (linkError) {
+      if (!isMissingSchema(linkError)) throw linkError;
+      await supabaseAdmin.from("pending_emails").insert(base);
+    }
   } catch {
     // Table not migrated or transient DB error — the original send was logged.
+  }
+}
+
+/**
+ * Mark the order_email_log row for (orderId, kind) as sent, re-taking the
+ * send-once slot on behalf of the retry that just delivered it.
+ *
+ * Best-effort and never throws: the email has already reached the customer, so
+ * only the record is at stake — the same trade sendOrderEmailOnce makes when it
+ * cannot write its own outcome.
+ */
+async function closeSendOnceSlot(
+  orderId: string,
+  kind: OrderEmailKind,
+  provider?: string,
+  providerMessageId?: string,
+): Promise<void> {
+  try {
+    await supabaseAdmin
+      .from("order_email_log")
+      .update({
+        status: "sent",
+        provider: provider ?? null,
+        provider_message_id: providerMessageId ?? null,
+        error: null,
+        completed_at: new Date().toISOString(),
+      })
+      .eq("order_id", orderId)
+      .eq("kind", kind)
+      .eq("status", "failed");
+  } catch (writeBackError) {
+    console.error("[email-retry] delivered but could not close the send-once slot", orderId, kind, writeBackError);
   }
 }
 
@@ -41,26 +116,58 @@ export async function retryPendingEmails(maxPerRun = 50): Promise<{ sent: number
   let retried = 0;
   let gaveUp = 0;
   try {
-    const { data, error } = await supabaseAdmin
+    // Typed explicitly because the column list is chosen at runtime, which
+    // defeats supabase-js's inference from a literal select string.
+    type PendingRow = {
+      id: string;
+      to_email: string | null;
+      subject: string | null;
+      html: string | null;
+      text_body: string | null;
+      reply_to: string | null;
+      attempts: number | null;
+      order_id?: string | null;
+      email_kind?: string | null;
+    };
+    const due = (columns: string) => supabaseAdmin
       .from("pending_emails")
-      .select("id, to_email, subject, html, text_body, reply_to, attempts")
+      .select(columns)
       .eq("status", "pending")
       .lte("next_attempt_at", new Date().toISOString())
       .order("next_attempt_at", { ascending: true })
-      .limit(maxPerRun);
+      .limit(maxPerRun) as unknown as PromiseLike<{ data: PendingRow[] | null; error: { code?: string; message?: string } | null }>;
+
+    const BASE_COLUMNS = "id, to_email, subject, html, text_body, reply_to, attempts";
+    let { data, error } = await due(`${BASE_COLUMNS}, order_id, email_kind`);
+    if (error && isMissingSchema(error)) {
+      // sql/pending-emails-order-link.sql has not run yet. Drain the queue the
+      // way it always did; the send-once write-back below simply does not fire.
+      ({ data, error } = await due(BASE_COLUMNS));
+    }
     if (error || !data) return { sent, retried, gaveUp };
 
     for (const row of data) {
+      const orderId = row.order_id ? String(row.order_id) : null;
+      const kind = row.email_kind ? (String(row.email_kind) as OrderEmailKind) : null;
       const result = await sendEmail({
         to: String(row.to_email),
         subject: String(row.subject),
         html: String(row.html ?? ""),
         text: String(row.text_body ?? ""),
         replyTo: row.reply_to ? String(row.reply_to) : undefined,
+        // The same identity sendOrderEmailOnce uses, so this retry and the
+        // original send look like ONE email to the provider too. Without it,
+        // even a provider that would collapse the duplicate cannot.
+        ...(orderId && kind ? { idempotencyKey: `${kind}:${orderId}` } : {}),
       });
       const now = new Date().toISOString();
       if (result.success) {
         await supabaseAdmin.from("pending_emails").update({ status: "sent", updated_at: now }).eq("id", row.id);
+        // CLOSE THE SLOT THIS RETRY JUST SATISFIED (C-02). The customer now has
+        // the email; leaving order_email_log at 'failed' leaves the slot free
+        // for the next caller to send a second one, and leaves the record
+        // saying a receipt was never delivered when it was.
+        if (orderId && kind) await closeSendOnceSlot(orderId, kind, result.provider, result.providerMessageId);
         sent += 1;
       } else {
         const attempts = Number(row.attempts ?? 0) + 1;

@@ -17,6 +17,7 @@ const membership = sentinel("membership");
 const storeCredit = sentinel("storeCredit");
 const cartRecovery = sentinel("cartRecovery");
 const commissions = sentinel("commissions");
+const commissionAccrualRepair = sentinel("commissionAccrualRepair");
 const reservations = sentinel("reservations");
 const emails = sentinel("emails");
 const paymentReconcile = sentinel("paymentReconcile");
@@ -39,6 +40,7 @@ vi.mock("@/lib/membership-billing", () => ({
 }));
 vi.mock("@/lib/cart-recovery", () => ({ runAbandonedCartSweep: () => cartRecovery() }));
 vi.mock("@/lib/partner-portal", () => ({ autoApproveEligibleCommissions: () => commissions() }));
+vi.mock("@/lib/commission-accrual-repair", () => ({ repairMissingCommissionAccruals: () => commissionAccrualRepair() }));
 vi.mock("@/lib/inventory-reservation", () => ({ expireStaleReservations: () => reservations() }));
 vi.mock("@/lib/email/retry-queue", () => ({ retryPendingEmails: () => emails() }));
 vi.mock("@/lib/express-reconcile", () => ({

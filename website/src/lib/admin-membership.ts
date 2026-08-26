@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isPaidBillingEvent } from "@/lib/membership-status";
+import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
 import { startOfCurrentMonthIso } from "@/lib/store-credit";
 import type { MembershipTier } from "@/lib/membership";
 
@@ -673,15 +674,21 @@ export async function getBulkSavingsStats(): Promise<BulkSavingsStats> {
     return stats;
   }
 
+  // Same rule as the RPC above, and as every other revenue surface (review
+  // finding 5). This path summed GROSS amount_paid over EVERY status, so
+  // pending, canceled and fully-refunded orders all counted as bulk-savings
+  // revenue. The RPC did the same, so the two agreed while both were wrong.
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("bulk_discount_tier, amount_paid")
+    .select("bulk_discount_tier, payment_status, order_type, amount_paid, refund_amount")
     .not("bulk_discount_tier", "is", null);
 
   if (error) throw error;
 
   for (const row of data ?? []) {
-    const amountCents = Math.round(Number(row.amount_paid ?? 0) * 100);
+    if (!isRevenueOrderStatus(row.payment_status as string | null)) continue;
+    if (!isSaleOrder(row.order_type as string | null)) continue;
+    const amountCents = Math.round(netOrderRevenue(row as { amount_paid?: number | null; refund_amount?: number | null }) * 100);
     if (row.bulk_discount_tier === "5_percent") {
       stats.tier5PercentOrders += 1;
       stats.tier5PercentRevenueCents += amountCents;

@@ -1,6 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { planInventoryAdjustments, type OrderItemRef } from "@/lib/inventory-fulfillment";
 import { invalidateCatalogCache } from "@/lib/catalog-cache";
+import { recordSystemAlert } from "@/lib/monitoring";
 
 // Enterprise inventory reservation (see src/lib/sql/inventory-reservations.sql).
 // Stock is held atomically the instant a checkout/payment session is created,
@@ -154,6 +155,50 @@ export async function reserveInventoryForOrder(
   return { ok: true, unavailable: [], degraded: false };
 }
 
+/**
+ * K-13. Every inventory RPC failure here was absorbed into a return value.
+ *
+ * `finalizeInventoryForOrder` returned `{ finalized: 0, degraded: true }` with no
+ * log at all, and the caller's fallback then went to a function that does not
+ * exist in production (G-04) — so a broken paid-path stock movement was
+ * invisible from end to end. `expireStaleReservations` returned 0, which is
+ * indistinguishable from "nothing was due", so the sweep reported a clean run
+ * while every expired hold stayed on the shelf.
+ *
+ * The degradation is KEPT — a paid order must never be stranded by an inventory
+ * RPC — but it stops being silent. This is the same trade the rate limiter makes
+ * (K-15): fail soft, say so loudly.
+ *
+ * Throttled per RPC: an outage hits every order at once, and an alert each would
+ * bury the signal.
+ */
+const INVENTORY_ALERT_THROTTLE_MS = 5 * 60_000;
+const lastInventoryAlertAt = new Map<string, number>();
+
+async function reportInventoryRpcFailure(rpc: string, orderId: string | null, error: unknown): Promise<void> {
+  const detail = error instanceof Error ? error.message : String((error as { message?: string })?.message ?? error);
+  console.error("[inventory] RPC failed", rpc, orderId ?? "-", detail);
+
+  const now = Date.now();
+  if (now - (lastInventoryAlertAt.get(rpc) ?? 0) < INVENTORY_ALERT_THROTTLE_MS) return;
+  lastInventoryAlertAt.set(rpc, now);
+  try {
+    await recordSystemAlert({
+      type: "inventory_rpc_failed",
+      severity: "critical",
+      message: `${rpc} failed. Stock is not moving; counts on the storefront are no longer trustworthy.`,
+      context: { rpc, orderId, detail },
+    });
+  } catch {
+    // The console line above is the floor.
+  }
+}
+
+/** Test-only: the throttle is module state and would leak between cases. */
+export function __resetInventoryAlertThrottle(): void {
+  lastInventoryAlertAt.clear();
+}
+
 // A verified payment permanently deducts every active hold for the order.
 // Idempotent (a replay finds them already finalized). `finalized` is the number
 // of lines deducted; `degraded` means the RPC is unavailable so the caller must
@@ -161,10 +206,14 @@ export async function reserveInventoryForOrder(
 export async function finalizeInventoryForOrder(orderId: string): Promise<{ finalized: number; degraded: boolean }> {
   try {
     const { data, error } = await supabaseAdmin.rpc("finalize_inventory_for_order", { p_order_id: orderId });
-    if (error) return { finalized: 0, degraded: true };
+    if (error) {
+      await reportInventoryRpcFailure("finalize_inventory_for_order", orderId, error);
+      return { finalized: 0, degraded: true };
+    }
     invalidateCatalogCache();
     return { finalized: Number(data ?? 0), degraded: false };
-  } catch {
+  } catch (error) {
+    await reportInventoryRpcFailure("finalize_inventory_for_order", orderId, error);
     return { finalized: 0, degraded: true };
   }
 }
@@ -176,7 +225,7 @@ export async function releaseInventoryForOrder(orderId: string): Promise<void> {
     await supabaseAdmin.rpc("release_inventory_for_order", { p_order_id: orderId });
     invalidateCatalogCache();
   } catch (error) {
-    console.error("Unable to release inventory reservation for order", orderId, error);
+    await reportInventoryRpcFailure("release_inventory_for_order", orderId, error);
   }
 }
 
@@ -185,12 +234,18 @@ export async function releaseInventoryForOrder(orderId: string): Promise<void> {
 export async function expireStaleReservations(): Promise<number> {
   try {
     const { data, error } = await supabaseAdmin.rpc("expire_stale_reservations", {});
-    if (error) return 0;
+    if (error) {
+      // Returning 0 is indistinguishable from "nothing was due", so the sweep
+      // reports a clean run while every expired hold stays on the shelf.
+      await reportInventoryRpcFailure("expire_stale_reservations", null, error);
+      return 0;
+    }
     // Reclaimed holds put units back on sale — publish that immediately rather
     // than leaving them looking unavailable until the TTL lapses.
     if (Number(data ?? 0) > 0) invalidateCatalogCache();
     return Number(data ?? 0);
-  } catch {
+  } catch (error) {
+    await reportInventoryRpcFailure("expire_stale_reservations", null, error);
     return 0;
   }
 }

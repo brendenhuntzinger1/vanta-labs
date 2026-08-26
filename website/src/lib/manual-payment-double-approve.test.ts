@@ -32,9 +32,10 @@ const state: {
 const sideEffects = {
   points: vi.fn(async () => {}),
   coupon: vi.fn(async () => ({ ok: true })),
-  email: vi.fn(async () => ({ ok: true })),
+  email: vi.fn(async (): Promise<{ ok?: boolean; success?: boolean; error?: string }> => ({ ok: true })),
   inventory: vi.fn(async () => {}),
   commission: vi.fn(async () => ({ percent: 15, tierName: null })),
+  enqueueFailedEmail: vi.fn(async () => {}),
 };
 
 vi.mock("server-only", () => ({}));
@@ -51,7 +52,7 @@ vi.mock("@/lib/membership", () => ({
 }));
 vi.mock("@/lib/coupons", () => ({ redeemCoupon: sideEffects.coupon }));
 vi.mock("@/lib/email/send", () => ({ sendEmail: sideEffects.email }));
-vi.mock("@/lib/email/retry-queue", () => ({ enqueueFailedEmail: vi.fn(async () => {}) }));
+vi.mock("@/lib/email/retry-queue", () => ({ enqueueFailedEmail: sideEffects.enqueueFailedEmail }));
 vi.mock("@/lib/email/templates", () => ({
   commissionEarnedTemplate: () => ({ subject: "s", html: "h" }),
   orderConfirmationTemplate: () => ({ subject: "s", html: "h" }),
@@ -126,6 +127,16 @@ vi.mock("@/lib/supabase-server", () => {
             neq(column: string, value: unknown) {
               filters.push([`neq:${column}`, value]);
               return builder;
+            },
+            // The paid_side_effects_at latch write at the end of the approval
+            // (review finding 2) is a conditional UPDATE terminated by .is(),
+            // with no .select(). Awaiting the builder has to resolve.
+            is(column: string, value: unknown) {
+              filters.push([`is:${column}`, value]);
+              return builder;
+            },
+            then(resolve: (v: unknown) => unknown) {
+              return Promise.resolve({ error: null }).then(resolve);
             },
             async select() {
               state.updateFilters.push(filters);
@@ -246,6 +257,29 @@ describe("orders that must never be approved through this path", () => {
       expect(sideEffects.email).not.toHaveBeenCalled();
     });
   }
+
+  /**
+   * C-02. When the provider is down, the receipt is queued for the sweep — and
+   * the queued row has to carry WHICH send-once slot it belongs to, or the sweep
+   * delivers it and leaves order_email_log at 'failed', and the next caller
+   * sends the customer a second receipt.
+   *
+   * The sweep's own behaviour is proven in order-email-sweep-duplicate.test.ts.
+   * This is the other half: that the real approval path actually supplies the
+   * context. Without this, removing the third argument from the call site broke
+   * nothing.
+   */
+  it("queues a failed receipt with the send-once slot it belongs to", async () => {
+    sideEffects.email.mockImplementationOnce(async () => ({ success: false, error: "provider down" }));
+
+    await approve();
+
+    expect(sideEffects.enqueueFailedEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ to: expect.any(String) }),
+      expect.anything(),
+      { orderId: ORDER_ID, kind: "order_confirmation" },
+    );
+  });
 
   it("reports an already-paid order as paid without touching anything", async () => {
     state.paymentStatus = "paid";

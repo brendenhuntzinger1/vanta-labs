@@ -13,6 +13,7 @@ import { getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
 import { getBundleDiscountedUnitPrice } from "@/lib/bundle-pricing";
 import { calculateShipping, isDomesticCountry, isShippableCountry } from "@/lib/shipping";
 import { normalizeUsState } from "@/lib/sales-tax";
+import { recordSystemAlert } from "@/lib/monitoring";
 import { quoteSalesTax, type ResolvedOrderTax } from "@/lib/tax-provider";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { isApprovedAmbassadorCustomer } from "@/lib/ambassador-status";
@@ -1022,34 +1023,131 @@ export type OrderInsertOutcome =
   | { status: "duplicate" }
   | { status: "error"; error: { code?: string; message?: string } };
 
-// Insert the row, degrading to the original column set when a later migration
-// hasn't been applied yet. Returns "duplicate" rather than resolving the winning
-// row itself, because what a caller should DO about a duplicate differs by lane.
+/**
+ * Columns whose absence changes what an order MEANS, rather than merely how
+ * completely it is described.
+ *
+ * `idempotency_key` is the duplicate-charge guard: without it the 23505 check
+ * cannot fire on this key, and the one protection against writing the same order
+ * twice is gone. The two tax columns are what `admin-tax-report` reads, and it
+ * never re-derives rates — an order missing them is silently wrong in the one
+ * report with a legal consequence.
+ *
+ * Losing one of these is still allowed when the column genuinely does not exist
+ * (refusing every checkout on a deployment that predates a migration would be
+ * worse), but it is never allowed to be SILENT.
+ */
+const ORDER_INTEGRITY_COLUMNS = new Set(["idempotency_key", "tax_state", "tax_rate_percent"]);
+
+/** A backstop only. The `column in row` check below is what actually terminates. */
+const MAX_COLUMN_PEELS = 8;
+
+/**
+ * The column name from a missing-column error, or null if this is not one.
+ *
+ * Two shapes reach us:
+ *   PostgREST: Could not find the 'checkout_channel' column of 'orders' in the schema cache
+ *   Postgres:  column "checkout_channel" of relation "orders" does not exist
+ *
+ * PGRST204 in particular is a STALE SCHEMA CACHE, which is an ordinary event in
+ * the minutes after a migration is applied — not a rare disaster.
+ */
+function missingColumnFrom(error: { code?: string; message?: string } | null): string | null {
+  if (!error) return null;
+  const message = String(error.message ?? "");
+  const code = String(error.code ?? "");
+  const looksMissing =
+    code === "PGRST204"
+    || code === "42703"
+    || /schema cache|does not exist|could not find|unknown column/i.test(message);
+  if (!looksMissing) return null;
+
+  const quoted = message.match(/'([A-Za-z0-9_]+)'/) ?? message.match(/"([A-Za-z0-9_]+)"/);
+  return quoted?.[1] ?? null;
+}
+
+/**
+ * Insert the order, degrading around a column the database does not have.
+ *
+ * WHY THIS IS NOT A FALLBACK TO A FIXED ROW ANY MORE.
+ *
+ * It used to retry with `draft.base` — a frozen pre-migration column set — as
+ * soon as anything looked like a missing column. So a PGRST204 about ONE column
+ * dropped ALL of `idempotency_key`, `tax_state`, `tax_rate_percent`,
+ * `shipping_protection_fee`, `state`, `phone` and `billing_*` in a single step.
+ * A stale schema cache on an unrelated column could take an order with its
+ * duplicate-charge guard removed, and nothing errored and nothing alerted.
+ *
+ * Now it removes only the column the database actually named, and tries again —
+ * so a deployment several migrations behind peels off exactly what is missing and
+ * keeps everything else. Dropping an integrity column is still permitted, because
+ * refusing the sale would be worse, but it raises a critical alert so it is never
+ * silent.
+ *
+ * `draft.base` is retained on the type for compatibility and is deliberately no
+ * longer used: degrading to a fixed row is the defect this replaced.
+ *
+ * Returns "duplicate" rather than resolving the winning row itself, because what
+ * a caller should DO about a duplicate differs by lane.
+ */
 export async function insertOrderRow(draft: OrderRowDraft): Promise<OrderInsertOutcome> {
-  let insertError = (await supabaseAdmin.from("orders").insert(draft.full)).error;
-  if (insertError && insertError.code === "23505") {
-    return { status: "duplicate" };
-  }
-  if (insertError) {
-    const message = String(insertError.message ?? "").toLowerCase();
-    const mentionsNewColumn = message.includes("state") || message.includes("phone") || message.includes("tax_rate_percent") || message.includes("tax_state") || message.includes("idempotency_key") || message.includes("billing_") || message.includes("checkout_channel") || message.includes("attributed_") || message.includes("shipping_protection_fee");
-    const looksLikeMissingColumn = message.includes("does not exist")
-      || message.includes("schema cache")
-      || message.includes("could not find")
-      || message.includes("unknown column");
-    const missingColumn = insertError.code === "PGRST204" || (mentionsNewColumn && looksLikeMissingColumn);
-    if (missingColumn) {
-      insertError = (await supabaseAdmin.from("orders").insert(draft.base)).error;
-      if (insertError && insertError.code === "23505") {
-        return { status: "duplicate" };
+  const row: Record<string, unknown> = { ...draft.full };
+  const dropped: string[] = [];
+  let lastError: { code?: string; message?: string } | null = null;
+
+  for (let attempt = 0; attempt <= MAX_COLUMN_PEELS; attempt += 1) {
+    const { error } = await supabaseAdmin.from("orders").insert(row);
+
+    if (!error) {
+      const lostIntegrityColumns = dropped.filter((column) => ORDER_INTEGRITY_COLUMNS.has(column));
+      if (lostIntegrityColumns.length > 0) {
+        // The order was taken. Somebody has to know it was taken without its
+        // guard, because nothing downstream can tell.
+        await recordSystemAlert({
+          type: "order_integrity_column_missing",
+          severity: "critical",
+          message:
+            `Order ${String(draft.full.order_number ?? draft.full.order_id ?? "")} was written without `
+            + `${lostIntegrityColumns.join(", ")} because the database does not have `
+            + "that column. Apply the outstanding migration: until then these orders have no "
+            + "duplicate-charge protection and/or no sales-tax audit trail.",
+          context: {
+            orderId: draft.full.order_id ?? null,
+            orderNumber: draft.full.order_number ?? null,
+            droppedColumns: dropped,
+            integrityColumnsLost: lostIntegrityColumns,
+          },
+        }).catch((alertError) => {
+          // Never let a failed alert undo a completed order.
+          console.error("Unable to record an order-integrity alert", alertError);
+        });
       }
+      return { status: "inserted" };
     }
+
+    lastError = error as { code?: string; message?: string };
+    if (String((error as { code?: string }).code ?? "") === "23505") {
+      return { status: "duplicate" };
+    }
+
+    const column = missingColumnFrom(error as { code?: string; message?: string });
+    // Only peel a column this row actually carries. If the error names something
+    // we never sent — or is not a missing-column error at all — degrading further
+    // cannot help and would only write a thinner, wronger order.
+    if (!column || !(column in row)) {
+      return { status: "error", error };
+    }
+
+    delete row[column];
+    dropped.push(column);
   }
 
-  if (insertError) {
-    return { status: "error", error: insertError };
-  }
-  return { status: "inserted" };
+  // Only reachable if the database named a new missing column on every attempt
+  // up to the backstop. lastError is always set by then.
+  return {
+    status: "error",
+    error: lastError ?? { code: "column_peel_exhausted", message: "Too many missing columns to insert this order." },
+  };
 }
 
 // The order_items rows for a quote, with the same pre-migration degradation

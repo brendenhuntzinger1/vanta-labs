@@ -162,6 +162,15 @@ export class LivePaymentProvider implements PaymentProvider {
     const siteUrl = getSiteUrl();
 
     const response = await fetch(`${base}/api/v1/checkout_sessions`, {
+      // K-19. The one call that takes the customer's money had no timeout at
+      // all, while the ad pixels and the label printer both did. A hung
+      // processor held the checkout request open until the platform killed it,
+      // and the shopper sat on "Processing…". 15s matches
+      // SHIPPO_REQUEST_TIMEOUT_MS — the timeout this codebase already chose for
+      // a third party on a request path. The Idempotency-Key below is what makes
+      // a timeout safe: a retry returns the SAME session rather than a second
+      // one, so timing out can never double-charge.
+      signal: AbortSignal.timeout(15_000),
       method: "POST",
       headers: {
         "Content-Type": "application/json",

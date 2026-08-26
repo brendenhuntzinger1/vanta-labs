@@ -183,33 +183,23 @@ describe("refunding Elijah's $16.00", () => {
   });
 });
 
-describe("the rate Elijah is actually paid", () => {
-  const commission = readFileSync(join(process.cwd(), "src/lib/ambassador-commission.ts"), "utf8");
-
-  // FIXED. `matched` was seeded with tiers[0] before the qualification loop, so
-  // an ambassador who earned nothing was still paid the lowest tier -- with any
-  // active tier present, the rate typed in the admin was never used. A tier
-  // whose threshold is 5 monthly sales was applied to someone with zero.
-  it("a tier must actually be earned before it applies", () => {
-    expect(commission).toContain("let matched: (typeof tiers)[number] | null = null;");
-    expect(commission).not.toContain("let matched = tiers[0];");
-  });
-
-  it("falls back to the ambassador's configured rate when no tier is earned", () => {
-    expect(commission).toContain("if (!matched) {\n    return { percent: ambassadorPercent, tierName: null };\n  }");
-  });
-
-  // The qualification itself is unchanged: a tier with a threshold of 0 still
-  // applies to everyone, which is the owner's choice to make.
-  it("still assigns a tier the ambassador does qualify for", () => {
-    expect(commission).toContain("if (monthlySales >= tier.minMonthlySales) {\n      matched = tier;");
-  });
-
-  it("an explicitly locked rate skips tiers entirely", () => {
-    expect(commission).toContain("if (ambassador?.commission_percent_locked) {");
-    expect(commission).toContain("if (tiers.length === 0) {");
-  });
-});
+// REPLACED, NOT PATCHED. This describe was four readFileSync greps over
+// ambassador-commission.ts — two of them whitespace-exact multi-line string
+// matches. They could not fail for the defect their own comments describe. Both
+// of these reproduce it exactly while leaving every asserted literal intact,
+// and the FULL suite stayed green for both:
+//
+//   let matched: (typeof tiers)[number] | null = null;
+//   matched = tiers.at(0) ?? null;                               // inserted
+//
+//   if (ambassador) ambassador.commission_percent_locked = false; // inserted
+//   if (ambassador?.commission_percent_locked) { ... }            // untouched
+//
+// A grep that goes red on a safe refactor and green on the real bug is worse
+// than no test, because it is counted as coverage. The rule Elijah's rate
+// depends on is now exercised behaviourally — real function, real tier rows,
+// real referral history — in src/lib/commission-tier-resolution.test.ts, which
+// catches both mutations above and eleven others.
 
 describe("what the owner and the ambassador each see", () => {
   const portal = readFileSync(join(process.cwd(), "src/lib/partner-portal.ts"), "utf8");
