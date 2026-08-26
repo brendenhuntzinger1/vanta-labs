@@ -542,9 +542,13 @@ export async function applyTransactionCreated(
   // the metadata on a late event would lose the real cost of a real label.
   const transition = canTransition(order.fulfillment_status, "label_purchased", "shippo");
 
-  await supabaseAdmin
-    .from("orders")
-    .update({
+  // The label metadata is a fact and is written either way (see above). The
+  // STATUS is a decision made against order.fulfillment_status, read moments
+  // ago — so it is applied only while the row still holds that value. Without
+  // that guard a concurrent carrier scan could be overwritten by this stale
+  // label_purchased decision, regressing an order the pipeline had already
+  // moved on. Same shape as service.applyTrackingUpdate.
+  const labelFacts = {
       shippo_transaction_id: transactionId,
       // Each written only when we actually have it. These used to be
       // unconditional, so a second, thinner delivery of the same event — or a
@@ -560,10 +564,31 @@ export async function applyTransactionCreated(
       // price must leave this NULL so the admin shows "Pending" and the owner
       // can enter it — writing 0 would silently overstate the margin instead.
       ...(amountCents !== null ? { postage_cost_cents: amountCents } : {}),
-      ...(transition.ok ? { fulfillment_status: "label_purchased" } : {}),
       updated_at: now,
-    })
-    .eq("order_id", order.order_id);
+  };
+
+  let statusApplied = false;
+
+  if (transition.ok) {
+    const guarded = supabaseAdmin
+      .from("orders")
+      .update({ ...labelFacts, fulfillment_status: "label_purchased" })
+      .eq("order_id", order.order_id);
+    const { data: touched, error: guardError } =
+      order.fulfillment_status === null || order.fulfillment_status === undefined
+        ? await guarded.is("fulfillment_status", null).select("order_id")
+        : await guarded.eq("fulfillment_status", order.fulfillment_status).select("order_id");
+
+    statusApplied = !guardError && Array.isArray(touched) && touched.length > 0;
+
+    if (!statusApplied) {
+      // Lost the race, or the write failed. Either way the status is not ours
+      // to set — but the label facts still are, and postage has been spent.
+      await supabaseAdmin.from("orders").update(labelFacts).eq("order_id", order.order_id);
+    }
+  } else {
+    await supabaseAdmin.from("orders").update(labelFacts).eq("order_id", order.order_id);
+  }
 
   if (amountCents !== null) {
     await recordActualShippingCost({
@@ -579,7 +604,7 @@ export async function applyTransactionCreated(
   // the order, so writing a row for it would put a state change in the
   // customer-facing timeline that never occurred. A duplicate delivery of the
   // same event is refused as "unchanged" and is silent here for the same reason.
-  if (transition.ok) {
+  if (transition.ok && statusApplied) {
     await supabaseAdmin.from("order_status_history").insert({
       order_id: order.order_id,
       from_status: transition.from,

@@ -550,9 +550,21 @@ describe("the Shippo round trip survives replays, reordering and gaps", () => {
     expect(pipeline).toContain('delivered: ["shippo"]');
   });
 
-  it("dedupes a repeated purchase event on the transaction's own id", () => {
-    expect(route).toContain("event_key: `transaction_created:${String(data?.object_id ?? \"unknown\")}`");
-    expect(route).toContain('onConflict: "event_key"');
+  it("claims a purchase event's key BEFORE running the handler, not after", () => {
+    // This assertion used to check only that the route mentioned an event_key
+    // and an onConflict — both of which were true while the route ran the whole
+    // handler FIRST and recorded the event afterwards, so every redelivery
+    // re-ran the write. The test was named "dedupes" and passed throughout.
+    //
+    // What actually matters is the ORDER of the two statements, so that is what
+    // is asserted here. The behavioural proof lives in
+    // src/lib/shippo/transaction-created-dedupe.test.ts, which drives the real
+    // POST handler twice.
+    const claim = route.indexOf(".insert({\n        event_key: eventKey");
+    const handler = route.indexOf("await applyTransactionCreated(data)");
+    expect(claim).toBeGreaterThan(-1);
+    expect(handler).toBeGreaterThan(-1);
+    expect(claim).toBeLessThan(handler);
   });
 
   it("writes no history row for a refused transition", () => {

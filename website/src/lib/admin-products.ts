@@ -341,14 +341,18 @@ async function getNextProductPosition() {
   return parseNumber(data?.position, 0) + 1;
 }
 
-async function createDoseRows(productId: string, doses: DoseInput[]) {
-  if (doses.length === 0) {
-    return;
-  }
-
-  const rows = doses.map((dose, index) => ({
-    id: dose.id ?? randomUUID(),
-    product_id: productId,
+/**
+ * The columns an admin edit is allowed to set.
+ *
+ * Deliberately NOT here: track_inventory, reserved_quantity, incoming_quantity,
+ * low_stock_threshold and shipping_weight_oz. Those are operational state owned
+ * by checkout, the reservation sweeper and the receiving flow — DoseInput has no
+ * field for any of them, so an editor payload can only ever reset them to their
+ * schema defaults. They are preserved on update and left to default only when a
+ * dose is genuinely new.
+ */
+function editableDoseValues(dose: DoseInput, index: number, doses: DoseInput[]) {
+  return {
     label: dose.label.trim(),
     slug_suffix: dose.slugSuffix.trim(),
     sku: dose.sku?.trim() || null,
@@ -365,8 +369,20 @@ async function createDoseRows(productId: string, doses: DoseInput[]) {
     is_default: Boolean(dose.isDefault) || (index === 0 && !doses.some((item) => item.isDefault)),
     is_enabled: dose.isEnabled ?? true,
     position: dose.position ?? index,
-    created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+  };
+}
+
+async function createDoseRows(productId: string, doses: DoseInput[]) {
+  if (doses.length === 0) {
+    return;
+  }
+
+  const rows = doses.map((dose, index) => ({
+    id: dose.id ?? randomUUID(),
+    product_id: productId,
+    ...editableDoseValues(dose, index, doses),
+    created_at: new Date().toISOString(),
   }));
 
   const { error } = await supabaseAdmin.from("product_doses").insert(rows);
@@ -989,17 +1005,91 @@ export async function deleteProductImage(input: { productId: string; imageId: st
   invalidateCatalogCache();
 }
 
+/**
+ * Apply an edited set of doses to a product.
+ *
+ * This used to DELETE every dose and re-insert from the payload, which was wrong
+ * in three ways at once. DoseInput carries none of the operational columns
+ * (track_inventory, reserved_quantity, incoming_quantity, low_stock_threshold,
+ * shipping_weight_oz), so re-inserting reset all five to their schema defaults:
+ * an ordinary "Save" in the product editor silently switched OFF oversell
+ * protection for that product and threw away the holds on any checkout in
+ * flight, while their inventory_reservations rows stayed 'active'. If the
+ * payload omitted an id, a fresh uuid was minted and every order_items
+ * "slug::doseId" and every reservation pointing at the old row was orphaned. And
+ * the delete was not transactional with the insert, so a failure in between left
+ * the product with no doses at all and the storefront falling back to the stale
+ * parent row.
+ *
+ * So it merges instead. Existing doses are UPDATEd in place with the editable
+ * columns only, keeping their ids and their operational state; genuinely new
+ * doses are inserted; and the rows the admin actually removed are deleted LAST,
+ * once the writes that keep the product sellable have succeeded.
+ *
+ * A dose is matched by id, and failing that by slug_suffix — an id-less payload
+ * is far more likely to be the same 5mg dose round-tripped than a brand new one.
+ */
 export async function replaceProductDoses(productId: string, doses: DoseInput[]) {
-  const { error: deleteError } = await supabaseAdmin
+  const { data: existingRows, error: readError } = await supabaseAdmin
     .from("product_doses")
-    .delete()
+    .select("id, slug_suffix")
     .eq("product_id", productId);
 
-  if (deleteError) {
-    throw deleteError;
+  if (readError) {
+    throw readError;
   }
 
-  await createDoseRows(productId, doses);
+  const existing = (existingRows ?? []) as Array<{ id: string; slug_suffix: string | null }>;
+  const byId = new Map(existing.map((row) => [row.id, row]));
+  const bySlug = new Map(
+    existing.filter((row) => row.slug_suffix).map((row) => [String(row.slug_suffix), row]),
+  );
+
+  const claimed = new Set<string>();
+  const updates: Array<{ id: string; values: ReturnType<typeof editableDoseValues> }> = [];
+  const inserts: DoseInput[] = [];
+
+  doses.forEach((dose, index) => {
+    const slug = dose.slugSuffix.trim();
+    const match =
+      (dose.id && byId.get(dose.id)) ||
+      (slug ? bySlug.get(slug) : undefined);
+
+    if (match && !claimed.has(match.id)) {
+      claimed.add(match.id);
+      updates.push({ id: match.id, values: editableDoseValues(dose, index, doses) });
+    } else {
+      inserts.push(dose);
+    }
+  });
+
+  for (const update of updates) {
+    const { error } = await supabaseAdmin
+      .from("product_doses")
+      .update(update.values)
+      .eq("id", update.id);
+    if (error) {
+      throw error;
+    }
+  }
+
+  await createDoseRows(productId, inserts);
+
+  // Last, and only now: the doses the admin genuinely removed. Doing this after
+  // the writes means a failure above leaves the product over-supplied with
+  // doses rather than with none.
+  const removed = existing.filter((row) => !claimed.has(row.id)).map((row) => row.id);
+  if (removed.length > 0) {
+    const { error: deleteError } = await supabaseAdmin
+      .from("product_doses")
+      .delete()
+      .eq("product_id", productId)
+      .in("id", removed);
+
+    if (deleteError) {
+      throw deleteError;
+    }
+  }
 
   const firstDose = doses.find((dose) => dose.isDefault) ?? doses[0];
   if (firstDose) {

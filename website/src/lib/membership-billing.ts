@@ -8,6 +8,7 @@ import {
   cancelVeyraMembership,
   skipVeyraMembershipCycle,
   updateVeyraMembershipCard,
+  changeVeyraMembershipPlan,
 } from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase, membershipTermPlan } from "@/lib/membership-billing-math";
@@ -566,6 +567,46 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
       annualPriceCents: tier.annual_price_cents ?? null,
       introPriceCents: tier.intro_price_cents,
     });
+
+    // REPRICE AT VEYRA FIRST, AND ONLY MOVE THE MEMBER IF IT TAKES.
+    //
+    // Veyra owns the subscription and the amount it charges. This branch used to
+    // write tier_id and next_billing_amount_cents locally and stop, so the perks
+    // switched immediately while the card kept being billed the OLD tier's price
+    // — an upgrade undercharged forever, a downgrade overcharged forever, and
+    // every membership.renewed webhook carried the stale amount.
+    //
+    // A member with no veyra_membership_id has no ongoing subscription billing
+    // them at all (charged once, nothing at the processor), so there is nothing
+    // to keep in sync and the local change stands on its own.
+    const veyraMembershipId = (existingMembership as { veyra_membership_id?: string | null })
+      .veyra_membership_id;
+
+    if (veyraMembershipId) {
+      const repricedAtProcessor = await changeVeyraMembershipPlan(veyraMembershipId, {
+        amountCents: repriced.nextBillingAmountCents,
+        interval: changedCycle === "annual" ? "annual" : "monthly",
+      });
+
+      if (!repricedAtProcessor.ok) {
+        // Leave the member exactly where they were. Granting the new tier's
+        // perks while the old price is still what gets charged is the bug this
+        // guard exists to prevent.
+        console.error(
+          "Could not reprice a membership at Veyra; tier change refused",
+          input.userId,
+          repricedAtProcessor.message,
+        );
+        await recordBillingEvent({
+          userId: input.userId,
+          tierId: tier.id,
+          eventType: "tier_change",
+          amountCents: 0,
+          status: "failed",
+        });
+        return { success: false, changed: false, error: repricedAtProcessor.message };
+      }
+    }
 
     await supabaseAdmin
       .from("customer_memberships")
