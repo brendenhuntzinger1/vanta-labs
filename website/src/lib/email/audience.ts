@@ -2,7 +2,25 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isPaidOrderStatus } from "@/lib/ledger";
-import { readAllRows } from "@/lib/supabase-page";
+import { readAllRowsBounded } from "@/lib/supabase-page";
+
+/**
+ * F-A-19. These reads used `readAllRows`, which stops as soon as a page comes
+ * back shorter than its page size — safe only while the server's row cap is
+ * exactly that size, and the application cannot read that setting.
+ *
+ * `readAllRowsBounded` advances by the rows it actually received and probes one
+ * row past its ceiling, so it reports truncation rather than inferring the end
+ * of the table from a short page.
+ *
+ * A truncated audience read is not a soft failure here. Two of these decide who
+ * gets mail and one decides who must NOT, so a short read is either a person
+ * missing a campaign or a person who unsubscribed receiving one. Both are
+ * refused loudly instead of being quietly delivered.
+ */
+const MAX_AUDIENCE_ROWS = 500_000;
+const AUDIENCE_TRUNCATED =
+  "Could not read the whole marketing audience, so this send was refused rather than sent to an incomplete or unfiltered list.";
 
 /**
  * Who a campaign goes to.
@@ -81,11 +99,16 @@ export async function loadConsentedAudience(): Promise<ConsentedAudience> {
   // Paged for the same reason as the lists below: past the server's row cap an
   // unpaged read returns a short list with no error, silently dropping
   // account-holders from every audience.
-  const prefs = await readAllRows<{ user_id: string }>((from, to) => supabaseAdmin
-    .from("customer_preferences")
-    .select("user_id")
-    .eq("marketing_emails", true)
-    .range(from, to));
+  const { rows: prefs, truncated: prefsTruncated } = await readAllRowsBounded<{ user_id: string }>(
+    (from, to) => supabaseAdmin
+      .from("customer_preferences")
+      .select("user_id")
+      .eq("marketing_emails", true)
+      .order("user_id", { ascending: true })
+      .range(from, to),
+    { maxRows: MAX_AUDIENCE_ROWS, label: "marketing opt-in read" },
+  );
+  if (prefsTruncated) throw new Error(AUDIENCE_TRUNCATED);
 
   const optedInUserIds = new Set(prefs.map((row) => row.user_id).filter(Boolean));
 
@@ -110,11 +133,16 @@ export async function loadConsentedAudience(): Promise<ConsentedAudience> {
 
   // Paged: an unpaged read stops at the server's row cap without saying so,
   // which would silently drop subscribers from every audience past that point.
-  const subs = await readAllRows<{ email: string }>((from, to) => supabaseAdmin
-    .from("marketing_subscribers")
-    .select("email")
-    .is("unsubscribed_at", null)
-    .range(from, to));
+  const { rows: subs, truncated: subsTruncated } = await readAllRowsBounded<{ email: string }>(
+    (from, to) => supabaseAdmin
+      .from("marketing_subscribers")
+      .select("email")
+      .is("unsubscribed_at", null)
+      .order("email", { ascending: true })
+      .range(from, to),
+    { maxRows: MAX_AUDIENCE_ROWS, label: "marketing subscriber read" },
+  );
+  if (subsTruncated) throw new Error(AUDIENCE_TRUNCATED);
   for (const row of subs) {
     const email = normalize(row.email);
     if (email) subscribers.add(email);
@@ -125,10 +153,21 @@ export async function loadConsentedAudience(): Promise<ConsentedAudience> {
   // Paged, and this is the one that matters most: a truncated suppression list
   // does not fail, it just stops mentioning some of the people who
   // unsubscribed — and the next campaign mails them.
-  const suppressed = await readAllRows<{ email: string }>((from, to) => supabaseAdmin
-    .from("email_suppressions")
-    .select("email")
-    .range(from, to));
+  const { rows: suppressed, truncated: suppressionTruncated } = await readAllRowsBounded<{ email: string }>(
+    (from, to) => supabaseAdmin
+      .from("email_suppressions")
+      .select("email")
+      // Any stable key will do; paging without one can repeat or skip rows, and
+      // a SKIPPED row here is a person who unsubscribed getting mail.
+      .order("email", { ascending: true })
+      .range(from, to),
+    { maxRows: MAX_AUDIENCE_ROWS, label: "suppression list read" },
+  );
+  // FATAL, not best-effort. Every other read in this function failing short
+  // means someone does not get an email they wanted. This one failing short
+  // means someone gets an email they asked to stop receiving, which is the one
+  // outcome that is not ours to absorb.
+  if (suppressionTruncated) throw new Error(AUDIENCE_TRUNCATED);
   const blocked = new Set(suppressed.map((row) => normalize(row.email)));
 
   for (const email of blocked) {

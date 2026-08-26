@@ -28,44 +28,29 @@ const PAGE_SIZE = 1000;
 /** Guard against an unbounded loop if a server ever ignores `range`. */
 const MAX_PAGES = 1000;
 
-export async function readAllRows<T>(
-  page: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: unknown }>,
-): Promise<T[]> {
-  const all: T[] = [];
-
-  for (let index = 0; index < MAX_PAGES; index++) {
-    const from = index * PAGE_SIZE;
-    const { data, error } = await page(from, from + PAGE_SIZE - 1);
-    // Surfacing the error is the caller's job — some callers must fail loudly
-    // (an audience read that silently returns fewer people is the bug this
-    // module exists to prevent), so the error is rethrown rather than swallowed
-    // into a short result that looks like a complete one.
-    if (error) throw error;
-    const rows = data ?? [];
-    all.push(...rows);
-    if (rows.length < PAGE_SIZE) return all;
-  }
-
-  console.warn(`readAllRows: stopped at ${MAX_PAGES} pages; the result may be incomplete.`);
-  return all;
-}
-
 // ---------------------------------------------------------------------------
-// A BOUNDED VARIANT, FOR READS THAT MUST REPORT BEING INCOMPLETE.
+// ONE PAGER, AND WHY THE OTHER ONE IS GONE.
 //
-// readAllRows above stops when a page comes back shorter than PAGE_SIZE, and
-// its docblock is explicit about why that is sound: the page size is set equal
-// to Supabase's default cap, so "short means finished".
+// There used to be a second helper here, `readAllRows`, which stopped as soon as
+// a page came back shorter than PAGE_SIZE. Its docblock argued that was sound
+// because the page size equals Supabase's default cap, so "short means finished".
 //
 // That reasoning holds exactly as long as the cap IS 1000. It is a project API
-// setting, this module cannot observe it, and if it is ever set BELOW the page
-// size then every page arrives short and the loop stops on the first one —
-// returning one page of an arbitrarily large table, silently. Its fixed stride
-// compounds that: the next request would start a full PAGE_SIZE on, skipping
-// whatever the cap held back.
+// setting, this module cannot observe it, and if it were ever set BELOW the page
+// size then every page arrives short, the loop stops on the first one, and an
+// arbitrarily large table is read as one page — silently. The fixed stride
+// compounded it: the next request started a full PAGE_SIZE on, skipping whatever
+// the cap had held back.
 //
-// The financial-reporting surfaces cannot accept either behaviour, because
-// their output is a filing figure or a lifetime total. So this variant:
+// Block F recorded that as F-19 and left both functions in place, because
+// changing termination semantics under another block's callers was not its call.
+// It IS this block's call, the callers have been moved, and a helper with a
+// silent-truncation mode sitting next to one without it is an invitation. The
+// last five callers were an audience read, a broadcast recipient list and a
+// SUPPRESSION list — where a short read does not fail, it just stops mentioning
+// some of the people who unsubscribed, and the next campaign mails them.
+//
+// So there is one pager, and it:
 //
 //   * stops only on an EMPTY page, never a short one;
 //   * advances by the rows actually RECEIVED, so a capped page is resumed
@@ -73,10 +58,7 @@ export async function readAllRows<T>(
 //   * bounds memory with maxRows and REPORTS reaching it, instead of returning
 //     a smaller number as though it were the answer.
 //
-// The cost is one extra request per read. Two functions rather than one is
-// deliberate: readAllRows' callers were written against its contract, and
-// changing termination semantics underneath them is not this block's call.
-// See docs/findings/BLOCK-F.md finding F-19.
+// The cost is one extra request per read.
 // ---------------------------------------------------------------------------
 
 export interface BoundedRead<T> {

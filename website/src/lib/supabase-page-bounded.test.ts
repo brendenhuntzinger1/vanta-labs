@@ -118,4 +118,48 @@ describe("readAllRowsBounded — short pages are not the end", () => {
     expect(rows).toHaveLength(5000);
     expect(truncated).toBe(true);
   });
+
+  // ---- ported from supabase-page.test.ts, which tested the deleted helper ----
+  //
+  // `readAllRows` is gone (F-A-19: its short-page termination is only safe while
+  // the server's cap is exactly the page size, and the app cannot read that
+  // setting). These three cases were the ones its suite covered that this one
+  // did not, and they are just as true of the pager that survived.
+
+  /** A fake table of `total` rows that never returns more than 1000 at a time. */
+  function cappedTable(total: number) {
+    const calls: Array<[number, number]> = [];
+    const page = (from: number, to: number) => {
+      calls.push([from, to]);
+      const size = Math.min(to - from + 1, 1000);
+      const rows: Array<{ email: string }> = [];
+      for (let i = from; i < Math.min(from + size, total); i++) rows.push({ email: `person${i}@example.com` });
+      return Promise.resolve({ data: rows, error: null });
+    };
+    return { page, calls };
+  }
+
+  it("returns all 2,500 rows — the case an unpaged read truncates to 1,000", async () => {
+    const { page } = cappedTable(2500);
+    const { rows, truncated } = await readAllRowsBounded(page, { maxRows: 500_000 });
+    expect(rows).toHaveLength(2500);
+    expect(truncated).toBe(false);
+    // No gaps and no repeats: every row appears exactly once.
+    expect(new Set(rows.map((r) => (r as { email: string }).email)).size).toBe(2500);
+  });
+
+  it("asks for contiguous, non-overlapping ranges", async () => {
+    const { page, calls } = cappedTable(2500);
+    await readAllRowsBounded(page, { maxRows: 500_000 });
+    expect(calls.slice(0, 3)).toEqual([[0, 999], [1000, 1999], [2000, 2999]]);
+  });
+
+  it("asks once more when the table is EXACTLY one page", async () => {
+    // The boundary a naive "stop when short" loop gets wrong in the other
+    // direction: 1000 rows is a full page, so the end is not yet proven.
+    const { page, calls } = cappedTable(1000);
+    const { rows } = await readAllRowsBounded(page, { maxRows: 500_000 });
+    expect(rows).toHaveLength(1000);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+  });
 });

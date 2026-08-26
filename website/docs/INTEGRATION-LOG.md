@@ -1200,3 +1200,57 @@ Block F recorded and `F-014` exists to guarantee. It is the reason the gate in
 Phase 7 checks the cluster is up rather than assuming it.
 
 `scripts/start-test-postgres.sh` is committed so the gate is reproducible.
+
+## 4.7 F-A-19 — a short read that would have mailed people who unsubscribed
+
+`readAllRows` stopped as soon as a page came back shorter than its page size.
+Its own docblock argued that was sound because the page size equals Supabase's
+default `max-rows`, so "short means finished" — **true only while that cap IS
+1000**, and it is a project API setting this application cannot observe. Set it
+lower and every page arrives short, the loop stops on the first one, and an
+arbitrarily large table is read as one page with no error. The fixed stride
+compounded it: the next request started a full page on, skipping whatever the cap
+had held back.
+
+Five callers. Two decide who **gets** mail. The third decides who must **not**:
+
+> *"a truncated suppression list does not fail, it just stops mentioning some of
+> the people who unsubscribed — and the next campaign mails them."*
+
+**All five moved to `readAllRowsBounded`**, which advances by the rows actually
+received, so a low cap costs round trips instead of coverage. Every read is
+`.order()`ed on a stable key first — paging without one can repeat or skip rows,
+and a **skipped** row on the suppression list is a person who unsubscribed
+getting mail.
+
+The three audience reads now **refuse the send** if the pager reports truncation.
+The two reporting reads in `admin-email.ts` are bounded but not fatal, and say so
+— a short read there misstates an open rate rather than mailing anyone.
+
+### `readAllRows` is deleted
+
+Block F left both helpers in place because *"changing termination semantics
+underneath another block's callers is not this block's call."* It **is** this
+block's call, the callers have moved, and a pager with a silent-truncation mode
+sitting next to one without it is an invitation. Its three unique test cases —
+2,500 rows across three requests, contiguous non-overlapping ranges, and the
+exactly-one-page boundary — were ported into `supabase-page-bounded.test.ts`
+before `supabase-page.test.ts` was removed.
+
+| mutation | result |
+|---|---|
+| reinstate short-page termination (the deleted behaviour) | **4 failures** |
+| stop refusing on a truncated **suppression** list | **1 failure** |
+| stop refusing on a truncated subscriber list | **1 failure** |
+| stop refusing on a truncated opt-in list | **1 failure** |
+
+The last three survived the first round: one mock that truncated everything trips
+the **first** guard and leaves the other two untested. The test is parameterised
+per read now, and that is recorded because it is the same shape as the placebo
+tests this audit exists to find.
+
+One assertion was corrected before it shipped: the first draft asserted that a
+low server cap makes the audience builder *refuse*. It does not, and should not —
+the whole point of the bounded pager is that a low cap is survivable. What it
+must do is return the **complete** list, which is what is asserted now, with the
+ceiling-refusal wiring proven separately.
