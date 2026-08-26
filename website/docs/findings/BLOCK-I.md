@@ -337,7 +337,7 @@ Block D has not touched them at consolidation time. `src/lib/admin-roles.ts` and
 
 ## I-03 — Public rate limits are keyed on a client-controlled header; the same codebase already calls that header untrusted
 
-**Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN
+**Grade:** `BEHAVIORAL-TEST-PROVEN` · **Severity:** P1 · **Status:** FIXED
 
 Three distinct client-IP resolution strategies exist:
 
@@ -395,17 +395,82 @@ header writes a new row per request, and cleanup is only a 1%-sampled delete of
 rows older than 24h (`src/lib/rate-limit.ts:41-47`). Bypassing the limit also
 grows the limiter's own table.
 
-### What is NOT proven
+### I-03b — the same code fails the OTHER way too, and the test found it
+
+Writing the reproduction turned up a second defect I had not predicted, in the
+opposite direction.
+
+`getClientKey` reads `x-forwarded-for ?? x-real-ip ?? "unknown"`. On a host that
+sets `x-vercel-forwarded-for` and `x-real-ip` but **not** `x-forwarded-for`, the
+first two both miss and every visitor on earth keys into the single literal
+bucket `contact:unknown`. Three submissions per ten minutes — total, for
+everyone.
+
+So one header shape removes the limit and another collapses it onto all
+customers. This is why the "two genuinely different clients still get two
+buckets" case is in the suite: a fix that only chases the bypass could satisfy
+the spoofing tests by keying everything to a constant, and that is mutation N3
+below.
+
+### Reproduction
+
+`src/lib/public-form-rate-limit-key.test.ts` imports the **real** `POST`
+handlers for all three routes, mocks only `checkRateLimit` to capture the bucket
+string, and sends requests carrying the headers a proxy would set plus a
+prepended forgery.
+
+Before the fix — red for the right reason, on all three routes:
+
+```
+× contact: same real client, ten forged headers, one bucket
+× wholesale: same real client, ten forged headers, one bucket
+× back-in-stock: same real client, ten forged headers, one bucket
+    AssertionError: expected 10 to be 1
+
+× two genuinely different clients still get two buckets
+    AssertionError: expected 1 to be 2        <- I-03b
+   Tests  4 failed | 1 passed (5)
+```
+
+Ten forged headers produced **ten distinct buckets**: the limit is not a limit.
+Two genuinely different clients produced **one**: the limit is a site-wide one.
+
+### Fix applied
+
+New `src/lib/request-ip.ts` holds the single resolver. `admin-auth.ts` no longer
+defines its own — it re-exports from there, so every existing importer keeps
+working and there is exactly one implementation. The three public routes drop
+their private `getClientKey` copies and call
+`rateLimitKeyForRequest(prefix, request)`.
+
+The `x-forwarded-for` fallback is kept deliberately, and the reasoning is
+written into the module: on a host that sets no trusted header (local dev, a
+self-hosted proxy) a forgeable key still separates ordinary traffic, whereas
+returning null recreates I-03b.
+
+After: **5 passed (5)**. Full suite **205 files / 3600 tests passed**, 1 file /
+7 skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
+
+### Negative controls
+
+| # | Mutation | Result |
+|---|---|---|
+| N1 | Read `x-forwarded-for` first — the original defect | 4 failed |
+| N2 | Drop the `x-forwarded-for` fallback entirely | 1 failed — I-03b's guard fires |
+| N3 | Return a constant bucket for everyone | 5 failed — the naive "fix" is rejected |
+| N4 | Stop trimming the chain, use the whole header | 1 failed |
+
+All four caught. N3 is the one that matters: it is the shortcut that satisfies
+"one bucket per client" by giving everyone the same bucket, and the suite
+rejects it.
+
+### What is still NOT proven
 
 Whether Vercel's edge overwrites `x-forwarded-for` before the function sees it.
-If it does, strategy 2 is safe by accident and strategy 1's comment is
-over-cautious. Proving it needs a request to a **preview** deployment with a
-forged header, reading back the resolved value — network work, not yet run, and
-not to be run against production.
-
-The fix is safe under either answer: routing all three through
-`getRequestIpAddress` is strictly no worse than the current code and removes the
-divergence. Grade stays `SOURCE-INSPECTED` until a preview probe runs.
+If it does, the old code was safe by accident against spoofing — but I-03b was
+real regardless of that answer, and the fix is correct under either. Confirming
+the edge behaviour needs a forged-header request against a **preview**
+deployment; not run, and not to be run against production.
 
 ---
 
@@ -522,14 +587,18 @@ type, and apply the 8 MB cap inside the helper so both entry points inherit it.
 |---|---|---|---|
 | I-01 | P0 | `DATABASE-PROVEN` + `BEHAVIORAL-TEST-PROVEN` | **Read boundary fixed & tested.** Rotation + historical rows still owed to the owner |
 | I-02 | P1 | `SOURCE-INSPECTED` | No — fix proposed, CROSS-BLOCK with D |
-| I-03 | P1 | `SOURCE-INSPECTED` | No — fix proposed |
+| I-03 | P1 | `BEHAVIORAL-TEST-PROVEN` | **Fixed & tested** (incl. I-03b, found by the test) |
 | I-04 | P2 | `SOURCE-INSPECTED` | No — fix proposed, CROSS-BLOCK unassigned |
 | I-05 | P2 | `SOURCE-INSPECTED` | No — fix proposed |
 
-I-01 is proven and fixed at the read boundary, with negative controls recorded
-above. I-02 through I-05 remain `SOURCE-INSPECTED`: per the execution plan's
+I-01 and I-03 are proven and fixed, with negative controls recorded above.
+I-02, I-04 and I-05 remain `SOURCE-INSPECTED`: per the execution plan's
 step 3, a finding is not proven until a test fails for the right reason. Their
 tests and fixes follow.
 
-Full suite after I-01: **204 files / 3595 tests passed**, 1 file / 7 tests
+Full suite after I-03: **205 files / 3600 tests passed**, 1 file / 7 tests
 skipped, zero regressions. `tsc --noEmit` clean, eslint clean.
+
+**CROSS-BLOCK:** `src/app/api/catalog/back-in-stock/route.ts` sits under
+`api/catalog/`. Block D owns `catalog.ts` (the library), not this route, so the
+edit was made here; flagging it in case D touches the same file.

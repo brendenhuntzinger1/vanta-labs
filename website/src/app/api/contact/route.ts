@@ -3,6 +3,7 @@ import { sendEmail } from "@/lib/email/send";
 import { contactFormNotificationTemplate, contactFormAutoReplyTemplate } from "@/lib/email/templates";
 import { getBusinessSettings } from "@/lib/admin-control";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { rateLimitKeyForRequest } from "@/lib/request-ip";
 
 const SUBMISSION_WINDOW_MS = 3000;
 const RATE_LIMIT_WINDOW_SECONDS = 10 * 60;
@@ -28,11 +29,6 @@ type ContactBody = {
 
 function parseString(value: unknown) {
   return typeof value === "string" ? value.trim() : "";
-}
-
-function getClientKey(request: Request) {
-  const forwardedFor = request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip") ?? "unknown";
-  return forwardedFor.split(",")[0].trim() || "unknown";
 }
 
 export async function POST(request: Request) {
@@ -76,7 +72,7 @@ export async function POST(request: Request) {
     }
 
     const rateLimit = await checkRateLimit(
-      `contact:${getClientKey(request)}`,
+      rateLimitKeyForRequest("contact", request),
       MAX_SUBMISSIONS_PER_WINDOW,
       RATE_LIMIT_WINDOW_SECONDS,
     );

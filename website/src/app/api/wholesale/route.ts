@@ -3,6 +3,7 @@ import { sendEmail } from "@/lib/email/send";
 import { wholesaleInquiryAutoReplyTemplate, wholesaleInquiryNotificationTemplate } from "@/lib/email/templates";
 import { getBusinessSettings } from "@/lib/admin-control";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { rateLimitKeyForRequest } from "@/lib/request-ip";
 import { customerSafeMessage } from "@/lib/safe-error";
 
 /**
@@ -44,11 +45,6 @@ type WholesaleBody = {
 };
 
 const parseString = (value: unknown) => (typeof value === "string" ? value.trim() : "");
-
-function getClientKey(request: Request) {
-  const forwardedFor = request.headers.get("x-forwarded-for") ?? request.headers.get("x-real-ip") ?? "unknown";
-  return forwardedFor.split(",")[0].trim() || "unknown";
-}
 
 export async function POST(request: Request) {
   try {
@@ -98,7 +94,7 @@ export async function POST(request: Request) {
     }
 
     const rateLimit = await checkRateLimit(
-      `wholesale:${getClientKey(request)}`,
+      rateLimitKeyForRequest("wholesale", request),
       MAX_SUBMISSIONS_PER_WINDOW,
       RATE_LIMIT_WINDOW_SECONDS,
     );

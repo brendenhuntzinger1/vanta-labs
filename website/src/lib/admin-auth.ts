@@ -57,22 +57,11 @@ function normalizeIpAddress(raw: string | null | undefined) {
   return raw.split(",")[0]?.trim() || null;
 }
 
-export function getRequestIpAddress(request: Request) {
-  // Prefer headers the hosting proxy (Vercel) sets itself and that a client
-  // cannot forge: x-vercel-forwarded-for and x-real-ip are overwritten at the
-  // edge with the true client IP. x-forwarded-for is only a last resort — a
-  // client can PREPEND spoofed entries to it, so its leftmost token is
-  // attacker-controlled and must never be the primary lockout key.
-  const trusted = request.headers.get("x-vercel-forwarded-for") ?? request.headers.get("x-real-ip");
-  if (trusted && trusted.trim()) {
-    return normalizeIpAddress(trusted);
-  }
-  return normalizeIpAddress(request.headers.get("x-forwarded-for") ?? null);
-}
-
-export function getRequestUserAgent(request: Request) {
-  return request.headers.get("user-agent") ?? null;
-}
+// The resolver these two used to define now lives in request-ip.ts, so the
+// public endpoints share it instead of each keeping a weaker copy. Re-exported
+// rather than moved outright: existing importers of admin-auth keep working,
+// and there is still exactly one implementation.
+export { getRequestIpAddress, getRequestUserAgent } from "@/lib/request-ip";
 
 export function buildAdminSessionCookie(token: string) {
   return {
