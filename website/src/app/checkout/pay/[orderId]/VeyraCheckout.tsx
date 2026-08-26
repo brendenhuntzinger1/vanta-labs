@@ -2,6 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { decideFromOrderStatus } from "@/lib/checkout-poll-decision";
+
 // On-site card entry. Veyra's documented integration is "create a session
 // server-side and mount the iframe" — the shopper never leaves this domain and
 // this page never sees card data; the iframe is served from veyragate.com and
@@ -132,9 +134,18 @@ export default function VeyraCheckout({
   );
 
   /**
-   * Ask our own server whether the order is paid. Deliberately silent on
-   * failure: a dropped request during payment is expected on mobile data and
-   * must never produce an error the shopper can misread as a failed charge.
+   * Ask our own server whether the order is paid. Deliberately silent on a
+   * TRANSPORT failure: a dropped request during payment is expected on mobile
+   * data and must never produce an error the shopper can misread as a failed
+   * charge.
+   *
+   * A terminal answer from the server is different, and used to be missed
+   * entirely. This read only `paid`, so a declined card — recorded correctly as
+   * payment_failed, and reported by order-status as
+   * `{ paid: false, pending: false }` — was indistinguishable from "not
+   * finished yet". The page span forever on the card form and the shopper was
+   * never told. decideFromOrderStatus is where those three cases now live, with
+   * its own tests.
    */
   const checkOrderStatus = useCallback(async () => {
     if (settledRef.current) return;
@@ -143,8 +154,20 @@ export default function VeyraCheckout({
         cache: "no-store",
       });
       if (!response.ok) return;
-      const data = (await response.json()) as { paid?: boolean };
-      if (data?.paid) goToConfirmation();
+      const decision = decideFromOrderStatus(await response.json());
+      if (decision === "settled") {
+        goToConfirmation();
+        return;
+      }
+      if (decision === "failed") {
+        // Stop the poll the same way a success does, so the shopper is not left
+        // watching a spinner behind a message telling them it is over.
+        settledRef.current = true;
+        setStatus("error");
+        setMessage(
+          "That payment did not go through, and your card has not been charged. This is usually the bank declining the transaction rather than a problem with your order. Refresh to try again, or use a different card.",
+        );
+      }
     } catch {
       // Keep polling. The next tick may succeed.
     }
@@ -184,6 +207,19 @@ export default function VeyraCheckout({
         // supplier's brand at the moment of payment. The technical detail goes
         // to the console for debugging; the shopper gets Vanta Labs' own words.
         console.error("[checkout] secure card entry failed to load", err);
+        // ...and to Sentry, explicitly. The client SDK registers only
+        // breadcrumbs + globalHandlers (onerror/onunhandledrejection), so a
+        // CAUGHT error logged to the console reaches nothing: a shopper whose
+        // card form never loaded produced no signal anywhere, on any dashboard.
+        // Reported here rather than by enabling CaptureConsole globally, which
+        // would ship every console.error on the site — including ones carrying
+        // shopper input — to a third party.
+        void import("@sentry/nextjs")
+          .then((Sentry) => {
+            Sentry.captureException(err, { tags: { area: "checkout", stage: "card_form_load" } });
+          })
+          // Reporting must never be the reason a payment page breaks.
+          .catch(() => {});
         setMessage(
           "We couldn't load secure card entry. Your card has not been charged. Please refresh, or contact support if this continues.",
         );
@@ -201,10 +237,16 @@ export default function VeyraCheckout({
 
   // The settlement watch, independent of the iframe entirely.
   useEffect(() => {
-    // Immediately, because this also catches the shopper who already paid and
+    // Straight away, because this also catches the shopper who already paid and
     // then reloaded: they must land on their receipt, never on a card form that
     // invites a second payment.
-    void checkOrderStatus();
+    //
+    // Deferred by one tick rather than called inline. checkOrderStatus can now
+    // set state (it reports a declined payment instead of polling forever), and
+    // a setState statically reachable from an effect body is a cascading-render
+    // hazard the lint rule refuses — correctly, even though the await on fetch
+    // means it could never actually run synchronously here.
+    const kickoff = window.setTimeout(() => void checkOrderStatus(), 0);
 
     const poll = window.setInterval(() => void checkOrderStatus(), POLL_MS);
     const reassureTimer = window.setTimeout(() => setReassure(true), REASSURE_AFTER_MS);
@@ -220,6 +262,7 @@ export default function VeyraCheckout({
     window.addEventListener("pageshow", recheck);
 
     return () => {
+      window.clearTimeout(kickoff);
       window.clearInterval(poll);
       window.clearTimeout(reassureTimer);
       document.removeEventListener("visibilitychange", recheck);

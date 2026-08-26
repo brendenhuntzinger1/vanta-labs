@@ -46,9 +46,24 @@ function makeOrdersQuery() {
   return q;
 }
 
+/** The most recent alert row of the queried type, or null for "none yet". */
+let lastAlertAt: string | null = null;
+
 vi.mock("@/lib/supabase-server", () => ({
   supabaseAdmin: {
     from: (table: string) => {
+      if (table === "system_alerts") {
+        // Read-only: the throttle asks when this alert last fired.
+        const q: Record<string, unknown> = {};
+        q.select = () => q;
+        q.eq = () => q;
+        q.order = () => q;
+        q.limit = () => Promise.resolve({
+          data: lastAlertAt ? [{ created_at: lastAlertAt }] : [],
+          error: null,
+        });
+        return q;
+      }
       if (table !== "orders") throw new Error(`unexpected table ${table}`);
       return {
         select: (...a: unknown[]) => {
@@ -88,6 +103,8 @@ const { reconcileVeyraPendingPayments } = await import("@/lib/express-reconcile"
 
 // Older than RECONCILE_AFTER_MS (10 min) so the row is eligible at all.
 const OLD = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+// Older than RECONCILE_STALE_MS (24h), so it counts toward the backlog warning.
+const ANCIENT = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
 
 function providerSays(status: string | null) {
   fetchSession.mockImplementation(async () =>
@@ -100,6 +117,7 @@ function providerSays(status: string | null) {
 beforeEach(() => {
   vi.clearAllMocks();
   selectFilters = {};
+  lastAlertAt = null;
   pendingRows = [{ order_id: "order-1", payment_id: "cs_live_1", created_at: OLD }];
   vi.stubGlobal("fetch", fetchSession);
 });
@@ -204,5 +222,78 @@ describe("the query only ever considers orders that can be reconciled", () => {
     const result = await reconcileVeyraPendingPayments();
     expect(result).toEqual({ checked: 0, settled: 0, failedOut: 0, unresolved: 0 });
     expect(processPaymentWebhook).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The backlog warning itself. None of this changes which orders are touched —
+// it changes only what the operator is told, and how often.
+//
+// The old copy was wrong in two ways that sent an operator chasing nothing:
+// it called these "express" orders (the query matches ANY order carrying a
+// session id, and the two that triggered it in production were plain card
+// checkouts with checkout_channel NULL), and it said they hold inventory (both
+// reservations had read `released` for over a day by the time it first fired).
+// It also fired every single sweep — 43 times in 22 hours for two orders — which
+// is how a true warning becomes noise nobody reads.
+// ---------------------------------------------------------------------------
+describe("the backlog warning tells the truth, and only occasionally", () => {
+  it("does not claim held inventory, and does not call these express orders", async () => {
+    pendingRows = [{ order_id: "order-1", payment_id: "cs_live_1", created_at: ANCIENT }];
+    providerSays("open");
+
+    await reconcileVeyraPendingPayments();
+
+    expect(recordSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "payment_reconcile_backlog", severity: "warning" }),
+    );
+    const [{ message }] = recordSystemAlert.mock.calls[0] as unknown as [{ message: string }];
+    expect(message).not.toMatch(/inventory/i);
+    expect(message).not.toMatch(/express/i);
+  });
+
+  it("stays quiet when the same warning was already raised within the throttle window", async () => {
+    pendingRows = [{ order_id: "order-1", payment_id: "cs_live_1", created_at: ANCIENT }];
+    providerSays("open");
+    lastAlertAt = new Date(Date.now() - 60 * 60 * 1000).toISOString(); // 1h ago
+
+    await reconcileVeyraPendingPayments();
+
+    expect(recordSystemAlert).not.toHaveBeenCalled();
+  });
+
+  it("warns again once the throttle window has passed", async () => {
+    pendingRows = [{ order_id: "order-1", payment_id: "cs_live_1", created_at: ANCIENT }];
+    providerSays("open");
+    lastAlertAt = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString(); // 7h ago
+
+    await reconcileVeyraPendingPayments();
+
+    expect(recordSystemAlert).toHaveBeenCalledTimes(1);
+  });
+
+  it("still says nothing about a pending order that is younger than 24h", async () => {
+    pendingRows = [{ order_id: "order-1", payment_id: "cs_live_1", created_at: OLD }];
+    providerSays("open");
+
+    await reconcileVeyraPendingPayments();
+
+    expect(recordSystemAlert).not.toHaveBeenCalled();
+  });
+
+  it("never lets the throttle silence the critical could-not-settle alert", async () => {
+    // Throttling is for the aggregate backlog warning only. A charge that is
+    // confirmed paid but could not be settled is per-order and severe, and must
+    // fire every time regardless of how recently anything else alerted.
+    pendingRows = [{ order_id: "order-1", payment_id: "cs_live_1", created_at: ANCIENT }];
+    providerSays("paid");
+    processPaymentWebhook.mockRejectedValueOnce(new Error("boom"));
+    lastAlertAt = new Date(Date.now() - 60 * 1000).toISOString(); // 1 min ago
+
+    await reconcileVeyraPendingPayments();
+
+    expect(recordSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "express_reconcile_failed", severity: "critical" }),
+    );
   });
 });

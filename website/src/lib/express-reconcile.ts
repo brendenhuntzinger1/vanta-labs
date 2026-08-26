@@ -33,6 +33,51 @@ const RECONCILE_PAGE = 50;
 const RECONCILE_MAX_PAGES = 10;
 /** Past this a still-unknown charge needs a human, not another poll. */
 const RECONCILE_STALE_MS = 24 * 60 * 60 * 1000;
+/**
+ * How long the backlog warning stays quiet after firing.
+ *
+ * One aggregate row per sweep was not enough. A backlog only clears when a
+ * human acts on it, so the same unresolved orders re-alerted on every run —
+ * 43 firings in 22 hours for two orders, which is exactly the "operators learn
+ * to ignore it" failure the per-sweep aggregation was meant to prevent.
+ *
+ * Persisted rather than a module-level timestamp: each cron run is a fresh
+ * serverless invocation, so an in-memory clock is always empty and would
+ * throttle nothing. (inventory-reservation.ts can use an in-memory throttle
+ * because its alerts fire many times within ONE request; these fire once.)
+ */
+const BACKLOG_ALERT_THROTTLE_MS = 6 * 60 * 60 * 1000;
+/**
+ * Renamed from "express_reconcile_backlog": the query this reports on matches
+ * ANY order with a processor session id, and in production it has only ever
+ * fired for plain card checkouts. Nothing reads alert types programmatically
+ * (monitoring.ts stores and lists them), so the rename costs only the grouping
+ * of historical rows — which were misleading anyway.
+ */
+const BACKLOG_ALERT_TYPE = "payment_reconcile_backlog";
+
+/**
+ * Has this alert type been quiet long enough to fire again?
+ *
+ * Fails OPEN in every error path — a throttle must never be the reason a real
+ * warning goes unsent.
+ */
+async function backlogAlertIsDue(type: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("system_alerts")
+      .select("created_at")
+      .eq("type", type)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error || !data || data.length === 0) return true;
+    const last = Date.parse(String((data[0] as { created_at?: string }).created_at ?? ""));
+    if (!Number.isFinite(last)) return true;
+    return Date.now() - last > BACKLOG_ALERT_THROTTLE_MS;
+  } catch {
+    return true;
+  }
+}
 
 /**
  * Mapped session statuses that mean the charge definitively did NOT happen.
@@ -183,14 +228,26 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
     if (Date.parse(order.created_at) < staleFloor) stale += 1;
   }
 
-  if (stale > 0) {
-    // One aggregate row per sweep, not one per order — an alert that fires N
-    // times an hour is an alert operators learn to ignore. Warning, not
+  if (stale > 0 && (await backlogAlertIsDue(BACKLOG_ALERT_TYPE))) {
+    // One aggregate row, throttled — see BACKLOG_ALERT_THROTTLE_MS. Warning, not
     // critical: nothing here is known to be charged, it is simply unknown.
+    //
+    // WHAT THIS DELIBERATELY NO LONGER SAYS, because both were false and each
+    // sent an operator somewhere there was nothing to do:
+    //
+    //   "express order(s)" — the query above matches any order carrying a
+    //   session id, not just the wallet lane. The two orders that first
+    //   triggered this in production were ordinary card checkouts
+    //   (checkout_channel NULL, payment_method 'card').
+    //
+    //   "They hold inventory" — a checkout hold is DEFAULT_RESERVATION_MINUTES
+    //   (15 min) and reservation_expiry reclaims it on the next sweep. By the
+    //   time an order is 24h old its stock has been back on sale for ~23 of
+    //   them. Nothing here is holding anything.
     await recordSystemAlert({
-      type: "express_reconcile_backlog",
+      type: BACKLOG_ALERT_TYPE,
       severity: "warning",
-      message: `${stale} express order(s) have been pending at the processor for over 24h — typically an abandoned 3DS challenge. They hold inventory and will never settle on their own; review and cancel or complete them.`,
+      message: `${stale} order(s) have been unresolved at the payment processor for over 24h. Most are abandoned checkouts, which need nothing: no money moved and their stock was released long ago. Worth a look only if the count keeps climbing, which would point at the processor being unreadable rather than at shoppers walking away.`,
       context: { stale, unresolved, checked: orders.length },
     });
   }
