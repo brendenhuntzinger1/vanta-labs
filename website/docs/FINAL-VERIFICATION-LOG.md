@@ -967,3 +967,49 @@ And if the WRONG one is dropped, recreate immediately:
 create index concurrently if not exists rate_limit_hits_bucket_time_idx
   on public.rate_limit_hits using btree (bucket, created_at desc);
 ```
+
+### STEP 5b — APPLIED ✅
+
+Ran on its own, outside any transaction, as required by `concurrently`.
+
+Verify output:
+
+```
+matching_indexes_expect_1 : 1        <-- NOT 0; the hard-stop condition did not fire
+```
+
+And confirming the **right** index survived — a count of 1 alone would be
+satisfied by having dropped the wrong one:
+
+```
+rate_limit_hits_bucket_time_idx  CREATE INDEX ... (bucket, created_at DESC)   idx_scan 20864
+rate_limit_hits_pkey             CREATE UNIQUE INDEX ... (id)                 idx_scan 1
+```
+
+`idx_rate_limit_bucket_time` (49 scans) is gone. `rate_limit_hits_bucket_time_idx`
+(20,864 scans) — the one the planner actually uses — is intact with its
+definition unchanged. The limiter keeps its access path; the hottest write path
+in the app stops maintaining a redundant index.
+
+---
+
+## MIGRATION RUN — COMPLETE. 5 of 5 APPLIED AND VERIFIED.
+
+| step | what | result |
+|---|---|---|
+| 1 | `referral_orders` commission lifecycle | ✅ 1 constraint, 7 values, default `pending` |
+| 2 | inventory return path | ✅ column + function + index; stock totals unchanged; anon denied |
+| 3 | `pending_emails` order link | ✅ both columns `text`, matching `order_email_log` |
+| 4 | referral code management | ✅ 2 tables, 4 columns, unique index; all 8 codes intact |
+| 5b | duplicate rate-limit index | ✅ correct index survived |
+| ~~5~~ | RPC default-privilege lockdown | ⛔ **SKIPPED — the file is invalid SQL** (see below) |
+
+No step errored. No verify query returned a surprise. No hard-stop condition
+fired. Nothing was improvised.
+
+**Findings closed in production by this run:** M-01 / G-01, G-04 / I-12 residual,
+the schema half of G-02 / K-17, the schema half of C-02, and M-03.
+
+**Still true, and unchanged by this run:** there is no restore point (Step 0,
+accepted risk). Every change above was additive except one redundant index and
+one CHECK on an empty table.
