@@ -118,16 +118,99 @@ NEXT_PUBLIC_EXPRESS_CHECKOUT_ENABLED=false
 `EMAIL_ENABLED=false` and `PAYMENT_PROVIDER=mock` are load-bearing: they make it
 impossible for a synthetic test to mail a real person or reach a real processor.
 
+### 5b. Env goes in `.env.test.local`, NOT `.env.local`
+
+`harness:build` and `harness:start` both set `NODE_ENV=test`, and Next does not
+load `.env.local` in test — see
+`node_modules/next/dist/docs/01-app/02-guides/environment-variables.md`:
+*".env.local won't be loaded, as you expect tests to produce the same results
+for everyone."* Section 5 above tells you to put everything in the one file the
+harness cannot read. Symptom: `Missing NEXT_PUBLIC_SUPABASE_URL` and every
+product page 500s.
+
+Put the same contents in **`.env.test.local`** (also gitignored). Keep
+`.env.local` too if you ever run `next dev`.
+
 ### 6. Build and run — NOT dev
 
 ```bash
-npm run build && npm run start
+npm run harness:build && npm run harness:start
 ```
 
 **Never `npm run dev` in this environment.** The HMR socket is blocked, Next
 retries continuously, and Fast Refresh resets React state mid-test. That
 produces convincing false bugs — it made a working age gate look like an
-un-passable P0 earlier in this audit.
+un-passable P0 earlier in this audit. (Re-confirmed 2026-08-26: in dev the age
+gate cannot be passed even with all four boxes genuinely checked.)
+
+**Clear `.next/cache` after any schema or settings change.** `getCatalogProducts`
+is wrapped in `unstable_cache`, which caches FAILURES and persists across
+restarts, so a fix looks like a no-op until you do:
+
+```bash
+rm -rf .next && npm run harness:build
+```
+
+### 7. Payments: run LIVE mode against a local stub
+
+Do **not** try to use `PAYMENT_PROVIDER=mock` on a production build, and do not
+weaken the lockout to make it work. The guard
+
+```js
+if (process.env.NODE_ENV === "production") throw new Error("PAYMENT_PROVIDER=mock/test is forbidden…")
+```
+
+is **constant-folded away at build time** — the compiled bundle contains an
+unconditional throw:
+
+```js
+if ("mock" === t || "test" === t) throw Error("PAYMENT_PROVIDER=mock/test is forbidden in production…")
+```
+
+so `harness-server.mjs`'s runtime `NODE_ENV = "test"` cannot re-open it; the
+check no longer exists to re-evaluate. That control is correct and must stay.
+
+Instead, run the **real live provider against a local stub**. `VEYRA_API_BASE`
+is a required env var read by both `LivePaymentProvider.createCheckoutSession`
+and the express service, so pointing it at localhost exercises the genuine code
+path and reaches no real processor:
+
+```
+PAYMENT_PROVIDER=live
+VEYRA_API_BASE=http://127.0.0.1:59999
+VEYRA_SECRET_KEY=stub-secret-not-real
+CHECKOUT_ENABLED=true
+```
+
+```bash
+node scripts/veyra-stub.mjs      # mints session ids only; never marks anything paid
+```
+
+> `scripts/veyra-stub.mjs` originates from the live-inspection session
+> (`claude/vanta-labs-live-inspection-h1eh4f`). If it is not on your branch yet,
+> take it from there rather than writing a second one.
+
+Then drive the outcome with a signed webhook through the real handler:
+
+```bash
+PAYMENT_WEBHOOK_SECRET=<your harness secret> \
+  node scripts/harness-pay-order.mjs <order_id>                      # success
+PAYMENT_WEBHOOK_SECRET=... HARNESS_EVENT_TYPE=payment.failed \
+  node scripts/harness-pay-order.mjs <order_id>                      # decline
+```
+
+`HARNESS_EVENT_TYPE` also accepts `payment.canceled` and `refund.completed`.
+
+**This gets you the full loop** — checkout UI → order → payment outcome →
+success/decline UI — on a production build, with production protections intact.
+Verified 2026-08-26: the decline message, the poll stopping, and the paid-order
+redirect to confirmation were all browser-proven this way.
+
+**What it still cannot do:** mount the real card iframe. `SCRIPT_SRC` in
+`VeyraCheckout.tsx` is hardcoded to `https://veyragate.com/v1/checkout.js`, and
+it should stay hardcoded — an env-configurable script src on a payment page is a
+way to point the card form at an arbitrary script. The poll runs independently
+of the iframe, which is why the decline and success paths are still reachable.
 
 ---
 
