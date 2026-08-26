@@ -37,6 +37,7 @@ pasted verbatim.
 | K-12 | P1 | `SOURCE-INSPECTED` | Store credit is decided at quote time and debited at settlement time, so a manual-payment order debits a different month — or nothing |
 | K-13 | P1 | `SOURCE-INSPECTED` | The "15-minute" inventory hold is really up to 45 minutes, and every way it can fail reports success |
 | K-14 | P1 | `SOURCE-INSPECTED` | Maintenance mode 503s the entire cron sweep and the one-click unsubscribe in already-delivered marketing email |
+| K-15 | P1 | `SOURCE-INSPECTED` | Rate limiting is a read-then-write with no claim and fails open silently, so the throttle does not hold under concurrent traffic |
 
 ---
 
@@ -2098,6 +2099,198 @@ fails naming it.
   touching `middleware.ts`.**
 - The Phase 1 map spotted only the express-shipping-callback case. The cron and
   unsubscribe cases are additional and, for cron, larger.
+
+### Addendum — the middleware can also replace a response another system parses
+
+Recorded here rather than as a separate finding because the root cause and the
+fix are the same, and the reachability is narrow.
+
+`/api/veyra/express-shipping-callback` is not on the bypass list either. That
+route is unusually careful about its **response shape**: its docblock
+(`:21-25`, `:36-42`) records that Veyra "aborts at 5s and FAILS OPEN to a $0
+shipping / $0 tax method", that Veyra's validator rejects
+`empty_shipping_methods_without_error_message` by degrading the whole response to
+free shipping, and therefore that "every failure path here returns an explicit
+error shape (never a bare empty list)".
+
+That contract is enforced inside the route. Maintenance mode returns
+`{"success":false,"error":"Maintenance mode enabled"}` from the **middleware**,
+before the route runs — a body the route author never wrote and cannot see. It
+happens to carry an `error` key, so Veyra may well refuse correctly; that is
+luck, not design, and it is not something this session can confirm without
+Veyra's validator.
+
+Reachability is narrow: maintenance mode would have to be switched on while an
+Apple Pay sheet is open. But the general shape is worth block M's attention —
+**a route whose correctness depends on its exact response body can have that body
+replaced by middleware**, and nothing in either file references the other. The
+`/api/veyra` prefix belongs on the bypass list for the same reason
+`/api/webhooks` already is.
+
+
+---
+
+---
+
+## K-15 — Rate limiting is a read-then-write with no claim, and it fails open silently — so the throttle on coupon enumeration and order creation does not hold under exactly the traffic it exists to stop
+
+**Grade:** `SOURCE-INSPECTED` · **Severity:** P1 · **Status:** OPEN
+**Area:** third-party degraded mode (fail-open)
+
+### What is wrong
+
+`src/lib/rate-limit.ts:17-53` is the whole implementation, and it has two
+independent defects:
+
+```ts
+try {
+  const { count, error } = await supabaseAdmin
+    .from("rate_limit_hits")
+    .select("id", { count: "exact", head: true })
+    .eq("bucket", bucket)
+    .gt("created_at", windowStart);
+
+  if (error) {
+    return { allowed: true, retryAfterSeconds: 0 };      // (a) fail-open, silent
+  }
+
+  if ((count ?? 0) >= limit) {
+    return { allowed: false, retryAfterSeconds: windowSeconds };
+  }
+
+  await supabaseAdmin.from("rate_limit_hits").insert({ bucket });   // (b) count THEN insert
+  …
+  return { allowed: true, retryAfterSeconds: 0 };
+} catch {
+  return { allowed: true, retryAfterSeconds: 0 };          // (a) again
+}
+```
+
+**(a) It fails open on any storage error, silently.** No log, no
+`recordSystemAlert`, no distinguishable return value. The caller cannot tell
+"under the limit" from "the rate-limit table is unreachable". Most consequential
+case: if the `rate_limit_hits` migration has not been applied, the `select`
+returns `42P01`, and **every rate limit in the application is off**, on every
+route, with nothing anywhere saying so. The ledger's F-011 already records that
+four migrations exist in production and were never committed — migration state in
+this project is demonstrably not a given.
+
+**(b) The check and the record are not atomic.** SELECT the count, then INSERT.
+Two hundred requests arriving together all read a count below the limit, all pass
+the gate, and all then insert. The effective limit under a concurrent burst is
+**unbounded** — the code only throttles *serial* traffic. Automated abuse is
+concurrent by construction, which is the traffic this exists to stop.
+
+The codebase already contains the correct pattern for exactly this shape:
+`src/lib/cart-recovery.ts` `reserveAndSendStage` inserts against a unique index
+*before* acting, and `src/lib/email/campaign-sender.ts` `claimBatch` uses a
+conditional UPDATE. Neither technique was applied here.
+
+### What is behind this gate
+
+Eighteen call sites, several of them money-adjacent:
+
+| route | limit | what the throttle is protecting |
+|---|---|---|
+| `/api/coupons/validate:14` | 20/min | **the only barrier to coupon-code enumeration** |
+| `/api/checkout/create-session:47` | 8/min | order creation |
+| `/api/checkout/submit-payment:30` | 10/min | payment submission |
+| `/api/checkout/express/session:87` | 12/min | wallet session minting |
+| `/api/partner/referral-code:17` | 5/hour | ambassador code churn |
+| `/api/partner/apply:37` | 3/hour | partner applications |
+| `/api/wholesale:100`, `/api/contact:78` | 3/10min | **unauthenticated email-sending forms** |
+| `/api/catalog/back-in-stock:11`, `/subscribe-save:32` | 10/hour | list stuffing |
+| `/api/analytics/track:96,104`, `/api/ads/funnel-event:36`, `/r/[code]:35` | 120–600/min | funnel-data poisoning |
+
+Coupon enumeration is the sharpest: codes are minted as `SAVE-XXXX`
+(`src/lib/cart-recovery.ts` `generateCouponCode`), `validateCoupon` matches
+case-insensitively, and a valid code is worth a real discount. 20/min serially is
+a meaningful barrier; 20/min that a concurrent burst walks straight through is not.
+
+**Not affected:** admin login has its own separate mechanism
+(`admin_login_attempts`, `src/lib/admin-auth.ts:278-338`) and does not depend on
+this module. Checked so the severity is not overstated — this is not an
+authentication bypass.
+
+### Compounding: the IP key is attacker-supplied on most of these
+
+Every bucket above is keyed on a client IP, and the Phase 1 critic established
+that **three different IP resolvers** exist, with several routes reading
+`x-forwarded-for` first — a header the client controls. Rotating one header
+changes the bucket. That is Block I's finding to fix; it is recorded here because
+the two defects multiply: a bypassable key on a non-atomic, fail-open counter.
+
+### Impact
+
+A security control that is off whenever its table is unavailable, ineffective
+whenever traffic is concurrent, and bypassable by rotating a header — with no
+signal in any of the three states. The store cannot tell the difference between
+"the limits are working" and "the limits have never fired".
+
+### Reproduction
+
+**Fail-open:** on the harness, `revoke select on public.rate_limit_hits from service_role;`
+then send 50 sequential `POST /api/coupons/validate` requests. All 50 return 200.
+Confirm no `system_alerts` row and nothing in the function logs.
+
+**Non-atomicity (no failure required):**
+`for i in $(seq 1 100); do curl -s -o /dev/null -w '%{http_code}\n' -X POST .../api/coupons/validate -d '{"code":"TEST"}' & done; wait | sort | uniq -c`
+→ far more than 20 non-429 responses. Repeat with `sleep 0.2` between calls and
+watch the limit engage at 20, which isolates concurrency as the variable.
+
+### Smallest safe root-cause fix
+
+**Make the count and the record one statement.** A Postgres function that inserts
+and returns the in-window count in a single round trip removes the race entirely:
+
+```sql
+create or replace function public.hit_rate_limit(p_bucket text, p_window_seconds int)
+returns integer language sql security definer as $$
+  with ins as (insert into public.rate_limit_hits (bucket) values (p_bucket) returning created_at)
+  select count(*)::int from public.rate_limit_hits
+   where bucket = p_bucket and created_at > now() - make_interval(secs => p_window_seconds);
+$$;
+```
+
+The caller then compares the returned count against the limit. This also matches
+how the rest of the codebase solves claim problems.
+
+**Make the failure visible.** Fail-open is arguably the right *default* — a
+Supabase blip should not take checkout down — but it must not be silent:
+
+```ts
+if (error) {
+  await recordSystemAlert({ type: "rate_limit_unavailable", severity: "critical", … });
+  return { allowed: true, retryAfterSeconds: 0, degraded: true };
+}
+```
+
+Adding `degraded: true` to `RateLimitResult` lets individual callers choose: the
+funnel-event route can happily proceed, while `/api/coupons/validate` and the two
+unauthenticated email-sending forms can fail **closed** instead. That per-route
+choice is the part the current single return value makes impossible.
+
+### Regression test to write
+
+Concurrency test: fire `limit + 50` `checkRateLimit` calls with
+`Promise.all` against a stubbed store and assert exactly `limit` are allowed.
+This fails today. Negative control: with `Promise.all` replaced by a sequential
+loop, it should pass — proving the test is measuring concurrency, not the limit
+arithmetic.
+
+Second test: stub the select to return a `42P01` error and assert the result
+carries `degraded: true`. Negative control: remove the flag and confirm it fails.
+
+### CROSS-BLOCK
+
+- **Block I** owns `src/app/api/admin/**`, `admin-auth.ts` and `middleware.ts`,
+  and is already auditing the three-IP-resolver problem. The IP-key half is
+  theirs; `src/lib/rate-limit.ts` itself is unowned and Block K can carry the
+  atomicity and visibility fixes. **They compose — neither is sufficient alone**,
+  and Block M should land them together.
+- Per-route fail-closed decisions touch `src/app/api/checkout/**` and
+  `src/app/api/coupons/**`; those need the route owners' agreement, not a
+  unilateral change from here.
 
 ---
 
