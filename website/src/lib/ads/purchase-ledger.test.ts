@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { wasAlreadySent, type LedgerRow } from "./purchase-ledger";
+import {
+  wasAlreadySent,
+  isBackfillRow,
+  countLedger,
+  BACKFILL_EVENT_ID,
+  type LedgerRow,
+  type LedgerCountRow,
+} from "./purchase-ledger";
 
 describe("wasAlreadySent", () => {
   it("returns false for an empty ledger", () => {
@@ -55,5 +62,43 @@ describe("wasAlreadySent", () => {
   it("tolerates a null or undefined row list", () => {
     expect(wasAlreadySent(null, "tiktok")).toBe(false);
     expect(wasAlreadySent(undefined, "tiktok")).toBe(false);
+  });
+});
+
+// A backfill row exists only to stop a send on a channel the old single-column
+// key had silenced — it must suppress that send and can never itself become one.
+describe("backfill rows suppress a send but cannot become one", () => {
+  it("a backfill-only row for a platform makes wasAlreadySent true, suppressing the send", () => {
+    const rows: LedgerRow[] = [
+      { order_id: "VL-1001", platform: "reddit", delivered: false },
+    ];
+    // simulate the ledger carrying the migration's marker via LedgerCountRow shape
+    const backfillRows: LedgerCountRow[] = [
+      { order_id: "VL-1001", platform: "reddit", delivered: false, event_id: BACKFILL_EVENT_ID },
+    ];
+    expect(wasAlreadySent(backfillRows, "reddit")).toBe(true);
+    expect(wasAlreadySent(rows, "reddit")).toBe(true);
+  });
+
+  it("suppression is per-platform: a backfill row for reddit does not suppress tiktok", () => {
+    const backfillRows: LedgerCountRow[] = [
+      { order_id: "VL-1001", platform: "reddit", delivered: false, event_id: BACKFILL_EVENT_ID },
+    ];
+    expect(wasAlreadySent(backfillRows, "reddit")).toBe(true);
+    expect(wasAlreadySent(backfillRows, "tiktok")).toBe(false);
+  });
+
+  it("a backfill row is identifiable as never-sent and excluded from countLedger's total and delivered", () => {
+    const backfillRow: LedgerCountRow = {
+      order_id: "VL-1001",
+      platform: "reddit",
+      delivered: false,
+      event_id: BACKFILL_EVENT_ID,
+    };
+    expect(isBackfillRow(backfillRow)).toBe(true);
+
+    const counts = countLedger([backfillRow], "reddit");
+    expect(counts.total).toBe(0);
+    expect(counts.delivered).toBe(0);
   });
 });
