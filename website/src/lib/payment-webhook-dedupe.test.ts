@@ -50,7 +50,8 @@ const state: {
 };
 
 const sideEffects = {
-  email: vi.fn(async () => ({ ok: true })),
+  // Typed so a test can read what was actually sent, not just how often.
+  email: vi.fn(async (_message?: { idempotencyKey?: string }) => ({ ok: true })),
   points: vi.fn(async () => {}),
   coupon: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
   storeCredit: vi.fn(async () => {}),
@@ -485,6 +486,35 @@ describe("a points redemption that throws", () => {
 
     // The earn ran in its own try, so one failure did not swallow the other.
     expect(sideEffects.points).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// E-04 — THE REFUND CONFIRMATION WAS THE ONE ORDER EMAIL OUTSIDE SEND-ONCE.
+//
+// order_email_log was built with two kinds, 'order_confirmation' and
+// 'refund_confirmation', and only the first was ever routed through
+// sendOrderEmailOnce. The refund path called sendEmail directly, so it had
+// neither of the two guards the receipt has: no database-enforced slot, and no
+// provider-side idempotency key. The confirmation is at least gated by the
+// atomic paid_side_effects_at claim; nothing at all gates this one, and a
+// processor that re-delivers a refund event (they retry anything not answered
+// 2xx) mailed the customer another "your refund was processed" for the same
+// money.
+//
+// The observable difference is the idempotency key: it is the identity
+// sendOrderEmailOnce attaches, and a bare sendEmail cannot produce it.
+// ---------------------------------------------------------------------------
+describe("the refund confirmation email", () => {
+  it("goes out under the send-once identity, not as a bare send", async () => {
+    await deliver("evt-refund-once", refundPayload());
+
+    const refundSend = sideEffects.email.mock.calls
+      .map(([message]) => message)
+      .find((message) => message?.idempotencyKey?.startsWith("refund_confirmation:"));
+
+    expect(refundSend).toBeDefined();
+    expect(refundSend!.idempotencyKey).toBe(`refund_confirmation:${ORDER_ID}`);
   });
 });
 

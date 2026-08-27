@@ -2299,7 +2299,38 @@ export async function processPaymentWebhook(payload: string, signature: string, 
             refundAmount: refundOutcome.recordedRefundAmount,
             isFullRefund: refundOutcome.isFullRefund,
           });
-          await sendEmail({ to: String(orderRecord.customer_email), ...refundEmail });
+          // SEND-ONCE, LIKE THE RECEIPT (E-04). This called sendEmail directly,
+          // outside the send-once guard, even though 'refund_confirmation' is
+          // one of the two kinds order_email_log was built for. Nothing here is
+          // behind a once-only claim the way the confirmation is behind
+          // paid_side_effects_at: a processor that re-delivers a refund webhook
+          // (they retry anything not answered 2xx), a partial refund followed by
+          // the rest, or the refund-effect repair sweep re-entering this path
+          // each mailed the customer another "your refund was processed" for the
+          // same money. Routing through sendOrderEmailOnce makes the second one
+          // impossible at the database level and leaves the same audit row the
+          // receipt leaves.
+          const refundResult = await sendOrderEmailOnce({
+            orderId,
+            kind: "refund_confirmation",
+            to: String(orderRecord.customer_email),
+            template: refundEmail,
+          });
+          if (refundResult.attempted && !refundResult.sent) {
+            console.error("Refund confirmation email not sent for order", orderId, refundResult.error);
+            // (orderId, kind) so the sweep closes this send-once slot when it
+            // delivers, rather than leaving it released for a second send.
+            await enqueueFailedEmail(
+              {
+                to: String(orderRecord.customer_email),
+                subject: refundEmail.subject,
+                html: refundEmail.html,
+                text: refundEmail.text,
+              },
+              refundResult.error,
+              { orderId, kind: "refund_confirmation" },
+            );
+          }
         } catch (refundEmailError) {
           console.error("Unable to send refund confirmation email for order", orderId, refundEmailError);
         }

@@ -23,6 +23,7 @@ type Payload = {
   found?: number;
   sent?: number;
   stillFailing?: number;
+  skippedAlreadySent?: number;
 };
 
 const TONE: Record<CommunicationState, string> = {
@@ -84,7 +85,11 @@ export function AdminOrderCommunications({ orderId }: { orderId: string }) {
       setNote(
         body.found === 0
           ? "Nothing queued to retry."
-          : `Retried ${body.found}: ${body.sent ?? 0} delivered, ${body.stillFailing ?? 0} still failing.`,
+          : `Retried ${body.found}: ${body.sent ?? 0} delivered, ${body.stillFailing ?? 0} still failing${
+              body.skippedAlreadySent
+                ? `, ${body.skippedAlreadySent} skipped (already delivered — not re-sent)`
+                : ""
+            }.`,
       );
     } catch (error) {
       setNote(error instanceof Error ? error.message : String(error));
