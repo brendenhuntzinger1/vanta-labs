@@ -1,7 +1,16 @@
 -- =============================================================================
 -- Purchase send-ledger — widen the key from (order_id) to (order_id, platform).
 --
--- NOT APPLIED. Authored for review; the owner applies it separately.
+-- APPLIED to production 2026-08-27, after owner approval.
+--
+-- Preflight matched the reviewed assumptions exactly (PK on order_id alone; 1 row;
+-- platform='tiktok'; zero duplicate pairs; zero null/empty platform; RLS on with zero
+-- policies). Post-apply verification: the genuine TikTok row is byte-for-byte identical
+-- (md5 3ece47722904cde190dbb1c4efc66d6b before and after); key is (order_id, platform);
+-- exactly two suppression rows exist (reddit, google), neither delivered; total delivered
+-- rows unchanged at 1, so no historical conversion was sent; the health board's TikTok
+-- input is total=1/delivered=1; column count, indexes, RLS and policy count all unchanged;
+-- and a second verbatim apply left the whole-table md5 fingerprint identical.
 --
 -- THE DEFECT
 -- ----------
