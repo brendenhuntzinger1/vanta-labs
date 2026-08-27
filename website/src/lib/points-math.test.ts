@@ -132,6 +132,47 @@ describe("the redemption rate", () => {
 
   it("floors a fractional dollar conversion rather than rounding up", () => {
     expect(dollarsToPoints(1.009)).toBe(100);
+    // The floor is a POLICY about fractional cents, and it must survive the
+    // float fix below. A customer can never be handed more discount than they
+    // paid points for.
+    expect(dollarsToPoints(0.999)).toBe(99);
+    expect(dollarsToPoints(1.995)).toBe(199);
+    expect(dollarsToPoints(2.3456)).toBe(234);
+  });
+
+  it("converts a WHOLE-CENT amount to the exact point count, floats notwithstanding", () => {
+    // THE DEFECT. `Math.floor(dollars * 100)` on a raw double:
+    //   18.08 * 100 === 1807.9999999999998   ->  1807, not 1808
+    // quote-order.ts:809-810 takes the discount off the customer's total at the
+    // full $18.08 and stores points_redeemed = 1807; admin-profit reconstructs
+    // it as pointsToDollars(1807) = $18.07, so gross revenue exceeds
+    // amount_paid by a cent and the customer keeps a point that was never
+    // debited. These four are among the smallest values that reproduce it.
+    expect(dollarsToPoints(18.08)).toBe(1808);
+    expect(dollarsToPoints(0.29)).toBe(29);
+    expect(dollarsToPoints(0.57)).toBe(57);
+    expect(dollarsToPoints(1.13)).toBe(113);
+  });
+
+  it("and does so for EVERY whole-cent amount up to $2,000, not just the lucky ones", () => {
+    // The value handed to dollarsToPoints in production is always a
+    // roundMoney()'d dollar figure, so "every two-decimal amount" IS the input
+    // space. 9,174 of these 200,000 (4.6%) lost a point before the fix — which
+    // is why one hand-picked example is not enough to hold it.
+    const broken: number[] = [];
+    for (let cents = 1; cents <= 200_000; cents += 1) {
+      if (dollarsToPoints(cents / 100) !== cents) broken.push(cents);
+    }
+    expect(broken).toEqual([]);
+  });
+
+  it("round-trips every whole-cent amount back to the same dollars", () => {
+    // The property the revenue invariant actually depends on: what quote-order
+    // discounts and what admin-profit reconstructs are the same number.
+    for (let cents = 1; cents <= 20_000; cents += 1) {
+      const dollars = Math.round(cents) / 100;
+      expect(pointsToDollars(dollarsToPoints(dollars))).toBe(dollars);
+    }
   });
 
   it("never converts a negative amount into points", () => {

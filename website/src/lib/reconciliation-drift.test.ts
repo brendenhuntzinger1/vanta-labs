@@ -325,16 +325,31 @@ describe("reconciliation-math agrees with the formula that wrote the row", () =>
       if (result.mismatch) flagged.push(detail);
     }
 
-    // WHAT THIS FOUND. The two formulas are NOT identical: quoteOrder rounds to
-    // the cent at four intermediate steps, expectedOrderTotal rounds once at the
-    // end, and on some baskets those disagree by exactly one cent. Recorded, not
-    // asserted away — this is the drift, and it is real.
-    expect(apart1).toBeGreaterThan(0);
+    // WHAT THIS ACTUALLY FOUND, AND THE DIAGNOSIS THAT WAS WRONG.
+    //
+    // This block used to read: "the two formulas are NOT identical: quoteOrder
+    // rounds to the cent at four intermediate steps, expectedOrderTotal rounds
+    // once at the end, and on some baskets those disagree by exactly one cent",
+    // and it asserted `apart1 > 0` — it required the drift to exist. That
+    // explanation was wrong, and requiring it kept a real money defect alive.
+    //
+    // Every one of the 8 cents-apart baskets in this sweep was a POINTS
+    // redemption, and the cause was `dollarsToPoints`'s float floor
+    // (points-math.ts): `18.08 * 100 === 1807.9999999999998` stored 1807 points
+    // for an $18.08 discount, so the row's `points_redeemed / 100` came back a
+    // cent short of what quoteOrder had actually taken off the total. Fix that
+    // one multiplication and the count goes 8 -> 0: the four intermediate
+    // roundings contribute NOTHING, because every term quoteOrder rounds is
+    // already a whole number of cents by the time it is rounded.
+    //
+    // So the assertion is now the true one — the two formulas agree EXACTLY on
+    // every basket. A non-zero count here means a genuinely new source of drift
+    // has appeared, and it should be diagnosed rather than absorbed.
+    expect(apart1).toBe(0);
 
-    // WHAT KEEPS IT HARMLESS, and the thing that must not regress: the gap never
-    // exceeds a cent, so isTotalMismatch's ±$0.01 band absorbs it and no genuine
-    // order is ever accused of not adding up. A two-cent gap WOULD false-flag,
-    // which is why this is a bound and not a tolerance.
+    // Kept as the outer bound even so: isTotalMismatch's ±$0.01 band would
+    // absorb a one-cent gap, but a two-cent gap WOULD false-flag a real order
+    // as not adding up.
     expect(apartMore).toEqual([]);
     expect(flagged).toEqual([]);
   });
