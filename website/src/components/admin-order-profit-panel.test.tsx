@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+
+// The panel now embeds the manual shipping-cost entry form, a client component
+// whose only browser dependency is useRouter().refresh(). Stubbed so the panel
+// can still be rendered to static markup in a node test.
+vi.mock("next/navigation", () => ({ useRouter: () => ({ refresh: () => {} }) }));
 
 import { AdminOrderProfitPanel, type OrderProfitView } from "@/components/admin-order-profit-panel";
 
@@ -59,7 +64,7 @@ const REDEEMING: OrderProfitView = {
 };
 
 function render(profit: OrderProfitView): string {
-  return renderToStaticMarkup(<AdminOrderProfitPanel profit={profit} audit={[]} />);
+  return renderToStaticMarkup(<AdminOrderProfitPanel profit={profit} audit={[]} orderId="order-test" />);
 }
 
 /** Every `<dt>label</dt><dd>$x.xx</dd>` pair the panel rendered, in order. */
@@ -145,5 +150,33 @@ describe("the order profit panel explains the revenue it reports", () => {
     expect(tax).toBeGreaterThan(net);
     // And it is not one of the revenue lines above the divider.
     expect(revenueTotal(html)).toBe(89.5);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE PANEL MUST OFFER THE ENTRY THE SWEEP TELLS THE OPERATOR TO USE.
+//
+// shipping_cost_manual_entry_required fires for labels whose postage Shippo
+// cannot report back, and says "Enter the cost by hand in Admin -> Orders; no
+// automatic repair is possible." This panel is that screen, and it carried a
+// comment stating the opposite -- that the form was removed because "the
+// reconciliation sweep re-fetches it from Shippo rather than asking a human".
+// For this class of order the sweep has already given up. Nothing on the page
+// closed the loop.
+//
+// The pair below is the whole rule: offered when the figure is MISSING, absent
+// when the figure was MEASURED. The second half preserves the reason the form
+// was removed in the first place -- a typed figure must not be able to quietly
+// outrank a Shippo-reported one.
+// ---------------------------------------------------------------------------
+describe("entering a shipping cost the sweep cannot recover", () => {
+  it("offers the entry form while the exact cost is still unknown", () => {
+    const html = render({ ...REDEEMING, shippingCostIsEstimate: true, profitStatus: "estimated" });
+    expect(html).toContain("<input");
+  });
+
+  it("does not offer it once a measured cost has been recorded", () => {
+    const html = render({ ...REDEEMING, shippingCostIsEstimate: false, profitStatus: "finalized" });
+    expect(html).not.toContain("<input");
   });
 });

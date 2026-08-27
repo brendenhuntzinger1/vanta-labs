@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getSystemStatus, type StatusLevel } from "@/lib/system-status";
 import { getRecentSystemAlerts } from "@/lib/monitoring";
+import { AdminSystemAlertRow } from "@/components/admin-system-alert-row";
 import { CheckoutPreflight } from "@/components/checkout-preflight";
 import { InventoryReservationCheck } from "@/components/inventory-reservation-check";
 
@@ -82,14 +83,7 @@ export default async function AdminStatusPage() {
           ) : (
             <div className="mt-2 divide-y divide-white/5 overflow-hidden rounded-xl border border-white/10">
               {unresolvedAlerts.map((a) => (
-                <div key={a.id} className="bg-white/[0.02] p-4">
-                  <div className="flex items-center gap-2">
-                    <span className={`inline-block h-2 w-2 rounded-full ${a.severity === "critical" ? "bg-rose-500" : a.severity === "warning" ? "bg-amber-400" : "bg-sky-400"}`} aria-hidden />
-                    <span className="text-sm font-medium text-white">{a.type}</span>
-                    <span className="text-xs text-zinc-500">{new Date(a.created_at).toLocaleString()}</span>
-                  </div>
-                  <p className="mt-1 pl-4 text-xs text-zinc-400">{a.message}</p>
-                </div>
+                <AdminSystemAlertRow key={a.id} alert={a} />
               ))}
             </div>
           )}
