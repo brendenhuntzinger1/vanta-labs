@@ -138,7 +138,10 @@ export default async function HomePage() {
             padding -- there the block is nearly full-width and dropping it
             further would crowd the scroll cue. */}
         <div className="vl2-hero-content mx-auto w-full max-w-[1440px] px-4 sm:px-6 pb-12 pt-28 sm:pb-12 sm:pt-40 lg:px-12 lg:pb-14">
-          <div className="vl2-fade-in">
+          {/* vl2-hero-enter, NOT vl2-fade-in: the headline below is this page's
+              LCP element and must not be held at opacity:0 while it animates.
+              See the rule in globals.css for the measurement. */}
+          <div className="vl2-hero-enter">
             {/* THE HERO PROMO PILL WAS REMOVED, AND IT WAS THREE PROBLEMS.
                 It read "🎁 Buy 3 Get 1 Free — Limited Time" in amber, gated on
                 the same `promoBuy3Get1Enabled` flag the offers bar now reads.
