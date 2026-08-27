@@ -1,11 +1,19 @@
 import path from "node:path";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
     environment: "node",
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
+    // .gitignore:49-52 has claimed since it was written that "vitest.config.ts
+    // excludes scratchpad separately; both are required". It did not: there was
+    // no `exclude` here at all, and vitest does not read .gitignore. A stray
+    // agent probe left under website/scratchpad/ therefore JOINED the suite and
+    // silently inflated the gate counts the whole project reports against.
+    // Keep the defaults (node_modules, dist, build output) and add the two
+    // scratch directories, so the comment over there is now true.
+    exclude: [...configDefaults.exclude, "scratchpad/**", "scratch-verify/**"],
   },
   resolve: {
     alias: {

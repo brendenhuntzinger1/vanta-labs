@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { netOrderRevenue } from "@/lib/ledger";
 
 // There is no customer-account system yet (Phase 5) - this aggregates the
 // guest checkout orders already in Supabase by email. It is a reporting
@@ -35,7 +36,7 @@ export interface AdminCustomerListResult {
 async function aggregateCustomers(search?: string): Promise<AdminCustomerRow[]> {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("customer_email, customer_name, amount_paid, payment_status, created_at")
+    .select("customer_email, customer_name, amount_paid, refund_amount, payment_status, created_at")
     .not("customer_email", "is", null)
     .order("created_at", { ascending: false })
     .limit(5000);
@@ -51,8 +52,17 @@ async function aggregateCustomers(search?: string): Promise<AdminCustomerRow[]> 
     if (!email) continue;
 
     const existing = byEmail.get(email);
+    // NET, NOT GROSS. This summed raw `amount_paid`, so a fully refunded order
+    // still counted its whole value toward the customer's lifetime spend and a
+    // partially refunded one counted the part that was handed back. Every other
+    // revenue surface in this codebase — /admin/revenue, analytics, email
+    // attribution, membership revenue and the SQL rollups — uses
+    // ledger.netOrderRevenue, and "what this customer has actually spent with
+    // us" is the same question. Which ROWS are counted is unchanged; only the
+    // amount is, and a fully refunded order now contributes 0 rather than its
+    // face value.
     const isPaid = PAID_STATUSES.has(String(order.payment_status ?? ""));
-    const amount = isPaid ? Number(order.amount_paid ?? 0) : 0;
+    const amount = isPaid ? netOrderRevenue(order) : 0;
     const createdAt = String(order.created_at);
 
     if (!existing) {
