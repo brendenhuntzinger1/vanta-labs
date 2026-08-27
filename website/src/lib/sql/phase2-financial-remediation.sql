@@ -88,18 +88,78 @@ delete from public.fulfillment_orders;
 -- SECTION 4 — null the inherited EvoLabs parent costs.
 -- Only for products that HAVE doses; a product with no dose rows keeps its
 -- parent cost, which is the one case product-cogs.sql says it is for.
+--
+-- CAPTURED FIRST AND VALUE-GUARDED, LIKE SECTIONS 5 AND 6.
+--
+-- As written before, this section nulled the parent cost of every published
+-- dose-bearing product with no guard on the VALUE and no prior capture. The 38
+-- rows it is aimed at are the inherited EvoLabs placeholders (3300 / 3500); a
+-- REAL parent cost typed in by hand since 2026-08-26 sat in exactly the same
+-- column and would have been destroyed with no way to recover it — and the
+-- verify below could not have detected that, because `expect 0` is satisfied by
+-- the destruction itself. Both are now fixed: the old value is written to
+-- its own capture table below (created here, additive), the update only touches
+-- the two placeholder figures, and the verify distinguishes "the guard did its
+-- job" from "the update did not run".
+--
+-- IF THE CAPTURE COUNT IS NOT 38, STOP AND READ THE ROWS BEFORE CONTINUING.
 -- ---------------------------------------------------------------------------
+-- The capture table. Additive and non-destructive, like Section 1 — and its own
+-- table rather than order_cost_restatements, because nulling a product's cost is
+-- not a restatement of an order line and forcing it into that shape would need a
+-- new_cost_cents of 0, which is not what happened here.
+create table if not exists public.product_cost_restatements (
+  id             uuid primary key default gen_random_uuid(),
+  product_id     uuid not null,
+  slug           text not null,
+  old_cost_cents integer,
+  reason         text not null,
+  restated_by    text not null,
+  restated_at    timestamptz not null default now()
+);
+alter table public.product_cost_restatements enable row level security;
+
+insert into public.product_cost_restatements
+  (product_id, slug, old_cost_cents, reason, restated_by)
+select p.id, p.slug, p.product_cost_cents,
+       'Inherited EvoLabs parent cost cleared; this product prices COGS from its dose rows',
+       'financial-reconciliation-audit'
+  from public.products p
+ where p.is_published
+   and p.product_cost_cents in (3300, 3500)
+   and exists (select 1 from public.product_doses d where d.product_id = p.id)
+   -- Re-running must not record the same clearance twice.
+   and not exists (
+     select 1 from public.product_cost_restatements r
+      where r.product_id = p.id
+        and r.restated_by = 'financial-reconciliation-audit'
+   );
+
 update public.products p
    set product_cost_cents = null,
        updated_at = now()
  where p.is_published
-   and p.product_cost_cents is not null
+   and p.product_cost_cents in (3300, 3500)
    and exists (select 1 from public.product_doses d where d.product_id = p.id);
 
--- VERIFY: expect 0.
-select count(*) from public.products p
- where p.is_published and p.product_cost_cents is not null
-   and exists (select 1 from public.product_doses d where d.product_id = p.id);
+-- VERIFY: expect captured = 38, still_placeholder = 0, and READ
+-- unguarded_remaining before deciding anything.
+--
+-- A NON-ZERO unguarded_remaining IS NOT A FAILURE OF THIS SECTION. It is a
+-- published dose-bearing product whose parent cost is some figure OTHER than
+-- the two EvoLabs placeholders — i.e. a number somebody entered deliberately.
+-- The old `expect 0` could not tell that apart from a successful run, because
+-- it counted the same rows the unguarded update had just destroyed. Inspect
+-- each one and clear it by hand only if it really is inherited.
+select (select count(*) from public.product_cost_restatements
+         where restated_by = 'financial-reconciliation-audit') as captured,
+       (select count(*) from public.products p
+         where p.is_published and p.product_cost_cents in (3300, 3500)
+           and exists (select 1 from public.product_doses d where d.product_id = p.id)) as still_placeholder,
+       (select count(*) from public.products p
+         where p.is_published and p.product_cost_cents is not null
+           and p.product_cost_cents not in (3300, 3500)
+           and exists (select 1 from public.product_doses d where d.product_id = p.id)) as unguarded_remaining;
 
 -- ---------------------------------------------------------------------------
 -- SECTION 5 — cerebrolysin / pinealon: no cost on file.

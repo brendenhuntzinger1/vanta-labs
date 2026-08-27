@@ -13,6 +13,16 @@
 -- --- Products -------------------------------------------------------------
 -- product_cost_cents (added by product-cost-profit.sql) gives the profit guard
 -- a real per-unit cost. Priced here at ~25% of retail.
+--
+-- COST IS SET ON INSERT ONLY — never in the ON CONFLICT clause. A seed script
+-- that clobbers product_cost_cents overwrites a real landed cost with a made-up
+-- one on every re-run, which is the defect removed from SETUP-run-all.sql and
+-- add-bacteriostatic-water.sql. This file was the remaining copy of it.
+--
+-- price_cents IS still refreshed on conflict, deliberately: resetting these five
+-- staging fixtures to a known price is the point of a staging seed, and dropping
+-- it would change what re-running this script does. Cost is different — it is a
+-- fact about what the store paid, not a fixture.
 insert into public.products
   (slug, name, category, short_description, long_description, price_cents,
    compare_at_price_cents, inventory_quantity, sku, is_published, is_enabled,
@@ -66,7 +76,6 @@ on conflict (slug) do update set
   lab_name = excluded.lab_name,
   coa_url = excluded.coa_url,
   molecular_formula = excluded.molecular_formula,
-  product_cost_cents = excluded.product_cost_cents,
   updated_at = now();
 
 -- --- Coupon ---------------------------------------------------------------
