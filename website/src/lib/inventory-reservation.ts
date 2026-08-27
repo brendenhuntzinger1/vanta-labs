@@ -124,13 +124,16 @@ export async function reserveInventoryForOrder(
   const unavailable: ReserveResult["unavailable"] = [];
   for (const a of adjustments) {
     try {
-      const { data, error } = await supabaseAdmin.rpc("reserve_inventory", {
-        p_slug: a.slug,
-        p_variant_id: a.variantId,
-        p_order_id: orderId,
-        p_quantity: a.quantity,
-        p_expires_at: expiresAt,
-      });
+      // Retried on an edge rejection: degrading here lets the checkout proceed
+      // with NO hold on the stock it just sold.
+      const { data, error } = await rpcWithAuthRetry<boolean>(async () =>
+        supabaseAdmin.rpc("reserve_inventory", {
+          p_slug: a.slug,
+          p_variant_id: a.variantId,
+          p_order_id: orderId,
+          p_quantity: a.quantity,
+          p_expires_at: expiresAt,
+        }));
       if (error) {
         return { ok: true, unavailable: [], degraded: true };
       }
@@ -175,6 +178,51 @@ export async function reserveInventoryForOrder(
  */
 const INVENTORY_ALERT_THROTTLE_MS = 5 * 60_000;
 const lastInventoryAlertAt = new Map<string, number>();
+
+/** Breathing room for a momentary edge rejection, not a backoff schedule. */
+const RPC_RETRY_DELAY_MS = 250;
+
+/**
+ * IS THIS A REJECTION THAT NEVER REACHED POSTGRES?
+ *
+ * Production rejects roughly 0.1% of this app's Supabase calls with a 401 whose
+ * body reads "JWT issued at future" — 36 in 24 hours on 2026-08-27, spread
+ * across nine different tables and RPCs, while the same RPC succeeded on the
+ * ticks either side. Nothing retried, so one blip cost a whole half-hourly
+ * sweep.
+ *
+ * THE NARROWNESS IS THE SAFETY ARGUMENT. A 401 is refused at the edge: the
+ * statement never ran, so re-issuing it cannot double anything, whatever the
+ * RPC does. That reasoning does NOT extend to an error raised by Postgres
+ * itself — a statement timeout may have executed, wholly or partly, and this
+ * module moves stock. Nor does it extend to a missing grant or a bad key, which
+ * are permanent: retrying those only delays the alert that tells the operator
+ * what to fix.
+ *
+ * So this matches the token, and nothing else.
+ */
+export function isTransientAuthRejection(error: unknown): boolean {
+  const message = error instanceof Error
+    ? error.message
+    : String((error as { message?: unknown } | null)?.message ?? "");
+  return /\bjwt\b/i.test(message);
+}
+
+/**
+ * Run an inventory RPC, retrying ONCE if it was refused before it could run.
+ *
+ * One retry, not a loop: the observed failure is momentary, and a sweep that
+ * hammers an edge which is already rejecting it makes an outage worse rather
+ * than shorter. Two consecutive rejections are a real incident and alert.
+ */
+async function rpcWithAuthRetry<T>(
+  run: () => Promise<{ data: T | null; error: unknown }>,
+): Promise<{ data: T | null; error: unknown }> {
+  const first = await run();
+  if (!first.error || !isTransientAuthRejection(first.error)) return first;
+  await new Promise((resolve) => setTimeout(resolve, RPC_RETRY_DELAY_MS));
+  return run();
+}
 
 async function reportInventoryRpcFailure(rpc: string, orderId: string | null, error: unknown): Promise<void> {
   const detail = error instanceof Error ? error.message : String((error as { message?: string })?.message ?? error);
@@ -282,7 +330,8 @@ export async function finalizeInventoryForOrder(orderId: string): Promise<{ fina
   // which is exactly why a replay adds no ledger rows.
   const pendingHolds = await readPendingHolds(orderId);
   try {
-    const { data, error } = await supabaseAdmin.rpc("finalize_inventory_for_order", { p_order_id: orderId });
+    const { data, error } = await rpcWithAuthRetry<number>(async () =>
+      supabaseAdmin.rpc("finalize_inventory_for_order", { p_order_id: orderId }));
     if (error) {
       await reportInventoryRpcFailure("finalize_inventory_for_order", orderId, error);
       return { finalized: 0, degraded: true };
@@ -318,7 +367,8 @@ export async function releaseInventoryForOrder(orderId: string): Promise<void> {
 // the number reclaimed.
 export async function expireStaleReservations(): Promise<number> {
   try {
-    const { data, error } = await supabaseAdmin.rpc("expire_stale_reservations", {});
+    const { data, error } = await rpcWithAuthRetry<number>(async () =>
+      supabaseAdmin.rpc("expire_stale_reservations", {}));
     if (error) {
       // Returning 0 is indistinguishable from "nothing was due", so the sweep
       // reports a clean run while every expired hold stays on the shelf.
