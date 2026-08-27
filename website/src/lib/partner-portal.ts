@@ -58,9 +58,13 @@ export interface PartnerSummary {
   customerDiscountPercent: number;
   /**
    * How long an earned commission is held before payout, from the same
-   * `getAmbassadorProgramSettings()` the accrual reads. Carried on the payload
-   * because the dashboard used to print a literal "14-day hold" that stayed at
-   * 14 when the programme moved to 30.
+   * `getAmbassadorProgramSettings()` the accrual reads.
+   *
+   * Carried on the payload because the number was typed into the copy: the
+   * dashboard, the programme landing page and the ambassador hub all said
+   * "14-day hold" while production held 30, and the setting was changed without
+   * them. An ambassador planning around a promised payout date is the last
+   * person who should be reading a stale constant.
    */
   commissionHoldDays: number;
   /**
@@ -96,6 +100,7 @@ export interface PartnerSummary {
   monthlyRevenueSeries: Array<{ label: string; value: number }>;
   lifetimeRevenueSeries: Array<{ label: string; value: number }>;
   marketingResources: AmbassadorMarketingResource[];
+  // The CONFIGURED hold, read from the Control Center — never a literal in the
   accountStatus: string;
   payoutHistory: Array<{ id: string; amount: number; note: string | null; createdAt: string }>;
 }

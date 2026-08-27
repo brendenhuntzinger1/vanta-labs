@@ -65,6 +65,17 @@ cloud environment rather than `vanta`. Say so rather than working around it.
 - **Sentry MCP** — check production errors before and after a fix, and use it
   to confirm an error actually stopped occurring.
 
+## Local permission allowlist
+
+Supabase `execute_sql` and `apply_migration` are auto-approved in the checked-in
+`.claude/settings.json`, so SQL calls don't prompt in any session, cloud or
+local. Auto-approval only removes the permission dialog — the production
+Supabase rules above still apply.
+
+`.claude/settings.local.json` is gitignored and available for per-developer
+grants on top of that; `scripts/setup-claude-local-settings.sh` recreates it
+after a fresh clone.
+
 ## Out of scope
 
 - Claude in Chrome is Anthropic's separate local browser extension. Do not

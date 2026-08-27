@@ -240,11 +240,14 @@ async function commissionByOrderId(orderIds: string[]): Promise<Map<string, numb
 
   for (let i = 0; i < orderIds.length; i += IN_CHUNK) {
     const chunk = orderIds.slice(i, i + IN_CHUNK);
-    // `status`, not `payment_status`. The column has always been `status` —
-    // every schema definition declares it, and payment-webhook, partner-portal
-    // and admin-ambassadors all read and write it. This asked for a column that
-    // does not exist, PostgREST answered 42703 with no rows, and the error was
-    // dropped on the next line, so every commission silently became $0.00.
+    // `status`, NOT `payment_status`. The column is `status` on `commissions`
+    // and `payment_status` on `referral_orders`, and this read had the two
+    // crossed: PostgREST answered 42703 with `data: null`, the error was never
+    // destructured, and `data ?? []` turned a failed query into "this order
+    // owed no commission". Profit was therefore overstated by the FULL
+    // commission on every referred order. Guarded by
+    // supabase-schema-parity.test.ts, and by the behavioural cover in
+    // admin-profit-commission.test.ts.
     const { data, error } = await supabaseAdmin
       .from("commissions")
       .select("order_id, commission_amount, status")
@@ -252,15 +255,20 @@ async function commissionByOrderId(orderIds: string[]): Promise<Map<string, numb
 
     // A FAILED READ MUST NOT LOOK LIKE "NO COMMISSION WAS PAID".
     //
-    // Those two produced the identical answer here, and $0.00 of commission is
-    // the most flattering number available: profit came out overstated by the
-    // full commission on every referred order, on the dashboard, in the CSV
-    // export and in the operator's push notification, with nothing to notice.
-    // The shipping overlay a few lines down degrades on error deliberately —
-    // it can only make profit look WORSE, and the migration may genuinely not
-    // have run. This one moves the figure the other way, so it fails loudly,
-    // the same way readAllRowsBounded does for the cost lines.
+    // Those two produced the identical answer, and $0.00 of commission is the
+    // most flattering number available: profit came out overstated on the
+    // dashboard, in the CSV export and in the operator's push notification,
+    // with nothing to notice. The shipping overlay a few lines down degrades on
+    // error deliberately — it can only make profit look WORSE, and the
+    // migration may genuinely not have run. This one moves the figure the other
+    // way, so it fails loudly.
     if (error) {
+      console.error("Unable to read commissions for profit; profit would overstate by the commission owed", error);
+      // WRAPPED, not rethrown raw. A PostgREST error is a plain object, so
+      // `throw error` produces a rejection with no stack and no indication of
+      // which read failed. Same shape as readAllRowsBounded's
+      // "<label> failed: <message>" for the cost lines, which is what a reader
+      // of the logs will already recognise.
       const message = (error as { message?: string })?.message ?? String(error);
       throw new Error(`commission read failed: ${message}`);
     }

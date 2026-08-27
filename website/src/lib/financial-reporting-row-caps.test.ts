@@ -104,11 +104,13 @@ create table order_items (
   unit_cost_cents integer
 );
 
+-- status, NOT payment_status -- matches production. See
+-- supabase-schema-parity.test.ts.
 create table commissions (
   id bigserial primary key,
   order_id text not null,
   commission_amount numeric(12,2) not null default 0,
-  payment_status text not null default 'pending'
+  status text not null default 'pending'
 );
 `;
 
