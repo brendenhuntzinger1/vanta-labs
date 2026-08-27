@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { PAID_ORDER_STATUSES, REVENUE_ORDER_STATUSES } from "@/lib/ledger";
+import { PAID_ORDER_STATUSES, REVENUE_ORDER_STATUSES, netOrderRevenue } from "@/lib/ledger";
 
 // ---------------------------------------------------------------------------
 // BLOCK F — the TypeScript definition of "revenue" and the SQL one, kept in step.
@@ -124,6 +124,20 @@ describe("ledger revenue statuses vs the SQL rollups", () => {
       if (!expression.includes("amount_paid")) continue;
       expect(expression, `gross revenue sum: ${expression}`).toContain("refund_amount");
     }
+  });
+
+  it("no revenue aggregation clamps the refund off at zero", () => {
+    // THE TWO SIDES MUST AGREE AT THE OVER-REFUND BOUNDARY TOO, not just about
+    // which statuses count. `greatest(0, amount_paid - refund_amount)` here
+    // against an unclamped `netOrderRevenue` is a $0-vs-negative disagreement on
+    // exactly the orders where the store lost money — the direction that
+    // flatters. Neither side may reintroduce the floor alone.
+    expect(sql).not.toMatch(/greatest\s*\(\s*0\s*,[^)]*amount_paid/i);
+    expect(netOrderRevenue({ amount_paid: 100, refund_amount: 150 })).toBe(-50);
+
+    // And the SQL still expresses the subtraction it is being trusted for.
+    const netExpressions = sql.match(/coalesce\(amount_paid, 0\) - coalesce\(refund_amount, 0\)/g) ?? [];
+    expect(netExpressions.length).toBeGreaterThanOrEqual(6);
   });
 
   it("finds the sums it is asserting on, and would see a nested one", () => {

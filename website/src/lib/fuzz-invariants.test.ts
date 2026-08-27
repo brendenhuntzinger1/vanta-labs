@@ -281,14 +281,21 @@ describe(`fuzz: pricing / shipping / tax / ledger invariants (${ITER.toLocaleStr
     expect(CASES).toBeGreaterThan(0);
   });
 
-  it("ledger.netOrderRevenue: clamped to [0, amount_paid]", TIMEOUT, () => {
+  it("ledger.netOrderRevenue: cash kept, signed, never above what was collected", TIMEOUT, () => {
+    // The upper bound is the invariant that matters — revenue can never exceed
+    // the cash collected. The LOWER bound used to be zero, which floored an
+    // over-refund and disagreed with the profit engine on exactly the orders
+    // where the store lost money. It is now the signed subtraction, so a refund
+    // larger than the payment reports the loss. See
+    // revenue-clamp-agreement.test.ts for the two-sided agreement.
     const g = makeRng(0x55);
     for (let i = 0; i < ITER; i++) {
       const paid = g.money(2000);
       const refunded = g.money(paid * 1.5);
       const net = netOrderRevenue({ amount_paid: paid, refund_amount: refunded });
-      check(net >= 0 && net <= paid + EPS, () => `net ${net}/${paid}`);
-      check(Math.abs(net - round2(Math.max(0, paid - refunded))) < 1e-6, () => `net mismatch`);
+      check(net <= paid + EPS, () => `net ${net}/${paid}`);
+      check(net >= -refunded - EPS, () => `net ${net} below what was returned ${refunded}`);
+      check(Math.abs(net - round2(paid - refunded)) < 1e-6, () => `net mismatch`);
       CASES++;
     }
     expect(CASES).toBeGreaterThan(0);

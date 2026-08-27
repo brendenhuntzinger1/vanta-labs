@@ -70,10 +70,26 @@ function round2(value: number): number {
 // This is THE definition of revenue for the whole system — a $200 order refunded
 // by $50 is $150 — and every reporting surface must reach it, either through
 // this function or through the identical expression in the SQL rollups.
+//
+// SIGNED, NOT CLAMPED, AND THAT IS THE AGREED CONVENTION.
+//
+// This used to return `max(0, paid − refunded)` while the profit engine
+// (order-profit.ts) subtracted the refund unfloored, so an order paid $100 and
+// refunded $150 was −$50 on the profit dashboard and $0 here, on /admin/revenue,
+// in analytics, in the campaign report and in the SQL rollups. Two definitions
+// of revenue is the one thing this module exists to prevent.
+//
+// The convention picked is REVENUE IS CASH: collected minus returned, keeping
+// its sign. A clamp does not make the money come back — it reports an order the
+// store lost money on as having broken even, and it does so on the surfaces the
+// owner reads first. The loss is real, so it is shown. Held by
+// revenue-clamp-agreement.test.ts, and mirrored in
+// sql/admin-dashboard-rollups.sql (which must be re-run for the RPC path to
+// agree; the JS fallback and the profit engine agree from this commit).
 export function netOrderRevenue(order: { amount_paid?: number | null; refund_amount?: number | null }): number {
   const paid = Number(order.amount_paid ?? 0);
   const refunded = Number(order.refund_amount ?? 0);
-  return round2(Math.max(0, paid - refunded));
+  return round2(paid - refunded);
 }
 
 // Sum of earned (non-reversed) commission for a set of ledger rows — the ONE
