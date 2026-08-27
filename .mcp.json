@@ -4,10 +4,13 @@
       "type": "stdio",
       "command": "npx",
       "args": [
-        "-y", "@playwright/mcp@0.0.79",
+        "-y",
+        "@playwright/mcp@0.0.79",
         "--headless",
-        "--browser", "chromium",
-        "--executable-path", "/opt/pw-browsers/chromium",
+        "--browser",
+        "chromium",
+        "--executable-path",
+        "/opt/pw-browsers/chromium",
         "--isolated"
       ]
     },
@@ -19,7 +22,7 @@
         "mcp-remote@0.1.38",
         "https://mcp.snapchat.com/ads",
         "--static-oauth-client-info",
-        "{\"client_id\":\"claude-snap-ads\",\"scope\":\"snapads.read\"}"
+        "{\"client_id\":\"d1eaba97-9bb6-46f0-9115-8d29d60f7f23\",\"scope\":\"snapads.read\"}"
       ]
     }
   }
