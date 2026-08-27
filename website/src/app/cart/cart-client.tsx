@@ -11,6 +11,7 @@ import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
 import { CHECKOUT_SHORT, DESTINATIONS_SENTENCE, FULFILMENT_SENTENCE, FULFILMENT_SHORT, TRACKING_SENTENCE } from "@/lib/trust-claims";
 import { cartTotalLabel, pendingChargeNotice } from "@/lib/cart-total-disclosure";
 import type { CardProcessingFeeConfig } from "@/lib/payment-methods";
+import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 
 export function CartPageClient() {
   const router = useRouter();
@@ -296,7 +297,12 @@ export function CartPageClient() {
                     <span className="block text-xs text-white/45">Replace or refund items lost, stolen, or damaged in transit.</span>
                   </span>
                 </span>
-                <span className="whitespace-nowrap text-white/80">+{formatCartCurrency(shippingProtectionFee || 0)}</span>
+                {/* The PROSPECTIVE fee, not the applied one. `shippingProtectionFee`
+                    is 0 while the box is unticked — which it is for every shopper
+                    still deciding — so this row offered a paid add-on at +$0.00 and
+                    only revealed the price after they had agreed to it. The drawer
+                    and checkout already priced it this way. */}
+                <span className="whitespace-nowrap text-white/80">+{formatCartCurrency(calculateShippingProtectionFee(subtotal))}</span>
               </label>
             ) : null}
 
