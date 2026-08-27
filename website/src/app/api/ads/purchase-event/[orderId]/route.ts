@@ -4,6 +4,9 @@ import { buildPurchase } from "@/lib/ads/tiktok-events";
 import { buildSnapPurchase } from "@/lib/ads/snap-events";
 import { buildRedditPurchase } from "@/lib/ads/reddit-events";
 import { describeRedditResult, redditCredentialStatus, sendRedditConversion } from "@/lib/ads/reddit-conversions";
+import { buildGooglePurchase } from "@/lib/ads/google-events";
+import { buildGoogleIdentity } from "@/lib/ads/google-matching";
+import { describeGoogleResult, googleCredentialStatus, sendGoogleConversion } from "@/lib/ads/google-conversions";
 import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
 import { wasAlreadySent, type LedgerRow } from "@/lib/ads/purchase-ledger";
 import { getOrderAttribution } from "@/lib/order-attribution";
@@ -185,6 +188,18 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
       })
     : null;
 
+  // Google, from the SAME server-confirmed paid gate. Its identity uses
+  // Google's own canonicalisation — Gmail dots and +suffixes stripped, phone in
+  // E.164 with the plus — which is why it is hashed here rather than reusing
+  // the digests TikTok and Snap receive. transaction_id is the order id, the
+  // identical value the browser tag sends, so Google collapses the pair into
+  // one conversion rather than doubling the reported revenue.
+  const googleIdentity = buildGoogleIdentity({
+    email: order.customer_email ? String(order.customer_email) : null,
+    phone: orderPhone,
+  });
+  const googlePurchase = buildGooglePurchase(paidOrder, { identity: googleIdentity });
+
   // Server-side Purchase, sent with the SAME event_id the browser uses so
   // TikTok collapses the pair into one conversion. It is gated on exactly the
   // same condition as the browser event — `event` is non-null only when the
@@ -230,6 +245,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   }
   const alreadySent = wasAlreadySent(ledgerRows, "tiktok");
   const redditAlreadySent = wasAlreadySent(ledgerRows, "reddit");
+  const googleAlreadySent = wasAlreadySent(ledgerRows, "google");
 
   if (inspect) {
     // Admin-gated: it returns the customer's order value and line items, which
@@ -251,6 +267,8 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
         event: event ? { name: event.name, eventId: event.eventId, properties: event.properties } : null,
         snapPurchase,
         redditPurchase,
+        googlePurchase,
+        googleConfigured: googleCredentialStatus().configured,
         // The reason an unpaid order reports nothing, stated rather than implied.
         reason: event
           ? null
@@ -264,6 +282,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
 
   let serverDelivery: string | null = null;
   let redditDelivery: string | null = null;
+  let googleDelivery: string | null = null;
 
   // Reddit, on its OWN credential check — deliberately not nested inside
   // TikTok's.
@@ -316,6 +335,35 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     }
   }
 
+  // Google, on its OWN credential and ledger checks — deliberately not nested
+  // inside TikTok's or Reddit's. Nesting is a silent single point of failure:
+  // one platform unconfigured would stop another's conversions while every
+  // dashboard looked fine. Four platforms, four independent gates.
+  if (googlePurchase && !googleAlreadySent && googleCredentialStatus().configured) {
+    const googleOutcome = await sendGoogleConversion({
+      event: googlePurchase,
+      occurredAt: new Date(),
+    });
+    googleDelivery = describeGoogleResult(googleOutcome);
+    if (!googleOutcome.delivered) {
+      console.error("[ads/google-conversions]", googleDelivery);
+    }
+
+    try {
+      await supabaseAdmin.from("ad_purchase_events_sent").upsert(
+        {
+          order_id: String(order.order_id),
+          event_id: googlePurchase.params.transaction_id ?? String(order.order_id),
+          platform: "google",
+          delivered: googleOutcome.delivered,
+        },
+        { onConflict: "order_id,platform" },
+      );
+    } catch {
+      /* ledger unavailable; Google's own transaction_id dedup still applies */
+    }
+  }
+
   if (event && !alreadySent && credentialStatus().configured) {
     const attribution = await getOrderAttribution(String(order.order_id)).catch(() => null);
     const outcome = await sendServerEvents([
@@ -364,7 +412,15 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   }
 
   return NextResponse.json(
-    { found: true, isPaid, event, snapPurchase, redditPurchase, serverDelivery: [serverDelivery, redditDelivery].filter(Boolean).join(" | ") || null },
+    {
+      found: true,
+      isPaid,
+      event,
+      snapPurchase,
+      redditPurchase,
+      googlePurchase,
+      serverDelivery: [serverDelivery, redditDelivery, googleDelivery].filter(Boolean).join(" | ") || null,
+    },
     { headers: { "cache-control": "no-store" } },
   );
 }
