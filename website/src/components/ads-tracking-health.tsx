@@ -23,7 +23,8 @@ import {
  * is derived from observations and never from an opinion this component holds.
  *
  * Every row shows who established it: CODE (provable from the repository),
- * PRODUCTION (observed on the live deployment), TIKTOK (TikTok said so). The
+ * PRODUCTION (observed on the live deployment), PLATFORM (the ad platform
+ * itself said so). The
  * distinction is the point — a board of green CODE rows is exactly the state
  * that fools people into thinking a dead pixel is alive.
  */
@@ -41,7 +42,7 @@ const TONE: Record<HealthStatus, string> = {
 const TIER_TONE = {
   CODE: "text-white/35",
   PRODUCTION: "text-sky-300/70",
-  TIKTOK: "text-[color:var(--accent-gold)]/80",
+  PLATFORM: "text-[color:var(--accent-gold)]/80",
 } as const;
 
 function Row({ check }: { check: HealthCheck }) {

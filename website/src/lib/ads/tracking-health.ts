@@ -9,18 +9,19 @@
  *   CODE        — provable by reading this repository or running its tests.
  *   PRODUCTION  — observed on the live deployment (its env, its bundle, its
  *                 browser session), not inferred from source.
- *   TIKTOK      — TikTok themselves accepted or reported it.
+ *   PLATFORM    — the ad platform itself accepted or reported it; which one
+ *                 is named in the row's detail.
  *
  * A CODE row can be green while the funnel is dead; that is not a flaw in the
  * row, it is the row doing its job. The board is deliberately unable to mark
- * anything TIKTOK-verified without a response from TikTok in hand.
+ * anything PLATFORM-verified without a response from the platform in hand.
  *
  * Pure by construction: every input is passed in, so the whole board is
  * testable without a network, a browser or a database, and the same builder
  * runs on the server and in the admin's browser.
  */
 
-export type HealthTier = "CODE" | "PRODUCTION" | "TIKTOK";
+export type HealthTier = "CODE" | "PRODUCTION" | "PLATFORM";
 
 export type HealthStatus =
   | "PASS"
@@ -154,7 +155,7 @@ export function buildHealthReport(server: ServerHealthInput, browser: BrowserHea
       ? {
           id: "tiktok-connection",
           label: "TikTok connection",
-          tier: "TIKTOK",
+          tier: "PLATFORM",
           status: "NOT_TESTED",
           detail: "No call has been made to TikTok in this run.",
           action: "Enter a Test Events code below and run the live check.",
@@ -163,14 +164,14 @@ export function buildHealthReport(server: ServerHealthInput, browser: BrowserHea
         ? {
             id: "tiktok-connection",
             label: "TikTok connection",
-            tier: "TIKTOK",
+            tier: "PLATFORM",
             status: "PASS",
             detail: `TikTok accepted the call: code 0, request ${probe.requestId ?? "?"}.`,
           }
         : {
             id: "tiktok-connection",
             label: "TikTok connection",
-            tier: "TIKTOK",
+            tier: "PLATFORM",
             status: "FAIL",
             detail: probe.transportError
               ? `Never reached TikTok — ${probe.transportError}.`
@@ -250,15 +251,15 @@ export function buildHealthReport(server: ServerHealthInput, browser: BrowserHea
       ? {
           id: "purchase-server",
           label: "Purchase server event",
-          tier: "TIKTOK",
+          tier: "PLATFORM",
           status: "NOT_TESTED",
-          detail: "Not checked in this run.",
+          detail: "Not checked against TikTok in this run.",
         }
       : !ledger.available
         ? {
             id: "purchase-server",
             label: "Purchase server event",
-            tier: "TIKTOK",
+            tier: "PLATFORM",
             status: "NOT_TESTED",
             detail:
               "There is no local record to read: the ad_purchase_events_sent ledger table has not been created, so nothing writes a row when a Purchase is sent. Sending still works — the ledger only guards against a re-opened confirmation link reporting twice after TikTok's own 48-hour window closes.",
@@ -269,19 +270,19 @@ export function buildHealthReport(server: ServerHealthInput, browser: BrowserHea
         ? {
             id: "purchase-server",
             label: "Purchase server event",
-            tier: "TIKTOK",
+            tier: "PLATFORM",
             status: "PASS",
             detail: `TikTok accepted ${ledger.delivered} of ${ledger.total} server-side Purchase event(s).`,
           }
         : {
             id: "purchase-server",
             label: "Purchase server event",
-            tier: "TIKTOK",
+            tier: "PLATFORM",
             status: ledger.total > 0 ? "FAIL" : "NOT_TESTED",
             detail:
               ledger.total > 0
                 ? `${ledger.total} server Purchase event(s) were attempted and TikTok accepted none of them.`
-                : "No paid order has reached the reporting path yet.",
+                : "No paid order has reached TikTok's reporting path yet.",
           },
   );
 
@@ -318,7 +319,7 @@ export function buildHealthReport(server: ServerHealthInput, browser: BrowserHea
           ? {
               id: "api-auth",
               label: "API authentication",
-              tier: "TIKTOK",
+              tier: "PLATFORM",
               status: "FAIL",
               detail: `TikTok rejected the credential: code ${probe.code}, "${probe.message ?? "no message"}".`,
               action:
@@ -327,7 +328,7 @@ export function buildHealthReport(server: ServerHealthInput, browser: BrowserHea
           : {
               id: "api-auth",
               label: "API authentication",
-              tier: "TIKTOK",
+              tier: "PLATFORM",
               status: probe.transportError ? "NOT_TESTED" : "PASS",
               detail: probe.transportError
                 ? `Could not reach TikTok to check the credential — ${probe.transportError}.`
@@ -368,7 +369,7 @@ export function buildHealthReport(server: ServerHealthInput, browser: BrowserHea
   checks.push({
     id: "tiktok-production-events",
     label: "TikTok receiving production events",
-    tier: "TIKTOK",
+    tier: "PLATFORM",
     status: productionEventsReaching ? "VERIFIED" : "NOT_VERIFIED",
     detail: productionEventsReaching
       ? "TikTok has accepted at least one real production conversion."
