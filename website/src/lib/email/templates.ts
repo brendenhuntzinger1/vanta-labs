@@ -1,6 +1,7 @@
 import type { EmailTemplate } from "@/lib/email/types";
 import { formatDisplayDate } from "@/lib/format-date";
 import { DEFAULT_CARD_PROCESSING_FEE } from "@/lib/payment-methods";
+import { DEFAULT_COMMISSION_HOLD_DAYS } from "@/lib/referral-config";
 
 // ONE CHARGE, ONE NAME. The receipt used to call the card surcharge "Card
 // processing fee" while the checkout screen called it "Service Fee" and the
@@ -574,7 +575,10 @@ export function ambassadorApprovedTemplate(input: {
   const commissionPct = Number.isFinite(input.commissionPercent) ? Number(input.commissionPercent) : 10;
   const personalPct = Number.isFinite(input.personalDiscountPercent) ? Number(input.personalDiscountPercent) : 20;
   const referralPct = Number.isFinite(input.referralDiscountPercent) ? Number(input.referralDiscountPercent) : 10;
-  const holdDays = Number.isFinite(input.holdDays) ? Number(input.holdDays) : 14;
+  // The programme default (30), not a literal 14 — the approval email told
+  // new ambassadors the wrong hold whenever the caller could not resolve the
+  // configured value.
+  const holdDays = Number.isFinite(input.holdDays) ? Number(input.holdDays) : DEFAULT_COMMISSION_HOLD_DAYS;
 
   const bodyHtml = `
     <p>Congratulations, ${name} — your application to the Vanta Labs Ambassador Program has been <strong>approved</strong>. Welcome aboard.</p>

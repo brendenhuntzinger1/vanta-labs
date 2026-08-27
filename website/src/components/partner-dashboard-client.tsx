@@ -154,7 +154,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
       {/* Earnings — featured */}
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard label="Total earnings" value={currency(liveSummary.totalEarnings)} featured accent="gold" sub="lifetime" />
-        <StatCard label="Pending" value={currency(liveSummary.pendingOnlyCommissions)} sub="14-day hold" />
+        <StatCard label="Pending" value={currency(liveSummary.pendingOnlyCommissions)} sub={`${liveSummary.commissionHoldDays}-day hold`} />
         <StatCard label="Next payout" value={currency(liveSummary.approvedCommissions)} accent="cyan" sub="approved · every 2 weeks" />
         <StatCard label="Paid out" value={currency(liveSummary.paidCommissions)} accent="emerald" sub="all time" />
       </section>
@@ -277,7 +277,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
             </table>
           </div>
         ) : (
-          <p className="mt-3 text-sm text-zinc-500">No payouts yet. Commissions are held for 14 days, then paid on a biweekly basis.</p>
+          <p className="mt-3 text-sm text-zinc-500">No payouts yet. Commissions are held for {liveSummary.commissionHoldDays} days, then paid on a biweekly basis.</p>
         )}
       </section>
 

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { DEFAULT_COMMISSION_HOLD_DAYS } from "@/lib/referral-config";
 import type { PartnerProgramStats } from "@/lib/partner-portal";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 
@@ -448,7 +449,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
             ))}
           </ul>
           <p className="mt-6 text-xs leading-6 text-white/70">
-            Commissions become payable 14 days after an order completes (this protects
+            Commissions become payable {DEFAULT_COMMISSION_HOLD_DAYS} days after an order completes (this protects
             against refunds and chargebacks), and payouts are sent every two weeks via
             PayPal, Venmo, or Cash App.
           </p>
