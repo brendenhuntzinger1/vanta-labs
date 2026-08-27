@@ -1,0 +1,14 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "isolated": true,
+    "launchOptions": {
+      "headless": true,
+      "executablePath": "/opt/pw-browsers/chromium",
+      "args": [
+        "--no-sandbox",
+        "--ssl-version-max=tls1.2"
+      ]
+    }
+  }
+}
