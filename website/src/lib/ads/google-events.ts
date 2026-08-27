@@ -167,7 +167,7 @@ export function buildGoogleBeginCheckout(input: {
   if (!isPositive(value)) return null;
 
   const items = input.items
-    .map((item) => {
+    .map((item): GoogleItem | null => {
       const itemId = resolveContentId({ slug: item.slug });
       if (!itemId) return null;
       return {
@@ -210,7 +210,7 @@ export function buildGooglePurchase(
   // produce an item id that silently stops matching the day a product is
   // renamed. A line with no slug and no product id is dropped instead.
   const resolved = order.items
-    .map((item) => {
+    .map((item): GoogleItem | null => {
       const itemId = resolveContentId({ slug: item.slug, productId: item.productId });
       if (!itemId) return null;
       return {
