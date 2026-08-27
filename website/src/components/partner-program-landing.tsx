@@ -3,7 +3,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
-import { DEFAULT_COMMISSION_HOLD_DAYS } from "@/lib/referral-config";
+import {
+  type PublicProgramTerms,
+  formatPercent,
+  holdDuration,
+} from "@/lib/public-program-terms-shared";
 import type { PartnerProgramStats } from "@/lib/partner-portal";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 
@@ -22,7 +26,7 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerProgramStats }) {
+export function PartnerProgramLanding({ initialStats, terms }: { initialStats: PartnerProgramStats; terms: PublicProgramTerms }) {
   const searchParams = useSearchParams();
   const [stats, setStats] = useState(initialStats);
   const [fullName, setFullName] = useState(() => searchParams.get("name") ?? "");
@@ -40,7 +44,8 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
   const [referralsPerMonth, setReferralsPerMonth] = useState(40);
   const [averageOrderValue, setAverageOrderValue] = useState(130);
   const [reorderRate, setReorderRate] = useState(35);
-  const [commissionPercent, setCommissionPercent] = useState(10);
+  // Opens on the rate actually offered, not a typed-in one.
+  const [commissionPercent, setCommissionPercent] = useState(terms.commissionPercent);
 
   useEffect(() => {
     const interval = window.setInterval(async () => {
@@ -414,9 +419,9 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
           <h2 className="vl2-serif mt-2 text-2xl text-white sm:text-3xl">Benefits</h2>
           <ul className="mt-5 space-y-3 text-sm leading-7 text-white/70">
             {[
-              "20% discount on all of your own purchases — active the whole time you're approved.",
-              "A personal referral code that gives your audience 10% off.",
-              "A 15% commission on every completed order placed with your code.",
+              `${formatPercent(terms.personalDiscountPercent)} discount on all of your own purchases — active the whole time you're approved.`,
+              `A personal referral code that gives your audience ${formatPercent(terms.customerDiscountPercent)} off.`,
+              `A ${formatPercent(terms.commissionPercent)} commission on every completed order placed with your code.`,
               "A real-time dashboard: pending, approved, and paid commissions, referral orders, and total earnings.",
               "Payouts every two weeks.",
               "Opportunities for performance bonuses and a higher commission rate.",
@@ -449,7 +454,7 @@ export function PartnerProgramLanding({ initialStats }: { initialStats: PartnerP
             ))}
           </ul>
           <p className="mt-6 text-xs leading-6 text-white/70">
-            Commissions become payable {DEFAULT_COMMISSION_HOLD_DAYS} days after an order completes (this protects
+            Commissions become payable {holdDuration(terms.commissionHoldDays)} after an order completes (this protects
             against refunds and chargebacks), and payouts are sent every two weeks via
             PayPal, Venmo, or Cash App.
           </p>

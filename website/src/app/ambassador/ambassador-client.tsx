@@ -3,7 +3,13 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
-import { DEFAULT_COMMISSION_HOLD_DAYS } from "@/lib/referral-config";
+import {
+  type PublicProgramTerms,
+  formatPercent,
+  formatThreshold,
+  holdDuration,
+  holdLabel,
+} from "@/lib/public-program-terms-shared";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 
 function formatCurrency(value: number) {
@@ -14,11 +20,13 @@ function formatCurrency(value: number) {
   }).format(value);
 }
 
-export function AmbassadorPageClient() {
+export function AmbassadorPageClient({ terms }: { terms: PublicProgramTerms }) {
   const router = useRouter();
   const [monthlyReferrals, setMonthlyReferrals] = useState(30);
   const [averageOrderValue, setAverageOrderValue] = useState(130);
-  const [commissionRate, setCommissionRate] = useState(15);
+  // The estimator opens on the rate this ambassador would actually be offered,
+  // not on an aspirational one. The slider still lets them model a higher tier.
+  const [commissionRate, setCommissionRate] = useState(terms.commissionPercent);
   const [applicantName, setApplicantName] = useState("");
   const [applicantEmail, setApplicantEmail] = useState("");
 
@@ -53,7 +61,7 @@ export function AmbassadorPageClient() {
 
         <section className="mt-7 grid gap-4 md:grid-cols-3">
           {[
-            { title: "15% Base Commission", text: "Tiered rates available for high-volume ambassadors." },
+            { title: `${formatPercent(terms.commissionPercent)} Base Commission`, text: "Tiered rates available for high-volume ambassadors." },
             { title: "Recurring Revenue", text: "Earn from repeat customer orders tied to your referral stream." },
             { title: "Fast Approval", text: "Most qualified applications are reviewed in under 24 hours." },
           ].map((item) => (
@@ -69,11 +77,11 @@ export function AmbassadorPageClient() {
           <h2 className="vl2-serif mt-3 text-2xl text-white">Everything you earn, and how</h2>
           <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {[
-              { k: "You earn 15%", v: "15% commission on every qualifying order placed with your code. Higher tiers unlock as your volume grows." },
-              { k: "Your audience saves 10%", v: "Anyone who uses your referral code gets 10% off their order — a real reason for them to buy through you." },
-              { k: "$100 minimum order", v: "Orders must be at least $100 (before shipping) to earn a commission, so every payout is on a real sale." },
-              { k: `${DEFAULT_COMMISSION_HOLD_DAYS}-day hold`, v: `Commissions are held ${DEFAULT_COMMISSION_HOLD_DAYS} days after an order to clear the return window, then become payable.` },
-              { k: "$100 payout minimum", v: "Once your cleared balance reaches $100, you can be paid out." },
+              { k: `You earn ${formatPercent(terms.commissionPercent)}`, v: `${formatPercent(terms.commissionPercent)} commission on every qualifying order placed with your code. Higher tiers unlock as your volume grows.` },
+              { k: `Your audience saves ${formatPercent(terms.customerDiscountPercent)}`, v: `Anyone who uses your referral code gets ${formatPercent(terms.customerDiscountPercent)} off their order — a real reason for them to buy through you.` },
+              { k: `${formatThreshold(terms.minimumQualifyingOrder)} minimum order`, v: `Orders must be at least ${formatThreshold(terms.minimumQualifyingOrder)} (before shipping) to earn a commission, so every payout is on a real sale.` },
+              { k: holdLabel(terms.commissionHoldDays), v: `Commissions are held ${holdDuration(terms.commissionHoldDays)} after an order to clear the return window, then become payable.` },
+              { k: `${formatThreshold(terms.minimumPayoutThreshold)} payout minimum`, v: `Once your cleared balance reaches ${formatThreshold(terms.minimumPayoutThreshold)}, you can be paid out.` },
               { k: "Fair & transparent", v: "One discount per order, no self-referrals, live tracking in your dashboard. What you see is what you earn." },
             ].map((item) => (
               <div key={item.k} className="rounded-xl border border-white/10 bg-white/[0.02] p-4">
@@ -83,8 +91,8 @@ export function AmbassadorPageClient() {
             ))}
           </div>
           <p className="mt-5 text-xs leading-6 text-white/70">
-            Commission is calculated on the order subtotal after the customer&apos;s 10% discount (excluding shipping and
-            fees). Exact rate and thresholds may vary by tier and are shown in your dashboard.
+            Commission is calculated on the order subtotal after the customer&apos;s {formatPercent(terms.customerDiscountPercent)} discount
+            (excluding shipping and fees). Exact rate and thresholds may vary by tier and are shown in your dashboard.
           </p>
         </section>
 
@@ -104,8 +112,8 @@ export function AmbassadorPageClient() {
                 <input type="range" min={40} max={500} value={averageOrderValue} onChange={(event) => setAverageOrderValue(Number(event.target.value))} className="w-full" />
               </label>
               <label className="block">
-                <div className="mb-2 flex justify-between text-sm text-white/60"><span>Commission rate</span><span>{commissionRate}%</span></div>
-                <input type="range" min={10} max={35} value={commissionRate} onChange={(event) => setCommissionRate(Number(event.target.value))} className="w-full" />
+                <div className="mb-2 flex justify-between text-sm text-white/60"><span>Commission rate</span><span>{formatPercent(commissionRate)}</span></div>
+                <input type="range" min={terms.commissionPercent} max={35} value={commissionRate} onChange={(event) => setCommissionRate(Number(event.target.value))} className="w-full" />
               </label>
             </div>
           </article>

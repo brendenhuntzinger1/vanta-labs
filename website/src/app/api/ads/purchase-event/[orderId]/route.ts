@@ -205,17 +205,47 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   // If the ledger table does not exist yet the send still proceeds — an
   // occasional duplicate that TikTok itself collapses is a far better failure
   // than silently never reporting real revenue.
-  let alreadySent = false;
+  // Read PER PLATFORM, because the ledger is keyed per platform.
+  //
+  // This was `.maybeSingle()` over `order_id` alone. The table is
+  // PRIMARY KEY (order_id, platform), so a fully-recorded order holds one row
+  // per platform — and PostgREST answers a multi-row `.maybeSingle()` with an
+  // error, not a row. The error landed in `data: null`, which read as "never
+  // sent", so the orders that WERE on the ledger were exactly the ones that
+  // sent again. A guard that fails open on its own success.
+  const sentPlatforms = new Set<string>();
   try {
     const { data: sent } = await supabaseAdmin
       .from("ad_purchase_events_sent")
-      .select("order_id")
-      .eq("order_id", String(order.order_id))
-      .maybeSingle();
-    alreadySent = Boolean(sent);
+      .select("platform, delivered")
+      .eq("order_id", String(order.order_id));
+    for (const row of (sent ?? []) as Array<{ platform?: string | null }>) {
+      if (row.platform) sentPlatforms.add(String(row.platform));
+    }
   } catch {
     /* table not applied yet — fall through and send */
   }
+  const alreadySent = sentPlatforms.size > 0;
+
+  /**
+   * Record the send before the next request can ask about it.
+   *
+   * `onConflict` must name the table's actual unique index — (order_id,
+   * platform). It named `order_id` alone, which matches no unique constraint,
+   * so every write raised 42P10 and was swallowed by the catch below. The
+   * ledger stayed empty while the sends went out, and nothing upstream failed
+   * loudly enough to notice.
+   */
+  const recordSend = async (platform: string, eventId: string, delivered: boolean, tiktokCode: number | null) => {
+    try {
+      await supabaseAdmin.from("ad_purchase_events_sent").upsert(
+        { order_id: String(order.order_id), event_id: eventId, platform, delivered, tiktok_code: tiktokCode },
+        { onConflict: "order_id,platform" },
+      );
+    } catch {
+      /* ledger unavailable; the platform's own dedup window still applies */
+    }
+  };
 
   if (inspect) {
     // Admin-gated: it returns the customer's order value and line items, which
@@ -263,7 +293,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   // pixel sends — so Reddit collapses the pair into one conversion rather than
   // reporting the sale twice. Awaited before the TikTok leg rather than beside
   // it because each is best-effort telemetry that must not fail the response.
-  if (redditPurchase && !alreadySent && redditCredentialStatus().configured) {
+  if (redditPurchase && !sentPlatforms.has("reddit") && redditCredentialStatus().configured) {
     const redditOutcome = await sendRedditConversion({
       event: redditPurchase,
       occurredAt: new Date(),
@@ -275,12 +305,16 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
       },
     });
     redditDelivery = describeRedditResult(redditOutcome);
+    // Reddit sent and recorded nothing at all — only the TikTok leg wrote a
+    // row. So even once the conflict target above was right, Reddit alone
+    // would still have reported the sale again on every reopened link.
+    await recordSend("reddit", redditPurchase.properties.conversionId ?? String(order.order_id), redditOutcome.delivered, null);
     if (!redditOutcome.delivered) {
       console.error("[ads/reddit-conversions]", redditDelivery);
     }
   }
 
-  if (event && !alreadySent && credentialStatus().configured) {
+  if (event && !sentPlatforms.has("tiktok") && credentialStatus().configured) {
     const attribution = await getOrderAttribution(String(order.order_id)).catch(() => null);
     const outcome = await sendServerEvents([
       {
@@ -308,20 +342,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
 
     // Recorded whatever the outcome, so a hard TikTok rejection is not retried
     // on every page refresh. `delivered` distinguishes the two for later repair.
-    try {
-      await supabaseAdmin.from("ad_purchase_events_sent").upsert(
-        {
-          order_id: String(order.order_id),
-          event_id: event.eventId,
-          platform: "tiktok",
-          delivered: outcome.delivered,
-          tiktok_code: outcome.tiktokCode,
-        },
-        { onConflict: "order_id" },
-      );
-    } catch {
-      /* ledger unavailable; TikTok's own 48h dedup still applies */
-    }
+    await recordSend("tiktok", event.eventId, outcome.delivered, outcome.tiktokCode);
     // Diagnostics only. No token, no customer data — describeResult is built
     // from a fixed field set precisely so this line cannot leak either.
     console.info(`[ads] order ${String(order.order_id)} — ${[serverDelivery, redditDelivery].filter(Boolean).join(" | ")}`);

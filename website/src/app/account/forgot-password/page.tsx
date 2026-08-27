@@ -1,5 +1,14 @@
+import type { Metadata } from "next";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { AccountForgotPasswordForm } from "@/components/account-forgot-password-form";
+
+export const metadata: Metadata = {
+  title: "Reset Your Password",
+  description: "Request a password reset link for your Vanta Labs account.",
+  // Transactional/auth surface: robots.ts already disallows these paths, and
+  // this is the per-page half of the same statement, exactly as /cart does it.
+  robots: { index: false, follow: false },
+};
 
 export default function AccountForgotPasswordPage() {
   return (

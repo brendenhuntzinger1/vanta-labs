@@ -22,6 +22,15 @@ function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 }
 
+/**
+ * A margin, or "n/a" when there is none to state. `null` arrives from
+ * order-profit.marginPercentOf, which refuses to answer at or below zero
+ * revenue — 0% there reads as "broke even" on a store that lost money.
+ */
+function percent(value: number | null) {
+  return value === null ? "n/a" : `${value.toFixed(1)}%`;
+}
+
 export default async function AdminHomePage() {
   const session = await verifyAdminSessionFromCookie();
   if (!session) {
@@ -183,8 +192,10 @@ export default async function AdminHomePage() {
             <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
               {([
                 ["Gross revenue", money(profitDashboard.lifetime.grossRevenue)],
-                ["Net margin", `${profitDashboard.lifetime.netMarginPercent.toFixed(1)}%`],
-                ["Gross margin", `${profitDashboard.lifetime.grossMarginPercent.toFixed(1)}%`],
+                // "n/a", never "0.0%": a margin is a proportion of revenue, and
+                // at or below zero revenue there is none to take a proportion of.
+                ["Net margin", percent(profitDashboard.lifetime.netMarginPercent)],
+                ["Gross margin", percent(profitDashboard.lifetime.grossMarginPercent)],
                 ["Avg order value", money(profitDashboard.lifetime.averageOrderValue)],
                 ["Avg profit / order", money(profitDashboard.lifetime.averageProfitPerOrder)],
                 ["Product costs", money(profitDashboard.lifetime.totalProductCosts)],

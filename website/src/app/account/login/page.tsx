@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
@@ -16,6 +17,14 @@ function safeNext(next: string | string[] | undefined): string {
   }
   return "/account";
 }
+
+export const metadata: Metadata = {
+  title: "Sign In",
+  description: "Sign in to your Vanta Labs account to track orders, rewards, and store credit.",
+  // Transactional/auth surface: robots.ts already disallows these paths, and
+  // this is the per-page half of the same statement, exactly as /cart does it.
+  robots: { index: false, follow: false },
+};
 
 export default async function AccountLoginPage({
   searchParams,

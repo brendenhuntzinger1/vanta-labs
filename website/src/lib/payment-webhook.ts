@@ -36,6 +36,7 @@ import {
 import { recordSystemAlert } from "@/lib/monitoring";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { toAnalyticsAttribution } from "@/lib/attribution";
+import { creditFundedOrderNotice } from "@/lib/credit-funded-order-notice";
 
 /**
  * The billing cycle to activate for a paid membership order.
@@ -1014,6 +1015,41 @@ async function notifyAmbassadorOfNewCommission(input: {
 // (refundedFraction >= ~1) voids the commission entirely; a PARTIAL refund
 // reduces it proportionally to the share of the order value that was refunded,
 // so the ambassador keeps commission on the merchandise the customer kept.
+/**
+ * How much of an order's COMMISSIONABLE MERCHANDISE a refund has returned, as a
+ * fraction — the number `updateCommissionOnRefund` reverses against.
+ *
+ * MEASURED AGAINST EVERYTHING THE CUSTOMER GETS BACK, NOT JUST THE CASH.
+ *
+ * The admin refund lane used to compute this as `min(newRefundTotal, base) /
+ * base`, where `newRefundTotal` is capped at the CASH `amount_paid`. Store
+ * credit and loyalty points are real tender: an order settled entirely in
+ * credit has `amount_paid` 0, so a full return of that order measured a
+ * refunded fraction of ZERO and the ambassador kept the whole commission on
+ * merchandise that came back. The same under-reversal applies, in proportion,
+ * to any order part-settled with credit.
+ *
+ * Refunds are treated MERCHANDISE-FIRST (the conservative direction): a return
+ * covering the discounted merchandise voids the commission entirely, and a
+ * shipping- or fee-only refund can never exceed it. With no commissionable base
+ * at all there is nothing to apportion, so the answer is a full reversal.
+ */
+export function refundedMerchandiseFraction(input: {
+  /** Discounted merchandise subtotal — the base commission was earned on. */
+  commissionableBase: number;
+  /** Cash returned in total, including any earlier partial refunds. */
+  cashRefunded: number;
+  /** Non-cash tender handed back with this refund (store credit + points). */
+  nonCashReturned?: number;
+}): number {
+  const base = roundMoney(Math.max(0, input.commissionableBase));
+  if (base <= 0) return 1;
+  const returned = roundMoney(
+    Math.max(0, input.cashRefunded) + Math.max(0, input.nonCashReturned ?? 0),
+  );
+  return Math.min(1, Math.min(returned, base) / base);
+}
+
 export function computeRetainedCommission(input: {
   base: number; // commissionable (discounted merchandise) subtotal
   percent: number;
@@ -1288,6 +1324,23 @@ export async function finalizeManualPayment(
     // discount and KEPT the credit: the store is out that money. An operator
     // triaging by alert type would credit the customer again on a fault that
     // had already over-credited them.
+    // OBSERVABILITY FOR A DEFERRED DECISION, NOT A GUARD.
+    //
+    // The profit floor is measured BEFORE non-cash tender (quote-order.ts), so
+    // an order can clear it on merchandise margin and still settle for very
+    // little cash. That ordering was reviewed and deliberately kept -- the
+    // credit was paid for when it was granted. This records the orders it
+    // applies to so the policy can be set from real numbers instead of a
+    // guessed threshold. It never blocks anything, and failing to record it
+    // must not affect the order, hence the swallowed catch.
+    const creditNotice = creditFundedOrderNotice({
+      orderId,
+      amountPaid: Number(order?.amount_paid ?? 0),
+      storeCreditRedeemedCents: Number(order?.store_credit_redeemed_cents ?? 0),
+      pointsRedeemed: Number(order?.points_redeemed ?? 0),
+    });
+    if (creditNotice) await recordSystemAlert(creditNotice).catch(() => {});
+
     const storeCreditRedeemedCents = Number(order.store_credit_redeemed_cents ?? 0);
     if (storeCreditRedeemedCents > 0) {
       try {
@@ -1954,6 +2007,23 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         // Own try/catch, own alert — see the manual-approval path above. A
         // failed redemption leaves the store out of pocket; a failed points
         // earn leaves the customer short. Same catch block, opposite repairs.
+        // OBSERVABILITY FOR A DEFERRED DECISION, NOT A GUARD.
+        //
+        // The profit floor is measured BEFORE non-cash tender (quote-order.ts), so
+        // an order can clear it on merchandise margin and still settle for very
+        // little cash. That ordering was reviewed and deliberately kept -- the
+        // credit was paid for when it was granted. This records the orders it
+        // applies to so the policy can be set from real numbers instead of a
+        // guessed threshold. It never blocks anything, and failing to record it
+        // must not affect the order, hence the swallowed catch.
+        const creditNotice = creditFundedOrderNotice({
+          orderId,
+          amountPaid: Number(orderRecord?.amount_paid ?? 0),
+          storeCreditRedeemedCents: Number(orderRecord?.store_credit_redeemed_cents ?? 0),
+          pointsRedeemed: Number(orderRecord?.points_redeemed ?? 0),
+        });
+        if (creditNotice) await recordSystemAlert(creditNotice).catch(() => {});
+
         const storeCreditRedeemedCents = Number(orderRecord?.store_credit_redeemed_cents ?? 0);
         if (storeCreditRedeemedCents > 0) {
           try {

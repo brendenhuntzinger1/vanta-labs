@@ -97,7 +97,10 @@ describe("computeOrderProfit", () => {
       refund: 100,
     }));
     expect(r.revenue).toBe(0);
-    expect(r.marginPercent).toBe(0);
+    // NOT 0%. A $40 loss beside "0.0%" reads as having broken even; a margin is
+    // a proportion of revenue and there is none here. See
+    // margin-never-flatters-a-loss.test.ts.
+    expect(r.marginPercent).toBeNull();
     expect(r.profit).toBe(-40); // −COGS − shippingCost
   });
 

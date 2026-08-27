@@ -18,7 +18,8 @@ export interface OrderProfitView {
   refund: number;
   taxCollected: number;
   profit: number;
-  marginPercent: number;
+  /** `null` when revenue is <= 0 — a margin has no meaning there. Renders "n/a". */
+  marginPercent: number | null;
   profitStatus: "estimated" | "finalized";
   processingFeeIsEstimate: boolean;
   hasEstimatedCost: boolean;
@@ -133,7 +134,13 @@ export function AdminOrderProfitPanel({
         <div className="!mt-2 flex justify-between border-t border-white/10 pt-2 text-base font-semibold">
           <dt className={profit.profit >= 0 ? "text-emerald-300" : "text-rose-300"}>Net profit</dt>
           <dd className={`tabular-nums ${profit.profit >= 0 ? "text-emerald-300" : "text-rose-300"}`}>
-            {money(profit.profit)} <span className="text-xs font-normal text-zinc-500">({profit.marginPercent.toFixed(1)}%)</span>
+            {money(profit.profit)}{" "}
+            <span className="text-xs font-normal text-zinc-500">
+              {/* "0.0%" beside a real dollar loss reads as "broke even", and the
+                  arithmetic that would replace it (two negatives divided) reads
+                  as a healthy margin. Neither is said. */}
+              ({profit.marginPercent === null ? "margin n/a" : `${profit.marginPercent.toFixed(1)}%`})
+            </span>
           </dd>
         </div>
 

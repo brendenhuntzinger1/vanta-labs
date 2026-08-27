@@ -210,8 +210,12 @@ export interface OrderProfitResult {
   /** Sum of all expense line items (excludes the refund revenue reversal). */
   totalExpenses: number;
   profit: number;
-  /** Net margin as a percent of revenue (0 when revenue ≤ 0). */
-  marginPercent: number;
+  /**
+   * Net margin as a percent of revenue, or `null` when there is no revenue to
+   * take a proportion of. See marginPercentOf — `null` renders as "n/a", and
+   * NEVER as 0%.
+   */
+  marginPercent: number | null;
   /** True when any line was missing a cost snapshot (COGS is estimated). */
   hasEstimatedCost: boolean;
   /** "finalized" once shipping cost is exact AND every line cost is known. */
@@ -220,6 +224,26 @@ export interface OrderProfitResult {
 
 function round(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+/**
+ * Margin as a percent of revenue — or `null` when the question has no answer.
+ *
+ * THE ONE DEFINITION, so every surface that renders a margin renders the same
+ * convention. A margin is a proportion OF revenue; below or at zero revenue
+ * there is nothing to take a proportion of, and BOTH numeric answers available
+ * at that boundary are lies in the store's favour:
+ *
+ *   revenue -50, profit -80  ->  "0%"     reads as broke even (the old answer)
+ *   revenue -50, profit -80  ->  "+160%"  two negatives divided (the naive fix)
+ *
+ * `null` is the only answer that cannot flatter a loss. Callers render it as
+ * "n/a" and the dollar profit beside it — which is the real number — carries the
+ * bad news on its own. Held by margin-never-flatters-a-loss.test.ts.
+ */
+export function marginPercentOf(profit: number, revenue: number): number | null {
+  if (!Number.isFinite(revenue) || !Number.isFinite(profit) || revenue <= 0) return null;
+  return round((profit / revenue) * 100);
 }
 
 export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
@@ -303,7 +327,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   const revenueRefund = countTaxAsProfit ? refund : round(Math.max(0, refund - refundedTax));
   const revenue = round(grossRevenue - revenueRefund);
   const profit = round(revenue - totalExpenses);
-  const marginPercent = revenue > 0 ? round((profit / revenue) * 100) : 0;
+  const marginPercent = marginPercentOf(profit, revenue);
   const shippingProfit = round(shippingRevenue - shippingCost);
   const profitStatus: ProfitStatus = !shippingCostIsEstimate && !hasEstimatedCost ? "finalized" : "estimated";
 
