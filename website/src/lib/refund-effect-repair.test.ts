@@ -14,6 +14,9 @@ describe("planRefundRepairs", () => {
     points_redeemed: 50,
     store_credit_redeemed_cents: 500,
     amount_paid: 4999,
+    // Points live on an ACCOUNT. An order that earned or redeemed any must
+    // have one, so the fixture carries it.
+    customer_user_id: "user-1",
   };
 
   it("plans every effect when none has run", () => {
@@ -84,6 +87,31 @@ describe("planRefundRepairs", () => {
     expect(planRefundRepairs(zeroDollarOrder, new Set(), new Set())).toEqual([]);
   });
 
+  // FIX ROUND 2 — a repair that can NEVER write anything is terminal, not
+  // pending. Both points effects return early when the order has no
+  // customer_user_id (reverseOrderPoints / restoreRedeemedPoints), so planning
+  // them for a guest order calls a function that does nothing, counts a
+  // "repair", and plans it again on the next tick. Forever.
+  it("plans no points effect for a guest order that has no account to credit", () => {
+    const guest = { ...refunded, customer_user_id: null, refund_amount: 4999, store_credit_redeemed_cents: 0 };
+    expect(planRefundRepairs(guest, new Set(), new Set())).toEqual([]);
+  });
+
+  // Same shape for store credit: refundStoreCreditForOrder declines a
+  // redemption spent in a PRIOR month (the credit has expired) and writes
+  // nothing, so "no membership_redemption_refund row" stays true forever.
+  it("plans no store credit refund when no recorded redemption is still refundable", () => {
+    const expired = { ...refunded, refund_amount: 4999, points_earned: 0, points_redeemed: 0 };
+    expect(
+      planRefundRepairs(expired, new Set(), new Set(), { storeCreditRefundable: false }),
+    ).toEqual([]);
+    // ...and still plans it when the redemption IS refundable, so the fix does
+    // not disable the effect it exists for.
+    expect(
+      planRefundRepairs(expired, new Set(), new Set(), { storeCreditRefundable: true }),
+    ).toEqual(["store_credit_refund"]);
+  });
+
   // The fix must not disable the effect it exists for: a normal refunded
   // order that DID take money and has no refund_amount recorded yet must
   // still plan refund_amount.
@@ -148,9 +176,17 @@ vi.mock("@/lib/membership", () => ({
   reverseOrderPoints: effects.reverseOrderPoints,
   restoreRedeemedPoints: effects.restoreRedeemedPoints,
 }));
-vi.mock("@/lib/store-credit", () => ({
-  refundStoreCreditForOrder: effects.refundStoreCreditForOrder,
-}));
+vi.mock("@/lib/store-credit", async () => {
+  // isRefundableRedemption and startOfCurrentMonthIso are pure date/amount
+  // rules — the sweep must use the REAL ones, or the expired-credit test would
+  // only be proving the mock.
+  const real = await vi.importActual<typeof import("@/lib/store-credit")>("@/lib/store-credit");
+  return {
+    isRefundableRedemption: real.isRefundableRedemption,
+    startOfCurrentMonthIso: real.startOfCurrentMonthIso,
+    refundStoreCreditForOrder: effects.refundStoreCreditForOrder,
+  };
+});
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: effects.recordSystemAlert }));
 
 vi.mock("@/lib/supabase-server", () => {
@@ -182,8 +218,9 @@ vi.mock("@/lib/supabase-server", () => {
     const filters: Array<(row: Row) => boolean> = [];
     let action: "select" | "update" = "select";
     let patch: Row = {};
-    let sort: { col: string; asc: boolean } | null = null;
+    const sortKeys: Array<{ col: string; asc: boolean }> = [];
     let take: number | null = null;
+    let skip = 0;
 
     function settle() {
       if (action === "update" && name === "orders") db.beforeOrdersUpdate?.();
@@ -193,14 +230,20 @@ vi.mock("@/lib/supabase-server", () => {
         return { data: hit.map((row) => ({ ...row })), error: null };
       }
       let out = hit.map((row) => ({ ...row }));
-      if (sort) {
-        const { col, asc } = sort;
+      if (sortKeys.length > 0) {
+        // Multi-key ordering, because paging is only deterministic with a
+        // tiebreak: two rows sharing an updated_at must still have ONE order.
         out.sort((a, x) => {
-          const l = String(a[col] ?? "");
-          const r = String(x[col] ?? "");
-          return asc ? l.localeCompare(r) : r.localeCompare(l);
+          for (const { col, asc } of sortKeys) {
+            const l = String(a[col] ?? "");
+            const r = String(x[col] ?? "");
+            const cmp = l.localeCompare(r);
+            if (cmp !== 0) return asc ? cmp : -cmp;
+          }
+          return 0;
         });
       }
+      if (skip > 0) out = out.slice(skip);
       if (take != null) out = out.slice(0, take);
       return { data: out, error: null };
     }
@@ -216,8 +259,10 @@ vi.mock("@/lib/supabase-server", () => {
         return b;
       },
       in(col: string, values: unknown[]) { filters.push((row) => values.includes(row[col])); return b; },
-      order(col: string, opts?: { ascending?: boolean }) { sort = { col, asc: opts?.ascending !== false }; return b; },
+      order(col: string, opts?: { ascending?: boolean }) { sortKeys.push({ col, asc: opts?.ascending !== false }); return b; },
       limit(n: number) { take = n; return b; },
+      // Offset paging, as PostgREST implements .range(): inclusive on both ends.
+      range(from: number, to: number) { skip = from; take = to - from + 1; return b; },
       then(resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) {
         return Promise.resolve(settle()).then(resolve, reject);
       },
@@ -242,6 +287,7 @@ function refundedOrder(overrides: Row = {}): Row {
     points_redeemed: 0,
     store_credit_redeemed_cents: 0,
     amount_paid: 4999,
+    customer_user_id: "user-1",
     refunded_at: null,
     updated_at: "2026-08-01T00:00:00Z",
     ...overrides,
@@ -257,17 +303,22 @@ beforeEach(() => {
   // Each effect writes its own ledger row the first time, exactly as the real
   // functions do, so the SECOND run's absence check reads state the first run
   // genuinely produced.
+  // Each returns WHETHER IT WROTE, exactly as the real functions now do — a
+  // no-op is not a repair.
   effects.reverseOrderPoints.mockImplementation(async (orderId: string) => {
-    if (db.points_ledger.some((r) => r.order_id === orderId && r.reason === "order_refund_reversal")) return;
+    if (db.points_ledger.some((r) => r.order_id === orderId && r.reason === "order_refund_reversal")) return false;
     db.points_ledger.push({ order_id: orderId, reason: "order_refund_reversal" });
+    return true;
   });
   effects.restoreRedeemedPoints.mockImplementation(async (orderId: string) => {
-    if (db.points_ledger.some((r) => r.order_id === orderId && r.reason === "order_refund_points_restore")) return;
+    if (db.points_ledger.some((r) => r.order_id === orderId && r.reason === "order_refund_points_restore")) return false;
     db.points_ledger.push({ order_id: orderId, reason: "order_refund_points_restore" });
+    return true;
   });
   effects.refundStoreCreditForOrder.mockImplementation(async (orderId: string) => {
-    if (db.store_credit_ledger.some((r) => r.order_id === orderId && r.reason === "membership_redemption_refund")) return;
+    if (db.store_credit_ledger.some((r) => r.order_id === orderId && r.reason === "membership_redemption_refund")) return false;
     db.store_credit_ledger.push({ order_id: orderId, reason: "membership_redemption_refund" });
+    return true;
   });
 });
 
@@ -293,11 +344,19 @@ describe("a refunded order that never got a refunded_at", () => {
     expect(db.orders[0].refunded_at).toBeNull();
   });
 
-  it("converges: the second tick no longer sees it", async () => {
+  it("converges: the second tick plans nothing and writes nothing", async () => {
     db.orders = [refundedOrder({ refunded_at: null, refund_amount: 0 })];
     await repairIncompleteRefunds();
+    const before = JSON.stringify(db.orders);
+
     const second = await repairIncompleteRefunds();
-    expect(second).toEqual({ scanned: 0, repaired: 0, failed: 0 });
+
+    // `scanned` counts rows READ from the window, and a repaired order is
+    // still a refunded order inside it — so it is read again and found to need
+    // nothing. What must not happen is another write or another counted repair.
+    expect(second.repaired).toBe(0);
+    expect(second.failed).toBe(0);
+    expect(JSON.stringify(db.orders)).toBe(before);
   });
 });
 
@@ -364,6 +423,15 @@ describe("repairIncompleteRefunds — running twice over the same order", () => 
       store_credit_redeemed_cents: 500,
       refunded_at: "2026-08-20T00:00:00Z",
     })];
+    // The redemption this refund returns. Without a redemption row on file
+    // there is nothing for refundStoreCreditForOrder to give back, and the
+    // effect is correctly not planned at all.
+    db.store_credit_ledger = [{
+      order_id: ORDER_ID,
+      reason: "membership_redemption",
+      amount_cents: -500,
+      created_at: new Date().toISOString(),
+    }];
 
     const first = await repairIncompleteRefunds();
     expect(first).toEqual({ scanned: 1, repaired: 4, failed: 0 });
@@ -375,12 +443,12 @@ describe("repairIncompleteRefunds — running twice over the same order", () => 
       { order_id: ORDER_ID, reason: "order_refund_reversal" },
       { order_id: ORDER_ID, reason: "order_refund_points_restore" },
     ]);
-    expect(db.store_credit_ledger).toEqual([
+    expect(db.store_credit_ledger.filter((row) => row.reason === "membership_redemption_refund")).toEqual([
       { order_id: ORDER_ID, reason: "membership_redemption_refund" },
     ]);
 
-    // Still scanned by the ledger-effects pass (it earned points), but every
-    // effect is now present, so nothing is planned and nothing is written.
+    // Still read from the window, but every effect is now present, so nothing
+    // is planned and nothing is written.
     const second = await repairIncompleteRefunds();
     expect(second).toEqual({ scanned: 1, repaired: 0, failed: 0 });
     expect(effects.reverseOrderPoints).toHaveBeenCalledTimes(1);
@@ -398,5 +466,195 @@ describe("repairIncompleteRefunds — running twice over the same order", () => 
 
     expect(result).toEqual({ scanned: 1, repaired: 1, failed: 0 });
     expect(effects.reverseOrderPoints).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SWEEP MUST ADVANCE. This is the test that did not exist, and the gap
+// three separate non-convergence defects lived in.
+//
+// `limit` bounds WORK, not READS. Three of the four effects are proven missing
+// by the ABSENCE OF A ROW IN ANOTHER TABLE, which no `orders` predicate can
+// express — so a query that returns the oldest `limit` refunded orders and then
+// decides in JavaScript returns the SAME rows on every tick when those rows
+// need nothing. The order behind them is never selected. Not late: never.
+//
+// Every test below therefore puts MORE rows in the window than `limit` allows,
+// with the row that actually needs repair LAST.
+// ---------------------------------------------------------------------------
+describe("a window with more rows than `limit`", () => {
+  function filler(n: number, overrides: Row = {}): Row[] {
+    return Array.from({ length: n }, (_, i) => refundedOrder({
+      id: `row-fill-${i}`,
+      order_id: `filler-${i}`,
+      // Oldest first, so every filler sorts AHEAD of the broken order.
+      updated_at: `2026-08-0${i + 1}T00:00:00Z`,
+      ...overrides,
+    }));
+  }
+
+  it("reaches the broken order sitting behind a full window of already-correct ones", async () => {
+    // Five refunded orders that earned points and were correctly reversed.
+    // They match every narrowing an `orders` query can express, they are never
+    // written to, so their updated_at never moves — they held the head of the
+    // queue forever.
+    const correct = filler(5, { refund_amount: 4999, points_earned: 120 });
+    for (const order of correct) {
+      db.points_ledger.push({ order_id: order.order_id, reason: "order_refund_reversal" });
+    }
+    const broken = refundedOrder({
+      id: "row-broken",
+      order_id: "order-broken",
+      updated_at: "2026-08-20T00:00:00Z",
+      refund_amount: 4999,
+      points_earned: 120,
+    });
+    db.orders = [...correct, broken];
+
+    // A limit far smaller than the number of rows in front of the broken one.
+    const result = await repairIncompleteRefunds({ limit: 2 });
+
+    expect(effects.reverseOrderPoints).toHaveBeenCalledWith("order-broken");
+    expect(result.repaired).toBe(1);
+    // Every row in the window was read to get there — `limit` bounded the
+    // repair, not the scan.
+    expect(result.scanned).toBe(6);
+  });
+
+  it("is not blocked by $0-paid refunded orders that can never be repaired", async () => {
+    // A fully-comped order marked refunded: amount_paid 0 and refund_amount 0.
+    // It matches "refund_amount is null or 0" forever and is never written to.
+    db.orders = [
+      ...filler(4, { amount_paid: 0, refund_amount: 0 }),
+      refundedOrder({ id: "row-real", order_id: "order-real", updated_at: "2026-08-20T00:00:00Z", refund_amount: 0 }),
+    ];
+
+    const result = await repairIncompleteRefunds({ limit: 2 });
+
+    expect(result.repaired).toBe(1);
+    expect(db.orders.find((row) => row.order_id === "order-real")!.refund_amount).toBe(4999);
+    // The comped orders were read and left alone — no write, no counted repair.
+    for (const row of db.orders.filter((r) => r.amount_paid === 0)) {
+      expect(row.refund_amount).toBe(0);
+    }
+  });
+
+  it("is not blocked by orders whose only outstanding effect can never write", async () => {
+    // Expired store credit and a guest order's points: both are repairs that
+    // legitimately do nothing, so both used to be replanned every tick AND
+    // counted as repaired.
+    const expiredCredit = filler(3, { refund_amount: 4999, store_credit_redeemed_cents: 500 });
+    for (const order of expiredCredit) {
+      db.store_credit_ledger.push({
+        order_id: order.order_id,
+        reason: "membership_redemption",
+        amount_cents: -500,
+        created_at: "2000-01-05T00:00:00Z", // spent in a long-gone month: expired
+      });
+    }
+    const guest = refundedOrder({
+      id: "row-guest",
+      order_id: "order-guest",
+      updated_at: "2026-08-06T00:00:00Z",
+      refund_amount: 4999,
+      customer_user_id: null,
+      points_earned: 120,
+    });
+    const broken = refundedOrder({
+      id: "row-broken",
+      order_id: "order-broken",
+      updated_at: "2026-08-20T00:00:00Z",
+      refund_amount: 0,
+    });
+    db.orders = [...expiredCredit, guest, broken];
+
+    const result = await repairIncompleteRefunds({ limit: 2 });
+
+    expect(result.repaired).toBe(1);
+    expect(db.orders.find((row) => row.order_id === "order-broken")!.refund_amount).toBe(4999);
+    // Neither dead-end effect was even attempted.
+    expect(effects.refundStoreCreditForOrder).not.toHaveBeenCalled();
+    expect(effects.reverseOrderPoints).not.toHaveBeenCalled();
+  });
+
+  it("pages past a full page of rows that need nothing", async () => {
+    // SCAN_PAGE_SIZE is 200. A window larger than one page must still reach
+    // the row on the second page.
+    db.orders = [
+      ...filler(0),
+      ...Array.from({ length: 250 }, (_, i) => refundedOrder({
+        id: `row-ok-${i}`,
+        order_id: `ok-${String(i).padStart(4, "0")}`,
+        updated_at: `2026-08-01T00:00:${String(i % 60).padStart(2, "0")}Z`,
+        refund_amount: 4999,
+      })),
+      refundedOrder({ id: "row-last", order_id: "zzz-last", updated_at: "2026-08-25T00:00:00Z", refund_amount: 0 }),
+    ];
+
+    const result = await repairIncompleteRefunds({ limit: 5 });
+
+    expect(result.repaired).toBe(1);
+    expect(db.orders.find((row) => row.order_id === "zzz-last")!.refund_amount).toBe(4999);
+    expect(result.scanned).toBe(251);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A REPAIR THAT WRITES NOTHING IS NOT A REPAIR.
+//
+// `repaired` is the number the operator reads as "something was fixed". An
+// effect that correctly declines to write — expired store credit, a guest
+// order's points — must never appear in it, and must never be replanned on the
+// next tick either. Reporting `repaired: 1` every thirty minutes forever for a
+// function that writes nothing is the same storm the refund_amount guard fixed.
+// ---------------------------------------------------------------------------
+describe("an effect that can never write", () => {
+  it("does not count expired store credit as a repair, on this tick or any later one", async () => {
+    db.orders = [refundedOrder({ refund_amount: 4999, store_credit_redeemed_cents: 500 })];
+    db.store_credit_ledger = [{
+      order_id: ORDER_ID,
+      reason: "membership_redemption",
+      amount_cents: -500,
+      created_at: "2000-01-05T00:00:00Z",
+    }];
+
+    const first = await repairIncompleteRefunds();
+    const second = await repairIncompleteRefunds();
+
+    expect(first.repaired).toBe(0);
+    expect(second.repaired).toBe(0);
+    expect(effects.refundStoreCreditForOrder).not.toHaveBeenCalled();
+  });
+
+  it("does not count a store credit refund that returned nothing", async () => {
+    // Belt and braces: even when the planner cannot tell (the redemption looks
+    // refundable), the function's own report of "I wrote nothing" is what the
+    // counter follows.
+    db.orders = [refundedOrder({ refund_amount: 4999, store_credit_redeemed_cents: 500 })];
+    db.store_credit_ledger = [{
+      order_id: ORDER_ID,
+      reason: "membership_redemption",
+      amount_cents: -500,
+      created_at: new Date().toISOString(),
+    }];
+    effects.refundStoreCreditForOrder.mockResolvedValueOnce(false);
+
+    const result = await repairIncompleteRefunds();
+
+    expect(effects.refundStoreCreditForOrder).toHaveBeenCalledTimes(1);
+    expect(result.repaired).toBe(0);
+    expect(result.failed).toBe(0);
+  });
+
+  it("does not plan points effects for a guest order, ever", async () => {
+    db.orders = [refundedOrder({ refund_amount: 4999, customer_user_id: null, points_earned: 120, points_redeemed: 50 })];
+
+    const first = await repairIncompleteRefunds();
+    const second = await repairIncompleteRefunds();
+
+    expect(first.repaired).toBe(0);
+    expect(second.repaired).toBe(0);
+    expect(effects.reverseOrderPoints).not.toHaveBeenCalled();
+    expect(effects.restoreRedeemedPoints).not.toHaveBeenCalled();
   });
 });

@@ -37,6 +37,7 @@ const state: {
   flipsApplied: number;
   signatureValid: boolean;
   sideEffectsClaimedAt: string | null;
+  orderType: string;
 } = {
   paymentStatus: "pending_payment",
   fulfillmentStatus: "pending",
@@ -45,6 +46,7 @@ const state: {
   flipsApplied: 0,
   signatureValid: true,
   sideEffectsClaimedAt: null,
+  orderType: "product",
 };
 
 const sideEffects = {
@@ -52,6 +54,8 @@ const sideEffects = {
   points: vi.fn(async () => {}),
   coupon: vi.fn(async () => ({ ok: true })),
   storeCredit: vi.fn(async () => {}),
+  redeemPoints: vi.fn(async () => {}),
+  revokeMembership: vi.fn(async () => {}),
   alert: vi.fn(async (_alert: { type: string; severity: string; message: string; context?: unknown }) => {}),
 };
 
@@ -67,7 +71,7 @@ vi.mock("@/lib/membership", () => ({
   getActivePointsMultiplier: async () => 1,
   getActivePointsPerDollar: async () => 1,
   recordPointsLedgerEntry: sideEffects.points,
-  redeemPoints: vi.fn(async () => {}),
+  redeemPoints: sideEffects.redeemPoints,
   restoreRedeemedPoints: vi.fn(async () => {}),
   reverseOrderPoints: vi.fn(async () => {}),
 }));
@@ -99,7 +103,7 @@ vi.mock("@/lib/store-credit", () => ({
 }));
 vi.mock("@/lib/membership-billing", () => ({
   activatePaidMembership: vi.fn(async () => {}),
-  revokeMembershipForRefund: vi.fn(async () => {}),
+  revokeMembershipForRefund: sideEffects.revokeMembership,
 }));
 vi.mock("@/lib/cart-recovery", () => ({ markAbandonedCartsRecovered: vi.fn(async () => {}) }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: sideEffects.alert }));
@@ -117,14 +121,15 @@ vi.mock("@/lib/supabase-server", () => {
     payment_status: state.paymentStatus,
     fulfillment_status: state.fulfillmentStatus,
     payment_method: "card",
-    order_type: "product",
+    order_type: state.orderType,
     customer_email: "buyer@example.test",
     customer_name: "A Buyer",
     customer_user_id: "user-1",
     coupon_code: "SAVE10",
-    // The order redeems store credit as well as a coupon, so the redemption
-    // path below is actually exercised rather than skipped.
+    // The order redeems store credit AND loyalty points as well as a coupon,
+    // so every redemption path below is actually exercised rather than skipped.
     store_credit_redeemed_cents: 500,
+    points_redeemed: 100,
     subtotal: 200,
     discount_amount: 0,
     amount_paid: 200,
@@ -237,6 +242,13 @@ vi.mock("@/lib/supabase-server", () => {
   return { supabaseAdmin: { from } };
 });
 
+function refundPayload() {
+  return JSON.stringify({
+    type: "refund.completed",
+    data: { object: { metadata: { order_id: ORDER_ID }, amount: 200 } },
+  });
+}
+
 function successPayload() {
   return JSON.stringify({
     type: "payment.succeeded",
@@ -258,6 +270,7 @@ beforeEach(() => {
   state.flipsApplied = 0;
   state.signatureValid = true;
   state.sideEffectsClaimedAt = null;
+  state.orderType = "product";
 });
 
 describe("an unsigned delivery is not a payment", () => {
@@ -439,5 +452,67 @@ describe("an unsafe effect that throws", () => {
     const types = sideEffects.alert.mock.calls.map((call) => call[0].type);
     expect(types).toContain("unsafe_effect_failed_store_credit_redemption");
     expect(types).not.toContain("unsafe_effect_failed_points_earn");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TWO MORE EFFECTS THAT FAIL IN THEIR OWN DIRECTION.
+//
+// The rule this file already proves for store credit — ONE EFFECT, ONE ALERT
+// TYPE — was only half-applied. A points REDEMPTION shared a try/catch with the
+// points EARN and surfaced as `points_earn`; the membership revoke on a refund
+// had a brand-new alert call that nothing drove, so deleting it left every test
+// green. Both are wired here through the real webhook.
+// ---------------------------------------------------------------------------
+describe("a points redemption that throws", () => {
+  it("is not reported as a points-earn failure", async () => {
+    // Opposite directions: a failed redemption means the customer kept the
+    // points AND took the discount (the store is short); a failed earn means
+    // the customer is owed.
+    sideEffects.redeemPoints.mockRejectedValueOnce(new Error("points ledger down"));
+
+    await deliver("evt-1");
+
+    const types = sideEffects.alert.mock.calls.map((call) => call[0].type);
+    expect(types).toContain("unsafe_effect_failed_points_redemption");
+    expect(types).not.toContain("unsafe_effect_failed_points_earn");
+  });
+
+  it("does not cancel the points the customer earned on the same order", async () => {
+    sideEffects.redeemPoints.mockRejectedValueOnce(new Error("points ledger down"));
+
+    await deliver("evt-1");
+
+    // The earn ran in its own try, so one failure did not swallow the other.
+    expect(sideEffects.points).toHaveBeenCalled();
+  });
+});
+
+describe("a membership revoke that throws on a refund", () => {
+  it("raises unsafe_effect_failed_membership_revoke", async () => {
+    // A refunded membership whose revoke fails leaves the customer with member
+    // pricing, free shipping and points multipliers indefinitely. This is not
+    // auto-repairable — ending a subscription is not replayable — so the alert
+    // IS the recovery path.
+    state.orderType = "membership";
+    sideEffects.revokeMembership.mockRejectedValueOnce(new Error("billing provider down"));
+
+    await deliver("evt-refund-1", refundPayload());
+
+    expect(sideEffects.revokeMembership).toHaveBeenCalledWith("user-1");
+    const alerts = sideEffects.alert.mock.calls.map((call) => call[0]);
+    const revoke = alerts.find((alert) => alert.type === "unsafe_effect_failed_membership_revoke");
+    expect(revoke).toBeDefined();
+    expect(revoke!.severity).toBe("critical");
+    expect(revoke!.message).toContain(ORDER_ID);
+  });
+
+  it("raises nothing when the revoke succeeds", async () => {
+    state.orderType = "membership";
+
+    await deliver("evt-refund-2", refundPayload());
+
+    const types = sideEffects.alert.mock.calls.map((call) => call[0].type);
+    expect(types).not.toContain("unsafe_effect_failed_membership_revoke");
   });
 });

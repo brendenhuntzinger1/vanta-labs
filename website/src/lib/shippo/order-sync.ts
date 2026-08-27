@@ -8,6 +8,7 @@ import { isShippoConfigured } from "@/lib/shippo/config";
 import { buildOrderParcel, toCountryCode } from "@/lib/shippo/service";
 import type { ShippoAddress, ShippoOrderLineItem, ShippoTransactionCreated } from "@/lib/shippo/types";
 import { canTransition } from "@/lib/order-pipeline";
+import { recordSystemAlert } from "@/lib/monitoring";
 
 // ---------------------------------------------------------------------------
 // Pushing orders INTO Shippo, and receiving the label back OUT of it.
@@ -55,13 +56,19 @@ interface OrderRow {
   payment_status: string | null;
   order_type: string | null;
   shippo_order_id: string | null;
+  /**
+   * Read so a label adopted from the dashboard can be told apart from a replay
+   * of the event for the label that was voided — see applyTransactionCreated.
+   */
+  shippo_transaction_id: string | null;
+  label_voided_at: string | null;
 }
 
 const ORDER_COLUMNS =
   // fulfillment_status is selected so the monotonicity guard in
 // applyTransactionCreated can read the order's CURRENT progress before
 // deciding whether a late label event is allowed to move it.
-  "order_id, order_number, customer_name, customer_email, phone, shipping_address, shipping_address_2, city, state, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, currency, paid_at, payment_status, fulfillment_status, order_type, shippo_order_id";
+  "order_id, order_number, customer_name, customer_email, phone, shipping_address, shipping_address_2, city, state, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, currency, paid_at, payment_status, fulfillment_status, order_type, shippo_order_id, shippo_transaction_id, label_voided_at";
 
 function money(value: number | null | undefined): string {
   return (Math.round((Number(value) || 0) * 100) / 100).toFixed(2);
@@ -548,8 +555,23 @@ export async function applyTransactionCreated(
   // that guard a concurrent carrier scan could be overwritten by this stale
   // label_purchased decision, regressing an order the pipeline had already
   // moved on. Same shape as service.applyTrackingUpdate.
+  // A NEW TRANSACTION IS A NEW LABEL, AND A NEW LABEL IS NOT VOIDED.
+  //
+  // The in-app re-buy path clears label_voided_at (purchaseLabelForOrder); this
+  // one did not. So an admin who voided a label in-app and then bought the
+  // replacement in the Shippo DASHBOARD ended up with a live label on a row
+  // still marked voided — which recordActualShippingCost refuses to cost and
+  // the repair sweep filters out. Real postage, never charged to profit, no
+  // error anywhere.
+  //
+  // ONLY FOR A DIFFERENT TRANSACTION. A redelivery of the event for the label
+  // that WAS voided carries the same object_id, and un-voiding on that would
+  // resurrect exactly the refunded-postage re-charge the void protection
+  // exists to stop.
+  const isReplacementLabel = Boolean(transactionId) && transactionId !== order.shippo_transaction_id;
   const labelFacts = {
       shippo_transaction_id: transactionId,
+      ...(isReplacementLabel ? { label_voided_at: null } : {}),
       // Each written only when we actually have it. These used to be
       // unconditional, so a second, thinner delivery of the same event — or a
       // replay Shippo sent without the expanded rate — overwrote a good
@@ -591,13 +613,29 @@ export async function applyTransactionCreated(
   }
 
   if (amountCents !== null) {
-    await recordActualShippingCost({
+    // THE RETURN VALUE IS THE FAILURE, NOT AN EXCEPTION. recordActualShippingCost
+    // reports a refusal as { ok: false } and does not throw, so a `.catch()`
+    // alone discarded every one of them: postage spent, profit still on the
+    // flat estimate, nothing logged and nothing alerted. The repair sweep picks
+    // up a live label on its next tick, so this is a warning rather than a
+    // page — but it is durable and it names the order.
+    const recorded = await recordActualShippingCost({
       orderId: order.order_id,
       amountCents,
       source: "shippo",
-    }).catch((err) => {
-      console.error("Unable to reconcile shipping cost for order", order.order_id, err);
-    });
+    }).catch((err) => ({ ok: false as const, error: err instanceof Error ? err.message : String(err) }));
+
+    if (!recorded.ok) {
+      console.error("Unable to reconcile shipping cost for order", order.order_id, recorded.error);
+      await recordSystemAlert({
+        type: "shipping_cost_unrecorded",
+        severity: "warning",
+        message:
+          `A Shippo label for order ${order.order_id} cost ${amountCents} cents, but that cost could not be `
+          + "recorded, so this order's profit is still on the flat shipping estimate.",
+        context: { orderId: order.order_id, transactionId, amountCents, reason: recorded.error ?? null },
+      }).catch(() => {});
+    }
   }
 
   // History records what actually happened. A refused transition did not move

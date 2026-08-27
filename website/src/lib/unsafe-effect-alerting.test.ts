@@ -5,6 +5,7 @@ import { unsafeEffectAlert } from "@/lib/payment-webhook";
 //
 //   inventory decrement        legacy fallback has no order-scoped claim
 //   points earn                bare INSERT, no (order_id, reason) guard
+//   points redemption          bare debit, no guard
 //   store credit redemption    bare insert, no guard
 //   coupon redemption          unconditional increment, no order linkage
 //   membership activation      duplicates a 'renewal' billing event
@@ -17,7 +18,14 @@ import { unsafeEffectAlert } from "@/lib/payment-webhook";
 // points_earn because the two shared a try/catch. They fail in OPPOSITE money
 // directions — a points-earn failure owes the customer, a redemption failure
 // means the customer kept the credit AND took the discount — so an operator
-// triaging by type performed the wrong repair.
+// triaging by type performed the wrong repair. points_redemption had the same
+// defect and the same fix.
+//
+// EVERYTHING BELOW IS THE SHAPE OF THE ALERT, NOT ITS WIRING. unsafeEffectAlert
+// is a string template, so these assertions pass against any version of the
+// webhook — including one with the alert call deleted. The tests that actually
+// drive a THROWING effect through processPaymentWebhook, and therefore go red
+// when a catch block is removed, live in payment-webhook-dedupe.test.ts.
 describe("unsafeEffectAlert", () => {
   it("is always critical — this is money that silently did not happen", () => {
     const alert = unsafeEffectAlert("points_earn", "order-1", new Error("boom"));
@@ -50,5 +58,10 @@ describe("unsafeEffectAlert", () => {
   it("carries the membership revoke, which was previously neither swept nor alerted", () => {
     expect(unsafeEffectAlert("membership_revoke", "order-9", new Error("x")).type)
       .toBe("unsafe_effect_failed_membership_revoke");
+  });
+
+  it("keeps a points REDEMPTION apart from a points EARN", () => {
+    expect(unsafeEffectAlert("points_redemption", "order-1", new Error("x")).type)
+      .toBe("unsafe_effect_failed_points_redemption");
   });
 });

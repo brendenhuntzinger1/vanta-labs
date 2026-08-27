@@ -23,11 +23,18 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type Row = Record<string, unknown>;
 
-const db: { orders: Row[]; order_items: Row[]; commissions: Row[]; order_shipping_cost_audit: Row[] } = {
+const db: {
+  orders: Row[];
+  order_items: Row[];
+  commissions: Row[];
+  order_shipping_cost_audit: Row[];
+  system_alerts: Row[];
+} = {
   orders: [],
   order_items: [],
   commissions: [],
   order_shipping_cost_audit: [],
+  system_alerts: [],
 };
 
 const shippo = vi.hoisted(() => ({
@@ -36,7 +43,19 @@ const shippo = vi.hoisted(() => ({
     data: { object_id: "txn-1", status: "SUCCESS", rate: { amount: "7.42", currency: "USD" } },
   })),
   settledCentsFromTransaction: vi.fn(() => 742),
-  recordSystemAlert: vi.fn(async (_alert: { type: string; severity: string; message: string }) => {}),
+  // Writes the durable row the real one writes, so a second run genuinely
+  // reads back what the first run reported.
+  recordSystemAlert: vi.fn(async (alert: { type: string; severity: string; message: string; context?: unknown }) => {
+    db.system_alerts.push({
+      id: `alert-${db.system_alerts.length + 1}`,
+      type: alert.type,
+      severity: alert.severity,
+      message: alert.message,
+      context: alert.context ?? {},
+      resolved_at: null,
+      created_at: new Date(Date.now() + db.system_alerts.length).toISOString(),
+    });
+  }),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -174,6 +193,7 @@ function seedLabelledOrder() {
   }];
   db.order_items = [{ id: 1, order_id: ORDER_ID, quantity: 1, unit_cost_cents: 1000 }];
   db.commissions = [];
+  db.system_alerts = [];
   db.order_shipping_cost_audit = [{
     id: "audit-1",
     order_id: ORDER_ID,
@@ -251,7 +271,7 @@ describe("the shipping sweep after a label is voided", () => {
     expect(shippo.getTransaction).toHaveBeenCalledTimes(1);
   });
 
-  it("prefers the postage already on the order over a Shippo round-trip", async () => {
+  it("confirms the label is still live with Shippo, then takes the amount from the order", async () => {
     db.orders[0].actual_shipping_cost_cents = null;
     db.orders[0].profit_finalized = false;
     // postage_cost_cents is still 742 from the label purchase.
@@ -260,7 +280,45 @@ describe("the shipping sweep after a label is voided", () => {
 
     expect(result).toEqual({ scanned: 1, repaired: 1, failed: 0 });
     expect(db.orders[0].actual_shipping_cost_cents).toBe(742);
-    expect(shippo.getTransaction).not.toHaveBeenCalled();
+    // The status is asked for — that check is the ONLY thing standing between
+    // an out-of-app void and a re-charge.
+    expect(shippo.getTransaction).toHaveBeenCalledTimes(1);
+    // ...but the amount is the one already on the order; the rate is not
+    // re-parsed.
+    expect(shippo.settledCentsFromTransaction).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A LABEL VOIDED IN THE SHIPPO DASHBOARD NEVER SETS label_voided_at HERE.
+//
+// The in-app void path stamps that column, and three layers key off it. A void
+// raised at Shippo does not: the order still reads label_purchased_at set,
+// label_voided_at NULL, postage_cost_cents 742 — and if recordActualShippingCost
+// had failed when the label was bought, actual_shipping_cost_cents NULL too.
+// That row matches this sweep exactly, and the refunded postage was charged to
+// profit on the next tick. The transaction's STATUS is the only evidence that
+// exists, and the sweep must actually look at it.
+// ---------------------------------------------------------------------------
+describe("a label voided outside this app, on an order that still holds its postage", () => {
+  it("is not charged to profit", async () => {
+    db.orders[0].actual_shipping_cost_cents = null;
+    db.orders[0].profit_finalized = false;
+    // The order still carries the figure written when the label was bought,
+    // and label_voided_at is NULL because the void happened at Shippo.
+    expect(db.orders[0].postage_cost_cents).toBe(742);
+    expect(db.orders[0].label_voided_at).toBeNull();
+    shippo.getTransaction.mockResolvedValueOnce({
+      ok: true as const,
+      data: { object_id: "txn-1", status: "REFUNDED", rate: { amount: "7.42", currency: "USD" } },
+    });
+
+    const result = await repairMissingShippingCosts();
+
+    expect(result).toEqual({ scanned: 1, repaired: 0, failed: 1 });
+    expect(db.orders[0].actual_shipping_cost_cents).toBeNull();
+    expect(db.orders[0].profit_finalized).toBe(false);
+    expect(db.order_shipping_cost_audit.filter((row) => row.exact_cost_cents === 742)).toHaveLength(1);
   });
 });
 
@@ -276,6 +334,62 @@ describe("recordActualShippingCost is the layer that cannot be bypassed", () => 
     expect(db.orders[0].actual_shipping_cost_cents).toBeNull();
     expect(db.orders[0].profit_finalized).toBe(false);
     expect(db.order_shipping_cost_audit).toHaveLength(auditRowsBefore);
+  });
+
+  // ------------------------------------------------------------------
+  // ...BUT A HUMAN MUST STILL HAVE A LAST RESORT.
+  //
+  // A carrier void refund is often PENDING and can be DECLINED. When USPS
+  // refuses it the store really did pay that postage, and with the sweep
+  // filtering voided rows out and this function refusing every caller, there
+  // was no path left to record it at all — while the sweep's own alert told
+  // the operator to "enter the cost by hand in Admin -> Orders".
+  // ------------------------------------------------------------------
+  it("accepts a deliberate manual override for a void refund the carrier declined", async () => {
+    applyVoid();
+
+    const outcome = await recordActualShippingCost({
+      orderId: ORDER_ID,
+      amountCents: 742,
+      source: "manual",
+      changedBy: "admin",
+      overrideVoidedLabel: true,
+    });
+
+    expect(outcome.ok).toBe(true);
+    expect(db.orders[0].actual_shipping_cost_cents).toBe(742);
+    expect(db.orders[0].shipping_cost_source).toBe("manual");
+  });
+
+  it("still refuses the AUTOMATED path even if it asks to override", async () => {
+    applyVoid();
+
+    // The sweep and the Shippo webhook both record with source "shippo". The
+    // override is a human's, and cannot be borrowed by a machine.
+    const outcome = await recordActualShippingCost({
+      orderId: ORDER_ID,
+      amountCents: 742,
+      source: "shippo",
+      overrideVoidedLabel: true,
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(db.orders[0].actual_shipping_cost_cents).toBeNull();
+  });
+
+  it("refuses a manual entry that did NOT ask to override, and says how to", async () => {
+    applyVoid();
+
+    const outcome = await recordActualShippingCost({
+      orderId: ORDER_ID,
+      amountCents: 742,
+      source: "manual",
+      changedBy: "admin",
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toMatch(/overrideVoidedLabel/);
+    expect(db.orders[0].actual_shipping_cost_cents).toBeNull();
   });
 
   it("records the cost normally on an order whose label is live", async () => {
@@ -312,5 +426,61 @@ describe("a Shippo transaction that is not SUCCESS", () => {
     expect(alerts).toHaveLength(1);
     expect(alerts[0].severity).toBe("warning");
     expect(alerts[0].type).toBe("shipping_cost_manual_entry_required");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A STANDING CONDITION IS REPORTED ONCE, NOT EVERY THIRTY MINUTES.
+//
+// An order whose postage cannot be read back from Shippo stays that way until
+// a human enters the figure. recordSystemAlert has no dedup, so this warning
+// wrote a system_alerts row on every sweep tick — ~48 a day, indefinitely, for
+// a state the sweep itself calls working-as-designed — burying the alerts that
+// are real events.
+// ---------------------------------------------------------------------------
+describe("the manual-entry warning for a permanently unreadable label", () => {
+  beforeEach(() => {
+    db.orders[0].actual_shipping_cost_cents = null;
+    db.orders[0].postage_cost_cents = null;
+    db.orders[0].profit_finalized = false;
+    shippo.getTransaction.mockResolvedValue({
+      ok: true as const,
+      data: { object_id: "txn-1", status: "REFUNDED", rate: { amount: "7.42", currency: "USD" } },
+    });
+  });
+
+  it("is written once, not on every tick", async () => {
+    await repairMissingShippingCosts();
+    await repairMissingShippingCosts();
+    await repairMissingShippingCosts();
+
+    const raised = db.system_alerts.filter((row) => row.type === "shipping_cost_manual_entry_required");
+    expect(raised).toHaveLength(1);
+  });
+
+  it("is written again when a NEW order joins the backlog", async () => {
+    await repairMissingShippingCosts();
+
+    db.orders.push({
+      ...db.orders[0],
+      order_id: "order-void-2",
+      order_number: "VL-VOID002",
+      label_purchased_at: "2026-08-23T10:00:00Z",
+    });
+
+    await repairMissingShippingCosts();
+
+    const raised = db.system_alerts.filter((row) => row.type === "shipping_cost_manual_entry_required");
+    expect(raised).toHaveLength(2);
+    expect((raised[1].context as { total: number }).total).toBe(2);
+  });
+
+  it("is written again once a human has resolved the previous one", async () => {
+    await repairMissingShippingCosts();
+    for (const alert of db.system_alerts) alert.resolved_at = "2026-08-24T00:00:00Z";
+
+    await repairMissingShippingCosts();
+
+    expect(db.system_alerts.filter((row) => row.type === "shipping_cost_manual_entry_required")).toHaveLength(2);
   });
 });

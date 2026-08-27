@@ -666,6 +666,11 @@ export interface RecordShippingCostInput {
    */
   source: "shippo" | "manual";
   changedBy?: string | null;
+  /**
+   * A HUMAN'S DELIBERATE OVERRIDE OF THE VOIDED-LABEL REFUSAL. Only honoured
+   * for source "manual" — see the refusal in recordActualShippingCost.
+   */
+  overrideVoidedLabel?: boolean;
 }
 
 /**
@@ -719,13 +724,28 @@ export async function recordActualShippingCost(input: RecordShippingCostInput): 
   // shippo_transaction_id — so everything the repair sweep needs to "re-record"
   // the refunded postage is still sitting on the row. The sweep now filters
   // voided orders out, but a pre-filter is a caller's promise, and this is the
-  // only place that actually charges profit. Refusing here means no caller,
-  // present or future, can re-charge a refunded label: not the sweep, not a
-  // replayed Shippo webhook, not an admin retry.
-  if (current?.label_voided_at) {
+  // only place that actually charges profit. Refusing here means no automated
+  // caller, present or future, can re-charge a refunded label: not the sweep,
+  // not a replayed Shippo webhook, not order-sync.
+  //
+  // A PERSON, HOWEVER, IS NOT AN AUTOMATED CALLER, AND THE REFUND CAN BE
+  // DECLINED. VoidedLabel.refundPending exists because a carrier void refund
+  // frequently settles later — and USPS can refuse it outright. When it is
+  // refused the store really did pay that postage, and a blanket refusal here
+  // left NO path to record it: not the sweep (it filters voided rows out), not
+  // the webhook (this refusal), not the admin screen (which surfaces this
+  // error as a 400). That contradicted the sweep's own instruction to "enter
+  // the cost by hand in Admin -> Orders". So a MANUAL entry may override, and
+  // only a manual one: source "shippo" can never set this flag meaningfully,
+  // so no automated path can re-charge by passing it.
+  const humanOverride = input.source === "manual" && input.overrideVoidedLabel === true;
+  if (current?.label_voided_at && !humanOverride) {
     return {
       ok: false,
-      error: "This order's label was voided and its postage refunded, so there is no shipping cost to record.",
+      error:
+        "This order's label was voided and its postage refunded, so there is no shipping cost to record. "
+        + "If the carrier DECLINED the refund and the postage was really paid, re-send this entry with "
+        + "overrideVoidedLabel to record it by hand.",
     };
   }
 

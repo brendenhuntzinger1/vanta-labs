@@ -63,6 +63,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       reason?: string;
       items?: Array<{ itemId?: string | number; quantity?: number }>;
       shippingCostAmount?: number;
+      /**
+       * Record postage on an order whose label was voided. Only ever set by a
+       * human who knows the carrier DECLINED the void refund — see the refusal
+       * in recordActualShippingCost.
+       */
+      overrideVoidedLabel?: boolean;
       /** Idempotency key for send_replacement — one per confirmation dialog. */
       requestId?: string;
     /** How the owner already sent the money: zelle | cashapp | other. */
@@ -705,11 +711,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         return NextResponse.json({ success: false, error: "Enter a shipping cost between $0 and $10,000." }, { status: 400 });
       }
 
+      // A voided label's postage is refused by default, because the automated
+      // paths must never re-charge a refund. A human who knows the carrier
+      // declined that refund can say so explicitly, and only explicitly.
+      const overrideVoidedLabel = body.overrideVoidedLabel === true;
       const result = await recordActualShippingCost({
         orderId,
         amountCents: Math.round(amount * 100),
         source: "manual",
         changedBy: session.username,
+        overrideVoidedLabel,
       });
       if (!result.ok) {
         return NextResponse.json({ success: false, error: result.error ?? "Unable to record shipping cost." }, { status: 400 });
@@ -723,6 +734,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
           target_id: orderId,
           metadata: {
             shippingCost: roundMoney(amount),
+            // An override charges profit for a label the system believes was
+            // refunded. It is a deliberate human act and the audit says so.
+            ...(overrideVoidedLabel ? { overrodeVoidedLabel: true } : {}),
             performedAt: now,
             performedBy: session.username,
             ipAddress,

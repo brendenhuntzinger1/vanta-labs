@@ -55,10 +55,20 @@ vi.mock("@/lib/supabase-server", async () => {
   return { supabaseAdmin: { from } };
 });
 
+// Set by a test that needs the money write to REFUSE, which it reports as a
+// return value rather than a throw.
+const costOutcome: { value: { ok: boolean; error?: string } } = { value: { ok: true } };
 vi.mock("@/lib/admin-profit", () => ({
   recordActualShippingCost: vi.fn(async (input: { orderId: string; amountCents: number; source: string }) => {
     state.costCalls.push(input);
-    return { ok: true };
+    return costOutcome.value;
+  }),
+}));
+
+const alerts: Array<{ type: string; severity: string; message: string }> = [];
+vi.mock("@/lib/monitoring", () => ({
+  recordSystemAlert: vi.fn(async (alert: { type: string; severity: string; message: string }) => {
+    alerts.push(alert);
   }),
 }));
 
@@ -99,6 +109,8 @@ function seed(overrides: Record<string, unknown> = {}) {
   state.updates = [];
   state.costCalls = [];
   transactionResponse.value = null;
+  costOutcome.value = { ok: true };
+  alerts.length = 0;
 }
 
 /** The label really cost $8.45. That number must survive to the order. */
@@ -207,5 +219,67 @@ describe("repeat deliveries of the same label", () => {
     await applyTransactionCreated(withStringRate as never);
     expect(state.order?.tracking_number).toBe("9400100000000000000000");
     expect(state.order?.shipping_carrier).toBe("USPS");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A REPLACEMENT LABEL BOUGHT IN THE DASHBOARD AFTER AN IN-APP VOID.
+//
+// voidLabelForOrder stamps label_voided_at and keeps it there. The in-app
+// re-buy clears it; this path did not. So the order kept a live label on a row
+// still marked voided — recordActualShippingCost refuses to cost such a row and
+// the repair sweep filters it out, which meant real postage was never charged
+// to profit and nothing anywhere said so, because the refusal is a RETURN
+// VALUE and the only handler here was a .catch().
+// ---------------------------------------------------------------------------
+describe("a replacement label after a void", () => {
+  it("clears label_voided_at, so the new label's cost can actually be recorded", async () => {
+    seed({
+      shippo_transaction_id: "shippo-txn-VOIDED",
+      label_voided_at: "2026-08-22T09:00:00Z",
+      fulfillment_status: "packed",
+    });
+
+    await applyTransactionCreated(withExpandedRate as never);
+
+    const written = Object.assign({}, ...state.updates) as Record<string, unknown>;
+    expect(written.shippo_transaction_id).toBe("shippo-txn-1");
+    expect(written.label_voided_at).toBeNull();
+    expect(state.costCalls).toHaveLength(1);
+    expect(state.costCalls[0]).toMatchObject({ amountCents: 845 });
+  });
+
+  it("does NOT un-void on a redelivery of the voided label's own event", async () => {
+    // Same object_id as the label that was voided. Un-voiding here would put
+    // the refunded postage straight back into profit.
+    seed({
+      shippo_transaction_id: "shippo-txn-1",
+      label_voided_at: "2026-08-22T09:00:00Z",
+      fulfillment_status: "packed",
+    });
+
+    await applyTransactionCreated(withExpandedRate as never);
+
+    const written = Object.assign({}, ...state.updates) as Record<string, unknown>;
+    expect("label_voided_at" in written).toBe(false);
+    expect(state.order?.label_voided_at).toBe("2026-08-22T09:00:00Z");
+  });
+
+  it("does not discard a refused cost write — it names the order in an alert", async () => {
+    seed({ shippo_transaction_id: "shippo-txn-1", label_voided_at: "2026-08-22T09:00:00Z" });
+    costOutcome.value = { ok: false, error: "This order's label was voided" };
+
+    await applyTransactionCreated(withExpandedRate as never);
+
+    expect(state.costCalls).toHaveLength(1);
+    const unrecorded = alerts.find((alert) => alert.type === "shipping_cost_unrecorded");
+    expect(unrecorded).toBeDefined();
+    expect(unrecorded!.message).toContain("ord-cost-1");
+  });
+
+  it("raises nothing when the cost is recorded normally", async () => {
+    seed();
+    await applyTransactionCreated(withExpandedRate as never);
+    expect(alerts).toHaveLength(0);
   });
 });

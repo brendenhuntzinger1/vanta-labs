@@ -2,7 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { reverseOrderPoints, restoreRedeemedPoints } from "@/lib/membership";
-import { refundStoreCreditForOrder } from "@/lib/store-credit";
+import { refundStoreCreditForOrder, isRefundableRedemption, startOfCurrentMonthIso } from "@/lib/store-credit";
 import { recordSystemAlert } from "@/lib/monitoring";
 
 /**
@@ -25,7 +25,23 @@ import { recordSystemAlert } from "@/lib/monitoring";
  */
 
 const DEFAULT_LOOKBACK_DAYS = 90;
+
+/**
+ * How many ORDERS WITH WORK TO DO one run takes on. This bounds the WRITES, not
+ * the reads — see collectRepairablePages for why that distinction is the whole
+ * design.
+ */
 const DEFAULT_LIMIT = 50;
+
+/** Rows read per page while scanning the window. */
+const SCAN_PAGE_SIZE = 200;
+
+/**
+ * A ceiling on rows READ per run, so the scan cost cannot grow without bound as
+ * the order table does. Sized far above any realistic count of refunded orders
+ * in a 90-day window; reaching it is reported, never silent.
+ */
+const MAX_SCAN_ROWS = 5000;
 
 export type RefundRepairEffect =
   | "refund_amount"
@@ -34,9 +50,17 @@ export type RefundRepairEffect =
   | "store_credit_refund";
 
 export interface RefundRepairResult {
+  /** Refunded orders READ from the window this run. */
   scanned: number;
+  /** Effects that actually wrote something. */
   repaired: number;
   failed: number;
+  /**
+   * The window held more rows than MAX_SCAN_ROWS, so this run did not see all
+   * of it. Surfaced rather than swallowed: it is the only condition under which
+   * the scan can fail to reach a row that needs repair.
+   */
+  scanTruncated?: boolean;
 }
 
 export interface RefundCandidate {
@@ -47,6 +71,21 @@ export interface RefundCandidate {
   points_redeemed: number | null;
   store_credit_redeemed_cents: number | null;
   amount_paid: number | null;
+  /**
+   * NULL for a guest order. Both points effects write to a USER's ledger, so
+   * with no user there is nothing either of them can ever do.
+   */
+  customer_user_id: string | null;
+}
+
+/** What the store-credit ledger says about one order, as the planner needs it. */
+export interface RefundLedgerFacts {
+  /**
+   * At least one recorded redemption on this order is still refundable — see
+   * isRefundableRedemption. Optional so a caller that only has the reason sets
+   * keeps working; when it is omitted the planner assumes refundable.
+   */
+  storeCreditRefundable?: boolean;
 }
 
 /**
@@ -60,9 +99,6 @@ export interface RefundCandidate {
  * update whose failure is swallowed. So the canonical "revenue was never
  * reduced" order — the exact order this sweep exists to repair — has
  * refunded_at IS NULL and was invisible to it.
- *
- * The scan stays bounded: NULL-refunded_at rows are still constrained by
- * payment_status, by the absence conditions each pass adds, and by `limit`.
  */
 function refundedWindow(since: string) {
   return `refunded_at.gte.${since},refunded_at.is.null`;
@@ -71,23 +107,33 @@ function refundedWindow(since: string) {
 /**
  * Which refund effects are still missing for one order.
  *
- * An effect is only planned when the order actually incurred it: an order that
- * earned no points needs no reversal, and planning one would call a function
- * that correctly does nothing, every sweep, forever.
+ * AN EFFECT IS ONLY PLANNED WHEN IT CAN ACTUALLY WRITE SOMETHING. This is not
+ * an optimisation, it is the convergence rule. Every one of the four repair
+ * functions returns quietly when there is nothing for it to do, so planning an
+ * effect that will do nothing produces a sweep that plans it again on the next
+ * tick, and the next, forever — while counting a "repair" each time. Three
+ * distinct shapes of that bug live here, and each is closed by a condition
+ * below:
  *
- * `refund_amount` additionally requires that money was actually taken
- * (`amount_paid > 0`). A legitimately $0 refund — a 100%-discount order
- * marked `refunded` with nothing ever paid — has no refund amount to record.
- * Without this guard, the condition "refund_amount is 0" is permanently true
- * for such an order (the guarded UPDATE would keep matching and rewriting
- * 0 -> 0), so it would be replanned and "repaired" on every sweep tick
- * forever: an unbounded stream of pointless writes and a `repaired` count
- * that no longer means "something was actually fixed".
+ *   - refund_amount   an order that took no money (`amount_paid <= 0`) has no
+ *                     refund amount to record. The guarded UPDATE would match
+ *                     0 -> 0 on every tick.
+ *   - points          both points effects write to a USER's ledger, and
+ *                     reverseOrderPoints / restoreRedeemedPoints return early
+ *                     when the order has no customer_user_id. A guest order can
+ *                     never have either applied.
+ *   - store credit    refundStoreCreditForOrder declines a redemption that has
+ *                     expired (spent in a prior month) and writes no row, so
+ *                     the "no membership_redemption_refund row" condition stays
+ *                     true forever.
+ *
+ * A repair that legitimately writes nothing is TERMINAL, not pending.
  */
 export function planRefundRepairs(
   order: RefundCandidate,
   pointsLedgerReasons: Set<string>,
   storeCreditReasons: Set<string>,
+  ledger?: RefundLedgerFacts,
 ): RefundRepairEffect[] {
   if (String(order.payment_status ?? "").toLowerCase() !== "refunded") return [];
 
@@ -95,19 +141,170 @@ export function planRefundRepairs(
   if (Number(order.amount_paid ?? 0) > 0 && Number(order.refund_amount ?? 0) <= 0) {
     planned.push("refund_amount");
   }
-  if (Number(order.points_earned ?? 0) > 0 && !pointsLedgerReasons.has("order_refund_reversal")) {
+  const hasAccount = Boolean(order.customer_user_id);
+  if (
+    hasAccount
+    && Number(order.points_earned ?? 0) > 0
+    && !pointsLedgerReasons.has("order_refund_reversal")
+  ) {
     planned.push("points_reversal");
   }
-  if (Number(order.points_redeemed ?? 0) > 0 && !pointsLedgerReasons.has("order_refund_points_restore")) {
+  if (
+    hasAccount
+    && Number(order.points_redeemed ?? 0) > 0
+    && !pointsLedgerReasons.has("order_refund_points_restore")
+  ) {
     planned.push("points_restore");
   }
   if (
     Number(order.store_credit_redeemed_cents ?? 0) > 0
+    && (ledger?.storeCreditRefundable ?? true)
     && !storeCreditReasons.has("membership_redemption_refund")
   ) {
     planned.push("store_credit_refund");
   }
   return planned;
+}
+
+// ONE STRING LITERAL, DELIBERATELY: postgrest-js infers the row type from the
+// literal, and a concatenated expression makes it give up and return
+// GenericStringError[].
+const COLUMNS =
+  "order_id, payment_status, refund_amount, points_earned, points_redeemed, store_credit_redeemed_cents, amount_paid, customer_user_id";
+
+/** Could this order need a ledger effect at all, before the ledgers are read? */
+function mayNeedLedgerEffect(order: RefundCandidate): boolean {
+  const points = Boolean(order.customer_user_id)
+    && (Number(order.points_earned ?? 0) > 0 || Number(order.points_redeemed ?? 0) > 0);
+  return points || Number(order.store_credit_redeemed_cents ?? 0) > 0;
+}
+
+function reasonsByOrder(rows: Array<{ order_id: unknown; reason: unknown }> | null) {
+  const map = new Map<string, Set<string>>();
+  for (const row of rows ?? []) {
+    const key = String(row.order_id);
+    if (!map.has(key)) map.set(key, new Set());
+    map.get(key)!.add(String(row.reason));
+  }
+  return map;
+}
+
+interface PlannedOrder {
+  order: RefundCandidate;
+  effects: RefundRepairEffect[];
+}
+
+/**
+ * WALK THE WINDOW UNTIL `limit` ORDERS THAT NEED WORK HAVE BEEN FOUND.
+ *
+ * WHY THIS IS NOT A SINGLE `.limit(n)` QUERY. Three of the four effects are
+ * proven missing by the ABSENCE OF A ROW IN ANOTHER TABLE (points_ledger,
+ * store_credit_ledger), and no predicate on `orders` can express that. The
+ * previous shape — select the oldest N refunded orders, then decide in
+ * JavaScript — made `limit` bound the rows READ rather than the rows to repair,
+ * and the two are not interchangeable: fifty already-correct refunded orders at
+ * the head of `ORDER BY updated_at ASC LIMIT 50` are returned again on every
+ * tick, plan nothing, and the fifty-first order — the one whose points reversal
+ * actually failed — is never selected. Not "eventually"; never. The narrowing
+ * that was supposed to prevent that (`points_earned.gt.0,...`) is not changed
+ * by any repair, so those rows never leave the set either.
+ *
+ * So the scan PAGES THROUGH THE WHOLE WINDOW and `limit` bounds the WRITES.
+ * A page that yields no work costs one read and is left behind; the walk
+ * continues until it has `limit` orders to repair, the window is exhausted, or
+ * MAX_SCAN_ROWS is reached. Every row in the window is therefore reachable
+ * within a single run, whatever sits in front of it.
+ *
+ * ORDERED BY updated_at, THEN order_id. Oldest neglect first, and the tiebreak
+ * makes the page boundaries deterministic, so offset paging cannot skip or
+ * repeat a row within a run. Candidates are collected BEFORE any repair runs,
+ * so this run's own writes cannot shuffle the rows underneath its own scan.
+ *
+ * A CONCURRENT run can still move a row across a page boundary and cost this
+ * run sight of it. That is a missed tick, not a missed repair: the row still
+ * has its absence, and the next scan finds it. Nothing here is a claim, so two
+ * runs never fight over one — every repair below is either a compare-and-set or
+ * an insert guarded by an existing-row check.
+ */
+async function collectRepairablePages(input: {
+  since: string;
+  limit: number;
+  monthStart: string;
+}): Promise<{ planned: PlannedOrder[]; scanned: number; truncated: boolean }> {
+  const planned: PlannedOrder[] = [];
+  let scanned = 0;
+  let offset = 0;
+  let truncated = false;
+
+  while (true) {
+    const { data, error } = await supabaseAdmin
+      .from("orders")
+      .select(COLUMNS)
+      .eq("payment_status", "refunded")
+      .or(refundedWindow(input.since))
+      .order("updated_at", { ascending: true })
+      .order("order_id", { ascending: true })
+      .range(offset, offset + SCAN_PAGE_SIZE - 1);
+
+    // A sweep that cannot read is not a sweep that found nothing.
+    if (error) throw error;
+
+    const page = (data ?? []) as RefundCandidate[];
+    scanned += page.length;
+
+    // The ledgers are read once per page, and only for the orders on it that
+    // could need a ledger effect at all.
+    const needLedger = page.filter(mayNeedLedgerEffect).map((order) => order.order_id);
+    let pointsByOrder = new Map<string, Set<string>>();
+    let creditByOrder = new Map<string, Set<string>>();
+    let refundableCredit = new Set<string>();
+    if (needLedger.length > 0) {
+      const [points, credit] = await Promise.all([
+        supabaseAdmin.from("points_ledger").select("order_id, reason").in("order_id", needLedger),
+        supabaseAdmin
+          .from("store_credit_ledger")
+          .select("order_id, reason, amount_cents, created_at")
+          .in("order_id", needLedger),
+      ]);
+      if (points.error) throw points.error;
+      if (credit.error) throw credit.error;
+
+      pointsByOrder = reasonsByOrder(points.data as Array<{ order_id: unknown; reason: unknown }>);
+      const creditRows = (credit.data ?? []) as Array<Record<string, unknown>>;
+      creditByOrder = reasonsByOrder(creditRows as Array<{ order_id: unknown; reason: unknown }>);
+      refundableCredit = new Set(
+        creditRows
+          .filter(
+            (row) =>
+              String(row.reason) === "membership_redemption"
+              && isRefundableRedemption(row, input.monthStart),
+          )
+          .map((row) => String(row.order_id)),
+      );
+    }
+
+    for (const order of page) {
+      const effects = planRefundRepairs(
+        order,
+        pointsByOrder.get(order.order_id) ?? new Set(),
+        creditByOrder.get(order.order_id) ?? new Set(),
+        { storeCreditRefundable: refundableCredit.has(order.order_id) },
+      );
+      if (effects.length === 0) continue;
+      planned.push({ order, effects });
+      if (planned.length >= input.limit) return { planned, scanned, truncated };
+    }
+
+    // A short page is the end of the window.
+    if (page.length < SCAN_PAGE_SIZE) break;
+    offset += SCAN_PAGE_SIZE;
+    if (offset >= MAX_SCAN_ROWS) {
+      truncated = true;
+      break;
+    }
+  }
+
+  return { planned, scanned, truncated };
 }
 
 export async function repairIncompleteRefunds(options?: {
@@ -122,97 +319,25 @@ export async function repairIncompleteRefunds(options?: {
 
   const result: RefundRepairResult = { scanned: 0, repaired: 0, failed: 0 };
 
-  const COLUMNS =
-    "order_id, payment_status, refund_amount, points_earned, points_redeemed, store_credit_redeemed_cents, amount_paid";
-
-  // ABSENCE BELONGS IN THE QUERY. Selecting the oldest N refunded orders and
-  // THEN filtering in JavaScript meant `limit` bounded the rows SCANNED, not
-  // the rows to repair: once the oldest N were fixed, every later tick re-read
-  // those same N, found nothing to do, and never reached the orders behind
-  // them. Each pass below carries its own absence condition, so `limit` bounds
-  // CANDIDATES.
-  //
-  // ORDER ON A COLUMN THAT IS ALWAYS PRESENT. Paginating on refunded_at cannot
-  // work now that NULL-refunded_at rows are in scope — NULLs sort to one end
-  // and the window would never move past them. updated_at is written by every
-  // path that touches an order, including the refund_amount repair below, so a
-  // repaired order moves to the BACK of the queue as well as out of pass A's
-  // filter.
-  //
-  // TWO PASSES, because the four effects are not detectable the same way.
-  // refund_amount lives on the order and can be tested in SQL. The other three
-  // are proven ABSENT by a missing ledger row in another table, which no
-  // orders-table predicate can express — the closest available narrowing is
-  // "this order actually incurred points or store credit at all". Running both
-  // and de-duplicating keeps the primary case self-advancing without dropping
-  // coverage of the other three.
-  const [primary, ledgerEffects] = await Promise.all([
-    // Pass A — revenue was never reduced. Self-advancing: the repair changes
-    // the very column this filter tests, so a fixed order leaves the set.
-    supabaseAdmin
-      .from("orders")
-      .select(COLUMNS)
-      .eq("payment_status", "refunded")
-      .or(refundedWindow(since))
-      .or("refund_amount.is.null,refund_amount.eq.0")
-      .order("updated_at", { ascending: true })
-      .limit(limit),
-    // Pass B — points and store credit. Only orders that actually earned,
-    // redeemed or spent something can need one of these.
-    supabaseAdmin
-      .from("orders")
-      .select(COLUMNS)
-      .eq("payment_status", "refunded")
-      .or(refundedWindow(since))
-      .or("points_earned.gt.0,points_redeemed.gt.0,store_credit_redeemed_cents.gt.0")
-      .order("updated_at", { ascending: true })
-      .limit(limit),
-  ]);
-
-  if (primary.error) throw primary.error;
-  if (ledgerEffects.error) throw ledgerEffects.error;
-
-  const byId = new Map<string, RefundCandidate>();
-  for (const row of [...(primary.data ?? []), ...(ledgerEffects.data ?? [])] as RefundCandidate[]) {
-    if (!byId.has(row.order_id)) byId.set(row.order_id, row);
-  }
-  const candidates = [...byId.values()];
-  result.scanned = candidates.length;
-  if (candidates.length === 0) return result;
-
-  const orderIds = candidates.map((order) => order.order_id);
-
-  const [{ data: pointsRows, error: pointsError }, { data: creditRows, error: creditError }] =
-    await Promise.all([
-      supabaseAdmin.from("points_ledger").select("order_id, reason").in("order_id", orderIds),
-      supabaseAdmin.from("store_credit_ledger").select("order_id, reason").in("order_id", orderIds),
-    ]);
-  if (pointsError) throw pointsError;
-  if (creditError) throw creditError;
-
-  const reasonsByOrder = (rows: Array<{ order_id: unknown; reason: unknown }> | null) => {
-    const map = new Map<string, Set<string>>();
-    for (const row of rows ?? []) {
-      const key = String(row.order_id);
-      if (!map.has(key)) map.set(key, new Set());
-      map.get(key)!.add(String(row.reason));
-    }
-    return map;
-  };
-  const pointsByOrder = reasonsByOrder(pointsRows as Array<{ order_id: unknown; reason: unknown }>);
-  const creditByOrder = reasonsByOrder(creditRows as Array<{ order_id: unknown; reason: unknown }>);
+  const { planned, scanned, truncated } = await collectRepairablePages({
+    since,
+    limit,
+    monthStart: startOfCurrentMonthIso(now),
+  });
+  result.scanned = scanned;
+  if (truncated) result.scanTruncated = true;
+  if (planned.length === 0) return result;
 
   const failures: Array<{ orderId: string; effect: string; error: string }> = [];
 
-  for (const order of candidates) {
-    const planned = planRefundRepairs(
-      order,
-      pointsByOrder.get(order.order_id) ?? new Set(),
-      creditByOrder.get(order.order_id) ?? new Set(),
-    );
-
-    for (const effect of planned) {
+  for (const { order, effects } of planned) {
+    for (const effect of effects) {
       try {
+        // WROTE SOMETHING, OR DID NOT. Each branch reports whether it actually
+        // changed anything, and only a real write counts as a repair — a
+        // `repaired` count that includes no-ops is what made the last storm
+        // look like progress.
+        let wrote: boolean;
         if (effect === "refund_amount") {
           // A refunded order with refund_amount 0 never had the reversal
           // recorded, so revenue was never reduced. The refunded amount is what
@@ -232,12 +357,12 @@ export async function repairIncompleteRefunds(options?: {
           // anyway — the order was replanned and "repaired" on every tick
           // forever. Same hazard, same handling as the admin reimbursement
           // route (src/app/api/admin/orders/[orderId]/route.ts).
-          const now = new Date().toISOString();
+          const writtenAt = new Date().toISOString();
           const claim = supabaseAdmin
             .from("orders")
             .update({
               refund_amount: Number(order.amount_paid ?? 0),
-              updated_at: now,
+              updated_at: writtenAt,
             })
             .eq("order_id", order.order_id);
           const { data: claimed, error: updateError } = await (order.refund_amount == null
@@ -248,15 +373,15 @@ export async function repairIncompleteRefunds(options?: {
           // Nothing matched: another writer got there first, or the row moved
           // under us. That is not a repair, and counting it as one is what
           // made the storm self-sustaining.
-          if (!claimed || claimed.length === 0) continue;
+          wrote = Boolean(claimed && claimed.length > 0);
         } else if (effect === "points_reversal") {
-          await reverseOrderPoints(order.order_id);
+          wrote = await reverseOrderPoints(order.order_id);
         } else if (effect === "points_restore") {
-          await restoreRedeemedPoints(order.order_id);
+          wrote = await restoreRedeemedPoints(order.order_id);
         } else {
-          await refundStoreCreditForOrder(order.order_id);
+          wrote = await refundStoreCreditForOrder(order.order_id);
         }
-        result.repaired += 1;
+        if (wrote) result.repaired += 1;
       } catch (repairError) {
         result.failed += 1;
         failures.push({

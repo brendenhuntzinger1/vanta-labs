@@ -317,6 +317,14 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
       ? await supabaseAdmin
           .from("product_doses")
           .select("product_id, track_inventory, inventory_quantity, price_cents, sale_price_cents, product_cost_cents")
+          // ONLY THE DOSES A CUSTOMER CAN ACTUALLY BUY. The storefront reads
+          // doses with `.eq("is_enabled", true)` (catalog.ts), so a retired
+          // dose left in the table is not sellable — and every check below is
+          // about what happens at checkout. Without this, a disabled dose whose
+          // price and cost were swapped years ago put "Published products can
+          // be sold at a profit" into a launch-blocking error and told the
+          // operator that checkout refuses carts it in fact accepts.
+          .eq("is_enabled", true)
           .in("product_id", rows.map((row) => row.id))
       : { data: [] };
     const dosesByProduct = new Map<string, DoseRow[]>();

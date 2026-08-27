@@ -1196,12 +1196,25 @@ export async function finalizeManualPayment(
       }
     }
 
+    // REDEEMING POINTS AND EARNING THEM ARE OPPOSITE MONEY DIRECTIONS, SO THEY
+    // GET SEPARATE CATCHES AND SEPARATE ALERT TYPES. A failed redemption means
+    // the customer kept the points AND took the discount (the store is short);
+    // a failed earn means the customer is owed points. Sharing one try/catch
+    // reported both as `points_earn` and sent the operator to the wrong repair
+    // — the same defect already fixed for store credit. Separating them also
+    // stops a redemption failure from silently cancelling the earn.
     try {
       const pointsRedeemed = Number(order.points_redeemed ?? 0);
       if (pointsRedeemed > 0) {
         await redeemPoints(customerUserId, pointsRedeemed, orderId);
       }
+    } catch (redeemError) {
+      console.error("Unable to redeem loyalty points for manual order", orderId, redeemError);
+      await recordSystemAlert(unsafeEffectAlert("points_redemption", orderId, redeemError))
+        .catch(() => {});
+    }
 
+    try {
       const pointsRate = await getActivePointsPerDollar(customerUserId);
       const { multiplier } = await getActivePointsMultiplier();
       const pointsEarned = calculateEarnedPoints(commissionableSubtotal, pointsRate, multiplier);
@@ -1751,12 +1764,19 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           }
         }
 
+        // Separate catches, separate alert types: see the manual lane above.
         try {
           const pointsRedeemed = Number(orderRecord?.points_redeemed ?? eventPayload.pointsRedeemed ?? 0);
           if (pointsRedeemed > 0) {
             await redeemPoints(customerUserId, pointsRedeemed, orderId);
           }
+        } catch (redeemError) {
+          console.error("Unable to redeem loyalty points for order", orderId, redeemError);
+          await recordSystemAlert(unsafeEffectAlert("points_redemption", orderId, redeemError))
+            .catch(() => {});
+        }
 
+        try {
           const pointsRate = await getActivePointsPerDollar(customerUserId);
           const { multiplier } = await getActivePointsMultiplier();
           const pointsEarned = calculateEarnedPoints(commissionableSubtotal, pointsRate, multiplier);

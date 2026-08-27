@@ -405,7 +405,13 @@ export async function redeemPoints(userId: string, points: number, orderId: stri
 // balance can go negative if they already redeemed those points elsewhere -
 // same tradeoff most lightweight loyalty programs accept rather than
 // blocking redemption entirely.
-export async function reverseOrderPoints(orderId: string) {
+/**
+ * RETURNS WHETHER A REVERSAL ROW WAS ACTUALLY WRITTEN. An order with no
+ * customer_user_id (a guest checkout) can never have points reversed — there is
+ * no account to debit — so this returns early, and a caller that counted that
+ * as a repair would report one every time it ran.
+ */
+export async function reverseOrderPoints(orderId: string): Promise<boolean> {
   const { data: order, error } = await supabaseAdmin
     .from("orders")
     .select("customer_user_id, points_earned")
@@ -418,7 +424,7 @@ export async function reverseOrderPoints(orderId: string) {
 
   const pointsEarned = Number(order?.points_earned ?? 0);
   if (!order?.customer_user_id || pointsEarned <= 0) {
-    return;
+    return false;
   }
 
   // Idempotent: a repeated refund/chargeback event for the same order (distinct
@@ -433,7 +439,7 @@ export async function reverseOrderPoints(orderId: string) {
     .maybeSingle();
 
   if (existing) {
-    return;
+    return false;
   }
 
   await recordPointsLedgerEntry({
@@ -442,13 +448,16 @@ export async function reverseOrderPoints(orderId: string) {
     reason: "order_refund_reversal",
     orderId,
   });
+  return true;
 }
 
 // Re-credits the loyalty points a customer SPENT on an order (orders.points_redeemed)
 // when that order is fully refunded. Without this, a refunded customer loses the
 // points they redeemed for a discount even though the discount is being undone.
 // Idempotent: a second refund call for the same order will not double-credit.
-export async function restoreRedeemedPoints(orderId: string) {
+// Returns whether a restore row was actually written — a guest order with no
+// customer_user_id has no account to credit and never will have.
+export async function restoreRedeemedPoints(orderId: string): Promise<boolean> {
   const { data: order, error } = await supabaseAdmin
     .from("orders")
     .select("customer_user_id, points_redeemed")
@@ -461,7 +470,7 @@ export async function restoreRedeemedPoints(orderId: string) {
 
   const pointsRedeemed = Number(order?.points_redeemed ?? 0);
   if (!order?.customer_user_id || pointsRedeemed <= 0) {
-    return;
+    return false;
   }
 
   const { data: existing } = await supabaseAdmin
@@ -472,7 +481,7 @@ export async function restoreRedeemedPoints(orderId: string) {
     .maybeSingle();
 
   if (existing) {
-    return;
+    return false;
   }
 
   await recordPointsLedgerEntry({
@@ -481,6 +490,7 @@ export async function restoreRedeemedPoints(orderId: string) {
     reason: "order_refund_points_restore",
     orderId,
   });
+  return true;
 }
 
 export async function getReferralEarnedPoints(userId: string): Promise<number> {

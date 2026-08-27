@@ -91,9 +91,12 @@ describe("published product data", () => {
       product_cost_cents: 1200, track_inventory: false, inventory_quantity: null,
       is_published: true, is_enabled: true, is_archived: false,
     }]);
+    // is_enabled mirrors the column's NOT NULL DEFAULT TRUE: the status screen
+    // reads the doses a customer can actually buy, exactly as the storefront
+    // does, so a dose row must say whether it is one of them.
     harness.db.seed("product_doses", [
-      { id: "d-1", product_id: "p-dosed", label: "5mg", track_inventory: true, inventory_quantity: 12 },
-      { id: "d-2", product_id: "p-dosed", label: "10mg", track_inventory: true, inventory_quantity: 4 },
+      { id: "d-1", product_id: "p-dosed", label: "5mg", is_enabled: true, track_inventory: true, inventory_quantity: 12 },
+      { id: "d-2", product_id: "p-dosed", label: "10mg", is_enabled: true, track_inventory: true, inventory_quantity: 4 },
     ]);
 
     const row = check(await status(), "product_inventory_data");
@@ -121,7 +124,7 @@ describe("published product data", () => {
       is_published: true, is_enabled: true, is_archived: false,
     }]);
     harness.db.seed("product_doses", [
-      { id: "d-3", product_id: "p-loose", label: "5mg", track_inventory: false, inventory_quantity: 0 },
+      { id: "d-3", product_id: "p-loose", label: "5mg", is_enabled: true, track_inventory: false, inventory_quantity: 0 },
     ]);
 
     const row = check(await status(), "product_inventory_data");

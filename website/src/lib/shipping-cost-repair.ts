@@ -163,9 +163,9 @@ export async function repairMissingShippingCosts(options?: {
     });
   }
 
-  if (manual.length > 0) {
+  if (manual.length > 0 && await manualEntryStateChanged(manual)) {
     await recordSystemAlert({
-      type: "shipping_cost_manual_entry_required",
+      type: MANUAL_ENTRY_ALERT,
       severity: "warning",
       message:
         `${manual.length} order(s) have a label whose postage cannot be read back from Shippo. `
@@ -179,19 +179,75 @@ export async function repairMissingShippingCosts(options?: {
   return result;
 }
 
+const MANUAL_ENTRY_ALERT = "shipping_cost_manual_entry_required";
+
 /**
- * What this label actually cost, in cents.
+ * Has the manual-entry backlog CHANGED since the last time it was reported?
  *
- * PREFER THE COST WE ALREADY HOLD. postage_cost_cents is written from the same
- * Shippo rate the moment a label lands (purchaseLabel, and order-sync for a
- * label adopted from the dashboard), so when it is present it is the answer —
- * no network call, and nothing to go wrong. Shippo is only consulted when the
- * order carries no figure at all.
+ * This alert describes a STANDING CONDITION, not an event: an order whose
+ * postage cannot be read back from Shippo stays that way until a human types
+ * the figure in. recordSystemAlert has no dedup of any kind, so re-reporting it
+ * on every tick wrote a `system_alerts` row every thirty minutes, forever, for
+ * a state the sweep itself calls working-as-designed — roughly 48 rows a day
+ * burying the alerts that ARE events.
+ *
+ * The row is still written the moment the backlog changes: a new order joining
+ * it, or the count moving. So nothing new goes unreported, and an operator
+ * looking at admin still sees the standing condition — once.
+ *
+ * Best-effort by design. If the check cannot be made, the alert is raised: a
+ * missed alert is worse than a duplicate one.
+ */
+async function manualEntryStateChanged(manual: Array<{ orderId: string }>): Promise<boolean> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("system_alerts")
+      .select("context, resolved_at, created_at")
+      .eq("type", MANUAL_ENTRY_ALERT)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error) return true;
+
+    const latest = (data ?? [])[0] as
+      | { context?: { orders?: Array<{ orderId?: unknown }>; total?: unknown } | null; resolved_at?: string | null }
+      | undefined;
+    // Never reported, or reported and cleared by a human: report it again.
+    if (!latest || latest.resolved_at) return true;
+
+    // The stored list is capped at 25 entries, so the COUNT is what carries the
+    // rest of it. Either moving means the backlog is not the one already on
+    // file.
+    if (Number(latest.context?.total ?? -1) !== manual.length) return true;
+    const reported = new Set((latest.context?.orders ?? []).map((row) => String(row.orderId)));
+    return manual.slice(0, 25).some((entry) => !reported.has(entry.orderId));
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * What this label actually cost, in cents — or nothing, if it is not a label
+ * the store still owes money for.
+ *
+ * ASK WHETHER THE LABEL IS STILL LIVE BEFORE DECIDING WHAT IT COST. The status
+ * check below used to sit AFTER a short-circuit that returned
+ * postage_cost_cents without ever contacting Shippo, which made it unreachable
+ * for every order the app or order-sync had bought a label for — precisely the
+ * orders that HAVE a postage figure. Its own comment claimed it was "the only
+ * place that catches" a void raised outside this app, and it caught none of
+ * them: an order with postage_cost_cents = 742 whose label was voided in the
+ * Shippo dashboard (so label_voided_at is NULL here) had that refunded postage
+ * charged straight to profit on the next tick. The lookup is a GET on an
+ * existing transaction, it cannot buy anything, and this sweep only ever runs
+ * for orders with no recorded cost — a rare row — so the round-trip is worth
+ * what it proves.
+ *
+ * THE HELD FIGURE IS STILL THE AMOUNT. postage_cost_cents is written from the
+ * same Shippo rate the moment a label lands, so once the label is confirmed
+ * live there is no reason to re-parse the rate — which is also the shape that
+ * cannot be read back for a dashboard label with a bare rate reference.
  */
 async function resolveSettledCents(order: ShippingCostCandidate): Promise<number> {
-  const held = Number(order.postage_cost_cents ?? 0);
-  if (order.postage_cost_cents != null && held > 0) return held;
-
   const transaction = await getTransaction(String(order.shippo_transaction_id));
   if (!transaction.ok) {
     throw new Error(transaction.message ?? "Shippo transaction lookup failed");
@@ -208,6 +264,9 @@ async function resolveSettledCents(order: ShippingCostCandidate): Promise<number
       `Shippo reports this transaction as ${status || "an unknown status"}, not SUCCESS — no postage to record`,
     );
   }
+
+  const held = Number(order.postage_cost_cents ?? 0);
+  if (order.postage_cost_cents != null && held > 0) return held;
 
   // getTransaction returns the RAW Shippo transaction, whose postage lives on
   // `rate`. It is NOT the parsed label object purchaseLabel builds, so there is

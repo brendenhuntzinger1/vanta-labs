@@ -48,7 +48,9 @@ const state: {
   history: Record<string, unknown>[];
 } = { orders: [], updatedOrderIds: [], updates: [], history: [] };
 
-const recordActualShippingCost = vi.fn(async () => {});
+// Returns the real shape: recordActualShippingCost reports a refusal as
+// { ok: false } rather than throwing, and applyTransactionCreated now reads it.
+const recordActualShippingCost = vi.fn(async () => ({ ok: true as const }));
 vi.mock("@/lib/admin-profit", () => ({ recordActualShippingCost }));
 vi.mock("server-only", () => ({}));
 

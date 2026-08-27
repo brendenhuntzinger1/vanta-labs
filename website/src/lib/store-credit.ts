@@ -122,9 +122,39 @@ export async function redeemStoreCredit(userId: string, amountCents: number, ord
   }
 }
 
-// Reverses a redemption if an order is refunded, returning the credit to the
-// buyer (only if still within the same month it was spent).
-export async function refundStoreCreditForOrder(orderId: string): Promise<void> {
+/**
+ * Is this recorded redemption one a refund can actually return?
+ *
+ * Store credit is use-it-or-lose-it, so credit spent in a PRIOR month has
+ * already expired and returning it would hand back money that is no longer
+ * valid. A zero-value row has nothing to return either.
+ *
+ * EXPORTED BECAUSE THE REFUND SWEEP HAS TO ASK THE SAME QUESTION. An order
+ * whose only redemption is expired is one this function will correctly decline
+ * to refund — forever. A caller that selects work by "store_credit_redeemed_cents
+ * > 0 and no refund row exists" would therefore replan that order on every tick
+ * and count a repair that wrote nothing. One rule, one place, both readers.
+ */
+export function isRefundableRedemption(
+  row: { amount_cents?: unknown; created_at?: unknown },
+  monthStartIso: string,
+): boolean {
+  return (
+    Math.abs(Number(row.amount_cents ?? 0)) > 0
+    && String(row.created_at ?? "") >= monthStartIso
+  );
+}
+
+/**
+ * Reverses a redemption if an order is refunded, returning the credit to the
+ * buyer (only if still within the same month it was spent).
+ *
+ * RETURNS WHETHER IT ACTUALLY RETURNED ANYTHING. "Refund considered and
+ * declined" (expired credit, no redemption on file, already refunded) is not
+ * the same event as "credit returned", and a caller that treats the two alike
+ * reports repairs that never happened.
+ */
+export async function refundStoreCreditForOrder(orderId: string): Promise<boolean> {
   const { data, error } = await supabaseAdmin
     .from("store_credit_ledger")
     .select("user_id, amount_cents, created_at")
@@ -132,7 +162,7 @@ export async function refundStoreCreditForOrder(orderId: string): Promise<void> 
     .eq("reason", "membership_redemption");
 
   if (error) {
-    if (String(error.code) === "42P01") return;
+    if (String(error.code) === "42P01") return false;
     throw error;
   }
 
@@ -147,23 +177,23 @@ export async function refundStoreCreditForOrder(orderId: string): Promise<void> 
     .limit(1);
 
   if (alreadyRefunded && alreadyRefunded.length > 0) {
-    return;
+    return false;
   }
 
   const monthStart = startOfCurrentMonthIso();
+  let returnedAny = false;
   for (const row of data ?? []) {
-    const returned = Math.abs(Number(row.amount_cents ?? 0));
-    if (returned <= 0) continue;
-    // Only re-credit if the credit was spent in the CURRENT month — credit
-    // spent in a prior month has already expired, so refunding it would hand
-    // back money that was no longer valid.
-    if (String(row.created_at ?? "") < monthStart) continue;
+    // Only re-credit a redemption that is still refundable — see
+    // isRefundableRedemption.
+    if (!isRefundableRedemption(row, monthStart)) continue;
     await supabaseAdmin.from("store_credit_ledger").insert({
       user_id: String(row.user_id),
-      amount_cents: returned,
+      amount_cents: Math.abs(Number(row.amount_cents ?? 0)),
       reason: "membership_redemption_refund",
       order_id: orderId,
       created_at: new Date().toISOString(),
     });
+    returnedAny = true;
   }
+  return returnedAny;
 }
