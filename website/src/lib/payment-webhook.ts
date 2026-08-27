@@ -720,7 +720,7 @@ async function ensureCommissionRecord(input: {
   const commissionableSubtotal = roundMoney(input.commissionableSubtotal ?? 0);
   const qualifyingSubtotal = roundMoney(input.qualifyingSubtotal ?? commissionableSubtotal);
 
-  const [ambassadorSettings, referralProgram, fraudSignal, ambassadorRow] = await Promise.all([
+  const [ambassadorSettings, referralProgram, fraudSignal, ambassadorRow, partnerRow] = await Promise.all([
     getAmbassadorProgramSettings(),
     getReferralProgramConfig(),
     detectCommissionFraudSignal({
@@ -732,6 +732,9 @@ async function ensureCommissionRecord(input: {
       postalCode: input.postalCode,
     }),
     supabaseAdmin.from("ambassadors").select("status, customer_discount_percent").eq("id", input.ambassadorId).maybeSingle(),
+    // See the guard below: this is the ONLY thing standing between the two
+    // ledger writes and a permanently half-recorded obligation.
+    supabaseAdmin.from("partners").select("id").eq("id", input.ambassadorId).maybeSingle(),
   ]);
 
   // A COMMISSION WRITTEN AT $0 BECAUSE A READ FAILED IS PERMANENT.
@@ -745,6 +748,42 @@ async function ensureCommissionRecord(input: {
   // the sweep counts `failed` and alerts, and the absence is still there to
   // repair on the next tick.
   if (ambassadorRow.error) throw ambassadorRow.error;
+
+  // THE TWO LEDGER WRITES BELOW ARE NOT IN A TRANSACTION, SO CHECK FIRST.
+  //
+  // This function writes referral_orders (what the payout reads) and then
+  // upserts commissions (what the profit report reads), as two separate
+  // statements. The value it hands to `commissions.partner_id` is
+  // `orders.ambassador_id`, but in production that column is
+  //
+  //     partner_id uuid not null references partners(id) on delete cascade
+  //
+  // so an ambassador with no matching `partners` row makes the mirror upsert
+  // raise 23503 AFTER the referral_orders row has already committed. The
+  // ambassador is then paid from the ledger while the commission expense is
+  // invisible to profit forever: the repair sweep keys on the ledger row's
+  // ABSENCE, and this function returns early once a row is past `pending`, so
+  // nothing revisits it.
+  //
+  // This is LATENT, not live — every one of the nine live ambassadors has a
+  // matching partners row today (verified read-only against production). It
+  // becomes live the moment a partners row is deleted (ON DELETE CASCADE
+  // removes the commissions but NOT the referral_orders rows or the order's
+  // ambassador_id) or an ambassador is created without its partner mirror.
+  //
+  // Identity is deliberately NOT restructured here. The fix is to fail BEFORE
+  // the first write, loudly and recoverably: nothing is written, so the
+  // absence the repair sweep keys on is still there, the sweep counts `failed`
+  // and raises the critical alert, and the backlog clears itself the moment the
+  // partners row exists.
+  if (partnerRow.error) throw partnerRow.error;
+  if (!partnerRow.data) {
+    throw new Error(
+      `Commission accrual refused for order ${input.orderId}: ambassador ${input.ambassadorId} has no partners row, `
+      + "so commissions.partner_id (not null references partners(id)) would reject the mirror after the "
+      + "referral_orders row had already committed. Create the partners row and the repair sweep will accrue it.",
+    );
+  }
 
   // Fall back to the admin's default commission rate (Control Center) when the
   // order/ambassador carries no explicit rate, instead of a hardcoded number.

@@ -79,10 +79,23 @@ const BUYER: Shopper = {
 const AMBASSADOR_ID = "amb-0001";
 const CODE = "VANTATEST";
 
-/** Put an ambassador in the database at a given status. */
+/**
+ * Put an ambassador in the database at a given status.
+ *
+ * BOTH TABLES, because production has both: `ambassadors` and `partners` are
+ * mirrors keyed by the same id (verified read-only against live Postgres — 9
+ * ambassadors, 9 partners, 0 ambassadors without a partners row). The mirror
+ * matters to money: `commissions.partner_id` is
+ * `not null references partners(id)`, so seeding only `ambassadors` describes a
+ * database that cannot exist and would let a commission accrue that production
+ * would refuse.
+ */
 function seedAmbassador(status: string) {
   harness.db.seed("ambassadors", [
     { id: AMBASSADOR_ID, status, customer_discount_percent: null, referral_code: CODE },
+  ]);
+  harness.db.seed("partners", [
+    { id: AMBASSADOR_ID, status, name: "Ambassador", email: "ambassador@example.test", referral_code: CODE },
   ]);
 }
 
@@ -184,15 +197,44 @@ describe("a commission only accrues when the ambassador and the program are live
     });
   }
 
-  it("an ambassador who vanishes from the table entirely earns NOTHING", async () => {
-    // No seedAmbassador call: the row is missing, not merely inactive.
+  it("an ambassador who vanishes from the table entirely earns NOTHING — and NOTHING IS WRITTEN", async () => {
+    // No seedAmbassador call: both mirror rows are missing, not merely inactive.
+    //
+    // This used to write a $0 `ineligible_reason: "Ambassador is not active."`
+    // row into referral_orders and then attempt the commissions mirror with
+    // `partner_id = <a partner that does not exist>`. In production that upsert
+    // raises 23503 AFTER the ledger row has committed, and nothing ever
+    // reconciles the two: the repair sweep keys on the ledger row's ABSENCE,
+    // which the half-written row has just destroyed.
+    //
+    // ensureCommissionRecord now refuses BEFORE its first write. Nothing is
+    // recorded, the order stays visible to the repair sweep, and the sweep
+    // raises its critical alert every tick until a human restores the partners
+    // row or clears the order's attribution. Loud and recoverable, rather than
+    // quiet and permanent.
     const { orderId, total } = await paidReferredOrder();
+    // The webhook still settles the payment: accrual failures are caught and
+    // logged there (payment-webhook.ts) precisely so a commission problem can
+    // never cost the shopper their order.
     expect(await payWebhook(orderId, "evt-missing", total)).toBe(200);
 
-    const row = commissionRow();
-    expect(row).not.toBeNull();
-    expect(Number(row!.commission_amount)).toBe(0);
-    expect(String(row!.ineligible_reason)).toMatch(/not active/i);
+    expect(commissionRow()).toBeNull();
+    expect((harness.db.tables.get("commissions") ?? []).length).toBe(0);
+  });
+
+  it("an ambassador present in `ambassadors` but MISSING from `partners` writes nothing either", async () => {
+    // The latent identity split, stated on its own: the accrual reads
+    // eligibility from `ambassadors` but the commissions mirror is FK'd to
+    // `partners`. Seed only the first and the two ledgers cannot both be
+    // written, so neither is.
+    harness.db.seed("ambassadors", [
+      { id: AMBASSADOR_ID, status: "approved", customer_discount_percent: null, referral_code: CODE },
+    ]);
+    const { orderId, total } = await paidReferredOrder();
+    expect(await payWebhook(orderId, "evt-no-partner", total)).toBe(200);
+
+    expect(commissionRow()).toBeNull();
+    expect((harness.db.tables.get("commissions") ?? []).length).toBe(0);
   });
 
   it("PAUSED commissions earn NOTHING even for an approved ambassador", async () => {
