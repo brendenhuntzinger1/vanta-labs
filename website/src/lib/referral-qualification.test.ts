@@ -116,6 +116,7 @@ describe("referralStatusLine", () => {
       amountToQualify: 0,
       minimumOrder: 100,
       formatCurrency: money,
+      referralDiscountApplied: true,
     })).toBe("Xavier Martinez · 15% customer discount");
   });
 
@@ -204,6 +205,7 @@ describe("referralStatusLine with a code that gives the customer nothing", () =>
     expect(referralStatusLine({
       ambassadorName: "Sara Chen", discountPercent: 15, meetsMinimum: true,
       amountToQualify: 0, minimumOrder: 100, formatCurrency: money,
+      referralDiscountApplied: true,
     })).toBe("Sara Chen · 15% customer discount");
   });
 });
@@ -213,20 +215,39 @@ describe("referralStatusLine — the other reasons a code gives nothing", () => 
   const money = (n: number) => `$${n.toFixed(2)}`;
   const base = { ambassadorName: "Jane Doe", discountPercent: 15, minimumOrder: 100, formatCurrency: money };
 
-  // Buy-3-Get-1 short-circuits the referral entirely (cart-context promoDiscount),
-  // so "add $60.01 to unlock it" is advice that cannot unlock anything, and
+  // Another discount winning short-circuits the referral entirely, so
+  // "add $60.01 to unlock it" is advice that cannot unlock anything, and
   // "15% customer discount" is simply false.
   it.each([
     ["qualifying", true, 0],
     ["below the minimum", false, 60.01],
-  ])("says only that the code is applied when a promotion has taken over (%s)", (_l, meetsMinimum, amountToQualify) => {
-    expect(referralStatusLine({ ...base, meetsMinimum, amountToQualify, blockedByPromotion: true }))
-      .toBe("Jane Doe · referral code applied");
+  ])("says only that the code is applied when another discount has taken over (%s)", (_l, meetsMinimum, amountToQualify) => {
+    expect(referralStatusLine({
+      ...base, meetsMinimum, amountToQualify,
+      referralDiscountApplied: false, competingDiscountApplied: true,
+    })).toBe("Jane Doe · referral code applied");
   });
 
-  it("is unaffected when no promotion is running", () => {
-    expect(referralStatusLine({ ...base, meetsMinimum: true, amountToQualify: 0, blockedByPromotion: false }))
-      .toBe("Jane Doe · 15% customer discount");
+  // THE CLAIM FOLLOWS THE MONEY, NOT THE BASKET SIZE.
+  //
+  // Qualifying on size is not the same as being given the discount. Two units
+  // of a $100 item carry $10 of quantity-bundle pricing, and a 5% ambassador's
+  // $10 competes to exactly $0 against it — the basket clears the minimum and
+  // the code is worth nothing. The first version of this sentence read
+  // "5% customer discount" while the totals underneath credited "Bundle
+  // pricing", which is the defect the whole module was extracted to stop.
+  it("never claims a discount that is not being given, however big the basket", () => {
+    expect(referralStatusLine({
+      ...base, meetsMinimum: true, amountToQualify: 0,
+      referralDiscountApplied: false, competingDiscountApplied: false,
+    })).toBe("Jane Doe · referral code applied");
+  });
+
+  it("claims the discount when the referral is the one actually applied", () => {
+    expect(referralStatusLine({
+      ...base, meetsMinimum: true, amountToQualify: 0,
+      referralDiscountApplied: true, competingDiscountApplied: false,
+    })).toBe("Jane Doe · 15% customer discount");
   });
 
   // referral-client.ts returns ambassador_name straight from the RPC. Before
@@ -238,14 +259,14 @@ describe("referralStatusLine — the other reasons a code gives nothing", () => 
     ["empty", ""],
     ["whitespace", "   "],
   ])("never prints a %s ambassador name", (_l, name) => {
-    const line = referralStatusLine({ ...base, ambassadorName: name as unknown as string, meetsMinimum: true, amountToQualify: 0 });
+    const line = referralStatusLine({ ...base, ambassadorName: name as unknown as string, meetsMinimum: true, amountToQualify: 0, referralDiscountApplied: true });
     expect(line).toBe("Your ambassador · 15% customer discount");
     expect(line).not.toMatch(/null|undefined/);
   });
 });
 
 // ---------------------------------------------------------------------------
-// THE WHOLE STATUS, DERIVED ONCE.
+// THE WHOLE STATUS, DERIVED ONCE — AND FOLLOWING THE MONEY.
 //
 // referralStatusLine takes the answers; something has to work them out. That
 // something lived in cart-context.tsx, and the three surfaces that show the
@@ -255,10 +276,27 @@ describe("referralStatusLine — the other reasons a code gives nothing", () => 
 // import is a decision nothing can test, and three hand-written copies of it
 // are three chances to pass the wrong flag.
 //
-// The specific one already in the tree: the Buy-3-Get-1 promotion suppresses
-// the referral outright in promoDiscount, and none of the three call sites knew
-// it. The cart offered "add $60.01 to unlock it" for a discount that adding
-// $60.01 could not unlock.
+// The first version of this function asked the wrong question. It took the
+// Buy-3-Get-1 amount and treated only that as "the referral is suppressed",
+// because Buy-3-Get-1 was the case in front of me. But the referral competes
+// against EVERY other candidate in resolveCustomerDiscount, and it loses to
+// several of them:
+//
+//   • a commission-only ambassador (customer_discount_percent = 0)
+//   • Buy-3-Get-1 (profit-engine: `!isBundle && hasReferral`)
+//   • quantity-bundle pricing, via compete() — DEFAULT catalogue pricing, not
+//     an opt-in promo: two units of a $100 item bake in $10 of savings, and a
+//     5% ambassador's $10 competes to exactly $0
+//   • membership, bulk savings or an ambassador personal discount winning
+//
+// In every one of those the basket clears the minimum, the code is worth $0.00,
+// and the old sentence announced "N% customer discount" while the totals below
+// it credited "Bundle pricing" or "Membership discount".
+//
+// So the input is no longer a bundle amount. It is the outcome: did the
+// referral actually win, and is some other discount applied instead. Both are
+// already computed — resolveCartDiscount on the client, resolveCustomerDiscount
+// on the server — so nothing is re-derived here.
 // ---------------------------------------------------------------------------
 describe("referralCartStatus", () => {
   const money = (n: number) => `$${n.toFixed(2)}`;
@@ -266,7 +304,8 @@ describe("referralCartStatus", () => {
     ambassadorName: "Xavier Martinez",
     discountPercent: 15,
     minimumQualifyingOrder: 100,
-    bundleDiscountAmount: 0,
+    referralDiscountApplied: true,
+    competingDiscountApplied: false,
     formatCurrency: money,
   };
 
@@ -274,13 +313,12 @@ describe("referralCartStatus", () => {
     const s = referralCartStatus({ ...base, subtotal: 110.37 });
     expect(s.meetsMinimum).toBe(true);
     expect(s.amountToQualify).toBe(0);
-    expect(s.blockedByPromotion).toBe(false);
     expect(s.needsMoreToQualify).toBe(false);
     expect(s.line).toBe("Xavier Martinez · 15% customer discount");
   });
 
   it("reports the exact shortfall on a basket that is short", () => {
-    const s = referralCartStatus({ ...base, subtotal: 39.99 });
+    const s = referralCartStatus({ ...base, subtotal: 39.99, referralDiscountApplied: false });
     expect(s.meetsMinimum).toBe(false);
     expect(s.amountToQualify).toBeCloseTo(60.01, 10);
     expect(s.needsMoreToQualify).toBe(true);
@@ -291,20 +329,31 @@ describe("referralCartStatus", () => {
   it.each([
     ["a short basket", 39.99],
     ["a qualifying basket", 240],
-  ])("never asks the shopper to add money while a bundle is suppressing the referral (%s)", (_label, subtotal) => {
-    const s = referralCartStatus({ ...base, subtotal, bundleDiscountAmount: 39.99 });
-    expect(s.blockedByPromotion).toBe(true);
+  ])("never asks the shopper to add money while another discount has taken over (%s)", (_label, subtotal) => {
+    const s = referralCartStatus({ ...base, subtotal, referralDiscountApplied: false, competingDiscountApplied: true });
     expect(s.needsMoreToQualify).toBe(false);
     expect(s.line).toBe("Xavier Martinez · referral code applied");
     expect(s.line).not.toContain("unlock");
     expect(s.line).not.toContain("customer discount");
   });
 
+  // THE CASE THE FIRST VERSION MISSED. Nothing is "applied" here at all: the
+  // quantity-bundle saving is already inside the subtotal, so it is not a
+  // discount line — it just competes the referral down to zero. The basket
+  // qualifies, no other discount shows, and the referral still gives nothing.
+  it("claims nothing when the referral qualifies on size but wins nothing", () => {
+    const s = referralCartStatus({ ...base, subtotal: 190, referralDiscountApplied: false, competingDiscountApplied: false });
+    expect(s.meetsMinimum).toBe(true);
+    expect(s.referralDiscountApplied).toBe(false);
+    expect(s.needsMoreToQualify).toBe(false);
+    expect(s.line).toBe("Xavier Martinez · referral code applied");
+  });
+
   // needsMoreToQualify drives the amber styling. Amber on a sentence with no
   // call to action is noise, and a commission-only code has no call to action
   // at any size.
   it("does not flag a commission-only code as needing a bigger basket", () => {
-    const s = referralCartStatus({ ...base, discountPercent: 0, subtotal: 39.99 });
+    const s = referralCartStatus({ ...base, discountPercent: 0, subtotal: 39.99, referralDiscountApplied: false });
     expect(s.needsMoreToQualify).toBe(false);
     expect(s.line).toBe("Xavier Martinez · referral code applied");
   });

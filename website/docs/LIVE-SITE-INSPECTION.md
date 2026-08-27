@@ -2179,6 +2179,88 @@ This closes what was recorded as OPEN-01 below.
   `referral-client.ts` returns the column straight from the RPC and it is
   nullable. Falls back to "Your ambassador".
 
+### The second review found the fix was half of itself
+
+The committed fix was put through a second adversarial panel — four independent
+lenses, every finding then given to three refuters — and the panel found that
+the rule the commit *states* had only been half implemented.
+
+**The rule.** Store credit and points never stack with a referral discount.
+The commit says it gates on "a referral discount BEING GIVEN, not a code being
+attached".
+
+**What it actually gated on.** `referralQualifiesForDiscount` — *is the basket
+over $100*. That is not the same question. The referral has to WIN against
+every other candidate in `resolveCustomerDiscount`, and it loses to four things:
+
+| the referral loses to | how |
+|---|---|
+| a commission-only ambassador | `customer_discount_percent = 0` — the module's own comment calls this legitimate |
+| Buy-3-Get-1 | `!isBundle && hasReferral` suppresses the bucket outright |
+| **quantity-bundle pricing** | `compete()` — and this is DEFAULT catalogue pricing, not an opt-in promo |
+| membership / bulk / personal | simply worth more |
+
+The quantity-bundle case needs no special basket. Two units of a $100 item bake
+$10 of bundle savings into the subtotal, and a 5% ambassador's $10 competes to
+**exactly $0.00**. Five vials at $59.99 against a 10% ambassador: $36.00 of
+bundle savings, referral worth $30.00, competed to **$0.00**.
+
+In every one of those the shopper cleared the minimum, was told "N% customer
+discount" on three surfaces, was charged a total containing none of it, **and
+had her whole store-credit balance withheld to pay for it** — up to $50 more
+than the identical cart with no ambassador link at all, on the card lane and
+the express lane alike, with client and server agreeing so nothing surfaced.
+The ambassador still earned her commission, so her own link made her audience
+worse off.
+
+**The fix.** One predicate, read off the resolved winner rather than re-derived:
+
+- server — `customerDiscount.components.includes("referral") && amount > 0`
+- client — `bestDiscount?.type === "referral" && discountAmount > 0`
+
+It gates store credit, points, and what the sentence is allowed to claim. The
+client derivation had to move below `resolveCartDiscount` to see the winner.
+`blockedByPromotion` is gone: "the referral did not win" subsumes it.
+
+**The arithmetic moved too.** `store-credit-redemption.ts` (new) holds the
+credit and points maths in **cents**, and all three callers — cart context,
+checkout panel, `quote-order.ts` — call it. They were three hand-written copies,
+two of them comparing in dollars while the server compared in cents.
+
+### Two tests that proved nothing, found by mutation
+
+The same panel mutated the source and ran the suite. Two gaps:
+
+- **Reverting the server's store-credit gate left all 4,147 tests green.** The
+  points half was covered; the credit half was not, and no test anywhere passed
+  a referral code into `quoteOrder` alongside a store-credit balance.
+- **Reverting both client gates left the suite green too.** Nothing renders
+  `CartProvider`, so nothing could see them.
+
+Both are now covered by behaviour:
+
+- `referral-exclusivity.test.ts` (new) drives the real `quoteOrder` through all
+  five states — below the minimum, 0% ambassador, Buy-3-Get-1, membership
+  winning, and the referral genuinely winning — and asserts the invariant
+  directly: **a referred basket that earns no referral discount is charged
+  exactly what the same basket with no code at all is charged.**
+- `store-credit-redemption.test.ts` (new) covers the shared arithmetic.
+- `cart-server-discount-parity.test.ts` now checks *who won*, not only how much,
+  across all 22 scenarios — using the exact expressions the client and the
+  server each use.
+
+**Mutation controls, watched:** reverting the gate to `referralQualifiesForDiscount`
+(the first repair) turns 3 tests red; reverting it to `Boolean(referral)` (the
+original) turns 7 red across two files.
+
+Also fixed: the apply confirmation ("Referral code saved — 15% off unlocks at
+$100.00. Add $31.00 to qualify.") is a one-shot string quoting a basket-dependent
+figure, and `updateQuantity`/`removeItem` did not clear it — so stepping a cart
+down left "Referral code applied — 15% off." in emerald directly above "add
+$31.00 to unlock it" in amber. And the comment introducing the change asserted
+the *opposite* of what the change did, which on a live store's money path is a
+trap rather than a nit.
+
 ### A note on verifying this repo
 
 One review lens reported the branch red when the rest of the evidence said
@@ -2187,7 +2269,7 @@ of `quote-order.ts`, which flipped the profit-guard test in and out of failure
 with no source change. The final numbers below were taken after
 `rm -rf node_modules/.vite`.
 
-**Final: 4,147 tests pass, 0 fail, 78 skipped, `tsc` clean, eslint 0 errors** —
+**Final: 4,198 tests pass, 0 fail, 78 skipped, `tsc` clean, eslint 0 errors** —
 cold cache, whole suite.
 
 ---
@@ -2241,23 +2323,15 @@ and tells the shopper to refresh, which does not help. Special-casing the messag
 when `referral && !referralQualifiesForDiscount`, or returning the qualification
 state in the quote so the client can reconcile, would close it.
 
-### OPEN-04 — the sentence still says "customer discount" when bundle pricing wins
+### OPEN-04 — CLOSED during the second review
 
-**Severity:** P3 · pre-existing wording, not a regression
-**Status:** CONFIRMED by code read
-
-`resolveCustomerDiscount` makes the referral *compete* with quantity-bundle
-pricing, and the bundle wins at the 5-unit (12%) and 10-unit (20%) tiers. Ten
-units of a $30 item: bundle $60.00 beats referral $45.00, the referral
-contributes **$0.00**, and the line still reads "15% customer discount". The
-Buy-3-Get-1 case of exactly this was closed above; the quantity-bundle case
-would need `referralCartStatus` to be told which candidate won, which means
-threading the resolved discount into it. Worth doing, in its own diff.
-
-Related and smaller: "add $4.96 to unlock it" can be unreachable by adding
-$4.96, because adding a unit can cross into a deeper bundle tier and *lower* the
-subtotal (9 × $12.00 → $95.04; 10 × $12.00 → $96.00). Self-correcting on the
-next render, but wrong at the moment it is read.
+The sentence no longer claims a discount that is not being given, in any of the
+four ways the referral can lose; see "The second review found the fix was half
+of itself" in §8. What remains is the smaller half of the original note: "add
+$4.96 to unlock it" can still be unreachable by adding $4.96, because adding a
+unit can cross into a deeper bundle tier and *lower* the subtotal (9 × $12.00 →
+$95.04; 10 × $12.00 → $96.00). Self-correcting on the next render, but wrong at
+the moment it is read.
 
 ### OPEN-05 — ineligible `referral_orders` rows stay `pending` forever
 
@@ -2271,6 +2345,28 @@ rows with no limit to compute what an ambassador is owed. The rows contribute
 $0, so no figure is wrong today, but the query grows without bound and the
 portal's "pending" count will read as money in flight when it is not. A
 `ineligible_reason is null` filter is behaviour-preserving.
+
+### OPEN-06 — the referral programme master switch still hard-blocks the pay button
+
+**Severity:** P2 · pre-existing, unchanged by this fix
+**Status:** CONFIRMED by code read
+
+`quote-order.ts:538` throws "The referral program is currently unavailable.
+Remove the code to continue." when the admin turns the programme off in the
+Control Center. The client never learns: `validateReferralCodeClient` reads the
+ambassadors table directly, and `/api/catalog/promotions` sends
+`referralDiscountPercent` and `referralMinimumOrder` but never `enabled`. So
+every link already in the wild keeps showing "15% customer discount", keeps
+applying it, and every one of those shoppers is refused at the pay button — the
+identical shape to the defect this fix closes, triggered by the switch instead
+of the minimum.
+
+Dropping the referral instead of throwing does **not** fix it on its own: the
+server's total would then be higher than the client's, and the underpayment
+guard refuses the order anyway. The client has to be told, which means the
+`enabled` flag on `/api/catalog/promotions`, state for it in cart context, and a
+decision about tabs already open. That is its own diff. The switch is currently
+**on**, so nothing is failing today.
 
 ### Still true, and unchanged by this fix
 

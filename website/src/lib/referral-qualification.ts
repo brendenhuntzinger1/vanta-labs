@@ -117,15 +117,20 @@ export function referralStatusLine(input: {
   minimumOrder: number;
   formatCurrency: (value: number) => string;
   /**
-   * Something other than basket size is already suppressing the referral —
-   * today that is only the Buy-3-Get-1 promotion, which `promoDiscount` lets win
-   * outright. When it is set, "add $60.01 to unlock it" is advice that cannot
-   * unlock anything and "15% customer discount" is simply false, so the sentence
-   * falls back to the one claim still true: the code is attached.
+   * The referral is the discount actually coming off this basket.
+   *
+   * NOT "the basket is big enough". The referral competes against every other
+   * candidate in `resolveCustomerDiscount` and loses to several of them, at
+   * which point it is worth exactly $0.00 on a basket that clears the minimum
+   * — see the module note on `referralCartStatus`.
    */
-  blockedByPromotion?: boolean;
+  referralDiscountApplied?: boolean;
+  /** Some OTHER discount is what the shopper is getting instead. */
+  competingDiscountApplied?: boolean;
 }): string {
-  const { discountPercent, meetsMinimum, amountToQualify, minimumOrder, formatCurrency, blockedByPromotion } = input;
+  const { discountPercent, meetsMinimum, amountToQualify, minimumOrder, formatCurrency } = input;
+  const referralDiscountApplied = input.referralDiscountApplied ?? false;
+  const competingDiscountApplied = input.competingDiscountApplied ?? false;
   // `ambassador_name` comes straight off the RPC row and is nullable there.
   // Interpolating it produced the literal words "null" / "undefined" in front of
   // a shopper; the old JSX rendered nothing at all, which was merely odd. Neither
@@ -133,22 +138,37 @@ export function referralStatusLine(input: {
   const name = typeof input.ambassadorName === "string" && input.ambassadorName.trim()
     ? input.ambassadorName.trim()
     : "Your ambassador";
+  const applied = `${name} · referral code applied`;
+
   // A COMMISSION-ONLY AMBASSADOR GIVES THE CUSTOMER NOTHING, AT ANY SIZE.
   //
   // customer_discount_percent = 0 is a legitimate configuration — the admin can
   // set it and resolveAmbassadorCustomerDiscount accepts it verbatim. For that
   // code no basket ever "unlocks" anything, so naming a minimum would be a
-  // false claim: a $500 order would read "0% off orders of $100.00 or more — add
-  // $0.00 to unlock it". Say only what is true.
-  if (!(discountPercent > 0) || blockedByPromotion) {
-    return `${name} · referral code applied`;
+  // false claim: a $500 order would read "0% off orders of $100.00 or more —
+  // add $0.00 to unlock it". Say only what is true.
+  if (!(discountPercent > 0)) {
+    return applied;
+  }
+  // CLAIM A DISCOUNT ONLY WHEN ONE IS BEING GIVEN.
+  if (referralDiscountApplied) {
+    return `${name} · ${discountPercent}% customer discount`;
+  }
+  // Something else won. "Add $60.01 to unlock it" is advice that cannot unlock
+  // anything while that holds, and it is just as wrong above the minimum as
+  // below it — so this is checked BEFORE the shortfall wording, not after.
+  if (competingDiscountApplied) {
+    return applied;
   }
   if (meetsMinimum) {
-    return `${name} · ${discountPercent}% customer discount`;
+    // Qualifies, nothing else applied, and the referral still won nothing: the
+    // quantity-bundle pricing already inside the subtotal competed it to zero.
+    // There is no shortfall to name and no discount to promise.
+    return applied;
   }
   // "orders OF $100.00 OR MORE", not "orders over $100.00". referralQualifies
   // rounds both sides to cents and compares with `>=`, so a basket of exactly
-  // $100.00 qualifies. "over" describes a threshold this module deliberately
+  // $100.00 qualifies. "Over" describes a threshold this module deliberately
   // does not have, and the shopper who lands on it to the cent is the one person
   // guaranteed to notice.
   return `${name} · ${discountPercent}% off orders of ${formatCurrency(minimumOrder)} or more`
@@ -194,42 +214,62 @@ export function referralAppliedMessage(input: {
  * extracted to end: a decision inside a React component is a decision nothing
  * can import, so nothing can test it, so the copies diverge.
  *
- * One had already diverged. The Buy-3-Get-1 promotion suppresses the referral
- * outright (`promoDiscount` returns the bundle and never reaches the referral
- * branch), and not one of the three call sites knew it — so a shopper with four
- * items and an ambassador's code was told to "add $60.01 to unlock it" for a
- * discount that adding $60.01 could not unlock.
+ * IT TAKES THE OUTCOME, NOT THE BASKET SIZE. The first version of this
+ * function was handed the Buy-3-Get-1 amount and treated only that as "the
+ * referral is suppressed", because Buy-3-Get-1 was the case in front of me.
+ * The referral competes against every candidate in `resolveCustomerDiscount`
+ * and loses to several:
  *
- * `bundleDiscountAmount` is the Buy-3-Get-1 free-item value, the same
- * `buy3Get1FreeDiscount` that decides the suppression, passed in rather than
- * re-derived so the two cannot disagree.
+ *   - a commission-only ambassador (`customer_discount_percent = 0`)
+ *   - Buy-3-Get-1 (`!isBundle && hasReferral` in profit-engine)
+ *   - quantity-bundle pricing, through `compete()` — DEFAULT catalogue
+ *     pricing, not an opt-in promo. Two units of a $100 item bake $10 of
+ *     savings into the subtotal, and a 5% ambassador's $10 competes to
+ *     exactly $0.00.
+ *   - membership, bulk savings or an ambassador personal discount winning
+ *
+ * In each of those the basket clears the minimum and the code is worth
+ * nothing, and the sentence used to announce "N% customer discount" directly
+ * above totals crediting "Bundle pricing". Worse, the same half-answer was
+ * what store credit and points were suppressed on, so the shopper lost her own
+ * credit to buy a discount of $0.00.
+ *
+ * So the inputs are the resolved outcome — already computed by
+ * `resolveCartDiscount` on the client and `resolveCustomerDiscount` on the
+ * server — and nothing is re-derived here.
  */
 export function referralCartStatus(input: {
   ambassadorName: string;
   discountPercent: number;
   subtotal: number;
   minimumQualifyingOrder: number;
-  bundleDiscountAmount: number;
+  /** The referral is the discount actually coming off this basket. */
+  referralDiscountApplied: boolean;
+  /** Some other discount is what the shopper is getting instead. */
+  competingDiscountApplied: boolean;
   formatCurrency: (value: number) => string;
 }): {
   meetsMinimum: boolean;
   amountToQualify: number;
-  blockedByPromotion: boolean;
+  referralDiscountApplied: boolean;
   /** The shopper can actually act on this sentence — drives the amber styling. */
   needsMoreToQualify: boolean;
   line: string;
 } {
-  const { ambassadorName, discountPercent, subtotal, minimumQualifyingOrder, bundleDiscountAmount, formatCurrency } = input;
-  const blockedByPromotion = Number.isFinite(bundleDiscountAmount) && bundleDiscountAmount > 0;
+  const {
+    ambassadorName, discountPercent, subtotal, minimumQualifyingOrder,
+    referralDiscountApplied, competingDiscountApplied, formatCurrency,
+  } = input;
   const meetsMinimum = referralQualifies(subtotal, minimumQualifyingOrder);
   const amountToQualify = referralShortfall(subtotal, minimumQualifyingOrder);
   return {
     meetsMinimum,
     amountToQualify,
-    blockedByPromotion,
-    // Amber is a call to action. There is none when a bundle has taken over and
-    // none for a commission-only code, because no basket size changes either.
-    needsMoreToQualify: !meetsMinimum && !blockedByPromotion && discountPercent > 0,
+    referralDiscountApplied,
+    // Amber is a call to action. There is none when another discount has taken
+    // over and none for a commission-only code, because no basket size changes
+    // either.
+    needsMoreToQualify: !meetsMinimum && !competingDiscountApplied && discountPercent > 0,
     line: referralStatusLine({
       ambassadorName,
       discountPercent,
@@ -237,7 +277,8 @@ export function referralCartStatus(input: {
       amountToQualify,
       minimumOrder: minimumQualifyingOrder,
       formatCurrency,
-      blockedByPromotion,
+      referralDiscountApplied,
+      competingDiscountApplied,
     }),
   };
 }
