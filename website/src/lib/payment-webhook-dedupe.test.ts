@@ -177,6 +177,25 @@ vi.mock("@/lib/supabase-server", () => {
       };
     }
 
+    if (table === "order_items") {
+      // The card lane re-reads the sold lines from the DB before it falls back
+      // to the legacy decrement. Without this the fallback was handed an empty
+      // list, so these cases proved a call was made rather than that stock
+      // moved — and now that an empty list correctly skips the decrement, they
+      // need the real rows.
+      return {
+        select: () => {
+          const b: Record<string, unknown> = {
+            eq() { return b; },
+            then(resolve: (v: { data: unknown; error: unknown }) => unknown) {
+              return Promise.resolve({ data: [{ product_id: "p1", quantity: 1 }], error: null }).then(resolve);
+            },
+          };
+          return b;
+        },
+      };
+    }
+
     if (table === "orders") {
       return {
         select: () => {
@@ -554,7 +573,7 @@ describe("an unsafe effect that REPORTS its failure instead of throwing", () => 
     // The reachable failure: the reservation RPC is unavailable (returned, not
     // thrown), and the legacy decrement then errors on each line (logged, not
     // thrown). Nothing propagated, so nothing alerted.
-    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true });
+    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true, finalizedLines: null });
     vi.mocked(fulfillment.decrementInventoryForOrder).mockResolvedValueOnce({
       attempted: 2,
       failed: 2,
@@ -569,7 +588,7 @@ describe("an unsafe effect that REPORTS its failure instead of throwing", () => 
 
   it("raises nothing when the fallback decrement moves the stock", async () => {
     const reservation = await import("@/lib/inventory-reservation");
-    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true });
+    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true, finalizedLines: null });
 
     await deliver("evt-1");
 

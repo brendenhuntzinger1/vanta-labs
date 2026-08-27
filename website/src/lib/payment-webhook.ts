@@ -15,7 +15,7 @@ import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/li
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
-import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
+import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock, itemsNotFinalized } from "@/lib/inventory-fulfillment";
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
 import { after } from "next/server";
 import { syncOrderToShippo } from "@/lib/shippo/order-sync";
@@ -1500,14 +1500,31 @@ export async function finalizeManualPayment(
     // Note also what `failed === 0` does NOT prove: adjust_inventory_on_sale
     // no-ops for an untracked slug, so the latch means "the RPC accepted every
     // line", not "the shelf really moved". The earlier wording overclaimed.
+    //
+    // F4 — WHAT THE FINALIZE DID NOT COVER STILL HAS TO MOVE.
+    //
+    // The fallback used to run only when the finalize moved NOTHING
+    // (`fin.finalized === 0`). But a reservation can be PARTIAL:
+    // reserveInventoryForOrder holds line by line and gives up the moment one
+    // line's RPC fails, with the earlier lines already held. That order arrives
+    // here holding line 1 and nothing for line 2, finalizes one line, reports
+    // `degraded: false, finalized: 1` — and the fallback was skipped, so line 2
+    // was sold with no stock movement whatsoever and nothing said so.
+    // `finalizedLines` names what actually moved, so the rest can be decremented.
+    const orderItems = (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>;
     let partialLines: { attempted: number; failed: number; errors: string[] } | null = null;
     try {
       const fin = await finalizeInventoryForOrder(orderId);
-      if (fin.degraded || fin.finalized === 0) {
-        const decrement = await decrementInventoryForOrder(
-          (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
-          orderId,
-        );
+      // A degraded RPC moved nothing reliable, and holds it could not enumerate
+      // leave no usable diff — both fall back to the coarse, safe rule.
+      const finalizedLines = fin.finalizedLines ?? null;
+      const unmoved = fin.degraded || finalizedLines === null
+        // No usable diff: fall back only when the finalize moved nothing, which
+        // is the coarse rule this lane has always used.
+        ? (fin.degraded || fin.finalized === 0 ? orderItems : [])
+        : itemsNotFinalized(orderItems, finalizedLines);
+      if (unmoved.length > 0) {
+        const decrement = await decrementInventoryForOrder(unmoved, orderId);
         if (decrement.failed > 0) {
           if (decrement.failed < decrement.attempted) partialLines = decrement;
           throw new Error(
@@ -1561,6 +1578,15 @@ export async function finalizeManualPayment(
   // already finalized — a no-op — so cancelling a manually-paid order destroyed
   // its stock and reported "released".
   //
+  // IT NOW WRITES BOTH COLUMNS (VL-10 / INV-01 / F1). `paid_side_effects_at` is
+  // still the shared vocabulary for "the paid side effects ran". But it cannot
+  // answer the cancel path's question in the OTHER lane, where it is the
+  // exactly-once claim and is therefore stamped BEFORE the decrement — so an
+  // order whose decrement failed still carried it, and cancelling that order
+  // restocked units that were never removed. `inventory_committed_at` is the
+  // receipt the cancel path reads, and this lane's guard is already exactly the
+  // one a receipt needs: it is written only when the stock really moved.
+  //
   // WRITTEN LAST, NOT AS PART OF THE CLAIM. The latch has to mean "the decrement
   // happened", not "the decrement was about to be attempted". Setting it up with
   // the paid-flip would mark stock as decremented before finalizeInventoryForOrder
@@ -1570,9 +1596,10 @@ export async function finalizeManualPayment(
   // behaviour for one narrow window, and this codebase's stated rule for
   // inventory ambiguity is to never guess in the direction that invents units.
   if (stockCommitted) {
+    const committedAt = new Date().toISOString();
     const { error: latchError } = await supabaseAdmin
       .from("orders")
-      .update({ paid_side_effects_at: new Date().toISOString() })
+      .update({ paid_side_effects_at: committedAt, inventory_committed_at: committedAt })
       .eq("order_id", orderId)
       .is("paid_side_effects_at", null);
 
@@ -1923,6 +1950,9 @@ export async function processPaymentWebhook(payload: string, signature: string, 
 
     if (runSideEffects) {
       const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
+      // Did this order's stock actually move? A membership order holds none, so
+      // it is vacuously true there; a product order has to earn it below.
+      let stockCommitted = isMembershipOrder;
 
       // Ambassador commission — MUST be gated (an ungated replay reset a paid
       // commission back to pending and paid the ambassador twice).
@@ -2158,15 +2188,34 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       if (!isMembershipOrder) {
         try {
           // Finalize the checkout reservation (permanent deduct). Fall back to
-          // the legacy atomic decrement only when there's no active hold to
-          // finalize (untracked item, expired hold, or pre-migration order).
+          // the legacy atomic decrement for whatever the finalize did NOT move —
+          // an untracked item, an expired hold, a pre-migration order, or (F4) a
+          // line the reservation never managed to hold in the first place.
           //
           // THE DECREMENT REPORTS ITS FAILURE RATHER THAN THROWING IT — see the
           // manual lane. Without reading the returned result this catch, and
           // the alert in it, were unreachable on the real failure path.
+          //
+          // F4. The condition used to be `fin.degraded || fin.finalized === 0`,
+          // which asks "did the finalize do nothing?" rather than "did it do
+          // everything?". reserveInventoryForOrder holds line by line and gives
+          // up the moment one line's RPC fails, with the earlier lines already
+          // held, so a two-line order can arrive here with a hold on line 1 and
+          // none on line 2. It finalizes one line, reports `degraded: false,
+          // finalized: 1`, and the fallback never ran: line 2 was sold with no
+          // stock movement at all, silently. `finalizedLines` says which lines
+          // moved so the rest can be decremented — and only the rest, because
+          // decrementing a finalized line again would take its units twice.
           let decrement = { attempted: 0, failed: 0, errors: [] as string[] };
           const fin = await finalizeInventoryForOrder(orderId);
-          if (fin.degraded || fin.finalized === 0) {
+          // The one case with nothing left to do: the RPC was healthy, it moved
+          // lines, and the holds behind them could not be enumerated — so the
+          // coarse rule (which is all that read supports) says it covered the
+          // order. A degraded RPC moved nothing reliable, and an enumerable
+          // finalize gets the real per-line diff below.
+          const finalizedLines = fin.finalizedLines ?? null;
+          const finalizeCoveredOrder = !fin.degraded && finalizedLines === null && fin.finalized > 0;
+          if (!finalizeCoveredOrder) {
             // An unreadable line-item list is not an order with no lines: it
             // would decrement nothing and report success, leaving sold stock on
             // the shelf with the side-effects claim already spent.
@@ -2175,10 +2224,13 @@ export async function processPaymentWebhook(payload: string, signature: string, 
               .select("product_id, quantity")
               .eq("order_id", orderId);
             if (soldItemsError) throw soldItemsError;
-            decrement = await decrementInventoryForOrder(
-              (soldItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
-              orderId,
-            );
+            const items = (soldItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>;
+            const unmoved = fin.degraded || finalizedLines === null
+              ? items
+              : itemsNotFinalized(items, finalizedLines);
+            if (unmoved.length > 0) {
+              decrement = await decrementInventoryForOrder(unmoved, orderId);
+            }
           }
           if (decrement.failed > 0) {
             throw new Error(
@@ -2186,10 +2238,47 @@ export async function processPaymentWebhook(payload: string, signature: string, 
               + decrement.errors.join("; "),
             );
           }
+          stockCommitted = true;
         } catch (inventoryError) {
           console.error("Unable to decrement inventory for order", orderId, inventoryError);
           await recordSystemAlert(unsafeEffectAlert("inventory_decrement", orderId, inventoryError))
             .catch(() => {});
+        }
+      }
+
+      // VL-10 / INV-01 / F1 — RECORD THAT THE STOCK ACTUALLY MOVED.
+      //
+      // `paid_side_effects_at` cannot carry this fact in THIS lane. It is the
+      // exactly-once claim over every paid side effect, so it has to be taken
+      // BEFORE they run — otherwise a duplicate delivery pays the ambassador
+      // twice. It therefore means "this delivery won the right to try", never
+      // "the units left the shelf", and it is stamped whether the decrement
+      // above then succeeds, fails, or half-succeeds.
+      //
+      // returnInventoryForCancelledOrder read it as the second thing. So
+      // cancelling an order whose decrement had FAILED took the restock branch
+      // and returned units that were never removed — invented stock, which
+      // oversells, and the precise failure the latch was introduced to prevent.
+      // The manual lane had already reasoned its way here and simply withholds
+      // its latch on a failed decrement; the card lane cannot copy that without
+      // giving up its claim.
+      //
+      // So the claim and the receipt become two columns. This one is written
+      // only after the stock has moved, it is what the cancel path reads, and
+      // both paid lanes write it. A partial decrement deliberately leaves it
+      // NULL: restockInventoryForOrder returns EVERY line, so a receipt here
+      // would invent units for the lines that never moved. Under-restock is a
+      // recoverable inconvenience; over-restock is a money-losing oversell.
+      if (stockCommitted) {
+        const { error: committedError } = await supabaseAdmin
+          .from("orders")
+          .update({ inventory_committed_at: new Date().toISOString() })
+          .eq("order_id", orderId)
+          .is("inventory_committed_at", null);
+        if (committedError) {
+          // Never fails the webhook — the payment is verified and the stock has
+          // moved. But a later cancel will now under-restock, so say so.
+          console.error("Unable to record inventory_committed_at for order", orderId, committedError);
         }
       }
 

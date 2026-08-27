@@ -142,7 +142,7 @@ describe("finalizing a paid order's holds writes the movement to the ledger", ()
     rpc.mockImplementation(async () => ({ data: finalizeRows(), error: null }));
 
     const { finalizeInventoryForOrder } = await mod();
-    expect(await finalizeInventoryForOrder("order-real")).toEqual({ finalized: 2, degraded: false });
+    expect(await finalizeInventoryForOrder("order-real")).toMatchObject({ finalized: 2, degraded: false });
 
     expect(ledgerInserts).toHaveLength(2);
     expect(ledgerInserts).toEqual(
@@ -200,7 +200,7 @@ describe("finalizing a paid order's holds writes the movement to the ledger", ()
     rpc.mockImplementation(async () => ({ data: finalizeRows(), error: null }));
 
     const { finalizeInventoryForOrder } = await mod();
-    expect(await finalizeInventoryForOrder("order-replay")).toEqual({ finalized: 0, degraded: false });
+    expect(await finalizeInventoryForOrder("order-replay")).toMatchObject({ finalized: 0, degraded: false });
     expect(ledgerInserts).toHaveLength(0);
   });
 
@@ -219,7 +219,7 @@ describe("finalizing a paid order's holds writes the movement to the ledger", ()
     rpc.mockImplementation(async () => ({ data: finalizeRows(), error: null }));
 
     const { finalizeInventoryForOrder } = await mod();
-    expect(await finalizeInventoryForOrder("order-partial")).toEqual({ finalized: 1, degraded: false });
+    expect(await finalizeInventoryForOrder("order-partial")).toMatchObject({ finalized: 1, degraded: false });
 
     expect(ledgerInserts).toHaveLength(1);
     expect(ledgerInserts[0]).toMatchObject({ dose_id: "dose-glp3", delta: -1 });
@@ -235,7 +235,7 @@ describe("finalizing a paid order's holds writes the movement to the ledger", ()
     rpc.mockResolvedValue({ data: 0, error: null });
 
     const { finalizeInventoryForOrder } = await mod();
-    expect(await finalizeInventoryForOrder("order-raced")).toEqual({ finalized: 0, degraded: false });
+    expect(await finalizeInventoryForOrder("order-raced")).toMatchObject({ finalized: 0, degraded: false });
     expect(ledgerInserts).toHaveLength(0);
   });
 
@@ -245,10 +245,46 @@ describe("finalizing a paid order's holds writes the movement to the ledger", ()
     rpc.mockResolvedValue({ data: null, error: { message: "function does not exist" } });
 
     const { finalizeInventoryForOrder } = await mod();
-    expect(await finalizeInventoryForOrder("order-broken")).toEqual({ finalized: 0, degraded: true });
+    expect(await finalizeInventoryForOrder("order-broken")).toMatchObject({ finalized: 0, degraded: true });
     // A ledger row here would assert a movement that did not happen, and the
     // caller is about to run the fallback decrement, which writes its own.
     expect(ledgerInserts).toHaveLength(0);
+  });
+
+  it("names the lines it finalized, so the caller can decrement the rest (F4)", async () => {
+    // The count alone cannot say WHICH lines moved, and a reservation can be
+    // partial — reserveInventoryForOrder gives up mid-order with the earlier
+    // lines already held. The caller diffs these against the order's lines.
+    activeReservations.rows = [
+      { slug: "glp-3", variant_id: "dose-glp3", quantity: 1, status: "active" },
+      { slug: "hcg", variant_id: null, quantity: 2, status: "active" },
+    ];
+    rpc.mockImplementation(async () => ({ data: finalizeRows(), error: null }));
+
+    const { finalizeInventoryForOrder } = await mod();
+
+    expect(await finalizeInventoryForOrder("order-lines")).toEqual({
+      finalized: 2,
+      degraded: false,
+      finalizedLines: [
+        { slug: "glp-3", variantId: "dose-glp3", quantity: 1 },
+        { slug: "hcg", variantId: null, quantity: 2 },
+      ],
+    });
+  });
+
+  it("reports NULL lines, not an empty list, when the holds could not be read", async () => {
+    // The two point opposite ways: "no holds existed" invites the caller to
+    // decrement everything, "I could not find out" forbids it. Conflating them
+    // would take every unit off the shelf twice.
+    activeReservations.rows = [{ slug: "glp-3", variant_id: null, quantity: 1, status: "active" }];
+    rpc.mockResolvedValue({ data: null, error: { message: "function does not exist" } });
+
+    const { finalizeInventoryForOrder } = await mod();
+
+    expect(await finalizeInventoryForOrder("order-unreadable")).toEqual({
+      finalized: 0, degraded: true, finalizedLines: null,
+    });
   });
 
   it("still deducts the stock when the ledger write throws", async () => {
@@ -261,6 +297,6 @@ describe("finalizing a paid order's holds writes the movement to the ledger", ()
     const { finalizeInventoryForOrder } = await mod();
     // recordInventoryTransaction swallows its own errors; prove finalize still
     // reports the deduction that really happened.
-    expect(await finalizeInventoryForOrder("order-ledger-down")).toEqual({ finalized: 1, degraded: false });
+    expect(await finalizeInventoryForOrder("order-ledger-down")).toMatchObject({ finalized: 1, degraded: false });
   });
 });
