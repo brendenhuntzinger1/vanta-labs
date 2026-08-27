@@ -38,7 +38,8 @@ const JOBS = {
   membershipBilling: { label: "membership_billing", run: runMembershipBillingSweep },
   cartRecovery: { label: "cart_recovery", run: runAbandonedCartSweep },
   storeCredit: { label: "store_credit", run: grantMonthlyStoreCreditSweep },
-  // Advance ambassador commissions past the 14-day hold automatically, instead
+  // Advance ambassador commissions past the CONFIGURED hold automatically
+  // (referral.commission_hold_days, 30 in production), instead
   // of only when someone happens to load the partner page. Idempotent.
   commissionApproval: { label: "commission_approval", run: autoApproveEligibleCommissions },
   // Re-derive commissions whose accrual failed after the paid claim was already
