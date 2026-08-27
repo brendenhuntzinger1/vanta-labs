@@ -1,16 +1,23 @@
 import { describe, expect, it } from "vitest";
 import { unsafeEffectAlert } from "@/lib/payment-webhook";
 
-// THESE FIVE ARE NOT AUTO-REPAIRED, AND THAT IS DELIBERATE.
+// THESE ARE NOT AUTO-REPAIRED, AND THAT IS DELIBERATE.
 //
 //   inventory decrement        legacy fallback has no order-scoped claim
 //   points earn                bare INSERT, no (order_id, reason) guard
 //   store credit redemption    bare insert, no guard
 //   coupon redemption          unconditional increment, no order linkage
 //   membership activation      duplicates a 'renewal' billing event
+//   membership revoke          ends a subscription; not replayable
 //
 // Retrying any of them would double-write. So the failure is escalated to a
 // durable, operator-visible alert instead of a console line nobody reads.
+//
+// ONE EFFECT, ONE TYPE. store_credit_redemption used to be reported as
+// points_earn because the two shared a try/catch. They fail in OPPOSITE money
+// directions — a points-earn failure owes the customer, a redemption failure
+// means the customer kept the credit AND took the discount — so an operator
+// triaging by type performed the wrong repair.
 describe("unsafeEffectAlert", () => {
   it("is always critical — this is money that silently did not happen", () => {
     const alert = unsafeEffectAlert("points_earn", "order-1", new Error("boom"));
@@ -31,5 +38,17 @@ describe("unsafeEffectAlert", () => {
   it("stringifies a non-Error rejection rather than dropping it", () => {
     expect(unsafeEffectAlert("points_earn", "order-1", "plain string").context.error)
       .toBe("plain string");
+  });
+
+  it("keeps the two opposite-direction money effects on distinct types", () => {
+    expect(unsafeEffectAlert("store_credit_redemption", "order-1", new Error("x")).type)
+      .toBe("unsafe_effect_failed_store_credit_redemption");
+    expect(unsafeEffectAlert("points_earn", "order-1", new Error("x")).type)
+      .toBe("unsafe_effect_failed_points_earn");
+  });
+
+  it("carries the membership revoke, which was previously neither swept nor alerted", () => {
+    expect(unsafeEffectAlert("membership_revoke", "order-9", new Error("x")).type)
+      .toBe("unsafe_effect_failed_membership_revoke");
   });
 });

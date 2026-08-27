@@ -51,6 +51,8 @@ const sideEffects = {
   email: vi.fn(async () => ({ ok: true })),
   points: vi.fn(async () => {}),
   coupon: vi.fn(async () => ({ ok: true })),
+  storeCredit: vi.fn(async () => {}),
+  alert: vi.fn(async (_alert: { type: string; severity: string; message: string; context?: unknown }) => {}),
 };
 
 vi.mock("server-only", () => ({}));
@@ -92,7 +94,7 @@ vi.mock("@/lib/ambassador-commission", () => ({
 }));
 vi.mock("@/lib/shippo/order-sync", () => ({ syncOrderToShippo: vi.fn(async () => {}) }));
 vi.mock("@/lib/store-credit", () => ({
-  redeemStoreCredit: vi.fn(async () => {}),
+  redeemStoreCredit: sideEffects.storeCredit,
   refundStoreCreditForOrder: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/membership-billing", () => ({
@@ -100,7 +102,7 @@ vi.mock("@/lib/membership-billing", () => ({
   revokeMembershipForRefund: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/cart-recovery", () => ({ markAbandonedCartsRecovered: vi.fn(async () => {}) }));
-vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: vi.fn(async () => {}) }));
+vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: sideEffects.alert }));
 vi.mock("@/lib/ambassador-settings", () => ({ getAmbassadorProgramSettings: async () => ({ enabled: false }) }));
 vi.mock("@/lib/admin-control", () => ({ getReferralProgramConfig: async () => ({ enabled: false }) }));
 vi.mock("@/lib/ambassador-discount", () => ({ resolveAmbassadorCustomerDiscount: async () => 0 }));
@@ -120,6 +122,9 @@ vi.mock("@/lib/supabase-server", () => {
     customer_name: "A Buyer",
     customer_user_id: "user-1",
     coupon_code: "SAVE10",
+    // The order redeems store credit as well as a coupon, so the redemption
+    // path below is actually exercised rather than skipped.
+    store_credit_redeemed_cents: 500,
     subtotal: 200,
     discount_amount: 0,
     amount_paid: 200,
@@ -392,5 +397,47 @@ describe("one charge burns one coupon redemption", () => {
     state.signatureValid = false;
     await expect(deliver("evt-1")).rejects.toThrow(/signature/i);
     expect(sideEffects.coupon).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A FAILED NON-IDEMPOTENT EFFECT MUST RAISE ITS OWN ALERT.
+//
+// The five effects that cannot be auto-repaired are escalated to a durable
+// system alert instead of a console line. Until now that wiring was carried
+// entirely by a comment: no test drove a THROWING effect through the webhook,
+// so deleting a catch block, or mislabelling one effect as another, was
+// invisible. The alert type is what an operator triages by.
+// ---------------------------------------------------------------------------
+describe("an unsafe effect that throws", () => {
+  it("raises unsafe_effect_failed_coupon_redemption when redeemCoupon throws", async () => {
+    sideEffects.coupon.mockRejectedValueOnce(new Error("coupon service down"));
+
+    const result = await deliver("evt-1");
+
+    // The payment itself still lands — one broken side-effect must never undo
+    // a charge the processor has already taken.
+    expect(result.duplicate).toBe(false);
+    expect(state.flipsApplied).toBe(1);
+
+    const alerts = sideEffects.alert.mock.calls.map((call) => call[0]);
+    const coupon = alerts.find((alert) => alert.type === "unsafe_effect_failed_coupon_redemption");
+    expect(coupon).toBeDefined();
+    expect(coupon!.severity).toBe("critical");
+    expect(coupon!.message).toContain(ORDER_ID);
+  });
+
+  it("does not mislabel a store-credit redemption failure as a points-earn failure", async () => {
+    // These fail in OPPOSITE money directions: a points-earn failure owes the
+    // customer, a redemption failure means the customer kept the credit AND
+    // got the discount. Sharing one try/catch sent an operator to the wrong
+    // repair.
+    sideEffects.storeCredit.mockRejectedValueOnce(new Error("credit ledger down"));
+
+    await deliver("evt-1");
+
+    const types = sideEffects.alert.mock.calls.map((call) => call[0].type);
+    expect(types).toContain("unsafe_effect_failed_store_credit_redemption");
+    expect(types).not.toContain("unsafe_effect_failed_points_earn");
   });
 });

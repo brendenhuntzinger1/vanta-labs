@@ -50,6 +50,25 @@ export interface RefundCandidate {
 }
 
 /**
+ * Refunded orders inside the lookback window — INCLUDING the ones with no
+ * refunded_at at all.
+ *
+ * `refunded_at` IS NULLABLE, AND `>=` NEVER MATCHES NULL. That single fact made
+ * the old `.gte("refunded_at", since)` blind to this sweep's PRIMARY case:
+ * upsertOrderRecord writes payment_status = 'refunded' EARLY, while
+ * refund_amount and refunded_at are written together LATER in a best-effort
+ * update whose failure is swallowed. So the canonical "revenue was never
+ * reduced" order — the exact order this sweep exists to repair — has
+ * refunded_at IS NULL and was invisible to it.
+ *
+ * The scan stays bounded: NULL-refunded_at rows are still constrained by
+ * payment_status, by the absence conditions each pass adds, and by `limit`.
+ */
+function refundedWindow(since: string) {
+  return `refunded_at.gte.${since},refunded_at.is.null`;
+}
+
+/**
  * Which refund effects are still missing for one order.
  *
  * An effect is only planned when the order actually incurred it: an order that
@@ -103,19 +122,61 @@ export async function repairIncompleteRefunds(options?: {
 
   const result: RefundRepairResult = { scanned: 0, repaired: 0, failed: 0 };
 
-  const { data, error } = await supabaseAdmin
-    .from("orders")
-    .select(
-      "order_id, payment_status, refund_amount, points_earned, points_redeemed, store_credit_redeemed_cents, amount_paid",
-    )
-    .eq("payment_status", "refunded")
-    .gte("refunded_at", since)
-    .order("refunded_at", { ascending: true })
-    .limit(limit);
+  const COLUMNS =
+    "order_id, payment_status, refund_amount, points_earned, points_redeemed, store_credit_redeemed_cents, amount_paid";
 
-  if (error) throw error;
+  // ABSENCE BELONGS IN THE QUERY. Selecting the oldest N refunded orders and
+  // THEN filtering in JavaScript meant `limit` bounded the rows SCANNED, not
+  // the rows to repair: once the oldest N were fixed, every later tick re-read
+  // those same N, found nothing to do, and never reached the orders behind
+  // them. Each pass below carries its own absence condition, so `limit` bounds
+  // CANDIDATES.
+  //
+  // ORDER ON A COLUMN THAT IS ALWAYS PRESENT. Paginating on refunded_at cannot
+  // work now that NULL-refunded_at rows are in scope — NULLs sort to one end
+  // and the window would never move past them. updated_at is written by every
+  // path that touches an order, including the refund_amount repair below, so a
+  // repaired order moves to the BACK of the queue as well as out of pass A's
+  // filter.
+  //
+  // TWO PASSES, because the four effects are not detectable the same way.
+  // refund_amount lives on the order and can be tested in SQL. The other three
+  // are proven ABSENT by a missing ledger row in another table, which no
+  // orders-table predicate can express — the closest available narrowing is
+  // "this order actually incurred points or store credit at all". Running both
+  // and de-duplicating keeps the primary case self-advancing without dropping
+  // coverage of the other three.
+  const [primary, ledgerEffects] = await Promise.all([
+    // Pass A — revenue was never reduced. Self-advancing: the repair changes
+    // the very column this filter tests, so a fixed order leaves the set.
+    supabaseAdmin
+      .from("orders")
+      .select(COLUMNS)
+      .eq("payment_status", "refunded")
+      .or(refundedWindow(since))
+      .or("refund_amount.is.null,refund_amount.eq.0")
+      .order("updated_at", { ascending: true })
+      .limit(limit),
+    // Pass B — points and store credit. Only orders that actually earned,
+    // redeemed or spent something can need one of these.
+    supabaseAdmin
+      .from("orders")
+      .select(COLUMNS)
+      .eq("payment_status", "refunded")
+      .or(refundedWindow(since))
+      .or("points_earned.gt.0,points_redeemed.gt.0,store_credit_redeemed_cents.gt.0")
+      .order("updated_at", { ascending: true })
+      .limit(limit),
+  ]);
 
-  const candidates = (data ?? []) as RefundCandidate[];
+  if (primary.error) throw primary.error;
+  if (ledgerEffects.error) throw ledgerEffects.error;
+
+  const byId = new Map<string, RefundCandidate>();
+  for (const row of [...(primary.data ?? []), ...(ledgerEffects.data ?? [])] as RefundCandidate[]) {
+    if (!byId.has(row.order_id)) byId.set(row.order_id, row);
+  }
+  const candidates = [...byId.values()];
   result.scanned = candidates.length;
   if (candidates.length === 0) return result;
 
@@ -157,16 +218,37 @@ export async function repairIncompleteRefunds(options?: {
           // recorded, so revenue was never reduced. The refunded amount is what
           // the customer paid — a processor-initiated full refund is the only
           // way this status is reached without an amount already written.
-          const { error: updateError } = await supabaseAdmin
+          //
+          // refunded_at IS NOT WRITTEN HERE, DELIBERATELY. It records WHEN the
+          // money went back, and admin-membership.ts attributes 30-day
+          // membership refunds by it. Stamping it with now() moved a
+          // months-old refund into the current month and deducted it from the
+          // wrong one — this repair knows the AMOUNT that was missed, not the
+          // DATE, and inventing the date corrupts a figure that was correct.
+          //
+          // NULL AND 0 ARE DIFFERENT FILTERS IN SQL. `.eq("refund_amount", 0)`
+          // does not match NULL, so for a legacy NULL row the guarded update
+          // matched nothing, returned no error, and `repaired` was incremented
+          // anyway — the order was replanned and "repaired" on every tick
+          // forever. Same hazard, same handling as the admin reimbursement
+          // route (src/app/api/admin/orders/[orderId]/route.ts).
+          const now = new Date().toISOString();
+          const claim = supabaseAdmin
             .from("orders")
             .update({
               refund_amount: Number(order.amount_paid ?? 0),
-              refunded_at: new Date().toISOString(),
-              updated_at: new Date().toISOString(),
+              updated_at: now,
             })
-            .eq("order_id", order.order_id)
-            .eq("refund_amount", 0);
+            .eq("order_id", order.order_id);
+          const { data: claimed, error: updateError } = await (order.refund_amount == null
+            ? claim.is("refund_amount", null)
+            : claim.eq("refund_amount", 0)
+          ).select("id");
           if (updateError) throw updateError;
+          // Nothing matched: another writer got there first, or the row moved
+          // under us. That is not a repair, and counting it as one is what
+          // made the storm self-sustaining.
+          if (!claimed || claimed.length === 0) continue;
         } else if (effect === "points_reversal") {
           await reverseOrderPoints(order.order_id);
         } else if (effect === "points_restore") {

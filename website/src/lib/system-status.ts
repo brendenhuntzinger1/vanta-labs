@@ -29,6 +29,48 @@ export function effectiveUnitPriceCents(row: {
   return Number(row.sale_price_cents) > 0 ? Number(row.sale_price_cents) : Number(row.price_cents ?? 0);
 }
 
+/** A row that carries its own price and cost: a product, or one of its doses. */
+export interface SellableUnit {
+  price_cents: number | null;
+  sale_price_cents: number | null;
+  product_cost_cents: number | null;
+}
+
+/** A published product, with the dose rows that are actually bought from it. */
+export interface DoseBearingProduct extends SellableUnit {
+  doses?: SellableUnit[] | null;
+}
+
+/**
+ * WHAT A SHOPPER CAN ACTUALLY BUY FROM THIS PRODUCT.
+ *
+ * Cost resolution here MUST mirror resolveUnitCostCents in quote-order.ts, or
+ * these checks report on a number no order ever uses:
+ *
+ *   HAS dose rows → the doses are the units; each carries its own price and
+ *                   its own landed cost. The parent's product_cost_cents is an
+ *                   inherited EvoLabs seed figure, 1.4x-6.8x the true cost, and
+ *                   Phase 2 Section 4 nulls it outright for all 38 of them.
+ *   NO dose rows  → the product row IS the unit, and its parent cost is the
+ *                   only cost it has (which is exactly the case
+ *                   sql/product-cogs.sql sets it for).
+ *
+ * Reading only the parent column meant that after Section 4 the COGS check
+ * warned on every dose-bearing product forever, and — far worse — the
+ * below-cost check could NEVER fire again, because it requires cost > 0 and
+ * every parent cost was NULL. That check is blocksLaunch and is the only thing
+ * in the system that catches a swapped price and cost.
+ */
+export function sellableUnits<T extends DoseBearingProduct>(row: T): SellableUnit[] {
+  return row.doses && row.doses.length > 0 ? row.doses : [row];
+}
+
+function isBelowCost(unit: SellableUnit): boolean {
+  const cost = Number(unit.product_cost_cents ?? 0);
+  const price = effectiveUnitPriceCents(unit);
+  return cost > 0 && price > 0 && price <= cost;
+}
+
 /**
  * Published products a shopper cannot actually buy.
  *
@@ -38,17 +80,33 @@ export function effectiveUnitPriceCents(row: {
  * alike. The shopper is told "This order can't be completed at a profitable
  * price", which reads as a site fault rather than a price they can avoid.
  *
+ * Compared PER SELLABLE UNIT: a dose is measured against its OWN price, never
+ * against the parent's, so a large dose's landed cost is never held up against
+ * a small dose's price.
+ *
  * Rows with no cost on file are NOT flagged: an unknown cost is the "no COGS"
  * check's business, and guessing here would cry wolf on every unpriced import.
  */
-export function findProductsPricedBelowCost<
-  T extends { price_cents: number | null; sale_price_cents: number | null; product_cost_cents: number | null },
->(rows: T[]): T[] {
-  return rows.filter((row) => {
-    const cost = Number(row.product_cost_cents ?? 0);
-    const price = effectiveUnitPriceCents(row);
-    return cost > 0 && price > 0 && price <= cost;
-  });
+export function findProductsPricedBelowCost<T extends DoseBearingProduct>(rows: T[]): T[] {
+  return rows.filter((row) => sellableUnits(row).some(isBelowCost));
+}
+
+/** The first unit that sells at or below its cost — for the operator message. */
+export function firstBelowCostUnit<T extends DoseBearingProduct>(row: T): SellableUnit | null {
+  return sellableUnits(row).find(isBelowCost) ?? null;
+}
+
+/**
+ * Published products where something buyable has no cost on file.
+ *
+ * A missing cost does not break a sale, it makes the margin on that sale a
+ * guess: resolveUnitCostCents returns null for that line and computeOrderProfit
+ * marks the order's COGS as ESTIMATED. So the check is per-unit — one uncosted
+ * dose is one product whose profit is partly a guess.
+ */
+export function findProductsMissingCost<T extends DoseBearingProduct>(rows: T[]): T[] {
+  return rows.filter((row) =>
+    sellableUnits(row).some((unit) => !(Number(unit.product_cost_cents ?? 0) > 0)));
 }
 
 function safeMockMode(): boolean {
@@ -244,18 +302,31 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
 
     // Stock lives on the DOSE for anything sold by dose, so a parent product
     // can legitimately carry no stock of its own.
+    // Price and cost come back with the stock columns because the COGS and
+    // margin checks below resolve BOTH from the dose when one exists — see
+    // sellableUnits(). One read, three checks.
+    type DoseRow = {
+      product_id: string;
+      track_inventory: boolean | null;
+      inventory_quantity: number | null;
+      price_cents: number | null;
+      sale_price_cents: number | null;
+      product_cost_cents: number | null;
+    };
     const { data: doseRows } = rows.length > 0
       ? await supabaseAdmin
           .from("product_doses")
-          .select("product_id, track_inventory, inventory_quantity")
+          .select("product_id, track_inventory, inventory_quantity, price_cents, sale_price_cents, product_cost_cents")
           .in("product_id", rows.map((row) => row.id))
       : { data: [] };
-    const dosesByProduct = new Map<string, Array<{ track_inventory: boolean | null; inventory_quantity: number | null }>>();
-    for (const dose of (doseRows ?? []) as Array<{ product_id: string; track_inventory: boolean | null; inventory_quantity: number | null }>) {
+    const dosesByProduct = new Map<string, DoseRow[]>();
+    for (const dose of (doseRows ?? []) as DoseRow[]) {
       const list = dosesByProduct.get(String(dose.product_id)) ?? [];
       list.push(dose);
       dosesByProduct.set(String(dose.product_id), list);
     }
+    // The shape the cost checks read: a product plus the units bought from it.
+    const priced = rows.map((row) => ({ ...row, doses: dosesByProduct.get(row.id) ?? [] }));
 
     /**
      * The rule reserve_inventory() actually enforces, mirrored exactly:
@@ -299,7 +370,7 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
     // COGS drives every profit figure. A missing cost does not break a sale, it
     // makes the margin on that sale a guess — the profit report falls back to
     // the worst-case assumption in Control Center.
-    const withoutCost = rows.filter((row) => !(Number(row.product_cost_cents ?? 0) > 0));
+    const withoutCost = findProductsMissingCost(priced);
     out.push({
       key: "product_cogs",
       label: "Published products have a unit cost (COGS)",
@@ -316,7 +387,7 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
      * between them that is wrong — which is exactly what a swapped price and
      * cost looks like, and it silently refuses every cart containing the item.
      */
-    const belowCost = findProductsPricedBelowCost(rows);
+    const belowCost = findProductsPricedBelowCost(priced);
     out.push({
       key: "product_sellable_margin",
       label: "Published products can be sold at a profit",
@@ -324,7 +395,13 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
       detail: belowCost.length === 0
         ? `All ${rows.length} published products price above their cost`
         : `${belowCost.length} published product(s) cost at least as much as they sell for, so checkout refuses any cart containing them: ${belowCost
-            .map((row) => `${label(row)} (sells ${(effectiveUnitPriceCents(row) / 100).toFixed(2)}, costs ${(Number(row.product_cost_cents) / 100).toFixed(2)})`)
+            .map((row) => {
+              // Report the OFFENDING unit's own figures — a dose when the
+              // product sells by dose — so the operator is shown the pair that
+              // is actually wrong rather than the parent's unrelated numbers.
+              const unit = firstBelowCostUnit(row) ?? row;
+              return `${label(row)} (sells ${(effectiveUnitPriceCents(unit) / 100).toFixed(2)}, costs ${(Number(unit.product_cost_cents) / 100).toFixed(2)})`;
+            })
             .join(", ")}. Correct the price or the cost — a swapped pair looks exactly like this — or unpublish them.`,
       blocksLaunch: true,
     });

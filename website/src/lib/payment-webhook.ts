@@ -56,9 +56,16 @@ export function resolveMembershipCycle(raw: unknown, orderId: string): "monthly"
  * A durable alert for a financial effect that FAILED and CANNOT be auto-repaired.
  *
  * The repair sweeps cover the six effects whose every downstream write is
- * idempotent. These five are not: retrying them would double-write a ledger
- * row, a counter, or a billing event. Until they carry uniqueness guarantees
- * they get a human, not a retry.
+ * idempotent. These are not: retrying them would double-write a ledger row, a
+ * counter, or a billing event. Until they carry uniqueness guarantees they get
+ * a human, not a retry.
+ *
+ * ONE EFFECT, ONE `effect` STRING. The alert type is what an operator triages
+ * by, so effects that fail in different money directions must never share one.
+ * `store_credit_redemption` used to be reported as `points_earn` because they
+ * sat in the same try/catch: a points-earn failure means the customer is OWED
+ * something, a redemption failure means the customer was OVER-credited and the
+ * store is short. The repairs are opposites, so the labels must be too.
  */
 export function unsafeEffectAlert(effect: string, orderId: string, error: unknown) {
   return {
@@ -1170,15 +1177,29 @@ export async function finalizeManualPayment(
   // Membership purchases don't earn or redeem loyalty points (it's a digital,
   // non-refundable subscription, not a merchandise order).
   if (customerUserId && !isMembershipOrder) {
+    // STORE-CREDIT REDEMPTION GETS ITS OWN ALERT. It used to share this try
+    // with the points EARN, so its failure raised
+    // `unsafe_effect_failed_points_earn` — and the two fail in OPPOSITE money
+    // directions. A failed points earn means the customer is owed points they
+    // did not get. A failed redemption means the customer already received the
+    // discount and KEPT the credit: the store is out that money. An operator
+    // triaging by alert type would credit the customer again on a fault that
+    // had already over-credited them.
+    const storeCreditRedeemedCents = Number(order.store_credit_redeemed_cents ?? 0);
+    if (storeCreditRedeemedCents > 0) {
+      try {
+        await redeemStoreCredit(customerUserId, storeCreditRedeemedCents, orderId);
+      } catch (creditError) {
+        console.error("Unable to redeem store credit for manual order", orderId, creditError);
+        await recordSystemAlert(unsafeEffectAlert("store_credit_redemption", orderId, creditError))
+          .catch(() => {});
+      }
+    }
+
     try {
       const pointsRedeemed = Number(order.points_redeemed ?? 0);
       if (pointsRedeemed > 0) {
         await redeemPoints(customerUserId, pointsRedeemed, orderId);
-      }
-
-      const storeCreditRedeemedCents = Number(order.store_credit_redeemed_cents ?? 0);
-      if (storeCreditRedeemedCents > 0) {
-        await redeemStoreCredit(customerUserId, storeCreditRedeemedCents, orderId);
       }
 
       const pointsRate = await getActivePointsPerDollar(customerUserId);
@@ -1716,15 +1737,24 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // Memberships are a digital purchase: no loyalty points earned or redeemed
       // (matches the manual-approval path).
       if (customerUserId && !isMembershipOrder) {
+        // Own try/catch, own alert — see the manual-approval path above. A
+        // failed redemption leaves the store out of pocket; a failed points
+        // earn leaves the customer short. Same catch block, opposite repairs.
+        const storeCreditRedeemedCents = Number(orderRecord?.store_credit_redeemed_cents ?? 0);
+        if (storeCreditRedeemedCents > 0) {
+          try {
+            await redeemStoreCredit(customerUserId, storeCreditRedeemedCents, orderId);
+          } catch (creditError) {
+            console.error("Unable to redeem store credit for order", orderId, creditError);
+            await recordSystemAlert(unsafeEffectAlert("store_credit_redemption", orderId, creditError))
+              .catch(() => {});
+          }
+        }
+
         try {
           const pointsRedeemed = Number(orderRecord?.points_redeemed ?? eventPayload.pointsRedeemed ?? 0);
           if (pointsRedeemed > 0) {
             await redeemPoints(customerUserId, pointsRedeemed, orderId);
-          }
-
-          const storeCreditRedeemedCents = Number(orderRecord?.store_credit_redeemed_cents ?? 0);
-          if (storeCreditRedeemedCents > 0) {
-            await redeemStoreCredit(customerUserId, storeCreditRedeemedCents, orderId);
           }
 
           const pointsRate = await getActivePointsPerDollar(customerUserId);
@@ -1983,6 +2013,13 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         }
       } catch (membershipError) {
         console.error("Unable to revoke membership for refunded order", orderId, membershipError);
+        // NEITHER SWEPT NOR ALERTED until now. The refund sweep repairs the
+        // four idempotent refund effects; membership revocation is not one of
+        // them, so this failure had no console reader, no alert and no repair
+        // path — a customer whose membership was refunded kept member pricing,
+        // free shipping and points multipliers indefinitely.
+        await recordSystemAlert(unsafeEffectAlert("membership_revoke", orderId, membershipError))
+          .catch(() => {});
       }
     }
 

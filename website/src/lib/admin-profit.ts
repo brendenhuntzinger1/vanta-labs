@@ -675,12 +675,22 @@ export interface RecordShippingCostInput {
  * The repair sweep can legitimately re-run against an order whose cost is
  * already recorded; without this the audit trail fills with identical rows and
  * stops being usable as a record of what actually changed.
+ *
+ * COMPARE AGAINST THE MOST RECENT ROW ONLY, NOT THE WHOLE HISTORY.
+ *
+ * Matching ANY prior row made the audit lie about real changes: 742 -> 500 ->
+ * 742 wrote two rows and then silently dropped the third, so the trail ended
+ * at 500 while the order actually charged 742. A cost is only "unchanged" when
+ * it equals what the order was LAST recorded at. `existing` arrives from
+ * getShippingCostAudit, which orders created_at DESCENDING, so index 0 is the
+ * current state — including a reversal row (exactCostCents null), which is
+ * never equal to an amount and therefore correctly lets the next charge write.
  */
 export function shouldWriteShippingAudit(
   existing: Array<{ exactCostCents: number | null }>,
   amountCents: number,
 ): boolean {
-  return !existing.some((row) => row.exactCostCents === amountCents);
+  return !(existing.length > 0 && existing[0].exactCostCents === amountCents);
 }
 
 export async function recordActualShippingCost(input: RecordShippingCostInput): Promise<{ ok: boolean; error?: string }> {
@@ -697,9 +707,28 @@ export async function recordActualShippingCost(input: RecordShippingCostInput): 
   // correction must not overwrite it.
   const { data: current } = await supabaseAdmin
     .from("orders")
-    .select("estimated_shipping_cost_cents")
+    .select("estimated_shipping_cost_cents, label_voided_at")
     .eq("order_id", input.orderId)
     .maybeSingle();
+
+  // A VOIDED LABEL HAS NO COST TO RECORD, AND THIS FUNCTION IS WHERE THE MONEY
+  // IS WRITTEN.
+  //
+  // voidLabelForOrder refunds the postage and then nulls
+  // actual_shipping_cost_cents, but deliberately keeps label_purchased_at and
+  // shippo_transaction_id — so everything the repair sweep needs to "re-record"
+  // the refunded postage is still sitting on the row. The sweep now filters
+  // voided orders out, but a pre-filter is a caller's promise, and this is the
+  // only place that actually charges profit. Refusing here means no caller,
+  // present or future, can re-charge a refunded label: not the sweep, not a
+  // replayed Shippo webhook, not an admin retry.
+  if (current?.label_voided_at) {
+    return {
+      ok: false,
+      error: "This order's label was voided and its postage refunded, so there is no shipping cost to record.",
+    };
+  }
+
   const estimatedCents =
     current?.estimated_shipping_cost_cents != null
       ? Number(current.estimated_shipping_cost_cents)
