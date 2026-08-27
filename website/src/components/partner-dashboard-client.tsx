@@ -6,6 +6,7 @@ import { ReferralCodeManager } from "@/components/referral-code-manager";
 import { ReferralShare } from "@/components/referral-share";
 import type { PartnerSummary } from "@/lib/partner-portal";
 import { formatDisplayDate } from "@/lib/format-date";
+import { commissionHoldDuration, commissionHoldLabel, personalDiscountLabel } from "@/lib/partner-dashboard-copy";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -98,6 +99,15 @@ function statusText(value: string) {
 
 export function PartnerDashboardClient({ summary }: { summary: PartnerSummary }) {
   const [liveSummary, setLiveSummary] = useState(summary);
+  // Both of these used to be literals in the JSX below — "14-day hold" and
+  // "15% off your own orders" — while the programme held 30 days and gave 20%.
+  // They now come from the payload, which reads the same settings checkout and
+  // the commission accrual read.
+  const personalDiscount = personalDiscountLabel(liveSummary.personalDiscountPercent);
+  // Used in two places — the Pending card and the empty-payouts note. The
+  // second one was missed on the first pass and still said 14 days.
+  const holdLabel = commissionHoldLabel(liveSummary.commissionHoldDays);
+  const holdDuration = commissionHoldDuration(liveSummary.commissionHoldDays);
   const [statusFilter, setStatusFilter] = useState("all");
   const [query, setQuery] = useState("");
 
@@ -145,8 +155,10 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
           <h1 className="vl2-serif mt-2 text-3xl text-white sm:text-4xl">Welcome back, {liveSummary.partnerName}.</h1>
           <p className="mt-2 text-sm text-zinc-400">
             Your code gives customers <span className="text-cyan-300">{liveSummary.customerDiscountPercent}% off</span> ·
-            you earn <span className="text-amber-200">{liveSummary.commissionPercent}% commission</span> · you also get{" "}
-            <span className="text-emerald-300">15% off your own orders</span> while approved.
+            you earn <span className="text-amber-200">{liveSummary.commissionPercent}% commission</span>
+            {personalDiscount ? (
+              <> · you also get <span className="text-emerald-300">{personalDiscount}</span> while approved</>
+            ) : null}.
           </p>
         </div>
       </section>
@@ -154,7 +166,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
       {/* Earnings — featured */}
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard label="Total earnings" value={currency(liveSummary.totalEarnings)} featured accent="gold" sub="lifetime" />
-        <StatCard label="Pending" value={currency(liveSummary.pendingOnlyCommissions)} sub={`${liveSummary.commissionHoldDays}-day hold`} />
+        <StatCard label="Pending" value={currency(liveSummary.pendingOnlyCommissions)} sub={holdLabel} />
         <StatCard label="Next payout" value={currency(liveSummary.approvedCommissions)} accent="cyan" sub="approved · every 2 weeks" />
         <StatCard label="Paid out" value={currency(liveSummary.paidCommissions)} accent="emerald" sub="all time" />
       </section>
@@ -277,7 +289,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
             </table>
           </div>
         ) : (
-          <p className="mt-3 text-sm text-zinc-500">No payouts yet. Commissions are held for {liveSummary.commissionHoldDays} days, then paid on a biweekly basis.</p>
+          <p className="mt-3 text-sm text-zinc-500">No payouts yet. Commissions are held for {holdDuration}, then paid on a biweekly basis.</p>
         )}
       </section>
 
