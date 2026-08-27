@@ -31,6 +31,17 @@
 -- platforms — the row exists solely so a historical order cannot newly report.
 -- Do not read them as delivery evidence, and do not count them in reporting.
 --
+-- The code that counts them was taught to skip them: `readPurchaseLedger` in
+-- src/lib/ads/tracking-health-server.ts now scopes its read to one platform and
+-- excludes `event_id = 'backfill-no-send'`. Before that fix this backfill would
+-- have made the tracking-health board render Reddit's sends and these
+-- suppression rows as TikTok's own, and — worse — a non-zero total on an
+-- account with no delivered TikTok row flips that check from NOT_TESTED to
+-- FAIL, reporting a working integration as broken. Any NEW consumer of this
+-- table must apply the same two exclusions; src/lib/ads/purchase-ledger.ts
+-- exports countLedger() and BACKFILL_EVENT_ID so it does not have to reinvent
+-- them.
+--
 -- Idempotent throughout: `if exists` / `if not exists` / `on conflict do
 -- nothing`. Running it twice is a no-op the second time.
 --

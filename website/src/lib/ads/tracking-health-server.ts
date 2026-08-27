@@ -3,6 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { credentialStatus, PIXEL_ID } from "@/lib/ads/tiktok-events-api";
 import type { ServerHealthInput } from "@/lib/ads/tracking-health";
+import { BACKFILL_EVENT_ID, countLedger, type LedgerCountRow, type LedgerPlatform } from "@/lib/ads/purchase-ledger";
 
 /**
  * Everything the health board can learn without leaving the server.
@@ -42,21 +43,42 @@ export function findClientExposedSecrets(env: NodeJS.ProcessEnv = process.env): 
   return [...exposed].sort();
 }
 
-/** How many server-side Purchase events have been attempted, and accepted. */
-async function readPurchaseLedger(): Promise<ServerHealthInput["purchaseLedger"]> {
+/**
+ * How many server-side Purchase events ONE platform has attempted, and had
+ * accepted.
+ *
+ * Scoped to a platform because the ledger is no longer one row per order. Its
+ * key is (order_id, platform), so an unfiltered read returns every channel's
+ * rows, and this figure is rendered as "TikTok accepted N of M" — Reddit's
+ * genuine sends would land in TikTok's numerator.
+ *
+ * `backfill-no-send` rows are excluded for a sharper reason. They are the
+ * suppression rows ads-purchase-ledger-per-platform.sql writes so historical
+ * orders cannot newly report; nothing was sent for them. Counting them would
+ * not merely inflate M — on an account with no delivered TikTok row, any
+ * non-zero total flips this check from NOT_TESTED to FAIL, so a green
+ * integration would report as broken.
+ *
+ * Both exclusions are applied twice on purpose: in the query, so `.limit(1000)`
+ * still budgets a thousand of THIS platform's rows rather than a third of that,
+ * and again in countLedger, which is the pure, tested arithmetic.
+ *
+ * Failure mode unchanged: a missing table or a query error still answers
+ * `{ available: false, total: 0, delivered: 0 }` — "nothing recorded", not an
+ * error to surface.
+ */
+async function readPurchaseLedger(platform: LedgerPlatform = "tiktok"): Promise<ServerHealthInput["purchaseLedger"]> {
   try {
     const { data, error } = await supabaseAdmin
       .from("ad_purchase_events_sent")
-      .select("delivered")
+      .select("platform, delivered, event_id")
+      .eq("platform", platform)
+      .neq("event_id", BACKFILL_EVENT_ID)
       .limit(1000);
     // A missing table is a legitimate state, not an error to surface: the
     // ledger is an enhancement and its absence only means "nothing recorded".
     if (error || !data) return { available: false, total: 0, delivered: 0 };
-    return {
-      available: true,
-      total: data.length,
-      delivered: data.filter((row) => (row as { delivered?: boolean }).delivered).length,
-    };
+    return countLedger(data as LedgerCountRow[], platform);
   } catch {
     return { available: false, total: 0, delivered: 0 };
   }

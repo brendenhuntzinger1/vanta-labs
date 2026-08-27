@@ -59,3 +59,47 @@ export function wasAlreadySent(rows: readonly LedgerRow[] | null | undefined, pl
   const wanted = platform.trim().toLowerCase();
   return rows.some((row) => platformOf(row) === wanted);
 }
+
+/**
+ * The marker `ads-purchase-ledger-per-platform.sql` writes on the rows it
+ * backfills. Those rows were NEVER sent: they exist only so an order that
+ * predates the per-platform key cannot newly report on a channel the old
+ * single-column key had silenced. Anything that counts sends must skip them.
+ */
+export const BACKFILL_EVENT_ID = "backfill-no-send";
+
+/** A ledger row as the health reader sees it — `event_id` included. */
+export type LedgerCountRow = LedgerRow & { event_id?: string | null };
+
+/** The shape the tracking-health board consumes. */
+export type LedgerCounts = { available: boolean; total: number; delivered: number };
+
+/** Is this row a suppression marker rather than a record of a real send? */
+export function isBackfillRow(row: LedgerCountRow): boolean {
+  return String(row?.event_id ?? "").trim().toLowerCase() === BACKFILL_EVENT_ID;
+}
+
+/**
+ * How many Purchase events one platform genuinely attempted, and how many it
+ * had accepted.
+ *
+ * Pure, so the health board's arithmetic is testable without a database. Two
+ * classes of row must not be counted towards a platform's card: another
+ * platform's rows, and this migration's suppression rows. Counting either would
+ * make the TikTok card claim sends it never made — and worse, on an account
+ * with no delivered TikTok row, a non-zero total flips that check from
+ * NOT_TESTED to FAIL, reporting a green integration as broken.
+ */
+export function countLedger(
+  rows: readonly LedgerCountRow[] | null | undefined,
+  platform: LedgerPlatform = "tiktok",
+): LedgerCounts {
+  if (!rows) return { available: false, total: 0, delivered: 0 };
+  const wanted = platform.trim().toLowerCase();
+  const genuine = rows.filter((row) => platformOf(row) === wanted && !isBackfillRow(row));
+  return {
+    available: true,
+    total: genuine.length,
+    delivered: genuine.filter((row) => Boolean(row?.delivered)).length,
+  };
+}
