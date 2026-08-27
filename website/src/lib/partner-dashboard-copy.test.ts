@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { commissionHoldLabel, personalDiscountLabel } from "@/lib/partner-dashboard-copy";
+import { commissionHoldDuration, commissionHoldLabel, personalDiscountLabel } from "@/lib/partner-dashboard-copy";
 
 // ---------------------------------------------------------------------------
 // TWO NUMBERS THE AMBASSADOR DASHBOARD TOLD ITS OWN AMBASSADORS, WRONGLY.
@@ -80,5 +80,47 @@ describe("personalDiscountLabel", () => {
   it("does not invent decimals the admin did not set", () => {
     expect(personalDiscountLabel(12.5)).toBe("12.5% off your own orders");
     expect(personalDiscountLabel(20.0)).toBe("20% off your own orders");
+  });
+});
+
+// The same setting, worded for the middle of a sentence rather than as a label
+// under a figure: "Commissions are held for 30 days, then paid biweekly."
+//
+// It exists because the first pass at this fix replaced the "Pending" card's
+// literal and missed a SECOND "14 days" further down the same file. Deriving
+// both from one setting is the point; two call sites needing two shapes is not
+// a reason to leave one of them typed in.
+describe("commissionHoldDuration", () => {
+  it("reads as a duration inside a sentence", () => {
+    expect(commissionHoldDuration(30)).toBe("30 days");
+  });
+
+  it("never says 14 days when the programme holds 30", () => {
+    expect(commissionHoldDuration(30)).not.toContain("14");
+  });
+
+  it("keeps the singular grammatical", () => {
+    expect(commissionHoldDuration(1)).toBe("1 day");
+  });
+
+  it("says a hold of zero in words rather than '0 days'", () => {
+    expect(commissionHoldDuration(0)).toBe("no time at all");
+  });
+
+  it.each([
+    ["NaN", Number.NaN],
+    ["Infinity", Number.POSITIVE_INFINITY],
+    ["negative", -5],
+  ])("stays vague rather than printing a %s at an ambassador", (_label, value) => {
+    const text = commissionHoldDuration(value);
+    expect(text).toBe("a short period");
+    expect(text).not.toMatch(/NaN|Infinity|-/);
+  });
+
+  it("agrees with the label form about how long the hold is", () => {
+    for (const days of [1, 7, 30, 45]) {
+      expect(commissionHoldLabel(days)).toContain(String(days));
+      expect(commissionHoldDuration(days)).toContain(String(days));
+    }
   });
 });

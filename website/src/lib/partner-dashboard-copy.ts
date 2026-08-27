@@ -56,3 +56,23 @@ export function personalDiscountLabel(percent: number): string | null {
   // "12.5%". Number's own formatting drops the trailing zero for us.
   return `${Number(percent)}% off your own orders`;
 }
+
+/**
+ * The same setting worded for the middle of a sentence: "Commissions are held
+ * for 30 days, then paid on a biweekly basis."
+ *
+ * A second shape rather than string surgery on the label, because the first
+ * pass at this fix replaced the "Pending" card's literal and missed a SECOND
+ * "14 days" further down the same component. Two call sites wanting two shapes
+ * is not a reason to leave one of them typed in.
+ */
+export function commissionHoldDuration(days: number): string {
+  const resolved = wholeDays(days);
+  if (resolved === null) {
+    return "a short period";
+  }
+  if (resolved === 0) {
+    return "no time at all";
+  }
+  return `${resolved} ${resolved === 1 ? "day" : "days"}`;
+}

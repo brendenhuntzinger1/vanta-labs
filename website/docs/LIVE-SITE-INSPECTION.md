@@ -2346,27 +2346,81 @@ $0, so no figure is wrong today, but the query grows without bound and the
 portal's "pending" count will read as money in flight when it is not. A
 `ineligible_reason is null` filter is behaviour-preserving.
 
-### OPEN-06 — the referral programme master switch still hard-blocks the pay button
+### OPEN-06 — CLOSED
 
-**Severity:** P2 · pre-existing, unchanged by this fix
+The switch now reaches the client through `/api/catalog/promotions`, held as
+`boolean | null` so "not answered yet" is not "off". With the programme off no
+surface shows a saving, the stored code is dropped, and the pay button answers
+200 where it used to answer 400. The `/r/` cookie is kept, so turning the
+programme back on restores the referral. `quote-order.ts:539` is unchanged and
+is now the backstop against a crafted or stale request. Proven in a browser
+against a production build across the landing route, cart, drawer, checkout, a
+card checkout, the express session API, Buy-3-Get-1, a refresh, a stored code, a
+typed code, and the off→on transition.
+
+### OPEN-07 — the ambassador personal discount ignores the master switch
+
+**Severity:** P3 · pre-existing · undercharges in the customer's favour
+**Status:** CONFIRMED by code read, both halves
+
+`quote-order.ts:623` computes the approved ambassador's own discount from
+`personalDiscountPercent > 0` alone, with no check on `referralProgram.enabled`
+— so the switch is mislabelled in both directions: it blocks their customers
+(now: drops their discount) while leaving the ambassadors' own perk running.
+Meanwhile `api/account/ambassador-discount/route.ts:24` DOES gate the previewed
+percent on `program.enabled`, so with the switch off the page shows $200 and the
+card is charged $160 on a 20% basket.
+
+Nobody is overcharged — the underpayment guard is deliberately one-directional —
+and the same gap already exists with the programme fully on for an approved
+ambassador checking out signed-out, because the route returns 0 with no session
+while `isApprovedAmbassadorCustomer` matches by email. The wider fix is the
+route, not the quote. The Control Center warning added in this pass states the
+behaviour plainly so an operator is not surprised by it.
+
+### OPEN-08 — `manual_review` commissions are excluded from the owner's P&L
+
+**Severity:** P2 · unreachable for at least 30 days
 **Status:** CONFIRMED by code read
 
-`quote-order.ts:538` throws "The referral program is currently unavailable.
-Remove the code to continue." when the admin turns the programme off in the
-Control Center. The client never learns: `validateReferralCodeClient` reads the
-ambassadors table directly, and `/api/catalog/promotions` sends
-`referralDiscountPercent` and `referralMinimumOrder` but never `enabled`. So
-every link already in the wild keeps showing "15% customer discount", keeps
-applying it, and every one of those shoppers is refused at the pay button — the
-identical shape to the defect this fix closes, triggered by the switch instead
-of the minimum.
+`admin-profit.ts` filters through `isEarnedCommission`, which excludes
+`reversed`, `voided` and `manual_review` (`ledger.ts:12`). The justifying
+comment says those were "clawed back" — true of the first two, **wrong for
+`manual_review`**: `payment-webhook.ts:969` writes that status precisely when
+the commission was ALREADY PAID and the order is then refunded. So the one case
+where the cash has definitely left the building is the one excluded from profit.
 
-Dropping the referral instead of throwing does **not** fix it on its own: the
-server's total would then be higher than the client's, and the underpayment
-guard refuses the order anyway. The client has to be told, which means the
-`enabled` flag on `/api/catalog/promotions`, state for it in cart context, and a
-decision about tabs already open. That is its own diff. The switch is currently
-**on**, so nothing is failing today.
+Unreachable until an order clears the 30-day hold, is auto-approved, is paid
+out, and is then partially refunded — and the store has no referral orders. The
+understatement is the retained amount, not the whole commission, since the same
+write lowers `commission_amount`. Fix it as a profit-specific predicate in
+`admin-profit.ts` rather than by editing `ledger.ts`, which is shared with the
+ambassador-facing balances and mirrored in SQL under `ledger-sql-parity.test.ts`
+— and correct the comment at the same time.
+
+### OPEN-09 — the recruitment pages still promise numbers the programme does not pay
+
+**Severity:** P2 · public-facing, and it is a promise about money
+**Status:** CONFIRMED against production settings
+
+`ambassador/ambassador-client.tsx:74` advertises "You earn 15%" and a "14-day
+hold". Production pays **10%** (`referral.default_commission_percent`) and holds
+**30 days**. `partner-program-landing.tsx:451` carries the hold literal too.
+Seven ambassadors have already signed up against the 15% figure.
+
+Left out of this pass on purpose: correcting only the hold would leave the
+commission rate wrong beside it, which reads as though both had been checked.
+The page's whole terms grid should read live config in one change.
+
+### OPEN-10 — a tab open across the switch keeps its snapshot
+
+**Severity:** P3
+**Status:** CONFIRMED by code read
+
+`cart-context.tsx` fetches the promotions config once per load, so a tab already
+open when an operator flips the switch keeps the old answer and can still reach
+the server throw once. Every fresh load is correct. Same root cause as OPEN-03,
+and the same fix would close both.
 
 ### Still true, and unchanged by this fix
 

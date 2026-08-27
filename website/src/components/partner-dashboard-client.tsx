@@ -6,7 +6,7 @@ import { ReferralCodeManager } from "@/components/referral-code-manager";
 import { ReferralShare } from "@/components/referral-share";
 import type { PartnerSummary } from "@/lib/partner-portal";
 import { formatDisplayDate } from "@/lib/format-date";
-import { commissionHoldLabel, personalDiscountLabel } from "@/lib/partner-dashboard-copy";
+import { commissionHoldDuration, commissionHoldLabel, personalDiscountLabel } from "@/lib/partner-dashboard-copy";
 
 function currency(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -104,6 +104,10 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
   // They now come from the payload, which reads the same settings checkout and
   // the commission accrual read.
   const personalDiscount = personalDiscountLabel(liveSummary.personalDiscountPercent);
+  // Used in two places — the Pending card and the empty-payouts note. The
+  // second one was missed on the first pass and still said 14 days.
+  const holdLabel = commissionHoldLabel(liveSummary.commissionHoldDays);
+  const holdDuration = commissionHoldDuration(liveSummary.commissionHoldDays);
   const [statusFilter, setStatusFilter] = useState("all");
   const [query, setQuery] = useState("");
 
@@ -162,7 +166,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
       {/* Earnings — featured */}
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard label="Total earnings" value={currency(liveSummary.totalEarnings)} featured accent="gold" sub="lifetime" />
-        <StatCard label="Pending" value={currency(liveSummary.pendingOnlyCommissions)} sub={commissionHoldLabel(liveSummary.commissionHoldDays)} />
+        <StatCard label="Pending" value={currency(liveSummary.pendingOnlyCommissions)} sub={holdLabel} />
         <StatCard label="Next payout" value={currency(liveSummary.approvedCommissions)} accent="cyan" sub="approved · every 2 weeks" />
         <StatCard label="Paid out" value={currency(liveSummary.paidCommissions)} accent="emerald" sub="all time" />
       </section>
@@ -285,7 +289,7 @@ export function PartnerDashboardClient({ summary }: { summary: PartnerSummary })
             </table>
           </div>
         ) : (
-          <p className="mt-3 text-sm text-zinc-500">No payouts yet. Commissions are held for 14 days, then paid on a biweekly basis.</p>
+          <p className="mt-3 text-sm text-zinc-500">No payouts yet. Commissions are held for {holdDuration}, then paid on a biweekly basis.</p>
         )}
       </section>
 
