@@ -756,3 +756,176 @@ describe("a refund side-effect that fails is not silent", () => {
     expect(alerts()).toHaveLength(0);
   });
 });
+
+// ===========================================================================
+// AN ORDER THE CUSTOMER SETTLED ENTIRELY IN STORE CREDIT.
+//
+// `remaining = max(0, amount_paid - refund_amount)` and a `remaining <= 0`
+// rejection meant an order that collected NO CASH could never be refunded at
+// all: the admin got "This order has already been fully refunded" on an order
+// nothing had been refunded on, and the customer's credit stayed spent. With
+// store credit a real tender, that is a customer who cannot be made whole.
+//
+// The money rules this must not break while fixing it:
+//   - no cash is recorded as returned, because none was collected. refund_amount
+//     stays 0, so `revenue === cash` still holds on this order.
+//   - the customer is NOT emailed that a reimbursement was sent, because none
+//     was. A "$0.00 reimbursement processed" email is a false statement.
+//   - the ambassador's commission is reversed IN FULL. The refunded fraction
+//     was measured against `newRefundTotal` — capped at the CASH amount_paid —
+//     while the base is `subtotal - discount`, so a fully returned credit-settled
+//     order reversed 0% of the commission (money-recert finding 12, adjacent).
+// ===========================================================================
+describe("an order settled entirely in store credit", () => {
+  const CREDIT_USER = "user-credit-1";
+
+  /** The delivered order, restated as one paid entirely with store credit. */
+  async function creditOnlyOrder() {
+    const { orderId, amount } = await deliveredOrder();
+    const row = harness.db.table("orders").find((o) => o.order_id === orderId)!;
+    const creditCents = Math.round(amount * 100);
+    row.amount_paid = 0;
+    // `refund_amount numeric not null default 0` in production, so 0 — NOT
+    // null. It matters: with NULL, the compare-and-set discriminates on the
+    // null->0 transition and the payment_status half of the claim is never
+    // exercised. Zero is the state a real order is in.
+    row.refund_amount = 0;
+    row.store_credit_redeemed_cents = creditCents;
+    row.customer_user_id = CREDIT_USER;
+    harness.db.table("store_credit_ledger").push({
+      id: "scl-redemption-1",
+      user_id: CREDIT_USER,
+      order_id: orderId,
+      reason: "membership_redemption",
+      amount_cents: -creditCents,
+      created_at: new Date().toISOString(),
+    });
+    return { orderId, amount, creditCents };
+  }
+
+  function creditReturns(orderId: string) {
+    return harness.db.rows("store_credit_ledger")
+      .filter((r) => r.order_id === orderId && r.reason === "membership_redemption_refund");
+  }
+
+  it("can be refunded at all", async () => {
+    const { orderId } = await creditOnlyOrder();
+
+    const { status, body } = await reimburse(orderId);
+
+    // Was 400 "This order has already been fully refunded" — on an order that
+    // had never been refunded and had a full balance of credit to return.
+    expect(status).toBe(200);
+    expect(body.success).toBe(true);
+    expect(order(orderId)?.payment_status).toBe("refunded");
+  });
+
+  it("returns the store credit to the customer", async () => {
+    const { orderId, creditCents } = await creditOnlyOrder();
+
+    await reimburse(orderId);
+
+    const returned = creditReturns(orderId);
+    expect(returned).toHaveLength(1);
+    expect(Number(returned[0].amount_cents)).toBe(creditCents);
+    expect(String(returned[0].user_id)).toBe(CREDIT_USER);
+  });
+
+  it("records NO cash refund, so revenue still equals cash on this order", async () => {
+    const { orderId } = await creditOnlyOrder();
+
+    const { body } = await reimburse(orderId);
+
+    // amount_paid is 0 and refund_amount stays 0. Writing the credit's dollar
+    // value into refund_amount would make netOrderRevenue report -$134 of
+    // revenue on an order that collected nothing.
+    expect(Number(order(orderId)?.refund_amount ?? 0)).toBe(0);
+    expect(body.refundAmount).toBe(0);
+    expect(body.isFullRefund).toBe(true);
+  });
+
+  it("does not email the customer that a payment was sent, because none was", async () => {
+    const { orderId } = await creditOnlyOrder();
+
+    const { body } = await reimburse(orderId);
+
+    expect(harness.emails.filter((e) => /reimbursement/i.test(e.subject))).toHaveLength(0);
+    expect(body.customerNotified).toBe(false);
+    expect(String(body.message)).toMatch(/store credit/i);
+  });
+
+  it("reverses the ambassador's commission IN FULL", async () => {
+    const { orderId } = await creditOnlyOrder();
+    const row = harness.db.table("orders").find((o) => o.order_id === orderId)!;
+    harness.db.table("referral_orders").push({
+      id: "ro-credit-1",
+      order_id: orderId,
+      ambassador_id: "amb-credit-1",
+      referral_code: "CREDIT15",
+      commission_percent: 15,
+      commission_amount: 20.25,
+      amount_paid: Number(row.subtotal ?? 0) - Number(row.discount_amount ?? 0),
+      payment_status: "pending",
+    });
+
+    await reimburse(orderId);
+
+    // Was "pending" with the full commission intact: the refunded fraction was
+    // measured against $0 of cash, so nothing was reversed on an order that was
+    // returned in its entirety.
+    const commission = harness.db.findOne("referral_orders", "order_id", orderId);
+    expect(String(commission?.payment_status)).toBe("reversed");
+  });
+
+  it("refuses a second attempt rather than returning the credit twice", async () => {
+    const { orderId } = await creditOnlyOrder();
+
+    expect((await reimburse(orderId)).status).toBe(200);
+    const second = await reimburse(orderId);
+
+    expect(second.status).toBe(400);
+    expect(creditReturns(orderId)).toHaveLength(1);
+  });
+
+  it("refuses a cash amount on an order that collected no cash", async () => {
+    const { orderId } = await creditOnlyOrder();
+
+    const { status, body } = await reimburse(orderId, { refundAmount: 25 });
+
+    // Recording $25 of cash returned on an order that took $0 would overstate
+    // refunds and drive reported revenue negative.
+    expect(status).toBe(400);
+    expect(String(body.error)).toMatch(/no cash/i);
+    expect(order(orderId)?.payment_status).not.toBe("refunded");
+  });
+
+  it("lets exactly ONE of two simultaneous refunds through", async () => {
+    // THE CLAIM HAS TO HOLD UNDER CONCURRENCY, NOT ONLY IN SEQUENCE. The
+    // sequential guard above passes on the `payment_status === "refunded"` check
+    // at the top of the handler, which two requests that both read the order
+    // BEFORE either writes will both sail past. The compare-and-set is what
+    // actually decides it — and on a credit-settled order refund_amount is 0
+    // before and after, so the status is the only thing in the claim that
+    // changes. Without it in the filter, both requests win.
+    const { orderId } = await creditOnlyOrder();
+
+    const [first, second] = await Promise.all([reimburse(orderId), reimburse(orderId)]);
+
+    const statuses = [first.status, second.status].sort();
+    expect(statuses).toEqual([200, 409]);
+    expect(creditReturns(orderId)).toHaveLength(1);
+    expect(harness.db.rows("admin_audit_logs").filter((row) => row.action === "order_refund")).toHaveLength(1);
+  });
+
+  it("leaves a normal cash order behaving exactly as before", async () => {
+    // The regression guard: none of the above may change the ordinary lane.
+    const { orderId, amount } = await deliveredOrder();
+
+    const { status } = await reimburse(orderId, { refundAmount: amount });
+
+    expect(status).toBe(200);
+    expect(Number(order(orderId)?.refund_amount)).toBeCloseTo(amount, 2);
+    expect(order(orderId)?.payment_status).toBe("refunded");
+    expect(harness.emails.filter((e) => /reimbursement/i.test(e.subject))).toHaveLength(1);
+  });
+});

@@ -1014,6 +1014,41 @@ async function notifyAmbassadorOfNewCommission(input: {
 // (refundedFraction >= ~1) voids the commission entirely; a PARTIAL refund
 // reduces it proportionally to the share of the order value that was refunded,
 // so the ambassador keeps commission on the merchandise the customer kept.
+/**
+ * How much of an order's COMMISSIONABLE MERCHANDISE a refund has returned, as a
+ * fraction — the number `updateCommissionOnRefund` reverses against.
+ *
+ * MEASURED AGAINST EVERYTHING THE CUSTOMER GETS BACK, NOT JUST THE CASH.
+ *
+ * The admin refund lane used to compute this as `min(newRefundTotal, base) /
+ * base`, where `newRefundTotal` is capped at the CASH `amount_paid`. Store
+ * credit and loyalty points are real tender: an order settled entirely in
+ * credit has `amount_paid` 0, so a full return of that order measured a
+ * refunded fraction of ZERO and the ambassador kept the whole commission on
+ * merchandise that came back. The same under-reversal applies, in proportion,
+ * to any order part-settled with credit.
+ *
+ * Refunds are treated MERCHANDISE-FIRST (the conservative direction): a return
+ * covering the discounted merchandise voids the commission entirely, and a
+ * shipping- or fee-only refund can never exceed it. With no commissionable base
+ * at all there is nothing to apportion, so the answer is a full reversal.
+ */
+export function refundedMerchandiseFraction(input: {
+  /** Discounted merchandise subtotal — the base commission was earned on. */
+  commissionableBase: number;
+  /** Cash returned in total, including any earlier partial refunds. */
+  cashRefunded: number;
+  /** Non-cash tender handed back with this refund (store credit + points). */
+  nonCashReturned?: number;
+}): number {
+  const base = roundMoney(Math.max(0, input.commissionableBase));
+  if (base <= 0) return 1;
+  const returned = roundMoney(
+    Math.max(0, input.cashRefunded) + Math.max(0, input.nonCashReturned ?? 0),
+  );
+  return Math.min(1, Math.min(returned, base) / base);
+}
+
 export function computeRetainedCommission(input: {
   base: number; // commissionable (discounted merchandise) subtotal
   percent: number;

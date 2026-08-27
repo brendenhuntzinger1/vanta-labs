@@ -12,10 +12,11 @@ import { getBusinessSettings } from "@/lib/admin-control";
 import { deliveryConfirmationTemplate, orderConfirmationTemplate, reimbursementRecordedTemplate, replacementOrderTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { createReplacementOrder } from "@/lib/admin-replacements";
 import { syncOrderToShippo } from "@/lib/shippo/order-sync";
-import { updateCommissionOnRefund } from "@/lib/payment-webhook";
+import { refundedMerchandiseFraction, updateCommissionOnRefund } from "@/lib/payment-webhook";
 import { restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
 import { revokeMembershipForRefund } from "@/lib/membership-billing";
 import { refundStoreCreditForOrder } from "@/lib/store-credit";
+import { pointsToDollars } from "@/lib/points-math";
 import { recordSystemAlert } from "@/lib/monitoring";
 
 function roundMoney(value: number) {
@@ -336,20 +337,53 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       const alreadyRefunded = roundMoney(Number(order.refund_amount ?? 0));
       const remaining = roundMoney(Math.max(0, amountPaid - alreadyRefunded));
 
-      if (remaining <= 0) {
+      // STORE CREDIT AND POINTS ARE TENDER, AND THEY ARE REFUNDABLE.
+      //
+      // This gate used to be `remaining <= 0 -> "already fully refunded"`, which
+      // is a statement about CASH. An order the customer settled entirely with
+      // store credit has `amount_paid` 0, so it hit that branch on the very
+      // first attempt: the admin was told an order had already been refunded
+      // when nothing had been, and the customer's credit could never be
+      // returned. Both redemptions come off the same columns the profit engine
+      // reads as contra-revenue, through the one exported points rate rather
+      // than a local copy of it.
+      const nonCashTender = roundMoney(
+        Math.max(0, Number(order.store_credit_redeemed_cents ?? 0)) / 100
+        + Math.max(0, pointsToDollars(Number(order.points_redeemed ?? 0))),
+      );
+      const cashAvailable = remaining > 0;
+
+      if (!cashAvailable && nonCashTender <= 0) {
         return NextResponse.json({ success: false, error: "This order has already been fully refunded." }, { status: 400 });
       }
 
       const requestedAmount = typeof body.refundAmount === "number" && Number.isFinite(body.refundAmount)
         ? roundMoney(body.refundAmount)
-        : remaining;
+        : (cashAvailable ? remaining : 0);
 
-      if (requestedAmount <= 0 || requestedAmount > remaining) {
-        return NextResponse.json({ success: false, error: `Refund amount must be between $0.01 and $${remaining.toFixed(2)}.` }, { status: 400 });
+      if (cashAvailable) {
+        if (requestedAmount <= 0 || requestedAmount > remaining) {
+          return NextResponse.json({ success: false, error: `Refund amount must be between $0.01 and $${remaining.toFixed(2)}.` }, { status: 400 });
+        }
+      } else if (requestedAmount !== 0) {
+        // Recording cash returned on an order that collected none would
+        // overstate refunds and drive reported revenue below zero on an order
+        // that never took a payment.
+        return NextResponse.json({
+          success: false,
+          error: `This order collected no cash — only the $${nonCashTender.toFixed(2)} of store credit and points can be returned. `
+            + "Send the refund with no amount to return them.",
+        }, { status: 400 });
       }
 
       const newRefundTotal = roundMoney(alreadyRefunded + requestedAmount);
+      // A CREDIT-SETTLED ORDER IS FULLY REFUNDED AT ZERO CASH: `amount_paid` is
+      // 0, so 0 >= 0. That is what runs the non-cash reversals below.
       const isFullRefund = newRefundTotal >= amountPaid;
+      /** Non-cash tender this refund actually hands back. Only a full refund does. */
+      const nonCashReturned = isFullRefund ? nonCashTender : 0;
+      /** Whether any MONEY moved. Nothing may tell the customer it did if not. */
+      const cashSent = requestedAmount > 0;
 
       // HOW the owner sent it, from a fixed list. Free text is not accepted so
       // nobody can paste an account number or a handle into the audit trail.
@@ -393,7 +427,13 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
           refunded_at: now,
           updated_at: now,
         })
-        .eq("order_id", orderId);
+        .eq("order_id", orderId)
+        // PAYMENT_STATUS IS PART OF THE CLAIM, and it carries the whole claim on
+        // a credit-settled order: there `newRefundTotal` equals `alreadyRefunded`
+        // (both 0), so the refund_amount filter below matches on a second
+        // request too and would return the credit twice. The status moved to
+        // "refunded" on the first, so exactly one request can win.
+        .eq("payment_status", String(order.payment_status ?? ""));
       // NULL and 0 are different filters in SQL, and getting it wrong here does
       // not fail loudly — it silently matches nothing, so NO reimbursement
       // could ever be recorded. The column is `not null default 0` in the
@@ -420,13 +460,19 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       // card fee) under-reverses when a customer returns all their goods but not
       // shipping. Treat a refund as merchandise-first: a full merchandise return
       // fully voids the commission; a shipping/fee-only refund can't exceed it.
+      //
+      // AND AGAINST EVERYTHING RETURNED, NOT JUST THE CASH. `newRefundTotal` is
+      // capped at the cash `amount_paid`, so a credit-settled order that came
+      // back in its entirety measured a refunded fraction of 0 and left the
+      // ambassador the whole commission on merchandise the store got back.
       const commissionableBase = roundMoney(
         Math.max(0, Number(order.subtotal ?? 0) - Number(order.discount_amount ?? 0)),
       );
-      const merchandiseRefunded = Math.min(newRefundTotal, commissionableBase);
-      const refundedFraction = commissionableBase > 0
-        ? Math.min(1, merchandiseRefunded / commissionableBase)
-        : 1;
+      const refundedFraction = refundedMerchandiseFraction({
+        commissionableBase,
+        cashRefunded: newRefundTotal,
+        nonCashReturned,
+      });
       await updateCommissionOnRefund(orderId, { refundedFraction });
 
       // Only reverse membership points and re-credit spent store credit on a
@@ -501,7 +547,11 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       // Sent exactly once because it is inside the branch that WON the
       // compare-and-set above: a duplicate request never reaches this line.
       let customerNotified = false;
-      if (order.customer_email) {
+      // ONLY WHEN MONEY ACTUALLY MOVED. The template says a reimbursement was
+      // processed; on a credit-settled order none was, and "$0.00 reimbursement
+      // processed" is a false statement to a customer whose credit has instead
+      // gone back onto their balance where they can see it.
+      if (cashSent && order.customer_email) {
         const reimbursementEmail = reimbursementRecordedTemplate({
           customerName: String(order.customer_name ?? ""),
           orderId: String(order.order_number ?? orderId),
@@ -528,6 +578,9 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
             amount: requestedAmount,
             newRefundTotal,
             isFullRefund,
+            // What came back that was never cash, so the audit row explains a
+            // $0.00 reimbursement rather than looking like a no-op.
+            nonCashReturned,
             note: body.note ?? null,
             // How the owner actually sent the money, for the audit trail. The
             // METHOD is recorded; no handle, account or credential is.
@@ -556,9 +609,12 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         isFullRefund,
         providerRefunded,
         customerNotified,
-        message: customerNotified
-          ? "Reimbursement recorded. Vanta did not send any money — the customer has been emailed to confirm the payment you already made."
-          : "Reimbursement recorded. Vanta did not send any money. The confirmation email could not be sent and has been queued for retry.",
+        nonCashReturned,
+        message: !cashSent
+          ? `No cash reimbursement was recorded — this order collected none. The $${nonCashReturned.toFixed(2)} of store credit and points has been returned to the customer's balance.`
+          : customerNotified
+            ? "Reimbursement recorded. Vanta did not send any money — the customer has been emailed to confirm the payment you already made."
+            : "Reimbursement recorded. Vanta did not send any money. The confirmation email could not be sent and has been queued for retry.",
       });
     }
 
