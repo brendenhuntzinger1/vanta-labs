@@ -2,7 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
-import { computeOrderProfit, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
+import { computeOrderProfit, marginPercentOf, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
 import { isEarnedCommission, isRevenueOrderStatus, isSaleOrder } from "@/lib/ledger";
 import { pointsToDollars } from "@/lib/points-math";
 import { readAllRowsBounded } from "@/lib/supabase-page";
@@ -604,8 +604,10 @@ export interface ProfitDashboard {
   lifetime: {
     grossRevenue: number;
     netProfit: number;
-    grossMarginPercent: number;
-    netMarginPercent: number;
+    /** `null` when gross revenue is <= 0 — see order-profit.marginPercentOf. */
+    grossMarginPercent: number | null;
+    /** `null` when gross revenue is <= 0 — see order-profit.marginPercentOf. */
+    netMarginPercent: number | null;
     averageOrderValue: number;
     averageProfitPerOrder: number;
     orderCount: number;
@@ -727,8 +729,12 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
     lifetime: {
       grossRevenue: round(grossRevenue),
       netProfit: round(netProfit),
-      grossMarginPercent: grossRevenue > 0 ? round(((grossRevenue - totalProductCosts) / grossRevenue) * 100) : 0,
-      netMarginPercent: grossRevenue > 0 ? round((netProfit / grossRevenue) * 100) : 0,
+      // The SAME convention the per-order margin uses: `null`, never 0%, when
+      // there is no revenue to take a proportion of. A store whose lifetime
+      // revenue is negative must not report a 0% margin as though it had broken
+      // even, and must not report the positive number two negatives divide to.
+      grossMarginPercent: marginPercentOf(grossRevenue - totalProductCosts, grossRevenue),
+      netMarginPercent: marginPercentOf(netProfit, grossRevenue),
       averageOrderValue: orderCount > 0 ? round(grossRevenue / orderCount) : 0,
       averageProfitPerOrder: orderCount > 0 ? round(netProfit / orderCount) : 0,
       orderCount,
