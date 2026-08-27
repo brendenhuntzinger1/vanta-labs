@@ -109,6 +109,69 @@ function cartAmount(s: Scenario): number {
   }).amount;
 }
 
+// ---------------------------------------------------------------------------
+// AND THE SECOND THING BOTH SIDES HAVE TO AGREE ON: WHO WON.
+//
+// The amount is not the only shared answer. "Is the referral the discount
+// actually coming off this basket" decides whether the shopper keeps her store
+// credit and her points, and it is derived on BOTH sides — from
+// `cartDiscount.best.type` in cart-context.tsx, and from
+// `customerDiscount.components` in quote-order.ts. Two derivations of one fact,
+// which is how the amount drifted in the first place.
+//
+// If they disagree the shopper is either refused outright ("Altered total
+// detected", when the client deducts credit the server does not) or charged a
+// figure no screen showed her (the express lane sends no expectedTotal, so
+// nothing checks). Both were reached in review.
+// ---------------------------------------------------------------------------
+
+function serverReferralWon(s: Scenario): boolean {
+  const fullSubtotal = s.subtotal + (s.quantityBundleSavings ?? 0);
+  const resolved = resolveCustomerDiscount({
+    subtotal: s.subtotal,
+    fullSubtotal,
+    quantityBundleSavings: s.quantityBundleSavings ?? 0,
+    productCost: 0,
+    bundleDiscount: s.buy3Get1 ?? 0,
+    referralAccepted: Boolean(s.referralPercent),
+    referralPercent: s.referralPercent ?? 0,
+    isMember: Boolean(s.memberPercent),
+    membershipPercent: s.memberPercent ?? 0,
+    couponDiscount: s.couponDiscount ?? 0,
+    bulkSavingsAmount: s.bulkSavings ?? 0,
+    personalDiscountAmount: s.personalDiscount ?? 0,
+    allowCouponStacking: s.allowCouponStacking ?? false,
+    commissionPercent: 0,
+    processingFeePercent: 0,
+    shippingCollected: 0,
+    shippingCost: 0,
+    handlingCollected: 0,
+    taxPercent: 0,
+  }, ALL);
+  // The exact expression quote-order.ts uses.
+  return resolved.components.includes("referral") && resolved.amount > 0;
+}
+
+function cartReferralWon(s: Scenario): boolean {
+  const promo: { type: DiscountType; amount: number } | null =
+    (s.buy3Get1 ?? 0) > 0
+      ? { type: "buy3get1", amount: s.buy3Get1 ?? 0 }
+      : s.referralPercent
+        ? { type: "referral", amount: (s.subtotal + (s.quantityBundleSavings ?? 0)) * (s.referralPercent / 100) }
+        : null;
+  const resolved = resolveCartDiscount({
+    subtotal: s.subtotal,
+    quantityBundleSavings: s.quantityBundleSavings ?? 0,
+    bulkSavingsAmount: s.bulkSavings ?? 0,
+    memberPricingAmount: s.memberPercent ? (s.subtotal + (s.quantityBundleSavings ?? 0)) * (s.memberPercent / 100) : 0,
+    ambassadorPersonalAmount: s.personalDiscount ?? 0,
+    couponDiscountAmount: s.couponDiscount ?? 0,
+    promo,
+  });
+  // The exact expression cart-context.tsx uses.
+  return resolved.best?.type === "referral" && resolved.amount > 0;
+}
+
 // Referral and coupon are mutually exclusive in cart state — applying either
 // clears the other (cart-context.tsx:1059 and :1144) — so no scenario here
 // carries both. A combination the UI cannot produce proves nothing.
@@ -140,6 +203,28 @@ const REACHABLE: Scenario[] = [
 describe("what the shopper is shown is what the card is charged", () => {
   it.each(REACHABLE)("$name", (scenario) => {
     expect(cartAmount(scenario)).toBe(serverAmount(scenario));
+  });
+
+  it.each(REACHABLE)("$name — and both sides agree on whether the REFERRAL is what won", (scenario) => {
+    expect(cartReferralWon(scenario)).toBe(serverReferralWon(scenario));
+  });
+
+  // Named cases, so a regression says which state broke rather than only that
+  // one of twenty-two did.
+  it("says the referral won when it is the only discount and it is real", () => {
+    const s: Scenario = { name: "x", subtotal: 200, referralPercent: 20 };
+    expect(serverReferralWon(s)).toBe(true);
+    expect(cartReferralWon(s)).toBe(true);
+  });
+
+  it.each([
+    ["a Buy-3-Get-1 bundle suppresses it outright", { name: "x", subtotal: 300, buy3Get1: 60, referralPercent: 10 } as Scenario],
+    ["a bigger membership discount beats it", { name: "x", subtotal: 200, memberPercent: 20, referralPercent: 5 } as Scenario],
+    ["quantity-bundle pricing competes it to exactly zero", { name: "x", subtotal: 190, quantityBundleSavings: 10, referralPercent: 5 } as Scenario],
+    ["a commission-only ambassador gives 0%", { name: "x", subtotal: 200, referralPercent: 0 } as Scenario],
+  ])("says the referral did NOT win when %s", (_label, s) => {
+    expect(serverReferralWon(s)).toBe(false);
+    expect(cartReferralWon(s)).toBe(false);
   });
 
   it("no discount ever exceeds the cart, on either side", () => {

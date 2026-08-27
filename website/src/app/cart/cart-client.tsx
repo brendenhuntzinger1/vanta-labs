@@ -36,9 +36,10 @@ export function CartPageClient() {
     autoBestDiscountApplied,
     total,
     referralCode,
-    referralDetails,
     referralError,
     referralSuccess,
+    referralStatusText,
+    referralNeedsMoreToQualify,
     applyReferralCode,
     clearReferralCode,
     isApplyingReferral,
@@ -409,8 +410,10 @@ export function CartPageClient() {
             )}
             {referralSuccess ? <p className="mt-4 text-sm text-emerald-300">{referralSuccess}</p> : null}
             {referralError ? <p className="mt-4 text-sm text-rose-300">{referralError}</p> : null}
-            {referralDetails ? (
-              <p className="mt-4 text-sm text-white/60">Ambassador {referralDetails.ambassadorName} • {referralDetails.customerDiscountPercent}% customer discount</p>
+            {referralStatusText ? (
+              <p className={`mt-4 text-sm ${referralNeedsMoreToQualify ? "text-amber-300/80" : "text-white/60"}`}>
+                {referralStatusText}
+              </p>
             ) : null}
 
             {stockNotices.length > 0 ? (

@@ -12,6 +12,7 @@ import { useApplePayOffered } from "@/components/use-apple-pay-offered";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
+import { resolvePointsRedemptionCents, resolveStoreCreditCents } from "@/lib/store-credit-redemption";
 import {
   REQUIRED_CONFIRMATIONS,
   defaultAcknowledgements,
@@ -223,7 +224,9 @@ export default function CheckoutPage() {
     appliedDiscountLabel,
     autoBestDiscountApplied,
     referralCode,
-    referralDetails,
+    referralStatusText,
+    referralNeedsMoreToQualify,
+    referralDiscountApplied,
     referralError,
     referralSuccess,
     applyReferralCode,
@@ -355,16 +358,27 @@ export default function CheckoutPage() {
   const totalBeforeCredit = Math.max(0, subtotal + shipping + taxAmount - discountAmount);
   // Membership store credit auto-applies when the merchandise subtotal meets
   // the tier's redemption minimum (mirrors payment-service.ts).
-  const storeCreditApplied = useMemo(() => {
-    if (referralDetails) return 0; // referral codes are exclusive of store credit
-    if (storeCreditBalanceCents <= 0) return 0;
-    if (Math.round(subtotal * 100) < storeCreditMinOrderCents) return 0;
-    return Math.min(storeCreditBalanceCents / 100, totalBeforeCredit);
-  }, [referralDetails, storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforeCredit]);
+  // Shared verbatim with quote-order.ts and cart-context.tsx — this figure is
+  // posted as expectedTotal, and a server that computes a higher one refuses
+  // the order outright.
+  const storeCreditApplied = useMemo(
+    () => resolveStoreCreditCents({
+      referralDiscountApplied,
+      balanceCents: storeCreditBalanceCents,
+      minOrderCents: storeCreditMinOrderCents,
+      subtotalCents: Math.round(subtotal * 100),
+      redeemableCents: Math.round(totalBeforeCredit * 100),
+    }) / 100,
+    [referralDiscountApplied, storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforeCredit],
+  );
   const totalBeforePoints = Math.max(0, totalBeforeCredit - storeCreditApplied);
   const pointsRedeemedDiscount = useMemo(
-    () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints)),
-    [referralDetails, pointsToRedeem, totalBeforePoints],
+    () => resolvePointsRedemptionCents({
+      referralDiscountApplied,
+      requestedCents: Math.round(pointsToDollars(pointsToRedeem) * 100),
+      redeemableCents: Math.round(totalBeforePoints * 100),
+    }) / 100,
+    [referralDiscountApplied, pointsToRedeem, totalBeforePoints],
   );
   // `total` is the pre-payment-method total sent to the server as
   // expectedTotal (matches the server's own recompute exactly). The card
@@ -1057,7 +1071,7 @@ export default function CheckoutPage() {
                     )}
                     {referralSuccess ? <p className="mt-2 text-xs text-emerald-300">{referralSuccess}</p> : null}
                     {referralError ? <p className="mt-2 text-xs text-rose-300">{referralError}</p> : null}
-                    {referralDetails ? <p className="mt-2 text-xs text-white/45">{referralDetails.ambassadorName} · {referralDetails.customerDiscountPercent}% off</p> : null}
+                    {referralStatusText ? <p className={`mt-2 text-xs ${referralNeedsMoreToQualify ? "text-amber-300/80" : "text-white/45"}`}>{referralStatusText}</p> : null}
                     {referralCode && !isBuy3Get1FreeActive ? (
                       <button type="button" onClick={() => { clearReferralCode(); setReferralInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
                     ) : null}
@@ -1115,9 +1129,9 @@ export default function CheckoutPage() {
                       <p className="text-xs text-white/45">
                         <span className="text-white/80">{pointsBalance.toLocaleString()}</span> available ({formatCartCurrency(pointsBalance / 100)} value).
                       </p>
-                      {referralDetails ? (
+                      {referralDiscountApplied ? (
                         <p className="mt-2 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
-                          A referral code is applied. Remove it to redeem points.
+                          A referral discount is applied. Remove the code to redeem points.
                         </p>
                       ) : pointsBalance > 0 ? (
                         <div className="mt-2 flex items-center gap-2">

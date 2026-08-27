@@ -20,6 +20,13 @@ import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inven
 import { after } from "next/server";
 import { syncOrderToShippo } from "@/lib/shippo/order-sync";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
+// The SAME rule quote-order.ts gates the discount on. Two copies of
+// "is this basket big enough" is how a customer ends up with the discount
+// while the ambassador silently earns nothing on the same order. No
+// reachable basket separates the two comparisons today — prices are whole
+// cents and their sums do not drift across the boundary — so this is
+// defensive, not a bug fix. It is here so the two can never drift apart.
+import { referralQualifies } from "@/lib/referral-qualification";
 import { activatePaidMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 import {
   isMembershipEvent,
@@ -713,7 +720,7 @@ async function ensureCommissionRecord(input: {
     ineligibleReason = "Commissions are paused.";
   } else if (!ambassadorApproved) {
     ineligibleReason = "Ambassador is not active.";
-  } else if (qualifyingSubtotal < ambassadorSettings.minimumQualifyingOrder) {
+  } else if (!referralQualifies(qualifyingSubtotal, ambassadorSettings.minimumQualifyingOrder)) {
     ineligibleReason = `Order subtotal ${qualifyingSubtotal.toFixed(2)} is below the ${ambassadorSettings.minimumQualifyingOrder.toFixed(2)} minimum qualifying order.`;
   }
 

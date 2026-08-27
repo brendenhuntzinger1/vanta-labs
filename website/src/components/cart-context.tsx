@@ -14,6 +14,8 @@ import type { MembershipTierSummary } from "@/lib/member-pricing";
 import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { describeCouponOutcome, resolveCartDiscount, type CouponOutcome, type PriceControllingDiscount } from "@/lib/discount-resolution";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
+import { referralAppliedMessage, referralCartStatus, referralQualifies, referralShortfall } from "@/lib/referral-qualification";
+import { resolvePointsRedemptionCents, resolveStoreCreditCents } from "@/lib/store-credit-redemption";
 
 type CouponDetails = {
   code: string;
@@ -53,6 +55,21 @@ type CartContextValue = {
   referralDetails: ReferralCode | null;
   referralError: string | null;
   referralSuccess: string | null;
+  /** The programme's minimum merchandise subtotal for a referral code to apply. */
+  referralMinimumOrder: number;
+  /**
+   * The one sentence every surface shows about the attached code, built once.
+   * Null when no code is attached.
+   */
+  referralStatusText: string | null;
+  /** True only when a bigger basket would actually unlock something — amber styling. */
+  referralNeedsMoreToQualify: boolean;
+  /**
+   * The referral is the discount actually coming off this basket — it beat
+   * every other candidate. NOT "a code is attached", and NOT "the basket is big
+   * enough": this is what store credit and points are exclusive of.
+   */
+  referralDiscountApplied: boolean;
   couponCode: string | null;
   couponDetails: CouponDetails | null;
   couponDiscountAmount: number;
@@ -720,17 +737,20 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       // number: a 15% ambassador's customers were quoted the program's 10%
       // while checkout charged 15%.
       //
-      // Below the minimum qualifying order the server does not discount, it
-      // THROWS (quote-order.ts). Offering a discount here that checkout will
-      // refuse outright is worse than showing none, so the referral simply does
-      // not compete until the basket qualifies.
-      if (subtotal < referralMinimumOrder) {
+      // Below the minimum qualifying order the server gives no referral
+      // discount either (quote-order.ts gates on the SAME referralQualifies
+      // rule this line uses), so the referral does not compete until the basket
+      // qualifies. It no longer REFUSES the order — that hard block turned an
+      // ambassador's link into a checkout blocker — which is why the cart must
+      // now say what is actually true: see referralMeetsMinimum below.
+      if (!referralQualifies(subtotal, referralMinimumOrder)) {
         return null;
       }
       return { type: "referral" as const, amount: discountBase * (referralDetails.customerDiscountPercent / 100) };
     }
     return null;
   }, [buy3Get1FreeDiscount, referralDetails, discountBase, subtotal, referralMinimumOrder]);
+
 
   // The elite "Exclusive Buy In Bulk Savings" benefit cannot stack with
   // anything else - it competes with whatever the customer would otherwise
@@ -774,6 +794,44 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   const bestDiscount = cartDiscount.best;
   const discountAmount = cartDiscount.amount;
+
+  // WHAT THE CART IS ALLOWED TO CLAIM.
+  //
+  // referralDetails alone means "this code is real and belongs to an approved
+  // ambassador" — it does NOT mean the basket earns anything. The cart used to
+  // render "Ambassador X - 15% customer discount" off referralDetails alone, so
+  // a shopper who followed an ambassador's link with a $39.99 basket was
+  // promised a discount, given none, and then refused at the pay button.
+  //
+  // Worked out by referralCartStatus rather than here, for the reason
+  // resolveCartDiscount was lifted out of this file: a decision that lives
+  // inside a component cannot be imported, so it cannot be tested, so its
+  // copies drift.
+  //
+  // IT SITS BELOW resolveCartDiscount ON PURPOSE. The question the sentence and
+  // the exclusivity gates both need is "is the referral the discount actually
+  // coming off this basket", and only the resolved winner answers it. Asking
+  // "is the basket over $100" instead announced a 15% discount on a five-vial
+  // cart whose quantity-bundle pricing had already competed the referral to
+  // $0.00 — and suppressed the shopper's store credit to pay for it.
+  const referralStatus = useMemo(
+    () => (referralDetails
+      ? referralCartStatus({
+        ambassadorName: referralDetails.ambassadorName,
+        discountPercent: referralDetails.customerDiscountPercent,
+        subtotal,
+        minimumQualifyingOrder: referralMinimumOrder,
+        referralDiscountApplied: bestDiscount?.type === "referral" && discountAmount > 0,
+        competingDiscountApplied: Boolean(bestDiscount) && bestDiscount?.type !== "referral" && discountAmount > 0,
+        formatCurrency: formatCartCurrency,
+      })
+      : null),
+    [referralDetails, subtotal, referralMinimumOrder, bestDiscount, discountAmount],
+  );
+  const referralStatusText = referralStatus?.line ?? null;
+  const referralNeedsMoreToQualify = Boolean(referralStatus?.needsMoreToQualify);
+  /** The referral is the discount actually coming off this basket. */
+  const referralDiscountApplied = Boolean(referralStatus?.referralDiscountApplied);
 
   // Customer-facing name for the applied discount, and the "we picked the
   // best one for you" note shown when an entered code lost to something
@@ -850,21 +908,32 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
 
   // Membership store credit auto-applies when the merchandise subtotal meets
   // the tier's redemption minimum. Mirrors payment-service.ts exactly.
-  const storeCreditApplied = useMemo(() => {
-    if (referralDetails) return 0; // referral codes are exclusive of store credit
-    if (storeCreditBalanceCents <= 0) return 0;
-    if (Math.round(subtotal * 100) < storeCreditMinOrderCents) return 0;
-    return Math.min(storeCreditBalanceCents / 100, totalBeforePoints);
-  }, [referralDetails, storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforePoints]);
+  // The arithmetic is in store-credit-redemption.ts, shared verbatim with
+  // quote-order.ts. It used to be a hand-written copy here and a second one in
+  // checkout/page.tsx; reverting either of them left the whole suite green,
+  // because nothing renders this provider.
+  const storeCreditApplied = useMemo(
+    () => resolveStoreCreditCents({
+      referralDiscountApplied,
+      balanceCents: storeCreditBalanceCents,
+      minOrderCents: storeCreditMinOrderCents,
+      subtotalCents: Math.round(subtotal * 100),
+      redeemableCents: Math.round(totalBeforePoints * 100),
+    }) / 100,
+    [referralDiscountApplied, storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforePoints],
+  );
 
   const totalAfterCredit = Math.max(0, totalBeforePoints - storeCreditApplied);
 
-  // Referral codes are exclusive of every other discount, including
-  // redeemed loyalty points - mirrors the server-side rule in
-  // payment-service.ts.
+  // Points are exclusive of a referral DISCOUNT, not of an attached code —
+  // same shared rule, same reason as store credit above.
   const pointsRedeemedDiscount = useMemo(
-    () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalAfterCredit)),
-    [referralDetails, pointsToRedeem, totalAfterCredit],
+    () => resolvePointsRedemptionCents({
+      referralDiscountApplied,
+      requestedCents: Math.round(pointsToDollars(pointsToRedeem) * 100),
+      redeemableCents: Math.round(totalAfterCredit * 100),
+    }) / 100,
+    [referralDiscountApplied, pointsToRedeem, totalAfterCredit],
   );
 
   // Shipping-protection add-on (loss/theft/damage). Added by DEFAULT — the
@@ -992,11 +1061,23 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         },
       ];
     });
-    setReferralError(null);
-    setReferralSuccess(null);
+    clearCodeMessages();
     // Intentionally do NOT open the cart here — the fly-to-cart animation and
     // the updated cart badge confirm the add, and the shopper keeps browsing
     // instead of being pulled into the cart on every add.
+  };
+
+  /**
+   * Drop the one-shot apply/error messages.
+   *
+   * They are strings captured at the moment a code was applied, and two of them
+   * quote a figure derived from the basket at that moment. Any change to the
+   * basket can make them false, and they render immediately above the live
+   * status line that has already updated.
+   */
+  const clearCodeMessages = () => {
+    setReferralError(null);
+    setReferralSuccess(null);
   };
 
   const updateQuantity = (slug: string, quantity: number) => {
@@ -1024,6 +1105,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       const clamped = Math.min(Math.max(1, Math.floor(quantity)), MAX_LINE_QUANTITY);
       return currentItems.map((item) => (item.key === slug ? { ...item, quantity: clamped } : item));
     });
+    // The apply confirmation is BASKET-DEPENDENT — "Referral code saved — 15%
+    // off unlocks at $100.00. Add $31.00 to qualify." — and it is a one-shot
+    // string, not derived state. Changing the basket makes it stale, and it
+    // renders directly above the live status line, so a shopper stepping down
+    // from two vials to one saw "Referral code applied — 15% off." in emerald
+    // immediately above "add $31.00 to unlock it" in amber. addItem already
+    // cleared it; the two mutators that can INVALIDATE it did not.
+    clearCodeMessages();
   };
 
   const removeFromCart = (slug: string) => {
@@ -1039,6 +1128,8 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     }
 
     setItems((currentItems) => currentItems.filter((item) => item.key !== slug));
+    // Same reason as updateQuantity above.
+    clearCodeMessages();
   };
 
   // Used by /cart/restore - replaces the current cart with a recovered
@@ -1104,14 +1195,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (subtotal < referralMinimumOrder) {
-      setReferralDetails(null);
-      setReferralCode(null);
-      setReferralError(`Referral codes require a minimum order of ${formatCurrency(referralMinimumOrder)}. Add more items to use one.`);
-      setReferralSuccess(null);
-      return;
-    }
-
     setIsApplyingReferral(true);
     try {
       const validatedReferral = await validateReferralCodeClient(normalized);
@@ -1141,7 +1224,20 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       setReferralError(null);
       // Quote the rate actually applied, not the program default — the two
       // differ for every ambassador with an override.
-      setReferralSuccess(`Referral code applied — ${appliedPercent}% off.`);
+      //
+      // And say which state this is. Apply used to REFUSE a code below the
+      // minimum, clearing it and blocking with an error — so the same code
+      // behaved differently depending on whether it was typed or arrived from a
+      // link, and after the server stopped refusing below-minimum orders the
+      // refusal disagreed with the server too. The code is kept either way now;
+      // this sentence is what tells the shopper which one they are in.
+      setReferralSuccess(referralAppliedMessage({
+        discountPercent: appliedPercent,
+        meetsMinimum: referralQualifies(subtotal, referralMinimumOrder),
+        amountToQualify: referralShortfall(subtotal, referralMinimumOrder),
+        minimumOrder: referralMinimumOrder,
+        formatCurrency,
+      }));
       setCouponCode(null);
       setCouponDetails(null);
       setCouponError(null);
@@ -1265,6 +1361,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     referralDetails,
     referralError,
     referralSuccess,
+    referralMinimumOrder,
+    referralStatusText,
+    referralNeedsMoreToQualify,
+    referralDiscountApplied,
     couponCode,
     couponDetails,
     couponDiscountAmount,
