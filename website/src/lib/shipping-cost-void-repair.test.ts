@@ -50,6 +50,9 @@ const shippo = vi.hoisted(() => ({
     data: { object_id: "txn-1", status: "SUCCESS", rate: { amount: "7.42", currency: "USD" } },
   })),
   settledCentsFromTransaction: vi.fn(() => 742),
+  settledCentsForTransaction: vi.fn(async (txn: { rate?: unknown }) =>
+    txn?.rate && typeof txn.rate === "object" ? 742 : null,
+  ),
   // Writes the durable row the real one writes, so a second run genuinely
   // reads back what the first run reported.
   recordSystemAlert: vi.fn(async (alert: { type: string; severity: string; message: string; context?: unknown }) => {
@@ -69,6 +72,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/lib/shippo/client", () => ({
   getTransaction: shippo.getTransaction,
   settledCentsFromTransaction: shippo.settledCentsFromTransaction,
+  settledCentsForTransaction: shippo.settledCentsForTransaction,
 }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: shippo.recordSystemAlert }));
 vi.mock("@/lib/admin-control", () => ({
@@ -298,7 +302,7 @@ describe("the shipping sweep after a label is voided", () => {
     expect(shippo.getTransaction).toHaveBeenCalledTimes(1);
     // ...but the amount is the one already on the order; the rate is not
     // re-parsed.
-    expect(shippo.settledCentsFromTransaction).not.toHaveBeenCalled();
+    expect(shippo.settledCentsForTransaction).not.toHaveBeenCalled();
   });
 });
 

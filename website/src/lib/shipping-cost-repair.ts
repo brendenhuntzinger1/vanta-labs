@@ -1,7 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { getTransaction, settledCentsFromTransaction } from "@/lib/shippo/client";
+import { getTransaction, settledCentsForTransaction } from "@/lib/shippo/client";
 import { recordActualShippingCost } from "@/lib/admin-profit";
 import { recordSystemAlert } from "@/lib/monitoring";
 
@@ -621,10 +621,17 @@ async function resolveSettledCents(order: ShippingCostCandidate): Promise<number
 
   // getTransaction returns the RAW Shippo transaction, whose postage lives on
   // `rate`. It is NOT the parsed label object purchaseLabel builds, so there is
-  // no `postageCostCents` on it — settledCentsFromTransaction is the one place
-  // that parses it, and returns null when `rate` came back as a bare id
-  // reference rather than an expanded object.
-  const amountCents = settledCentsFromTransaction(transaction.data.rate);
+  // no `postageCostCents` on it.
+  //
+  // A DASHBOARD LABEL IS NOT A HAND-ENTRY CASE. When the label was bought in
+  // Shippo's dashboard the transaction comes back with `rate` as a bare
+  // object_id string, which carries no price — and that shape was declared
+  // unrecoverable here, so every such label raised ManualEntryRequired and sat
+  // in the manual-entry backlog permanently, re-alerting the operator about a
+  // figure Shippo would have answered on request. settledCentsForTransaction
+  // resolves the reference with a GET on /rates/<id> (which cannot buy
+  // anything) and only gives up when the price truly cannot be established.
+  const amountCents = await settledCentsForTransaction(transaction.data);
   if (amountCents == null) {
     throw new ManualEntryRequired("Shippo returned no usable postage amount on the transaction rate");
   }
