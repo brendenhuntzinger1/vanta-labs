@@ -11,7 +11,7 @@ import {
   type PaymentMethodConfig,
   type CardProcessingFeeConfig,
 } from "@/lib/payment-methods";
-import { PROCESSING_FEE_DEFAULT_PERCENT, describeEffectiveRate } from "@/lib/admin-control-shared";
+import { PROCESSING_FEE_DEFAULT_PERCENT, describeEffectiveRate, parseRatePercent } from "@/lib/admin-control-shared";
 
 // Re-exported so every existing/expected `@/lib/admin-control` import site
 // keeps working. The implementation itself lives in admin-control-shared.ts
@@ -21,7 +21,7 @@ import { PROCESSING_FEE_DEFAULT_PERCENT, describeEffectiveRate } from "@/lib/adm
 // otherwise-pure, dependency-free export like this one. A Client Component
 // (e.g. admin-control-center-client.tsx) must import `describeEffectiveRate`
 // from `@/lib/admin-control-shared` directly, not from here.
-export { describeEffectiveRate };
+export { describeEffectiveRate, parseRatePercent };
 
 const CONTROL_ACTION = "admin_control_upsert";
 
@@ -664,7 +664,11 @@ export async function getProfitSettings(): Promise<ProfitSettingsConfig> {
       minProfitPercent: num(profit.min_profit_percent, DEFAULT_PROFIT_CONFIG.minProfitPercent),
       minProfitDollars: num(profit.min_profit_dollars, DEFAULT_PROFIT_CONFIG.minProfitDollars),
       worstCaseUnitCost: num(profit.worst_case_unit_cost, DEFAULT_PROFIT_CONFIG.worstCaseUnitCost),
-      processingFeePercent: num(profit.processing_fee_percent, DEFAULT_PROFIT_CONFIG.processingFeePercent),
+      // THE SAME RESOLVER THE DISPLAY USES. Keeping a private copy of the rule
+      // here is what let the Control Center advertise a rate that was not in
+      // effect, and left the field with no upper bound at all.
+      processingFeePercent:
+        parseRatePercent(profit.processing_fee_percent) ?? DEFAULT_PROFIT_CONFIG.processingFeePercent,
       processingFeeIncludesTax: profit.processing_fee_includes_tax === undefined || profit.processing_fee_includes_tax === null || profit.processing_fee_includes_tax === ""
         ? DEFAULT_PROFIT_CONFIG.processingFeeIncludesTax
         : profit.processing_fee_includes_tax !== false && profit.processing_fee_includes_tax !== "false",

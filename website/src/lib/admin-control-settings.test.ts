@@ -236,6 +236,40 @@ describe("profit protection settings", () => {
     const { getProfitSettings, DEFAULT_PROFIT_CONFIG } = await mod();
     expect((await getProfitSettings()).minProfitPercent).toBe(DEFAULT_PROFIT_CONFIG.minProfitPercent);
   });
+
+  // FIX WAVE 3 — THE PROCESSOR FEE IS A FREE-TEXT FIELD WITH NO ROUTE-LEVEL
+  // VALIDATION, and its resolver had a lower bound but no upper one. "800" was
+  // accepted verbatim: an 800% modelled fee puts every order below the profit
+  // floor and blocks all checkout, and reports every historical order at a
+  // loss. It is also the exact figure the Control Center displays back, so the
+  // display and the applied value must come from ONE rule.
+  describe("the processor fee", () => {
+    it("applies an explicit rate inside the legitimate range", async () => {
+      state.rows = [control("profit", "processing_fee_percent", "2.9")];
+      const { getProfitSettings } = await mod();
+      expect((await getProfitSettings()).processingFeePercent).toBe(2.9);
+    });
+
+    it("treats an explicit zero as a real choice", async () => {
+      state.rows = [control("profit", "processing_fee_percent", "0")];
+      const { getProfitSettings } = await mod();
+      expect((await getProfitSettings()).processingFeePercent).toBe(0);
+    });
+
+    describe("falls back to the coded default rather than applying a value a text box can produce", () => {
+      for (const stored of ["-5", "8%", "800", "abc", "", "   ", "100.01"]) {
+        it(JSON.stringify(stored), async () => {
+          state.rows = [control("profit", "processing_fee_percent", stored)];
+          const { getProfitSettings, DEFAULT_PROFIT_CONFIG, describeEffectiveRate } = await mod();
+          const applied = (await getProfitSettings()).processingFeePercent;
+          expect(applied).toBe(DEFAULT_PROFIT_CONFIG.processingFeePercent);
+          // And the label the owner reads must agree with what is applied.
+          expect(describeEffectiveRate(stored, DEFAULT_PROFIT_CONFIG.processingFeePercent))
+            .toContain(`${DEFAULT_PROFIT_CONFIG.processingFeePercent}%`);
+        });
+      }
+    });
+  });
 });
 
 describe("coupon policy", () => {
