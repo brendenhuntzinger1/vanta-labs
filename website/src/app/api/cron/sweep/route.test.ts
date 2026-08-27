@@ -150,7 +150,7 @@ describe("the scheduled sweep", () => {
   });
 
   it("registers the financial repair sweeps", async () => {
-    const module = await import("@/app/api/cron/sweep/route");
+    const route = await import("@/app/api/cron/sweep/route");
     // The JOBS registry is keyed, not positional; asserting on the key is
     // asserting on the response contract an operator reads.
     const source = await import("node:fs").then((fs) =>
@@ -158,6 +158,6 @@ describe("the scheduled sweep", () => {
     );
     expect(source).toContain("shippingCostRepair");
     expect(source).toContain("refundEffectRepair");
-    expect(module.GET).toBeTypeOf("function");
+    expect(route.GET).toBeTypeOf("function");
   });
 });
