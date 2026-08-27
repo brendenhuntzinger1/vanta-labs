@@ -25,6 +25,13 @@ These apply to **every** task. They are not restated per task.
 - **Out of scope, do not build:** campaigns, ad groups, keywords, ad copy, bidding, budgets, alternate landing pages.
 - Currency constant: `"USD"`. Google conversion ID format: `/^AW-\d+$/`.
 - Test runner: `npm test` (vitest). Lint: `npm run lint`. Build: `npm run build`. All run from `website/`.
+- **Every task must end with `npx tsc --noEmit` clean.** A green vitest run does not prove the
+  branch compiles — vitest transpiles without typechecking, so a type error survives a fully
+  green suite. Task 3 shipped four TS2677/TS2322 errors past both its implementer and a review
+  because its cycle omitted this command. It is not optional on any task.
+- **Annotate `.map()` callback return types** where the result is later narrowed by a type
+  predicate. An inferred object literal makes optional fields required, and
+  `filter((x): x is T => ...)` then fails to typecheck against it. This is what bit Task 3.
 
 ---
 
@@ -774,7 +781,7 @@ export function buildGoogleBeginCheckout(input: {
   if (!isPositive(value)) return null;
 
   const items = input.items
-    .map((item) => {
+    .map((item): GoogleItem | null => {
       const itemId = resolveContentId({ slug: item.slug });
       if (!itemId) return null;
       return {
@@ -817,7 +824,7 @@ export function buildGooglePurchase(
   // produce an item id that silently stops matching the day a product is
   // renamed. A line with no slug and no product id is dropped instead.
   const resolved = order.items
-    .map((item) => {
+    .map((item): GoogleItem | null => {
       const itemId = resolveContentId({ slug: item.slug, productId: item.productId });
       if (!itemId) return null;
       return {
