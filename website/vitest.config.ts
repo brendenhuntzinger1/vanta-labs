@@ -1,16 +1,21 @@
 import path from "node:path";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
     environment: "node",
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
-    // `tests/` holds Playwright specs (browser-driven, run via `npx playwright
-    // test`), not Vitest suites. Without this exclude, Vitest's default
-    // `*.spec.ts` glob picks them up too and fails on the `@playwright/test`
-    // import, which isn't a Vitest dependency.
-    exclude: ["**/node_modules/**", "**/tests/**"],
+    // The root-level `tests/` directory holds Playwright specs
+    // (browser-driven, run via `npx playwright test`), not Vitest suites.
+    // Without this exclude, Vitest's default `*.spec.ts` glob picks them up
+    // too and fails on the `@playwright/test` import, which isn't a Vitest
+    // dependency. Extending `configDefaults.exclude` (rather than replacing
+    // it) keeps Vitest's own default ignores — node_modules, dist, .next,
+    // etc. — intact. The pattern is anchored to the repo root (`tests/**`,
+    // not `**/tests/**`) so it does not also swallow a future
+    // `src/**/tests/**` Vitest suite.
+    exclude: [...configDefaults.exclude, "tests/**"],
   },
   resolve: {
     alias: {

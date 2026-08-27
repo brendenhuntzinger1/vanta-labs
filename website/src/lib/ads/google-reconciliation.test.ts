@@ -58,6 +58,23 @@ describe("reconciliation — the exact payload", () => {
     expect(event?.params.value).toBe(KNOWN_ORDER.amountPaid);
   });
 
+  // KNOWN_ORDER's line items happen to sum to exactly `amountPaid` (59.995*2 +
+  // 30 = 149.99), so the assertion above would stay green even if the builder
+  // were changed to sum line items instead of trusting `amountPaid` — the
+  // exact regression this test claims to forbid. This is the assertion that
+  // actually catches that: a discounted order where the line-item sum
+  // (149.99, same catalogue lines as KNOWN_ORDER) genuinely diverges from the
+  // settled total (131.50, e.g. an $18.49 discount applied at checkout).
+  it("reports the settled total even when it diverges from the line-item sum", () => {
+    const discountedOrder: PaidOrder = { ...KNOWN_ORDER, amountPaid: 131.5 };
+    const lineItemSum = discountedOrder.items.reduce((sum, item) => sum + (item.unitPrice ?? 0) * (item.quantity ?? 1), 0);
+    expect(lineItemSum).toBe(149.99); // sanity: the two figures really do differ
+    expect(lineItemSum).not.toBe(discountedOrder.amountPaid);
+
+    const event = buildGooglePurchase(discountedOrder);
+    expect(event?.params.value).toBe(131.5);
+  });
+
   it("carries no raw customer data anywhere in the payload", () => {
     const event = buildGooglePurchase(KNOWN_ORDER, {
       identity: buildGoogleIdentity({ email: KNOWN_EMAIL, phone: "+1 555 010 1234" }),
@@ -74,26 +91,40 @@ describe("reconciliation — one paid order, one conversion", () => {
     { order_id: "VL-2026-0001", platform: "google", delivered: true },
   ];
 
-  it("duplicate webhook delivery does not send twice", () => {
+  // Duplicate webhook delivery, a refreshed confirmation page, and a
+  // 49-hour-later re-open all reach `wasAlreadySent` the same way: a row for
+  // (order_id, platform) already exists, so the read returns true. They are
+  // one assertion under three names, not three mechanisms — the pure function
+  // has no way to distinguish *why* the request repeated, only that the
+  // ledger already has a row for this platform. What differs between those
+  // three real scenarios (timing, request origin, retry cause) is exercised
+  // by the route and enforced permanently by the database's unique
+  // constraint on (order_id, platform), not by this in-memory check.
+  it("any ledger row for the platform suppresses a resend, whatever caused the re-request", () => {
     expect(wasAlreadySent(ledgerAfterFirstSend, "google")).toBe(true);
   });
 
-  it("confirmation page refreshed does not send twice", () => {
-    expect(wasAlreadySent(ledgerAfterFirstSend, "google")).toBe(true);
-  });
-
-  it("back/forward navigation does not send twice — the 2026-08-25 production incident", () => {
-    expect(wasAlreadySent(ledgerAfterFirstSend, "google")).toBe(true);
+  // THE 2026-08-25 INCIDENT, actually covered. The production failure was not
+  // "a row existed and got ignored" — it was the ledger table answering 404,
+  // i.e. no rows at all, so `wasAlreadySent` had nothing to check against and
+  // returned false, and the send went out again 27 seconds later.
+  // `wasAlreadySent` deliberately fails OPEN on a missing/empty ledger: an
+  // occasional duplicate that a platform's own dedup window collapses is a
+  // better failure than silently dropping real revenue because a read
+  // failed. This is intentional and this test exists to keep it visible, not
+  // to demand it be changed — the permanent protection against a genuine
+  // double-send is the database's unique constraint on (order_id, platform)
+  // at insert time, not this read.
+  it("an unavailable ledger (null/undefined/empty rows) fails open — the 2026-08-25 mechanism", () => {
+    expect(wasAlreadySent(null, "google")).toBe(false);
+    expect(wasAlreadySent(undefined, "google")).toBe(false);
+    expect(wasAlreadySent([], "google")).toBe(false);
   });
 
   it("two tabs resolve to one transaction_id", () => {
     const a = buildGooglePurchase(KNOWN_ORDER);
     const b = buildGooglePurchase(KNOWN_ORDER);
     expect(a?.params.transaction_id).toBe(b?.params.transaction_id);
-  });
-
-  it("a link re-opened after 49 hours does not send again, beyond Google's own window", () => {
-    expect(wasAlreadySent(ledgerAfterFirstSend, "google")).toBe(true);
   });
 
   it("another platform's send does NOT suppress Google's", () => {

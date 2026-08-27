@@ -30,5 +30,12 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
+  // "tests" holds Playwright specs (browser-driven, run via `npx playwright
+  // test`), not app/library TypeScript. They are excluded here because
+  // `@playwright/test` is not yet a project dependency and there is no
+  // playwright.config.ts — once both exist, this exclude should be dropped
+  // (or scoped to a playwright-specific tsconfig) so the specs are
+  // typechecked like everything else, rather than left permanently outside
+  // `tsc --noEmit`'s reach.
   "exclude": ["node_modules", "tests"]
 }
