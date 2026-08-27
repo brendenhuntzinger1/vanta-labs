@@ -89,6 +89,11 @@ const BASKET = [
   { order_id: "b-pending", payment_status: "pending_payment", order_type: "product", amount_paid: 200, refund_amount: 0 },
   { order_id: "b-canceled", payment_status: "canceled", order_type: "product", amount_paid: 200, refund_amount: 0 },
   { order_id: "b-replacement", payment_status: "paid", order_type: "replacement", amount_paid: 15, refund_amount: 0 },
+  // OVER-REFUNDED: $100 collected, $150 handed back, so net revenue is -$50.
+  // The shipped function clamped this at zero with `greatest(0, ...)` while
+  // netOrderRevenue is signed — a disagreement no textual assertion can see and
+  // only executing the definition can settle.
+  { order_id: "b-over", payment_status: "partially_refunded", order_type: "product", amount_paid: 100, refund_amount: 150 },
 ];
 
 /** What the ledger says, derived rather than hand-typed. */
@@ -119,8 +124,8 @@ describeDb("admin_bulk_savings_stats, executed as it ships", () => {
 
   it("the basket separates gross from net, and sales from reships", () => {
     // Anchors the derivation so the expectations below cannot drift silently.
-    expect(LEDGER_ORDERS).toBe(2);            // paid + partially refunded
-    expect(LEDGER_REVENUE_CENTS).toBe(35000); // $200 + ($200 − $50)
+    expect(LEDGER_ORDERS).toBe(3);            // paid + both partially refunded
+    expect(LEDGER_REVENUE_CENTS).toBe(30000); // $200 + ($200 − $50) − $50
   });
 
   it("counts only orders that are actually sales", async () => {

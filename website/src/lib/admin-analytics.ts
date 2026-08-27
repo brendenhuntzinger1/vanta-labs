@@ -93,7 +93,12 @@ function revenueFromRows(rows: RevenueRow[]) {
     }
 
     const amount = netOrderRevenue(row);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    // NON-FINITE ONLY. This used to skip `amount <= 0`, which silently DROPPED
+    // an over-refunded order (net revenue below zero) while /admin/revenue
+    // summed it — reintroducing, on this one surface, exactly the disagreement
+    // ledger.netOrderRevenue's signed convention exists to remove. A zero adds
+    // nothing to a sum, so nothing else changes.
+    if (!Number.isFinite(amount)) {
       continue;
     }
 
@@ -206,7 +211,12 @@ export async function getRevenueTrend(input: RevenueRangeInput) {
     }
 
     const amount = netOrderRevenue(row);
-    if (!Number.isFinite(amount) || amount <= 0) {
+    // NON-FINITE ONLY. This used to skip `amount <= 0`, which silently DROPPED
+    // an over-refunded order (net revenue below zero) while /admin/revenue
+    // summed it — reintroducing, on this one surface, exactly the disagreement
+    // ledger.netOrderRevenue's signed convention exists to remove. A zero adds
+    // nothing to a sum, so nothing else changes.
+    if (!Number.isFinite(amount)) {
       continue;
     }
 

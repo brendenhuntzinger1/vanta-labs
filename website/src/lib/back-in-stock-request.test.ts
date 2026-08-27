@@ -1,0 +1,143 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// ---------------------------------------------------------------------------
+// requestBackInStock, against a Postgres that resolves conflict targets.
+//
+// The companion DB suite (back-in-stock-enrolment.test.ts) proves what the
+// database does. This proves what the FUNCTION does on top of it, because the
+// two are only connected by a line of error-string matching that got it wrong.
+//
+// back_in_stock_requests' only unique index is partial and over an expression:
+//   (product_slug, COALESCE(variant_id, ''), email) WHERE notified = false
+// so `on conflict (product_slug, variant_id, email)` gets 42P10 — and 42P10's
+// message contains no "duplicate", so the caller's duplicate check let it
+// through as a hard failure and told the customer to try again later.
+//
+// The double below refuses any conflict target that is not a real unique index,
+// exactly as Postgres does. The shipped in-memory double accepts every target,
+// which is why this was invisible.
+// ---------------------------------------------------------------------------
+
+vi.mock("server-only", () => ({}));
+vi.mock("@/lib/email/marketing", () => ({ sendMarketingEmail: async () => ({ ok: true }) }));
+vi.mock("@/lib/email/templates", () => ({ backInStockTemplate: () => ({ subject: "", html: "", text: "" }) }));
+vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://vanta.test" }));
+
+type Row = Record<string, unknown>;
+let rows: Row[] = [];
+let messageless23505 = false;
+
+/** Pending-uniqueness as the real partial index defines it. */
+const pendingKey = (row: Row) =>
+  JSON.stringify([row.product_slug, row.variant_id ?? "", row.email]);
+
+vi.mock("@/lib/supabase-server", () => {
+  const from = (table: string) => {
+    const filters: Array<{ column: string; value: unknown }> = [];
+    const builder: Record<string, unknown> = {
+      select() { return builder; },
+      eq(column: string, value: unknown) { filters.push({ column, value }); return builder; },
+      async maybeSingle() {
+        if (table === "products") {
+          const slug = filters.find((f) => f.column === "slug")?.value;
+          const archived = filters.find((f) => f.column === "is_archived")?.value;
+          const known = slug === "glp-1" && archived === false;
+          return { data: known ? { slug } : null, error: null };
+        }
+        const matched = rows.filter((r) => filters.every((f) => r[f.column] === f.value));
+        if (matched.length > 1) return { data: null, error: { code: "PGRST116", message: "multiple rows returned" } };
+        return { data: matched[0] ?? null, error: null };
+      },
+      async insert(payload: Row) {
+        const row = { ...payload, notified: payload.notified ?? false };
+        const clash = rows.some(
+          (r) => r.notified === false && row.notified === false && pendingKey(r) === pendingKey(row),
+        );
+        if (clash) {
+          return messageless23505
+            // A server running a non-English lc_messages: same SQLSTATE, no "duplicate".
+            ? { data: null, error: { code: "23505", message: 'Schlüsselwert verletzt Eindeutigkeitsconstraint "idx_bis_unique_pending"' } }
+            : { data: null, error: { code: "23505", message: 'duplicate key value violates unique constraint "idx_bis_unique_pending"' } };
+        }
+        rows.push(row);
+        return { data: null, error: null };
+      },
+      async upsert(_payload: Row, options?: { onConflict?: string }) {
+        // No value of onConflict can name a partial expression index.
+        return {
+          data: null,
+          error: {
+            code: "42P10",
+            message: `there is no unique or exclusion constraint matching the ON CONFLICT specification (${options?.onConflict})`,
+          },
+        };
+      },
+      then(resolve: (v: { data: unknown; error: unknown }) => unknown) {
+        const matched = rows.filter((r) => filters.every((f) => r[f.column] === f.value));
+        return Promise.resolve({ data: matched, error: null }).then(resolve);
+      },
+    };
+    return builder;
+  };
+  return { supabaseAdmin: { from } };
+});
+
+async function requestBackInStock() {
+  return (await import("@/lib/back-in-stock")).requestBackInStock;
+}
+
+beforeEach(() => {
+  rows = [];
+  messageless23505 = false;
+});
+
+describe("requestBackInStock", () => {
+  it("enrols the customer instead of asking them to try again later", async () => {
+    const fn = await requestBackInStock();
+    const result = await fn({ productSlug: "glp-1", email: "Buyer@Example.com" });
+
+    expect(result).toEqual({ ok: true });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].email).toBe("buyer@example.com");
+    expect(rows[0].notified).toBe(false);
+  });
+
+  it("stays on the list, and stays once, when the same person asks twice", async () => {
+    const fn = await requestBackInStock();
+    await fn({ productSlug: "glp-1", email: "buyer@example.com" });
+    const second = await fn({ productSlug: "glp-1", email: "buyer@example.com" });
+
+    // A racing duplicate is the index doing its job, not a failure to report.
+    expect(second).toEqual({ ok: true });
+    expect(rows).toHaveLength(1);
+  });
+
+  it("treats a unique violation as success even when the server's message is not English", async () => {
+    // Postgres renders error text in lc_messages. Matching the English word
+    // "duplicate" is a guess about server locale; SQLSTATE 23505 is the
+    // contract. Pinned so the code check cannot be dropped back to a substring.
+    messageless23505 = true;
+    const fn = await requestBackInStock();
+    await fn({ productSlug: "glp-1", email: "buyer@example.com" });
+    const second = await fn({ productSlug: "glp-1", email: "buyer@example.com" });
+
+    expect(second).toEqual({ ok: true });
+    expect(rows).toHaveLength(1);
+  });
+
+  it("still refuses an unknown product", async () => {
+    const fn = await requestBackInStock();
+    const result = await fn({ productSlug: "not-a-product", email: "buyer@example.com" });
+
+    expect(result.ok).toBe(false);
+    expect(rows).toHaveLength(0);
+  });
+
+  it("still refuses a malformed email", async () => {
+    const fn = await requestBackInStock();
+    const result = await fn({ productSlug: "glp-1", email: "nope" });
+
+    expect(result.ok).toBe(false);
+    expect(rows).toHaveLength(0);
+  });
+});

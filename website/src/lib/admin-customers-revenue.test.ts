@@ -98,16 +98,22 @@ describe("customer lifetime value", () => {
     expect(row.orderCount).toBe(1);
   });
 
-  it("never lets an over-refund drive lifetime spend negative", async () => {
+  it("lets an over-refund reduce lifetime spend, because it really did", async () => {
     // A chargeback on top of a partial can record more back than was collected.
-    // netOrderRevenue clamps at zero; a customer cannot have spent less than
-    // nothing, and a negative here would silently offset their other orders.
+    //
+    // This used to assert 80 — the over-refunded order clamped to 0 and left
+    // the other order untouched — on the reasoning that "a customer cannot have
+    // spent less than nothing". But the $50 handed back beyond what was
+    // collected is real money that left the business through this customer, and
+    // netOrderRevenue is now signed everywhere (see revenue-clamp-agreement
+    // .test.ts) precisely so no surface floors a loss to zero. Lifetime value is
+    // net cash from the customer: 100 - 150 + 80 = 30.
     state.orders = [
       order({ order_id: "a", amount_paid: 100, refund_amount: 150, payment_status: "refunded" }),
       order({ order_id: "b", amount_paid: 80, refund_amount: 0, payment_status: "paid" }),
     ];
     const row = await only();
-    expect(row.totalSpent).toBe(80);
+    expect(row.totalSpent).toBe(30);
     expect(row.orderCount).toBe(2);
   });
 

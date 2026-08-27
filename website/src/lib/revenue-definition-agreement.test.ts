@@ -53,6 +53,13 @@ const BASKET = [
   // disagree again. This row is what keeps the exclusion honest in the meantime.
   { order_id: "o-replacement-paid", payment_status: "paid", order_type: "replacement", amount_paid: 15, refund_amount: 0 },
   { order_id: "o-pending", payment_status: "pending_payment", order_type: "product", amount_paid: 200, refund_amount: 0 },
+  // AN OVER-REFUNDED ORDER: more handed back than was ever collected, so its
+  // net revenue is NEGATIVE. netOrderRevenue used to floor it at 0 while the
+  // profit engine reported the loss, and admin-analytics dropped it outright
+  // with an `amount <= 0` guard. It is in the basket so all four surfaces have
+  // to reach the same signed number rather than three of them agreeing on a
+  // zero that is not true.
+  { order_id: "o-over", payment_status: "partially_refunded", order_type: "product", amount_paid: 100, refund_amount: 150 },
 ].map((row) => ({
   ...row,
   // Never-paid orders carry no paid_at. getRevenueWindowMetrics unions a
@@ -155,11 +162,16 @@ beforeEach(() => {
 });
 
 describe("the basket the ledger describes", () => {
-  it("is worth $350.00 — paid in full, plus what a partial refund left behind", () => {
+  it("is worth $300.00 — paid in full, what a partial refund left, less an over-refund", () => {
     // Anchors the derivation. If this changes, every expectation below moves
     // with it deliberately rather than silently.
-    expect(LEDGER_REVENUE).toBeCloseTo(350, 2);
-    expect(LEDGER_SALES).toBe(2);
+    //
+    // 200 (paid) + 150 (200 less a 50 refund) - 50 (100 collected, 150 handed
+    // back). The last term is the one that used to be floored at zero, and the
+    // surfaces below now have to carry it too rather than each rounding the
+    // loss away in its own way.
+    expect(LEDGER_REVENUE).toBeCloseTo(300, 2);
+    expect(LEDGER_SALES).toBe(3);
   });
 
   it("counts a replacement as neither revenue nor a sale", () => {

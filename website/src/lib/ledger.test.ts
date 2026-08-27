@@ -20,10 +20,14 @@ describe("canonical ledger predicates (reporting reconciliation)", () => {
     }
   });
 
-  it("net revenue subtracts refunds, is 2-decimal, and never goes below zero", () => {
+  it("net revenue subtracts refunds, is 2-decimal, and keeps its sign", () => {
     expect(netOrderRevenue({ amount_paid: 100, refund_amount: 0 })).toBe(100);
     expect(netOrderRevenue({ amount_paid: 100, refund_amount: 30 })).toBe(70);
-    expect(netOrderRevenue({ amount_paid: 100, refund_amount: 150 })).toBe(0); // over-refund clamps to 0
+    // OVER-REFUND IS SIGNED, NOT FLOORED. This asserted 0 while the profit
+    // engine reported -50 for the same order, which is two definitions of
+    // revenue in a module whose whole purpose is that there is one. A clamp
+    // does not make the money come back. See revenue-clamp-agreement.test.ts.
+    expect(netOrderRevenue({ amount_paid: 100, refund_amount: 150 })).toBe(-50);
     expect(netOrderRevenue({ amount_paid: 49.99, refund_amount: 0 })).toBe(49.99);
     expect(netOrderRevenue({ amount_paid: null, refund_amount: null })).toBe(0);
   });

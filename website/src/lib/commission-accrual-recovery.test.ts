@@ -273,6 +273,16 @@ vi.mock("@/lib/supabase-server", () => {
           eq: (_c: string, value: unknown) => ({
             maybeSingle: async () => ({ data: db.commissions.get(String(value)) ?? null, error: null }),
           }),
+          // The candidate scan reads this table too: an order whose ledger row
+          // committed and whose mirror did not is a REPAIRABLE obligation, not
+          // an accrued one, so the sweep asks which order ids carry a mirror.
+          in: async (_c: string, values: unknown[]) => ({
+            data: values
+              .map((value) => db.commissions.get(String(value)))
+              .filter(Boolean)
+              .map((row) => ({ order_id: (row as Record<string, unknown>).order_id })),
+            error: null,
+          }),
         }),
         upsert: async (row: Record<string, unknown>) => {
           db.commissions.set(String(row.order_id), row);

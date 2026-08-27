@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { providerSettlesRefunds } from "@/lib/payment-provider";
+import { refundedMerchandiseFraction } from "@/lib/payment-webhook";
 import { reimbursementRecordedTemplate } from "@/lib/email/templates";
 
 // ---------------------------------------------------------------------------
@@ -108,5 +109,51 @@ describe("the audit trail", () => {
     expect(auditBlock).toContain("reimbursementMethod");
     expect(auditBlock).toContain("providerRefunded");
     expect(auditBlock).toContain("performedBy");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// WHAT A REFUND RETURNS IS NOT ONLY THE CASH.
+//
+// The refunded fraction decides how much of the ambassador's commission is
+// reversed. It used to be measured as `min(newRefundTotal, base) / base`, and
+// `newRefundTotal` is capped at the CASH `amount_paid` while `base` is
+// `subtotal - discount`. An order settled with store credit therefore returned
+// its entire merchandise while reporting a refunded fraction of zero, and the
+// commission on goods the store got back was never clawed back.
+// ---------------------------------------------------------------------------
+describe("how much of the merchandise a refund returned", () => {
+  const fraction = (cash: number, nonCash: number, base = 100) =>
+    refundedMerchandiseFraction({ commissionableBase: base, cashRefunded: cash, nonCashReturned: nonCash });
+
+  it("is 1 when an order settled entirely in credit is returned in full", () => {
+    // The defect, at its sharpest: $0 cash, $100 of merchandise handed back.
+    expect(fraction(0, 100)).toBe(1);
+  });
+
+  it("is 0 when nothing has been returned", () => {
+    expect(fraction(0, 0)).toBe(0);
+  });
+
+  it("counts cash and non-cash tender together", () => {
+    expect(fraction(30, 20)).toBeCloseTo(0.5, 10);
+  });
+
+  it("is unchanged on an ordinary all-cash order", () => {
+    // The regression guard. No credit, no points: identical to the old rule.
+    expect(fraction(0, 0)).toBe(0);
+    expect(fraction(25, 0)).toBeCloseTo(0.25, 10);
+    expect(fraction(100, 0)).toBe(1);
+  });
+
+  it("never exceeds 1, however much was handed back", () => {
+    // A refund covering shipping, tax and fees on top of the merchandise must
+    // not reverse MORE than the whole commission.
+    expect(fraction(500, 500)).toBe(1);
+  });
+
+  it("is a full reversal when there is no commissionable merchandise at all", () => {
+    // Nothing to apportion — the conservative direction is to reverse it all.
+    expect(refundedMerchandiseFraction({ commissionableBase: 0, cashRefunded: 0, nonCashReturned: 0 })).toBe(1);
   });
 });

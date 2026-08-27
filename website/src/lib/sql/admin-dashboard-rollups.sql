@@ -28,8 +28,17 @@
 -- entirely by this filter, so its RETAINED revenue vanished from the revenue
 -- page while admin-profit counted it — two numbers for one store.
 --
--- Net revenue per order = max(0, amount_paid - refund_amount), rounded to 2dp
--- per order then summed (matches netOrderRevenue()).
+-- Net revenue per order = amount_paid - refund_amount, rounded to 2dp per order
+-- then summed (matches netOrderRevenue()).
+--
+-- SIGNED, NOT CLAMPED. This was `greatest(0, ...)` while the profit engine
+-- subtracted the refund unfloored, so an order paid 100 and refunded 150 was
+-- -50 on the profit dashboard and 0 here. ledger.netOrderRevenue now keeps the
+-- sign and so does this: a clamp does not make the money come back, it reports
+-- an order the store lost money on as having broken even. Proved by executing
+-- this file's own definition against Postgres in
+-- sql/bulk-savings-rollup-executed.test.ts, and guarded textually by
+-- ledger-sql-parity.test.ts.
 --
 -- ledger-sql-parity.test.ts fails if this status list and REVENUE_ORDER_STATUSES
 -- stop agreeing, so neither side can drift alone.
@@ -49,7 +58,7 @@ set search_path = public, pg_temp
 as $$
   with paid as (
     select
-      round(greatest(0, coalesce(amount_paid, 0) - coalesce(refund_amount, 0)), 2) as net,
+      round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2) as net,
       coalesce(card_processing_fee, 0) as fee,
       paid_at
     from public.orders
@@ -78,7 +87,7 @@ set search_path = public, pg_temp
 as $$
   select
     coalesce(payment_method, '') as method,
-    round(coalesce(sum(round(greatest(0, coalesce(amount_paid, 0) - coalesce(refund_amount, 0)), 2)), 0), 2) as revenue,
+    round(coalesce(sum(round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2)), 0), 2) as revenue,
     count(*) as orders
   from public.orders
   where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
@@ -144,7 +153,7 @@ as $$
       lower(trim(customer_email)) as email,
       count(*) as order_count,
       coalesce(sum(case when payment_status in ('paid', 'partially_refunded', 'refunded')
-                        then round(greatest(0, coalesce(amount_paid, 0) - coalesce(refund_amount, 0)), 2)
+                        then round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2)
                         else 0 end), 0) as total_spent,
       min(created_at) as first_order_at,
       max(created_at) as last_order_at
@@ -228,11 +237,11 @@ as $$
     group by customer_email
   )
   select
-    coalesce((select sum(round(greatest(0, coalesce(amount_paid, 0) - coalesce(refund_amount, 0)), 2))
+    coalesce((select sum(round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2))
               from public.orders
               where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
                 and created_at >= p_today_start), 0) as live_sales_today,
-    coalesce((select sum(round(greatest(0, coalesce(amount_paid, 0) - coalesce(refund_amount, 0)), 2))
+    coalesce((select sum(round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2))
               from public.orders
               where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
                 and created_at >= p_month_start), 0) as live_sales_month,
@@ -313,7 +322,7 @@ as $$
   select
     bulk_discount_tier as tier,
     count(*) as orders,
-    coalesce(sum(round(greatest(0, coalesce(amount_paid, 0) - coalesce(refund_amount, 0)), 2) * 100), 0) as revenue_cents
+    coalesce(sum(round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2) * 100), 0) as revenue_cents
   from public.orders
   where bulk_discount_tier is not null
     and payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')

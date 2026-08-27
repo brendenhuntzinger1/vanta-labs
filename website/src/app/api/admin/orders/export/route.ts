@@ -120,6 +120,11 @@ export async function GET(request: Request) {
             p.commission,
             p.taxCollected,
             p.profit,
+            // `null` when there is no revenue to take a proportion of, which
+            // csvEscape writes as an EMPTY CELL. Deliberate: a spreadsheet
+            // column of margins must not carry a 0 that averages in as "broke
+            // even" on orders that lost money. Covered by
+            // margin-never-flatters-a-loss.test.ts.
             p.marginPercent,
             p.profitStatus,
           ].map((value) => csvEscape(value))

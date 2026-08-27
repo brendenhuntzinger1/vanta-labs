@@ -11,6 +11,7 @@ import {
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { mintCartRecoveryCoupon, type AbandonedCartItemSnapshot } from "@/lib/cart-recovery";
 import { getSiteUrl } from "@/lib/env";
+import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
 
 export interface AbandonedCartRow {
   id: string;
@@ -74,6 +75,13 @@ export interface CartRecoveryStats {
   totalRecovered: number;
   recoveryPercent: number;
   potentialLostRevenueCents: number;
+  /**
+   * NET revenue kept on the orders that closed a recovered cart — the canonical
+   * ledger.netOrderRevenue over revenue-status sale orders, not gross
+   * `amount_paid`. See the derivation in getCartRecoveryStats for why this is
+   * P&L rather than attribution, and what answers the attribution question
+   * instead.
+   */
   revenueRecoveredCents: number;
   openRatePercent: number;
   clickRatePercent: number;
@@ -98,8 +106,32 @@ export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
   const recoveredOrderIds = recoveredRows.map((row) => row.recovered_order_id).filter((id): id is string => Boolean(id));
   let revenueRecoveredCents = 0;
   if (recoveredOrderIds.length > 0) {
-    const { data: orders } = await supabaseAdmin.from("orders").select("amount_paid").in("order_id", recoveredOrderIds);
-    revenueRecoveredCents = (orders ?? []).reduce((sum, row) => sum + Math.round(Number(row.amount_paid ?? 0) * 100), 0);
+    // THIS IS REVENUE, AND IT USES THE REVENUE DEFINITION — a decision, recorded
+    // here because the alternative is defensible and was rejected.
+    //
+    // It summed GROSS `amount_paid` with NO refund subtraction and NO status
+    // filter, so a cart "recovered" by an order that never took a payment
+    // contributed its full value, and a recovery that was later returned still
+    // counted as money kept.
+    //
+    // The gross figure has an honest reading — ATTRIBUTION: the email did bring
+    // the customer back, and a return weeks later is a different event. It is
+    // rejected because of where this number is rendered. It is a tile labelled
+    // "Revenue Recovered" beside "Potential Lost Revenue", read to decide
+    // whether recovery emails pay for themselves, and that question is answered
+    // by what the store KEPT. ledger.ts exists so "revenue" means one thing on
+    // every surface; a second definition behind a money tile is what it forbids.
+    //
+    // Attribution is not lost: `totalRecovered` above counts every cart the
+    // emails closed, refunded or not. The count says whether the campaign
+    // worked; this says what it was worth.
+    const { data: orders } = await supabaseAdmin
+      .from("orders")
+      .select("amount_paid, refund_amount, payment_status, order_type")
+      .in("order_id", recoveredOrderIds);
+    revenueRecoveredCents = (orders ?? [])
+      .filter((row) => isRevenueOrderStatus(row.payment_status as string | null) && isSaleOrder(row.order_type as string | null))
+      .reduce((sum, row) => sum + Math.round(netOrderRevenue(row as { amount_paid?: number | null; refund_amount?: number | null }) * 100), 0);
   }
 
   const { data: emailRows, error: emailError } = await supabaseAdmin
