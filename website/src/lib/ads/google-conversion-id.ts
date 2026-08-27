@@ -21,6 +21,19 @@ export const GOOGLE_ADS_ID = process.env.NEXT_PUBLIC_GOOGLE_ADS_ID ?? "";
 export const GOOGLE_PURCHASE_LABEL = process.env.NEXT_PUBLIC_GOOGLE_PURCHASE_LABEL ?? "";
 
 /**
+ * The NUMERIC conversion action id, for the Google Ads REST API.
+ *
+ * Deliberately NOT the same value as GOOGLE_PURCHASE_LABEL. That label is the
+ * opaque gtag string used in `send_to: 'AW-123/AbC-D_efG'` on the browser leg.
+ * The REST API addresses the same conversion action by its numeric resource id
+ * (`customers/<cid>/conversionActions/<numeric id>`). Sending the gtag label
+ * there produces a resource name Google cannot resolve, and the failure is a
+ * rejected upload rather than anything visible in the browser.
+ */
+export const GOOGLE_PURCHASE_CONVERSION_ACTION_ID =
+  process.env.GOOGLE_ADS_PURCHASE_CONVERSION_ACTION_ID ?? "";
+
+/**
  * A conversion id we are willing to load a third-party script for.
  *
  * `G-` prefixed ids are GA4 measurement ids. They are superficially similar,

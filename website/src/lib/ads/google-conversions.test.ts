@@ -6,7 +6,21 @@ const ENV_KEYS = [
   "GOOGLE_ADS_CLIENT_ID",
   "GOOGLE_ADS_CLIENT_SECRET",
   "GOOGLE_ADS_REFRESH_TOKEN",
+  "GOOGLE_ADS_PURCHASE_CONVERSION_ACTION_ID",
 ] as const;
+
+/** Stubs a fully-allowed production environment so a send can proceed past the gate. */
+function stubProductionEnvironment() {
+  process.env.VERCEL_ENV = "production";
+  vi.stubEnv("NODE_ENV", "production");
+  delete process.env.CI;
+}
+
+function clearProductionEnvironment() {
+  delete process.env.VERCEL_ENV;
+  delete process.env.CI;
+  vi.unstubAllEnvs();
+}
 
 function setAll(value: string | undefined) {
   for (const key of ENV_KEYS) {
@@ -89,6 +103,116 @@ describe("sendGoogleConversion", () => {
   });
 });
 
+describe("sendGoogleConversion — request payload", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    setAll("value");
+    process.env.GOOGLE_ADS_PURCHASE_CONVERSION_ACTION_ID = "123456";
+    stubProductionEnvironment();
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    setAll(undefined);
+    clearProductionEnvironment();
+    vi.unstubAllGlobals();
+  });
+
+  function stubSuccessfulFetch() {
+    const fetchSpy = vi.fn(async (url: unknown) => {
+      if (String(url).includes("oauth2.googleapis.com")) {
+        return { ok: true, json: async () => ({ access_token: "test-token" }) } as unknown as Response;
+      }
+      return { ok: true, status: 200, statusText: "OK" } as unknown as Response;
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    return fetchSpy;
+  }
+
+  function conversionBody(fetchSpy: ReturnType<typeof vi.fn>) {
+    const call = fetchSpy.mock.calls.find((args: unknown[]) => String(args[0]).includes("uploadClickConversions"));
+    if (!call) throw new Error("uploadClickConversions was never called");
+    const body = JSON.parse((call[1] as { body: string }).body);
+    return body.conversions[0];
+  }
+
+  it("omits userIdentifiers entirely when userData is an empty object", async () => {
+    const fetchSpy = stubSuccessfulFetch();
+    const { sendGoogleConversion } = await import("./google-conversions");
+    const result = await sendGoogleConversion({
+      event: { name: "purchase", params: { transaction_id: "VL-1" }, userData: {}, dedupeKey: null },
+      occurredAt: new Date(),
+    });
+    expect(result.delivered).toBe(true);
+    expect(conversionBody(fetchSpy)).not.toHaveProperty("userIdentifiers");
+  });
+
+  it("omits userIdentifiers entirely when every digest inside userData is undefined", async () => {
+    const fetchSpy = stubSuccessfulFetch();
+    const { sendGoogleConversion } = await import("./google-conversions");
+    const result = await sendGoogleConversion({
+      event: {
+        name: "purchase",
+        params: { transaction_id: "VL-1" },
+        userData: { sha256_email_address: undefined },
+        dedupeKey: null,
+      },
+      occurredAt: new Date(),
+    });
+    expect(result.delivered).toBe(true);
+    expect(conversionBody(fetchSpy)).not.toHaveProperty("userIdentifiers");
+  });
+
+  it("includes userIdentifiers when at least one digest is present", async () => {
+    const fetchSpy = stubSuccessfulFetch();
+    const { sendGoogleConversion } = await import("./google-conversions");
+    await sendGoogleConversion({
+      event: {
+        name: "purchase",
+        params: { transaction_id: "VL-1" },
+        userData: { sha256_email_address: "abc123" },
+        dedupeKey: null,
+      },
+      occurredAt: new Date(),
+    });
+    expect(conversionBody(fetchSpy).userIdentifiers).toEqual([{ hashedEmail: "abc123" }]);
+  });
+
+  it("uses the numeric conversion action id, never the gtag label, in the resource name", async () => {
+    const fetchSpy = stubSuccessfulFetch();
+    const { sendGoogleConversion } = await import("./google-conversions");
+    await sendGoogleConversion({
+      event: { name: "purchase", params: { transaction_id: "VL-1" }, dedupeKey: null },
+      occurredAt: new Date(),
+    });
+    expect(conversionBody(fetchSpy).conversionAction).toContain("/conversionActions/123456");
+  });
+
+  it("refuses to send when the conversion action id is not numeric", async () => {
+    process.env.GOOGLE_ADS_PURCHASE_CONVERSION_ACTION_ID = "AbC-D_efG";
+    const fetchSpy = stubSuccessfulFetch();
+    const { sendGoogleConversion } = await import("./google-conversions");
+    const result = await sendGoogleConversion({
+      event: { name: "purchase", params: { transaction_id: "VL-1" }, dedupeKey: null },
+      occurredAt: new Date(),
+    });
+    expect(result.attempted).toBe(false);
+    expect(result.message).toMatch(/numeric/);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("refuses to send when the conversion action id is missing", async () => {
+    delete process.env.GOOGLE_ADS_PURCHASE_CONVERSION_ACTION_ID;
+    const fetchSpy = stubSuccessfulFetch();
+    const { sendGoogleConversion } = await import("./google-conversions");
+    const result = await sendGoogleConversion({
+      event: { name: "purchase", params: { transaction_id: "VL-1" }, dedupeKey: null },
+      occurredAt: new Date(),
+    });
+    expect(result.attempted).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
 describe("describeGoogleResult", () => {
   it("cannot leak a credential, because it has no field to carry one", async () => {
     const { describeGoogleResult } = await import("./google-conversions");
@@ -104,9 +228,18 @@ describe("describeGoogleResult", () => {
 });
 
 describe("environment enforcement — mutation control", () => {
-  it("refuses to send from a non-production environment even fully credentialed", async () => {
+  beforeEach(() => {
     vi.resetModules();
     setAll("value");
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    setAll(undefined);
+    clearProductionEnvironment();
+    vi.unstubAllGlobals();
+  });
+
+  it("refuses to send from a non-production environment even fully credentialed", async () => {
     process.env.VERCEL_ENV = "preview";
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
@@ -119,12 +252,9 @@ describe("environment enforcement — mutation control", () => {
     expect(result.message).toMatch(/suppressed/);
     expect(fetchSpy).not.toHaveBeenCalled();
     // Deleting the serverAdsReportingAllowed() call makes this fail.
-    delete process.env.VERCEL_ENV;
   });
 
   it("refuses when VERCEL_ENV is unset, because 'we could not tell' is not 'production'", async () => {
-    vi.resetModules();
-    setAll("value");
     delete process.env.VERCEL_ENV;
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);

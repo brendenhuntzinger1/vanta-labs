@@ -1,7 +1,7 @@
 import "server-only";
 
 import { serverAdsReportingAllowed } from "@/lib/ads/ads-environment";
-import { GOOGLE_PURCHASE_LABEL } from "@/lib/ads/google-conversion-id";
+import { GOOGLE_PURCHASE_CONVERSION_ACTION_ID } from "@/lib/ads/google-conversion-id";
 import type { GoogleEvent } from "@/lib/ads/google-events";
 
 /**
@@ -27,6 +27,17 @@ import type { GoogleEvent } from "@/lib/ads/google-events";
  * ON DIAGNOSTICS. `describeGoogleResult` is built from a fixed field set
  * precisely so a token, a customer id or a customer's data cannot reach a log
  * line, a Sentry breadcrumb or the audit log. It has no field to carry one.
+ *
+ * ON THE CONVERSION ACTION ID. `GOOGLE_ADS_PURCHASE_CONVERSION_ACTION_ID` is
+ * NOT the same value as the browser leg's gtag conversion label. The label
+ * (`GOOGLE_PURCHASE_LABEL`, an opaque string used in `send_to: 'AW-123/AbC-D_efG'`)
+ * is a browser-surface concept; this REST API addresses the same conversion
+ * action by its numeric resource id
+ * (`customers/<cid>/conversionActions/<numeric id>`). The two must never be
+ * conflated — sending the gtag label here produces a resource name Google
+ * cannot resolve, and the failure is a rejected upload, not anything visible
+ * in the browser. It is required and shape-checked for the same reason: an
+ * upload against a missing or malformed id has nothing to report against.
  */
 
 const REQUIRED_ENV = [
@@ -35,7 +46,10 @@ const REQUIRED_ENV = [
   "GOOGLE_ADS_CLIENT_ID",
   "GOOGLE_ADS_CLIENT_SECRET",
   "GOOGLE_ADS_REFRESH_TOKEN",
+  "GOOGLE_ADS_PURCHASE_CONVERSION_ACTION_ID",
 ] as const;
+
+const CONVERSION_ACTION_ID_SHAPE = /^\d+$/;
 
 export type GoogleSendResult = {
   attempted: boolean;
@@ -108,10 +122,23 @@ export async function sendGoogleConversion(input: {
   const transactionId = input.event.params.transaction_id;
   if (!transactionId) return { ...notAttempted, message: "no transaction id" };
 
+  if (!CONVERSION_ACTION_ID_SHAPE.test(String(process.env.GOOGLE_ADS_PURCHASE_CONVERSION_ACTION_ID))) {
+    return { ...notAttempted, message: "conversion action id is not numeric" };
+  }
+
   const token = await accessToken();
   if (!token) return { ...notAttempted, message: "oauth refresh failed" };
 
   const customerId = String(process.env.GOOGLE_ADS_CUSTOMER_ID).replace(/\D/g, "");
+
+  const userIdentifiers = [
+    ...(input.event.userData?.sha256_email_address
+      ? [{ hashedEmail: input.event.userData.sha256_email_address }]
+      : []),
+    ...(input.event.userData?.sha256_phone_number
+      ? [{ hashedPhoneNumber: input.event.userData.sha256_phone_number }]
+      : []),
+  ];
 
   try {
     const response = await fetch(`${ADS_API_BASE}/${customerId}:uploadClickConversions`, {
@@ -124,23 +151,12 @@ export async function sendGoogleConversion(input: {
       body: JSON.stringify({
         conversions: [
           {
-            conversionAction: `customers/${customerId}/conversionActions/${GOOGLE_PURCHASE_LABEL}`,
+            conversionAction: `customers/${customerId}/conversionActions/${GOOGLE_PURCHASE_CONVERSION_ACTION_ID}`,
             conversionDateTime: formatGoogleDateTime(input.occurredAt),
             conversionValue: input.event.params.value,
             currencyCode: input.event.params.currency,
             orderId: transactionId,
-            ...(input.event.userData
-              ? {
-                  userIdentifiers: [
-                    ...(input.event.userData.sha256_email_address
-                      ? [{ hashedEmail: input.event.userData.sha256_email_address }]
-                      : []),
-                    ...(input.event.userData.sha256_phone_number
-                      ? [{ hashedPhoneNumber: input.event.userData.sha256_phone_number }]
-                      : []),
-                  ],
-                }
-              : {}),
+            ...(userIdentifiers.length > 0 ? { userIdentifiers } : {}),
           },
         ],
         partialFailure: true,
