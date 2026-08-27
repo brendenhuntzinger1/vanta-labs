@@ -9,6 +9,8 @@ import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
 import { CHECKOUT_SHORT, DESTINATIONS_SENTENCE, FULFILMENT_SENTENCE, FULFILMENT_SHORT, TRACKING_SENTENCE } from "@/lib/trust-claims";
+import { cartTotalLabel, pendingChargeNotice } from "@/lib/cart-total-disclosure";
+import type { CardProcessingFeeConfig } from "@/lib/payment-methods";
 
 export function CartPageClient() {
   const router = useRouter();
@@ -16,6 +18,10 @@ export function CartPageClient() {
   // What live inventory said about this cart, if anything. Set by the
   // re-validation below; drives the per-line notices and the checkout button.
   const [stockNotices, setStockNotices] = useState<string[]>([]);
+  // The card service fee is decided server-side and applied at checkout. The
+  // cart never computes it — it reads the config purely so it can DISCLOSE it,
+  // instead of showing a "Final total" that grows by 3% one screen later.
+  const [cardFee, setCardFee] = useState<CardProcessingFeeConfig | null>(null);
   const [isValidatingStock, setIsValidatingStock] = useState(false);
   const {
     items,
@@ -124,6 +130,21 @@ export function CartPageClient() {
   // by a ref rather than a dependency list because the reconciliation itself
   // edits `items`, and re-running on that edit would loop.
   const hasReconciledRef = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/catalog/payment-methods", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((result: { cardProcessingFee?: CardProcessingFeeConfig | null } | null) => {
+        if (!cancelled) setCardFee(result?.cardProcessingFee ?? null);
+      })
+      .catch(() => {
+        // Disclosure is best-effort: a failed read must never block the cart.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     if (!isHydrated || hasReconciledRef.current) return;
     hasReconciledRef.current = true;
@@ -305,9 +326,16 @@ export function CartPageClient() {
                 <span>Calculated at checkout</span>
               </div>
               <div className="mt-4 flex justify-between border-t border-white/10 pt-4 text-base text-white">
-                <span>Final total</span>
+                {/* "Final total" is only accurate once nothing further will be
+                    added. Tax is always outstanding here, and on a card order
+                    so is the service fee — this said "Final total" and then
+                    grew by 3% at checkout. */}
+                <span>{cartTotalLabel({ taxPending: true, cardFeeApplies: Boolean(cardFee?.enabled && cardFee.percentage > 0) })}</span>
                 <span>{formatCartCurrency(total)}</span>
               </div>
+              {pendingChargeNotice({ cardFee, taxPending: false }) ? (
+                <p className="text-xs text-white/40">{pendingChargeNotice({ cardFee, taxPending: false })}</p>
+              ) : null}
               {autoBestDiscountApplied ? (
                 <p className="text-xs text-emerald-300/80">✓ We&apos;ve automatically applied your best available discount.</p>
               ) : null}

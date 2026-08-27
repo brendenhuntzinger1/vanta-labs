@@ -19,13 +19,25 @@ export const EXPRESS_CHECKOUT_ENABLED =
 // a page that otherwise looks fine, so the button must not render there at all.
 // Note the apex and the www host are DIFFERENT registrations; whichever one the
 // browser actually lands on is the one that matters.
-export const APPLE_PAY_DOMAINS: string[] = (process.env.NEXT_PUBLIC_APPLE_PAY_DOMAINS ?? "")
-  .split(",")
-  .map((domain) => domain.trim().toLowerCase())
-  .filter(Boolean);
+function parseApplePayDomains(raw: string | undefined): string[] {
+  return (raw ?? "")
+    .split(",")
+    .map((domain) => domain.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export const APPLE_PAY_DOMAINS: string[] = parseApplePayDomains(
+  process.env.NEXT_PUBLIC_APPLE_PAY_DOMAINS,
+);
 
 export function isRegisteredApplePayHost(hostname: string): boolean {
-  return APPLE_PAY_DOMAINS.includes(hostname.trim().toLowerCase());
+  // Read at CALL time, not module-load time. NEXT_PUBLIC_* is inlined at build
+  // so this is the same value in the browser, but it lets the eligibility gate
+  // be exercised against a configured host list in tests instead of silently
+  // answering false for every host because the suite has no env set.
+  return parseApplePayDomains(process.env.NEXT_PUBLIC_APPLE_PAY_DOMAINS).includes(
+    hostname.trim().toLowerCase(),
+  );
 }
 
 // Deliberately a user-agent test rather than `window.ApplePaySession` /
@@ -35,4 +47,47 @@ export function isRegisteredApplePayHost(hostname: string): boolean {
 // only rules the platform in.
 export function isApplePlatform(userAgent: string): boolean {
   return /iPhone|iPad|iPod|Macintosh|Mac OS X/.test(userAgent);
+}
+
+// ---------------------------------------------------------------------------
+// MAY WE OFFER APPLE PAY HERE?
+//
+// One predicate, because there are two surfaces that must agree: the express
+// BUTTON and the accepted-methods PILL under the checkout CTA. The pill used to
+// key off EXPRESS_CHECKOUT_ENABLED alone, so a shopper on desktop Chrome — or,
+// far worse, an iPhone on the unregistered www host — was told Apple Pay was
+// accepted while no button ever rendered. Advertising a wallet that cannot be
+// used is the one failure mode this whole file exists to prevent.
+//
+// Every field is a browser fact read at the call site rather than in here, so
+// this stays pure and directly testable.
+// ---------------------------------------------------------------------------
+export interface ApplePayEnvironment {
+  /** NEXT_PUBLIC_EXPRESS_CHECKOUT_ENABLED. */
+  enabled: boolean;
+  userAgent: string;
+  /** The EXACT host serving the page — apex and www are separate registrations. */
+  hostname: string;
+  /** `typeof window.ApplePaySession !== "undefined"`. */
+  hasApplePaySession: boolean;
+  /**
+   * `ApplePaySession.supportsVersion(APPLE_PAY_VERSION)`. Below iOS 13.4 /
+   * macOS 10.15.4 the v6 constructor THROWS rather than returning anything, so
+   * it must be checked before the button renders — not caught at tap time, by
+   * which point the shopper has already committed.
+   */
+  supportsVersion: boolean;
+  /** `ApplePaySession.canMakePayments()` — a wallet with a card provisioned. */
+  canMakePayments: boolean;
+}
+
+export function canOfferApplePay(environment: ApplePayEnvironment): boolean {
+  return (
+    environment.enabled &&
+    isApplePlatform(environment.userAgent) &&
+    environment.hasApplePaySession &&
+    environment.supportsVersion &&
+    environment.canMakePayments &&
+    isRegisteredApplePayHost(environment.hostname)
+  );
 }

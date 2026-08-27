@@ -4,7 +4,7 @@ import type { Metadata } from "next";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { detectRoleFromUser } from "@/lib/auth-role";
-import { getPaymentMethodsConfig } from "@/lib/admin-control";
+import { getCardProcessingFeeConfig, getPaymentMethodsConfig } from "@/lib/admin-control";
 import { getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { ClearCartOnMount } from "@/components/clear-cart-on-mount";
@@ -51,16 +51,20 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
   // A missing order now costs two wasted lookups before the 404. That is the
   // right trade: an unguessable order id that resolves to nothing is rare, and
   // every real customer gets the faster receipt.
-  const [orderResult, paymentMethods, user] = await Promise.all([
+  const [orderResult, paymentMethods, user, cardFeeConfig] = await Promise.all([
     supabaseAdmin
       .from("orders")
-      .select("order_id, order_number, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, shipping_protection_fee, amount_paid, payment_status, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
+      .select("order_id, order_number, subtotal, shipping_amount, handling_fee, tax_amount, discount_amount, shipping_protection_fee, card_processing_fee, amount_paid, payment_status, fulfillment_status, payment_method, customer_email, created_at, order_items(product_name, quantity, line_total)")
       .eq("order_id", orderId)
       .maybeSingle(),
     // Each keeps the failure behaviour it had when it was awaited alone: a
     // config that cannot load means "treat as card", and no session means guest.
     getPaymentMethodsConfig().catch(() => null),
     getAuthenticatedUser().catch(() => null),
+    // The store's own name for the card surcharge, so the receipt calls it what
+    // checkout called it. A config that cannot load falls back to the default
+    // label inside buildOrderSummaryLines rather than dropping the line.
+    getCardProcessingFeeConfig().catch(() => null),
   ]);
 
   const order = orderResult.data;
@@ -89,6 +93,11 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
     // left over. 0 on orders written before the column existed, which keeps the
     // old residual behaviour for exactly those.
     shippingProtection: Number(order.shipping_protection_fee ?? 0),
+    // Recorded too, and a DIFFERENT charge from protection. Without this the
+    // surcharge fell into the residual and was announced as "Shipping
+    // protection" on every card order that declined cover.
+    cardProcessingFee: Number(order.card_processing_fee ?? 0),
+    cardFeeLabel: cardFeeConfig?.label,
     itemsTotal: items.reduce((running, item) => running + Number(item.line_total ?? 0), 0),
   });
 

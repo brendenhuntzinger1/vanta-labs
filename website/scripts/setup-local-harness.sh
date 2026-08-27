@@ -51,7 +51,8 @@ for f in inventory-reservations inventory-ledger order-email-log v1.1-features \
          affiliate-program-schema orders-schema growth-features replacement-orders \
          shipping-protection-persistence dynamic-sales-tax product-shipping-weights \
          product-cost-profit coupon-private-flag membership-billing launch-audit-indexes \
-         add-order-items-order-id-index BASELINE-live-functions-2026-08-25; do
+         add-order-items-order-id-index BASELINE-live-functions-2026-08-25 \
+         admin-control-current-view; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 
@@ -66,5 +67,14 @@ $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-columns.sql"     >>/tmp/vl-sc
 $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-constraints.sql" >>/tmp/vl-schema.log 2>&1 || true
 $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-functions.sql"   >>/tmp/vl-schema.log 2>&1 || true
 
+# Seed. Runbook section 3 described the required shapes but nothing applied them,
+# so a fresh harness came up with an empty catalogue and every checkout case was
+# unreachable. harness-seed.sql is synthetic and re-runnable (it truncates first).
+echo "==> seed (synthetic shapes, never production data)"
+$PSQL -q -f "$HERE/src/lib/sql/harness-seed.sql" >>/tmp/vl-schema.log 2>&1 || true
+
 echo "==> tables: $($PSQL -tAc "select count(*) from information_schema.tables where table_schema='public' and table_type='BASE TABLE';") (production: 68)"
+echo "==> products seeded: $($PSQL -tAc "select count(*) from products;")"
 echo "==> done. Start the shim:  node scripts/pgrst-shim.mjs --port 54321 --db postgres://postgres@localhost:${PORT}/${DB}"
+echo "    NOTE: getCatalogProducts is wrapped in unstable_cache, which caches FAILURES too."
+echo "    After any schema fix, restart the app server or the catalogue will keep 400ing."

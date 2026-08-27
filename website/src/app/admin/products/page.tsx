@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Product, ProductBadge, ProductDose } from "@/lib/catalog-types";
+import { resolveHeadlineAvailability, availabilityLabel } from "@/lib/product-availability";
 
 type ProductStatusFilter = "all" | "published" | "draft" | "archived" | "disabled";
 
@@ -789,10 +790,45 @@ export default function AdminProductsPage() {
                   {statusLabel(product)}
                 </span>
               </div>
-              <div className="mt-3 flex items-center justify-between text-xs text-zinc-400">
-                <span>{product.doses?.length ?? 0} doses</span>
-                <span>{product.price}</span>
-              </div>
+              {/*
+                REAL STOCK, ON THE LIST.
+                The list showed only doses and price, so a product with nothing
+                on the shelf looked identical to a fully stocked one and the
+                only way to check was to open each product in turn.
+                Taken from resolveHeadlineAvailability so this agrees with the
+                storefront rather than reading the parent row (which is 0 for
+                most of the catalogue by design).
+              */}
+              {(() => {
+                const stock = resolveHeadlineAvailability(product);
+                const label = availabilityLabel(stock);
+                return (
+                  <div className="mt-3 flex items-center justify-between gap-2 text-xs text-zinc-400">
+                    <span className="flex items-center gap-1.5">
+                      <span
+                        aria-hidden="true"
+                        className={`inline-block h-1.5 w-1.5 rounded-full ${stock.available > 0 ? "bg-emerald-400" : "bg-rose-400"}`}
+                      />
+                      <span className={stock.available > 0 ? "text-zinc-300" : "text-rose-300"}>
+                        {stock.available} left
+                      </span>
+                      {stock.hidesSellableVariants ? (
+                        <span
+                          title="The default dose is empty but other doses still have stock — the card will read Out of Stock over sellable units."
+                          className="rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-semibold text-amber-200"
+                        >
+                          {stock.allVariants} hidden
+                        </span>
+                      ) : null}
+                      <span className="sr-only">{label}</span>
+                    </span>
+                    <span className="flex items-center gap-2">
+                      <span className="text-zinc-500">{product.doses?.length ?? 0} doses</span>
+                      <span>{product.price}</span>
+                    </span>
+                  </div>
+                );
+              })()}
             </div>
           ))}
         </aside>

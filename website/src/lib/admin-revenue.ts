@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { REVENUE_ORDER_STATUSES, netOrderRevenue, NON_SALE_ORDER_TYPES } from "@/lib/ledger";
+import { rawStatusesFor } from "@/lib/order-pipeline";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 
 export interface RevenueByMethod {
@@ -54,8 +55,28 @@ export async function getRevenueMetrics(): Promise<RevenueMetrics> {
   const [pending, approved, awaiting, shippedResult, summaryRpc, byMethodRpc] = await Promise.all([
     supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).in("payment_status", ["pending_payment", "awaiting_verification"]),
     supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).eq("payment_status", "paid"),
-    supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).eq("payment_status", "paid").eq("fulfillment_status", "awaiting_fulfillment"),
-    supabaseAdmin.from("orders").select("id", { count: "exact", head: true }).eq("fulfillment_status", "shipped"),
+    // AWAITING FULFILLMENT — two bugs lived in one line here.
+    //
+    // It matched the single literal `awaiting_fulfillment`, so every order
+    // sitting in the pick queue as `paid`, `ready_to_fulfill`, `processing` or
+    // `sent_to_fulfillment` was invisible: driven with 60 orders waiting, this
+    // reported 0 while the workstation reported 60. And it counted MEMBERSHIP
+    // orders, which never ship — ledger.ts is explicit that a membership is a
+    // sale but not a fulfilment.
+    supabaseAdmin
+      .from("orders")
+      .select("id", { count: "exact", head: true })
+      .eq("payment_status", "paid")
+      .neq("order_type", "membership")
+      .in("fulfillment_status", [...rawStatusesFor("paid"), ...rawStatusesFor("ready_to_fulfill")]),
+    // Same synonym problem, plus it counted shipped rows whose payment never
+    // landed. A shipped order that was not paid is a fulfilment mistake, not a
+    // shipment to report.
+    supabaseAdmin
+      .from("orders")
+      .select("id", { count: "exact", head: true })
+      .eq("payment_status", "paid")
+      .in("fulfillment_status", rawStatusesFor("shipped")),
     // Aggregate revenue in Postgres (one grouped pass, no row transfer). Falls
     // back to a paged JS scan if the RPC isn't migrated yet — see
     // src/lib/sql/admin-dashboard-rollups.sql. Both paths now answer with the

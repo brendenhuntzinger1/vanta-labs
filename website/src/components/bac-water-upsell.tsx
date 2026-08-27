@@ -5,7 +5,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useCart } from "@/components/cart-context";
 import type { Product } from "@/lib/catalog-types";
 import {
-  BAC_WATER_SLUG,
   bacWaterAddOptions,
   getBacWaterDoseOffers,
   isBacWater,

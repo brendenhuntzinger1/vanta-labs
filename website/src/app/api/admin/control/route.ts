@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageSettings } from "@/lib/admin-roles";
 import { getControlSnapshot, getReferralProgramConfig, upsertControlValue } from "@/lib/admin-control";
+import { findDestructiveClears, type ControlUpdate } from "@/lib/admin-control-updates";
 
 /**
  * What the referral rates ACTUALLY resolve to, and where each one comes from.
@@ -85,7 +86,7 @@ export async function PATCH(request: Request) {
 
   try {
     const body = await request.json() as {
-      updates?: Array<{ section: string; key: string; value: unknown }>;
+      updates?: ControlUpdate[];
     };
 
     const updates = Array.isArray(body.updates) ? body.updates : [];
@@ -96,6 +97,30 @@ export async function PATCH(request: Request) {
     // Reject any attempt to write a credential section through this endpoint.
     if (updates.some((update) => SECRET_SECTIONS.has(String(update.section ?? "").trim().toLowerCase()))) {
       return NextResponse.json({ success: false, error: "Use the Settings page to change email, processor, or fulfillment credentials." }, { status: 403 });
+    }
+
+    // THE BLANKING BACKSTOP (F-02). A save that would empty a setting which
+    // currently holds a value is refused unless the caller declared that clear
+    // deliberately. On 2026-08-15 an unloaded Control Center form PATCHed "" over
+    // every key it owns; tax.nexus_states went from 48 states to empty and the
+    // store silently stopped charging sales tax for eight days.
+    //
+    // Checked BEFORE any write and refused in full, so a rejected save can never
+    // leave settings half-wiped. The client applies the same rule when building
+    // the request -- this is the copy that also covers a stale tab, a replayed
+    // request, or any future caller that forgets to read before writing.
+    const destructive = findDestructiveClears(updates, await getControlSnapshot());
+    if (destructive.length > 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error:
+            `Refusing to clear ${destructive.length} setting${destructive.length === 1 ? "" : "s"} that currently hold a value: ` +
+            `${destructive.join(", ")}. Reload the Control Center so it shows the current settings, then clear the field you meant to clear.`,
+          destructiveClears: destructive,
+        },
+        { status: 409 },
+      );
     }
 
     for (const update of updates) {

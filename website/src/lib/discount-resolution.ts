@@ -82,3 +82,62 @@ export function resolveCartDiscount(inputs: CartDiscountInputs): CartDiscountRes
 
   return { best, amount: round(Math.min(inputs.subtotal, best?.amount ?? 0)) };
 }
+
+// ---------------------------------------------------------------------------
+// WHAT THE SHOPPER IS TOLD WHEN THEY ENTER A CODE.
+//
+// "Only one discount per order, greatest savings wins" is correct pricing and
+// was terrible copy. A coupon that lost still reported "Coupon applied." next
+// to its headline offer, so a shopper on the 12% bundle tier who entered a 10%
+// code was told the code was applied to a total it did not move.
+//
+// The rule: only the discount that actually controls the price may be
+// described as applied, and when the code loses, the winner is named. Living
+// here rather than in a component means the cart drawer and the checkout page
+// cannot drift into two different explanations of the same outcome.
+// ---------------------------------------------------------------------------
+
+/** `bundle_pricing` is not a DiscountCandidate — it is baked into the subtotal
+ *  before the candidates compete — but it can still be what beat the coupon. */
+export type PriceControllingDiscount = DiscountType | "bundle_pricing";
+
+export interface CouponOutcome {
+  /** True only when the entered coupon is the discount reducing the total. */
+  controlsPrice: boolean;
+  /** Customer-facing sentence. Never claims an inactive coupon lowered a price. */
+  message: string;
+}
+
+export function describeCouponOutcome(input: {
+  code: string;
+  /** Headline offer, e.g. "10% off". Shown ONLY when the coupon actually wins. */
+  offerLabel: string | null;
+  winnerType: PriceControllingDiscount | null;
+  /** Customer-facing name of the winner, e.g. "Bundle pricing". */
+  winnerLabel: string | null;
+}): CouponOutcome {
+  const code = input.code.trim();
+
+  if (input.winnerType === "coupon") {
+    const offer = input.offerLabel?.trim();
+    return {
+      controlsPrice: true,
+      message: offer ? `Coupon applied — ${code} · ${offer}.` : `Coupon applied — ${code}.`,
+    };
+  }
+
+  const winner = input.winnerLabel?.trim();
+  if (winner) {
+    // Name the winner. Deliberately omits the coupon's own percentage: quoting
+    // an offer that is not in effect is what made the old copy misleading.
+    return {
+      controlsPrice: false,
+      message: `${code} accepted — but your ${winner} saves you more, so we kept that.`,
+    };
+  }
+
+  return {
+    controlsPrice: false,
+    message: `${code} accepted — but it doesn't lower the total on this order.`,
+  };
+}

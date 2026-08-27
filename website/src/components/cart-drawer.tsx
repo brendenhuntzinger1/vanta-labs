@@ -94,7 +94,7 @@ export function CartDrawer() {
     couponCode,
     couponDetails,
     couponError,
-    couponSuccess,
+    couponOutcome,
     applyCouponCode,
     clearCouponCode,
     isApplyingCoupon,
@@ -502,11 +502,16 @@ export function CartDrawer() {
                             {isApplyingCoupon ? "…" : "Apply"}
                           </button>
                         </div>
-                        {couponSuccess ? <p className="mt-1.5 text-xs text-emerald-400">{couponSuccess}</p> : null}
+                        {couponOutcome ? (
+                          <p className={`mt-1.5 text-xs ${couponOutcome.controlsPrice ? "text-emerald-400" : "text-amber-300/90"}`}>
+                            {couponOutcome.message}
+                          </p>
+                        ) : null}
                         {couponError ? <p className="mt-1.5 text-xs text-rose-400">{couponError}</p> : null}
                         {couponDetails ? (
                           <p className="mt-1.5 flex items-center justify-between text-xs text-zinc-400">
-                            <span>{couponDetails.code} · {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off</span>
+                            {/* Offer size shown only while the coupon controls the price. */}
+                            <span>{couponOutcome?.controlsPrice ? `${couponDetails.code} · ${couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off` : couponDetails.code}</span>
                             <button type="button" onClick={clearCouponCode} className="text-zinc-500 underline-offset-2 hover:text-zinc-300 hover:underline">Remove</button>
                           </p>
                         ) : null}

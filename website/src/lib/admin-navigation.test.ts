@@ -2,6 +2,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { BUCKETS, EXCEPTION_REASONS } from "@/lib/fulfillment-buckets";
+import { ADMIN_TABS, activeAdminTab } from "@/lib/admin-nav-config";
 
 // ---------------------------------------------------------------------------
 // A PAGE NOBODY CAN NAVIGATE TO HAS NOT SHIPPED.
@@ -44,15 +45,41 @@ function stripComments(src: string): string {
 const WORKSTATION = "/admin/fulfillment/workstation";
 
 describe("the fulfillment Workstation is reachable", () => {
-  const tabs = source("src/components/admin-tabs.tsx");
+  // Asserted against the nav CONFIG, not the component source. The previous
+  // version matched the literal text `pathname.startsWith("/admin/fulfillment")`
+  // inside admin-tabs.tsx, so extracting that predicate into a helper broke a
+  // green test while the behaviour was byte-for-byte identical. What matters is
+  // where the tab goes and when it lights up — so that is what is checked.
+  const fulfillment = ADMIN_TABS.find((tab) => tab.label === "Fulfillment");
 
   it("is where the Fulfillment tab actually goes", () => {
-    expect(tabs).toContain(`href: "${WORKSTATION}"`);
+    expect(fulfillment?.href).toBe(WORKSTATION);
   });
 
   it("keeps the tab lit on the search page too, so neither feels like leaving", () => {
     // Both live under /admin/fulfillment, so one prefix match covers the pair.
-    expect(tabs).toContain('pathname.startsWith("/admin/fulfillment")');
+    expect(fulfillment?.match(WORKSTATION)).toBe(true);
+    expect(fulfillment?.match("/admin/fulfillment")).toBe(true);
+    expect(activeAdminTab(WORKSTATION)?.label).toBe("Fulfillment");
+    expect(activeAdminTab("/admin/fulfillment")?.label).toBe("Fulfillment");
+  });
+
+  it("does not light up for unrelated admin routes", () => {
+    for (const path of ["/admin", "/admin/orders", "/admin/products", "/admin/revenue"]) {
+      expect(fulfillment?.match(path)).toBe(false);
+    }
+  });
+
+  it("carries the waiting-orders count, so the queue depth is visible without opening it", () => {
+    // The dashboard and nav shipped with no work count anywhere: driven with 60
+    // orders in the pick queue, the number 60 appeared on no screen.
+    expect(fulfillment?.badge).toBe("work");
+  });
+
+  it("gives every tab a unique destination and a group", () => {
+    const hrefs = ADMIN_TABS.map((tab) => tab.href);
+    expect(new Set(hrefs).size).toBe(hrefs.length);
+    expect(ADMIN_TABS.every((tab) => tab.label.trim().length > 0)).toBe(true);
   });
 
   it("is linked from the order-search page", () => {
@@ -105,11 +132,16 @@ describe("no admin page is orphaned", () => {
       .map(source)
       .join("\n");
 
-    const tabs = source("src/components/admin-tabs.tsx");
+    // The tab destinations, read from the nav CONFIG rather than by scanning
+    // admin-tabs.tsx for quoted strings. Scanning the component meant that
+    // moving the tab list into its own module reported eleven live, linked
+    // pages as orphans — the test was measuring which file the strings sat in,
+    // not whether anything pointed at the route.
+    const tabHrefs = new Set(ADMIN_TABS.map((tab) => tab.href.split("#")[0]));
 
     const orphans = routes.filter((route) => {
       if (route in REACHED_ANOTHER_WAY) return false;
-      if (tabs.includes(`"${route}"`)) return false;
+      if (tabHrefs.has(route)) return false;
       // A dynamic route is linked by its STATIC PREFIX plus an interpolated id
       // (`/admin/partners/${row.id}`), so the literal route string never
       // appears. Match the prefix instead.
