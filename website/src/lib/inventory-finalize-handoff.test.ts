@@ -43,7 +43,7 @@ const state: {
 };
 
 const { legacyDecrement, holder } = vi.hoisted(() => ({
-  legacyDecrement: vi.fn(async () => {}),
+  legacyDecrement: vi.fn(async () => ({ attempted: 1, failed: 0, errors: [] as string[] })),
   holder: {} as { finalizeResult: { ok: boolean; degraded: boolean; finalized: number } },
 }));
 

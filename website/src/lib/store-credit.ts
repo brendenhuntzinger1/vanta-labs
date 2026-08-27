@@ -169,31 +169,57 @@ export async function refundStoreCreditForOrder(orderId: string): Promise<boolea
   // Idempotent: a repeated refund/chargeback event for the same order must not
   // re-credit the customer twice. If we've already recorded a refund for this
   // order, stop.
-  const { data: alreadyRefunded } = await supabaseAdmin
+  //
+  // THE READ'S ERROR IS THE WHOLE GUARD. `{ data: null, error }` — a statement
+  // timeout, a pooler blip — used to be indistinguishable from "no refund row
+  // exists", so one transient failure re-credited an order that had already
+  // been refunded. No concurrency required, and no unique index to catch it.
+  // Refusing to guess makes the caller (the webhook) log it and the sweep count
+  // `failed` and alert, which is recoverable; a double credit is not.
+  const { data: alreadyRefunded, error: alreadyRefundedError } = await supabaseAdmin
     .from("store_credit_ledger")
     .select("id")
     .eq("order_id", orderId)
     .eq("reason", "membership_redemption_refund")
     .limit(1);
 
+  if (alreadyRefundedError) throw alreadyRefundedError;
+
   if (alreadyRefunded && alreadyRefunded.length > 0) {
     return false;
   }
 
   const monthStart = startOfCurrentMonthIso();
-  let returnedAny = false;
-  for (const row of data ?? []) {
-    // Only re-credit a redemption that is still refundable — see
-    // isRefundableRedemption.
-    if (!isRefundableRedemption(row, monthStart)) continue;
-    await supabaseAdmin.from("store_credit_ledger").insert({
+  // Only re-credit redemptions that are still refundable — see
+  // isRefundableRedemption.
+  const refundRows = (data ?? [])
+    .filter((row) => isRefundableRedemption(row, monthStart))
+    .map((row) => ({
       user_id: String(row.user_id),
       amount_cents: Math.abs(Number(row.amount_cents ?? 0)),
       reason: "membership_redemption_refund",
       order_id: orderId,
       created_at: new Date().toISOString(),
-    });
-    returnedAny = true;
-  }
-  return returnedAny;
+    }));
+
+  if (refundRows.length === 0) return false;
+
+  // ONE INSERT, AND ITS ERROR IS THE RESULT.
+  //
+  // This used to discard the insert's return value entirely and set
+  // returnedAny = true regardless, so a rejected insert (a user_id that no
+  // longer resolves against auth.users, a constraint violation, a transient
+  // failure) reported the customer's credit as returned when nothing was
+  // written: the sweep counted `repaired`, `failed` stayed 0 so no alert fired,
+  // and — because the row it looks for still did not exist — it replanned the
+  // identical repair on every tick, forever.
+  //
+  // Writing all the rows in a SINGLE statement also makes a partial return
+  // impossible: previously a failure on the second of two redemptions left the
+  // first refunded, and the already-refunded guard above then declined to ever
+  // finish the job.
+  const { error: insertError } = await supabaseAdmin.from("store_credit_ledger").insert(refundRows);
+  if (insertError) throw insertError;
+
+  return true;
 }

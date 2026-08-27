@@ -34,7 +34,7 @@ const sideEffects = {
   points: vi.fn(async () => {}),
   coupon: vi.fn(async () => ({ ok: true })),
   email: vi.fn(async (): Promise<{ ok?: boolean; success?: boolean; error?: string }> => ({ ok: true })),
-  inventory: vi.fn(async () => {}),
+  inventory: vi.fn(async () => ({ attempted: 1, failed: 0, errors: [] as string[] })),
   commission: vi.fn(async () => ({ percent: 15, tierName: null })),
   enqueueFailedEmail: vi.fn(async () => {}),
 };

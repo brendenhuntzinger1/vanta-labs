@@ -185,9 +185,19 @@ export function resolveRefundOutcome(input: {
     return { isRefundEvent: false, isChargeback, isFullRefund: false, paymentStatus: nextStatus, recordedRefundAmount: existingRefundAmount, refundedFraction: 0, shouldRestock: false };
   }
 
-  // Partial applies ONLY to a genuine refund.completed carrying a positive
-  // amount below what was charged. Chargebacks / cancels / failures are full.
-  const isPartial = nextStatus === "refunded" && !isChargeback && refundEventAmount > 0 && refundEventAmount < amountPaid;
+  // Partial applies ONLY to a genuine refund.completed whose CUMULATIVE refund
+  // total is still below what was charged. Chargebacks / cancels / failures are
+  // full.
+  //
+  // CUMULATIVE, NOT THIS EVENT. Comparing only this event's amount left a $100
+  // order refunded as $60 then $40 sitting on "partially_refunded" forever: no
+  // points reversal, no points restore, no store-credit return, no restock —
+  // and invisible to the refund sweep, which selects payment_status =
+  // 'refunded'. Two-step refunds (goods, then shipping) are ordinary practice,
+  // and the line below already knew the cumulative figure was the one that
+  // matters.
+  const cumulativeRefundAmount = existingRefundAmount + refundEventAmount;
+  const isPartial = nextStatus === "refunded" && !isChargeback && refundEventAmount > 0 && cumulativeRefundAmount < amountPaid;
   const isFullRefund = !isPartial;
   const paymentStatus: OrderStatus = isPartial ? "partially_refunded" : nextStatus;
   // Prorate on the CUMULATIVE amount refunded (prior partials + this event), not
@@ -196,12 +206,20 @@ export function resolveRefundOutcome(input: {
   // computeRetainedCommission recomputes retained = original * (1 - fraction)
   // from the original base each time, so this fraction must be cumulative.
   // Single partials are unchanged (existingRefundAmount is 0).
-  const cumulativeRefundAmount = existingRefundAmount + refundEventAmount;
   const refundedFraction = isFullRefund ? 1 : merchandiseBase > 0 ? Math.min(1, cumulativeRefundAmount / merchandiseBase) : 1;
   // refund_amount is only meaningful for money returned (refunded / partial). A
   // cancel/failure of a paid order records no refund dollars.
+  //
+  // A FULL REVERSAL RECORDS WHAT WAS COLLECTED, AND NEVER MORE. refund_amount is
+  // bounded by amount_paid on purpose: the profit engine ratio-caps an
+  // over-refund against it, and this module's fuzz invariant asserts the bound
+  // directly. A chargeback that costs the store MORE than it collected (a prior
+  // partial plus a full dispute) is a dispute loss, not a larger refund of this
+  // order, and recording it here would silently break both.
   const recordedRefundAmount = nextStatus === "refunded"
-    ? isFullRefund ? roundMoney(amountPaid) : roundMoney(Math.min(amountPaid, existingRefundAmount + refundEventAmount))
+    ? isFullRefund
+      ? roundMoney(amountPaid)
+      : roundMoney(Math.min(amountPaid, cumulativeRefundAmount))
     : existingRefundAmount;
 
   return { isRefundEvent: true, isChargeback, isFullRefund, paymentStatus, recordedRefundAmount, refundedFraction, shouldRestock: isFullRefund };
@@ -437,11 +455,19 @@ async function claimEvent(eventId: string, orderId: string, status: OrderStatus)
 
   // A row already exists. Decide: genuinely completed (skip), a live in-flight
   // claim (skip), or a stale/stranded claim (reclaim and reprocess).
-  const { data: existing } = await supabaseAdmin
+  // A CLAIM DECISION MADE ON AN UNREADABLE ROW IS A COIN TOSS. Discarding this
+  // error made a transient failure look like "the row was deleted", and the
+  // re-insert below then failed on the same duplicate key and reported the
+  // event as an already-processed duplicate — a 200 the processor never retries,
+  // for an event nothing had processed. Throwing returns a non-2xx instead, and
+  // nothing has been claimed at this point, so the retry is free.
+  const { data: existing, error: existingError } = await supabaseAdmin
     .from("payment_events")
     .select("processed_at, claimed_at")
     .eq("event_id", eventId)
     .maybeSingle();
+
+  if (existingError) throw existingError;
 
   if (!existing) {
     // The row was deleted (e.g. releaseEvent) between our failed insert and this
@@ -707,6 +733,18 @@ async function ensureCommissionRecord(input: {
     }),
     supabaseAdmin.from("ambassadors").select("status, customer_discount_percent").eq("id", input.ambassadorId).maybeSingle(),
   ]);
+
+  // A COMMISSION WRITTEN AT $0 BECAUSE A READ FAILED IS PERMANENT.
+  //
+  // ambassadorRow.error was never checked, so a transient failure made
+  // `status` undefined, `ambassadorApproved` false and the row landed with
+  // commission_amount 0 and ineligible_reason "Ambassador is not active." The
+  // repair sweep selects on the ABSENCE of a referral_orders row, so it never
+  // revisits an order that has one — the ambassador's real commission was gone
+  // for good, counted as `repaired: 1`. Throw instead: the webhook logs it and
+  // the sweep counts `failed` and alerts, and the absence is still there to
+  // repair on the next tick.
+  if (ambassadorRow.error) throw ambassadorRow.error;
 
   // Fall back to the admin's default commission rate (Control Center) when the
   // order/ambassador carries no explicit rate, instead of a hardcoded number.
@@ -1157,7 +1195,12 @@ export async function finalizeManualPayment(
 
   if (order.coupon_code) {
     try {
-      await redeemCoupon(String(order.coupon_code));
+      // redeemCoupon REPORTS failure, it does not throw it (supabase-js
+      // resolves). The catch alone made this alert dead code.
+      const redemption = await redeemCoupon(String(order.coupon_code));
+      if (!redemption.ok) {
+        throw new Error(redemption.error ?? "coupon redemption failed");
+      }
     } catch (couponError) {
       console.error("Unable to redeem coupon on manual payment", orderId, couponError);
       await recordSystemAlert(unsafeEffectAlert("coupon_redemption", orderId, couponError))
@@ -1221,7 +1264,15 @@ export async function finalizeManualPayment(
 
       if (pointsEarned > 0) {
         await recordPointsLedgerEntry({ userId: customerUserId, amount: pointsEarned, reason: "order_earn", orderId });
-        await supabaseAdmin.from("orders").update({ points_earned: pointsEarned }).eq("order_id", orderId);
+        // orders.points_earned IS WHAT THE REVERSAL READS. reverseOrderPoints
+        // and the refund sweep's points_reversal both derive the claw-back from
+        // this column, so a discarded error here leaves the ledger crediting
+        // points that no refund can ever take back.
+        const { error: pointsColumnError } = await supabaseAdmin
+          .from("orders")
+          .update({ points_earned: pointsEarned })
+          .eq("order_id", orderId);
+        if (pointsColumnError) throw pointsColumnError;
       }
     } catch (pointsError) {
       console.error("Unable to process membership points for manual order", orderId, pointsError);
@@ -1273,6 +1324,10 @@ export async function finalizeManualPayment(
     }
   }
 
+  // Did this order's stock actually move? A membership order holds none, so it
+  // is vacuously true there; a product order has to earn it.
+  let stockCommitted = isMembershipOrder;
+
   if (isMembershipOrder) {
     // Turn on the membership + perks now that payment is verified.
     try {
@@ -1292,27 +1347,42 @@ export async function finalizeManualPayment(
     // decrement so tracked stock still moves. The atomic order claim above
     // guarantees this runs exactly once per order, so no double-decrement.
     //
-    // OBSERVABILITY ONLY, deliberately still throws: log + alert, then
-    // re-throw. This block must keep propagating the way it always did — out
-    // of finalizeManualPayment, past the paid_side_effects_at latch write
-    // below (which stays NULL, as the comment above that write requires) and
-    // out to the route handler. Swallowing the error here would let the
-    // latch get written on a failed decrement, which is exactly the invented
-    // -stock direction the latch is designed never to guess in. This only
-    // adds a log line and a critical alert where previously there was
-    // neither — see task 6 fix round 1.
+    // THE LATCH IS THE PROTECTION, AND IT IS GATED ON WHAT ACTUALLY HAPPENED.
+    //
+    // This block used to rely on the decrement THROWING: log, alert, re-throw,
+    // and the paid_side_effects_at write below would never be reached. But
+    // neither finalizeInventoryForOrder nor decrementInventoryForOrder ever
+    // threw — both swallowed their errors and returned — so on the real failure
+    // path (reservation RPC unavailable, then every legacy decrement line
+    // erroring) nothing propagated, no alert fired, and the latch WAS written
+    // over stock that had not moved. A later cancel then read the latch, took
+    // the "restocked" branch and added units that were never removed: invented
+    // stock, which oversells. Exactly the direction the latch exists to avoid.
+    //
+    // Both callees now report their outcome, so the latch is written only when
+    // the shelf really moved, and the failure raises the alert it always
+    // promised. Nothing is re-thrown: the payment is verified and approved, and
+    // throwing here would report a fully successful payment as failed while
+    // skipping the audit row, the push notification and the Shippo push — none
+    // of which the admin's retry can recover, because it returns alreadyPaid.
     try {
       const fin = await finalizeInventoryForOrder(orderId);
       if (fin.degraded || fin.finalized === 0) {
-        await decrementInventoryForOrder(
+        const decrement = await decrementInventoryForOrder(
           (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
         );
+        if (decrement.failed > 0) {
+          throw new Error(
+            `${decrement.failed} of ${decrement.attempted} stock line(s) could not be decremented: `
+            + decrement.errors.join("; "),
+          );
+        }
       }
+      stockCommitted = true;
     } catch (inventoryError) {
       console.error("Unable to decrement inventory for order", orderId, inventoryError);
       await recordSystemAlert(unsafeEffectAlert("inventory_decrement", orderId, inventoryError))
         .catch(() => {});
-      throw inventoryError;
     }
     // Same deferred push as the card path. An admin waiting on an approval
     // click deserves the same protection from a slow third party as a shopper
@@ -1342,16 +1412,27 @@ export async function finalizeManualPayment(
   // (latch NULL, stock already moved) merely repeats the old conservative
   // behaviour for one narrow window, and this codebase's stated rule for
   // inventory ambiguity is to never guess in the direction that invents units.
-  const { error: latchError } = await supabaseAdmin
-    .from("orders")
-    .update({ paid_side_effects_at: new Date().toISOString() })
-    .eq("order_id", orderId)
-    .is("paid_side_effects_at", null);
+  if (stockCommitted) {
+    const { error: latchError } = await supabaseAdmin
+      .from("orders")
+      .update({ paid_side_effects_at: new Date().toISOString() })
+      .eq("order_id", orderId)
+      .is("paid_side_effects_at", null);
 
-  if (latchError) {
-    // Never fails the approval — the payment is verified and the stock has
-    // moved. But a cancel will now under-restock, so say so.
-    console.error("Unable to record paid_side_effects_at for manual order", orderId, latchError);
+    if (latchError) {
+      // Never fails the approval — the payment is verified and the stock has
+      // moved. But a cancel will now under-restock, so say so.
+      console.error("Unable to record paid_side_effects_at for manual order", orderId, latchError);
+    }
+  } else {
+    // The latch means "this order's units left the shelf". Writing it after a
+    // failed decrement is what lets a later cancel invent stock, so it stays
+    // NULL — the conservative direction this codebase's inventory rule requires.
+    console.error(
+      "Leaving paid_side_effects_at NULL for manual order",
+      orderId,
+      "because its inventory decrement did not complete",
+    );
   }
 
   // Same notification as the card lane. This lane has its own single-use claim
@@ -1723,7 +1804,11 @@ export async function processPaymentWebhook(payload: string, signature: string, 
 
       if (effectiveCouponCode) {
         try {
-          await redeemCoupon(effectiveCouponCode);
+          // See the manual lane: the failure arrives as a return value.
+          const redemption = await redeemCoupon(effectiveCouponCode);
+          if (!redemption.ok) {
+            throw new Error(redemption.error ?? "coupon redemption failed");
+          }
         } catch (couponError) {
           console.error("Unable to redeem coupon for order", orderId, couponError);
           await recordSystemAlert(unsafeEffectAlert("coupon_redemption", orderId, couponError))
@@ -1789,7 +1874,13 @@ export async function processPaymentWebhook(payload: string, signature: string, 
               orderId,
             });
 
-            await supabaseAdmin.from("orders").update({ points_earned: pointsEarned }).eq("order_id", orderId);
+            // See the manual lane: this column is what the refund reversal
+            // reads, so its failure must not be silent.
+            const { error: pointsColumnError } = await supabaseAdmin
+              .from("orders")
+              .update({ points_earned: pointsEarned })
+              .eq("order_id", orderId);
+            if (pointsColumnError) throw pointsColumnError;
           }
         } catch (pointsError) {
           console.error("Unable to process membership points for order", orderId, pointsError);
@@ -1883,14 +1974,29 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           // Finalize the checkout reservation (permanent deduct). Fall back to
           // the legacy atomic decrement only when there's no active hold to
           // finalize (untracked item, expired hold, or pre-migration order).
+          //
+          // THE DECREMENT REPORTS ITS FAILURE RATHER THAN THROWING IT — see the
+          // manual lane. Without reading the returned result this catch, and
+          // the alert in it, were unreachable on the real failure path.
+          let decrement = { attempted: 0, failed: 0, errors: [] as string[] };
           const fin = await finalizeInventoryForOrder(orderId);
           if (fin.degraded || fin.finalized === 0) {
-            const { data: soldItems } = await supabaseAdmin
+            // An unreadable line-item list is not an order with no lines: it
+            // would decrement nothing and report success, leaving sold stock on
+            // the shelf with the side-effects claim already spent.
+            const { data: soldItems, error: soldItemsError } = await supabaseAdmin
               .from("order_items")
               .select("product_id, quantity")
               .eq("order_id", orderId);
-            await decrementInventoryForOrder(
+            if (soldItemsError) throw soldItemsError;
+            decrement = await decrementInventoryForOrder(
               (soldItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+            );
+          }
+          if (decrement.failed > 0) {
+            throw new Error(
+              `${decrement.failed} of ${decrement.attempted} stock line(s) could not be decremented: `
+              + decrement.errors.join("; "),
             );
           }
         } catch (inventoryError) {
@@ -1962,13 +2068,23 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // somebody else returned these units; "unavailable" means the claim could
       // not be evaluated, and restocking blind could double-return them.
       if (!isMembershipOrder && await claimInventoryRestock(orderId) === "claimed") {
-        const { data: refundItems } = await supabaseAdmin
+        // THE CLAIM IS ALREADY SPENT BY THE TIME THIS READ RUNS, so an
+        // unreadable line-item list cannot simply be retried: restocking
+        // nothing here means these units are never returned by anybody. It used
+        // to do exactly that, silently. Alert instead — this is a hand repair.
+        const { data: refundItems, error: refundItemsError } = await supabaseAdmin
           .from("order_items")
           .select("product_id, quantity")
           .eq("order_id", orderId);
-        await restockInventoryForOrder(
-          (refundItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
-        );
+        if (refundItemsError) {
+          console.error("Unable to read order items for restock on order", orderId, refundItemsError);
+          await recordSystemAlert(unsafeEffectAlert("inventory_restock", orderId, refundItemsError))
+            .catch(() => {});
+        } else {
+          await restockInventoryForOrder(
+            (refundItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+          );
+        }
       }
     }
 
@@ -2019,11 +2135,15 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // so its benefits stop — otherwise a customer could buy a membership, get
       // it refunded, and keep member pricing/free shipping/points forever.
       try {
-        const { data: refundedOrder } = await supabaseAdmin
+        // An unreadable order is not a non-membership order: swallowing this
+        // read's error skipped the revocation and left the alert below blind to
+        // it, which is the exact failure that alert exists for.
+        const { data: refundedOrder, error: refundedOrderError } = await supabaseAdmin
           .from("orders")
           .select("order_type, customer_user_id")
           .eq("order_id", orderId)
           .maybeSingle();
+        if (refundedOrderError) throw refundedOrderError;
         if (
           refundedOrder
           && String(refundedOrder.order_type ?? "product") === "membership"

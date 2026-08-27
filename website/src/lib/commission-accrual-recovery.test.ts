@@ -52,6 +52,8 @@ const db: {
   referralOrders: Map<string, ReferralOrderRow>;
   commissions: Map<string, Record<string, unknown>>;
   insertAttempts: number;
+  /** Makes the ambassadors lookup fail the way PostgREST really fails. */
+  failAmbassadorRead: boolean;
 } = {
   lifecycleMigrationApplied: false,
   orderStatus: "awaiting_verification",
@@ -59,11 +61,12 @@ const db: {
   referralOrders: new Map(),
   commissions: new Map(),
   insertAttempts: 0,
+  failAmbassadorRead: false,
 };
 
 const sideEffects = {
   finalizeInventory: vi.fn(async () => ({ finalized: 1, degraded: false })),
-  decrementInventory: vi.fn(async () => {}),
+  decrementInventory: vi.fn(async () => ({ attempted: 1, failed: 0, errors: [] as string[] })),
   redeemCoupon: vi.fn(async () => ({ ok: true })),
   recordPoints: vi.fn(async () => {}),
   alert: vi.fn(async () => {}),
@@ -264,10 +267,15 @@ vi.mock("@/lib/supabase-server", () => {
       return {
         select: () => ({
           eq: () => ({
-            maybeSingle: async () => ({
-              data: { id: AMBASSADOR_ID, status: "approved", customer_discount_percent: 10 },
-              error: null,
-            }),
+            maybeSingle: async () =>
+              // PostgREST resolves `{ data: null, error }` for a statement
+              // timeout — see the ambassador-read block at the end of this file.
+              db.failAmbassadorRead
+                ? { data: null, error: { code: "57014", message: "canceling statement due to statement timeout" } }
+                : {
+                  data: { id: AMBASSADOR_ID, status: "approved", customer_discount_percent: 10 },
+                  error: null,
+                },
           }),
         }),
       };
@@ -297,6 +305,7 @@ beforeEach(() => {
   db.referralOrders.clear();
   db.commissions.clear();
   db.insertAttempts = 0;
+  db.failAmbassadorRead = false;
 });
 
 async function approveManually() {
@@ -384,5 +393,49 @@ describe("an accrual that fails against the live constraint", () => {
     expect(outcome.failed).toBe(1);
     expect(outcome.repaired).toBe(0);
     expect(sideEffects.alert).toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A $0 COMMISSION WRITTEN BECAUSE A READ FAILED IS PERMANENT — FIX WAVE 3.
+//
+// ensureCommissionRecord reads the ambassador's live status through a
+// .maybeSingle() whose error was never checked. On a transient failure `status`
+// was undefined, `ambassadorApproved` was false, and the row landed with
+// commission_amount 0 and ineligible_reason "Ambassador is not active."
+//
+// The repair sweep selects on the ABSENCE of a referral_orders row, so it never
+// revisits an order that HAS one. One blip therefore zeroed a real person's
+// commission for good — and the sweep counted it as `repaired: 1`.
+// ---------------------------------------------------------------------------
+describe("an ambassador lookup that fails mid-accrual", () => {
+  it("writes no commission row at all, rather than a permanent $0 one", async () => {
+    db.lifecycleMigrationApplied = true;
+    db.orderStatus = "paid";
+    db.paidSideEffectsAt = "2026-08-26T00:00:00.000Z";
+    db.failAmbassadorRead = true;
+
+    const outcome = await repair();
+
+    expect(outcome.failed).toBe(1);
+    expect(outcome.repaired).toBe(0);
+    expect(db.referralOrders.size).toBe(0);
+    expect(sideEffects.alert).toHaveBeenCalled();
+  });
+
+  it("leaves the absence there, so the next tick accrues the real commission", async () => {
+    db.lifecycleMigrationApplied = true;
+    db.orderStatus = "paid";
+    db.paidSideEffectsAt = "2026-08-26T00:00:00.000Z";
+    db.failAmbassadorRead = true;
+    await repair();
+
+    db.failAmbassadorRead = false;
+    const second = await repair();
+
+    expect(second.repaired).toBe(1);
+    const row = db.referralOrders.get(ORDER_ID)!;
+    expect(row.commission_amount).toBeGreaterThan(0);
+    expect(row.ineligible_reason ?? null).toBeNull();
   });
 });

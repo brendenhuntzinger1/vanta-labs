@@ -62,13 +62,18 @@ interface OrderRow {
    */
   shippo_transaction_id: string | null;
   label_voided_at: string | null;
+  /**
+   * When the label currently on this row was recorded. The ordering key for
+   * "is this incoming transaction_created newer than what we already hold?".
+   */
+  label_purchased_at: string | null;
 }
 
 const ORDER_COLUMNS =
   // fulfillment_status is selected so the monotonicity guard in
 // applyTransactionCreated can read the order's CURRENT progress before
 // deciding whether a late label event is allowed to move it.
-  "order_id, order_number, customer_name, customer_email, phone, shipping_address, shipping_address_2, city, state, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, currency, paid_at, payment_status, fulfillment_status, order_type, shippo_order_id, shippo_transaction_id, label_voided_at";
+  "order_id, order_number, customer_name, customer_email, phone, shipping_address, shipping_address_2, city, state, postal_code, country, subtotal, shipping_amount, tax_amount, amount_paid, currency, paid_at, payment_status, fulfillment_status, order_type, shippo_order_id, shippo_transaction_id, label_voided_at, label_purchased_at";
 
 function money(value: number | null | undefined): string {
   return (Math.round((Number(value) || 0) * 100) / 100).toFixed(2);
@@ -432,13 +437,20 @@ export function labelFactsFrom(source: {
  * both with nothing looking wrong.
  */
 async function matchOrder(data: ShippoTransactionCreated): Promise<OrderRow | null> {
+  // A READ THAT FAILED IS NOT A LABEL THAT BELONGS TO NOBODY. Discarding these
+  // errors turned a transient failure into "no_matching_order", which raises a
+  // CRITICAL shippo_label_unattributed alert naming a cause that is not the
+  // cause — and answers 200, so Shippo never redelivers the event and the real
+  // postage is lost. Throwing releases the route's event claim and lets the
+  // redelivery find the order.
   const shippoOrderId = String(data.order ?? "").trim();
   if (shippoOrderId) {
-    const { data: row } = await supabaseAdmin
+    const { data: row, error } = await supabaseAdmin
       .from("orders")
       .select(ORDER_COLUMNS)
       .eq("shippo_order_id", shippoOrderId)
       .maybeSingle<OrderRow>();
+    if (error) throw error;
     if (row) return row;
   }
 
@@ -453,11 +465,12 @@ async function matchOrder(data: ShippoTransactionCreated): Promise<OrderRow | nu
     // purchased — the writer sent one format and the reader looked up the
     // other.
     for (const column of ["order_number", "order_id"] as const) {
-      const { data: row } = await supabaseAdmin
+      const { data: row, error } = await supabaseAdmin
         .from("orders")
         .select(ORDER_COLUMNS)
         .eq(column, metadata)
         .maybeSingle<OrderRow>();
+      if (error) throw error;
       if (row) return row;
     }
   }
@@ -474,6 +487,48 @@ async function matchOrder(data: ShippoTransactionCreated): Promise<OrderRow | nu
  * Shipped is driven by tracking movement, and the customer's shipping email
  * follows that — never the purchase.
  */
+/**
+ * IS THIS EVENT ABOUT A NEWER LABEL THAN THE ONE THE ORDER ALREADY HOLDS?
+ *
+ * Shippo replays AND REORDERS deliveries, and the route-level event_key dedupe
+ * only blocks a redelivery of the transaction currently on the row. Every other
+ * stale shape was wide open, because "different transaction id" was read as
+ * "this is a replacement label":
+ *
+ *   t0  T1 bought          -> transaction T1, postage 742 recorded
+ *   t1  T1 voided in-app   -> label_voided_at set, cost nulled
+ *   t2  T2 bought          -> transaction T2, void cleared, postage 1200
+ *   t3  T1's transaction_created finally arrives (never seen, so not deduped)
+ *
+ * At t3, T1 !== T2, so the VOIDED label was classified as the replacement: the
+ * void was cleared, the order was pointed back at the dead transaction, the
+ * voided label's tracking number and printable label_url were restored onto a
+ * live order, and recordActualShippingCost overwrote a CORRECT 1200 with the
+ * refunded 742 while profit_finalized stayed true.
+ *
+ * The rule is monotonic: label facts only ever move forward. The transaction's
+ * own creation time against the label already recorded answers it exactly;
+ * when the delivery carries no timestamp, Shippo's live status for the incoming
+ * transaction does — anything other than SUCCESS is a label that is not the one
+ * this order should be costed on. When neither can be established, the row is
+ * left alone, which is the direction that cannot destroy a correct value.
+ */
+async function isNewerThanRecordedLabel(
+  data: ShippoTransactionCreated,
+  transactionId: string,
+  order: OrderRow,
+): Promise<boolean> {
+  const eventCreatedAt = Date.parse(String(data.object_created ?? ""));
+  const recordedAt = Date.parse(String(order.label_purchased_at ?? ""));
+  if (Number.isFinite(eventCreatedAt) && Number.isFinite(recordedAt)) {
+    return eventCreatedAt >= recordedAt;
+  }
+
+  const fetched = await getTransaction(transactionId);
+  if (!fetched.ok) return false;
+  return String(fetched.data.status ?? "").toUpperCase() === "SUCCESS";
+}
+
 export async function applyTransactionCreated(
   data: ShippoTransactionCreated,
 ): Promise<TransactionCreatedOutcome> {
@@ -489,6 +544,39 @@ export async function applyTransactionCreated(
   }
 
   const transactionId = String(data.object_id ?? "").trim() || null;
+
+  // REFUSE A LABEL EVENT THAT WOULD MOVE THIS ORDER BACKWARDS.
+  //
+  // Only a delivery naming a DIFFERENT transaction from the one on the row can
+  // do that; a redelivery of the same transaction is already handled (and is
+  // what the route's event_key dedupe blocks anyway).
+  const recordedTransactionId = order.shippo_transaction_id
+    ? String(order.shippo_transaction_id)
+    : null;
+  if (
+    transactionId
+    && recordedTransactionId
+    && transactionId !== recordedTransactionId
+    && !(await isNewerThanRecordedLabel(data, transactionId, order))
+  ) {
+    // Never silent: a refused label event is money Shippo believes was spent.
+    await recordSystemAlert({
+      type: "shippo_stale_transaction_ignored",
+      severity: "warning",
+      message:
+        `A Shippo transaction_created for order ${order.order_id} named transaction ${transactionId}, which is `
+        + `not newer than the label already recorded (${recordedTransactionId}). It was ignored rather than `
+        + "allowed to overwrite the live label's tracking, cost and voided state.",
+      context: {
+        orderId: order.order_id,
+        incomingTransactionId: transactionId,
+        recordedTransactionId,
+        incomingCreatedAt: data.object_created ?? null,
+        recordedLabelPurchasedAt: order.label_purchased_at ?? null,
+      },
+    }).catch(() => {});
+    return { matched: true, orderId: order.order_id, reason: "stale_transaction" };
+  }
 
   // WHAT THE LABEL COST, FROM WHICHEVER SHAPE ARRIVED.
   //
@@ -570,7 +658,12 @@ export async function applyTransactionCreated(
   // exists to stop.
   const isReplacementLabel = Boolean(transactionId) && transactionId !== order.shippo_transaction_id;
   const labelFacts = {
-      shippo_transaction_id: transactionId,
+      // Written only when the delivery actually names one. This was
+      // unconditional, so a thin transaction_created with no object_id BLANKED
+      // a recorded transaction id — leaving a label_purchased_at row with no
+      // transaction, which nothing can ever repair and which the shipping sweep
+      // could not even see.
+      ...(transactionId !== null ? { shippo_transaction_id: transactionId } : {}),
       ...(isReplacementLabel ? { label_voided_at: null } : {}),
       // Each written only when we actually have it. These used to be
       // unconditional, so a second, thinner delivery of the same event — or a

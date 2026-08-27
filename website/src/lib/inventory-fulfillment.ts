@@ -73,20 +73,51 @@ async function applyInventoryDelta(adjustment: InventoryAdjustment, signedQty: n
   }
 }
 
+/** What one decrement pass actually managed to do. */
+export interface InventoryDecrementResult {
+  /** Distinct stock lines this order asked to move. */
+  attempted: number;
+  /** Lines whose RPC failed outright. Stock did not move for these. */
+  failed: number;
+  /** First few failure messages, for the operator alert. */
+  errors: string[];
+}
+
 // Commit stock for a newly-paid order. Best-effort per line: a decrement that
 // can't apply (untracked item, or a stock number that would go negative) is a
 // no-op, and a single failing line is logged and never strands the paid order.
-export async function decrementInventoryForOrder(items: OrderItemRef[]): Promise<void> {
-  for (const adjustment of planInventoryAdjustments(items)) {
+//
+// THE FAILURE IS THE RETURN VALUE, NOT AN EXCEPTION.
+//
+// This returned `Promise<void>` and swallowed every per-line error, so the
+// callers' `catch` blocks around it — and the alert and re-throw inside them —
+// were unreachable code. In the real failure (the reservation RPC unavailable,
+// then adjust_inventory_on_sale erroring on every line) nothing threw, no
+// operator alert fired, and the manual lane wrote its paid_side_effects_at
+// latch on stock that never moved — so a later cancel "restocked" units that
+// were never removed, inventing stock and overselling. Reporting the outcome
+// lets the caller tell "the shelf moved" from "nothing happened".
+export async function decrementInventoryForOrder(items: OrderItemRef[]): Promise<InventoryDecrementResult> {
+  const adjustments = planInventoryAdjustments(items);
+  const errors: string[] = [];
+  for (const adjustment of adjustments) {
     try {
       await applyInventoryDelta(adjustment, -adjustment.quantity);
     } catch (error) {
       console.error("Unable to decrement inventory for", adjustment, error);
+      if (errors.length < 5) {
+        errors.push(
+          `${adjustment.slug}${adjustment.variantId ? `::${adjustment.variantId}` : ""}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
   }
   // A sale just changed what is left on the shelf; the cached catalog would
   // keep advertising the pre-sale count for up to a minute otherwise.
   invalidateCatalogCache();
+  return { attempted: adjustments.length, failed: errors.length, errors };
 }
 
 // Atomic exactly-once claim for an order's restock. Flips inventory_restocked_at

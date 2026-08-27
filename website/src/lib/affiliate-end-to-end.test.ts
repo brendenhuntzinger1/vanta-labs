@@ -125,7 +125,7 @@ vi.mock("@/lib/email/templates", () => ({
   referralCodeAssignedTemplate: () => ({ subject: "Your Vanta Labs Referral Code Is Ready", html: "h" }),
 }));
 vi.mock("@/lib/inventory-fulfillment", () => ({
-  decrementInventoryForOrder: vi.fn(async () => {}), restockInventoryForOrder: vi.fn(async () => {}),
+  decrementInventoryForOrder: vi.fn(async () => ({ attempted: 0, failed: 0, errors: [] as string[] })), restockInventoryForOrder: vi.fn(async () => {}),
   claimInventoryRestock: vi.fn(async () => true),
 }));
 vi.mock("@/lib/inventory-reservation", () => ({

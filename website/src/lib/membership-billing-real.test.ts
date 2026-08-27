@@ -55,7 +55,11 @@ const state: {
   // K-03: lets a test make ONE customer_memberships update fail, which is the
   // condition under which a successful charge leaves the row still due.
   failNextMembershipUpdate: boolean;
-} = { memberships: [], billingEvents: [], updates: [], paidEventRows: [], failNextMembershipUpdate: false };
+  // FIX WAVE 3: PostgREST resolves `{ data: null, error }` for a statement
+  // timeout rather than throwing, and that was indistinguishable from "this
+  // customer has no membership".
+  failNextMembershipRead: boolean;
+} = { memberships: [], billingEvents: [], updates: [], paidEventRows: [], failNextMembershipUpdate: false, failNextMembershipRead: false };
 
 const { chargeCard, cancelVeyra, updateVeyraCard, sendEmail } = vi.hoisted(() => ({
   chargeCard: vi.fn(async (_input: Record<string, unknown>): Promise<{ success: boolean; chargeId?: string; error?: string }> => ({ success: true, chargeId: "ch_1" })),
@@ -98,6 +102,10 @@ vi.mock("@/lib/supabase-server", () => {
             lte(c: string, v: unknown) { filters.push(["lte", c, v]); return b; },
             limit() { return b; },
             async maybeSingle() {
+              if (state.failNextMembershipRead) {
+                state.failNextMembershipRead = false;
+                return { data: null, error: { code: "57014", message: "canceling statement due to statement timeout" } };
+              }
               const found = state.memberships.find((m) => matches(m, filters));
               return { data: found ? { ...found } : null, error: null };
             },
@@ -239,6 +247,7 @@ beforeEach(() => {
   state.updates = [];
   state.paidEventRows = [];
   state.failNextMembershipUpdate = false;
+  state.failNextMembershipRead = false;
 });
 
 // =========================================================================
@@ -725,5 +734,57 @@ describe("K-03 — a renewal is charged once per period, not once per sweep", ()
     await runMembershipBillingSweep();
 
     expect(recordSystemAlert).not.toHaveBeenCalled();
+  });
+});
+
+// =========================================================================
+// REVOKING A REFUNDED MEMBERSHIP — FIX WAVE 3.
+//
+// The refund lane's brand-new unsafe_effect_failed_membership_revoke alert is
+// raised only from the webhook's CATCH, and this function swallowed both of its
+// database errors: the read's error was discarded (so a transient failure was
+// indistinguishable from "this customer has no membership" and the function
+// returned normally), and the revoking UPDATE's error was discarded too (so it
+// reported success having changed nothing). The one failure the alert exists
+// for was the one it could not see — and the outcome is a customer who charged
+// back keeping member pricing, free shipping, their points multiplier and their
+// Veyra subscription indefinitely.
+// =========================================================================
+describe("revokeMembershipForRefund", () => {
+  it("ends the membership immediately", async () => {
+    state.memberships = [membership({ status: "active" })];
+    const { revokeMembershipForRefund } = await mod();
+
+    await revokeMembershipForRefund("user-1");
+
+    expect(state.memberships[0].status).toBe("cancelled");
+    expect(state.memberships[0].cancel_at_period_end).toBe(false);
+  });
+
+  it("is a quiet no-op for a customer who has no membership", async () => {
+    state.memberships = [];
+    const { revokeMembershipForRefund } = await mod();
+
+    await expect(revokeMembershipForRefund("user-nobody")).resolves.toBeUndefined();
+  });
+
+  it("THROWS rather than reporting success when it cannot read the membership", async () => {
+    state.memberships = [membership({ status: "active" })];
+    state.failNextMembershipRead = true;
+    const { revokeMembershipForRefund } = await mod();
+
+    await expect(revokeMembershipForRefund("user-1")).rejects.toMatchObject({ code: "57014" });
+
+    // Still active — and now the caller knows, so the alert fires.
+    expect(state.memberships[0].status).toBe("active");
+  });
+
+  it("THROWS rather than reporting success when the revoking update fails", async () => {
+    state.memberships = [membership({ status: "active" })];
+    const { revokeMembershipForRefund } = await mod();
+    state.failNextMembershipUpdate = true;
+
+    await expect(revokeMembershipForRefund("user-1")).rejects.toBeDefined();
+    expect(state.memberships[0].status).toBe("active");
   });
 });

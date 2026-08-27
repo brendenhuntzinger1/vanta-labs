@@ -240,10 +240,14 @@ async function commissionByOrderId(orderIds: string[]): Promise<Map<string, numb
 
   for (let i = 0; i < orderIds.length; i += IN_CHUNK) {
     const chunk = orderIds.slice(i, i + IN_CHUNK);
-    const { data } = await supabaseAdmin
+    // A commission read that fails must not silently report zero commission —
+    // that overstates profit on every affected order, and recordActualShippingCost
+    // writes the resulting figure into an audit row as fact.
+    const { data, error } = await supabaseAdmin
       .from("commissions")
       .select("order_id, commission_amount, payment_status")
       .in("order_id", chunk);
+    if (error) throw error;
 
     for (const raw of (data ?? []) as Array<{ order_id: string; commission_amount: number | null; payment_status: string | null }>) {
       // Only subtract commission the owner actually pays out. A reversed /
@@ -358,7 +362,10 @@ export async function getOrderProfitMap(orderIds: string[]): Promise<Map<string,
   const records: OrderRecord[] = [];
   for (let i = 0; i < ids.length; i += IN_CHUNK) {
     const chunk = ids.slice(i, i + IN_CHUNK);
-    const { data } = await supabaseAdmin.from("orders").select(ORDER_FIELDS).in("order_id", chunk);
+    // Same rule as every other financial read on this branch: a page that could
+    // not be read is not a page with no orders on it.
+    const { data, error } = await supabaseAdmin.from("orders").select(ORDER_FIELDS).in("order_id", chunk);
+    if (error) throw error;
     for (const row of (data ?? []) as OrderRecord[]) records.push(row);
   }
 
@@ -703,18 +710,53 @@ export async function recordActualShippingCost(input: RecordShippingCostInput): 
   const now = new Date().toISOString();
 
   // Profit BEFORE reconciliation (still on the estimate) — for the audit trail.
-  const before = await getOrderProfit(input.orderId).catch(() => null);
+  // "Order not found" was ALSO what a transient failure of this read produced,
+  // and the sweep then raised a critical alert naming a cause that was not the
+  // cause. Separate the two: a throw is an unreadable order, null is a missing
+  // one.
+  let before: Awaited<ReturnType<typeof getOrderProfit>> | null = null;
+  try {
+    before = await getOrderProfit(input.orderId);
+  } catch (profitError) {
+    return {
+      ok: false,
+      error: `Could not read this order's profit before recording its shipping cost: ${
+        profitError instanceof Error ? profitError.message : String(profitError)
+      }`,
+    };
+  }
   if (!before) return { ok: false, error: "Order not found" };
 
   const config = await getProfitSettings();
 
   // Preserve the original estimate the first time we reconcile; a later manual
   // correction must not overwrite it.
-  const { data: current } = await supabaseAdmin
+  const { data: current, error: currentError } = await supabaseAdmin
     .from("orders")
     .select("estimated_shipping_cost_cents, label_voided_at")
     .eq("order_id", input.orderId)
     .maybeSingle();
+
+  // A GUARD THAT CANNOT READ IS NOT A GUARD THAT FOUND NOTHING.
+  //
+  // PostgREST does not throw for a statement timeout (57014), a pooler 503 or a
+  // schema-cache miss (PGRST204): it resolves { data: null, error }. Discarding
+  // that error made `current` undefined, which is byte-identical here to "this
+  // order has no voided label and no preserved estimate" — so ONE transient
+  // read turned the refusal below into a no-op and let an automated
+  // source:"shippo" caller charge refunded postage to profit, and overwrote the
+  // preserved per-order estimate with today's flat config figure at the same
+  // time. Refuse instead: the sweep counts `failed`, raises its critical alert
+  // and tries again next tick, which is what an unreadable row deserves.
+  if (currentError) {
+    return {
+      ok: false,
+      error: `Could not read this order before recording its shipping cost: ${currentError.message}`,
+    };
+  }
+  if (!current) {
+    return { ok: false, error: "Order not found" };
+  }
 
   // A VOIDED LABEL HAS NO COST TO RECORD, AND THIS FUNCTION IS WHERE THE MONEY
   // IS WRITTEN.
@@ -739,7 +781,7 @@ export async function recordActualShippingCost(input: RecordShippingCostInput): 
   // only a manual one: source "shippo" can never set this flag meaningfully,
   // so no automated path can re-charge by passing it.
   const humanOverride = input.source === "manual" && input.overrideVoidedLabel === true;
-  if (current?.label_voided_at && !humanOverride) {
+  if (current.label_voided_at && !humanOverride) {
     return {
       ok: false,
       error:
@@ -750,11 +792,15 @@ export async function recordActualShippingCost(input: RecordShippingCostInput): 
   }
 
   const estimatedCents =
-    current?.estimated_shipping_cost_cents != null
+    current.estimated_shipping_cost_cents != null
       ? Number(current.estimated_shipping_cost_cents)
       : Math.round(config.shippingCostPerOrder * 100);
 
-  const { error: updateError } = await supabaseAdmin
+  // .select() SO A ZERO-ROW MATCH IS NOT REPORTED AS A REPAIR. An UPDATE that
+  // matches nothing (the order was deleted between the read above and here)
+  // returns no error, and returning { ok: true } for it made the sweep count a
+  // `repaired` that wrote nothing and still insert an audit row asserting it.
+  const { data: updated, error: updateError } = await supabaseAdmin
     .from("orders")
     .update({
       estimated_shipping_cost_cents: estimatedCents,
@@ -764,8 +810,12 @@ export async function recordActualShippingCost(input: RecordShippingCostInput): 
       profit_finalized: true,
       updated_at: now,
     })
-    .eq("order_id", input.orderId);
+    .eq("order_id", input.orderId)
+    .select("order_id");
   if (updateError) return { ok: false, error: updateError.message };
+  if (!updated || updated.length === 0) {
+    return { ok: false, error: "No order row matched this shipping-cost update." };
+  }
 
   // Profit AFTER reconciliation (now on the exact cost).
   const after = await getOrderProfit(input.orderId).catch(() => null);

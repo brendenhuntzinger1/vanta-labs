@@ -31,6 +31,7 @@ const state: {
 
 const decrementInventoryForOrder = vi.fn(async () => {
   state.inventoryCalls += 1;
+  return { attempted: 1, failed: 0, errors: [] as string[] };
 });
 
 vi.mock("server-only", () => ({}));

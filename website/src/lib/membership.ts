@@ -367,6 +367,36 @@ export async function recordPointsLedgerEntry(input: {
   }
 }
 
+/**
+ * HAS THIS ORDER ALREADY GOT A LEDGER ROW FOR THIS REASON?
+ *
+ * TWO DEFECTS IN ONE LINE LIVED HERE, THREE TIMES OVER.
+ *
+ * 1. `const { data: existing } = await ...` discarded the read's error.
+ *    PostgREST resolves `{ data: null, error }` for a statement timeout or a
+ *    pooler blip, which is byte-identical to "no row exists" — so the guard
+ *    failed OPEN and the caller inserted a second debit or credit.
+ * 2. `.maybeSingle()` returns `{ data: null, error: PGRST116 }` when MORE THAN
+ *    ONE row matches (verified against the installed @supabase/postgrest-js).
+ *    So the first duplicate permanently disabled the guard for that order and
+ *    every later call added another row — the failure amplified itself.
+ *
+ * `.limit(1)` answers the only question a guard has ("is there at least one?")
+ * and cannot fail on a duplicate, and the error is now the answer "I could not
+ * tell", which is never the same as "no".
+ */
+async function ledgerRowExists(orderId: string, reason: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from("points_ledger")
+    .select("id")
+    .eq("order_id", orderId)
+    .eq("reason", reason)
+    .limit(1);
+
+  if (error) throw error;
+  return Boolean(data && data.length > 0);
+}
+
 // Records a points REDEMPTION debit for an order, capped to the customer's LIVE
 // balance and idempotent per order — mirroring redeemStoreCredit. This prevents
 // two concurrent pending orders that each froze the same balance from
@@ -380,14 +410,7 @@ export async function redeemPoints(userId: string, points: number, orderId: stri
   }
 
   // Idempotent: if this order already recorded a redemption, don't debit again.
-  const { data: existing } = await supabaseAdmin
-    .from("points_ledger")
-    .select("id")
-    .eq("order_id", orderId)
-    .eq("reason", "redeem")
-    .maybeSingle();
-
-  if (existing) {
+  if (await ledgerRowExists(orderId, "redeem")) {
     return;
   }
 
@@ -431,14 +454,7 @@ export async function reverseOrderPoints(orderId: string): Promise<boolean> {
   // event_ids both mapping to "refunded", or a refund followed by a chargeback)
   // must not claw back the earned points twice. Mirror restoreRedeemedPoints's
   // existing-row guard.
-  const { data: existing } = await supabaseAdmin
-    .from("points_ledger")
-    .select("id")
-    .eq("order_id", orderId)
-    .eq("reason", "order_refund_reversal")
-    .maybeSingle();
-
-  if (existing) {
+  if (await ledgerRowExists(orderId, "order_refund_reversal")) {
     return false;
   }
 
@@ -451,12 +467,25 @@ export async function reverseOrderPoints(orderId: string): Promise<boolean> {
   return true;
 }
 
-// Re-credits the loyalty points a customer SPENT on an order (orders.points_redeemed)
-// when that order is fully refunded. Without this, a refunded customer loses the
-// points they redeemed for a discount even though the discount is being undone.
-// Idempotent: a second refund call for the same order will not double-credit.
-// Returns whether a restore row was actually written — a guest order with no
-// customer_user_id has no account to credit and never will have.
+/**
+ * Re-credits the loyalty points a customer ACTUALLY SPENT on an order when that
+ * order is fully refunded. Without this, a refunded customer loses the points
+ * they redeemed for a discount even though the discount is being undone.
+ *
+ * RESTORE WHAT THE LEDGER SAYS WAS DEBITED, NOT WHAT THE ORDER INTENDED TO
+ * SPEND. `orders.points_redeemed` is written by upsertOrderRecord BEFORE any
+ * debit is attempted, and the debit that follows can legitimately be smaller
+ * (redeemPoints clamps to the live balance) or never happen at all (the order
+ * has no account, it is a membership order, or the ledger insert failed — which
+ * this branch classifies as alert-only and survivable). Crediting the order
+ * column back therefore created points out of nothing: a customer whose
+ * redemption failed kept the discount AND was handed the points on refund, and
+ * the refund sweep applied exactly that across a 90-day backlog automatically.
+ *
+ * Idempotent: a second refund call for the same order will not double-credit.
+ * Returns whether a restore row was actually written — a guest order, or an
+ * order whose points were never debited, has nothing to restore and never will.
+ */
 export async function restoreRedeemedPoints(orderId: string): Promise<boolean> {
   const { data: order, error } = await supabaseAdmin
     .from("orders")
@@ -468,25 +497,36 @@ export async function restoreRedeemedPoints(orderId: string): Promise<boolean> {
     throw error;
   }
 
-  const pointsRedeemed = Number(order?.points_redeemed ?? 0);
-  if (!order?.customer_user_id || pointsRedeemed <= 0) {
+  if (!order?.customer_user_id) {
     return false;
   }
 
-  const { data: existing } = await supabaseAdmin
-    .from("points_ledger")
-    .select("id")
-    .eq("order_id", orderId)
-    .eq("reason", "order_refund_points_restore")
-    .maybeSingle();
+  if (await ledgerRowExists(orderId, "order_refund_points_restore")) {
+    return false;
+  }
 
-  if (existing) {
+  // The debit itself, from the ledger. Summed rather than read singly so a
+  // historical duplicate cannot make this read fail, and so the figure restored
+  // is exactly the figure taken.
+  const { data: debits, error: debitError } = await supabaseAdmin
+    .from("points_ledger")
+    .select("amount")
+    .eq("order_id", orderId)
+    .eq("reason", "redeem");
+
+  if (debitError) throw debitError;
+
+  const debited = (debits ?? []).reduce(
+    (sum, row) => sum + Math.abs(Number((row as { amount?: unknown }).amount ?? 0)),
+    0,
+  );
+  if (debited <= 0) {
     return false;
   }
 
   await recordPointsLedgerEntry({
     userId: String(order.customer_user_id),
-    amount: pointsRedeemed,
+    amount: debited,
     reason: "order_refund_points_restore",
     orderId,
   });
@@ -621,11 +661,16 @@ export async function checkAndAwardBirthdayBonus(userId: string, birthday: strin
   }
 
   const currentYear = today.getUTCFullYear();
-  const { data } = await supabaseAdmin
+  // Same rule as every other already-granted guard here: a read that failed is
+  // not a year with no bonus in it. Throwing leaves the caller's .catch() to
+  // skip this page load; the customer's next visit today grants it once.
+  const { data, error: bonusYearError } = await supabaseAdmin
     .from("customer_preferences")
     .select("birthday_bonus_year")
     .eq("user_id", userId)
     .maybeSingle();
+
+  if (bonusYearError) throw bonusYearError;
 
   if (Number(data?.birthday_bonus_year) === currentYear) {
     return false;

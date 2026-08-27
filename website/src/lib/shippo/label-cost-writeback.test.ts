@@ -104,6 +104,8 @@ function seed(overrides: Record<string, unknown> = {}) {
     label_url: null,
     shippo_transaction_id: null,
     postage_cost_cents: null,
+    label_voided_at: null,
+    label_purchased_at: null,
     ...overrides,
   };
   state.updates = [];
@@ -119,6 +121,10 @@ const EXPANDED_RATE = { amount: "8.45", provider: "USPS", servicelevel: { name: 
 const withExpandedRate = {
   status: "SUCCESS",
   object_id: "shippo-txn-1",
+  // WHEN SHIPPO MADE THIS TRANSACTION. The ordering key that tells a genuine
+  // replacement label apart from a late delivery for an older one — see the
+  // "out-of-order deliveries" block at the end of this file.
+  object_created: "2026-08-23T10:00:00Z",
   order: "shippo-order-1",
   tracking_number: "9400100000000000000000",
   label_url: "https://example.invalid/label.pdf",
@@ -129,6 +135,7 @@ const withExpandedRate = {
 const withStringRate = {
   status: "SUCCESS",
   object_id: "shippo-txn-1",
+  object_created: "2026-08-23T10:00:00Z",
   order: "shippo-order-1",
   rate: "3a7fa84885e7401487990c2b43ddc105",
 };
@@ -237,6 +244,9 @@ describe("a replacement label after a void", () => {
     seed({
       shippo_transaction_id: "shippo-txn-VOIDED",
       label_voided_at: "2026-08-22T09:00:00Z",
+      // The voided label was recorded on the 22nd; the replacement below was
+      // created by Shippo on the 23rd, so it is genuinely newer.
+      label_purchased_at: "2026-08-22T08:00:00Z",
       fulfillment_status: "packed",
     });
 
@@ -281,5 +291,141 @@ describe("a replacement label after a void", () => {
     seed();
     await applyTransactionCreated(withExpandedRate as never);
     expect(alerts).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// OUT-OF-ORDER DELIVERIES — FIX WAVE 3.
+//
+// The route-level event_key dedupe only blocks a redelivery of the transaction
+// CURRENTLY on the row, and "different transaction id" used to be read as "this
+// is a replacement label". Every other stale shape was therefore wide open:
+//
+//   t0  T1 bought           -> transaction T1, postage 742 recorded
+//   t1  T1 voided in-app    -> label_voided_at set, cost nulled
+//   t2  T2 bought           -> transaction T2, void cleared, postage 1200
+//   t3  T1's transaction_created finally arrives (never seen, so not deduped)
+//
+// At t3 the VOIDED label was classified as the replacement: the void was
+// cleared, the order was pointed back at the dead transaction, the voided
+// label's tracking number and printable label_url were restored onto a live
+// order, and a CORRECT recorded cost was overwritten with the refunded one
+// while profit_finalized stayed true.
+// ---------------------------------------------------------------------------
+describe("a late transaction_created for an OLDER label", () => {
+  /** T1, bought and voided before the live label T2 landed. */
+  const staleVoidedLabel = {
+    status: "SUCCESS",
+    object_id: "shippo-txn-VOIDED",
+    object_created: "2026-08-22T07:00:00Z",
+    order: "shippo-order-1",
+    tracking_number: "TRACK-VOIDED",
+    label_url: "https://example.invalid/label-VOIDED.pdf",
+    rate: { amount: "7.42", provider: "USPS", servicelevel: { name: "Ground Advantage" } },
+  };
+
+  it("does not overwrite the live label's transaction, tracking, url or cost", async () => {
+    seed({
+      shippo_transaction_id: "shippo-txn-2",
+      tracking_number: "TRACK-LIVE",
+      label_url: "https://example.invalid/label-LIVE.pdf",
+      postage_cost_cents: 1200,
+      label_purchased_at: "2026-08-23T10:00:05Z",
+      fulfillment_status: "label_purchased",
+    });
+
+    const outcome = await applyTransactionCreated(staleVoidedLabel as never);
+
+    expect(outcome).toMatchObject({ matched: true, reason: "stale_transaction" });
+    expect(state.updates).toHaveLength(0);
+    expect(state.order?.shippo_transaction_id).toBe("shippo-txn-2");
+    expect(state.order?.tracking_number).toBe("TRACK-LIVE");
+    expect(state.order?.label_url).toBe("https://example.invalid/label-LIVE.pdf");
+    expect(state.order?.postage_cost_cents).toBe(1200);
+    // And no money is written for the dead label.
+    expect(state.costCalls).toHaveLength(0);
+  });
+
+  it("does not clear label_voided_at on a row that is still voided", async () => {
+    seed({
+      shippo_transaction_id: "shippo-txn-1",
+      label_voided_at: "2026-08-22T09:00:00Z",
+      label_purchased_at: "2026-08-22T08:00:00Z",
+      fulfillment_status: "packed",
+    });
+
+    // An even older transaction — T0 — arriving late. Different id, so the old
+    // rule called it a replacement and un-voided the order outright.
+    await applyTransactionCreated({ ...staleVoidedLabel, object_id: "shippo-txn-0", object_created: "2026-08-21T07:00:00Z" } as never);
+
+    expect(state.order?.label_voided_at).toBe("2026-08-22T09:00:00Z");
+    expect(state.order?.shippo_transaction_id).toBe("shippo-txn-1");
+  });
+
+  it("is never silent about it", async () => {
+    seed({
+      shippo_transaction_id: "shippo-txn-2",
+      label_purchased_at: "2026-08-23T10:00:05Z",
+      fulfillment_status: "label_purchased",
+    });
+
+    await applyTransactionCreated(staleVoidedLabel as never);
+
+    const ignored = alerts.find((alert) => alert.type === "shippo_stale_transaction_ignored");
+    expect(ignored).toBeDefined();
+    expect(ignored!.message).toContain("ord-cost-1");
+  });
+
+  it("still accepts a genuinely newer replacement", async () => {
+    seed({
+      shippo_transaction_id: "shippo-txn-VOIDED",
+      label_voided_at: "2026-08-22T09:00:00Z",
+      label_purchased_at: "2026-08-22T08:00:00Z",
+      fulfillment_status: "packed",
+    });
+
+    await applyTransactionCreated(withExpandedRate as never);
+
+    expect(state.order?.shippo_transaction_id).toBe("shippo-txn-1");
+    expect(state.order?.label_voided_at).toBeNull();
+    expect(state.costCalls).toHaveLength(1);
+  });
+
+  it("falls back to Shippo's live status when the delivery carries no timestamp", async () => {
+    seed({
+      shippo_transaction_id: "shippo-txn-2",
+      postage_cost_cents: 1200,
+      label_purchased_at: "2026-08-23T10:00:05Z",
+      fulfillment_status: "label_purchased",
+    });
+    // Shippo now reports the incoming transaction as REFUNDED — a voided label.
+    transactionResponse.value = { status: "REFUNDED", rate: { amount: "7.42" } };
+
+    const noTimestamp: Record<string, unknown> = { ...staleVoidedLabel };
+    delete noTimestamp.object_created;
+    const outcome = await applyTransactionCreated(noTimestamp as never);
+
+    expect(outcome).toMatchObject({ reason: "stale_transaction" });
+    expect(state.order?.postage_cost_cents).toBe(1200);
+  });
+
+  // A first label is not a stale one: there is nothing on the row to move
+  // backwards from.
+  it("never blocks the first label an order ever gets", async () => {
+    seed();
+    await applyTransactionCreated(withExpandedRate as never);
+    expect(state.order?.shippo_transaction_id).toBe("shippo-txn-1");
+    expect(state.costCalls).toHaveLength(1);
+  });
+
+  // A thin delivery with no object_id must not BLANK a recorded transaction id:
+  // that leaves a label_purchased_at row with no transaction, which nothing can
+  // repair and which the shipping sweep cannot even see.
+  it("does not blank a recorded transaction id when the delivery names none", async () => {
+    seed({ shippo_transaction_id: "shippo-txn-2", label_purchased_at: "2026-08-23T10:00:05Z" });
+
+    await applyTransactionCreated({ status: "SUCCESS", order: "shippo-order-1", rate: EXPANDED_RATE } as never);
+
+    expect(state.order?.shippo_transaction_id).toBe("shippo-txn-2");
   });
 });

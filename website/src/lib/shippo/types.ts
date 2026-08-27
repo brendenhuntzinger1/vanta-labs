@@ -277,6 +277,12 @@ export interface ShippoOrder {
  */
 export interface ShippoTransactionCreated {
   object_id?: string | null;
+  /**
+   * When Shippo created this transaction. Read so a late or reordered delivery
+   * can be compared against the label already on the order — see
+   * applyTransactionCreated. Optional because a thin delivery may omit it.
+   */
+  object_created?: string | null;
   status?: string | null;
   tracking_number?: string | null;
   tracking_url_provider?: string | null;

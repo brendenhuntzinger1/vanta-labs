@@ -221,12 +221,19 @@ export async function createAnnualMembershipManualOrder(input: {
 // are active for the whole term.
 export async function activateAnnualMembership(userId: string, tierId: string) {
   const tier = await getTierById(tierId);
-  if (!tier) return;
+  // The customer PAID for this tier. Returning quietly because it cannot be
+  // resolved leaves them charged with no membership and no alert — the caller
+  // treats a silent return as success.
+  if (!tier) throw new Error(`Membership tier ${tierId} not found; annual membership not activated.`);
 
   const now = new Date();
   const nextBillingAt = new Date(now.getTime() + 365 * ONE_DAY_MS);
 
-  await supabaseAdmin.from("customer_memberships").upsert({
+  // THE MEMBERSHIP WRITE IS THE EFFECT. Its error was discarded, so this
+  // function returned normally with no membership row written and
+  // unsafe_effect_failed_membership_activation could never fire for it — the
+  // alert only ever covered the receipt emails that follow.
+  const { error: activationError } = await supabaseAdmin.from("customer_memberships").upsert({
     user_id: userId,
     tier_id: tier.id,
     billing_cycle: "annual",
@@ -244,6 +251,8 @@ export async function activateAnnualMembership(userId: string, tierId: string) {
     cancelled_at: null,
     updated_at: now.toISOString(),
   }, { onConflict: "user_id" });
+
+  if (activationError) throw activationError;
 
   await recordBillingEvent({ userId, tierId: tier.id, eventType: "renewal", amountCents: tier.annual_price_cents ?? 0, status: "succeeded" });
 
@@ -278,12 +287,18 @@ export async function activateAnnualMembership(userId: string, tierId: string) {
 // renewal attempt fails honestly and the member goes past-due).
 export async function activateMonthlyMembership(userId: string, tierId: string) {
   const tier = await getTierById(tierId);
-  if (!tier) return;
+  // See activateAnnualMembership: a paid membership that cannot be activated is
+  // an operator's problem, not a silent no-op.
+  if (!tier) throw new Error(`Membership tier ${tierId} not found; monthly membership not activated.`);
 
   const now = new Date();
   const nextBillingAt = new Date(now.getTime() + 30 * ONE_DAY_MS);
 
-  await supabaseAdmin.from("customer_memberships").upsert({
+  // THE MEMBERSHIP WRITE IS THE EFFECT. Its error was discarded, so this
+  // function returned normally with no membership row written and
+  // unsafe_effect_failed_membership_activation could never fire for it — the
+  // alert only ever covered the receipt emails that follow.
+  const { error: activationError } = await supabaseAdmin.from("customer_memberships").upsert({
     user_id: userId,
     tier_id: tier.id,
     billing_cycle: "monthly",
@@ -302,6 +317,8 @@ export async function activateMonthlyMembership(userId: string, tierId: string) 
     cancelled_at: null,
     updated_at: now.toISOString(),
   }, { onConflict: "user_id" });
+
+  if (activationError) throw activationError;
 
   await recordBillingEvent({ userId, tierId: tier.id, eventType: "renewal", amountCents: tier.monthly_price_cents ?? 0, status: "succeeded" });
 
@@ -363,11 +380,16 @@ export async function createMembershipCheckoutSession(input: {
   // no equivalent guard, so an active member who reached the subscribe page
   // again was sent to a live checkout and charged for a plan they already hold.
   // A different tier is a legitimate plan change and still goes through.
-  const { data: existingMembership } = await supabaseAdmin
+  // A DUPLICATE-CHARGE GUARD THAT CANNOT READ MUST NOT SAY "NO MEMBERSHIP".
+  // Discarding this error sent an already-active member to a live checkout and
+  // charged them again for a plan they hold.
+  const { data: existingMembership, error: existingMembershipError } = await supabaseAdmin
     .from("customer_memberships")
     .select("status, tier_id, cancel_at_period_end, veyra_membership_id, membership_tiers(name)")
     .eq("user_id", input.userId)
     .maybeSingle();
+
+  if (existingMembershipError) throw existingMembershipError;
 
   const existingTier = existingMembership?.membership_tiers as unknown as { name?: string } | null;
   const purchaseDecision = guardDuplicateMembershipPurchase(
@@ -539,7 +561,9 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
   // re-runs the $1 intro charge, never overwrites a paid (e.g. annual) term,
   // and never re-sends welcome/trial emails — it just changes perks and
   // reconciles this month's store credit to the new tier.
-  const { data: existingMembership } = await supabaseAdmin
+  // Same rule as the hosted-checkout lane: an unreadable membership must not be
+  // treated as a fresh signup, which re-runs the intro charge on a paying member.
+  const { data: existingMembership, error: existingMembershipError } = await supabaseAdmin
     .from("customer_memberships")
     // cancel_at_period_end + veyra_membership_id are REQUIRED by the same-tier
     // branch below: without them it reads undefined, treats every member as
@@ -548,6 +572,8 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
     .select("user_id, tier_id, status, billing_cycle, cancel_at_period_end, veyra_membership_id")
     .eq("user_id", input.userId)
     .maybeSingle();
+
+  if (existingMembershipError) throw existingMembershipError;
 
   if (
     existingMembership &&
@@ -1171,11 +1197,21 @@ export async function skipNextBilling(userId: string): Promise<MembershipSchedul
 // refund/chargeback means the customer no longer paid — so every benefit stops
 // right now. Safe to call for any order; no-ops when the user has no membership.
 export async function revokeMembershipForRefund(userId: string): Promise<void> {
-  const { data: existing } = await supabaseAdmin
+  // "I COULD NOT READ" IS NOT "THEY HAVE NO MEMBERSHIP".
+  //
+  // This read's error was discarded, so a transient failure returned from this
+  // function normally — the webhook's try completed, the brand-new
+  // unsafe_effect_failed_membership_revoke alert never fired, and a customer who
+  // charged back kept member pricing, free shipping, their points multiplier and
+  // (because cancelVeyraMembership is skipped too) their Veyra subscription.
+  // The one failure the alert exists for was the one it could not see.
+  const { data: existing, error: readError } = await supabaseAdmin
     .from("customer_memberships")
     .select("user_id, tier_id, status, veyra_membership_id")
     .eq("user_id", userId)
     .maybeSingle();
+
+  if (readError) throw readError;
 
   if (!existing) {
     return;
@@ -1212,7 +1248,9 @@ export async function revokeMembershipForRefund(userId: string): Promise<void> {
     }
   }
 
-  await supabaseAdmin
+  // The revocation itself. Its error was discarded too, so this function
+  // reported success having changed nothing at all.
+  const { error: revokeError } = await supabaseAdmin
     .from("customer_memberships")
     .update({
       status: "cancelled",
@@ -1221,6 +1259,8 @@ export async function revokeMembershipForRefund(userId: string): Promise<void> {
       updated_at: new Date().toISOString(),
     })
     .eq("user_id", userId);
+
+  if (revokeError) throw revokeError;
 
   await recordBillingEvent({
     userId,

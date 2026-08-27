@@ -102,7 +102,10 @@ vi.mock("@/lib/inventory-fulfillment", async (importOriginal) => {
   return {
     ...actual,
     restockInventoryForOrder: vi.fn(async (items: unknown[]) => { db.restocked.push(items); }),
-    decrementInventoryForOrder: vi.fn(async () => { db.decremented += 1; }),
+    decrementInventoryForOrder: vi.fn(async () => {
+      db.decremented += 1;
+      return { attempted: 1, failed: 0, errors: [] as string[] };
+    }),
   };
 });
 vi.mock("@/lib/inventory-reservation", () => ({
@@ -291,9 +294,47 @@ describe("cancelling an order that was paid through the MANUAL lane", () => {
     const reservation = await import("@/lib/inventory-reservation");
     vi.mocked(reservation.finalizeInventoryForOrder).mockRejectedValueOnce(new Error("inventory RPC down"));
 
-    await expect(approveManualPayment()).rejects.toThrow("inventory RPC down");
+    // THE APPROVAL ITSELF SUCCEEDS. The payment is verified and recorded; it is
+    // the STOCK that did not move. Re-throwing here used to report a fully
+    // successful payment as failed and skip the audit row, the push
+    // notification and the Shippo push — none of which the admin's retry can
+    // recover, because it returns alreadyPaid. The latch is the protection, and
+    // it is what stays NULL.
+    await expect(approveManualPayment()).resolves.toBeTruthy();
+    expect(db.order.payment_status).toBe("paid");
     expect(db.order.paid_side_effects_at).toBeNull();
+    expect(db.alerts.map((a) => a.type)).toContain("unsafe_effect_failed_inventory_decrement");
 
+    const outcome = await cancel();
+    expect(outcome.action).toBe("released");
+    expect(db.restocked).toHaveLength(0);
+  });
+
+  // FIX WAVE 3 — THE REAL FAILURE PATH, WHICH NOTHING USED TO CATCH.
+  //
+  // finalizeInventoryForOrder does not throw when the RPC is unavailable: it
+  // returns { finalized: 0, degraded: true }. decrementInventoryForOrder did not
+  // throw either — it logged each failing line and returned void. So on the one
+  // failure mode that actually happens, execution fell straight through: no
+  // alert, and the latch WAS written over stock that never moved. A later cancel
+  // then read the latch, took the restock branch, and added units that were
+  // never removed — inventing stock, which oversells.
+  it("leaves the latch NULL when the degraded fallback decrement fails on every line", async () => {
+    const reservation = await import("@/lib/inventory-reservation");
+    const fulfillment = await import("@/lib/inventory-fulfillment");
+    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true });
+    vi.mocked(fulfillment.decrementInventoryForOrder).mockResolvedValueOnce({
+      attempted: 1,
+      failed: 1,
+      errors: ["p1: adjust_inventory_on_sale unavailable"],
+    });
+
+    await expect(approveManualPayment()).resolves.toBeTruthy();
+    expect(db.order.payment_status).toBe("paid");
+    expect(db.order.paid_side_effects_at).toBeNull();
+    expect(db.alerts.map((a) => a.type)).toContain("unsafe_effect_failed_inventory_decrement");
+
+    // And the consequence the latch exists to prevent: no invented units.
     const outcome = await cancel();
     expect(outcome.action).toBe("released");
     expect(db.restocked).toHaveLength(0);

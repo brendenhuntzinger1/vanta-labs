@@ -29,12 +29,19 @@ const db: {
   commissions: Row[];
   order_shipping_cost_audit: Row[];
   system_alerts: Row[];
+  /**
+   * Reads that must fail the way PostgREST really fails: `{ data: null, error }`,
+   * NOT a rejected promise. Keyed by the exact column list the query asks for,
+   * so one specific read can be broken while the rest of the flow works.
+   */
+  failSelect: Record<string, { code: string; message: string }>;
 } = {
   orders: [],
   order_items: [],
   commissions: [],
   order_shipping_cost_audit: [],
   system_alerts: [],
+  failSelect: {},
 };
 
 const shippo = vi.hoisted(() => ({
@@ -81,7 +88,7 @@ vi.mock("@/lib/admin-control", () => ({
 // it — which is the whole point of the test below.
 vi.mock("@/lib/supabase-server", () => {
   function tableFor(name: string): Row[] {
-    const rows = (db as Record<string, Row[]>)[name];
+    const rows = (db as unknown as Record<string, Row[]>)[name];
     if (!rows) throw new Error(`unexpected table in test: ${name}`);
     return rows;
   }
@@ -97,6 +104,9 @@ vi.mock("@/lib/supabase-server", () => {
     const matched = () => tableFor(name).filter((row) => filters.every((f) => f(row)));
 
     function settle() {
+      if (action === "select" && db.failSelect[selectedColumns]) {
+        return { data: null, error: db.failSelect[selectedColumns] };
+      }
       const rows = matched();
       if (action === "update") {
         for (const row of rows) Object.assign(row, patch);
@@ -116,8 +126,10 @@ vi.mock("@/lib/supabase-server", () => {
       return { data: out, error: null };
     }
 
+    let selectedColumns = "";
+
     const b: Record<string, unknown> = {
-      select() { return b; },
+      select(cols?: string) { selectedColumns = String(cols ?? ""); return b; },
       update(next: Row) { action = "update"; patch = next; return b; },
       insert(next: Row | Row[]) {
         const list = Array.isArray(next) ? next : [next];
@@ -144,7 +156,8 @@ vi.mock("@/lib/supabase-server", () => {
       limit(n: number) { take = n; return b; },
       range(from: number, to: number) { slice = [from, to]; return b; },
       async maybeSingle() {
-        const { data } = settle();
+        const { data, error } = settle();
+        if (error) return { data: null, error };
         return { data: (data as Row[])[0] ?? null, error: null };
       },
       then(resolve: (value: unknown) => unknown, reject?: (reason: unknown) => unknown) {
@@ -482,5 +495,105 @@ describe("the manual-entry warning for a permanently unreadable label", () => {
     await repairMissingShippingCosts();
 
     expect(db.system_alerts.filter((row) => row.type === "shipping_cost_manual_entry_required")).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE VOID REFUSAL USED TO FAIL OPEN — FIX WAVE 3.
+//
+// recordActualShippingCost reads label_voided_at with a narrow SELECT and then
+// refuses a voided label. That read discarded its error, and PostgREST resolves
+// `{ data: null, error }` rather than throwing for a statement timeout, a
+// pooler 503 or a schema-cache miss. `current` was therefore undefined on any
+// of them, `current?.label_voided_at` was falsy, and the ONLY money-layer guard
+// against re-charging refunded postage was skipped — for an automated
+// `source: "shippo"` caller, exactly what the guard's own comment promises is
+// impossible. The same undefined also dropped the preserved per-order estimate
+// and overwrote it with today's flat config figure.
+// ---------------------------------------------------------------------------
+describe("recordActualShippingCost when its own void-check read fails", () => {
+  const VOID_CHECK_COLUMNS = "estimated_shipping_cost_cents, label_voided_at";
+  const TIMEOUT = { code: "57014", message: "canceling statement due to statement timeout" };
+
+  beforeEach(() => {
+    seedLabelledOrder();
+    applyVoid();
+    db.failSelect = {};
+    // Earlier blocks in this file drive getTransaction to non-SUCCESS states.
+    shippo.getTransaction.mockResolvedValue({
+      ok: true as const,
+      data: { object_id: "txn-1", status: "SUCCESS", rate: { amount: "7.42", currency: "USD" } },
+    });
+  });
+
+  it("refuses instead of charging the refunded postage to profit", async () => {
+    db.failSelect[VOID_CHECK_COLUMNS] = TIMEOUT;
+
+    const outcome = await recordActualShippingCost({
+      orderId: ORDER_ID,
+      amountCents: 742,
+      source: "shippo",
+    });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("statement timeout");
+    const order = db.orders[0];
+    expect(order.actual_shipping_cost_cents).toBeNull();
+    expect(order.profit_finalized).toBe(false);
+    expect(order.shipping_cost_source).toBeNull();
+  });
+
+  it("does not overwrite the preserved estimate with the flat config figure", async () => {
+    db.orders[0].estimated_shipping_cost_cents = 1250;
+    db.failSelect[VOID_CHECK_COLUMNS] = TIMEOUT;
+
+    await recordActualShippingCost({ orderId: ORDER_ID, amountCents: 742, source: "shippo" });
+
+    // 600 is `shippingCostPerOrder * 100` from the mocked config — the figure
+    // the fail-open path used to write over a real historical estimate.
+    expect(db.orders[0].estimated_shipping_cost_cents).toBe(1250);
+  });
+
+  it("writes no audit row for a refusal", async () => {
+    const before = db.order_shipping_cost_audit.length;
+    db.failSelect[VOID_CHECK_COLUMNS] = TIMEOUT;
+
+    await recordActualShippingCost({ orderId: ORDER_ID, amountCents: 742, source: "shippo" });
+
+    expect(db.order_shipping_cost_audit).toHaveLength(before);
+  });
+
+  it("makes the sweep count it as FAILED, so the critical alert fires", async () => {
+    db.failSelect[VOID_CHECK_COLUMNS] = TIMEOUT;
+    // A live (non-voided) label, so the sweep genuinely reaches the money write.
+    db.orders[0].label_voided_at = null;
+
+    const result = await repairMissingShippingCosts();
+
+    expect(result).toMatchObject({ repaired: 0, failed: 1 });
+    const alerted = db.system_alerts.map((row) => row.type);
+    expect(alerted).toContain("shipping_cost_unrecorded");
+    expect(db.orders[0].actual_shipping_cost_cents).toBeNull();
+  });
+
+  it("still records normally once the read works", async () => {
+    db.orders[0].label_voided_at = null;
+
+    const outcome = await recordActualShippingCost({ orderId: ORDER_ID, amountCents: 742, source: "shippo" });
+
+    expect(outcome.ok).toBe(true);
+    expect(db.orders[0].actual_shipping_cost_cents).toBe(742);
+  });
+
+  // An UPDATE that matches nothing returns no error. Reporting { ok: true } for
+  // it made the sweep count a `repaired` that wrote nothing at all.
+  it("does not report success when the update matches no row", async () => {
+    db.orders[0].label_voided_at = null;
+    const outcome = await recordActualShippingCost({
+      orderId: "order-that-does-not-exist",
+      amountCents: 742,
+      source: "shippo",
+    });
+    expect(outcome.ok).toBe(false);
   });
 });

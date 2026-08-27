@@ -52,7 +52,7 @@ const state: {
 const sideEffects = {
   email: vi.fn(async () => ({ ok: true })),
   points: vi.fn(async () => {}),
-  coupon: vi.fn(async () => ({ ok: true })),
+  coupon: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
   storeCredit: vi.fn(async () => {}),
   redeemPoints: vi.fn(async () => {}),
   revokeMembership: vi.fn(async () => {}),
@@ -84,7 +84,7 @@ vi.mock("@/lib/email/templates", () => ({
   refundConfirmationTemplate: () => ({ subject: "s", html: "h" }),
 }));
 vi.mock("@/lib/inventory-fulfillment", () => ({
-  decrementInventoryForOrder: vi.fn(async () => {}),
+  decrementInventoryForOrder: vi.fn(async () => ({ attempted: 0, failed: 0, errors: [] as string[] })),
   restockInventoryForOrder: vi.fn(async () => {}),
   claimInventoryRestock: vi.fn(async () => true),
 }));
@@ -514,5 +514,66 @@ describe("a membership revoke that throws on a refund", () => {
 
     const types = sideEffects.alert.mock.calls.map((call) => call[0].type);
     expect(types).not.toContain("unsafe_effect_failed_membership_revoke");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE FAILURE ARRIVES AS A RETURN VALUE, NOT AN EXCEPTION — FIX WAVE 3.
+//
+// supabase-js RESOLVES on error; it does not reject. redeemCoupon,
+// finalizeInventoryForOrder and decrementInventoryForOrder were all total
+// functions built on it — every branch ended in `console.error(...); return`.
+// So four of the eight new unsafeEffectAlert sites were unreachable code, and
+// the only tests that drove them made the callee THROW, which the real callee
+// never does. The block above proves the throwing path; this one proves the
+// path that actually happens.
+// ---------------------------------------------------------------------------
+describe("an unsafe effect that REPORTS its failure instead of throwing", () => {
+  it("raises unsafe_effect_failed_coupon_redemption when redeemCoupon reports failure", async () => {
+    sideEffects.coupon.mockResolvedValueOnce({ ok: false, error: "coupon rpc unavailable" });
+
+    const result = await deliver("evt-1");
+
+    expect(result.duplicate).toBe(false);
+    const alerts = sideEffects.alert.mock.calls.map((call) => call[0]);
+    const coupon = alerts.find((alert) => alert.type === "unsafe_effect_failed_coupon_redemption");
+    expect(coupon).toBeDefined();
+    expect(coupon!.severity).toBe("critical");
+    expect(String((coupon!.context as { error?: string }).error)).toContain("coupon rpc unavailable");
+  });
+
+  it("raises nothing when the redemption is recorded", async () => {
+    await deliver("evt-1");
+    const types = sideEffects.alert.mock.calls.map((call) => call[0].type);
+    expect(types).not.toContain("unsafe_effect_failed_coupon_redemption");
+  });
+
+  it("raises unsafe_effect_failed_inventory_decrement when the fallback decrement fails on every line", async () => {
+    const reservation = await import("@/lib/inventory-reservation");
+    const fulfillment = await import("@/lib/inventory-fulfillment");
+    // The reachable failure: the reservation RPC is unavailable (returned, not
+    // thrown), and the legacy decrement then errors on each line (logged, not
+    // thrown). Nothing propagated, so nothing alerted.
+    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true });
+    vi.mocked(fulfillment.decrementInventoryForOrder).mockResolvedValueOnce({
+      attempted: 2,
+      failed: 2,
+      errors: ["p1: rpc down", "p2: rpc down"],
+    });
+
+    await deliver("evt-1");
+
+    const types = sideEffects.alert.mock.calls.map((call) => call[0].type);
+    expect(types).toContain("unsafe_effect_failed_inventory_decrement");
+  });
+
+  it("raises nothing when the fallback decrement moves the stock", async () => {
+    const reservation = await import("@/lib/inventory-reservation");
+    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true });
+
+    await deliver("evt-1");
+
+    const types = sideEffects.alert.mock.calls.map((call) => call[0].type);
+    expect(types).not.toContain("unsafe_effect_failed_inventory_decrement");
   });
 });

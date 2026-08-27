@@ -189,12 +189,25 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
   };
 }
 
+/** Whether the redemption was recorded, or why it could not be. */
+export interface CouponRedemptionResult {
+  ok: boolean;
+  error?: string;
+}
+
 // Called once a coupon's order is confirmed paid (see payment-webhook.ts) so
 // abandoned/failed checkouts never consume redemption slots.
-export async function redeemCoupon(code: string) {
+//
+// THE FAILURE IS THE RETURN VALUE, NOT AN EXCEPTION. Every branch below used to
+// end in `console.error(...); return;`, and supabase-js resolves rather than
+// rejects, so the callers' catch blocks — and the
+// unsafe_effect_failed_coupon_redemption alert inside them — could never run.
+// A coupon that quietly failed to record its redemption keeps being redeemable
+// past its limit, and nobody was told.
+export async function redeemCoupon(code: string): Promise<CouponRedemptionResult> {
   const normalizedCode = normalizeCouponCode(code);
   if (!normalizedCode) {
-    return;
+    return { ok: true };
   }
 
   // Atomic increment (single SQL statement) so simultaneous redemptions of a
@@ -202,7 +215,7 @@ export async function redeemCoupon(code: string) {
   const { error } = await supabaseAdmin.rpc("redeem_coupon", { input_code: normalizedCode });
 
   if (!error) {
-    return;
+    return { ok: true };
   }
 
   const message = String(error.message ?? "").toLowerCase();
@@ -210,7 +223,7 @@ export async function redeemCoupon(code: string) {
 
   if (!isMissingRpc) {
     console.error("Unable to record coupon redemption:", error);
-    return;
+    return { ok: false, error: String(error.message ?? "coupon redemption failed") };
   }
 
   // Fallback: the RPC migration hasn't been run yet. Best-effort
@@ -224,11 +237,13 @@ export async function redeemCoupon(code: string) {
 
   if (loadError) {
     console.error("Unable to load coupon for redemption:", loadError);
-    return;
+    return { ok: false, error: String(loadError.message ?? "coupon lookup failed") };
   }
 
+  // No such coupon: there is nothing to record, and no amount of retrying
+  // changes that. Not a failure to alert on.
   if (!data) {
-    return;
+    return { ok: true };
   }
 
   const { error: updateError } = await supabaseAdmin
@@ -238,7 +253,10 @@ export async function redeemCoupon(code: string) {
 
   if (updateError) {
     console.error("Unable to record coupon redemption:", updateError);
+    return { ok: false, error: String(updateError.message ?? "coupon redemption update failed") };
   }
+
+  return { ok: true };
 }
 
 export interface ActiveCouponSummary {

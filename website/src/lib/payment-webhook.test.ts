@@ -53,10 +53,41 @@ describe("resolveRefundOutcome (F2/A5 — partial refunds & chargebacks)", () =>
     expect(o.shouldRestock).toBe(false); // never over-restock on partial
   });
 
-  it("accumulates repeated partial refunds and never exceeds the amount paid", () => {
+  // FIX WAVE 3 — the CUMULATIVE total is what decides partial vs full.
+  //
+  // 100 already returned plus 30 more on a 118 order is the whole order back.
+  // Comparing only THIS event's amount left it "partially_refunded" forever:
+  // no points reversal, no points restore, no store-credit return, no restock,
+  // and invisible to the refund sweep (which selects payment_status
+  // 'refunded'). refund_amount is still bounded by what was collected.
+  it("treats partials that cumulatively return the whole charge as a FULL refund", () => {
     const o = resolveRefundOutcome({ eventType: "refund.completed", nextStatus: "refunded", refundEventAmount: 30, ...base, existingRefundAmount: 100 });
-    expect(o.recordedRefundAmount).toBe(118); // min(118, 100 + 30)
+    expect(o.recordedRefundAmount).toBe(118); // clamped to amount_paid
+    expect(o.paymentStatus).toBe("refunded");
+    expect(o.isFullRefund).toBe(true);
+    expect(o.shouldRestock).toBe(true);
+  });
+
+  // The canonical two-step refund: goods first, then shipping. Neither event on
+  // its own is the whole order; together they are.
+  it("reaches `refunded` when two partials exactly total the amount paid", () => {
+    const first = resolveRefundOutcome({ eventType: "refund.completed", nextStatus: "refunded", refundEventAmount: 60, ...base, amountPaid: 100, existingRefundAmount: 0 });
+    expect(first.paymentStatus).toBe("partially_refunded");
+    expect(first.recordedRefundAmount).toBe(60);
+
+    const second = resolveRefundOutcome({ eventType: "refund.completed", nextStatus: "refunded", refundEventAmount: 40, ...base, amountPaid: 100, existingRefundAmount: 60 });
+    expect(second.paymentStatus).toBe("refunded");
+    expect(second.isFullRefund).toBe(true);
+    expect(second.shouldRestock).toBe(true);
+    expect(second.recordedRefundAmount).toBe(100);
+  });
+
+  // A partial that still leaves money on the order stays partial.
+  it("stays partially_refunded while the cumulative total is below the charge", () => {
+    const o = resolveRefundOutcome({ eventType: "refund.completed", nextStatus: "refunded", refundEventAmount: 8, ...base, existingRefundAmount: 100 });
     expect(o.paymentStatus).toBe("partially_refunded");
+    expect(o.recordedRefundAmount).toBe(108);
+    expect(o.shouldRestock).toBe(false);
   });
 
   it("prorates commission on the CUMULATIVE refunded amount across multiple partials", () => {
