@@ -1,5 +1,9 @@
-// Server component: with the manual cost form gone there is nothing
-// interactive left here, so none of this needs to ship to the browser.
+import { AdminOrderShippingCostForm } from "@/components/admin-order-shipping-cost-form";
+
+// Server component. The one interactive element -- the manual shipping cost
+// entry -- is its own client component, so this panel still does not ship to
+// the browser.
+
 export interface OrderProfitView {
   grossRevenue: number;
   merchandiseRevenue: number;
@@ -65,9 +69,12 @@ function ExpenseRow({ label, amount, muted }: { label: string; amount: number; m
 export function AdminOrderProfitPanel({
   profit,
   audit,
+  orderId,
 }: {
   profit: OrderProfitView;
   audit: ShippingCostAuditView[];
+  /** Needed only by the manual cost form below, which PATCHes this order. */
+  orderId: string;
 }) {
   const estimated = profit.profitStatus === "estimated";
 
@@ -171,13 +178,22 @@ export function AdminOrderProfitPanel({
         </p>
       ) : null}
 
-      {/* The manual "enter exact shipping cost" form was removed deliberately.
-          It turned a number the system already receives -- Shippo reports the
-          settled postage on the transaction_created webhook -- into daily
-          bookkeeping, and a typed figure silently outranks a measured one.
-          Postage now has exactly one source. If a cost is genuinely missing,
-          the reconciliation sweep re-fetches it from Shippo rather than asking
-          a human to remember what a label cost. */}
+      {/* MANUAL ENTRY IS OFFERED ONLY WHERE THE MEASUREMENT NEVER ARRIVES.
+          This form was once on every order, and was removed for a good reason:
+          Shippo reports settled postage on the transaction_created webhook, and
+          a figure typed next to a measured one silently outranks it. That
+          reasoning still holds and is why the condition below is
+          `shippingCostIsEstimate` rather than "always".
+
+          What it missed is the class of order the repair sweep itself gives up
+          on -- a label adopted from the Shippo dashboard whose rate carries no
+          readable amount. For those the sweep raises
+          shipping_cost_manual_entry_required, which says "no automatic repair
+          is possible. Enter the cost by hand in Admin -> Orders", and until now
+          this screen had no such control: the profit stayed estimated for ever
+          and the instruction pointed nowhere. Shippo is still the only source
+          for postage Shippo can report. */}
+      {profit.shippingCostIsEstimate ? <AdminOrderShippingCostForm orderId={orderId} /> : null}
 
       {audit.length > 0 ? (
         <details className="mt-4 border-t border-white/10 pt-3">
