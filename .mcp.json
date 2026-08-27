@@ -21,6 +21,7 @@
         "-y",
         "mcp-remote@0.1.38",
         "https://mcp.snapchat.com/ads",
+        "3334",
         "--static-oauth-client-info",
         "{\"client_id\":\"d1eaba97-9bb6-46f0-9115-8d29d60f7f23\",\"scope\":\"snapads.read\"}"
       ]
