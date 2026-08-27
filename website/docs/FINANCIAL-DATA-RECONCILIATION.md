@@ -149,6 +149,13 @@ the only FL orders since the change were $2–$3.80 test-priced orders — but t
 future FL order under-collects. The design choice that a **blank** field means "collect nowhere" is safe as a
 first-run default and unsafe as the result of an admin saving a form.
 
+> **REMEDIATION STATUS — UNRESOLVED. NOT fixed by the Phase 1 remediation branch.**
+> FIN-03 was deliberately excluded from `claude/vanta-financial-reconciliation-4mg1li` at the owner's
+> instruction, because tax and configuration are owned by a separate audit lane. It remains a
+> **high-priority open production and compliance finding**. Nothing in the Phase 1 code changes, and
+> nothing in the unexecuted Phase 2 SQL, restores tax collection. It needs an owner and a decision
+> independently of this branch.
+
 *Sub-point (SUSPECTED):* Idaho was charged at 6.030% on 2026-08-03. There is no plausible ID nexus for a
 Florida store. The 6.03% figure is the built-in combined-average rate (`sales-tax.ts:56`), so the resolver ran
 with ID in the nexus list at that time. No control row predates 2026-08-23, so the historical nexus list
