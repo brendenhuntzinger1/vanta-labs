@@ -68,7 +68,12 @@ export function planInventoryAdjustments(items: OrderItemRef[]): InventoryAdjust
 // before/after numbers instead of two nulls. Dose-authoritative for a dosed
 // line, exactly like the RPC itself. Best-effort: a failed read costs the
 // ledger its numbers, never the movement.
-async function readQuantityAfter(adjustment: InventoryAdjustment): Promise<{ after: number | null; productId: string | null }> {
+//
+// EXPORTED so the reservation-finalize path (inventory-reservation.ts) records
+// its movements the same way this one does. Both paths commit stock for a paid
+// order; a ledger whose numbers meant different things depending on which path
+// ran would be worse than no ledger.
+export async function readQuantityAfter(adjustment: InventoryAdjustment): Promise<{ after: number | null; productId: string | null }> {
   try {
     if (adjustment.variantId) {
       const { data } = await supabaseAdmin
