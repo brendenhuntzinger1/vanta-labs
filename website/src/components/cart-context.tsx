@@ -57,10 +57,6 @@ type CartContextValue = {
   referralSuccess: string | null;
   /** The programme's minimum merchandise subtotal for a referral code to apply. */
   referralMinimumOrder: number;
-  /** True when a code is attached AND the basket is big enough for it to apply. */
-  referralMeetsMinimum: boolean;
-  /** Dollars still needed before an attached code applies. 0 once it qualifies. */
-  referralAmountToQualify: number;
   /**
    * The one sentence every surface shows about the attached code, built once.
    * Null when no code is attached.
@@ -832,8 +828,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       : null),
     [referralDetails, subtotal, referralMinimumOrder, bestDiscount, discountAmount],
   );
-  const referralMeetsMinimum = Boolean(referralStatus?.meetsMinimum);
-  const referralAmountToQualify = referralStatus?.amountToQualify ?? 0;
   const referralStatusText = referralStatus?.line ?? null;
   const referralNeedsMoreToQualify = Boolean(referralStatus?.needsMoreToQualify);
   /** The referral is the discount actually coming off this basket. */
@@ -1368,8 +1362,6 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     referralError,
     referralSuccess,
     referralMinimumOrder,
-    referralMeetsMinimum,
-    referralAmountToQualify,
     referralStatusText,
     referralNeedsMoreToQualify,
     referralDiscountApplied,
