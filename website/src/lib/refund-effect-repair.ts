@@ -101,7 +101,22 @@ export interface RefundLedgerFacts {
  * refunded_at IS NULL and was invisible to it.
  */
 function refundedWindow(since: string) {
-  return `refunded_at.gte.${since},refunded_at.is.null`;
+  // BOUNDED ON BOTH DISJUNCTS, OR THE SCAN SET ONLY EVER GROWS.
+  //
+  // `refunded_at.is.null` on its own is unbounded by the lookback — a refund
+  // from 2020 sits inside a one-day window — and the refund_amount repair
+  // deliberately never stamps refunded_at, so every order this sweep touches
+  // stayed in scope forever. New refunds sort at the BACK of `ORDER BY
+  // updated_at ASC`, behind that whole accumulated history, so once it passed
+  // MAX_SCAN_ROWS a brand-new incomplete refund became permanently unreachable
+  // and nothing said so.
+  //
+  // orders.updated_at is `not null default now()` (sql/orders-schema.sql), and
+  // every write path touches it, so bounding the null-refunded_at disjunct by it
+  // keeps the sweep's PRIMARY case — payment_status flipped to 'refunded' while
+  // refund_amount/refunded_at were never written — fully in scope while making
+  // the window a window again.
+  return `refunded_at.gte.${since},and(refunded_at.is.null,updated_at.gte.${since})`;
 }
 
 /**
@@ -149,9 +164,22 @@ export function planRefundRepairs(
   ) {
     planned.push("points_reversal");
   }
+  // PLANNED FROM THE LEDGER, NOT FROM THE ORDER COLUMN.
+  //
+  // orders.points_redeemed is what checkout INTENDED to spend; it is written
+  // before any debit is attempted. The debit itself (reason 'redeem') is
+  // skipped for a guest or a membership order, is clamped down to the live
+  // balance, and — when it fails — is explicitly classified alert-only and
+  // survivable, so processing continues past it. Planning the restore from the
+  // order column therefore handed points back that were never taken: a customer
+  // whose redemption failed kept the discount and was then credited the points,
+  // automatically, across a 90-day backlog. The debit's own ledger row is the
+  // only proof it happened, and restoreRedeemedPoints returns the amount that
+  // row actually records.
   if (
     hasAccount
     && Number(order.points_redeemed ?? 0) > 0
+    && pointsLedgerReasons.has("redeem")
     && !pointsLedgerReasons.has("order_refund_points_restore")
   ) {
     planned.push("points_restore");
@@ -299,12 +327,45 @@ async function collectRepairablePages(input: {
     if (page.length < SCAN_PAGE_SIZE) break;
     offset += SCAN_PAGE_SIZE;
     if (offset >= MAX_SCAN_ROWS) {
-      truncated = true;
+      // TRUNCATION IS A CLAIM ABOUT ROWS WE DID NOT READ, SO PROVE IT.
+      // Declaring it whenever the ceiling is reached raised a false alarm on a
+      // window of exactly MAX_SCAN_ROWS — every row had in fact been scanned and
+      // repaired. One row-sized probe answers it exactly.
+      const probe = await supabaseAdmin
+        .from("orders")
+        .select("order_id")
+        .eq("payment_status", "refunded")
+        .or(refundedWindow(input.since))
+        .order("updated_at", { ascending: true })
+        .order("order_id", { ascending: true })
+        .range(offset, offset);
+      if (probe.error) throw probe.error;
+      truncated = (probe.data ?? []).length > 0;
       break;
     }
   }
 
   return { planned, scanned, truncated };
+}
+
+/**
+ * NOBODY READ `scanTruncated`. It was returned in the cron's JSON body and had
+ * no consumer anywhere in the repository, and the route alerts only on a
+ * REJECTED job — so the one condition under which this scan can fail to reach a
+ * row that needs repair was, in practice, silent. It is also not a transient:
+ * the window is over the ceiling and stays there until the backlog clears.
+ */
+async function alertScanTruncated(result: RefundRepairResult): Promise<void> {
+  await recordSystemAlert({
+    type: "refund_scan_truncated",
+    severity: "critical",
+    message:
+      `The refund repair sweep hit its ${MAX_SCAN_ROWS}-row scan ceiling with rows still unread, so refunds `
+      + "behind that point cannot be reached and their side-effects will not be completed automatically.",
+    context: { scanned: result.scanned, maxScanRows: MAX_SCAN_ROWS, repaired: result.repaired },
+  }).catch((alertError) => {
+    console.error("Unable to record a refund-scan truncation alert", alertError);
+  });
 }
 
 export async function repairIncompleteRefunds(options?: {
@@ -326,7 +387,10 @@ export async function repairIncompleteRefunds(options?: {
   });
   result.scanned = scanned;
   if (truncated) result.scanTruncated = true;
-  if (planned.length === 0) return result;
+  if (planned.length === 0) {
+    if (result.scanTruncated) await alertScanTruncated(result);
+    return result;
+  }
 
   const failures: Array<{ orderId: string; effect: string; error: string }> = [];
 
@@ -392,6 +456,8 @@ export async function repairIncompleteRefunds(options?: {
       }
     }
   }
+
+  if (result.scanTruncated) await alertScanTruncated(result);
 
   if (failures.length > 0) {
     await recordSystemAlert({

@@ -20,9 +20,34 @@ describe("planRefundRepairs", () => {
   };
 
   it("plans every effect when none has run", () => {
-    expect(planRefundRepairs(refunded, new Set(), new Set()).sort()).toEqual(
+    // The `redeem` reason is the PROOF the points were ever debited — see the
+    // points_restore tests below. Without it there is nothing to give back.
+    expect(planRefundRepairs(refunded, new Set(["redeem"]), new Set()).sort()).toEqual(
       ["points_restore", "points_reversal", "refund_amount", "store_credit_refund"],
     );
+  });
+
+  // FIX WAVE 3 — POINTS ARE RESTORED FROM THE LEDGER, NOT FROM THE ORDER.
+  //
+  // orders.points_redeemed is what checkout INTENDED to spend, written before
+  // any debit is attempted. redeemPoints is skipped for a guest or a membership
+  // order, clamps down to the live balance, and — when it fails — is explicitly
+  // classified alert-only and survivable, so the order proceeds. Planning the
+  // restore from the order column therefore handed a customer points that were
+  // never taken from them, automatically, across a 90-day backlog of refunds,
+  // on top of a full cash refund.
+  it("plans NO points_restore when the ledger holds no matching debit", () => {
+    const plan = planRefundRepairs(refunded, new Set(), new Set());
+    expect(plan).not.toContain("points_restore");
+  });
+
+  it("plans points_restore only once a `redeem` debit is on file", () => {
+    expect(planRefundRepairs(refunded, new Set(["redeem"]), new Set())).toContain("points_restore");
+  });
+
+  it("still skips points_restore once the restore itself is on file", () => {
+    const plan = planRefundRepairs(refunded, new Set(["redeem", "order_refund_points_restore"]), new Set());
+    expect(plan).not.toContain("points_restore");
   });
 
   it("skips refund_amount once it is recorded", () => {
@@ -36,7 +61,7 @@ describe("planRefundRepairs", () => {
   });
 
   it("skips points restore once its ledger row exists", () => {
-    const plan = planRefundRepairs(refunded, new Set(["order_refund_points_restore"]), new Set());
+    const plan = planRefundRepairs(refunded, new Set(["redeem", "order_refund_points_restore"]), new Set());
     expect(plan).not.toContain("points_restore");
   });
 
@@ -190,8 +215,34 @@ vi.mock("@/lib/store-credit", async () => {
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: effects.recordSystemAlert }));
 
 vi.mock("@/lib/supabase-server", () => {
-  // `col.op.value`, where the value may itself contain dots (an ISO timestamp).
+  /**
+   * Split a PostgREST or()/and() argument on its TOP-LEVEL commas only, so a
+   * nested `and(a,b)` group survives as one term. Splitting blindly turned
+   * `and(refunded_at.is.null,updated_at.gte.X)` into the nonsense column
+   * "and(refunded_at" — which matched EVERY row, and quietly made this whole
+   * double stop filtering.
+   */
+  function splitTerms(expression: string): string[] {
+    const parts: string[] = [];
+    let depth = 0;
+    let current = "";
+    for (const char of expression) {
+      if (char === "(") depth += 1;
+      if (char === ")") depth -= 1;
+      if (char === "," && depth === 0) { parts.push(current); current = ""; continue; }
+      current += char;
+    }
+    if (current) parts.push(current);
+    return parts;
+  }
+
+  // `col.op.value`, where the value may itself contain dots (an ISO timestamp),
+  // or a nested `and(...)` group.
   function term(expression: string): (row: Row) => boolean {
+    if (expression.startsWith("and(") && expression.endsWith(")")) {
+      const all = splitTerms(expression.slice(4, -1)).map(term);
+      return (row) => all.every((f) => f(row));
+    }
     const first = expression.indexOf(".");
     const second = expression.indexOf(".", first + 1);
     const column = expression.slice(0, first);
@@ -254,7 +305,7 @@ vi.mock("@/lib/supabase-server", () => {
       eq(col: string, value: unknown) { filters.push((row) => row[col] === value); return b; },
       is(col: string, value: unknown) { filters.push((row) => (row[col] ?? null) === value); return b; },
       or(expression: string) {
-        const any = expression.split(",").map(term);
+        const any = splitTerms(expression).map(term);
         filters.push((row) => any.some((f) => f(row)));
         return b;
       },
@@ -423,6 +474,10 @@ describe("repairIncompleteRefunds — running twice over the same order", () => 
       store_credit_redeemed_cents: 500,
       refunded_at: "2026-08-20T00:00:00Z",
     })];
+    // The points debit this refund gives back. Without a `redeem` row on file
+    // nothing was ever taken, and points_restore is correctly not planned —
+    // same rule as the store-credit redemption below.
+    db.points_ledger = [{ order_id: ORDER_ID, reason: "redeem" }];
     // The redemption this refund returns. Without a redemption row on file
     // there is nothing for refundStoreCreditForOrder to give back, and the
     // effect is correctly not planned at all.
@@ -440,6 +495,7 @@ describe("repairIncompleteRefunds — running twice over the same order", () => 
     expect(effects.refundStoreCreditForOrder).toHaveBeenCalledTimes(1);
     expect(db.orders[0].refund_amount).toBe(4999);
     expect(db.points_ledger).toEqual([
+      { order_id: ORDER_ID, reason: "redeem" },
       { order_id: ORDER_ID, reason: "order_refund_reversal" },
       { order_id: ORDER_ID, reason: "order_refund_points_restore" },
     ]);
@@ -656,5 +712,89 @@ describe("an effect that can never write", () => {
     expect(second.repaired).toBe(0);
     expect(effects.reverseOrderPoints).not.toHaveBeenCalled();
     expect(effects.restoreRedeemedPoints).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE SCAN WINDOW IS A WINDOW AGAIN — FIX WAVE 3.
+//
+// `refunded_at.is.null` was UNBOUNDED by the lookback: a refund from 2020 sat
+// inside a one-day window. And the refund_amount repair deliberately never
+// stamps refunded_at, so every order this sweep touched stayed in scope
+// forever. New refunds sort at the BACK of `ORDER BY updated_at ASC`, behind
+// that entire accumulated history — so once it passed the 5000-row scan
+// ceiling, a brand-new incomplete refund became permanently unreachable, and
+// the `scanTruncated` flag that would have said so had no consumer anywhere in
+// the repository.
+// ---------------------------------------------------------------------------
+describe("the lookback window bounds BOTH disjuncts", () => {
+  const old = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString();
+  const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
+
+  it("leaves behind a refunded_at-NULL order that has not been touched in the lookback", async () => {
+    db.orders = [refundedOrder({ order_id: "ancient", refunded_at: null, updated_at: old })];
+
+    const result = await repairIncompleteRefunds({ lookbackDays: 90 });
+
+    expect(result.scanned).toBe(0);
+    expect(db.orders[0].refund_amount).toBe(0);
+  });
+
+  it("still selects the PRIMARY case: refunded now, refunded_at never written", async () => {
+    db.orders = [refundedOrder({ order_id: "today", refunded_at: null, updated_at: recent })];
+
+    const result = await repairIncompleteRefunds({ lookbackDays: 90 });
+
+    expect(result).toMatchObject({ scanned: 1, repaired: 1 });
+    expect(db.orders[0].refund_amount).toBe(4999);
+  });
+
+  it("still selects an order whose refunded_at IS inside the window", async () => {
+    db.orders = [refundedOrder({ order_id: "dated", refunded_at: recent, updated_at: old })];
+
+    const result = await repairIncompleteRefunds({ lookbackDays: 90 });
+
+    expect(result).toMatchObject({ scanned: 1, repaired: 1 });
+  });
+});
+
+describe("hitting the scan ceiling", () => {
+  /** Correct, already-repaired refunds: read, plan nothing, and go on forever. */
+  function inertRefunds(count: number, prefix: string): Row[] {
+    return Array.from({ length: count }, (_, index) => refundedOrder({
+      id: `${prefix}-${index}`,
+      order_id: `${prefix}-${index}`,
+      refund_amount: 4999,
+      // Sorted before the victim below, so they are read first.
+      updated_at: `2026-08-01T00:00:${String(index % 60).padStart(2, "0")}.${String(index).padStart(4, "0")}Z`,
+    }));
+  }
+
+  it("does not cry truncation when the whole window was in fact scanned", async () => {
+    db.orders = inertRefunds(5000, "inert");
+
+    const result = await repairIncompleteRefunds();
+
+    expect(result.scanned).toBe(5000);
+    expect(result.scanTruncated).toBeUndefined();
+    expect(effects.recordSystemAlert).not.toHaveBeenCalled();
+  });
+
+  it("raises a CRITICAL alert when rows really are left unread", async () => {
+    db.orders = [
+      ...inertRefunds(5000, "inert"),
+      refundedOrder({ id: "victim", order_id: "victim", refund_amount: 0, updated_at: "2026-08-02T00:00:00Z" }),
+    ];
+
+    const result = await repairIncompleteRefunds();
+
+    expect(result.scanTruncated).toBe(true);
+    // The whole finding: this flag was returned and nobody read it, so the one
+    // condition under which the scan cannot reach a row that needs repair was
+    // silent in practice.
+    const alerted = (effects.recordSystemAlert.mock.calls as unknown as Array<[{ type: string; severity: string }]>)
+      .map((call) => call[0]);
+    expect(alerted.map((a) => a.type)).toContain("refund_scan_truncated");
+    expect(alerted.find((a) => a.type === "refund_scan_truncated")!.severity).toBe("critical");
   });
 });

@@ -98,32 +98,81 @@ export async function repairMissingShippingCosts(options?: {
 
   const result: ShippingCostRepairResult = { scanned: 0, repaired: 0, failed: 0 };
 
-  const { data, error } = await supabaseAdmin
-    .from("orders")
-    .select(
-      "order_id, label_purchased_at, label_voided_at, shippo_transaction_id, actual_shipping_cost_cents, postage_cost_cents",
-    )
-    .not("label_purchased_at", "is", null)
-    .gte("label_purchased_at", since)
-    // A voided label's postage was refunded — never re-charge it.
-    .is("label_voided_at", null)
-    // ABSENCE BELONGS IN THE QUERY, NOT IN JAVASCRIPT. Selecting the oldest N
-    // labels and THEN filtering for a missing cost meant `limit` bounded the
-    // rows SCANNED, not the rows to repair: once the oldest N were fixed every
-    // later tick re-read those same N, found nothing to do, and never reached
-    // the orders behind them. With the condition pushed down, `limit` bounds
-    // CANDIDATES and the sweep advances.
-    .is("actual_shipping_cost_cents", null)
-    .order("label_purchased_at", { ascending: true })
-    .limit(limit);
+  // EVERY CONDITION THAT DEFINES A CANDIDATE BELONGS IN THE QUERY.
+  //
+  // `shippo_transaction_id IS NOT NULL` lived only in the JavaScript predicate,
+  // so `limit` bounded the rows SCANNED rather than the candidates: fifty orders
+  // with a label_purchased_at and no transaction id (a thin transaction_created
+  // delivery produces exactly that) filled the page forever, nothing was ever
+  // repaired behind them, and the run reported {scanned:50, repaired:0,
+  // failed:0} — indistinguishable from "nothing to do", with no alert at all.
+  const candidateQuery = () =>
+    supabaseAdmin
+      .from("orders")
+      .select(
+        "order_id, label_purchased_at, label_voided_at, shippo_transaction_id, actual_shipping_cost_cents, postage_cost_cents",
+      )
+      .not("label_purchased_at", "is", null)
+      .not("shippo_transaction_id", "is", null)
+      .gte("label_purchased_at", since)
+      // A voided label's postage was refunded — never re-charge it.
+      .is("label_voided_at", null)
+      // ABSENCE BELONGS IN THE QUERY, NOT IN JAVASCRIPT. Selecting the oldest N
+      // labels and THEN filtering for a missing cost meant `limit` bounded the
+      // rows SCANNED, not the rows to repair: once the oldest N were fixed every
+      // later tick re-read those same N, found nothing to do, and never reached
+      // the orders behind them. With the condition pushed down, `limit` bounds
+      // CANDIDATES and the sweep advances.
+      .is("actual_shipping_cost_cents", null);
+
+  // BOTH ENDS OF THE WINDOW, BECAUSE A PERMANENTLY UNREPAIRABLE ROW MUST NOT BE
+  // ABLE TO HIDE EVERY LABEL BOUGHT SINCE.
+  //
+  // Whether a row can be repaired is only knowable by asking Shippo, so it
+  // cannot be expressed as a query condition the way absence can: a label whose
+  // transaction never settles (status not SUCCESS, or a bare rate reference)
+  // matches the predicate above forever. Ordered oldest-first alone, `limit` of
+  // those squatters is enough to halt the sweep permanently, and the only signal
+  // was a deduped warning. Oldest neglect still leads — it is the most likely to
+  // age out of the lookback — but half the budget is spent on the NEWEST
+  // candidates, so today's orders are always reachable and the backlog drains
+  // from both ends towards whatever core is genuinely unrepairable.
+  const oldestLimit = Math.max(1, Math.ceil(limit / 2));
+  const newestLimit = Math.max(0, limit - oldestLimit);
+
+  // order_id IS A TIEBREAK, NOT DECORATION. Labels bought in the same batch
+  // share a label_purchased_at to the second, and with ties the two ends of the
+  // scan can return the SAME rows — which would quietly halve the budget and
+  // hide the newest orders behind a tie at the oldest end.
+  const [oldest, newest] = await Promise.all([
+    candidateQuery()
+      .order("label_purchased_at", { ascending: true })
+      .order("order_id", { ascending: true })
+      .limit(oldestLimit),
+    newestLimit > 0
+      ? candidateQuery()
+        .order("label_purchased_at", { ascending: false })
+        .order("order_id", { ascending: false })
+        .limit(newestLimit)
+      : Promise.resolve({ data: [], error: null }),
+  ]);
 
   // A sweep that cannot read is not a sweep that found nothing.
-  if (error) throw error;
+  if (oldest.error) throw oldest.error;
+  if (newest.error) throw newest.error;
+
+  const seen = new Set<string>();
+  const rows: ShippingCostCandidate[] = [];
+  for (const row of [...(oldest.data ?? []), ...(newest.data ?? [])] as ShippingCostCandidate[]) {
+    if (seen.has(row.order_id)) continue;
+    seen.add(row.order_id);
+    rows.push(row);
+  }
 
   // Second line of defence: the same rule as a pure predicate, so the sweep is
   // still correct if the query above is ever loosened.
-  const candidates = findOrdersMissingShippingCost((data ?? []) as ShippingCostCandidate[]);
-  result.scanned = (data ?? []).length;
+  const candidates = findOrdersMissingShippingCost(rows);
+  result.scanned = rows.length;
   if (candidates.length === 0) return result;
 
   const failures: Array<{ orderId: string; error: string }> = [];
@@ -164,13 +213,30 @@ export async function repairMissingShippingCosts(options?: {
   }
 
   if (manual.length > 0 && await manualEntryStateChanged(manual)) {
+    // A HALTED SWEEP IS NOT A WARNING.
+    //
+    // Severity here used to be flat `warning` — no email — for a condition that
+    // includes "every slot this run had is held by a row that can never be
+    // repaired, so nothing behind them will ever be reached". Two-ended
+    // scanning means newer orders still get through, but a backlog that fills
+    // the whole budget is still the sweep telling the operator it has stopped
+    // making progress, and that has to reach a person. A smaller backlog is
+    // still a standing condition rather than an event, so it stays a warning.
+    //
+    // Both are deduped on the backlog's state (see manualEntryStateChanged), so
+    // neither can storm: the row is written when the backlog CHANGES, not on
+    // every tick.
+    const halted = manual.length >= limit;
     await recordSystemAlert({
       type: MANUAL_ENTRY_ALERT,
-      severity: "warning",
-      message:
-        `${manual.length} order(s) have a label whose postage cannot be read back from Shippo. `
-        + "Enter the cost by hand in Admin -> Orders; no automatic repair is possible.",
-      context: { orders: manual.slice(0, 25), total: manual.length },
+      severity: halted ? "critical" : "warning",
+      message: halted
+        ? `${manual.length} order(s) have a label whose postage cannot be read back from Shippo — `
+          + "enough to consume this sweep's entire per-run budget, so it is no longer making progress "
+          + "on the oldest end of the backlog. Enter these costs by hand in Admin -> Orders."
+        : `${manual.length} order(s) have a label whose postage cannot be read back from Shippo. `
+          + "Enter the cost by hand in Admin -> Orders; no automatic repair is possible.",
+      context: { orders: manual.slice(0, 25), total: manual.length, sweepBudgetExhausted: halted },
     }).catch((alertError) => {
       console.error("Unable to record a shipping-cost manual-entry alert", alertError);
     });
@@ -261,7 +327,18 @@ async function resolveSettledCents(order: ShippingCostCandidate): Promise<number
   const status = String(transaction.data.status ?? "");
   if (status !== "SUCCESS") {
     throw new ManualEntryRequired(
-      `Shippo reports this transaction as ${status || "an unknown status"}, not SUCCESS — no postage to record`,
+      `Shippo reports this transaction as ${status || "an unknown status"}, not SUCCESS — no postage to record`
+      + (status === "REFUNDED"
+        // NAME THE ONE CASE WHERE HAND-ENTERING A COST IS WRONG. A REFUNDED
+        // transaction is a label voided outside this app, so label_voided_at is
+        // NULL locally and the admin screen will ACCEPT a hand-entered figure
+        // with no override — charging profit for postage the carrier gave back.
+        ? ". This label was VOIDED and its postage refunded: do NOT enter a cost by hand unless the carrier "
+          + "declined the refund, in which case the entry needs overrideVoidedLabel."
+        : status === "QUEUED" || status === "WAITING"
+          // Nor is an unsettled purchase a permanent condition.
+          ? ". The purchase has not settled yet; the next sweep will record it once it does."
+          : ""),
     );
   }
 
