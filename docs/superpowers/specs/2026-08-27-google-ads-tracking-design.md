@@ -210,7 +210,9 @@ load.
 
 `sendGoogleConversion` returns a not-configured result, having sent nothing, unless all of
 `GOOGLE_ADS_DEVELOPER_TOKEN`, `GOOGLE_ADS_CUSTOMER_ID`, `GOOGLE_ADS_CLIENT_ID`,
-`GOOGLE_ADS_CLIENT_SECRET` and `GOOGLE_ADS_REFRESH_TOKEN` are present and non-empty.
+`GOOGLE_ADS_CLIENT_SECRET`, `GOOGLE_ADS_REFRESH_TOKEN` and the numeric
+`GOOGLE_ADS_PURCHASE_CONVERSION_ACTION_ID` are present and non-empty (six values, not five —
+without the conversion action id there is nothing to report against).
 Partial configuration is a refusal, never a best-effort attempt — an incomplete
 credential set must never produce a partially-identified conversion.
 
@@ -380,6 +382,13 @@ Every step is yours; none can be done from this repository. Nothing below spends
    count *One*, and attribution per your preference. **Count = One** is what makes
    Google's own dedup agree with ours.
 7. Record the conversion ID (`AW-XXXXXXXXX`) and each action's conversion label.
+7a. **Also record each conversion action's NUMERIC id** — a different identifier from the
+    label, and the one the REST API needs. The label is the opaque string in
+    `send_to: 'AW-123/AbC-D_efG'`; the numeric id appears in the conversion action's URL in
+    the Google Ads UI and forms `customers/<cid>/conversionActions/<numeric id>`. Sending the
+    label where the id belongs yields a resource name Google cannot resolve, and it fails as a
+    rejected upload rather than as anything visible in the browser. **The original design
+    conflated these two; this is the correction.**
 
 **C. Enhanced Conversions (server leg)**
 8. Enable Enhanced Conversions for leads/web on the Purchase action, choosing the **API**
@@ -398,7 +407,8 @@ Every step is yours; none can be done from this repository. Nothing below spends
 | Variable | Where | Notes |
 |---|---|---|
 | `NEXT_PUBLIC_GOOGLE_ADS_ID` | Vercel, production | `AW-…`. Public by design. |
-| `NEXT_PUBLIC_GOOGLE_PURCHASE_LABEL` | Vercel, production | Conversion label. Public by design. |
+| `NEXT_PUBLIC_GOOGLE_PURCHASE_LABEL` | Vercel, production | gtag conversion label, for the browser leg's `send_to`. Public by design. |
+| `GOOGLE_ADS_PURCHASE_CONVERSION_ACTION_ID` | Vercel, production, secret | The **numeric** conversion action id, for the REST API. NOT the same value as the label above. |
 | `GOOGLE_ADS_DEVELOPER_TOKEN` | Vercel, production, secret | Never `NEXT_PUBLIC_`. |
 | `GOOGLE_ADS_CUSTOMER_ID` | Vercel, production, secret | Digits only, no dashes. |
 | `GOOGLE_ADS_CLIENT_ID` / `_CLIENT_SECRET` / `_REFRESH_TOKEN` | Vercel, production, secret | OAuth triple. |
