@@ -10,6 +10,17 @@
         "--executable-path", "/opt/pw-browsers/chromium",
         "--isolated"
       ]
+    },
+    "snap-ads": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote@0.1.38",
+        "https://mcp.snapchat.com/ads",
+        "--static-oauth-client-info",
+        "{\"client_id\":\"claude-snap-ads\",\"scope\":\"snapads.read\"}"
+      ]
     }
   }
 }
