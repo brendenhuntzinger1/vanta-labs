@@ -77,7 +77,15 @@ async function applyInventoryDelta(adjustment: InventoryAdjustment, signedQty: n
 export interface InventoryDecrementResult {
   /** Distinct stock lines this order asked to move. */
   attempted: number;
-  /** Lines whose RPC failed outright. Stock did not move for these. */
+  /**
+   * Lines whose RPC failed outright. Stock did not move for these.
+   *
+   * COUNTED SEPARATELY FROM `errors`, which is capped. This was
+   * `failed: errors.length` against a list that stops growing at 5, so an order
+   * with six or more failing lines reported `failed: 5` — understating the
+   * damage in the operator alert and in every caller that reasons about
+   * "how much of this order moved".
+   */
   failed: number;
   /** First few failure messages, for the operator alert. */
   errors: string[];
@@ -100,10 +108,12 @@ export interface InventoryDecrementResult {
 export async function decrementInventoryForOrder(items: OrderItemRef[]): Promise<InventoryDecrementResult> {
   const adjustments = planInventoryAdjustments(items);
   const errors: string[] = [];
+  let failed = 0;
   for (const adjustment of adjustments) {
     try {
       await applyInventoryDelta(adjustment, -adjustment.quantity);
     } catch (error) {
+      failed += 1;
       console.error("Unable to decrement inventory for", adjustment, error);
       if (errors.length < 5) {
         errors.push(
@@ -117,7 +127,12 @@ export async function decrementInventoryForOrder(items: OrderItemRef[]): Promise
   // A sale just changed what is left on the shelf; the cached catalog would
   // keep advertising the pre-sale count for up to a minute otherwise.
   invalidateCatalogCache();
-  return { attempted: adjustments.length, failed: errors.length, errors };
+  // NOT-FAILED IS NOT THE SAME AS MOVED. adjust_inventory_on_sale is a no-op for
+  // an untracked slug and clamps rather than going negative, so a clean return
+  // means "the RPC accepted the line", not "a unit left the shelf". Callers may
+  // rely on `failed > 0` meaning something definitely did not move; they may not
+  // rely on `failed === 0` meaning every unit did.
+  return { attempted: adjustments.length, failed, errors };
 }
 
 // Atomic exactly-once claim for an order's restock. Flips inventory_restocked_at

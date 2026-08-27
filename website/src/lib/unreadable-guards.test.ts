@@ -131,15 +131,22 @@ vi.mock("@/lib/supabase-server", () => ({
 
 const { reverseOrderPoints, restoreRedeemedPoints, redeemPoints, getPointsBalance } = await import("@/lib/membership");
 const { refundStoreCreditForOrder } = await import("@/lib/store-credit");
+const { getEffectiveCommissionPercent } = await import("@/lib/ambassador-commission");
 
 const ORDER = "order-guard-1";
 const USER = "user-guard-1";
+const AMBASSADOR = "amb-guard-1";
 
 beforeEach(() => {
   db.tables = {
     orders: [{ order_id: ORDER, customer_user_id: USER, points_earned: 120, points_redeemed: 500 }],
     points_ledger: [],
     store_credit_ledger: [],
+    ambassadors: [{ id: AMBASSADOR, commission_percent: 25, commission_percent_locked: true }],
+    commission_tier_rules: [
+      { id: "t1", name: "base", min_monthly_sales: 0, commission_percent: 10, position: 1, is_active: true },
+    ],
+    referral_orders: [],
   };
   db.fail = [];
 });
@@ -300,5 +307,41 @@ describe("restoreRedeemedPoints — restore what the LEDGER says was taken", () 
     // A second refund event for the same order must not push it past 1000.
     await restoreRedeemedPoints(ORDER);
     expect(await getPointsBalance(USER)).toBe(1000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-1: THE SAME DEFECT, FOUR LINES FROM WHERE IT WAS FIXED.
+//
+// ensureCommissionRecord throws when its `ambassadors` read fails
+// (payment-webhook.ts). Four lines later it called
+// getEffectiveCommissionPercent, which read THE SAME ROW OF THE SAME TABLE and
+// discarded the error — so the ambassador's admin-locked rate silently became
+// the fallback plus a tier. The commission row was then written, referral_orders
+// existed, and the accrual sweep selects on the ABSENCE of that row, so nothing
+// ever revisited it: permanently wrong money from one blip, with no alert.
+// ---------------------------------------------------------------------------
+describe("getEffectiveCommissionPercent — the ambassadors read", () => {
+  it("honours an admin-locked rate when the row reads cleanly", async () => {
+    const effective = await getEffectiveCommissionPercent({ ambassadorId: AMBASSADOR, fallbackPercent: 8 });
+    expect(effective).toEqual({ percent: 25, tierName: null });
+  });
+
+  it("REFUSES rather than quietly paying the fallback when the read fails", async () => {
+    db.fail = [{ table: "ambassadors", op: "select", error: TIMEOUT_ERROR }];
+
+    await expect(
+      getEffectiveCommissionPercent({ ambassadorId: AMBASSADOR, fallbackPercent: 8 }),
+    ).rejects.toMatchObject({ code: "57014" });
+  });
+
+  it("still treats a genuinely MISSING ambassador as the fallback, not an error", async () => {
+    db.tables.ambassadors = [];
+
+    const effective = await getEffectiveCommissionPercent({ ambassadorId: AMBASSADOR, fallbackPercent: 8 });
+    // No locked row, one tier at threshold 0, zero qualifying sales -> the tier
+    // applies because its threshold is met. The point is that it resolved at
+    // all rather than throwing.
+    expect(effective.percent).toBe(10);
   });
 });

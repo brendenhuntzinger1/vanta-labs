@@ -36,7 +36,12 @@ const decrementInventoryForOrder = vi.fn(async () => {
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/inventory-fulfillment", () => ({ decrementInventoryForOrder }));
-vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: vi.fn(async () => {}) }));
+const alerts: Array<{ type: string; message: string; context?: Record<string, unknown> }> = [];
+vi.mock("@/lib/monitoring", () => ({
+  recordSystemAlert: vi.fn(async (alert: { type: string; message: string; context?: Record<string, unknown> }) => {
+    alerts.push(alert);
+  }),
+}));
 vi.mock("@/lib/ledger", () => ({ PAID_ORDER_STATUSES: new Set(["paid"]) }));
 
 const ORIGINAL_ROW = {
@@ -122,6 +127,11 @@ beforeEach(() => {
   state.insertedOrderIds = [];
   state.existingOrderIds = new Set();
   state.inventoryCalls = 0;
+  alerts.length = 0;
+  decrementInventoryForOrder.mockImplementation(async () => {
+    state.inventoryCalls += 1;
+    return { attempted: 1, failed: 0, errors: [] as string[] };
+  });
 });
 
 describe("a double-click cannot ship two free parcels", () => {
@@ -185,5 +195,50 @@ describe("a double-click cannot ship two free parcels", () => {
     expect(second.orderId).not.toBe(first.orderId);
     expect(second.duplicate).toBeFalsy();
     expect(state.insertedOrderIds).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-3 — A FIFTH DEAD ALERT SITE OF THE SAME CLASS.
+//
+// decrementInventoryForOrder is best-effort per line and NEVER throws, so the
+// try/catch this alert lived in was unreachable code. Both payment-webhook
+// lanes were converted to read the returned outcome; this third caller was
+// missed. Real stock leaves the warehouse for a replacement, every line fails,
+// and nothing at all is recorded.
+// ---------------------------------------------------------------------------
+describe("a replacement whose stock decrement did not move anything", () => {
+  it("raises the critical alert the try/catch could never reach", async () => {
+    decrementInventoryForOrder.mockResolvedValueOnce({
+      attempted: 2,
+      failed: 2,
+      errors: ["p1: adjust_inventory_on_sale unavailable", "p2: adjust_inventory_on_sale unavailable"],
+    });
+
+    await create("dead-alert-1");
+
+    const alert = alerts.find((entry) => entry.type === "replacement_inventory_not_decremented");
+    expect(alert).toBeDefined();
+    expect(alert!.message).toContain("2 of 2");
+    expect(alert!.context).toMatchObject({ attempted: 2, failed: 2 });
+  });
+
+  it("reports a PARTIAL failure too, with the true counts", async () => {
+    decrementInventoryForOrder.mockResolvedValueOnce({
+      attempted: 3,
+      failed: 1,
+      errors: ["p3: adjust_inventory_on_sale unavailable"],
+    });
+
+    await create("dead-alert-2");
+
+    const alert = alerts.find((entry) => entry.type === "replacement_inventory_not_decremented");
+    expect(alert!.message).toContain("1 of 3");
+  });
+
+  it("says nothing when every line moved", async () => {
+    await create("dead-alert-3");
+
+    expect(alerts.find((entry) => entry.type === "replacement_inventory_not_decremented")).toBeUndefined();
   });
 });

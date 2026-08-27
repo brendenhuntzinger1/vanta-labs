@@ -340,6 +340,52 @@ describe("cancelling an order that was paid through the MANUAL lane", () => {
     expect(db.restocked).toHaveLength(0);
   });
 
+  // FIX WAVE 4 (F-10) — "THE FALLBACK FAILED" AND "NO STOCK MOVED" ARE
+  // DIFFERENT FACTS, AND ONE BOOLEAN SAID BOTH.
+  //
+  // When the fallback decrement moves SOME lines and errors on others, the units
+  // that did move are gone from the count and the latch stays NULL, so a later
+  // cancel takes the release branch and never puts them back. The latch STAYS
+  // NULL — restockInventoryForOrder returns every line, so writing it would
+  // invent units for the lines that never moved, and this codebase's rule is
+  // that under-restock is recoverable and over-restock oversells. What was
+  // missing is that anyone was told WHICH failure it was.
+  it("names a PARTIAL decrement separately, so the lost units can be corrected by hand", async () => {
+    const reservation = await import("@/lib/inventory-reservation");
+    const fulfillment = await import("@/lib/inventory-fulfillment");
+    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true });
+    vi.mocked(fulfillment.decrementInventoryForOrder).mockResolvedValueOnce({
+      attempted: 3,
+      failed: 1,
+      errors: ["p3: adjust_inventory_on_sale unavailable"],
+    });
+
+    await expect(approveManualPayment()).resolves.toBeTruthy();
+
+    expect(db.order.paid_side_effects_at).toBeNull();
+    const types = db.alerts.map((a) => a.type);
+    expect(types).toContain("unsafe_effect_failed_inventory_decrement");
+    expect(types).toContain("inventory_partially_decremented");
+    const partial = db.alerts.find((a) => a.type === "inventory_partially_decremented")!;
+    expect(partial.message).toContain("2 of 3");
+    expect(partial.message).toContain("will NOT put them back");
+  });
+
+  it("does NOT raise the partial alert when nothing moved at all", async () => {
+    const reservation = await import("@/lib/inventory-reservation");
+    const fulfillment = await import("@/lib/inventory-fulfillment");
+    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true });
+    vi.mocked(fulfillment.decrementInventoryForOrder).mockResolvedValueOnce({
+      attempted: 3,
+      failed: 3,
+      errors: ["p1: down", "p2: down", "p3: down"],
+    });
+
+    await expect(approveManualPayment()).resolves.toBeTruthy();
+
+    expect(db.alerts.map((a) => a.type)).not.toContain("inventory_partially_decremented");
+  });
+
   it("still RELEASES rather than restocks an order that was never paid", async () => {
     // The phantom-stock guard. An unpaid order's units were never decremented,
     // so restocking would INVENT three units and oversell them.

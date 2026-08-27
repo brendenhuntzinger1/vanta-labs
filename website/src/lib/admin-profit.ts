@@ -300,10 +300,22 @@ function toOrderProfit(order: OrderRecord, result: OrderProfitResult, overlay: S
 // ---- Single order (Order Details page) ----
 
 export async function getOrderProfit(orderId: string): Promise<OrderProfit | null> {
-  const [{ data: order }, config] = await Promise.all([
+  // NULL MEANS "NO SUCH ORDER", AND NOTHING ELSE.
+  //
+  // This destructured only `{ data: order }` and dropped the error, so a
+  // statement timeout, a pooler 503 or a schema-cache miss — none of which
+  // supabase-js throws for — came back as `null` and every caller read it as
+  // "the order does not exist". recordActualShippingCost was rewritten to tell
+  // the two apart ("a throw is an unreadable order, null is a missing one") but
+  // the throw could never happen, so the sweep still reported "Order not found"
+  // for the single most likely read to fail, on rows that plainly do exist.
+  // Both callers outside this file already do `.catch(() => null)`, so a throw
+  // costs a profit panel, not a page.
+  const [{ data: order, error }, config] = await Promise.all([
     supabaseAdmin.from("orders").select(ORDER_FIELDS).eq("order_id", orderId).maybeSingle(),
     getProfitSettings(),
   ]);
+  if (error) throw error;
   if (!order) return null;
 
   const record = order as OrderRecord;
@@ -705,6 +717,12 @@ export function shouldWriteShippingAudit(
   return !(existing.length > 0 && existing[0].exactCostCents === amountCents);
 }
 
+function describeReadError(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  const message = (error as { message?: unknown } | null)?.message;
+  return message == null ? String(error) : String(message);
+}
+
 export async function recordActualShippingCost(input: RecordShippingCostInput): Promise<{ ok: boolean; error?: string }> {
   const amountCents = Math.max(0, Math.round(input.amountCents));
   const now = new Date().toISOString();
@@ -718,11 +736,13 @@ export async function recordActualShippingCost(input: RecordShippingCostInput): 
   try {
     before = await getOrderProfit(input.orderId);
   } catch (profitError) {
+    // A POSTGREST ERROR IS A PLAIN OBJECT, NOT AN Error. `String(err)` on one
+    // renders "[object Object]", which tells an operator nothing at all — and
+    // this is the branch that exists precisely so they are told the real cause
+    // instead of "Order not found".
     return {
       ok: false,
-      error: `Could not read this order's profit before recording its shipping cost: ${
-        profitError instanceof Error ? profitError.message : String(profitError)
-      }`,
+      error: `Could not read this order's profit before recording its shipping cost: ${describeReadError(profitError)}`,
     };
   }
   if (!before) return { ok: false, error: "Order not found" };

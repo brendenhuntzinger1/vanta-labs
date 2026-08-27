@@ -71,6 +71,30 @@ vi.mock("@/lib/payment-provider", async () => {
   };
 });
 
+// F-11: the four refund side-effects on this lane were bare `catch {}`. Driving
+// a real failure through needs one of them to actually fail.
+const effectFailure = { membershipRevocation: false, storeCredit: false };
+vi.mock("@/lib/membership-billing", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/membership-billing")>();
+  return {
+    ...actual,
+    revokeMembershipForRefund: vi.fn(async (userId: string) => {
+      if (effectFailure.membershipRevocation) throw new Error("membership revoke failed");
+      return actual.revokeMembershipForRefund(userId);
+    }),
+  };
+});
+vi.mock("@/lib/store-credit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/store-credit")>();
+  return {
+    ...actual,
+    refundStoreCreditForOrder: vi.fn(async (orderId: string) => {
+      if (effectFailure.storeCredit) throw new Error("store credit ledger unreadable");
+      return actual.refundStoreCreditForOrder(orderId);
+    }),
+  };
+});
+
 const ADMIN = { username: "owner", role: "super_admin" as const };
 const session = vi.fn(async () => ADMIN as { username: string; role: string } | null);
 vi.mock("@/lib/admin-auth", () => ({
@@ -165,6 +189,8 @@ beforeEach(() => {
   seedStore(harness.db, PRODUCTS);
   vi.clearAllMocks();
   session.mockResolvedValue(ADMIN);
+  effectFailure.membershipRevocation = false;
+  effectFailure.storeCredit = false;
 });
 
 // ===========================================================================
@@ -671,5 +697,62 @@ describe("the ambassador's commission follows the money back", () => {
     const { orderId, amount } = await deliveredOrder();
     await reimburse(orderId, { refundAmount: amount });
     expect(harness.db.rows("referral_orders")).toHaveLength(0);
+  });
+});
+
+// ===========================================================================
+// F-11 — THE ONE LANE WHERE A SWALLOWED FAILURE IS PERMANENT.
+//
+// Four refund side-effects here were wrapped in bare `catch {}` — no log, no
+// alert, nobody told. The reimbursement claim above is single-use, so a
+// swallowed failure is not retried by this route ever again. Wave 3 converted
+// several previously-silent returns inside those functions into throws, which
+// only moved MORE failure modes into a catch that told nobody. And
+// revokeMembershipForRefund is not covered by any sweep at all, so a refunded
+// member silently keeps member pricing, free shipping and their points
+// multiplier.
+// ===========================================================================
+describe("a refund side-effect that fails is not silent", () => {
+  function alerts() {
+    return harness.db.table("system_alerts").filter((row) => row.type === "admin_refund_effect_failed");
+  }
+
+  it("records the money and STILL alerts when store credit cannot be returned", async () => {
+    const { orderId, amount } = await deliveredOrder();
+    effectFailure.storeCredit = true;
+
+    const { status } = await reimburse(orderId, { refundAmount: amount });
+
+    // Non-blocking: the reimbursement was already sent by hand and recorded.
+    expect(status).toBe(200);
+    expect(Number(order(orderId)?.refund_amount)).toBeCloseTo(amount, 2);
+    const raised = alerts();
+    expect(raised).toHaveLength(1);
+    expect(raised[0].context).toMatchObject({ effect: "store_credit_refund", retriedAutomatically: true });
+    expect(String(raised[0].severity)).toBe("critical");
+  });
+
+  it("says NOTHING RETRIES IT for the membership revocation, which no sweep covers", async () => {
+    const { orderId, amount } = await deliveredOrder();
+    const row = harness.db.table("orders").find((o) => o.order_id === orderId)!;
+    row.order_type = "membership";
+    row.customer_user_id = "user-member-1";
+    effectFailure.membershipRevocation = true;
+
+    await reimburse(orderId, { refundAmount: amount });
+
+    const raised = alerts();
+    expect(raised.map((entry) => (entry.context as { effect: string }).effect)).toContain("membership_revocation");
+    const revocation = raised.find((entry) => (entry.context as { effect: string }).effect === "membership_revocation")!;
+    expect(revocation.context).toMatchObject({ retriedAutomatically: false });
+    expect(String(revocation.message)).toContain("NOTHING retries this one");
+  });
+
+  it("stays quiet when every effect succeeds", async () => {
+    const { orderId, amount } = await deliveredOrder();
+
+    await reimburse(orderId, { refundAmount: amount });
+
+    expect(alerts()).toHaveLength(0);
   });
 });

@@ -186,14 +186,22 @@ const db: {
   orders: Row[];
   points_ledger: Row[];
   store_credit_ledger: Row[];
+  // The truncation alert is now deduped against what is already on file, so
+  // the double has to answer for this table too.
+  system_alerts: Row[];
   beforeOrdersUpdate: null | (() => void);
-} = { orders: [], points_ledger: [], store_credit_ledger: [], beforeOrdersUpdate: null };
+  /** Make the one-row truncation PROBE (range(n, n)) fail, and only that. */
+  failTruncationProbe: boolean;
+} = {
+  orders: [], points_ledger: [], store_credit_ledger: [], system_alerts: [],
+  beforeOrdersUpdate: null, failTruncationProbe: false,
+};
 
 const effects = vi.hoisted(() => ({
   reverseOrderPoints: vi.fn(),
   restoreRedeemedPoints: vi.fn(),
   refundStoreCreditForOrder: vi.fn(),
-  recordSystemAlert: vi.fn(async () => {}),
+  recordSystemAlert: vi.fn(async (_alert: Record<string, unknown>) => { void _alert; }),
 }));
 
 vi.mock("server-only", () => ({}));
@@ -243,6 +251,12 @@ vi.mock("@/lib/supabase-server", () => {
       const all = splitTerms(expression.slice(4, -1)).map(term);
       return (row) => all.every((f) => f(row));
     }
+    // Nested or(...), which the window now uses to keep an aged, never-repaired
+    // refund in scope without letting the whole set grow for ever.
+    if (expression.startsWith("or(") && expression.endsWith(")")) {
+      const any = splitTerms(expression.slice(3, -1)).map(term);
+      return (row) => any.some((f) => f(row));
+    }
     const first = expression.indexOf(".");
     const second = expression.indexOf(".", first + 1);
     const column = expression.slice(0, first);
@@ -257,6 +271,7 @@ vi.mock("@/lib/supabase-server", () => {
         case "gt": return Number(actual ?? 0) > Number(value);
         // NULL never satisfies a range comparison — the whole point of #1.
         case "gte": return actual != null && String(actual) >= String(value);
+        case "lte": return actual != null && Number(actual) <= Number(value);
         default: throw new Error(`unsupported or() operator in test: ${op}`);
       }
     };
@@ -274,6 +289,12 @@ vi.mock("@/lib/supabase-server", () => {
     let skip = 0;
 
     function settle() {
+      if (
+        db.failTruncationProbe && name === "orders" && action === "select"
+        && take === 1 && skip >= 5000
+      ) {
+        return { data: null, error: { message: "probe read failed" } };
+      }
       if (action === "update" && name === "orders") db.beforeOrdersUpdate?.();
       const hit = rows.filter((row) => filters.every((f) => f(row)));
       if (action === "update") {
@@ -350,7 +371,9 @@ beforeEach(() => {
   db.orders = [];
   db.points_ledger = [];
   db.store_credit_ledger = [];
+  db.system_alerts = [];
   db.beforeOrdersUpdate = null;
+  db.failTruncationProbe = false;
   // Each effect writes its own ledger row the first time, exactly as the real
   // functions do, so the SECOND run's absence check reads state the first run
   // genuinely produced.
@@ -716,28 +739,62 @@ describe("an effect that can never write", () => {
 });
 
 // ---------------------------------------------------------------------------
-// THE SCAN WINDOW IS A WINDOW AGAIN — FIX WAVE 3.
+// THE WINDOW BOUNDS THE SET THAT GROWS, NOT THE CASE THE SWEEP EXISTS FOR.
 //
-// `refunded_at.is.null` was UNBOUNDED by the lookback: a refund from 2020 sat
-// inside a one-day window. And the refund_amount repair deliberately never
-// stamps refunded_at, so every order this sweep touched stayed in scope
-// forever. New refunds sort at the BACK of `ORDER BY updated_at ASC`, behind
-// that entire accumulated history — so once it passed the 5000-row scan
-// ceiling, a brand-new incomplete refund became permanently unreachable, and
-// the `scanTruncated` flag that would have said so had no consumer anywhere in
-// the repository.
+// Wave 3 found that `refunded_at.is.null` was UNBOUNDED by the lookback — a
+// refund from 2020 sat inside a one-day window — and that the set never shrank,
+// so it eventually passed the 5000-row ceiling and hid brand-new refunds behind
+// it. Its fix bounded that disjunct by `updated_at >= since`, which removed the
+// growth by removing THE SWEEP'S PRIMARY CASE: an aged, never-repaired refund
+// (payment_status flipped to 'refunded', refund_amount and refunded_at never
+// written, untouched since) has an old updated_at and fell straight out of the
+// window — {"scanned":0,"repaired":0}, revenue never reduced, no alert.
+//
+// The bound now applies only to rows that can accumulate: a refunded_at-NULL
+// row with no recorded amount stays in scope at any age, and one that already
+// HAS an amount ages out once it has been quiet for a whole lookback.
 // ---------------------------------------------------------------------------
-describe("the lookback window bounds BOTH disjuncts", () => {
+describe("the lookback window", () => {
   const old = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000).toISOString();
   const recent = new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString();
 
-  it("leaves behind a refunded_at-NULL order that has not been touched in the lookback", async () => {
-    db.orders = [refundedOrder({ order_id: "ancient", refunded_at: null, updated_at: old })];
+  it("reaches an AGED refund whose amount was never recorded (F-5)", async () => {
+    db.orders = [refundedOrder({ order_id: "ancient", refunded_at: null, refund_amount: null, updated_at: old })];
+
+    const result = await repairIncompleteRefunds({ lookbackDays: 90 });
+
+    expect(result).toMatchObject({ scanned: 1, repaired: 1 });
+    expect(db.orders[0].refund_amount).toBe(4999);
+  });
+
+  it("reaches an aged refund whose amount is a legacy 0", async () => {
+    db.orders = [refundedOrder({ order_id: "ancient-zero", refunded_at: null, refund_amount: 0, updated_at: old })];
+
+    const result = await repairIncompleteRefunds({ lookbackDays: 90 });
+
+    expect(result).toMatchObject({ scanned: 1, repaired: 1 });
+    expect(db.orders[0].refund_amount).toBe(4999);
+  });
+
+  // The half of wave 3's bound that was doing real work: without this the
+  // refunded_at-NULL set only ever grows, and past the scan ceiling it hides
+  // newer refunds behind rows that need nothing.
+  it("ages out a quiet refunded_at-NULL order whose amount is already recorded", async () => {
+    db.orders = [refundedOrder({ order_id: "settled", refunded_at: null, refund_amount: 4999, updated_at: old })];
 
     const result = await repairIncompleteRefunds({ lookbackDays: 90 });
 
     expect(result.scanned).toBe(0);
-    expect(db.orders[0].refund_amount).toBe(0);
+  });
+
+  // ... but only once it has been quiet. A row this sweep repaired last tick
+  // has a fresh updated_at, so its remaining ledger effects are still in scope.
+  it("keeps a recently-written refunded_at-NULL order in scope for its ledger effects", async () => {
+    db.orders = [refundedOrder({ order_id: "just-repaired", refunded_at: null, refund_amount: 4999, updated_at: recent })];
+
+    const result = await repairIncompleteRefunds({ lookbackDays: 90 });
+
+    expect(result.scanned).toBe(1);
   });
 
   it("still selects the PRIMARY case: refunded now, refunded_at never written", async () => {
@@ -796,5 +853,75 @@ describe("hitting the scan ceiling", () => {
       .map((call) => call[0]);
     expect(alerted.map((a) => a.type)).toContain("refund_scan_truncated");
     expect(alerted.find((a) => a.type === "refund_scan_truncated")!.severity).toBe("critical");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A DIAGNOSTIC MUST NOT BE ABLE TO CANCEL REAL WORK (F-6), AND A STANDING
+// CONDITION MUST NOT EMAIL THE OPERATOR EVERY THIRTY MINUTES (F-7).
+// ---------------------------------------------------------------------------
+describe("the truncation probe and its alert", () => {
+  function inert(count: number, prefix: string): Row[] {
+    return Array.from({ length: count }, (_, index) => refundedOrder({
+      id: `${prefix}-${index}`,
+      order_id: `${prefix}-${index}`,
+      refund_amount: 4999,
+      updated_at: `2026-08-01T00:00:${String(index % 60).padStart(2, "0")}.${String(index).padStart(4, "0")}Z`,
+    }));
+  }
+
+  it("still writes the repairs it planned when the probe cannot be read (F-6)", async () => {
+    db.orders = [
+      ...inert(5000, "inert"),
+      // Ten orders that DO need the refund_amount repair, planned before the
+      // ceiling is reached.
+      ...Array.from({ length: 10 }, (_, index) => refundedOrder({
+        id: `broken-${index}`,
+        order_id: `broken-${index}`,
+        refund_amount: 0,
+        updated_at: `2026-07-01T00:00:${String(index).padStart(2, "0")}Z`,
+      })),
+    ];
+    db.failTruncationProbe = true;
+
+    const result = await repairIncompleteRefunds();
+
+    console.log(`\n=== unreadable truncation probe ===\n${JSON.stringify(result)}`);
+    expect(result.repaired).toBe(10);
+    expect(db.orders.filter((row) => String(row.order_id).startsWith("broken-") && row.refund_amount === 4999)).toHaveLength(10);
+    // Unanswerable means "assume the alarming side", not "throw the run away".
+    expect(result.scanTruncated).toBe(true);
+  });
+
+  it("reports truncation once, not once per tick (F-7)", async () => {
+    db.orders = [
+      ...inert(5000, "inert"),
+      refundedOrder({ id: "victim", order_id: "victim", refund_amount: 0, updated_at: "2026-08-02T00:00:00Z" }),
+    ];
+    effects.recordSystemAlert.mockImplementation(async (alert: Row) => {
+      db.system_alerts.push({ ...alert, created_at: new Date(Date.now() + db.system_alerts.length).toISOString(), resolved_at: null });
+    });
+
+    for (let tick = 0; tick < 5; tick++) await repairIncompleteRefunds();
+
+    const truncationAlerts = db.system_alerts.filter((a) => a.type === "refund_scan_truncated");
+    console.log(`\n=== refund_scan_truncated over 5 ticks ===\nalert rows written: ${truncationAlerts.length}`);
+    expect(truncationAlerts).toHaveLength(1);
+  });
+
+  it("reports it again once a human has resolved the standing row", async () => {
+    db.orders = [
+      ...inert(5000, "inert"),
+      refundedOrder({ id: "victim", order_id: "victim", refund_amount: 0, updated_at: "2026-08-02T00:00:00Z" }),
+    ];
+    effects.recordSystemAlert.mockImplementation(async (alert: Row) => {
+      db.system_alerts.push({ ...alert, created_at: new Date(Date.now() + db.system_alerts.length).toISOString(), resolved_at: null });
+    });
+
+    await repairIncompleteRefunds();
+    for (const row of db.system_alerts) row.resolved_at = new Date().toISOString();
+    await repairIncompleteRefunds();
+
+    expect(db.system_alerts.filter((a) => a.type === "refund_scan_truncated")).toHaveLength(2);
   });
 });

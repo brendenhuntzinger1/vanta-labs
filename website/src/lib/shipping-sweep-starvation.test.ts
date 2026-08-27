@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
-// `limit` MUST BOUND CANDIDATES, AND AN UNREPAIRABLE ROW MUST NOT HIDE THE REST.
+// `limit` MUST BOUND THE SHIPPO CALLS, NOT WHICH ROWS ARE VISIBLE.
 //
-// Two separate starvation classes lived in this sweep, and the first was
-// completely silent:
+// Two starvation classes lived in this sweep, and the first was completely
+// silent:
 //
 //   CLASS A  `shippo_transaction_id IS NOT NULL` was enforced only in the
 //            JavaScript predicate, never in the query. `limit` therefore
@@ -18,13 +18,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 //            SUCCESS, or a bare rate reference) held every slot forever too.
 //            The docstring documented the ALERT STORM from these rows as fixed;
 //            it did not acknowledge that they also stop the sweep advancing.
-//            The only signal was a `warning` deliberately deduped to one row.
 //
-// Whether a row can be repaired is only knowable by asking Shippo, so it cannot
-// be a query condition the way absence can. The sweep therefore spends half its
-// budget on the NEWEST candidates, so today's orders are always reachable and
-// the backlog drains from both ends towards whatever core is genuinely stuck —
-// and says so loudly when that core fills the whole budget.
+// The FIRST attempt at class B split the budget oldest-half / newest-half. That
+// moved the starvation into the MIDDLE of the window: see
+// shipping-cost-repair-starvation.test.ts, which streams arrivals and is the
+// test that would have caught it. The design now pages the (cheap) candidate
+// SELECT across the whole window and spends the Shippo budget on rows with no
+// recorded probe outcome first, leaving known-unrepairable ones the leftovers.
 // ---------------------------------------------------------------------------
 
 type Row = Record<string, unknown>;
@@ -56,6 +56,7 @@ vi.mock("@/lib/supabase-server", () => {
     const filters: Array<(row: Row) => boolean> = [];
     const sortKeys: Array<{ col: string; asc: boolean }> = [];
     let take: number | null = null;
+    let skip = 0;
 
     function settle() {
       let out = rows.filter((row) => filters.every((f) => f(row))).map((row) => ({ ...row }));
@@ -71,6 +72,7 @@ vi.mock("@/lib/supabase-server", () => {
           return 0;
         });
       }
+      if (skip > 0) out = out.slice(skip);
       if (take != null) out = out.slice(0, take);
       return { data: out, error: null };
     }
@@ -87,6 +89,8 @@ vi.mock("@/lib/supabase-server", () => {
       gte(col: string, value: unknown) { filters.push((row) => String(row[col] ?? "") >= String(value)); return b; },
       order(col: string, opts?: { ascending?: boolean }) { sortKeys.push({ col, asc: opts?.ascending !== false }); return b; },
       limit(n: number) { take = n; return b; },
+      // Offset paging, as PostgREST implements .range(): inclusive both ends.
+      range(from: number, to: number) { skip = from; take = to - from + 1; return b; },
       insert(next: Row | Row[]) {
         for (const row of Array.isArray(next) ? next : [next]) rows.push({ ...row });
         return Promise.resolve({ data: null, error: null });
@@ -185,10 +189,16 @@ describe("class B — labels whose lookup can never settle", () => {
       candidate({ order_id: "victim", label_purchased_at: day(20) }),
     ];
 
-    const result = await repairMissingShippingCosts({ now: new Date("2026-08-27T00:00:00Z") });
+    // ONE TICK OF LAG, NOT FOREVER — and that lag is the point. Reserving a
+    // slice of every run for the newest end is what starved the middle of the
+    // window (F-4). Instead, the first run learns that the fifty are
+    // unrepairable and the second spends its budget on everything else. The
+    // finding was `repaired: 0` on EVERY tick, for ever.
+    const first = await repairMissingShippingCosts({ now: new Date("2026-08-27T00:00:00Z") });
+    expect(first.failed).toBe(50);
+    const second = await repairMissingShippingCosts({ now: new Date("2026-08-27T00:30:00Z") });
 
-    // The whole finding: this used to be repaired: 0, for ever.
-    expect(result.repaired).toBe(1);
+    expect(second.repaired).toBe(1);
     expect(db.orders.find((o) => o.order_id === "victim")!.actual_shipping_cost_cents).toBe(742);
   });
 
@@ -200,7 +210,10 @@ describe("class B — labels whose lookup can never settle", () => {
 
     let repaired = 0;
     for (let tick = 0; tick < 4; tick++) {
-      repaired += (await repairMissingShippingCosts({ now: new Date("2026-08-27T00:00:00Z") })).repaired;
+      repaired += (await repairMissingShippingCosts({
+        now: new Date(Date.UTC(2026, 7, 27, 0, tick * 30),
+        ),
+      })).repaired;
     }
 
     expect(repaired).toBe(60);
@@ -217,7 +230,9 @@ describe("class B — labels whose lookup can never settle", () => {
     expect(alert).toBeDefined();
     // A `warning` with no email was the only signal that the sweep had stopped.
     expect(alert!.severity).toBe("critical");
-    expect((alert!.context as { sweepBudgetExhausted: boolean }).sweepBudgetExhausted).toBe(true);
+    // The reported backlog is now the WHOLE set, not the capped detail list —
+    // `total` used to be read off a 25-row slice and understated it.
+    expect((alert!.context as { total: number }).total).toBe(50);
   });
 
   it("stay a warning while the backlog is small enough to work around", async () => {
@@ -254,7 +269,7 @@ describe("ordinary backlogs still converge", () => {
     let result = await repairMissingShippingCosts({ now: new Date("2026-08-27T00:00:00Z") });
     while (result.repaired > 0 && ticks < 10) {
       ticks += 1;
-      result = await repairMissingShippingCosts({ now: new Date("2026-08-27T00:00:00Z") });
+      result = await repairMissingShippingCosts({ now: new Date(Date.UTC(2026, 7, 27, 0, ticks * 30)) });
     }
 
     expect(db.orders.filter((o) => o.actual_shipping_cost_cents == null)).toHaveLength(0);

@@ -149,11 +149,32 @@ export async function getEffectiveCommissionPercent(input: {
   ambassadorId: string;
   fallbackPercent: number;
 }): Promise<EffectiveCommission> {
-  const { data: ambassador } = await supabaseAdmin
+  // A LOCKED RATE THAT COULD NOT BE READ IS NOT AN ABSENT ONE.
+  //
+  // The error here was discarded, four lines from the `if (ambassadorRow.error)
+  // throw` that ensureCommissionRecord performs against THE SAME TABLE AND THE
+  // SAME ROW (payment-webhook.ts). One transient read failure made `ambassador`
+  // undefined, so `commission_percent_locked` read false and the ambassador's
+  // negotiated, admin-locked rate was silently replaced by the fallback plus
+  // whatever tier the loop below happened to match. The commission row was then
+  // written, referral_orders existed, and the accrual sweep — which selects on
+  // the ABSENCE of that row — never revisited it. Permanently wrong money,
+  // silently, from a blip.
+  //
+  // Throwing is the recoverable direction: ensureCommissionRecord's caller
+  // leaves the accrual undone, the absence stays, and the sweep re-derives it on
+  // the next tick from a read that worked. The other two reads in this function
+  // (listCommissionTierRules, getQualifyingMonthlySalesCount) already throw, so
+  // this was also the one inconsistent path.
+  //
+  // A genuinely MISSING ambassador row is still not an error: `data` is null
+  // with no error, and the fallback percent applies exactly as before.
+  const { data: ambassador, error: ambassadorError } = await supabaseAdmin
     .from("ambassadors")
     .select("commission_percent, commission_percent_locked")
     .eq("id", input.ambassadorId)
     .maybeSingle();
+  if (ambassadorError) throw ambassadorError;
 
   const ambassadorPercent = ambassador ? Number(ambassador.commission_percent ?? input.fallbackPercent) : input.fallbackPercent;
 

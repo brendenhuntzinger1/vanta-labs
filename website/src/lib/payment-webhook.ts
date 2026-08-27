@@ -1359,12 +1359,35 @@ export async function finalizeManualPayment(
     // the "restocked" branch and added units that were never removed: invented
     // stock, which oversells. Exactly the direction the latch exists to avoid.
     //
-    // Both callees now report their outcome, so the latch is written only when
-    // the shelf really moved, and the failure raises the alert it always
-    // promised. Nothing is re-thrown: the payment is verified and approved, and
-    // throwing here would report a fully successful payment as failed while
-    // skipping the audit row, the push notification and the Shippo push — none
-    // of which the admin's retry can recover, because it returns alreadyPaid.
+    // Both callees now report their outcome, so the failure raises the alert it
+    // always promised. Nothing is re-thrown: the payment is verified and
+    // approved, and throwing here would report a fully successful payment as
+    // failed while skipping the audit row, the push notification and the Shippo
+    // push — none of which the admin's retry can recover, because it returns
+    // alreadyPaid.
+    //
+    // "NO STOCK MOVED" AND "THE DECREMENT DID NOT FINISH" ARE DIFFERENT FACTS.
+    //
+    // A single boolean conflated them. When the fallback decrement moves SOME
+    // lines and errors on others, `stockCommitted` stayed false, the latch
+    // stayed NULL, and a later cancel read that NULL, took the release branch
+    // (order-cancellation-inventory.ts) and did not restock — so the units that
+    // DID leave the shelf were lost from the count permanently, with the
+    // operator told only "inventory_decrement failed".
+    //
+    // The latch still stays NULL on a partial, and deliberately: it means "this
+    // order's units left the shelf", restockInventoryForOrder returns EVERY
+    // line, and writing it here would invent units for the lines that never
+    // moved. This codebase's inventory rule is that under-restock is a
+    // recoverable inconvenience and over-restock is a money-losing oversell, so
+    // NULL is the correct direction. What was missing is that a person is told
+    // WHICH failure this is, with the numbers, so the count can be corrected by
+    // hand rather than silently drifting.
+    //
+    // Note also what `failed === 0` does NOT prove: adjust_inventory_on_sale
+    // no-ops for an untracked slug, so the latch means "the RPC accepted every
+    // line", not "the shelf really moved". The earlier wording overclaimed.
+    let partialLines: { attempted: number; failed: number; errors: string[] } | null = null;
     try {
       const fin = await finalizeInventoryForOrder(orderId);
       if (fin.degraded || fin.finalized === 0) {
@@ -1372,6 +1395,7 @@ export async function finalizeManualPayment(
           (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
         );
         if (decrement.failed > 0) {
+          if (decrement.failed < decrement.attempted) partialLines = decrement;
           throw new Error(
             `${decrement.failed} of ${decrement.attempted} stock line(s) could not be decremented: `
             + decrement.errors.join("; "),
@@ -1383,6 +1407,25 @@ export async function finalizeManualPayment(
       console.error("Unable to decrement inventory for order", orderId, inventoryError);
       await recordSystemAlert(unsafeEffectAlert("inventory_decrement", orderId, inventoryError))
         .catch(() => {});
+      if (partialLines) {
+        await recordSystemAlert({
+          type: "inventory_partially_decremented",
+          severity: "critical",
+          message:
+            `Order ${orderId} decremented ${partialLines.attempted - partialLines.failed} of `
+            + `${partialLines.attempted} stock line(s) and then failed. Those units HAVE left the count, but `
+            + "paid_side_effects_at is deliberately left NULL (returning every line on a cancel would invent "
+            + "stock for the lines that never moved), so cancelling this order will NOT put them back. "
+            + "Correct the count by hand for the lines that did move.",
+          context: {
+            orderId,
+            attempted: partialLines.attempted,
+            moved: partialLines.attempted - partialLines.failed,
+            failed: partialLines.failed,
+            errors: partialLines.errors,
+          },
+        }).catch(() => {});
+      }
     }
     // Same deferred push as the card path. An admin waiting on an approval
     // click deserves the same protection from a slow third party as a shopper
@@ -1428,6 +1471,10 @@ export async function finalizeManualPayment(
     // The latch means "this order's units left the shelf". Writing it after a
     // failed decrement is what lets a later cancel invent stock, so it stays
     // NULL — the conservative direction this codebase's inventory rule requires.
+    // The two ways of getting here are told apart above: a total failure is only
+    // unsafe_effect_failed_inventory_decrement, a PARTIAL one also raises
+    // inventory_partially_decremented, which names the units a cancel will not
+    // return.
     console.error(
       "Leaving paid_side_effects_at NULL for manual order",
       orderId,

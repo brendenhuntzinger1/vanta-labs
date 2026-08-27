@@ -75,15 +75,22 @@ vi.mock("@/lib/monitoring", () => ({
 // The authoritative record of what was actually spent. Controlled per test so
 // the "webhook was thin" path can be driven deliberately.
 const transactionResponse: { value: unknown } = { value: null };
+// KEYED BY TRANSACTION ID, because the monotonicity guard now reads back the
+// RECORDED transaction as well as the incoming one — the only way to compare
+// two creation times on the same clock. A single shared response would let a
+// test pass by accident on the wrong lookup.
+const transactionsById: Record<string, unknown> = {};
 vi.mock("@/lib/shippo/client", async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();
   return {
     ...actual,
-    getTransaction: vi.fn(async () =>
-      transactionResponse.value
+    getTransaction: vi.fn(async (id: string) => {
+      const keyed = transactionsById[String(id)];
+      if (keyed) return { ok: true, data: keyed };
+      return transactionResponse.value
         ? { ok: true, data: transactionResponse.value }
-        : { ok: false, kind: "unavailable", message: "Shippo unreachable", safeToRetry: true },
-    ),
+        : { ok: false, kind: "unavailable", message: "Shippo unreachable", safeToRetry: true };
+    }),
     createShipmentWithRates: vi.fn(async () => ({ ok: false, kind: "rejected", message: "n/a", safeToRetry: false })),
     createShippoOrder: vi.fn(async () => ({ ok: false, kind: "rejected", message: "n/a", safeToRetry: false })),
   };
@@ -111,6 +118,7 @@ function seed(overrides: Record<string, unknown> = {}) {
   state.updates = [];
   state.costCalls = [];
   transactionResponse.value = null;
+  for (const key of Object.keys(transactionsById)) delete transactionsById[key];
   costOutcome.value = { ok: true };
   alerts.length = 0;
 }
@@ -333,6 +341,9 @@ describe("a late transaction_created for an OLDER label", () => {
       label_purchased_at: "2026-08-23T10:00:05Z",
       fulfillment_status: "label_purchased",
     });
+    // The live label, as SHIPPO records it. Both sides of the comparison come
+    // from the same clock now.
+    transactionsById["shippo-txn-2"] = { status: "SUCCESS", object_id: "shippo-txn-2", object_created: "2026-08-23T09:55:00Z" };
 
     const outcome = await applyTransactionCreated(staleVoidedLabel as never);
 
@@ -353,6 +364,7 @@ describe("a late transaction_created for an OLDER label", () => {
       label_purchased_at: "2026-08-22T08:00:00Z",
       fulfillment_status: "packed",
     });
+    transactionsById["shippo-txn-1"] = { status: "SUCCESS", object_id: "shippo-txn-1", object_created: "2026-08-22T07:30:00Z" };
 
     // An even older transaction — T0 — arriving late. Different id, so the old
     // rule called it a replacement and un-voided the order outright.
@@ -368,6 +380,7 @@ describe("a late transaction_created for an OLDER label", () => {
       label_purchased_at: "2026-08-23T10:00:05Z",
       fulfillment_status: "label_purchased",
     });
+    transactionsById["shippo-txn-2"] = { status: "SUCCESS", object_id: "shippo-txn-2", object_created: "2026-08-23T09:55:00Z" };
 
     await applyTransactionCreated(staleVoidedLabel as never);
 
@@ -383,12 +396,63 @@ describe("a late transaction_created for an OLDER label", () => {
       label_purchased_at: "2026-08-22T08:00:00Z",
       fulfillment_status: "packed",
     });
+    transactionsById["shippo-txn-VOIDED"] = { status: "REFUNDED", object_id: "shippo-txn-VOIDED", object_created: "2026-08-22T07:00:00Z" };
 
     await applyTransactionCreated(withExpandedRate as never);
 
     expect(state.order?.shippo_transaction_id).toBe("shippo-txn-1");
     expect(state.order?.label_voided_at).toBeNull();
     expect(state.costCalls).toHaveLength(1);
+  });
+
+  // ------------------------------------------------------------------------
+  // F-8: THE GUARD USED TO COMPARE TWO DIFFERENT CLOCKS.
+  //
+  // `orders.label_purchased_at` is RECEIPT time (`now`), written when the
+  // delivery lands — not the transaction's creation time. Shippo replays late,
+  // so a delayed T1 delivery pushes label_purchased_at ahead of a genuine
+  // replacement T2 that was bought EARLIER in wall-clock terms but is the live
+  // label. The old comparison then refused T2 as stale: the order kept the dead
+  // transaction, T2's postage was never recorded, and the only signal was a
+  // warning with no email.
+  // ------------------------------------------------------------------------
+  it("accepts a live replacement whose predecessor's webhook arrived late (F-8)", async () => {
+    seed({
+      // T1's transaction_created was delivered ten minutes late, so the LOCAL
+      // receipt time on the row runs well ahead of the remote creation time.
+      shippo_transaction_id: "shippo-txn-LATE",
+      label_purchased_at: "2026-08-23T10:10:00Z",
+      postage_cost_cents: 742,
+      fulfillment_status: "label_purchased",
+    });
+    // On SHIPPO's clock, T1 was created at 10:00 and the replacement at 10:03.
+    transactionsById["shippo-txn-LATE"] = { status: "SUCCESS", object_id: "shippo-txn-LATE", object_created: "2026-08-23T10:00:00Z" };
+    const replacement = { ...withExpandedRate, object_id: "shippo-txn-REPLACEMENT", object_created: "2026-08-23T10:03:00Z" };
+
+    const outcome = await applyTransactionCreated(replacement as never);
+
+    expect(outcome).not.toMatchObject({ reason: "stale_transaction" });
+    expect(state.order?.shippo_transaction_id).toBe("shippo-txn-REPLACEMENT");
+    // The real postage for the live label reaches profit.
+    expect(state.costCalls).toHaveLength(1);
+    expect(state.costCalls[0]).toMatchObject({ amountCents: 845 });
+  });
+
+  it("still refuses an older transaction once both creation times come from Shippo", async () => {
+    seed({
+      shippo_transaction_id: "shippo-txn-LIVE",
+      label_purchased_at: "2026-08-23T10:10:00Z",
+      postage_cost_cents: 1200,
+      fulfillment_status: "label_purchased",
+    });
+    transactionsById["shippo-txn-LIVE"] = { status: "SUCCESS", object_id: "shippo-txn-LIVE", object_created: "2026-08-23T10:05:00Z" };
+    const older = { ...withExpandedRate, object_id: "shippo-txn-OLDER", object_created: "2026-08-23T09:00:00Z" };
+
+    const outcome = await applyTransactionCreated(older as never);
+
+    expect(outcome).toMatchObject({ reason: "stale_transaction" });
+    expect(state.order?.shippo_transaction_id).toBe("shippo-txn-LIVE");
+    expect(state.costCalls).toHaveLength(0);
   });
 
   it("falls back to Shippo's live status when the delivery carries no timestamp", async () => {

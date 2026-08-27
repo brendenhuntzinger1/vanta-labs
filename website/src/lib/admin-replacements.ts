@@ -237,22 +237,43 @@ export async function createReplacementOrder(input: {
   // But it is NO LONGER SILENT. A swallowed failure here is precisely how
   // database stock drifts above the shelf — the units leave, nothing records
   // it, and the discrepancy only surfaces at a physical count months later.
+  //
+  // THE FAILURE IS THE RETURN VALUE, NOT AN EXCEPTION — AND THIS CALL SITE WAS
+  // THE FIFTH ONE THAT DID NOT KNOW IT. decrementInventoryForOrder is
+  // best-effort per line and never throws (its own comment now says so
+  // explicitly), so the try/catch below was unreachable code and this critical
+  // alert was dead. Both payment-webhook lanes were converted to read the
+  // returned outcome; this third caller was missed, so a replacement whose every
+  // stock line failed shipped real product and recorded nothing at all.
+  let decrement: Awaited<ReturnType<typeof decrementInventoryForOrder>>;
   try {
-    await decrementInventoryForOrder(
+    decrement = await decrementInventoryForOrder(
       replacementItems.map((item) => ({ product_id: item.product_id, quantity: item.quantity })) as Array<{ product_id?: string | null; quantity?: number | null }>,
     );
   } catch (error) {
+    // It does not throw today. If it ever starts to, that is still a failure to
+    // deduct, not a reason to lose the alert.
+    decrement = {
+      attempted: replacementItems.length,
+      failed: replacementItems.length,
+      errors: [error instanceof Error ? error.message : String(error)],
+    };
+  }
+  if (decrement.failed > 0) {
     await recordSystemAlert({
       type: "replacement_inventory_not_decremented",
       severity: "critical",
       message:
-        `Replacement ${orderNumber} shipped stock that was NOT deducted from inventory. ` +
+        `Replacement ${orderNumber} shipped stock that was NOT deducted from inventory ` +
+        `(${decrement.failed} of ${decrement.attempted} line(s) failed). ` +
         `Adjust it by hand or the count will read high.`,
       context: {
         replacementOrderId: orderId,
         originalOrderId: input.originalOrderId,
         items: replacementItems.map((item) => ({ productId: item.product_id, quantity: item.quantity })),
-        reason: error instanceof Error ? error.message : String(error),
+        attempted: decrement.attempted,
+        failed: decrement.failed,
+        reason: decrement.errors.join("; "),
       },
     }).catch(() => undefined);
   }

@@ -101,22 +101,51 @@ export interface RefundLedgerFacts {
  * refunded_at IS NULL and was invisible to it.
  */
 function refundedWindow(since: string) {
-  // BOUNDED ON BOTH DISJUNCTS, OR THE SCAN SET ONLY EVER GROWS.
+  // BOUND THE SET THAT GROWS, NOT THE CASE THIS SWEEP EXISTS FOR.
   //
-  // `refunded_at.is.null` on its own is unbounded by the lookback — a refund
-  // from 2020 sits inside a one-day window — and the refund_amount repair
-  // deliberately never stamps refunded_at, so every order this sweep touches
-  // stayed in scope forever. New refunds sort at the BACK of `ORDER BY
-  // updated_at ASC`, behind that whole accumulated history, so once it passed
-  // MAX_SCAN_ROWS a brand-new incomplete refund became permanently unreachable
-  // and nothing said so.
+  // Two failures, in order, and this expression is the answer to both.
   //
-  // orders.updated_at is `not null default now()` (sql/orders-schema.sql), and
-  // every write path touches it, so bounding the null-refunded_at disjunct by it
-  // keeps the sweep's PRIMARY case — payment_status flipped to 'refunded' while
-  // refund_amount/refunded_at were never written — fully in scope while making
-  // the window a window again.
-  return `refunded_at.gte.${since},and(refunded_at.is.null,updated_at.gte.${since})`;
+  // FIRST: `refunded_at.is.null` alone is unbounded by the lookback — a refund
+  // from 2020 sits inside a one-day window. Worse, it never SHRINKS: a refunded
+  // order whose refunded_at was never written matches for ever whether or not
+  // there is anything left to do, so the set only accumulates. Once it passed
+  // MAX_SCAN_ROWS, a brand-new incomplete refund at the back of
+  // `ORDER BY updated_at ASC` became unreachable.
+  //
+  // SECOND: bounding that disjunct by `updated_at >= since` fixed the growth by
+  // deleting the sweep's PRIMARY case. An aged, never-repaired refund —
+  // payment_status flipped to 'refunded' while refund_amount and refunded_at
+  // were never written, untouched since — has an old updated_at, so it fell out
+  // of the window entirely: {"scanned":0,"repaired":0}, revenue never reduced,
+  // and no alert. That is precisely the historical backlog this branch exists
+  // to clear, and it was the one row shape guaranteed to be excluded.
+  //
+  // So the bound is applied only to the rows that can accumulate. A refunded
+  // order with refunded_at NULL is in scope when EITHER:
+  //
+  //   - it has no recorded refund amount (`refund_amount` NULL or <= 0). This is
+  //     the primary case, it is self-limiting (the repair writes the amount, so
+  //     the row leaves this arm on its first successful repair), and it stays in
+  //     scope at ANY age; or
+  //   - something wrote to it inside the window. That covers the follow-up
+  //     ledger effects of a row this sweep itself just repaired — the
+  //     refund_amount repair stamps updated_at, deliberately not refunded_at —
+  //     and it ages out once the row has been quiet for a whole lookback.
+  //
+  // What is excluded is exactly the class that used to pile up at the head of
+  // the scan: an old row with a refund amount already recorded and no write
+  // since. Those need nothing and cost a page slot every run.
+  //
+  // WRITTEN FLAT ON PURPOSE. This is an OR of AND groups — exactly the nesting
+  // depth already running in production — rather than an OR nested inside an
+  // AND. Same predicate, one less thing for PostgREST's parser to be subtle
+  // about on a query whose failure mode is "silently matches fewer rows".
+  return [
+    `refunded_at.gte.${since}`,
+    `and(refunded_at.is.null,refund_amount.is.null)`,
+    `and(refunded_at.is.null,refund_amount.lte.0)`,
+    `and(refunded_at.is.null,updated_at.gte.${since})`,
+  ].join(",");
 }
 
 /**
@@ -339,8 +368,23 @@ async function collectRepairablePages(input: {
         .order("updated_at", { ascending: true })
         .order("order_id", { ascending: true })
         .range(offset, offset);
-      if (probe.error) throw probe.error;
-      truncated = (probe.data ?? []).length > 0;
+      // A DIAGNOSTIC MUST NOT BE ABLE TO CANCEL REAL WORK.
+      //
+      // This used to `throw probe.error`, which threw away an entire run of
+      // already-planned repairs: measured at 10 repairs written with a healthy
+      // probe and 0 with an unreadable one, plus a critical cron_sweep_failed
+      // email. The probe answers one question — "are there rows past the
+      // ceiling?" — and it is asked only to avoid a false alarm on a window of
+      // exactly MAX_SCAN_ROWS. When it cannot be answered, assume the alarming
+      // side (there ARE unread rows) and carry on with the repairs already
+      // planned. The `if (error) throw` on the SCAN itself stays: that one is
+      // not a diagnostic, it is the sweep's sight.
+      if (probe.error) {
+        console.error("Refund scan truncation probe failed; assuming the window is truncated", probe.error);
+        truncated = true;
+      } else {
+        truncated = (probe.data ?? []).length > 0;
+      }
       break;
     }
   }
@@ -355,9 +399,42 @@ async function collectRepairablePages(input: {
  * row that needs repair was, in practice, silent. It is also not a transient:
  * the window is over the ceiling and stays there until the backlog clears.
  */
+const SCAN_TRUNCATED_ALERT = "refund_scan_truncated";
+
+/**
+ * Is this standing condition already on file and unresolved?
+ *
+ * Truncation is not an event: the window is over the ceiling and stays there
+ * until the backlog clears or someone widens it. `recordSystemAlert` has no
+ * dedup of any kind, so writing it on every tick produced a CRITICAL row — and
+ * therefore an operator email — every thirty minutes, indefinitely: 48 a day
+ * for one unchanging fact, burying the alerts that ARE events. The sibling
+ * shipping sweep already deduped its standing condition on state; this one did
+ * not, which is the whole of the defect.
+ *
+ * Reported again the moment a human resolves the row, or if the check itself
+ * cannot be made — a duplicate alert is a smaller failure than a missing one.
+ */
+async function truncationAlreadyReported(): Promise<boolean> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("system_alerts")
+      .select("resolved_at, created_at")
+      .eq("type", SCAN_TRUNCATED_ALERT)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error) return false;
+    const latest = (data ?? [])[0] as { resolved_at?: string | null } | undefined;
+    return Boolean(latest) && !latest?.resolved_at;
+  } catch {
+    return false;
+  }
+}
+
 async function alertScanTruncated(result: RefundRepairResult): Promise<void> {
+  if (await truncationAlreadyReported()) return;
   await recordSystemAlert({
-    type: "refund_scan_truncated",
+    type: SCAN_TRUNCATED_ALERT,
     severity: "critical",
     message:
       `The refund repair sweep hit its ${MAX_SCAN_ROWS}-row scan ceiling with rows still unread, so refunds `

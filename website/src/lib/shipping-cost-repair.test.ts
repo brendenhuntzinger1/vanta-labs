@@ -49,13 +49,24 @@ vi.mock("@/lib/monitoring", () => ({
   recordSystemAlert: mocks.recordSystemAlert,
 }));
 
+// The real query PAGES the candidate select with .range() and reads the probe
+// backlog out of system_alerts, so the double has to answer both tables.
 vi.mock("@/lib/supabase-server", () => ({
   supabaseAdmin: {
     from: (table: string) => {
+      if (table === "system_alerts") {
+        const alerts = {
+          select: () => alerts,
+          eq: () => alerts,
+          order: () => alerts,
+          limit: async () => ({ data: [], error: null }),
+        };
+        return alerts;
+      }
       if (table !== "orders") throw new Error(`unexpected table in test: ${table}`);
-      // The real query now pushes the absence conditions down, so the mock
-      // honours them: a row whose cost is already recorded, or whose label was
-      // voided, is never returned at all.
+      // The real query pushes the absence conditions down, so the mock honours
+      // them: a row whose cost is already recorded, or whose label was voided,
+      // is never returned at all.
       const builder = {
         select: () => builder,
         not: () => builder,
@@ -65,9 +76,9 @@ vi.mock("@/lib/supabase-server", () => ({
           return builder;
         },
         order: () => builder,
-        limit: async () => {
+        range: async (from: number) => {
           const row = { ...mocks.row } as Record<string, unknown>;
-          const kept = conditions.every(([column, value]) => (row[column] ?? null) === value);
+          const kept = from === 0 && conditions.every(([column, value]) => (row[column] ?? null) === value);
           return { data: kept ? [row] : [], error: null };
         },
       };

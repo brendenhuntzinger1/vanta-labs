@@ -597,3 +597,64 @@ describe("recordActualShippingCost when its own void-check read fails", () => {
     expect(outcome.ok).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// F-2 — "ORDER NOT FOUND" WAS STILL WHAT A TRANSIENT PROFIT READ PRODUCED.
+//
+// recordActualShippingCost was rewritten to tell the two apart ("a throw is an
+// unreadable order, null is a missing one"), but getOrderProfit destructured
+// only `{ data: order }` and dropped the error — so the throw could never
+// happen and the operator was told the wrong cause for the single most likely
+// read to fail, on a row that plainly exists.
+// ---------------------------------------------------------------------------
+describe("recordActualShippingCost when the PROFIT read fails", () => {
+  const PROFIT_COLUMNS =
+    "order_id, order_number, order_type, subtotal, discount_amount, shipping_amount, tax_amount, "
+    + "refund_amount, amount_paid, payment_method, payment_status, paid_at, created_at, "
+    + "shipping_protection_fee, card_processing_fee, store_credit_redeemed_cents, points_redeemed";
+  const TIMEOUT = { code: "57014", message: "canceling statement due to statement timeout" };
+
+  beforeEach(() => {
+    seedLabelledOrder();
+    // The sweep's own shape: a bought label with no cost recorded yet.
+    db.orders[0].actual_shipping_cost_cents = null;
+    db.orders[0].shipping_cost_source = null;
+    db.failSelect = {};
+    shippo.getTransaction.mockResolvedValue({
+      ok: true as const,
+      data: { object_id: "txn-1", status: "SUCCESS", rate: { amount: "7.42", currency: "USD" } },
+    });
+  });
+
+  it("names the read failure, not a missing order", async () => {
+    db.failSelect[PROFIT_COLUMNS] = TIMEOUT;
+
+    const outcome = await recordActualShippingCost({ orderId: ORDER_ID, amountCents: 742, source: "shippo" });
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.error).toContain("statement timeout");
+    expect(outcome.error).not.toContain("Order not found");
+    expect(db.orders[0].actual_shipping_cost_cents).toBeNull();
+  });
+
+  it("makes the sweep count it as FAILED with the true cause", async () => {
+    db.failSelect[PROFIT_COLUMNS] = TIMEOUT;
+
+    const result = await repairMissingShippingCosts();
+
+    expect(result).toMatchObject({ repaired: 0, failed: 1 });
+    const alert = db.system_alerts.find((row) => row.type === "shipping_cost_unrecorded");
+    const failures = (alert!.context as { failures: Array<{ error: string }> }).failures;
+    expect(failures[0].error).toContain("statement timeout");
+  });
+
+  it("still says 'Order not found' for an order that genuinely is not there", async () => {
+    const outcome = await recordActualShippingCost({
+      orderId: "order-that-does-not-exist",
+      amountCents: 742,
+      source: "shippo",
+    });
+
+    expect(outcome).toMatchObject({ ok: false, error: "Order not found" });
+  });
+});

@@ -506,11 +506,30 @@ async function matchOrder(data: ShippoTransactionCreated): Promise<OrderRow | nu
  * live order, and recordActualShippingCost overwrote a CORRECT 1200 with the
  * refunded 742 while profit_finalized stayed true.
  *
- * The rule is monotonic: label facts only ever move forward. The transaction's
- * own creation time against the label already recorded answers it exactly;
- * when the delivery carries no timestamp, Shippo's live status for the incoming
- * transaction does — anything other than SUCCESS is a label that is not the one
- * this order should be costed on. When neither can be established, the row is
+ * The rule is monotonic: label facts only ever move forward.
+ *
+ * COMPARE LIKE WITH LIKE, OR THE GUARD REFUSES LIVE LABELS.
+ *
+ * This used to weigh Shippo's `object_created` for the INCOMING transaction
+ * against `orders.label_purchased_at` — and label_purchased_at is written as
+ * RECEIPT time (`now`), here and in service.ts, not as the transaction's
+ * creation time. Two clocks, and Shippo replays late, so the local one runs
+ * ahead of the remote one by however long a delivery was delayed:
+ *
+ *   t0     T1 bought in the dashboard
+ *   t0+3m  T2 bought in the dashboard (the real replacement)
+ *   t0+10m T1's transaction_created finally arrives -> label_purchased_at = t0+10m
+ *   t0+11m T2's event arrives: object_created (t0+3m) < label_purchased_at (t0+10m)
+ *
+ * The LIVE label was refused as stale, the order kept the dead transaction, T2's
+ * postage was never recorded, and the only trace was a `warning` with no email.
+ *
+ * So both sides of the comparison now come from Shippo: the incoming
+ * transaction's `object_created` against the RECORDED transaction's
+ * `object_created`, read back with a GET (which cannot buy anything). Only when
+ * one of those two creation times cannot be established at all does it fall
+ * back to the incoming transaction's live status — and that fallback is
+ * deliberately weak, so anything other than SUCCESS is refused and the row is
  * left alone, which is the direction that cannot destroy a correct value.
  */
 async function isNewerThanRecordedLabel(
@@ -518,11 +537,33 @@ async function isNewerThanRecordedLabel(
   transactionId: string,
   order: OrderRow,
 ): Promise<boolean> {
-  const eventCreatedAt = Date.parse(String(data.object_created ?? ""));
-  const recordedAt = Date.parse(String(order.label_purchased_at ?? ""));
-  if (Number.isFinite(eventCreatedAt) && Number.isFinite(recordedAt)) {
-    return eventCreatedAt >= recordedAt;
+  const recordedId = order.shippo_transaction_id ? String(order.shippo_transaction_id) : null;
+
+  // The incoming transaction's creation time, from the delivery if it carries
+  // one and from Shippo itself if it does not — a thin replay is not evidence
+  // about ordering, and the previous code let one through on status alone.
+  let incomingCreated = Date.parse(String(data.object_created ?? ""));
+  let incomingStatus = String(data.status ?? "").toUpperCase();
+  if (!Number.isFinite(incomingCreated)) {
+    const fetchedIncoming = await getTransaction(transactionId);
+    if (!fetchedIncoming.ok) return false;
+    incomingCreated = Date.parse(String(fetchedIncoming.data.object_created ?? ""));
+    incomingStatus = String(fetchedIncoming.data.status ?? "").toUpperCase();
   }
+
+  if (Number.isFinite(incomingCreated) && recordedId) {
+    const fetchedRecorded = await getTransaction(recordedId);
+    if (fetchedRecorded.ok) {
+      const recordedCreated = Date.parse(String(fetchedRecorded.data.object_created ?? ""));
+      if (Number.isFinite(recordedCreated)) return incomingCreated >= recordedCreated;
+      // A recorded transaction Shippo reports as REFUNDED or ERROR is not a
+      // label this order should be costed on, whatever its timestamps say.
+      const recordedStatus = String(fetchedRecorded.data.status ?? "").toUpperCase();
+      if (recordedStatus && recordedStatus !== "SUCCESS") return true;
+    }
+  }
+
+  if (incomingStatus) return incomingStatus === "SUCCESS";
 
   const fetched = await getTransaction(transactionId);
   if (!fetched.ok) return false;

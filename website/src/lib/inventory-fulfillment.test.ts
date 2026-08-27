@@ -1,5 +1,21 @@
-import { describe, expect, it } from "vitest";
-import { parseOrderItemRef, planInventoryAdjustments } from "./inventory-fulfillment";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// decrementInventoryForOrder needs the RPC and the catalog cache; everything
+// else in this file is pure.
+const rpcFailures = { forSlugs: new Set<string>() };
+vi.mock("@/lib/supabase-server", () => ({
+  supabaseAdmin: {
+    rpc: vi.fn(async (_name: string, args: { p_slug: string }) => {
+      void _name;
+      return rpcFailures.forSlugs.has(args.p_slug)
+        ? { data: null, error: { message: `adjust_inventory_on_sale failed for ${args.p_slug}` } }
+        : { data: null, error: null };
+    }),
+  },
+}));
+vi.mock("@/lib/catalog-cache", () => ({ invalidateCatalogCache: vi.fn() }));
+
+import { decrementInventoryForOrder, parseOrderItemRef, planInventoryAdjustments } from "./inventory-fulfillment";
 
 describe("parseOrderItemRef", () => {
   it("splits a bare slug into slug + no variant", () => {
@@ -78,5 +94,43 @@ describe("planInventoryAdjustments", () => {
     expect(planInventoryAdjustments([])).toEqual([]);
     // @ts-expect-error — defensive against a nullish payload at runtime.
     expect(planInventoryAdjustments(undefined)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-12 — `failed: errors.length` AGAINST A LIST THAT STOPS GROWING AT FIVE.
+//
+// The operator alert and, worse, the caller's "did any of this move?" reasoning
+// both read that number. Six or more failing lines reported five.
+// ---------------------------------------------------------------------------
+describe("decrementInventoryForOrder — the failure count", () => {
+  beforeEach(() => {
+    rpcFailures.forSlugs = new Set();
+  });
+
+  it("counts EVERY failing line, not just the ones it kept a message for", async () => {
+    const items = Array.from({ length: 7 }, (_, index) => ({ product_id: `slug-${index}`, quantity: 1 }));
+    rpcFailures.forSlugs = new Set(items.map((item) => item.product_id));
+
+    const result = await decrementInventoryForOrder(items);
+
+    expect(result.attempted).toBe(7);
+    expect(result.failed).toBe(7);
+    // The message list is still capped, on purpose — an alert is not a log.
+    expect(result.errors).toHaveLength(5);
+  });
+
+  it("reports a partial failure as partial", async () => {
+    const items = Array.from({ length: 4 }, (_, index) => ({ product_id: `slug-${index}`, quantity: 1 }));
+    rpcFailures.forSlugs = new Set(["slug-3"]);
+
+    const result = await decrementInventoryForOrder(items);
+
+    expect(result).toMatchObject({ attempted: 4, failed: 1 });
+  });
+
+  it("reports a clean pass as clean", async () => {
+    const result = await decrementInventoryForOrder([{ product_id: "slug-0", quantity: 2 }]);
+    expect(result).toMatchObject({ attempted: 1, failed: 0, errors: [] });
   });
 });

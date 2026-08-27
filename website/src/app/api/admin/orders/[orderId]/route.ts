@@ -16,9 +16,46 @@ import { updateCommissionOnRefund } from "@/lib/payment-webhook";
 import { restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
 import { revokeMembershipForRefund } from "@/lib/membership-billing";
 import { refundStoreCreditForOrder } from "@/lib/store-credit";
+import { recordSystemAlert } from "@/lib/monitoring";
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+/**
+ * Run one refund side-effect on the ADMIN MANUAL-REIMBURSEMENT lane, and make a
+ * failure reach a person.
+ *
+ * `NOT_SWEPT` names the effects nothing else will ever retry, so the alert can
+ * say whether a human has to act now or whether the sweep will pick it up.
+ */
+const NOT_SWEPT = new Set(["membership_revocation"]);
+
+async function runRefundEffect(
+  effect: string,
+  orderId: string,
+  run: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error("Admin refund side-effect failed", effect, orderId, detail);
+    const swept = !NOT_SWEPT.has(effect);
+    await recordSystemAlert({
+      type: "admin_refund_effect_failed",
+      severity: "critical",
+      message:
+        `A reimbursement was recorded for order ${orderId} but its ${effect} did not complete. `
+        + (swept
+          ? "The refund repair sweep will retry it; check that it clears."
+          : "NOTHING retries this one — the customer keeps member pricing, free shipping and their "
+            + "points multiplier until it is revoked by hand."),
+      context: { orderId, effect, detail, retriedAutomatically: swept },
+    }).catch((alertError) => {
+      console.error("Unable to record an admin refund effect alert", alertError);
+    });
+  }
 }
 
 async function getOrderWithItems(orderId: string) {
@@ -396,31 +433,37 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       // full refund - a partial refund leaves earned points untouched rather
       // than pro-rating them.
       if (isFullRefund) {
-        try {
-          await reverseOrderPoints(orderId);
-        } catch {
-          // Points reversal must not block the refund itself from completing.
-        }
-        try {
-          // Give back the points the customer spent on this order, since the
-          // discount those points bought is being fully undone.
-          await restoreRedeemedPoints(orderId);
-        } catch {
-          // Best-effort; never block the refund.
-        }
-        try {
-          await refundStoreCreditForOrder(orderId);
-        } catch {
-          // Store-credit re-credit is best-effort; never block the refund.
-        }
+        // BEST-EFFORT IS NOT THE SAME AS UNRECORDED.
+        //
+        // These four were bare `catch {}` — no log, no alert, nobody told. The
+        // reimbursement claim above is single-use, so a swallowed failure here
+        // is PERMANENT on this lane: the money went back and the effect never
+        // ran. It is the identical defect class this branch exists to close,
+        // on the one lane nothing else covers. Two of the four are swept
+        // (reverseOrderPoints and restoreRedeemedPoints by the refund sweep,
+        // which selects on ledger absence) — but only because the claim above
+        // sets payment_status and refunded_at, so the sweep can see the order.
+        // refundStoreCreditForOrder is swept too. revokeMembershipForRefund is
+        // NOT swept by anything, so a refunded member silently keeps member
+        // pricing, free shipping and their points multiplier until a human
+        // notices.
+        //
+        // Still non-blocking: the reimbursement is already recorded and
+        // throwing here would report a completed refund as a failure. The
+        // change is that every one of them now reaches an operator.
+        await runRefundEffect("points_reversal", orderId, () => reverseOrderPoints(orderId));
+        // Give back the points the customer spent on this order, since the
+        // discount those points bought is being fully undone.
+        await runRefundEffect("points_restore", orderId, () => restoreRedeemedPoints(orderId));
+        await runRefundEffect("store_credit_refund", orderId, () => refundStoreCreditForOrder(orderId));
         // A fully-refunded MEMBERSHIP order ends the membership immediately so
         // its benefits stop (member pricing, free shipping, points, etc.).
-        try {
-          if (String(order.order_type ?? "product") === "membership" && order.customer_user_id) {
-            await revokeMembershipForRefund(String(order.customer_user_id));
-          }
-        } catch {
-          // Best-effort; never block the refund.
+        if (String(order.order_type ?? "product") === "membership" && order.customer_user_id) {
+          await runRefundEffect(
+            "membership_revocation",
+            orderId,
+            () => revokeMembershipForRefund(String(order.customer_user_id)),
+          );
         }
         // INVENTORY IS NOT RESTOCKED HERE, DELIBERATELY.
         //
