@@ -69,11 +69,35 @@ create table public.order_items (
   unit_cost_cents integer
 );
 
+-- MIRRORS THE VERIFIED PRODUCTION COLUMN SET, NOT a convenient subset.
+--
+-- This fixture used to declare payment_status here. That column belongs to
+-- the SIBLING ledger, referral_orders; the commissions mirror calls it
+-- status. Because this was the only artefact in the repo carrying the wrong
+-- name, admin-profit's commission read agreed with the fixture and disagreed
+-- with production, and no test could see the difference. Keep this list in step
+-- with the live table.
+--
+-- commissions.partner_id is "not null references partners(id) on delete
+-- cascade" in production. The FK is not modelled here because this fixture
+-- carries no partners table -- nothing in this suite inserts a commission, so
+-- the constraint has nothing to enforce. Do not read the omission as a licence
+-- to write a commission with an unknown partner_id.
 create table public.commissions (
   id uuid primary key default gen_random_uuid(),
+  partner_id uuid not null,
   order_id text not null,
+  referral_code text,
+  commission_percent numeric(6,2),
   commission_amount numeric(12,2) not null default 0,
-  payment_status text not null default 'pending'
+  status text not null default 'pending',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  tier_name text,
+  ineligible_reason text,
+  fraud_flag boolean not null default false,
+  fraud_reason text,
+  customer_discount_percent numeric(6,2)
 );
 
 -- Only so admin-dashboard-rollups.sql compiles unedited; not exercised here.

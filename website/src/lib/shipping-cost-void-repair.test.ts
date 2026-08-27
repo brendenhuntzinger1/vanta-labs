@@ -170,7 +170,7 @@ vi.mock("@/lib/supabase-server", () => {
   return { supabaseAdmin: { from: (name: string) => builder(name) } };
 });
 
-import { recordActualShippingCost, getShippingCostAudit } from "@/lib/admin-profit";
+import { ORDER_FIELDS, recordActualShippingCost, getShippingCostAudit } from "@/lib/admin-profit";
 import { repairMissingShippingCosts } from "@/lib/shipping-cost-repair";
 
 const ORDER_ID = "order-void-1";
@@ -608,10 +608,10 @@ describe("recordActualShippingCost when its own void-check read fails", () => {
 // read to fail, on a row that plainly exists.
 // ---------------------------------------------------------------------------
 describe("recordActualShippingCost when the PROFIT read fails", () => {
-  const PROFIT_COLUMNS =
-    "order_id, order_number, order_type, subtotal, discount_amount, shipping_amount, tax_amount, "
-    + "refund_amount, amount_paid, payment_method, payment_status, paid_at, created_at, "
-    + "shipping_protection_fee, card_processing_fee, store_credit_redeemed_cents, points_redeemed";
+  // THE REAL SELECT LIST, NOT A COPY OF IT. This was a hand-written duplicate
+  // that had to be edited every time the profit read gained a column — and a
+  // duplicate that drifts is precisely how a stale fixture hides a defect.
+  const PROFIT_COLUMNS = ORDER_FIELDS;
   const TIMEOUT = { code: "57014", message: "canceling statement due to statement timeout" };
 
   beforeEach(() => {

@@ -66,8 +66,23 @@ export async function GET(request: Request) {
   // from the shared profit engine so the export never disagrees with the admin
   // order/dashboard figures.
   const includeProfit = canViewProfit(session.role);
+
+  // THE REVENUE COLUMNS HAVE TO DECOMPOSE. Since store credit and points became
+  // contra-revenue, `gross_revenue` equals `amount_paid` on a redeeming order —
+  // correct, but it means the export no longer shows that a redemption happened
+  // at all, and no combination of the remaining columns adds up to it. The three
+  // components (merchandise, other customer-paid fees, and the non-cash tender
+  // deducted) are exported alongside it so a row can be reconciled by whoever
+  // opens the file:
+  //
+  //   gross_revenue = merchandise_revenue + shipping_charged
+  //                 + additional_revenue + sales_tax_collected
+  //                 - credit_and_points_redeemed
   const profitHeader = [
     "gross_revenue",
+    "merchandise_revenue",
+    "additional_revenue",
+    "credit_and_points_redeemed",
     "product_cost",
     "shipping_charged",
     "shipping_cost",
@@ -94,6 +109,9 @@ export async function GET(request: Request) {
       const profitCells = p
         ? [
             p.grossRevenue,
+            p.merchandiseRevenue,
+            p.additionalRevenue,
+            p.creditRedeemed,
             p.cogs,
             p.shippingCharged,
             p.shippingCost,

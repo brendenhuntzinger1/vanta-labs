@@ -11,8 +11,13 @@ import { readAllRowsBounded } from "@/lib/supabase-page";
 // so profit is computed from the record — not from today's live product cost.
 // tax_amount is carried for display (never profit); the actual/estimated
 // shipping columns drive the estimate→exact reconciliation.
-const ORDER_FIELDS =
-  "order_id, order_number, order_type, subtotal, discount_amount, shipping_amount, tax_amount, refund_amount, amount_paid, payment_method, payment_status, paid_at, created_at, shipping_protection_fee, card_processing_fee, store_credit_redeemed_cents, points_redeemed";
+//
+// EXPORTED so a test can pin the real select list rather than keeping a copy of
+// it. shipping-cost-void-repair.test.ts held a hand-written duplicate of this
+// string and started failing the moment a column was added — a stale fixture in
+// miniature, and the same class of defect as the commissions column below.
+export const ORDER_FIELDS =
+  "order_id, order_number, order_type, subtotal, discount_amount, shipping_amount, handling_fee, tax_amount, refund_amount, amount_paid, payment_method, payment_status, paid_at, created_at, shipping_protection_fee, card_processing_fee, store_credit_redeemed_cents, points_redeemed";
 
 type OrderRecord = {
   order_id: string;
@@ -21,6 +26,7 @@ type OrderRecord = {
   subtotal: number | null;
   discount_amount: number | null;
   shipping_amount: number | null;
+  handling_fee?: number | null;
   tax_amount: number | null;
   refund_amount: number | null;
   amount_paid: number | null;
@@ -125,7 +131,19 @@ function profitForOrder(
   // OrderProfitInput.creditRedeemed). Revenue then equals cash on EVERY order.
   const recordedProtection = Math.max(0, Number(order.shipping_protection_fee ?? 0));
   const cardSurcharge = Math.max(0, Number(order.card_processing_fee ?? 0));
-  const additionalRevenue = Math.round((recordedProtection + cardSurcharge) * 100) / 100;
+  // HANDLING IS PART OF WHAT THE CUSTOMER PAID, SO IT IS PART OF REVENUE.
+  //
+  // `orders.handling_fee` is a term of the charged total everywhere else — the
+  // customer's invoice (invoice-totals), the confirmation page, the account
+  // order list, and reconciliation-math.expectedOrderTotal, which is what
+  // decides whether an order is accused of not adding up. It was the one term
+  // missing from this read, so the first order to carry a handling fee would
+  // have reported `amount_paid 105` against `grossRevenue 100` and broken the
+  // revenue invariant on a $5 charge nobody could see. Latent only because
+  // quote-order.ts:1007, membership-billing.ts:194,493 and
+  // admin-replacements.ts:161 all write 0 today.
+  const handlingFee = Math.max(0, Number(order.handling_fee ?? 0));
+  const additionalRevenue = Math.round((recordedProtection + cardSurcharge + handlingFee) * 100) / 100;
 
   // Non-cash tender applied to this order. store_credit_redeemed_cents is
   // integer CENTS; points_redeemed is a count of POINTS, converted through the
@@ -255,19 +273,45 @@ async function commissionByOrderId(orderIds: string[]): Promise<Map<string, numb
     // A commission read that fails must not silently report zero commission —
     // that overstates profit on every affected order, and recordActualShippingCost
     // writes the resulting figure into an audit row as fact.
+    // THE COLUMN IS `status`, AND THE NAME IS LOAD-BEARING.
+    //
+    // This read asked for `commissions.payment_status`, which does not exist:
+    // the verified production column set is (id, partner_id, order_id,
+    // referral_code, commission_percent, commission_amount, status, created_at,
+    // updated_at, tier_name, ineligible_reason, fraud_flag, fraud_reason,
+    // customer_discount_percent). `payment_status` is the SIBLING ledger's
+    // column — referral_orders has it, commissions mirrors it as `status` — and
+    // every writer of this table writes `status` (payment-webhook.ts:857,890,
+    // 1049; partner-portal.ts:436,1964,2099).
+    //
+    // While the error above was swallowed, that read returned nothing and every
+    // order silently reported ZERO commission. Now that it throws, the same
+    // typo would 42703 the profit dashboard, the order panel, the CSV export,
+    // the push notification and recordActualShippingCost on the first /admin
+    // load after deploy. No test could tell the two names apart because every
+    // Supabase double in the suite ignores the select list;
+    // admin-profit-schema-contract.test.ts pins it now.
     const { data, error } = await supabaseAdmin
       .from("commissions")
-      .select("order_id, commission_amount, payment_status")
+      .select("order_id, commission_amount, status")
       .in("order_id", chunk);
     if (error) throw error;
 
-    for (const raw of (data ?? []) as Array<{ order_id: string; commission_amount: number | null; payment_status: string | null }>) {
+    for (const raw of (data ?? []) as Array<{ order_id: string; commission_amount: number | null; status: string | null }>) {
       // Only subtract commission the owner actually pays out. A reversed /
       // voided / manual-review commission was clawed back (e.g. refunded order),
       // so it must NOT reduce profit — otherwise the owner is charged for a
       // commission that was never paid. The recorded amount is already at the
       // ambassador's effective (tiered) rate, so this is their exact payout.
-      if (!isEarnedCommission(raw.payment_status)) continue;
+      //
+      // The values a writer can actually produce here are `pending`,
+      // `approved_for_payout`, `paid`, `reversed` and `manual_review`
+      // (payment-webhook.getCommissionStateForRefund + the two partner-portal
+      // payout paths), so EXCLUDED_COMMISSION_STATUSES covers every clawed-back
+      // one. isEarnedCommission treats null/undefined as earned, which is the
+      // conservative direction HERE: an unreadable status subtracts the
+      // commission and understates profit rather than overstating it.
+      if (!isEarnedCommission(raw.status)) continue;
       byOrder.set(raw.order_id, (byOrder.get(raw.order_id) ?? 0) + Math.max(0, Number(raw.commission_amount ?? 0)));
     }
   }
