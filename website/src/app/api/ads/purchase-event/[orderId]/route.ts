@@ -5,6 +5,7 @@ import { buildSnapPurchase } from "@/lib/ads/snap-events";
 import { buildRedditPurchase } from "@/lib/ads/reddit-events";
 import { describeRedditResult, redditCredentialStatus, sendRedditConversion } from "@/lib/ads/reddit-conversions";
 import { buildAdvancedMatching } from "@/lib/ads/advanced-matching";
+import { wasAlreadySent, type LedgerRow } from "@/lib/ads/purchase-ledger";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { credentialStatus, describeResult, sendServerEvents } from "@/lib/ads/tiktok-events-api";
 import { getRequestIpAddress, verifyAdminSessionFromCookie } from "@/lib/admin-auth";
@@ -205,17 +206,30 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   // If the ledger table does not exist yet the send still proceeds — an
   // occasional duplicate that TikTok itself collapses is a far better failure
   // than silently never reporting real revenue.
-  let alreadySent = false;
+  // Read EVERY ledger row for this order, then decide per platform.
+  //
+  // It used to read one row and use it for all channels, which is the same
+  // defect the single-column primary key encoded: whichever platform reported
+  // first silenced the rest for that order forever. TikTok delivering meant
+  // Reddit could never report the sale. Now each channel answers only for
+  // itself — see src/lib/ads/purchase-ledger.ts and
+  // src/lib/sql/ads-purchase-ledger-per-platform.sql.
+  //
+  // The read is advisory, not the guarantee. Two simultaneous requests for the
+  // same order can both see "not sent"; the primary key on
+  // (order_id, platform) is what stops both from inserting.
+  let ledgerRows: LedgerRow[] = [];
   try {
     const { data: sent } = await supabaseAdmin
       .from("ad_purchase_events_sent")
-      .select("order_id")
-      .eq("order_id", String(order.order_id))
-      .maybeSingle();
-    alreadySent = Boolean(sent);
+      .select("order_id, platform, delivered")
+      .eq("order_id", String(order.order_id));
+    ledgerRows = (sent ?? []) as LedgerRow[];
   } catch {
     /* table not applied yet — fall through and send */
   }
+  const alreadySent = wasAlreadySent(ledgerRows, "tiktok");
+  const redditAlreadySent = wasAlreadySent(ledgerRows, "reddit");
 
   if (inspect) {
     // Admin-gated: it returns the customer's order value and line items, which
@@ -232,6 +246,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
         amountPaid: Number(order.amount_paid ?? 0),
         wouldReport: Boolean(event),
         alreadySent,
+        redditAlreadySent,
         eventsApiConfigured: credentialStatus().configured,
         event: event ? { name: event.name, eventId: event.eventId, properties: event.properties } : null,
         snapPurchase,
@@ -263,7 +278,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   // pixel sends — so Reddit collapses the pair into one conversion rather than
   // reporting the sale twice. Awaited before the TikTok leg rather than beside
   // it because each is best-effort telemetry that must not fail the response.
-  if (redditPurchase && !alreadySent && redditCredentialStatus().configured) {
+  if (redditPurchase && !redditAlreadySent && redditCredentialStatus().configured) {
     const redditOutcome = await sendRedditConversion({
       event: redditPurchase,
       occurredAt: new Date(),
@@ -277,6 +292,27 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
     redditDelivery = describeRedditResult(redditOutcome);
     if (!redditOutcome.delivered) {
       console.error("[ads/reddit-conversions]", redditDelivery);
+    }
+
+    // Reddit's OWN ledger row. It previously had none: the only write lived
+    // inside the TikTok block below, so with TikTok unconfigured Reddit sent on
+    // every single confirmation-page visit, and with TikTok configured the row
+    // it wrote carried platform 'tiktok' and said nothing about Reddit.
+    //
+    // Recorded whatever the outcome, matching TikTok: a hard rejection must not
+    // be retried on every page refresh. `delivered` distinguishes the two.
+    try {
+      await supabaseAdmin.from("ad_purchase_events_sent").upsert(
+        {
+          order_id: String(order.order_id),
+          event_id: redditPurchase.properties.conversionId ?? String(order.order_id),
+          platform: "reddit",
+          delivered: redditOutcome.delivered,
+        },
+        { onConflict: "order_id,platform" },
+      );
+    } catch {
+      /* ledger unavailable; Reddit's own conversion_id dedup still applies */
     }
   }
 
@@ -317,7 +353,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
           delivered: outcome.delivered,
           tiktok_code: outcome.tiktokCode,
         },
-        { onConflict: "order_id" },
+        { onConflict: "order_id,platform" },
       );
     } catch {
       /* ledger unavailable; TikTok's own 48h dedup still applies */
