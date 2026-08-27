@@ -106,6 +106,20 @@ describe("the access token never reaches the browser", () => {
     expect(exposed).toEqual(["NEXT_PUBLIC_ANALYTICS_ID"]);
   });
 
+  it("flags Google Ads credentials if any were ever given a public name", () => {
+    expect(
+      findClientExposedSecrets({
+        NEXT_PUBLIC_GOOGLE_ADS_DEVELOPER_TOKEN: "x",
+        NEXT_PUBLIC_GOOGLE_ADS_CLIENT_SECRET: "x",
+        NEXT_PUBLIC_GOOGLE_ADS_REFRESH_TOKEN: "x",
+      } as unknown as NodeJS.ProcessEnv),
+    ).toEqual([
+      "NEXT_PUBLIC_GOOGLE_ADS_CLIENT_SECRET",
+      "NEXT_PUBLIC_GOOGLE_ADS_DEVELOPER_TOKEN",
+      "NEXT_PUBLIC_GOOGLE_ADS_REFRESH_TOKEN",
+    ]);
+  });
+
   it("does not flag public values that are meant to be public", () => {
     expect(
       findClientExposedSecrets({

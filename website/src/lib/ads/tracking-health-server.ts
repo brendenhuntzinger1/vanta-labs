@@ -28,7 +28,7 @@ import { BACKFILL_EVENT_ID, countLedger, type LedgerCountRow, type LedgerPlatfor
  * it. So: match names that can only mean a secret, and separately look for the
  * actual token value wherever it might have been copied.
  */
-const SECRET_NAME = /(SECRET|ACCESS_TOKEN|PRIVATE_KEY|SERVICE_ROLE|PASSWORD|WEBHOOK_SECRET)/;
+const SECRET_NAME = /(SECRET|ACCESS_TOKEN|PRIVATE_KEY|SERVICE_ROLE|PASSWORD|WEBHOOK_SECRET|DEVELOPER_TOKEN|REFRESH_TOKEN)/;
 
 export function findClientExposedSecrets(env: NodeJS.ProcessEnv = process.env): string[] {
   const exposed = new Set<string>();

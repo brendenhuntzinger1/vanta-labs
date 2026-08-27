@@ -33,8 +33,11 @@
  * NEXT_PUBLIC_*_PIXEL_ID variables; do not defeat the environment check.
  *
  * NOTE ON META: there is no Meta/Facebook pixel in this codebase, and no Snap
- * Conversions API server leg. This gate is the chokepoint any future one must
- * pass through, which is the point of having exactly one.
+ * Conversions API server leg. Google Ads has both legs, and both pass through
+ * here — the browser tag via browserAdsReportingAllowed in google-pixel.tsx,
+ * the Enhanced Conversions leg via serverAdsReportingAllowed in
+ * google-conversions.ts. This gate is the chokepoint any future one must pass
+ * through, which is the point of having exactly one.
  */
 
 /**
