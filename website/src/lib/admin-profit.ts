@@ -240,18 +240,38 @@ async function commissionByOrderId(orderIds: string[]): Promise<Map<string, numb
 
   for (let i = 0; i < orderIds.length; i += IN_CHUNK) {
     const chunk = orderIds.slice(i, i + IN_CHUNK);
-    const { data } = await supabaseAdmin
+    // `status`, not `payment_status`. The column has always been `status` —
+    // every schema definition declares it, and payment-webhook, partner-portal
+    // and admin-ambassadors all read and write it. This asked for a column that
+    // does not exist, PostgREST answered 42703 with no rows, and the error was
+    // dropped on the next line, so every commission silently became $0.00.
+    const { data, error } = await supabaseAdmin
       .from("commissions")
-      .select("order_id, commission_amount, payment_status")
+      .select("order_id, commission_amount, status")
       .in("order_id", chunk);
 
-    for (const raw of (data ?? []) as Array<{ order_id: string; commission_amount: number | null; payment_status: string | null }>) {
+    // A FAILED READ MUST NOT LOOK LIKE "NO COMMISSION WAS PAID".
+    //
+    // Those two produced the identical answer here, and $0.00 of commission is
+    // the most flattering number available: profit came out overstated by the
+    // full commission on every referred order, on the dashboard, in the CSV
+    // export and in the operator's push notification, with nothing to notice.
+    // The shipping overlay a few lines down degrades on error deliberately —
+    // it can only make profit look WORSE, and the migration may genuinely not
+    // have run. This one moves the figure the other way, so it fails loudly,
+    // the same way readAllRowsBounded does for the cost lines.
+    if (error) {
+      const message = (error as { message?: string })?.message ?? String(error);
+      throw new Error(`commission read failed: ${message}`);
+    }
+
+    for (const raw of (data ?? []) as Array<{ order_id: string; commission_amount: number | null; status: string | null }>) {
       // Only subtract commission the owner actually pays out. A reversed /
       // voided / manual-review commission was clawed back (e.g. refunded order),
       // so it must NOT reduce profit — otherwise the owner is charged for a
       // commission that was never paid. The recorded amount is already at the
       // ambassador's effective (tiered) rate, so this is their exact payout.
-      if (!isEarnedCommission(raw.payment_status)) continue;
+      if (!isEarnedCommission(raw.status)) continue;
       byOrder.set(raw.order_id, (byOrder.get(raw.order_id) ?? 0) + Math.max(0, Number(raw.commission_amount ?? 0)));
     }
   }

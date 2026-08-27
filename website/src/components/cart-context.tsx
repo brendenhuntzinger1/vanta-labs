@@ -15,6 +15,7 @@ import { calculateBulkSavingsDiscount, getBulkSavingsProgress, DEFAULT_BULK_SAVI
 import { describeCouponOutcome, resolveCartDiscount, type CouponOutcome, type PriceControllingDiscount } from "@/lib/discount-resolution";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { referralAppliedMessage, referralCartStatus, referralQualifies, referralShortfall } from "@/lib/referral-qualification";
+import { REFERRAL_PROGRAM_PAUSED_MESSAGE, referralProgramAllowsCodes, referralProgramIsOff } from "@/lib/referral-program-gate";
 import { resolvePointsRedemptionCents, resolveStoreCreditCents } from "@/lib/store-credit-redemption";
 
 type CouponDetails = {
@@ -283,6 +284,14 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // loaded from the same config the server enforces so the client gate matches
   // the real charge (a hardcoded value drifts the moment an admin changes it).
   const [referralMinimumOrder, setReferralMinimumOrder] = useState<number>(DEFAULT_MINIMUM_QUALIFYING_ORDER);
+  // THE REFERRAL MASTER SWITCH — null until /api/catalog/promotions answers.
+  //
+  // quote-order.ts refuses any order still carrying a code while this is off,
+  // and until it was carried here the client could not know: the cart previewed
+  // and applied the discount, and the shopper was stopped at the pay button.
+  // `null` is "not answered yet", NOT "off" — see referral-program-gate.ts for
+  // why that distinction is a decision about money rather than a nicety.
+  const [referralProgramEnabled, setReferralProgramEnabled] = useState<boolean | null>(null);
   const [shippingConfig, setShippingConfig] = useState<ShippingConfig>(DEFAULT_SHIPPING_CONFIG);
   const [isEligibleForBulkSavings, setIsEligibleForBulkSavings] = useState(false);
   const [bulkSavingsConfig, setBulkSavingsConfig] = useState<BulkSavingsConfig>(DEFAULT_BULK_SAVINGS_CONFIG);
@@ -354,13 +363,19 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       try {
         const response = await fetch("/api/catalog/promotions", { cache: "no-store" });
         if (!response.ok) return;
-        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; referralMinimumOrder?: number; membershipTiers?: MembershipTierSummary[] };
+        const result = await response.json() as { success: boolean; promoBuy3Get1Enabled?: boolean; referralProgramEnabled?: boolean; bundleConfig?: BundleConfig; bundleStacking?: boolean; salesTax?: SalesTaxConfig; shippingConfig?: ShippingConfig; referralDiscountPercent?: number; referralMinimumOrder?: number; membershipTiers?: MembershipTierSummary[] };
         if (result.success) {
           setPromoBuy3Get1Enabled(Boolean(result.promoBuy3Get1Enabled));
           if (result.bundleConfig) setBundleConfig(result.bundleConfig);
           setBundleStacking(result.bundleStacking === true);
           if (Number.isFinite(result.referralMinimumOrder)) {
             setReferralMinimumOrder(Number(result.referralMinimumOrder));
+          }
+          // Only a real boolean resolves the state. A payload from an older
+          // deploy that omits the field leaves it null, which behaves exactly
+          // as this file did before the field existed.
+          if (typeof result.referralProgramEnabled === "boolean") {
+            setReferralProgramEnabled(result.referralProgramEnabled);
           }
           if (result.salesTax) {
             setSalesTaxConfig({
@@ -576,6 +591,16 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     if (!isHydrated || !referralCode || referralDetails) {
       return;
     }
+    // The programme is off: do not resolve the code into a discount. This is
+    // the path an ambassador's own link takes (cookie -> referralCode ->
+    // details), and it is where the cart used to start advertising a saving
+    // that quote-order would refuse at the pay button.
+    //
+    // Deliberately NOT the moment to discard the code — see the effect below.
+    // While the answer is still null this behaves exactly as it always did.
+    if (!referralProgramAllowsCodes(referralProgramEnabled)) {
+      return;
+    }
 
     let cancelled = false;
 
@@ -608,7 +633,29 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [isHydrated, referralCode, referralDetails]);
+  }, [isHydrated, referralCode, referralDetails, referralProgramEnabled]);
+
+  // A DEFINITE "OFF" CLEARS THE CODE, AND ONLY A DEFINITE ONE.
+  //
+  // Leaving it attached means it is still posted to create-session, which is
+  // exactly the 400 this fix exists to remove. Clearing it makes the server's
+  // throw unreachable from the UI — where it stays, as the backstop against a
+  // crafted or stale request.
+  //
+  // The COOKIE is left alone on purpose. It is how the ambassador's link is
+  // remembered, so turning the programme back on re-attaches the code on the
+  // next load and her referral is restored rather than lost. No error is shown:
+  // the shopper did nothing wrong and asked for nothing here. Typing a code
+  // deliberately is the case that gets an answer, in applyReferralCode.
+  //
+  // Adjusted DURING RENDER rather than in an effect — React's documented
+  // "adjusting state when props change" pattern, the same one cart-drawer.tsx
+  // uses for its codes row. One render pass instead of two, and the condition
+  // is false immediately afterwards, so it cannot loop.
+  if (isHydrated && referralProgramIsOff(referralProgramEnabled) && (referralCode !== null || referralDetails !== null)) {
+    setReferralCode(null);
+    setReferralDetails(null);
+  }
 
   const itemCount = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
 
@@ -727,7 +774,10 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     if (buy3Get1FreeDiscount > 0) {
       return { type: "buy3get1" as const, amount: buy3Get1FreeDiscount };
     }
-    if (referralDetails && isReferralValid(referralDetails)) {
+    // Belt and braces against the single frame between the config landing
+    // "off" and the clearing effect below running: the cart must never price a
+    // referral the server is about to refuse, not even once.
+    if (referralDetails && isReferralValid(referralDetails) && referralProgramAllowsCodes(referralProgramEnabled)) {
       // THE AMBASSADOR'S OWN RATE, resolved when the code was applied by the
       // same resolveAmbassadorCustomerDiscount the server uses, with the live
       // program default as the fallback for anyone who has no override.
@@ -749,7 +799,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       return { type: "referral" as const, amount: discountBase * (referralDetails.customerDiscountPercent / 100) };
     }
     return null;
-  }, [buy3Get1FreeDiscount, referralDetails, discountBase, subtotal, referralMinimumOrder]);
+  }, [buy3Get1FreeDiscount, referralDetails, discountBase, subtotal, referralMinimumOrder, referralProgramEnabled]);
 
 
   // The elite "Exclusive Buy In Bulk Savings" benefit cannot stack with
@@ -815,7 +865,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   // cart whose quantity-bundle pricing had already competed the referral to
   // $0.00 — and suppressed the shopper's store credit to pay for it.
   const referralStatus = useMemo(
-    () => (referralDetails
+    () => (referralDetails && referralProgramAllowsCodes(referralProgramEnabled)
       ? referralCartStatus({
         ambassadorName: referralDetails.ambassadorName,
         discountPercent: referralDetails.customerDiscountPercent,
@@ -826,7 +876,7 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
         formatCurrency: formatCartCurrency,
       })
       : null),
-    [referralDetails, subtotal, referralMinimumOrder, bestDiscount, discountAmount],
+    [referralDetails, subtotal, referralMinimumOrder, bestDiscount, discountAmount, referralProgramEnabled],
   );
   const referralStatusText = referralStatus?.line ?? null;
   const referralNeedsMoreToQualify = Boolean(referralStatus?.needsMoreToQualify);
@@ -1178,6 +1228,17 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
   const applyReferralCode = async (code: string) => {
     if (isApplyingReferral) return; // ignore rapid re-clicks while validating
     const normalized = code.trim().toUpperCase();
+
+    // Typed deliberately, so this one gets a straight answer rather than a
+    // silent no-op. Not "invalid code": the code is real and so is the
+    // ambassador behind it.
+    if (referralProgramIsOff(referralProgramEnabled)) {
+      setReferralDetails(null);
+      setReferralCode(null);
+      setReferralSuccess(null);
+      setReferralError(REFERRAL_PROGRAM_PAUSED_MESSAGE);
+      return;
+    }
 
     if (buy3Get1FreeDiscount > 0) {
       setReferralDetails(null);
