@@ -3,7 +3,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
 import type { Product } from "@/lib/catalog-types";
 import type { ReferralCode } from "@/lib/referral-codes";
-import { validateReferralCodeClient } from "@/lib/referral-client";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
 import { DEFAULT_MINIMUM_QUALIFYING_ORDER } from "@/lib/referral-config";
 import { getBundleDiscountedLineTotal, getBundleDiscountedUnitPrice, DEFAULT_BUNDLE_CONFIG, type BundleConfig } from "@/lib/bundle-pricing";
@@ -17,6 +16,31 @@ import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { referralAppliedMessage, referralCartStatus, referralQualifies, referralShortfall } from "@/lib/referral-qualification";
 import { REFERRAL_PROGRAM_PAUSED_MESSAGE, referralProgramAllowsCodes, referralProgramIsOff } from "@/lib/referral-program-gate";
 import { resolvePointsRedemptionCents, resolveStoreCreditCents } from "@/lib/store-credit-redemption";
+
+/**
+ * THE SUPABASE BROWSER CLIENT IS LOADED ONLY WHEN A CODE ACTUALLY NEEDS CHECKING.
+ *
+ * referral-client.ts imports @supabase/supabase-js, and this provider is
+ * mounted in the root layout -- so a static import put the whole client,
+ * GoTrue auth and realtime-js included, into the bundle every page shares.
+ * Measured against production: 231 KB of JavaScript to parse (61 KB over the
+ * wire), downloaded by every visitor to every page, 18% of all the script on
+ * the homepage.
+ *
+ * Almost nobody needs it. Both call sites are conditional -- one runs only when
+ * a referral code is already held, the other only when a shopper types one in.
+ * A dynamic import keeps the module out of the shared bundle and fetches it at
+ * the moment of use.
+ *
+ * NOTHING ABOUT THE VALIDATION CHANGES. Same function, same RPC, same server
+ * rules; quote-order.ts still re-resolves the rate and owns the charge. This is
+ * purely about when the code arrives.
+ */
+async function validateReferralCodeClient(code: string) {
+  const { validateReferralCodeClient: validate } = await import("@/lib/referral-client");
+  return validate(code);
+}
+
 
 type CouponDetails = {
   code: string;

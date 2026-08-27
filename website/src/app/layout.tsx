@@ -9,6 +9,7 @@ import { CartProvider } from "@/components/cart-context";
 import { SiteAnalyticsTracker } from "@/components/site-analytics-tracker";
 import { SiteFooter } from "@/components/site-footer";
 import { CookieConsent } from "@/components/cookie-consent";
+import { CONSENT_COOKIE_NAME } from "@/lib/cookie-consent-server";
 import { EntryDiagnostics } from "@/components/entry-diagnostics";
 import { StorefrontOffersBar } from "@/components/storefront-offers-bar";
 import { cookies } from "next/headers";
@@ -143,6 +144,24 @@ export default async function RootLayout({
   const dismissed = new Set(parseDismissed(cookieStore.get(OFFERS_DISMISSED_COOKIE)?.value));
   const offers = visibleOffers(allOffers.filter((offer) => !dismissed.has(offerTag(offer.id))));
 
+  // THE CONSENT BAR IS DECIDED HERE FOR THE SAME REASON THE OFFERS BAR IS.
+  //
+  // Both sit in normal flow above the page, so both push it down by their own
+  // height. Deciding either one in the browser means painting the page and then
+  // shoving it under the reader -- which is exactly what the consent bar did:
+  // 52px on a desktop, 86px on a phone, about half a second after first paint,
+  // and it was the largest single layout shift on every route we measured.
+  //
+  // The cookie is already written by the banner (see cookie-consent-server.ts,
+  // which exists so route handlers can honour a decline). Reading it costs
+  // nothing extra here -- `cookies()` is already awaited above for the offers
+  // bar -- and it lets the server render the final answer once.
+  //
+  // An unrecognised value is deliberately NOT treated as an answer, matching
+  // readCookieConsent: a corrupted cookie asks again rather than assuming.
+  const consentValue = cookieStore.get(CONSENT_COOKIE_NAME)?.value;
+  const consentAnswered = consentValue === "accepted" || consentValue === "declined";
+
   return (
     <html
       lang="en"
@@ -219,7 +238,7 @@ export default async function RootLayout({
           </Suspense>
           <AgeGate>
             {/* Both in flow, above the header, so they overlay nothing. */}
-            <CookieConsent />
+            <CookieConsent initiallyOpen={!consentAnswered} />
             {/* REPLACES <WelcomeOffer />, RATHER THAN JOINING IT.
                 The welcome offer is a promotion, and it is now resolved by
                 storefront-offers.ts alongside every other live offer. Rendering
