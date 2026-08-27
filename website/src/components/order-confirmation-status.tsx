@@ -5,6 +5,21 @@ import { useEffect, useRef, useState } from "react";
 import { OrderStatusTimeline } from "@/components/order-status-timeline";
 
 /**
+ * Lead-in for the order line's email clause.
+ *
+ * This must NEVER assert completed delivery. The confirmation email is queued
+ * and sent asynchronously (see order_email_log), so at the instant this page
+ * renders the send is usually still in flight, and if the provider is
+ * unreachable it may never land at all — the log records `failed` in that case.
+ * The old copy ("a confirmation was sent to …") stated delivery as settled fact
+ * regardless of outcome, so a customer whose email hard-failed was told to wait
+ * for something that was never coming instead of contacting support.
+ *
+ * Exported so the regression test can hold the line on the tense.
+ */
+export const EMAIL_CONFIRMATION_LEAD = "we'll email your confirmation to";
+
+/**
  * Confirmation hero that resolves the brief gap between a card/Apple Pay charge
  * completing and its webhook marking the order "paid". A customer who just paid
  * must NEVER see "complete payment" — for card orders we show a "confirming your
@@ -77,7 +92,7 @@ export function OrderConfirmationStatus({
   const orderLine = (
     <p className="mt-2.5 break-words text-sm leading-6 text-white/60">
       Order <span className="font-semibold text-white">{orderNumber}</span>
-      {maskedEmail ? <> — a confirmation was sent to <span className="text-white/80">{maskedEmail}</span>.</> : "."}
+      {maskedEmail ? <> — {EMAIL_CONFIRMATION_LEAD} <span className="text-white/80">{maskedEmail}</span>.</> : "."}
     </p>
   );
 
