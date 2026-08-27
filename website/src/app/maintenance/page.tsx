@@ -1,6 +1,15 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 
 export const dynamic = "force-dynamic";
+
+export const metadata: Metadata = {
+  title: "Scheduled Maintenance",
+  description: "Vanta Labs is briefly offline for scheduled maintenance.",
+  // Transactional/auth surface: robots.ts already disallows these paths, and
+  // this is the per-page half of the same statement, exactly as /cart does it.
+  robots: { index: false, follow: false },
+};
 
 export default function MaintenancePage() {
   return (

@@ -1,7 +1,16 @@
+import type { Metadata } from "next";
 import { redirect } from "next/navigation";
 import { PartnerLoginForm } from "@/components/partner-login-form";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+
+export const metadata: Metadata = {
+  title: "Partner Sign In",
+  description: "Sign in to the Vanta Labs partner portal.",
+  // Transactional/auth surface: robots.ts already disallows these paths, and
+  // this is the per-page half of the same statement, exactly as /cart does it.
+  robots: { index: false, follow: false },
+};
 
 export default async function LoginPage() {
   const user = await getAuthenticatedUser();
