@@ -6,6 +6,11 @@ export default defineConfig({
     environment: "node",
     globals: true,
     setupFiles: ["./vitest.setup.ts"],
+    // `tests/` holds Playwright specs (browser-driven, run via `npx playwright
+    // test`), not Vitest suites. Without this exclude, Vitest's default
+    // `*.spec.ts` glob picks them up too and fails on the `@playwright/test`
+    // import, which isn't a Vitest dependency.
+    exclude: ["**/node_modules/**", "**/tests/**"],
   },
   resolve: {
     alias: {
