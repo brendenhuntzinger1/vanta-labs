@@ -23,7 +23,17 @@ export type GoogleHealthInput = {
   conversionId: string;
   credentials: { configured: boolean; missing: string[] };
   environmentAllowed: boolean;
-  lastSend: { delivered: boolean; code: number | null; message: string | null } | null;
+  /**
+   * `null` means nothing has been sent yet. When present, `attempted` is the
+   * load-bearing field: `sendGoogleConversion` can return `attempted: false`
+   * (the OAuth refresh itself timed out or failed, or credentials were
+   * incomplete) or `message: "timed out"` with `attempted: true` (the upload
+   * call was aborted before Google answered). Neither of those is a rejection
+   * — Google never actually looked at the conversion — so only
+   * `attempted && delivered !== undefined && message !== "timed out"` may be
+   * read as an answer FROM Google.
+   */
+  lastSend: { attempted: boolean; delivered: boolean; code: number | null; message: string | null } | null;
 };
 
 const REQUIRED_ENV_COUNT = 6;
@@ -96,21 +106,51 @@ export function buildGoogleHealth(input: GoogleHealthInput): HealthCheck[] {
     return rows;
   }
 
+  const send = input.lastSend;
+
+  // Never reached Google at all — nothing to hold against the account. Also
+  // catches a timed-out OAuth refresh, which reports `attempted: false`.
+  if (!send.attempted) {
+    rows.push({
+      id: "google-server",
+      label: "Enhanced Conversions (server)",
+      tier: "CODE",
+      status: "NOT_TESTED",
+      detail: `The last send never reached Google: ${send.message ?? "not attempted"}. Not counted as a rejection — nothing was sent.`,
+      action: "Retry on the next paid order. If this repeats, check network egress to oauth2.googleapis.com.",
+    });
+    return rows;
+  }
+
+  // The upload call was aborted before Google responded. This is silence, not
+  // an answer — a timeout must never read as "Google said no".
+  if (send.message === "timed out") {
+    rows.push({
+      id: "google-server",
+      label: "Enhanced Conversions (server)",
+      tier: "CODE",
+      status: "NOT_TESTED",
+      detail: "The last send timed out waiting for Google. Not counted as a rejection — no answer was received.",
+      action: "Check whether googleads.googleapis.com is reachable from this deployment; retry on the next paid order.",
+    });
+    return rows;
+  }
+
   rows.push(
-    input.lastSend.delivered
+    send.delivered
       ? {
           id: "google-server",
           label: "Enhanced Conversions (server)",
           tier: "PRODUCTION",
           status: "PASS",
-          detail: `Last send delivered (HTTP ${input.lastSend.code ?? "200"}).`,
+          detail: `Last send delivered (HTTP ${send.code ?? "no status"}).`,
         }
       : {
           id: "google-server",
           label: "Enhanced Conversions (server)",
           tier: "PRODUCTION",
           status: "FAIL",
-          detail: `Google rejected the last send: HTTP ${input.lastSend.code ?? "no status"}${input.lastSend.message ? ` ${input.lastSend.message}` : ""}.`,
+          detail: `Google rejected the last send: HTTP ${send.code ?? "no status"}${send.message ? ` ${send.message}` : ""}.`,
           action: "Check the developer token's access level and the conversion action id.",
         },
   );

@@ -21,6 +21,8 @@
  * runs on the server and in the admin's browser.
  */
 
+import type { GoogleHealthInput } from "./google-health";
+
 export type HealthTier = "CODE" | "PRODUCTION" | "PLATFORM";
 
 export type HealthStatus =
@@ -68,6 +70,13 @@ export type ServerHealthInput = {
   probe: ProbeResult | null;
   /** The server-side Purchase ledger, when its table exists. */
   purchaseLedger: { available: boolean; total: number; delivered: number } | null;
+  /**
+   * Optional so every existing `ServerHealthInput` literal (including every
+   * one in tracking-health.test.ts) keeps compiling unchanged. Absent means
+   * "not computed for this call", not "Google is unconfigured" — the caller
+   * decides whether to include it.
+   */
+  google?: GoogleHealthInput | null;
 };
 
 export type BrowserHealthInput = {

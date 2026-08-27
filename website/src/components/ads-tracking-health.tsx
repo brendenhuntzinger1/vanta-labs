@@ -11,6 +11,7 @@ import {
   type ProbeResult,
   type ServerHealthInput,
 } from "@/lib/ads/tracking-health";
+import { buildGoogleHealth } from "@/lib/ads/google-health";
 
 /**
  * Tracking Health — the answer to "is this actually working?", without a
@@ -230,7 +231,10 @@ export function AdsTrackingHealth() {
     );
   }
 
-  const checks = buildHealthReport({ ...server, probe }, browser);
+  const checks = [
+    ...buildHealthReport({ ...server, probe }, browser),
+    ...(server.google ? buildGoogleHealth(server.google) : []),
+  ];
   const action = nextAction(checks);
   const green = checks.filter((c) => ["PASS", "VERIFIED", "AVAILABLE"].includes(c.status)).length;
   const red = checks.filter((c) => c.status === "FAIL").length;

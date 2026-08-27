@@ -4,6 +4,10 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { credentialStatus, PIXEL_ID } from "@/lib/ads/tiktok-events-api";
 import type { ServerHealthInput } from "@/lib/ads/tracking-health";
 import { BACKFILL_EVENT_ID, countLedger, type LedgerCountRow, type LedgerPlatform } from "@/lib/ads/purchase-ledger";
+import { GOOGLE_ADS_ID } from "@/lib/ads/google-conversion-id";
+import { googleCredentialStatus } from "@/lib/ads/google-conversions";
+import { serverAdsReportingAllowed } from "@/lib/ads/ads-environment";
+import type { GoogleHealthInput } from "@/lib/ads/google-health";
 
 /**
  * Everything the health board can learn without leaving the server.
@@ -84,8 +88,30 @@ async function readPurchaseLedger(platform: LedgerPlatform = "tiktok"): Promise<
   }
 }
 
+/**
+ * Google's `lastSend` summary, sourced from the same platform-scoped,
+ * backfill-excluding ledger reader TikTok's row already uses — never a
+ * second, unfiltered read.
+ *
+ * Narrowed deliberately to what the ledger actually stores: a row records
+ * only whether the send was `delivered`, never Google's HTTP code or message,
+ * and never whether it was aborted by a timeout versus rejected outright.
+ * Rather than invent either, this reports only what a delivered/undelivered
+ * row can honestly support: `attempted: true` (a row exists — the ledger
+ * excludes `backfill-no-send` suppression rows, so its presence means a real
+ * send was made) with `code: null, message: null`. `google-health.ts`'s FAIL
+ * and PASS branches already fall back to "no status" rather than fabricating
+ * one. A distinct "timed out" reading is not available from this source and
+ * is not synthesised here.
+ */
+function googleLastSendFromLedger(ledger: ServerHealthInput["purchaseLedger"]): GoogleHealthInput["lastSend"] {
+  if (!ledger || !ledger.available || ledger.total === 0) return null;
+  return { attempted: true, delivered: ledger.delivered > 0, code: null, message: null };
+}
+
 export async function collectServerHealth(): Promise<ServerHealthInput> {
   const credentials = credentialStatus();
+  const googleLedger = await readPurchaseLedger("google");
 
   return {
     pixelId: PIXEL_ID,
@@ -102,5 +128,11 @@ export async function collectServerHealth(): Promise<ServerHealthInput> {
     },
     probe: null,
     purchaseLedger: await readPurchaseLedger(),
+    google: {
+      conversionId: GOOGLE_ADS_ID,
+      credentials: googleCredentialStatus(),
+      environmentAllowed: serverAdsReportingAllowed().allowed,
+      lastSend: googleLastSendFromLedger(googleLedger),
+    },
   };
 }
