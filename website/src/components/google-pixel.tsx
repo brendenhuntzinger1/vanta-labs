@@ -6,7 +6,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { browserAdsReportingAllowed } from "@/lib/ads/ads-environment";
 import { GOOGLE_ADS_ID, isConfiguredGoogleAdsId } from "@/lib/ads/google-conversion-id";
-import { countGooglePageView } from "@/lib/ads/google-health-browser";
+import { countGooglePageView, shouldLoadGoogleTag } from "@/lib/ads/google-health-browser";
 
 /**
  * Google Ads global site tag — installed globally, behind the same consent gate
@@ -28,11 +28,12 @@ import { countGooglePageView } from "@/lib/ads/google-health-browser";
  * renders nothing at all. That is what lets this component ship before the
  * Google Ads account exists.
  *
- * ON THE CONFIG OBJECT: Google's own setup guides put `'user_data'` or an
- * `email` field in this position. Both are omitted deliberately. Left as a
- * placeholder it sends a literal string to Google as the visitor's identity on
- * every page load; filled in, it sends a raw address to a third party on every
- * page view. The root layout does not know who the visitor is in any case.
+ * ON THE CONFIG OBJECT: Google's own setup guides put an identity object or a
+ * contact-address field in this position. Both are omitted deliberately. Left
+ * as a placeholder it sends a literal string to Google as the visitor's
+ * identity on every page load; filled in, it sends a raw contact detail to a
+ * third party on every page view. The root layout does not know who the
+ * visitor is in any case.
  * Identity is attached at exactly one point — a confirmed paid order — and only
  * ever as a SHA-256 digest produced on the server. See google-events.ts.
  */
@@ -98,7 +99,7 @@ export function GooglePixel() {
   // document, so without this every visit would report exactly one page view
   // however much of the site someone read.
   useEffect(() => {
-    if (!adsAllowed || !accepted || !isConfiguredGoogleAdsId(GOOGLE_ADS_ID)) return;
+    if (!shouldLoadGoogleTag({ accepted, adsAllowed, conversionIdConfigured: isConfiguredGoogleAdsId(GOOGLE_ADS_ID) })) return;
     if (!initialPageSent.current) {
       initialPageSent.current = true;
       countGooglePageView();
@@ -108,9 +109,9 @@ export function GooglePixel() {
     countGooglePageView();
   }, [adsAllowed, accepted, pathname, searchParams]);
 
-  if (!adsAllowed) return null;
-  if (!accepted) return null;
-  if (!isConfiguredGoogleAdsId(GOOGLE_ADS_ID)) return null;
+  if (!shouldLoadGoogleTag({ accepted, adsAllowed, conversionIdConfigured: isConfiguredGoogleAdsId(GOOGLE_ADS_ID) })) {
+    return null;
+  }
 
   return (
     <>

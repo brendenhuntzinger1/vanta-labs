@@ -15,3 +15,21 @@ export function countGooglePageView(): void {
     /* storage blocked; the tally is diagnostics, never a gate */
   }
 }
+
+/**
+ * The gate decision, as a pure function.
+ *
+ * The component's three early returns delegate here so the decision is
+ * testable without a DOM. A source-text assertion cannot catch a deleted early
+ * return or an inverted condition; this can, and does — see the exhaustive
+ * table in google-gate.test.ts.
+ *
+ * All three must hold. Any false is a no, and absence of a signal is a false.
+ */
+export function shouldLoadGoogleTag(input: {
+  accepted: boolean;
+  adsAllowed: boolean;
+  conversionIdConfigured: boolean;
+}): boolean {
+  return input.accepted && input.adsAllowed && input.conversionIdConfigured;
+}

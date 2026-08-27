@@ -26,14 +26,24 @@ describe("google-pixel.tsx invariants", () => {
     expect(source()).toContain("isConfiguredGoogleAdsId");
   });
 
-  it("carries no raw identity field in the gtag config", () => {
+  it("carries no identity field in the gtag config, in any syntax", () => {
     const text = source();
+    // Google's own setup guides put an identity object in the config position.
+    // Each of these is a syntax a real regression would plausibly use.
     expect(text).not.toContain("INSERT_USER_EMAIL");
-    expect(text).not.toMatch(/['"]email['"]\s*:/);
-    expect(text).not.toMatch(/user_data\s*:/);
+    expect(text).not.toMatch(/\buser_data\b/);
+    expect(text).not.toMatch(/\bsha256_email_address\b/);
+    expect(text).not.toMatch(/\bsha256_phone_number\b/);
+    expect(text).not.toMatch(/\buser_id\b/);
+    expect(text).not.toMatch(/\bemail\b/i);
+    expect(text).not.toMatch(/\bphone\b/i);
   });
 
   it("declares no conversion id of its own", () => {
     expect(source()).not.toMatch(/["'`]AW-\d+["'`]/);
+  });
+
+  it("delegates the gate decision to the tested predicate rather than inlining it", () => {
+    expect(source()).toContain("shouldLoadGoogleTag");
   });
 });
