@@ -302,7 +302,13 @@ describeDb("reconciliation — what the operator can actually see", () => {
     // The order that is $114 short must be reported. Before the fix this was
     // an empty array: the cap cut it off and nothing said so.
     expect(flags.map((f) => f.orderId)).toContain("order-oldest-broken");
-  });
+    // 60s like the beforeAll hooks in this file, and for the same reason: this
+    // body SEEDS 2101 orders to reach the 2000-row cap, so its runtime is bulk
+    // insert time, not assertion time. On the default 5s it passes on an idle
+    // machine (1.6s) and times out under parallel-worker load -- a gate that
+    // fails for the machine's reasons rather than the code's is a gate people
+    // learn to re-run instead of read.
+  }, 60_000);
 
   it("examines every order even when the server caps each response", async () => {
     // THIS ASSERTION WAS STRENGTHENED, NOT WEAKENED. It used to require
