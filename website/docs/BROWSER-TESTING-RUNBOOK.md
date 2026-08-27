@@ -1,10 +1,24 @@
 # Browser Testing Runbook — Blocks G + H
 
-**Problem this solves:** the audit environment's egress policy denies every
+> **Egress note, re-checked 2026-08-27: the block described below has lifted.**
+> `https://<ref>.supabase.co/rest/v1/` now answers from the real Supabase edge
+> (HTTP 401 `UNAUTHORIZED_MISSING_API_KEY`, with a matching `sb-project-ref`
+> header) — a reply, not a refusal. The original premise of this runbook no
+> longer holds, so **check egress yourself rather than assuming either way**; it
+> has moved once and may move again.
+>
+> The shim remains the recommended target, but for a better reason than the
+> original one: it is isolated *by construction*. It cannot reach production
+> even by accident, so no misconfiguration or stray write can touch live
+> customer data. Reach for a real Supabase project only when you specifically
+> need GoTrue auth or RLS (see the table below), and then use the **harness**
+> project (`snnezhxvssochqpqsjcm`), never production.
+
+**Problem this solved:** the audit environment's egress policy denied every
 `*.supabase.co` host. Confirmed by three separate sessions, including a
 brand-new one on the correct `vanta` environment. A locally running Next.js app
-therefore cannot reach any Supabase project, production or throwaway, and every
-browser phase was blocked — including the one that matters most, proving a
+therefore could not reach any Supabase project, production or throwaway, and
+every browser phase was blocked — including the one that matters most, proving a
 customer can complete a purchase.
 
 Real PostgREST cannot be downloaded either: GitHub release assets are proxied to
@@ -87,6 +101,45 @@ Mirror production **shapes**, not production data. At minimum:
 - ambassadors covering all three discount resolutions: explicit percent,
   NULL (inherits program default), and `info_requested` (must be inert)
 - one coupon, one membership tier
+
+### 3b. Turn inventory tracking ON, or stock testing is meaningless
+
+**This one manufactures false P0s. Do not skip it.**
+
+`inventory.tracking_enabled` defaults to **false** (see
+`src/lib/inventory-settings.ts`, which documents why that default is
+deliberate). While it is off, `resolveStockStatus` in `catalog.ts` returns
+`In Stock` for *every* product regardless of quantity — so a zero-stock product
+renders a live ADD TO CART, adds to the cart, and is only refused at the final
+checkout step.
+
+A fresh harness has no `admin_control` rows at all, so it always starts in that
+state. **Production has tracking ON** (set 2026-08-25), so a harness left at the
+default does not match production and any stock finding from it is an artifact.
+Cost of not knowing this, 2026-08-27: a full false bug report claiming 8 live
+products were mis-selling, when the code was correct throughout.
+
+```bash
+psql -h /tmp -p 55432 -U postgres -d storefront -c "
+insert into admin_audit_logs (actor_user_id, action, target_table, target_id, metadata)
+values (null, 'admin_control_upsert', 'inventory', 'tracking_enabled', '{\"value\": true}'::jsonb);"
+```
+
+The `action` must be exactly `admin_control_upsert` — the `admin_control_current`
+view filters on it, so any other action string inserts a row the app never sees.
+
+Confirm it took, then **clear the cache and restart** (`getCatalogProducts` is
+`unstable_cache`-wrapped, so a stale catalogue survives the settings change):
+
+```bash
+psql -h /tmp -p 55432 -U postgres -d storefront -tAc \
+  "select target_id, metadata from admin_control_current where target_table='inventory';"
+rm -rf .next/cache && npm run harness:start
+```
+
+With tracking on, a parent-zero/all-doses-zero product correctly renders
+`OUT OF STOCK` with a `NOTIFY ME` button in place of the buy CTA, and a
+parent-zero/dose-stocked product (F-001) correctly stays purchasable.
 
 ### 4. Start the shim
 

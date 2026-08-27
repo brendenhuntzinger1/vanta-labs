@@ -11,10 +11,22 @@ navigation, mobile responsiveness, the age gate, authentication, product
 pages, cart, affiliate/referral flows, discounts and coupons, checkout UI,
 error states, or in-app-browser behaviour.
 
-**Default target is local dev.** Run `cd website && npm run dev`, then drive
-`http://localhost:3000`. Escalate only as far as the work needs:
+**Default target is the local harness, NOT `npm run dev`.** Follow
+`website/docs/BROWSER-TESTING-RUNBOOK.md` — it is authoritative for browser work
+and takes precedence over this section wherever the two differ.
 
-    local dev → automated tests → build → Vercel preview → (production only on request)
+    bash website/scripts/setup-local-harness.sh   # local Postgres + real schema
+    node website/scripts/pgrst-shim.mjs --port 54321 --db postgres://postgres@localhost:55432/storefront
+    cd website && npm run harness:build && npm run harness:start
+
+Then drive `http://127.0.0.1:3000`. Escalate only as far as the work needs:
+
+    local harness → automated tests → build → Vercel preview → (production only on request)
+
+**Do not use `npm run dev` for browser verification.** The HMR socket is blocked
+here, so Next retries continuously and Fast Refresh resets React state
+mid-test. That fabricates convincing bugs — it made a working age gate look
+like an un-passable P0. The runbook explains this in full.
 
 **Production rules — no exceptions without explicit per-test authorisation:**
 
