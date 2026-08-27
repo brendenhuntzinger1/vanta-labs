@@ -5,6 +5,8 @@
 import { getCatalogProductsBySlugs, getStockLevelsBySlugs } from "@/lib/catalog";
 import { calculateDiscountAmount } from "@/lib/referral-service";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
+import { referralQualifies } from "@/lib/referral-qualification";
+import { resolvePointsRedemptionCents, resolveStoreCreditCents } from "@/lib/store-credit-redemption";
 import { validateCoupon } from "@/lib/coupons";
 import { getMembershipPerks, getPointsBalance, isEligibleForBulkSavings, isPriorityMember } from "@/lib/membership";
 import { dollarsToPoints, pointsToDollars } from "@/lib/points-math";
@@ -603,11 +605,38 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     }
   }
 
+  // BELOW THE PROGRAMME MINIMUM THE REFERRAL IS INERT, NOT FATAL.
+  //
+  // This used to THROW, which made an ambassador's own link a checkout blocker
+  // for any basket under the minimum: the cart announced her discount, applied
+  // none, still sent the code, and the pay button returned HTTP 400 naming a
+  // minimum the shopper had never been shown. Production carried 75 referral
+  // clicks and 0 referral orders.
+  //
+  // Thirty lines above, a STALE code is dropped rather than thrown, on the
+  // stated grounds that "a stale referral must never hard-block a legitimate
+  // sale". A code that is perfectly valid and merely arrived with a small
+  // basket has at least as good a claim.
+  //
+  // So the referral stays attached for ATTRIBUTION — payment-webhook.ts is
+  // already built to record a referral_orders row with an ineligible_reason and
+  // zero commission for exactly this case — while being inert for PRICING. The
+  // invariant that matters is "no undeserved discount", and that is enforced
+  // below by referralQualifiesForDiscount, not by refusing the sale.
+  //
+  // WHAT THIS FLAG IS, AND WHAT IT IS NOT. It answers only "is the basket big
+  // enough for the referral to compete", which is what resolveCustomerDiscount
+  // needs as an input. It is NOT "the shopper is getting a referral discount":
+  // the referral still has to WIN that contest, and it loses to Buy-3-Get-1, to
+  // quantity-bundle pricing, to membership, to bulk savings. Store credit and
+  // points are exclusive of a referral discount that is actually given, so they
+  // gate on the resolved outcome further down (`referralDiscountApplied`), not
+  // on this. Using this flag for them charged a shopper her own store-credit
+  // balance to buy a discount of $0.00.
+  let referralQualifiesForDiscount = false;
   if (referral) {
     const ambassadorSettings = await getAmbassadorProgramSettings();
-    if (subtotal < ambassadorSettings.minimumQualifyingOrder) {
-      throw new Error(`This referral code requires a minimum merchandise subtotal of $${ambassadorSettings.minimumQualifyingOrder.toFixed(2)}. Add more items or remove the referral code to continue.`);
-    }
+    referralQualifiesForDiscount = referralQualifies(subtotal, ambassadorSettings.minimumQualifyingOrder);
 
     const customerEmail = input.customer.email.trim().toLowerCase();
     const isSelfReferralByEmail = Boolean(referral.ambassadorEmail) && referral.ambassadorEmail!.trim().toLowerCase() === customerEmail;
@@ -657,8 +686,8 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       quantityBundleSavings,
       productCost: 0,
       bundleDiscount: buy3Get1Discount,
-      referralAccepted: Boolean(referral),
-      referralPercent: referral ? referral.discountPercent : 0,
+      referralAccepted: referralQualifiesForDiscount,
+      referralPercent: referralQualifiesForDiscount && referral ? referral.discountPercent : 0,
       isMember: memberPricingAmount > 0,
       membershipPercent: memberPerks.memberDiscountPercent,
       couponDiscount: coupon ? coupon.discountAmount : 0,
@@ -677,6 +706,17 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   );
   const discountAmount = customerDiscount.amount;
   const bulkDiscountTier = customerDiscount.label === "Bulk savings" ? bulkSavingsResult.tier : null;
+  // IS THE SHOPPER ACTUALLY GETTING A REFERRAL DISCOUNT?
+  //
+  // Read off the resolved winner rather than re-derived, because every
+  // re-derivation of this question has so far got it wrong. `components`
+  // carries "referral" only when the referral bucket beat every other
+  // candidate; it loses whenever a Buy-3-Get-1 bundle is present
+  // (`!isBundle && hasReferral`), whenever quantity-bundle pricing already in
+  // the subtotal competes it to zero, and whenever membership, bulk savings or
+  // an ambassador personal discount is worth more. In each of those the code is
+  // real, the basket qualifies, and the discount is exactly $0.00.
+  const referralDiscountApplied = customerDiscount.components.includes("referral") && discountAmount > 0;
 
   // Sales tax — dynamic, from the SHIPPING ADDRESS: collected only for
   // destinations in the admin-configured nexus states, at the destination
@@ -709,8 +749,12 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // (an unlocked ambassador on a performance tier earns more than their stored
   // rate). Using the stored rate here let a thin-margin order pass the guard yet
   // finalize below true break-even once the higher tier commission was applied.
+  // Only a QUALIFYING referral will accrue commission, so only a qualifying one
+  // may be charged for it here. Reserving a phantom commission on a basket that
+  // will never earn one tightens the break-even floor for no reason and can
+  // refuse the order outright with "Promotion unavailable on this order."
   let guardCommissionPercent = 0;
-  if (referral) {
+  if (referral && referralQualifiesForDiscount) {
     try {
       const effective = await getEffectiveCommissionPercent({ ambassadorId: referral.ambassadorId, fallbackPercent: referral.commissionPercent });
       guardCommissionPercent = Math.max(referral.commissionPercent, effective.percent);
@@ -735,7 +779,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
       subtotal,
       productCost: guardProductCost,
       bundleDiscount: 0,
-      referralAccepted: Boolean(referral),
+      referralAccepted: referralQualifiesForDiscount,
       referralPercent: 0,
       isMember: false,
       membershipPercent: 0,
@@ -784,29 +828,55 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   // meets the tier's redemption minimum (the margin guardrail). It's deducted
   // before points; the actual ledger deduction is recorded once the order is
   // paid (payment-webhook), and returned if the order is later refunded.
-  let storeCreditRedeemedCents = 0;
-  // Store credit, like points, never stacks with a referral code (referral is
-  // exclusive of every other discount).
-  if (!referral && memberPerks.storeCreditBalanceCents > 0 && Math.round(subtotal * 100) >= memberPerks.storeCreditMinOrderCents) {
-    storeCreditRedeemedCents = Math.max(0, Math.min(memberPerks.storeCreditBalanceCents, Math.round(totalBeforePoints * 100)));
-  }
+  // A REFERRAL THAT GIVES NOTHING IS NOT A DISCOUNT TO BE EXCLUSIVE OF.
+  //
+  // The rule is that store credit and points never stack with a referral
+  // DISCOUNT, and it is unchanged. What changed is the test for it. This read
+  // `!referral` — "a code is attached" — and while quoteOrder threw on a
+  // below-minimum referral that was close enough, because the inert case could
+  // not reach this line. Removing the throw made it reachable, the client and
+  // server stopped agreeing, and the shopper watched $50 of her own credit come
+  // off the displayed total before create-session refused the order and told
+  // her to refresh a page that recomputes the same number.
+  //
+  // The first repair swapped it for `!referralQualifiesForDiscount`, which is
+  // BASKET SIZE and only half the question. A $263.95 basket of five vials
+  // clears the $100 minimum, so the flag said yes — but quantity-bundle pricing
+  // had already granted $36.00 and competed the ambassador's $30.00 down to
+  // exactly $0.00. The shopper was charged $50 more than the same cart without
+  // the link, for a discount of nothing, on both the card and the express lane,
+  // with the two sides agreeing so nothing surfaced.
+  //
+  // `referralDiscountApplied` is the resolved outcome, so the rule now says
+  // what it always meant.
+  const storeCreditRedeemedCents = resolveStoreCreditCents({
+    referralDiscountApplied,
+    balanceCents: memberPerks.storeCreditBalanceCents,
+    minOrderCents: memberPerks.storeCreditMinOrderCents,
+    subtotalCents: Math.round(subtotal * 100),
+    redeemableCents: Math.round(totalBeforePoints * 100),
+  });
   const storeCreditDiscount = roundMoney(storeCreditRedeemedCents / 100);
   const totalAfterCredit = roundMoney(Math.max(0, totalBeforePoints - storeCreditDiscount));
 
   // Points redemption stacks with a coupon or Buy 3 Get 1 Free (it behaves
-  // like store credit, not a promo code) but never with a referral code -
-  // referral codes are exclusive of every other discount, so redemption is
-  // silently zeroed rather than erroring (points aren't something a shopper
-  // deliberately "combines"; the balance is just sitting on their account).
-  // Also capped to the remaining balance due and the customer's actual point
-  // balance.
+  // like store credit, not a promo code) but never with a referral DISCOUNT -
+  // and redemption is silently zeroed rather than erroring, because points
+  // aren't something a shopper deliberately "combines"; the balance is just
+  // sitting on their account. Capped to the balance still owed and to the
+  // customer's actual point balance.
+  //
+  // Same predicate as store credit directly above, and for the same reason.
   let pointsRedeemed = 0;
   let pointsDiscountAmount = 0;
-  if (!referral && input.customerUserId && input.pointsToRedeem && input.pointsToRedeem > 0) {
+  if (input.customerUserId && input.pointsToRedeem && input.pointsToRedeem > 0) {
     const balance = await getPointsBalance(input.customerUserId);
     const requestedPoints = Math.min(Math.floor(input.pointsToRedeem), balance);
-    const requestedDollars = pointsToDollars(requestedPoints);
-    pointsDiscountAmount = roundMoney(Math.min(requestedDollars, totalAfterCredit));
+    pointsDiscountAmount = roundMoney(resolvePointsRedemptionCents({
+      referralDiscountApplied,
+      requestedCents: Math.round(pointsToDollars(requestedPoints) * 100),
+      redeemableCents: Math.round(totalAfterCredit * 100),
+    }) / 100);
     pointsRedeemed = dollarsToPoints(pointsDiscountAmount);
   }
 

@@ -125,7 +125,11 @@ export function calculateCardProcessingFee(
 
 export function cardProcessingFeeNotice(config: CardProcessingFeeConfig): string {
   if (config.noticeText.trim()) return config.noticeText.trim();
-  return `A ${config.percentage}% processing fee applies to card payments.`;
+  // Uses the configured LABEL, so the disclosure names the charge exactly as
+  // the checkout line, the receipt and the invoice name it. The default text
+  // used to say "processing fee" while the line said "Service Fee" — one charge
+  // reading as two.
+  return `A ${config.percentage}% ${config.label} applies to card payments.`;
 }
 
 export const DEFAULT_PAYMENT_METHODS: PaymentMethodConfig[] = [

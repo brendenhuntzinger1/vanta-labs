@@ -4,3 +4,6 @@
 test-results/
 
 node_modules/
+
+# Local, per-developer Claude Code settings
+.claude/settings.local.json

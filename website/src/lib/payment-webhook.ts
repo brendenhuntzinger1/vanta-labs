@@ -20,6 +20,13 @@ import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inven
 import { after } from "next/server";
 import { syncOrderToShippo } from "@/lib/shippo/order-sync";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
+// The SAME rule quote-order.ts gates the discount on. Two copies of
+// "is this basket big enough" is how a customer ends up with the discount
+// while the ambassador silently earns nothing on the same order. No
+// reachable basket separates the two comparisons today — prices are whole
+// cents and their sums do not drift across the boundary — so this is
+// defensive, not a bug fix. It is here so the two can never drift apart.
+import { referralQualifies } from "@/lib/referral-qualification";
 import { activatePaidMembership, revokeMembershipForRefund } from "@/lib/membership-billing";
 import {
   isMembershipEvent,
@@ -820,7 +827,7 @@ async function ensureCommissionRecord(input: {
     ineligibleReason = "Commissions are paused.";
   } else if (!ambassadorApproved) {
     ineligibleReason = "Ambassador is not active.";
-  } else if (qualifyingSubtotal < ambassadorSettings.minimumQualifyingOrder) {
+  } else if (!referralQualifies(qualifyingSubtotal, ambassadorSettings.minimumQualifyingOrder)) {
     ineligibleReason = `Order subtotal ${qualifyingSubtotal.toFixed(2)} is below the ${ambassadorSettings.minimumQualifyingOrder.toFixed(2)} minimum qualifying order.`;
   }
 
@@ -1216,7 +1223,21 @@ export async function finalizeManualPayment(
       postalCode: order.postal_code ? String(order.postal_code) : null,
     });
   } catch (commissionError) {
+    // An ambassador's money just failed to accrue. This used to be a bare
+    // console.error, which reaches nobody: the webhook catches its own errors
+    // and returns JSON, so Next.js never sees a throw and Sentry never fires.
+    // recordSystemAlert is the one path that reaches both the admin alert list
+    // and Sentry. The commission is not lost — repairMissingCommissionAccruals
+    // re-derives it from the order row on the next half-hourly sweep — but
+    // "recovers silently" and "recovered" are not the same fact, and the owner
+    // must be able to tell whether a partner is waiting on a repair.
     console.error("Unable to record commission for manually approved order", orderId, commissionError);
+    await recordSystemAlert({
+      type: "commission_accrual_failed",
+      severity: "critical",
+      message: `Commission accrual failed for manually approved order ${orderId}. The half-hourly repair sweep should re-derive it; verify it did.`,
+      context: { orderId, lane: "manual", error: commissionError instanceof Error ? commissionError.message : String(commissionError) },
+    });
   }
 
   try {
@@ -1432,6 +1453,7 @@ export async function finalizeManualPayment(
       if (fin.degraded || fin.finalized === 0) {
         const decrement = await decrementInventoryForOrder(
           (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+          orderId,
         );
         if (decrement.failed > 0) {
           if (decrement.failed < decrement.attempted) partialLines = decrement;
@@ -1873,7 +1895,15 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           postalCode: eventPayload.customer?.postalCode,
         });
       } catch (commissionError) {
+        // Same reasoning as the manual lane above: reach the operator, not just
+        // the log stream. Recoverable via the repair sweep, but never silent.
         console.error("Unable to record commission for order", orderId, commissionError);
+        await recordSystemAlert({
+          type: "commission_accrual_failed",
+          severity: "critical",
+          message: `Commission accrual failed for order ${orderId}. The half-hourly repair sweep should re-derive it; verify it did.`,
+          context: { orderId, lane: "card", error: commissionError instanceof Error ? commissionError.message : String(commissionError) },
+        });
       }
 
       try {
@@ -2077,6 +2107,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
             if (soldItemsError) throw soldItemsError;
             decrement = await decrementInventoryForOrder(
               (soldItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+              orderId,
             );
           }
           if (decrement.failed > 0) {
@@ -2169,6 +2200,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         } else {
           await restockInventoryForOrder(
             (refundItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+            orderId,
           );
         }
       }

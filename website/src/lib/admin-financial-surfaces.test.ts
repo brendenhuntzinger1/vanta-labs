@@ -65,7 +65,7 @@ async function seed(orders: SeedOrder[]) {
     }
     if (order.commissionAmount !== undefined) {
       await pg.query(
-        `insert into public.commissions (order_id, commission_amount, payment_status) values ($1, $2, $3)`,
+        `insert into public.commissions (order_id, commission_amount, status) values ($1, $2, $3)`,
         [order.orderId, order.commissionAmount, order.commissionStatus ?? "pending"],
       );
     }

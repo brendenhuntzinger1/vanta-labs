@@ -1,10 +1,24 @@
 # Browser Testing Runbook — Blocks G + H
 
-**Problem this solves:** the audit environment's egress policy denies every
+> **Egress note, re-checked 2026-08-27: the block described below has lifted.**
+> `https://<ref>.supabase.co/rest/v1/` now answers from the real Supabase edge
+> (HTTP 401 `UNAUTHORIZED_MISSING_API_KEY`, with a matching `sb-project-ref`
+> header) — a reply, not a refusal. The original premise of this runbook no
+> longer holds, so **check egress yourself rather than assuming either way**; it
+> has moved once and may move again.
+>
+> The shim remains the recommended target, but for a better reason than the
+> original one: it is isolated *by construction*. It cannot reach production
+> even by accident, so no misconfiguration or stray write can touch live
+> customer data. Reach for a real Supabase project only when you specifically
+> need GoTrue auth or RLS (see the table below), and then use the **harness**
+> project (`snnezhxvssochqpqsjcm`), never production.
+
+**Problem this solved:** the audit environment's egress policy denied every
 `*.supabase.co` host. Confirmed by three separate sessions, including a
 brand-new one on the correct `vanta` environment. A locally running Next.js app
-therefore cannot reach any Supabase project, production or throwaway, and every
-browser phase was blocked — including the one that matters most, proving a
+therefore could not reach any Supabase project, production or throwaway, and
+every browser phase was blocked — including the one that matters most, proving a
 customer can complete a purchase.
 
 Real PostgREST cannot be downloaded either: GitHub release assets are proxied to
@@ -88,6 +102,45 @@ Mirror production **shapes**, not production data. At minimum:
   NULL (inherits program default), and `info_requested` (must be inert)
 - one coupon, one membership tier
 
+### 3b. Turn inventory tracking ON, or stock testing is meaningless
+
+**This one manufactures false P0s. Do not skip it.**
+
+`inventory.tracking_enabled` defaults to **false** (see
+`src/lib/inventory-settings.ts`, which documents why that default is
+deliberate). While it is off, `resolveStockStatus` in `catalog.ts` returns
+`In Stock` for *every* product regardless of quantity — so a zero-stock product
+renders a live ADD TO CART, adds to the cart, and is only refused at the final
+checkout step.
+
+A fresh harness has no `admin_control` rows at all, so it always starts in that
+state. **Production has tracking ON** (set 2026-08-25), so a harness left at the
+default does not match production and any stock finding from it is an artifact.
+Cost of not knowing this, 2026-08-27: a full false bug report claiming 8 live
+products were mis-selling, when the code was correct throughout.
+
+```bash
+psql -h /tmp -p 55432 -U postgres -d storefront -c "
+insert into admin_audit_logs (actor_user_id, action, target_table, target_id, metadata)
+values (null, 'admin_control_upsert', 'inventory', 'tracking_enabled', '{\"value\": true}'::jsonb);"
+```
+
+The `action` must be exactly `admin_control_upsert` — the `admin_control_current`
+view filters on it, so any other action string inserts a row the app never sees.
+
+Confirm it took, then **clear the cache and restart** (`getCatalogProducts` is
+`unstable_cache`-wrapped, so a stale catalogue survives the settings change):
+
+```bash
+psql -h /tmp -p 55432 -U postgres -d storefront -tAc \
+  "select target_id, metadata from admin_control_current where target_table='inventory';"
+rm -rf .next/cache && npm run harness:start
+```
+
+With tracking on, a parent-zero/all-doses-zero product correctly renders
+`OUT OF STOCK` with a `NOTIFY ME` button in place of the buy CTA, and a
+parent-zero/dose-stocked product (F-001) correctly stays purchasable.
+
 ### 4. Start the shim
 
 ```bash
@@ -118,16 +171,99 @@ NEXT_PUBLIC_EXPRESS_CHECKOUT_ENABLED=false
 `EMAIL_ENABLED=false` and `PAYMENT_PROVIDER=mock` are load-bearing: they make it
 impossible for a synthetic test to mail a real person or reach a real processor.
 
+### 5b. Env goes in `.env.test.local`, NOT `.env.local`
+
+`harness:build` and `harness:start` both set `NODE_ENV=test`, and Next does not
+load `.env.local` in test — see
+`node_modules/next/dist/docs/01-app/02-guides/environment-variables.md`:
+*".env.local won't be loaded, as you expect tests to produce the same results
+for everyone."* Section 5 above tells you to put everything in the one file the
+harness cannot read. Symptom: `Missing NEXT_PUBLIC_SUPABASE_URL` and every
+product page 500s.
+
+Put the same contents in **`.env.test.local`** (also gitignored). Keep
+`.env.local` too if you ever run `next dev`.
+
 ### 6. Build and run — NOT dev
 
 ```bash
-npm run build && npm run start
+npm run harness:build && npm run harness:start
 ```
 
 **Never `npm run dev` in this environment.** The HMR socket is blocked, Next
 retries continuously, and Fast Refresh resets React state mid-test. That
 produces convincing false bugs — it made a working age gate look like an
-un-passable P0 earlier in this audit.
+un-passable P0 earlier in this audit. (Re-confirmed 2026-08-26: in dev the age
+gate cannot be passed even with all four boxes genuinely checked.)
+
+**Clear `.next/cache` after any schema or settings change.** `getCatalogProducts`
+is wrapped in `unstable_cache`, which caches FAILURES and persists across
+restarts, so a fix looks like a no-op until you do:
+
+```bash
+rm -rf .next && npm run harness:build
+```
+
+### 7. Payments: run LIVE mode against a local stub
+
+Do **not** try to use `PAYMENT_PROVIDER=mock` on a production build, and do not
+weaken the lockout to make it work. The guard
+
+```js
+if (process.env.NODE_ENV === "production") throw new Error("PAYMENT_PROVIDER=mock/test is forbidden…")
+```
+
+is **constant-folded away at build time** — the compiled bundle contains an
+unconditional throw:
+
+```js
+if ("mock" === t || "test" === t) throw Error("PAYMENT_PROVIDER=mock/test is forbidden in production…")
+```
+
+so `harness-server.mjs`'s runtime `NODE_ENV = "test"` cannot re-open it; the
+check no longer exists to re-evaluate. That control is correct and must stay.
+
+Instead, run the **real live provider against a local stub**. `VEYRA_API_BASE`
+is a required env var read by both `LivePaymentProvider.createCheckoutSession`
+and the express service, so pointing it at localhost exercises the genuine code
+path and reaches no real processor:
+
+```
+PAYMENT_PROVIDER=live
+VEYRA_API_BASE=http://127.0.0.1:59999
+VEYRA_SECRET_KEY=stub-secret-not-real
+CHECKOUT_ENABLED=true
+```
+
+```bash
+node scripts/veyra-stub.mjs      # mints session ids only; never marks anything paid
+```
+
+> `scripts/veyra-stub.mjs` originates from the live-inspection session
+> (`claude/vanta-labs-live-inspection-h1eh4f`). If it is not on your branch yet,
+> take it from there rather than writing a second one.
+
+Then drive the outcome with a signed webhook through the real handler:
+
+```bash
+PAYMENT_WEBHOOK_SECRET=<your harness secret> \
+  node scripts/harness-pay-order.mjs <order_id>                      # success
+PAYMENT_WEBHOOK_SECRET=... HARNESS_EVENT_TYPE=payment.failed \
+  node scripts/harness-pay-order.mjs <order_id>                      # decline
+```
+
+`HARNESS_EVENT_TYPE` also accepts `payment.canceled` and `refund.completed`.
+
+**This gets you the full loop** — checkout UI → order → payment outcome →
+success/decline UI — on a production build, with production protections intact.
+Verified 2026-08-26: the decline message, the poll stopping, and the paid-order
+redirect to confirmation were all browser-proven this way.
+
+**What it still cannot do:** mount the real card iframe. `SCRIPT_SRC` in
+`VeyraCheckout.tsx` is hardcoded to `https://veyragate.com/v1/checkout.js`, and
+it should stay hardcoded — an env-configurable script src on a payment page is a
+way to point the card form at an arbitrary script. The poll runs independently
+of the iframe, which is why the decline and success paths are still reachable.
 
 ---
 

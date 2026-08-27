@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { planInventoryAdjustments, type OrderItemRef } from "@/lib/inventory-fulfillment";
+import { planInventoryAdjustments, readQuantityAfter, type OrderItemRef } from "@/lib/inventory-fulfillment";
+import { recordInventoryTransaction } from "@/lib/inventory-ledger";
 import { invalidateCatalogCache } from "@/lib/catalog-cache";
 import { recordSystemAlert } from "@/lib/monitoring";
 
@@ -199,11 +200,87 @@ export function __resetInventoryAlertThrottle(): void {
   lastInventoryAlertAt.clear();
 }
 
+/**
+ * The holds the finalize RPC is ABOUT to turn into deductions.
+ *
+ * Read BEFORE the RPC runs, because that is the only moment they are
+ * identifiable: afterwards their status is 'finalized' and they are
+ * indistinguishable from lines a previous run already committed. Reading after
+ * would attribute an earlier sale's units to this one on every replay.
+ *
+ * Best-effort. A failed read costs the ledger its rows, never the deduction —
+ * the RPC that actually moves the stock does not depend on this.
+ */
+async function readPendingHolds(
+  orderId: string,
+): Promise<Array<{ slug: string; variantId: string | null; quantity: number }>> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("inventory_reservations")
+      .select("slug, variant_id, quantity")
+      .eq("order_id", orderId)
+      .eq("status", "active");
+    if (error || !data) return [];
+    return (data as Array<{ slug?: string | null; variant_id?: string | null; quantity?: number | null }>)
+      .map((row) => ({
+        slug: String(row.slug ?? ""),
+        variantId: row.variant_id ? String(row.variant_id) : null,
+        quantity: Math.trunc(Number(row.quantity ?? 0)),
+      }))
+      .filter((line) => line.slug.length > 0 && line.quantity > 0);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * WRITE DOWN THAT THE SHELF MOVED.
+ *
+ * `finalize_inventory_for_order` deducts stock inside Postgres and returns only
+ * a count, so nothing about the movement reached `inventory_transactions` — the
+ * admin's inventory history showed a shelf that only ever moved when a human
+ * touched it. On 2026-08-27 the operator, seeing no sale row for the store's
+ * first real customer order, decremented BAC Water a second time by hand. The
+ * automatic deduction had already run.
+ *
+ * `quantity_before` is derived from the observed after-value and the units this
+ * order took, rather than read separately before the RPC. That is deliberate:
+ * it is the same convention the fallback path uses, and it cannot be skewed by
+ * an admin edit landing between the two reads.
+ */
+async function recordFinalizedHolds(
+  orderId: string,
+  holds: Array<{ slug: string; variantId: string | null; quantity: number }>,
+): Promise<void> {
+  for (const hold of holds) {
+    try {
+      const { after, productId } = await readQuantityAfter(hold);
+      await recordInventoryTransaction({
+        productId: productId ?? hold.slug,
+        doseId: hold.variantId,
+        type: "order_completed",
+        delta: -hold.quantity,
+        quantityBefore: after === null ? null : after + hold.quantity,
+        quantityAfter: after,
+        reason: `Sold on ${orderId}`,
+        actor: "payment_webhook",
+        orderId,
+      });
+    } catch (error) {
+      // Never fail a committed deduction over its audit row.
+      console.error("Unable to record finalized inventory movement", orderId, hold.slug, error);
+    }
+  }
+}
+
 // A verified payment permanently deducts every active hold for the order.
 // Idempotent (a replay finds them already finalized). `finalized` is the number
 // of lines deducted; `degraded` means the RPC is unavailable so the caller must
 // fall back to the legacy decrement.
 export async function finalizeInventoryForOrder(orderId: string): Promise<{ finalized: number; degraded: boolean }> {
+  // Captured before the RPC — see readPendingHolds. On a replay this is empty,
+  // which is exactly why a replay adds no ledger rows.
+  const pendingHolds = await readPendingHolds(orderId);
   try {
     const { data, error } = await supabaseAdmin.rpc("finalize_inventory_for_order", { p_order_id: orderId });
     if (error) {
@@ -211,7 +288,15 @@ export async function finalizeInventoryForOrder(orderId: string): Promise<{ fina
       return { finalized: 0, degraded: true };
     }
     invalidateCatalogCache();
-    return { finalized: Number(data ?? 0), degraded: false };
+    const finalized = Number(data ?? 0);
+    // Only when the RPC actually moved something. Recording a movement that did
+    // not happen is the same class of error as not recording one that did, and
+    // the caller runs the fallback decrement on `finalized === 0` — which
+    // writes its own rows.
+    if (finalized > 0) {
+      await recordFinalizedHolds(orderId, pendingHolds);
+    }
+    return { finalized, degraded: false };
   } catch (error) {
     await reportInventoryRpcFailure("finalize_inventory_for_order", orderId, error);
     return { finalized: 0, degraded: true };

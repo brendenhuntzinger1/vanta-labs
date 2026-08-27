@@ -9,6 +9,7 @@ import { US_STATE_TAX_TABLE } from "@/lib/sales-tax";
 // module graph reaches it (even for an unrelated, dependency-free export).
 // This client-safe file holds the one piece this component actually needs.
 import { describeEffectiveRate, PROCESSING_FEE_DEFAULT_PERCENT } from "@/lib/admin-control-shared";
+import { buildControlUpdates, type ControlUpdate } from "@/lib/admin-control-updates";
 
 type ControlSnapshot = Record<string, Record<string, unknown>>;
 
@@ -48,6 +49,18 @@ function parseCsv(value: string) {
 
 export function AdminControlCenterClient() {
   const [saving, setSaving] = useState(false);
+  /**
+   * Whether a snapshot has actually landed (F-02).
+   *
+   * Every field below initialises blank, so an unloaded form and a form the
+   * operator emptied by hand are the same object. Until this is true the save
+   * button is disabled and buildControlUpdates refuses to emit anything --
+   * because on 2026-08-15 a save over an unloaded form wrote "" across every
+   * key it owns, and the store stopped charging sales tax for eight days.
+   */
+  const [loaded, setLoaded] = useState(false);
+  /** The stored snapshot the fields were populated from, keyed "section.key". */
+  const [baseline, setBaseline] = useState<Record<string, unknown>>({});
   const [quickSaving, setQuickSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -131,7 +144,11 @@ export function AdminControlCenterClient() {
       error?: string;
     };
     if (!res.ok || !json.success) {
-      setMessage(json.error ?? "Unable to load settings");
+      // Stay UNLOADED on failure. The previous version only set a message and
+      // left the save button live over a form full of empty inputs, which is
+      // one of the two ways the 2026-08-15 blanking save became possible.
+      setLoaded(false);
+      setMessage(json.error ?? "Unable to load settings — settings cannot be saved until this succeeds.");
       return;
     }
 
@@ -214,6 +231,18 @@ export function AdminControlCenterClient() {
     );
     setProfitFeeIncludesTax(profit.processing_fee_includes_tax !== false && profit.processing_fee_includes_tax !== "false");
     setProfitCountTax(profit.count_sales_tax_as_profit !== false && profit.count_sales_tax_as_profit !== "false");
+
+    // Remember exactly what was stored, so a save can send the operator's edits
+    // rather than the whole form. Flattened to the "section.key" paths
+    // buildControlUpdates compares against.
+    const flattened: Record<string, unknown> = {};
+    for (const [section, entries] of Object.entries(next)) {
+      for (const [key, value] of Object.entries(entries ?? {})) {
+        flattened[`${section}.${key}`] = value;
+      }
+    }
+    setBaseline(flattened);
+    setLoaded(true);
   };
 
   useEffect(() => {
@@ -249,10 +278,18 @@ export function AdminControlCenterClient() {
   }, []);
 
   const saveAll = async () => {
+    // RULE 1 (F-02): an unloaded form cannot write. Belt and braces with the
+    // disabled button -- a keyboard submit or a double click during the load
+    // window must not reach the network either.
+    if (!loaded) {
+      setMessage("Settings have not loaded yet — nothing was saved.");
+      return;
+    }
+
     setSaving(true);
     setMessage(null);
 
-    const updates = [
+    const desired: ControlUpdate[] = [
       { section: "homepage", key: "hero_headline", value: homepageHeroHeadline },
       { section: "homepage", key: "hero_subheadline", value: homepageHeroSubheadline },
       { section: "homepage", key: "promo_ticker_items", value: parseCsv(homepageTickerItems) },
@@ -313,6 +350,17 @@ export function AdminControlCenterClient() {
       { section: "profit", key: "count_sales_tax_as_profit", value: profitCountTax },
     ];
 
+    // RULE 2 (F-02): send the edit, not the form. Unchanged keys are dropped,
+    // and emptying a populated setting is tagged as a deliberate clear so the
+    // server can tell it apart from an accidental blank.
+    const updates = buildControlUpdates({ loaded, desired, baseline });
+
+    if (updates.length === 0) {
+      setMessage("No changes to save.");
+      setSaving(false);
+      return;
+    }
+
     const res = await fetch("/api/admin/control", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -326,7 +374,7 @@ export function AdminControlCenterClient() {
       return;
     }
 
-    setMessage("Control center updates saved and synced.");
+    setMessage(`Saved ${updates.length} change${updates.length === 1 ? "" : "s"}: ${updates.map((u) => `${u.section}.${u.key}`).join(", ")}.`);
     setSaving(false);
     void loadSnapshot();
   };
@@ -395,8 +443,8 @@ export function AdminControlCenterClient() {
             >
               {quickSaving ? "Updating..." : maintenanceMode ? "Unfreeze Site" : "Freeze Site Now"}
             </button>
-            <button type="button" onClick={saveAll} disabled={saving} className="vl-btn-primary vl-focus-ring px-5 py-3 text-sm disabled:opacity-60">
-              {saving ? "Saving..." : "Save All Changes"}
+            <button type="button" onClick={saveAll} disabled={saving || !loaded} className="vl-btn-primary vl-focus-ring px-5 py-3 text-sm disabled:opacity-60">
+              {saving ? "Saving..." : loaded ? "Save Changes" : "Loading settings..."}
             </button>
           </div>
         </div>
@@ -545,6 +593,34 @@ export function AdminControlCenterClient() {
             ) : null}
             <div className="mt-3 space-y-3 text-sm">
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralEnabled} onChange={(e) => setReferralEnabled(e.target.checked)} /> Referral program enabled</label>
+              {/* WHY THIS WARNING EXISTS, AND WHAT IT IS CAREFUL NOT TO SAY.
+                  Turning the program off does not just stop NEW codes: every
+                  link already shared keeps sending shoppers, and each of them
+                  now checks out at full price with no attribution, so the
+                  ambassador earns nothing on a sale she generated. It used to
+                  be worse — the order was refused outright at the pay button —
+                  and the cart now drops the code instead, but "the customer
+                  quietly loses the discount you promised them" is still the
+                  consequence an operator needs to see before ticking this.
+                  The pause switch below is almost always the intended action,
+                  so it is named here rather than left to be discovered. */}
+              {!referralEnabled ? (
+                <p className="rounded-lg border border-amber-400/30 bg-amber-400/[0.06] px-3 py-2 text-xs leading-5 text-amber-200/90">
+                  <strong className="font-semibold">Every referral link you have already shared stops giving a discount.</strong>{" "}
+                  Those links keep working and keep sending shoppers, but the code is dropped from their cart: they
+                  pay full price, and the ambassador earns nothing on a sale she sent you. Nobody is blocked from
+                  checking out. Ambassadors still get their own personal discount while this is off.
+                  <br />
+                  To stop paying new commissions while your ambassadors&apos; customers keep their discount, use{" "}
+                  <span className="font-semibold">Pause new commissions</span> below instead.
+                </p>
+              ) : (
+                <p className="text-xs leading-5 text-zinc-500">
+                  Turning this off drops the code from the cart of everyone already holding a referral link — they pay
+                  full price and the ambassador earns nothing on the sale. To stop paying commissions while their
+                  customers keep the discount, use <span className="text-zinc-400">Pause new commissions</span> below.
+                </p>
+              )}
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralCommissionsPaused} onChange={(e) => setReferralCommissionsPaused(e.target.checked)} /> Pause new commissions (codes still give the customer discount)</label>
               <label className="block text-zinc-300">Ambassador personal discount (% off their own orders)<input value={referralPersonalDiscount} onChange={(e) => setReferralPersonalDiscount(e.target.value)} placeholder="20" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="block text-zinc-300">Default commission rate (% when an ambassador has no custom rate)<input value={referralDefaultCommission} onChange={(e) => setReferralDefaultCommission(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
@@ -604,7 +680,7 @@ export function AdminControlCenterClient() {
           <p className="mt-2 text-sm text-zinc-400">Use these modules for customer history, low-stock visibility, and sales insights. Additional controls can be layered into this center without code changes.</p>
           <div className="mt-3 flex flex-wrap gap-2">
             <Link href="/admin/orders" className="vl-btn-secondary px-4 py-2 text-xs">Orders</Link>
-            <Link href="/admin/products" className="vl-btn-secondary px-4 py-2 text-xs">Inventory</Link>
+            <Link href="/admin/inventory" className="vl-btn-secondary px-4 py-2 text-xs">Inventory</Link>
             <Link href="/admin/partners" className="vl-btn-secondary px-4 py-2 text-xs">Partner Analytics</Link>
           </div>
         </div>

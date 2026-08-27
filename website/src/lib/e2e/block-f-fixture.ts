@@ -69,6 +69,13 @@ create table public.order_items (
   unit_cost_cents integer
 );
 
+-- status, NOT payment_status. This fixture previously invented a
+-- payment_status column, so the financial-reporting suites proved admin-profit
+-- worked against a schema production does not have -- while in production the
+-- same read failed with 42703 and silently reported no commission at all on
+-- every order. The column name here is load-bearing: it is the only thing that
+-- makes these tests a proof rather than a tautology.
+--
 -- MIRRORS THE VERIFIED PRODUCTION COLUMN SET, NOT a convenient subset.
 --
 -- This fixture used to declare payment_status here. That column belongs to

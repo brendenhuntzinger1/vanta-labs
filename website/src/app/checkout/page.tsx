@@ -8,10 +8,11 @@ import { getBundleDiscountedLineTotal } from "@/lib/bundle-pricing";
 import { readAttributionForCheckout } from "@/lib/attribution-client";
 import { calculateShipping, isDomesticCountry } from "@/lib/shipping";
 import { resolveSalesTax } from "@/lib/sales-tax";
-import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
+import { useApplePayOffered } from "@/components/use-apple-pay-offered";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { pointsToDollars } from "@/lib/points-math";
+import { resolvePointsRedemptionCents, resolveStoreCreditCents } from "@/lib/store-credit-redemption";
 import {
   REQUIRED_CONFIRMATIONS,
   defaultAcknowledgements,
@@ -223,7 +224,9 @@ export default function CheckoutPage() {
     appliedDiscountLabel,
     autoBestDiscountApplied,
     referralCode,
-    referralDetails,
+    referralStatusText,
+    referralNeedsMoreToQualify,
+    referralDiscountApplied,
     referralError,
     referralSuccess,
     applyReferralCode,
@@ -232,7 +235,7 @@ export default function CheckoutPage() {
     couponCode,
     couponDetails,
     couponError,
-    couponSuccess,
+    couponOutcome,
     applyCouponCode,
     clearCouponCode,
     isApplyingCoupon,
@@ -260,6 +263,10 @@ export default function CheckoutPage() {
     setShippingProtectionEnabled,
     shippingProtectionFee,
   } = useCart();
+
+  // Whether Apple Pay may be advertised at all — the same predicate the express
+  // button uses to decide whether to render.
+  const applePayOffered = useApplePayOffered();
 
   const [acknowledgements, setAcknowledgements] =
     useState<ComplianceAcknowledgements>(defaultAcknowledgements);
@@ -351,16 +358,27 @@ export default function CheckoutPage() {
   const totalBeforeCredit = Math.max(0, subtotal + shipping + taxAmount - discountAmount);
   // Membership store credit auto-applies when the merchandise subtotal meets
   // the tier's redemption minimum (mirrors payment-service.ts).
-  const storeCreditApplied = useMemo(() => {
-    if (referralDetails) return 0; // referral codes are exclusive of store credit
-    if (storeCreditBalanceCents <= 0) return 0;
-    if (Math.round(subtotal * 100) < storeCreditMinOrderCents) return 0;
-    return Math.min(storeCreditBalanceCents / 100, totalBeforeCredit);
-  }, [referralDetails, storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforeCredit]);
+  // Shared verbatim with quote-order.ts and cart-context.tsx — this figure is
+  // posted as expectedTotal, and a server that computes a higher one refuses
+  // the order outright.
+  const storeCreditApplied = useMemo(
+    () => resolveStoreCreditCents({
+      referralDiscountApplied,
+      balanceCents: storeCreditBalanceCents,
+      minOrderCents: storeCreditMinOrderCents,
+      subtotalCents: Math.round(subtotal * 100),
+      redeemableCents: Math.round(totalBeforeCredit * 100),
+    }) / 100,
+    [referralDiscountApplied, storeCreditBalanceCents, storeCreditMinOrderCents, subtotal, totalBeforeCredit],
+  );
   const totalBeforePoints = Math.max(0, totalBeforeCredit - storeCreditApplied);
   const pointsRedeemedDiscount = useMemo(
-    () => (referralDetails ? 0 : Math.min(pointsToDollars(pointsToRedeem), totalBeforePoints)),
-    [referralDetails, pointsToRedeem, totalBeforePoints],
+    () => resolvePointsRedemptionCents({
+      referralDiscountApplied,
+      requestedCents: Math.round(pointsToDollars(pointsToRedeem) * 100),
+      redeemableCents: Math.round(totalBeforePoints * 100),
+    }) / 100,
+    [referralDiscountApplied, pointsToRedeem, totalBeforePoints],
   );
   // `total` is the pre-payment-method total sent to the server as
   // expectedTotal (matches the server's own recompute exactly). The card
@@ -1053,7 +1071,7 @@ export default function CheckoutPage() {
                     )}
                     {referralSuccess ? <p className="mt-2 text-xs text-emerald-300">{referralSuccess}</p> : null}
                     {referralError ? <p className="mt-2 text-xs text-rose-300">{referralError}</p> : null}
-                    {referralDetails ? <p className="mt-2 text-xs text-white/45">{referralDetails.ambassadorName} · {referralDetails.customerDiscountPercent}% off</p> : null}
+                    {referralStatusText ? <p className={`mt-2 text-xs ${referralNeedsMoreToQualify ? "text-amber-300/80" : "text-white/45"}`}>{referralStatusText}</p> : null}
                     {referralCode && !isBuy3Get1FreeActive ? (
                       <button type="button" onClick={() => { clearReferralCode(); setReferralInput(""); }} className="vl-focus-ring mt-2 text-xs text-white/35 transition hover:text-white">Remove code</button>
                     ) : null}
@@ -1086,9 +1104,17 @@ export default function CheckoutPage() {
                         </button>
                       </div>
                     )}
-                    {couponSuccess ? <p className="mt-2 text-xs text-emerald-300">{couponSuccess}</p> : null}
+                    {couponOutcome ? (
+                      <p className={`mt-2 text-xs ${couponOutcome.controlsPrice ? "text-emerald-300" : "text-amber-300/90"}`}>
+                        {couponOutcome.message}
+                      </p>
+                    ) : null}
                     {couponError ? <p className="mt-2 text-xs text-rose-300">{couponError}</p> : null}
-                    {couponDetails ? (
+                    {/* The headline offer is shown ONLY while the coupon is the
+                        discount actually controlling the price. Quoting "10% off"
+                        beside a total the code did not move is what made the old
+                        copy misleading. */}
+                    {couponDetails && couponOutcome?.controlsPrice ? (
                       <p className="mt-2 text-xs text-white/45">{couponDetails.code} · {couponDetails.discountType === "fixed" ? formatCartCurrency(couponDetails.discountValue) : `${couponDetails.discountValue}%`} off</p>
                     ) : null}
                     {couponCode && !isBuy3Get1FreeActive ? (
@@ -1103,9 +1129,9 @@ export default function CheckoutPage() {
                       <p className="text-xs text-white/45">
                         <span className="text-white/80">{pointsBalance.toLocaleString()}</span> available ({formatCartCurrency(pointsBalance / 100)} value).
                       </p>
-                      {referralDetails ? (
+                      {referralDiscountApplied ? (
                         <p className="mt-2 rounded-xl border border-white/[0.08] bg-white/[0.02] px-3.5 py-2.5 text-xs text-white/55">
-                          A referral code is applied. Remove it to redeem points.
+                          A referral discount is applied. Remove the code to redeem points.
                         </p>
                       ) : pointsBalance > 0 ? (
                         <div className="mt-2 flex items-center gap-2">
@@ -1331,7 +1357,11 @@ export default function CheckoutPage() {
             {ctaLabel}
           </button>
           <p className="mt-2 text-center text-[10px] text-white/25">
-            {EXPRESS_CHECKOUT_ENABLED ? "Apple Pay · Visa · Mastercard · Amex · Discover" : "Visa · Mastercard · Amex · Discover"}
+            {/* Gated on the SAME predicate as the express button. Keying this
+                off the feature flag alone advertised Apple Pay on desktop
+                Chrome and, worse, to an iPhone on an unregistered host where
+                no button ever renders. */}
+            {applePayOffered ? "Apple Pay · Visa · Mastercard · Amex · Discover" : "Visa · Mastercard · Amex · Discover"}
           </p>
         </div>
       ) : null}

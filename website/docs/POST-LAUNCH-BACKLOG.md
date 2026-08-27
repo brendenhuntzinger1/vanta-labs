@@ -198,3 +198,47 @@ fix, and customer-invisible.
 Alternatively, probe `information_schema` once per process instead of probing by
 provoking an error — but the migration is the smaller change.
 
+
+---
+
+## SECURITY REVIEW: `/api/mcp/*` routes proposed on an unmerged branch
+
+**Status:** open, unmerged. Raised 2026-08-26 from the checkout-flow lane.
+Recorded here only — that branch was deliberately NOT touched by this lane.
+
+**Branch.** `copilot/add-mcp-server-with-devtools-integration`
+(`46b5df2`, `9d432d8`; last activity 2026-08-25). It adds 16 files, among them:
+
+    website/src/app/api/mcp/contexts/route.ts
+    website/src/app/api/mcp/contexts/[contextId]/route.ts
+    website/src/app/api/mcp/events/route.ts
+    website/src/app/api/mcp/ws/route.ts
+    website/devtools/mcp-extension/*      (a browser extension)
+
+**Why it is on this list.** The project's own working agreement says, verbatim:
+
+> Never add `/api/mcp/*` routes, browser-control endpoints, or debugging
+> backdoors to the customer-facing app. All tooling here is development-only
+> and lives outside the Next.js runtime.
+
+The branch does exactly the thing that rule names. These are unauthenticated-by-
+default route handlers inside the customer-facing Next.js app, plus a WebSocket
+endpoint and an extension that drives the browser — a remote-control surface on
+the same origin that serves checkout. The blast radius is the storefront itself,
+so the question is not style: it is whether a public deployment would expose
+context read/write and event streaming to anyone who can reach the domain.
+
+**Do not merge it without a security review that establishes, at minimum:**
+
+1. Whether the routes ship in a production build at all, or are dead-coded out.
+2. Auth on every handler, including the `ws` upgrade path.
+3. What `contexts` can read or mutate, and whether any of it reaches order,
+   customer or payment data.
+4. Whether the extension can be pointed at the production origin.
+
+**Recommended default:** move the whole surface out of `website/src/app` and run
+it as a separate development-only process, which is what the working agreement
+already prescribes. That removes the question rather than answering it.
+
+**Not investigated here.** This lane read the branch's file list only; no code on
+it was reviewed, run, or modified.

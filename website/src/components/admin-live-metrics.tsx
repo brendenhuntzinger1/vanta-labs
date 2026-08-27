@@ -102,18 +102,12 @@ export function AdminLiveMetrics({ initial }: { initial: MetricsState }) {
 
   return (
     <>
-      <div className="vl-panel rounded-2xl p-4">
-        <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Revenue Today</p>
-        <p className="mt-2 text-2xl font-semibold text-white">{money(metrics.revenue.today)}</p>
-      </div>
-      <div className="vl-panel rounded-2xl p-4">
-        <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Revenue Last 7 Days</p>
-        <p className="mt-2 text-2xl font-semibold text-white">{money(metrics.revenue.last7Days)}</p>
-      </div>
-      <div className="vl-panel rounded-2xl p-4">
-        <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Revenue Last 30 Days</p>
-        <p className="mt-2 text-2xl font-semibold text-white">{money(metrics.revenue.last30Days)}</p>
-      </div>
+      {/*
+        Revenue today / 7d / 30d used to be three tiles here AND the subline of
+        the "Revenue \u00b7 30d" tile above — the same three numbers rendered twice in
+        one row, taking the space the work queue needed. The tile above is the
+        one that stays; the trend chart below carries the range detail.
+      */}
       <div className="vl-panel rounded-2xl p-4">
         <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Online Now (5m)</p>
         <p className="mt-2 text-2xl font-semibold text-white">{metrics.onlineNow}</p>

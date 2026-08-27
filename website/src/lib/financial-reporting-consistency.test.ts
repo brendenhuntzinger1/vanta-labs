@@ -86,7 +86,10 @@ create table orders (
   actual_shipping_cost_cents integer, shipping_cost_source text, profit_finalized boolean not null default false,
   paid_at timestamptz, created_at timestamptz not null);
 create table order_items (id bigserial primary key, order_id text not null, quantity integer not null default 1, unit_cost_cents integer);
-create table commissions (id bigserial primary key, order_id text not null, commission_amount numeric(12,2) not null default 0, payment_status text not null default 'pending');
+-- status, NOT payment_status: production's commissions table has no
+-- payment_status column, and a fixture that invents one turns this suite into a
+-- tautology (see supabase-schema-parity.test.ts).
+create table commissions (id bigserial primary key, order_id text not null, commission_amount numeric(12,2) not null default 0, status text not null default 'pending');
 `;
 
 let activeClient: Client;

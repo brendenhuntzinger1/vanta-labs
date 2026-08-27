@@ -1,5 +1,14 @@
 import type { EmailTemplate } from "@/lib/email/types";
 import { formatDisplayDate } from "@/lib/format-date";
+import { DEFAULT_CARD_PROCESSING_FEE } from "@/lib/payment-methods";
+import { DEFAULT_COMMISSION_HOLD_DAYS } from "@/lib/referral-config";
+
+// ONE CHARGE, ONE NAME. The receipt used to call the card surcharge "Card
+// processing fee" while the checkout screen called it "Service Fee" and the
+// confirmation page called it "Shipping protection" — three names for one line,
+// on three screens the same customer sees within a minute of paying. This is
+// the same label the checkout screen, the invoice and Admin → Payments use.
+const CARD_FEE_LABEL = DEFAULT_CARD_PROCESSING_FEE.label;
 
 function escapeHtml(value: string) {
   return value
@@ -201,7 +210,7 @@ export function orderConfirmationTemplate(input: {
           ${summaryRow("Shipping", money(input.shipping))}
           ${savings > 0 ? summaryRow("Discounts &amp; credits", `-${money(savings)}`) : ""}
           ${tax > 0 ? summaryRow("Sales tax", money(tax)) : ""}
-          ${cardFee > 0 ? summaryRow("Card processing fee", money(cardFee)) : ""}
+          ${cardFee > 0 ? summaryRow(escapeHtml(CARD_FEE_LABEL), money(cardFee)) : ""}
           ${addOn > 0 ? summaryRow("Shipping protection", money(addOn)) : ""}
           ${summaryRow("Total", money(input.total), { bold: true })}
         </table>
@@ -218,7 +227,7 @@ export function orderConfirmationTemplate(input: {
       `Shipping: ${money(input.shipping)}`,
       savings > 0 ? `Discounts & credits: -${money(savings)}` : null,
       tax > 0 ? `Sales tax: ${money(tax)}` : null,
-      cardFee > 0 ? `Card processing fee: ${money(cardFee)}` : null,
+      cardFee > 0 ? `${CARD_FEE_LABEL}: ${money(cardFee)}` : null,
       addOn > 0 ? `Shipping protection: ${money(addOn)}` : null,
       `Total: ${money(input.total)}`,
       "",
@@ -566,7 +575,10 @@ export function ambassadorApprovedTemplate(input: {
   const commissionPct = Number.isFinite(input.commissionPercent) ? Number(input.commissionPercent) : 10;
   const personalPct = Number.isFinite(input.personalDiscountPercent) ? Number(input.personalDiscountPercent) : 20;
   const referralPct = Number.isFinite(input.referralDiscountPercent) ? Number(input.referralDiscountPercent) : 10;
-  const holdDays = Number.isFinite(input.holdDays) ? Number(input.holdDays) : 14;
+  // The programme default (30), not a literal 14 — the approval email told
+  // new ambassadors the wrong hold whenever the caller could not resolve the
+  // configured value.
+  const holdDays = Number.isFinite(input.holdDays) ? Number(input.holdDays) : DEFAULT_COMMISSION_HOLD_DAYS;
 
   const bodyHtml = `
     <p>Congratulations, ${name} — your application to the Vanta Labs Ambassador Program has been <strong>approved</strong>. Welcome aboard.</p>

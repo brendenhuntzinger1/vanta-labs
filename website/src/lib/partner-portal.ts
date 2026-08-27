@@ -16,6 +16,7 @@ import { getSiteUrl } from "@/lib/env";
 import { DEFAULT_REFERRAL_DISCOUNT_PERCENT, getBusinessSettings, getReferralProgramConfig } from "@/lib/admin-control";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { getAmbassadorProgramSettings, getAmbassadorMarketingResources, type AmbassadorMarketingResource } from "@/lib/ambassador-settings";
+import { DEFAULT_COMMISSION_HOLD_DAYS } from "@/lib/referral-config";
 
 function formatSupabaseError(error: unknown) {
   if (!error) {
@@ -55,6 +56,23 @@ export interface PartnerSummary {
   // ambassador with no override sees the program default, because that is what
   // their code actually gives -- not a blank.
   customerDiscountPercent: number;
+  /**
+   * How long an earned commission is held before payout, from the same
+   * `getAmbassadorProgramSettings()` the accrual reads.
+   *
+   * Carried on the payload because the number was typed into the copy: the
+   * dashboard, the programme landing page and the ambassador hub all said
+   * "14-day hold" while production held 30, and the setting was changed without
+   * them. An ambassador planning around a promised payout date is the last
+   * person who should be reading a stale constant.
+   */
+  commissionHoldDays: number;
+  /**
+   * What an approved ambassador saves on their OWN orders, from the same
+   * `getReferralProgramConfig()` quote-order applies. Same reason: the welcome
+   * paragraph printed a literal 15% while the programme gave 20%.
+   */
+  personalDiscountPercent: number;
   totalEarnings: number;
   pendingCommissions: number;
   pendingOnlyCommissions: number;
@@ -82,6 +100,7 @@ export interface PartnerSummary {
   monthlyRevenueSeries: Array<{ label: string; value: number }>;
   lifetimeRevenueSeries: Array<{ label: string; value: number }>;
   marketingResources: AmbassadorMarketingResource[];
+  // The CONFIGURED hold, read from the Control Center — never a literal in the
   accountStatus: string;
   payoutHistory: Array<{ id: string; amount: number; note: string | null; createdAt: string }>;
 }
@@ -958,6 +977,11 @@ export async function getPayoutQueue(): Promise<PayoutQueue> {
 }
 
 export async function getPartnerSummary(partnerId: string, siteUrl: string): Promise<PartnerSummary> {
+  // The hold period, read from the function that decides it rather than typed
+  // into the page. `referralProgram` is already read further down for the
+  // customer discount and is reused for the personal one — one read, one
+  // answer. Both fall back to the shared defaults, as every other reader does.
+  const ambassadorSettings = await getAmbassadorProgramSettings().catch(() => null);
   const [{ data: partner, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }, { data: payoutRows, error: payoutError }] = await Promise.all([
     supabaseAdmin
       .from("partners")
@@ -1090,6 +1114,8 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     referralLink: `${siteUrl.replace(/\/$/, "")}/r/${partner.referral_code}`,
     commissionPercent: liveRates?.commissionPercent ?? Number(partner.commission_percent ?? 15),
     customerDiscountPercent,
+    commissionHoldDays: ambassadorSettings?.commissionHoldDays ?? DEFAULT_COMMISSION_HOLD_DAYS,
+    personalDiscountPercent: referralProgram?.personalDiscountPercent ?? 0,
     totalEarnings,
     pendingCommissions,
     pendingOnlyCommissions,

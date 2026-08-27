@@ -60,6 +60,13 @@ export async function GET() {
       shippingConfig,
       referralDiscountPercent: referralProgram.discountPercent,
       referralMinimumOrder: ambassadorSettings.minimumQualifyingOrder,
+      // THE MASTER SWITCH, WHICH THE CLIENT COULD NOT SEE UNTIL NOW.
+      //
+      // quote-order.ts refuses any order still carrying a code while this is
+      // off. Without it here the cart previewed and applied a discount the pay
+      // button would reject — an ambassador's own link turned into a checkout
+      // blocker for everyone holding it.
+      referralProgramEnabled: referralProgram.enabled,
       membershipTiers: tierSummaries,
     });
   } catch (error) {
@@ -79,6 +86,12 @@ export async function GET() {
       shippingConfig: DEFAULT_SHIPPING_CONFIG,
       referralDiscountPercent: DEFAULT_REFERRAL_DISCOUNT_PERCENT,
       referralMinimumOrder: DEFAULT_MINIMUM_QUALIFYING_ORDER,
+      // TRUE, matching getReferralProgramConfig's own fallback. Same lockstep
+      // rule as every other field here: during an outage the client must
+      // assume exactly what the server will assume, or the preview and the
+      // charge disagree. Answering `false` on a failed read would also strip a
+      // real discount from every referred shopper for the duration.
+      referralProgramEnabled: true,
       membershipTiers: [],
     });
   }

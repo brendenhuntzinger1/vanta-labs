@@ -249,6 +249,7 @@ export async function createReplacementOrder(input: {
   try {
     decrement = await decrementInventoryForOrder(
       replacementItems.map((item) => ({ product_id: item.product_id, quantity: item.quantity })) as Array<{ product_id?: string | null; quantity?: number | null }>,
+      orderId,
     );
   } catch (error) {
     // It does not throw today. If it ever starts to, that is still a failure to
