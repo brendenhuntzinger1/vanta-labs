@@ -16,6 +16,7 @@ import { getSiteUrl } from "@/lib/env";
 import { DEFAULT_REFERRAL_DISCOUNT_PERCENT, getBusinessSettings, getReferralProgramConfig } from "@/lib/admin-control";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
 import { getAmbassadorProgramSettings, getAmbassadorMarketingResources, type AmbassadorMarketingResource } from "@/lib/ambassador-settings";
+import { DEFAULT_COMMISSION_HOLD_DAYS } from "@/lib/referral-config";
 
 function formatSupabaseError(error: unknown) {
   if (!error) {
@@ -82,6 +83,13 @@ export interface PartnerSummary {
   monthlyRevenueSeries: Array<{ label: string; value: number }>;
   lifetimeRevenueSeries: Array<{ label: string; value: number }>;
   marketingResources: AmbassadorMarketingResource[];
+  // The CONFIGURED hold, read from the Control Center — never a literal in the
+  // UI. Production holds 30 days; the dashboard, the programme landing page and
+  // the ambassador hub all told partners "14-day hold" because the number was
+  // typed into the copy and the setting was changed without it. An ambassador
+  // planning around a promised payout date is the last person who should be
+  // reading a stale constant.
+  commissionHoldDays: number;
   accountStatus: string;
   payoutHistory: Array<{ id: string; amount: number; note: string | null; createdAt: string }>;
 }
@@ -1069,6 +1077,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   });
 
   const marketingResources = await getAmbassadorMarketingResources().catch(() => []);
+  const holdSettings = await getAmbassadorProgramSettings().catch(() => null);
 
   // Resolved with the same rule checkout uses, so the dashboard tells the
   // ambassador what their code gives rather than what their row stores. A
@@ -1109,6 +1118,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     monthlyRevenueSeries: buildRevenueSeriesByMonth(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) }))),
     lifetimeRevenueSeries: buildLifetimeSeries(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) }))),
     marketingResources,
+    commissionHoldDays: holdSettings?.commissionHoldDays ?? DEFAULT_COMMISSION_HOLD_DAYS,
     accountStatus: String(partner.status ?? "approved"),
     payoutHistory: (payoutRows ?? []).map((row) => ({
       id: String(row.id),

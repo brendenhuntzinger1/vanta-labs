@@ -1239,6 +1239,7 @@ export async function finalizeManualPayment(
     if (fin.degraded || fin.finalized === 0) {
       await decrementInventoryForOrder(
         (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+        orderId,
       );
     }
     // Same deferred push as the card path. An admin waiting on an approval
@@ -1796,6 +1797,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
               .eq("order_id", orderId);
             await decrementInventoryForOrder(
               (soldItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+              orderId,
             );
           }
         } catch (inventoryError) {
@@ -1871,6 +1873,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           .eq("order_id", orderId);
         await restockInventoryForOrder(
           (refundItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+          orderId,
         );
       }
     }

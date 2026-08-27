@@ -240,18 +240,34 @@ async function commissionByOrderId(orderIds: string[]): Promise<Map<string, numb
 
   for (let i = 0; i < orderIds.length; i += IN_CHUNK) {
     const chunk = orderIds.slice(i, i + IN_CHUNK);
-    const { data } = await supabaseAdmin
+    // `status`, NOT `payment_status`. The column is `status` on `commissions`
+    // and `payment_status` on `referral_orders`, and this read had the two
+    // crossed: PostgREST answered 42703 with `data: null`, the error was never
+    // destructured, and `data ?? []` turned a failed query into "this order
+    // owed no commission". Profit was therefore overstated by the FULL
+    // commission on every referred order. Guarded by
+    // supabase-schema-parity.test.ts.
+    const { data, error } = await supabaseAdmin
       .from("commissions")
-      .select("order_id, commission_amount, payment_status")
+      .select("order_id, commission_amount, status")
       .in("order_id", chunk);
 
-    for (const raw of (data ?? []) as Array<{ order_id: string; commission_amount: number | null; payment_status: string | null }>) {
+    if (error) {
+      // Never degrade silently here. An unreadable commission ledger makes
+      // profit look BIGGER than it is, which is the one direction an owner
+      // must never be misled in — so say so loudly rather than reporting a
+      // confident wrong number.
+      console.error("Unable to read commissions for profit; profit would overstate by the commission owed", error);
+      throw error;
+    }
+
+    for (const raw of (data ?? []) as Array<{ order_id: string; commission_amount: number | null; status: string | null }>) {
       // Only subtract commission the owner actually pays out. A reversed /
       // voided / manual-review commission was clawed back (e.g. refunded order),
       // so it must NOT reduce profit — otherwise the owner is charged for a
       // commission that was never paid. The recorded amount is already at the
       // ambassador's effective (tiered) rate, so this is their exact payout.
-      if (!isEarnedCommission(raw.payment_status)) continue;
+      if (!isEarnedCommission(raw.status)) continue;
       byOrder.set(raw.order_id, (byOrder.get(raw.order_id) ?? 0) + Math.max(0, Number(raw.commission_amount ?? 0)));
     }
   }
