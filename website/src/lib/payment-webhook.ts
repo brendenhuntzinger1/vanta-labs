@@ -36,6 +36,7 @@ import {
 import { recordSystemAlert } from "@/lib/monitoring";
 import { getOrderAttribution } from "@/lib/order-attribution";
 import { toAnalyticsAttribution } from "@/lib/attribution";
+import { creditFundedOrderNotice } from "@/lib/credit-funded-order-notice";
 
 /**
  * The billing cycle to activate for a paid membership order.
@@ -1323,6 +1324,23 @@ export async function finalizeManualPayment(
     // discount and KEPT the credit: the store is out that money. An operator
     // triaging by alert type would credit the customer again on a fault that
     // had already over-credited them.
+    // OBSERVABILITY FOR A DEFERRED DECISION, NOT A GUARD.
+    //
+    // The profit floor is measured BEFORE non-cash tender (quote-order.ts), so
+    // an order can clear it on merchandise margin and still settle for very
+    // little cash. That ordering was reviewed and deliberately kept -- the
+    // credit was paid for when it was granted. This records the orders it
+    // applies to so the policy can be set from real numbers instead of a
+    // guessed threshold. It never blocks anything, and failing to record it
+    // must not affect the order, hence the swallowed catch.
+    const creditNotice = creditFundedOrderNotice({
+      orderId,
+      amountPaid: Number(order?.amount_paid ?? 0),
+      storeCreditRedeemedCents: Number(order?.store_credit_redeemed_cents ?? 0),
+      pointsRedeemed: Number(order?.points_redeemed ?? 0),
+    });
+    if (creditNotice) await recordSystemAlert(creditNotice).catch(() => {});
+
     const storeCreditRedeemedCents = Number(order.store_credit_redeemed_cents ?? 0);
     if (storeCreditRedeemedCents > 0) {
       try {
@@ -1989,6 +2007,23 @@ export async function processPaymentWebhook(payload: string, signature: string, 
         // Own try/catch, own alert — see the manual-approval path above. A
         // failed redemption leaves the store out of pocket; a failed points
         // earn leaves the customer short. Same catch block, opposite repairs.
+        // OBSERVABILITY FOR A DEFERRED DECISION, NOT A GUARD.
+        //
+        // The profit floor is measured BEFORE non-cash tender (quote-order.ts), so
+        // an order can clear it on merchandise margin and still settle for very
+        // little cash. That ordering was reviewed and deliberately kept -- the
+        // credit was paid for when it was granted. This records the orders it
+        // applies to so the policy can be set from real numbers instead of a
+        // guessed threshold. It never blocks anything, and failing to record it
+        // must not affect the order, hence the swallowed catch.
+        const creditNotice = creditFundedOrderNotice({
+          orderId,
+          amountPaid: Number(orderRecord?.amount_paid ?? 0),
+          storeCreditRedeemedCents: Number(orderRecord?.store_credit_redeemed_cents ?? 0),
+          pointsRedeemed: Number(orderRecord?.points_redeemed ?? 0),
+        });
+        if (creditNotice) await recordSystemAlert(creditNotice).catch(() => {});
+
         const storeCreditRedeemedCents = Number(orderRecord?.store_credit_redeemed_cents ?? 0);
         if (storeCreditRedeemedCents > 0) {
           try {
