@@ -38,7 +38,19 @@ import type { GoogleEvent } from "@/lib/ads/google-events";
  * cannot resolve, and the failure is a rejected upload, not anything visible
  * in the browser. It is required and shape-checked for the same reason: an
  * upload against a missing or malformed id has nothing to report against.
+ *
+ * ON TIMEOUTS. `sendGoogleConversion` is awaited inline from a customer's
+ * confirmation page (see the purchase-event route). Both network calls it
+ * makes — the OAuth refresh and the upload — are bounded by an AbortController,
+ * the same mechanism `reddit-conversions.ts` already uses, so a slow or hung
+ * Google endpoint cannot stall that page beyond `DEFAULT_TIMEOUT_MS`. A timeout
+ * is reported as `message: "timed out"`, which `describeGoogleResult` renders
+ * distinctly from both a rejection (which carries an HTTP code) and a generic
+ * network error, so an operator can tell "Google was slow" from "Google said
+ * no" at a glance.
  */
+
+const DEFAULT_TIMEOUT_MS = 8000;
 
 const REQUIRED_ENV = [
   "GOOGLE_ADS_DEVELOPER_TOKEN",
@@ -74,7 +86,13 @@ export function googleCredentialStatus(): { configured: boolean; missing: string
 const OAUTH_TOKEN_URL = "https://oauth2.googleapis.com/token";
 const ADS_API_BASE = "https://googleads.googleapis.com/v18/customers";
 
-async function accessToken(): Promise<string | null> {
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
+
+async function accessToken(timeoutMs: number): Promise<{ token: string | null; timedOut: boolean }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(OAUTH_TOKEN_URL, {
       method: "POST",
@@ -85,12 +103,15 @@ async function accessToken(): Promise<string | null> {
         refresh_token: String(process.env.GOOGLE_ADS_REFRESH_TOKEN),
         grant_type: "refresh_token",
       }),
+      signal: controller.signal,
     });
-    if (!response.ok) return null;
+    if (!response.ok) return { token: null, timedOut: false };
     const body = (await response.json()) as { access_token?: string };
-    return body.access_token ?? null;
-  } catch {
-    return null;
+    return { token: body.access_token ?? null, timedOut: false };
+  } catch (error) {
+    return { token: null, timedOut: isAbortError(error) };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -104,6 +125,7 @@ async function accessToken(): Promise<string | null> {
 export async function sendGoogleConversion(input: {
   event: GoogleEvent;
   occurredAt: Date;
+  timeoutMs?: number;
 }): Promise<GoogleSendResult> {
   const notAttempted: GoogleSendResult = { attempted: false, delivered: false, code: null, message: null };
 
@@ -126,7 +148,10 @@ export async function sendGoogleConversion(input: {
     return { ...notAttempted, message: "conversion action id is not numeric" };
   }
 
-  const token = await accessToken();
+  const timeoutMs = input.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+
+  const { token, timedOut: oauthTimedOut } = await accessToken(timeoutMs);
+  if (oauthTimedOut) return { ...notAttempted, message: "timed out" };
   if (!token) return { ...notAttempted, message: "oauth refresh failed" };
 
   const customerId = String(process.env.GOOGLE_ADS_CUSTOMER_ID).replace(/\D/g, "");
@@ -139,6 +164,9 @@ export async function sendGoogleConversion(input: {
       ? [{ hashedPhoneNumber: input.event.userData.sha256_phone_number }]
       : []),
   ];
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
 
   try {
     const response = await fetch(`${ADS_API_BASE}/${customerId}:uploadClickConversions`, {
@@ -161,6 +189,7 @@ export async function sendGoogleConversion(input: {
         ],
         partialFailure: true,
       }),
+      signal: controller.signal,
     });
 
     return {
@@ -169,8 +198,15 @@ export async function sendGoogleConversion(input: {
       code: response.status,
       message: response.ok ? null : response.statusText,
     };
-  } catch {
-    return { attempted: true, delivered: false, code: null, message: "network error" };
+  } catch (error) {
+    return {
+      attempted: true,
+      delivered: false,
+      code: null,
+      message: isAbortError(error) ? "timed out" : "network error",
+    };
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -184,6 +220,10 @@ export function formatGoogleDateTime(date: Date): string {
  * makes it safe to log.
  */
 export function describeGoogleResult(result: GoogleSendResult): string {
+  // Checked before attempted/delivered so a timeout on either leg reads the
+  // same way regardless of how far the request got — distinct from both a
+  // rejection (which carries an HTTP code) and a generic network error.
+  if (result.message === "timed out") return "google: timed out";
   if (!result.attempted) return `google: not sent (${result.message ?? "not attempted"})`;
   if (result.delivered) return "google: delivered";
   return `google: rejected (${result.code ?? "no status"}${result.message ? ` ${result.message}` : ""})`;

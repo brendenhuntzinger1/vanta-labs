@@ -213,6 +213,99 @@ describe("sendGoogleConversion — request payload", () => {
   });
 });
 
+describe("sendGoogleConversion — timeouts", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    setAll("value");
+    process.env.GOOGLE_ADS_PURCHASE_CONVERSION_ACTION_ID = "123456";
+    stubProductionEnvironment();
+    vi.unstubAllGlobals();
+  });
+  afterEach(() => {
+    setAll(undefined);
+    clearProductionEnvironment();
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  /** A fetch that never settles on its own — only aborting its signal ends it. */
+  function stubHangingFetch() {
+    const fetchSpy = vi.fn((_url: unknown, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const error = new Error("This operation was aborted");
+          error.name = "AbortError";
+          reject(error);
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    return fetchSpy;
+  }
+
+  it("returns within the bound when Google hangs, instead of hanging the caller", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = stubHangingFetch();
+    const { sendGoogleConversion } = await import("./google-conversions");
+
+    const pending = sendGoogleConversion({
+      event: { name: "purchase", params: { transaction_id: "VL-1" }, dedupeKey: null },
+      occurredAt: new Date(),
+      timeoutMs: 50,
+    });
+
+    // Proof the call would otherwise hang: nothing has settled before the bound.
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(100);
+    const result = await pending;
+
+    expect(result.attempted).toBe(false);
+    expect(result.delivered).toBe(false);
+    expect(result.message).toBe("timed out");
+    // Only the OAuth refresh fetch fired; the hang there means the upload call
+    // never has a chance to happen, which is itself the point of bounding it.
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds the upload call too, once the OAuth leg succeeds", async () => {
+    vi.useFakeTimers();
+    const fetchSpy = vi.fn((url: unknown, init?: RequestInit) => {
+      if (String(url).includes("oauth2.googleapis.com")) {
+        return Promise.resolve({ ok: true, json: async () => ({ access_token: "test-token" }) } as unknown as Response);
+      }
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const error = new Error("This operation was aborted");
+          error.name = "AbortError";
+          reject(error);
+        });
+      });
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+    const { sendGoogleConversion } = await import("./google-conversions");
+
+    const pending = sendGoogleConversion({
+      event: { name: "purchase", params: { transaction_id: "VL-1" }, dedupeKey: null },
+      occurredAt: new Date(),
+      timeoutMs: 50,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+    const result = await pending;
+
+    expect(result.attempted).toBe(true);
+    expect(result.delivered).toBe(false);
+    expect(result.message).toBe("timed out");
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("describeGoogleResult", () => {
   it("cannot leak a credential, because it has no field to carry one", async () => {
     const { describeGoogleResult } = await import("./google-conversions");
@@ -224,6 +317,28 @@ describe("describeGoogleResult", () => {
     });
     expect(text).toContain("401");
     expect(text).not.toContain("GOOGLE_ADS");
+  });
+
+  it("renders a timeout distinguishably from a rejection", async () => {
+    const { describeGoogleResult } = await import("./google-conversions");
+    const timedOut = describeGoogleResult({ attempted: false, delivered: false, code: null, message: "timed out" });
+    const timedOutAfterAttempt = describeGoogleResult({
+      attempted: true,
+      delivered: false,
+      code: null,
+      message: "timed out",
+    });
+    const rejected = describeGoogleResult({
+      attempted: true,
+      delivered: false,
+      code: 500,
+      message: "Internal Server Error",
+    });
+    expect(timedOut).toMatch(/timed out/);
+    expect(timedOutAfterAttempt).toMatch(/timed out/);
+    expect(rejected).not.toMatch(/timed out/);
+    expect(timedOut).not.toBe(rejected);
+    expect(timedOutAfterAttempt).not.toBe(rejected);
   });
 });
 
