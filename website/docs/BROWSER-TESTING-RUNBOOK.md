@@ -30,6 +30,39 @@ difference. npm and `pg` are already available, so nothing needs downloading.
 
 ---
 
+## Reaching a live site from a cloud session (TLS 1.3 vs the egress proxy)
+
+Cloud sessions send outbound HTTPS through an intercepting proxy. Chromium
+picks that proxy up on its own from `https_proxy`, so **no proxy flag is
+needed** — but its default TLS 1.3 ClientHello is reset by the interceptor.
+Every navigation fails with `net::ERR_CONNECTION_RESET`, for *any* host:
+
+    page.goto: net::ERR_CONNECTION_RESET at https://example.com/
+
+**This is an environment artefact, not a site defect.** `curl` to the same URL
+succeeds, which is the tell: if curl works and the browser does not, suspect
+the transport before you suspect the application. Read that failure as a
+product bug and you will "reproduce" an outage that does not exist — the same
+class of false positive as browser-testing against `npm run dev`.
+
+The fix is committed: `.playwright-mcp.json` launches Chromium with
+`--ssl-version-max=tls1.2`, and `.mcp.json` points the Playwright MCP server at
+it via `--config`. Capping the QA browser at TLS 1.2 changes nothing about what
+the application does, and it is inert on a laptop with no proxy, so the same
+config works locally and in the cloud.
+
+Driving Playwright directly (outside MCP) needs the same flag:
+
+    chromium.launch({
+      executablePath: '/opt/pw-browsers/chromium',
+      args: ['--no-sandbox', '--ssl-version-max=tls1.2'],
+    })
+
+Verified 2026-08-27: with the flag, `https://www.vantalabsresearch.com/`
+returns 200 and the full storefront is drivable; without it, every host resets.
+
+---
+
 ## What this is and is not
 
 It translates HTTP to SQL against a **real** Postgres running the **real**

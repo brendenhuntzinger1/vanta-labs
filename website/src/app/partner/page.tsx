@@ -3,6 +3,7 @@ import Link from "next/link";
 import { Suspense } from "react";
 import { PartnerProgramLanding } from "@/components/partner-program-landing";
 import { getPartnerProgramStats } from "@/lib/partner-portal";
+import { getPublicProgramTerms } from "@/lib/public-program-terms";
 
 export const dynamic = "force-dynamic";
 
@@ -13,19 +14,21 @@ export const metadata: Metadata = {
 
 async function getPartnerPageData() {
   try {
-    const stats = await getPartnerProgramStats();
-    return { stats, errorMessage: null as string | null };
+    // Terms resolve their own failures to the built-in defaults, so they never
+    // become the reason this page shows its error state.
+    const [stats, terms] = await Promise.all([getPartnerProgramStats(), getPublicProgramTerms()]);
+    return { stats, terms, errorMessage: null as string | null };
   } catch (error) {
     const message = error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error);
     console.error("Partner page failed:", message);
-    return { stats: null, errorMessage: message };
+    return { stats: null, terms: null, errorMessage: message };
   }
 }
 
 export default async function PartnerProgramPage() {
-  const { stats, errorMessage } = await getPartnerPageData();
+  const { stats, terms, errorMessage } = await getPartnerPageData();
 
-  if (errorMessage || !stats) {
+  if (errorMessage || !stats || !terms) {
     return (
       <div className="min-h-screen bg-[#0b0b0b] px-4 py-12 text-white sm:px-6 lg:px-8">
         <div className="mx-auto max-w-5xl border border-white/10 p-6 sm:p-8">
@@ -47,7 +50,7 @@ export default async function PartnerProgramPage() {
     // where it belongs. Reserving a viewport of the page's own background
     // holds the footer below the fold until the real content arrives.
     <Suspense fallback={<div className="min-h-screen overflow-x-hidden bg-[#0b0b0b]" aria-hidden="true" />}>
-      <PartnerProgramLanding initialStats={stats} />
+      <PartnerProgramLanding initialStats={stats} terms={terms} />
     </Suspense>
   );
 }

@@ -5,10 +5,7 @@
       "command": "npx",
       "args": [
         "-y", "@playwright/mcp@0.0.79",
-        "--headless",
-        "--browser", "chromium",
-        "--executable-path", "/opt/pw-browsers/chromium",
-        "--isolated"
+        "--config", ".playwright-mcp.json"
       ]
     }
   }
