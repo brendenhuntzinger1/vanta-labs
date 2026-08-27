@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import type { Product } from "@/lib/catalog-types";
 import type { ReferralCode } from "@/lib/referral-codes";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
@@ -274,6 +275,7 @@ function calculateCouponDiscountAmount(subtotal: number, coupon: CouponDetails |
 }
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
+  const router = useRouter();
   const [items, setItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -680,6 +682,33 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setReferralCode(null);
     setReferralDetails(null);
   }
+
+  // WARM /checkout THE MOMENT THERE IS SOMETHING TO CHECK OUT WITH.
+  //
+  // Both routes into checkout are router.push from a button -- cart-client.tsx
+  // and cart-drawer.tsx -- so nothing is fetched until the tap lands, and
+  // /checkout is force-dynamic and answers from the origin every time (measured
+  // in production: x-vercel-cache MISS on every request, ~485ms to first byte).
+  // That is the highest-intent tap in the funnel waiting on a cold render.
+  //
+  // Fetching the route ahead of the tap is safe here specifically because
+  // checkout/page.tsx is "use client" and its layout is a passthrough: rendering
+  // it has no server side effects. Every mutation still happens on submit, in
+  // POST /api/checkout/create-session, which is untouched.
+  //
+  // Deliberately not aggressive. It fires once, on the transition from an empty
+  // cart to a non-empty one -- not per render, not per page, and never for the
+  // visitors who are only browsing.
+  const hasItems = items.length > 0;
+  useEffect(() => {
+    if (!hasItems) return;
+    try {
+      router.prefetch("/checkout");
+    } catch {
+      // A prefetch is an optimisation and nothing more; if it throws, the tap
+      // simply fetches the route the way it always did.
+    }
+  }, [hasItems, router]);
 
   const itemCount = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
 

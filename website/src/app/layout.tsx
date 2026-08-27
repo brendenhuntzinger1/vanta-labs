@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Fraunces, Geist, Geist_Mono, Manrope } from "next/font/google";
+import { Fraunces, Geist_Mono, Manrope } from "next/font/google";
 import { Suspense } from "react";
 import { AgeGate } from "@/components/age-gate";
 import { CartDrawer } from "@/components/cart-drawer";
@@ -27,10 +27,18 @@ import { RedditPixel } from "@/components/reddit-pixel";
 import { TikTokCommerceEvents } from "@/components/tiktok-commerce-events";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
+// GEIST SANS IS NOT LOADED, BECAUSE NOTHING CUSTOMER-FACING COULD EVER RENDER IT.
+//
+// It was requested on every page and preloaded with the rest, but every
+// font-family in globals.css listed it AFTER var(--font-manrope) -- so it could
+// only ever be reached if Manrope failed, a case the system stack behind it
+// already covers. Its one real consumer was Tailwind's `font-sans` token, used
+// by two badges on the admin coupons screen; that token now points at Manrope,
+// which is the sans this site actually sets.
+//
+// Geist MONO stays. It is the `font-mono` token and is genuinely rendered on
+// customer pages -- batch numbers, peptide sequences and COA references on every
+// product page, 65 usages outside /admin.
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -165,7 +173,7 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} ${manrope.variable} h-full antialiased`}
+      className={`${geistMono.variable} ${fraunces.variable} ${manrope.variable} h-full antialiased`}
       // EVERY DOCUMENT STARTS UNVERIFIED.
       //
       // This was written by an inline script that read localStorage and a
