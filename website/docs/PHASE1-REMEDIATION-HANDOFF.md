@@ -69,10 +69,13 @@ Each sweep was proved against a deliberately broken variant before being accepte
 
 | Gate | Result |
 |---|---|
-| `npm test` | **264 passed / 9 skipped (273 files)**, **4196 passed / 78 skipped (4274 tests)**, exit 0 |
+| `npm test` | **265 passed / 9 skipped (274 files)**, **4225 passed / 78 skipped (4303 tests)**, exit 0 |
 | `npx tsc --noEmit` | exit 0 |
-| `npm run lint` | `✖ 44 problems (0 errors, 44 warnings)`, exit 0 — baseline was 42 warnings; the 2 new ones are unused `_alert` params in test doubles |
+| `npm run lint` | `✖ 43 problems (0 errors, 43 warnings)`, exit 0 — one fewer than the previous revision, none added |
 | `npm run build` | exit 0 |
+
+Re-run by hand at `6584e18`, each gate bare rather than piped (a piped exit code was misread once on
+this branch).
 
 The 9 skipped files are the DB-gated concurrency suites; they need `VANTA_TEST_DATABASE_URL`
 pointed at a throwaway Postgres and were **not** run — see §9.
@@ -87,7 +90,7 @@ review because the primary write was idempotent but a downstream effect was not.
 | # | Effect | Why a retry cannot double-write — including downstream |
 |---|---|---|
 | 1 | `ensureCommissionRecord` | Refuses to regress a non-`pending` commission. A retry after a successful insert takes the UPDATE branch, which never reaches `notifyAmbassadorOfNewCommission` — so no second commission **and** no second email. The `commissions` mirror is an upsert on `order_id`. Already live. |
-| 2 | `recordActualShippingCost` | Fixed-value UPDATE — writing the same settled cents twice yields the same row. Its one downstream, the `order_shipping_cost_audit` insert, was unconditional and *would* have duplicated; the dedup guard added in this branch is what makes this effect retry-safe. It now also refuses outright on a voided label. |
+| 2 | `recordActualShippingCost` | Fixed-value UPDATE — writing the same settled cents twice yields the same row. Its one downstream, the `order_shipping_cost_audit` insert, was unconditional and *would* have duplicated; the dedup guard added in this branch is what makes this effect retry-safe. It now also refuses outright on a voided label — with a deliberate `source: "manual"` override so a human can still record postage when a carrier declines the void refund. |
 | 3 | Refund-amount recording | Fixed-value UPDATE, guarded on the old value, no downstream effect at all. |
 | 4 | `reverseOrderPoints` | Guarded on an existing `points_ledger(order_id, reason='order_refund_reversal')` row. Its only downstream, `recordPointsLedgerEntry`, sits *behind* that guard, so the ledger entry cannot be written twice either. |
 | 5 | `restoreRedeemedPoints` | Same shape — guard on `(order_id, 'order_refund_points_restore')`, downstream inside the guard. |
@@ -95,9 +98,33 @@ review because the primary write was idempotent but a downstream effect was not.
 
 **The retry-storm argument.** Both sweeps are *absence-based*: they select rows by the absence of the
 effect and stop finding them the moment it exists. There is no queue to lose an entry, no counter to
-over-increment, and a second run of an already-repaired backlog scans and repairs nothing. That is why
-this shape was chosen over the durable outbox originally specified — it needs no migration, so it fits
-inside the Phase 1 wall, and it repairs the *existing* backlog rather than only future failures.
+over-increment, and a second run of an already-repaired backlog repairs nothing. That is why this shape
+was chosen over the durable outbox originally specified — it needs no migration, so it fits inside the
+Phase 1 wall, and it repairs the *existing* backlog rather than only future failures.
+
+**Convergence — corrected 2026-08-27 (commit `6584e18`).** An earlier revision of this document claimed
+convergence for both sweeps. That was true of the shipping sweep and **false of the refund sweep**, which
+a scoped re-review caught before any of this shipped. Three separate defects:
+
+- Its second scan pass narrowed on `points_earned` / `points_redeemed` / `store_credit_redeemed_cents` —
+  none of which a repair ever changes — and none of the three ledger effects writes to `orders` at all,
+  so `updated_at` never moved either. Fifty already-repaired orders pinned `ORDER BY updated_at ASC
+  LIMIT 50` on every tick and order #51, the one actually needing repair, was never selected.
+- The `amount_paid > 0` guard existed only in JavaScript, not in the query, so fifty fully-comped
+  refunded orders starved the primary pass the same way.
+- `refundStoreCreditForOrder` silently skips credit that expired in a prior month: it wrote no ledger
+  row, returned normally, was replanned every tick, and incremented `repaired` each time — the same
+  storm shape that had already been fixed for `refund_amount`. Points reversal had the identical shape
+  on a guest order with no `customer_user_id`.
+
+**Fixed by replacing the two narrowed passes with a paged walk of the window.** `limit` now bounds
+*orders actually repaired*, not rows read; the scan pages 200 rows at a time ordered by
+`(updated_at, order_id)`, so an already-repaired row plans nothing and is stepped over rather than
+blocking the window. The whole scan completes **before** the first write, so no repair can reorder the
+rows being paged. Effects that legitimately write nothing are now recognised as terminal — not replanned,
+not counted. A ceiling of 5000 rows read per run is reported as `scanTruncated` rather than swallowed.
+There is now a test that runs the sweep with more rows than `limit`, including across a page boundary,
+and proves the later row is reached; the absence of that test is where all three defects hid.
 
 **The honest limit.** These guards are application-level SELECT-then-INSERT, not database unique
 constraints. They are proof against **sequential** retries — the same job running again on the next
@@ -182,6 +209,31 @@ deployed, the two sweeps write to production on the 30-minute cron. Per your ins
 | 6 | Fully reversible — the audit INSERT runs **strictly before** the UPDATE, and both are guarded on the old value, so a re-run is a no-op rather than a second restatement. Restore from `order_cost_restatements.old_cost_cents`. |
 
 Run section by section, checking each verification SELECT before proceeding.
+
+---
+
+## 8a. Review history — what was caught before it shipped
+
+Nothing in this branch reached production, and three review passes ran against it:
+
+| Pass | Found | Outcome |
+|---|---|---|
+| Whole-branch review | 3 Critical, 7 Important | all fixed in `2ab3c51`; the 3 Criticals survived adversarial verification (`refuted: false, confidence: high`) |
+| Scoped re-review of that fix wave | 6 Important, 5 Minor — **5 of the Importants were NEW, introduced by the fix wave itself** | 9 fixed in `6584e18`, 2 deliberately left (below) |
+| My own verification | — | all four gates re-run by hand; the convergence fix traced through the source rather than taken on report |
+
+The re-review also independently re-ran the suite and matched my numbers, and explicitly checked and
+cleared the three things earlier reviewers in this project got wrong: the dollars-vs-cents column
+semantics, the `paid_side_effects_at` asymmetry, and the deferred unique index.
+
+**Deliberately left, both money-neutral:**
+
+- A permanently unrepairable shipping row (manual entry required) still occupies a slot in the sweep's
+  window. Skipping it requires remembering "tried, needs a human" across runs — a column, and therefore
+  a migration, which is behind the Phase 2 wall. The *alert* half of this was fixed. Recommended
+  follow-up.
+- Two sweeps running concurrently can write duplicate `order_shipping_cost_audit` rows. This is the
+  known §C3 deferral; the recorded cost itself is unaffected.
 
 ---
 
