@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import { Fraunces, Geist, Geist_Mono, Manrope } from "next/font/google";
+import { Fraunces, Geist_Mono, Manrope } from "next/font/google";
 import { Suspense } from "react";
 import { AgeGate } from "@/components/age-gate";
 import { CartDrawer } from "@/components/cart-drawer";
@@ -9,6 +9,7 @@ import { CartProvider } from "@/components/cart-context";
 import { SiteAnalyticsTracker } from "@/components/site-analytics-tracker";
 import { SiteFooter } from "@/components/site-footer";
 import { CookieConsent } from "@/components/cookie-consent";
+import { CONSENT_COOKIE_NAME } from "@/lib/cookie-consent-server";
 import { EntryDiagnostics } from "@/components/entry-diagnostics";
 import { StorefrontOffersBar } from "@/components/storefront-offers-bar";
 import { cookies } from "next/headers";
@@ -26,10 +27,18 @@ import { RedditPixel } from "@/components/reddit-pixel";
 import { TikTokCommerceEvents } from "@/components/tiktok-commerce-events";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
+// GEIST SANS IS NOT LOADED, BECAUSE NOTHING CUSTOMER-FACING COULD EVER RENDER IT.
+//
+// It was requested on every page and preloaded with the rest, but every
+// font-family in globals.css listed it AFTER var(--font-manrope) -- so it could
+// only ever be reached if Manrope failed, a case the system stack behind it
+// already covers. Its one real consumer was Tailwind's `font-sans` token, used
+// by two badges on the admin coupons screen; that token now points at Manrope,
+// which is the sans this site actually sets.
+//
+// Geist MONO stays. It is the `font-mono` token and is genuinely rendered on
+// customer pages -- batch numbers, peptide sequences and COA references on every
+// product page, 65 usages outside /admin.
 
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
@@ -143,10 +152,28 @@ export default async function RootLayout({
   const dismissed = new Set(parseDismissed(cookieStore.get(OFFERS_DISMISSED_COOKIE)?.value));
   const offers = visibleOffers(allOffers.filter((offer) => !dismissed.has(offerTag(offer.id))));
 
+  // THE CONSENT BAR IS DECIDED HERE FOR THE SAME REASON THE OFFERS BAR IS.
+  //
+  // Both sit in normal flow above the page, so both push it down by their own
+  // height. Deciding either one in the browser means painting the page and then
+  // shoving it under the reader -- which is exactly what the consent bar did:
+  // 52px on a desktop, 86px on a phone, about half a second after first paint,
+  // and it was the largest single layout shift on every route we measured.
+  //
+  // The cookie is already written by the banner (see cookie-consent-server.ts,
+  // which exists so route handlers can honour a decline). Reading it costs
+  // nothing extra here -- `cookies()` is already awaited above for the offers
+  // bar -- and it lets the server render the final answer once.
+  //
+  // An unrecognised value is deliberately NOT treated as an answer, matching
+  // readCookieConsent: a corrupted cookie asks again rather than assuming.
+  const consentValue = cookieStore.get(CONSENT_COOKIE_NAME)?.value;
+  const consentAnswered = consentValue === "accepted" || consentValue === "declined";
+
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} ${fraunces.variable} ${manrope.variable} h-full antialiased`}
+      className={`${geistMono.variable} ${fraunces.variable} ${manrope.variable} h-full antialiased`}
       // EVERY DOCUMENT STARTS UNVERIFIED.
       //
       // This was written by an inline script that read localStorage and a
@@ -219,7 +246,7 @@ export default async function RootLayout({
           </Suspense>
           <AgeGate>
             {/* Both in flow, above the header, so they overlay nothing. */}
-            <CookieConsent />
+            <CookieConsent initiallyOpen={!consentAnswered} />
             {/* REPLACES <WelcomeOffer />, RATHER THAN JOINING IT.
                 The welcome offer is a promotion, and it is now resolved by
                 storefront-offers.ts alongside every other live offer. Rendering

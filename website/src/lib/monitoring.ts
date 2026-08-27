@@ -123,3 +123,56 @@ export async function getRecentSystemAlerts(limit = 100): Promise<SystemAlertRow
     return [];
   }
 }
+
+/**
+ * How many order links one alert may render.
+ *
+ * The shipping sweeps cap their own backlogs at the scan ceiling, so this is a
+ * backstop rather than the usual bound: a future alert that names a thousand
+ * orders should not turn the status page into a wall of links.
+ */
+const MAX_ALERT_ORDER_LINKS = 50;
+
+/**
+ * THE ORDER IDS AN ALERT IS ABOUT, SO THE OPERATOR CAN GO AND ACT ON THEM.
+ *
+ * `shipping_cost_manual_entry_required` reads, in production: "2 order(s) have
+ * a label whose postage cannot be read back from Shippo. Enter the cost by hand
+ * in Admin -> Orders." Which two? The sweep is the only thing that knows, it
+ * puts them in `context`, and the status page rendered `message` alone -- so
+ * the operator was sent to fix orders they had no way to identify.
+ *
+ * Shape-tolerant on purpose. The sweeps do not agree on how they carry ids:
+ * the shipping backlogs write BOTH a flat `orderIds` and an `orders[]` of
+ * `{ orderId, error }`, while single-order alerts write a bare `orderId`. A
+ * reader that understood only one of them would silently render nothing for
+ * the rest, which is the failure it exists to fix.
+ */
+export function extractAlertOrderIds(context: Record<string, unknown> | null | undefined): string[] {
+  if (!context) return [];
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  const take = (candidate: unknown): void => {
+    if (typeof candidate !== "string") return;
+    const id = candidate.trim();
+    // A blank string is not an id, and linking one produces /admin/orders/ —
+    // the orders list, wearing the label of a specific order.
+    if (id.length === 0 || seen.has(id)) return;
+    seen.add(id);
+    out.push(id);
+  };
+
+  take(context.orderId);
+  if (Array.isArray(context.orderIds)) {
+    for (const entry of context.orderIds) take(entry);
+  }
+  if (Array.isArray(context.orders)) {
+    for (const entry of context.orders) {
+      if (entry && typeof entry === "object") take((entry as { orderId?: unknown }).orderId);
+    }
+  }
+
+  return out.slice(0, MAX_ALERT_ORDER_LINKS);
+}

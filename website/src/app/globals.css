@@ -88,7 +88,7 @@
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-accent-gold: var(--accent-gold);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-manrope);
   --font-mono: var(--font-geist-mono);
 }
 
@@ -105,7 +105,7 @@ body {
         var(--background);
   background-attachment: fixed;
   color: var(--foreground);
-  font-family: var(--font-manrope), var(--font-geist-sans), "Avenir Next", "Segoe UI", sans-serif;
+  font-family: var(--font-manrope), "Avenir Next", "Segoe UI", sans-serif;
   overflow-x: clip;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -179,7 +179,7 @@ textarea {
 }
 
 .vl-kicker {
-  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-family: var(--font-manrope), sans-serif;
   font-size: 0.69rem;
   letter-spacing: 0.32em;
   text-transform: uppercase;
@@ -209,11 +209,11 @@ textarea {
 }
 
 .vl-copy {
-  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-family: var(--font-manrope), sans-serif;
 }
 
 .vl-lux-kicker {
-  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-family: var(--font-manrope), sans-serif;
   font-weight: 700;
   letter-spacing: 0.34em;
   text-transform: uppercase;
@@ -267,7 +267,7 @@ textarea {
   border: 1px solid rgba(255, 255, 255, 0.84);
   background: linear-gradient(135deg, #ffffff 0%, #ededed 52%, #d9d9d9 100%);
   color: #111111;
-  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-family: var(--font-manrope), sans-serif;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -315,7 +315,7 @@ textarea {
   border: 1px solid rgba(255, 255, 255, 0.28);
   background: linear-gradient(145deg, rgba(255, 255, 255, 0.09), rgba(255, 255, 255, 0.03));
   color: #f0f0f0;
-  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-family: var(--font-manrope), sans-serif;
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -969,7 +969,7 @@ textarea.vl-input { min-height: 6rem; }
 /* ---------------------------------------------------------------------- */
 
 .vl-eyebrow {
-  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-family: var(--font-manrope), sans-serif;
   font-size: 0.68rem;
   font-weight: 700;
   letter-spacing: 0.32em;
@@ -1147,13 +1147,13 @@ body[data-welcome-offer="true"] .vl2-nav {
    the wordmark's own voice at display size — tight, modern, engineered — this
    is it. Negative tracking does the work that the serif's contrast used to. */
 .vl2-display {
-  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-family: var(--font-manrope), sans-serif;
   font-weight: 600;
   letter-spacing: -0.035em;
 }
 
 .vl2-eyebrow {
-  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-family: var(--font-manrope), sans-serif;
   font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.28em;
@@ -1481,6 +1481,33 @@ body[data-cookie-banner="true"] .vl-bottom-bar {
 @keyframes vl2-fade-in {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* THE HERO RISES, IT DOES NOT FADE UP FROM NOTHING.
+   The distinction is worth a rule of its own because the hero headline is the
+   LARGEST CONTENTFUL PAINT on the home page, and an element at opacity:0 has
+   not been painted as far as the browser is concerned. `.vl2-fade-in` holds
+   its subject invisible for the whole 560ms animation, with `both` extending
+   the from-state back to first style resolution -- so the headline was
+   deliberately withheld until roughly 1.44s, and LCP could not land before it.
+
+   Measured on the production build at 390x844 on throttled 4G with 4x CPU:
+   headline opacity 0 at 912ms, 1 at ~1439ms, LCP 1964ms.
+
+   This is the same principle scroll-reveal.tsx already states for content that
+   is on screen at mount -- "hiding it now to animate it back in is the flicker
+   this component exists to avoid, and the visitor is already looking at it."
+   The hero is always on screen at mount, so it gets the same treatment.
+
+   Translate is kept: a transform does not stop an element counting as painted,
+   so the entrance still reads as an entrance and costs LCP nothing. */
+.vl2-hero-enter {
+  animation: vl2-hero-enter var(--duration-slow) var(--ease-out-premium) both;
+}
+
+@keyframes vl2-hero-enter {
+  from { transform: translateY(10px); }
+  to { transform: translateY(0); }
 }
 
 .vl2-product-card {
@@ -1850,7 +1877,7 @@ body[data-cookie-banner="true"] .vl-bottom-bar {
 }
 
 .vl2-lab-eyebrow {
-  font-family: var(--font-manrope), var(--font-geist-sans), sans-serif;
+  font-family: var(--font-manrope), sans-serif;
   font-size: 0.68rem;
   font-weight: 600;
   letter-spacing: 0.28em;
@@ -1930,6 +1957,7 @@ body[data-cookie-banner="true"] .vl-bottom-bar {
   .vl-molecule-c,
   .vl2-vial-label,
   .vl2-fade-in,
+  .vl2-hero-enter,
   .vl2-galaxy::before,
   .vl2-galaxy::after,
   .vl2-lab-sweep,
@@ -3451,6 +3479,7 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
    client-side effect, which would paint the collision for one frame and then
    correct it. */
 :root[data-consent-pending] .vl2-nav,
+:root:has(.vl-consent-bar) .vl2-nav,
 :root:has(.vl-offer-bar) .vl2-nav {
   position: static;
 }

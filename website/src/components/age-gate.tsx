@@ -452,7 +452,16 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
              Widening at lg and pairing the attestations two-up fixes both at
              once: the card fills the screen properly AND gets short enough to
              fit without scrolling. */
-          className="vl2-fade-in vl-focus-ring relative w-full max-w-lg rounded-[1.75rem] border border-white/10 bg-[rgba(12,12,12,0.72)] p-6 text-center shadow-[0_28px_80px_rgba(0,0,0,0.6)] backdrop-blur-2xl sm:rounded-[2rem] sm:p-9 lg:max-w-3xl lg:p-8 xl:max-w-4xl"
+          /* vl2-hero-enter, NOT vl2-fade-in. On a first visit this panel is the
+             ONLY thing on the screen -- the storefront behind it is inert until
+             the attestations are confirmed -- so holding it at opacity:0 for the
+             560ms entrance leaves the visitor looking at an empty page, and the
+             browser records no first-contentful-paint at all. Measured on the
+             production build at 390x844 on throttled 4G with 4x CPU: a cold
+             first visit reported `first-paint` at 780ms and NO
+             first-contentful-paint and NO largest-contentful-paint entry, across
+             every run. The panel still rises; it is simply legible while it does. */
+          className="vl2-hero-enter vl-focus-ring relative w-full max-w-lg rounded-[1.75rem] border border-white/10 bg-[rgba(12,12,12,0.72)] p-6 text-center shadow-[0_28px_80px_rgba(0,0,0,0.6)] backdrop-blur-2xl sm:rounded-[2rem] sm:p-9 lg:max-w-3xl lg:p-8 xl:max-w-4xl"
         >
           {/* Monogram */}
           <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-full lg:mx-0 border border-[color:var(--accent-gold)]/25 bg-gradient-to-br from-[color:var(--accent-gold)]/[0.12] to-white/[0.02] shadow-[0_0_28px_rgba(199,174,94,0.14)]">
