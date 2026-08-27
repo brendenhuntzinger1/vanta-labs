@@ -244,7 +244,8 @@ async function sendPartnerStatusEmail(input: {
   let template;
   if (input.status === "approved") {
     // Enrich the approval email with the live program terms so the ambassador
-    // gets the full onboarding: their rates, the 14-day hold, biweekly payouts.
+    // gets the full onboarding: their rates, the configured hold, biweekly
+    // payouts. The hold is read from settings below, never named here.
     const [referralProgram, ambassadorSettings] = await Promise.all([
       getReferralProgramConfig().catch(() => null),
       getAmbassadorProgramSettings().catch(() => null),
@@ -1034,7 +1035,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
   const pendingCommissions = roundMoney(commissions
     .filter((row) => row.payment_status === "pending" || row.payment_status === "approved_for_payout")
     .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
-  // Pending (still in the 14-day hold) vs Approved (hold cleared, awaiting the
+  // Pending (still in the configured hold) vs Approved (hold cleared, awaiting the
   // next payout) shown as distinct buckets per the spec.
   const pendingOnlyCommissions = roundMoney(commissions
     .filter((row) => row.payment_status === "pending")
