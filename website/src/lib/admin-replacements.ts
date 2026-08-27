@@ -240,6 +240,7 @@ export async function createReplacementOrder(input: {
   try {
     await decrementInventoryForOrder(
       replacementItems.map((item) => ({ product_id: item.product_id, quantity: item.quantity })) as Array<{ product_id?: string | null; quantity?: number | null }>,
+      orderId,
     );
   } catch (error) {
     await recordSystemAlert({

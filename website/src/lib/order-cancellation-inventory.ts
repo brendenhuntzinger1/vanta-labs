@@ -173,6 +173,6 @@ export async function returnInventoryForCancelledOrder(
     return { action: "already_returned" };
   }
 
-  await restockInventoryForOrder(items);
+  await restockInventoryForOrder(items, orderId);
   return { action: "restocked" };
 }

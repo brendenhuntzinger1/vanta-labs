@@ -1,5 +1,7 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { invalidateCatalogCache } from "@/lib/catalog-cache";
+import { recordInventoryTransaction, type InventoryTransactionType } from "@/lib/inventory-ledger";
+import { recordSystemAlert } from "@/lib/monitoring";
 
 // Inventory movement for the PAID path. An order's stock is only ever committed
 // when money is actually captured (manual payment approved, or card
@@ -62,8 +64,57 @@ export function planInventoryAdjustments(items: OrderItemRef[]): InventoryAdjust
   return [...byKey.values()];
 }
 
-async function applyInventoryDelta(adjustment: InventoryAdjustment, signedQty: number): Promise<void> {
-  const { error } = await supabaseAdmin.rpc("adjust_inventory_on_sale", {
+// Read the quantity the RPC just left behind, so the ledger row can carry real
+// before/after numbers instead of two nulls. Dose-authoritative for a dosed
+// line, exactly like the RPC itself. Best-effort: a failed read costs the
+// ledger its numbers, never the movement.
+async function readQuantityAfter(adjustment: InventoryAdjustment): Promise<{ after: number | null; productId: string | null }> {
+  try {
+    if (adjustment.variantId) {
+      const { data } = await supabaseAdmin
+        .from("product_doses")
+        .select("inventory_quantity, product_id")
+        .eq("id", adjustment.variantId)
+        .maybeSingle<{ inventory_quantity: number | null; product_id: string | null }>();
+      if (!data) return { after: null, productId: null };
+      return { after: Number(data.inventory_quantity ?? 0), productId: data.product_id ? String(data.product_id) : null };
+    }
+    const { data } = await supabaseAdmin
+      .from("products")
+      .select("inventory_quantity, id")
+      .eq("slug", adjustment.slug)
+      .maybeSingle<{ inventory_quantity: number | null; id: string | null }>();
+    if (!data) return { after: null, productId: null };
+    return { after: Number(data.inventory_quantity ?? 0), productId: data.id ? String(data.id) : null };
+  } catch {
+    return { after: null, productId: null };
+  }
+}
+
+/**
+ * Move stock for one order line and WRITE DOWN THAT IT MOVED.
+ *
+ * Two things here are load-bearing and were both missing:
+ *
+ * 1. `adjust_inventory_on_sale` returns a boolean. It is `false` when the row
+ *    did not move — no such dose/slug, or the `inventory_quantity + p_qty >= 0`
+ *    guard refused a decrement that would go negative. That was discarded, so a
+ *    paid order whose stock could NOT be committed looked identical to one that
+ *    committed cleanly.
+ *
+ * 2. Nothing recorded order-driven movements in `inventory_transactions`. Only
+ *    the admin's own manual edits were logged, so the ledger showed a shelf that
+ *    only ever moved when a human touched it. On 2026-08-27 the operator, seeing
+ *    no sale row for the store's first real customer order, manually decremented
+ *    BAC Water a SECOND time — the automatic decrement had already run. An
+ *    invisible movement is how a correct system produces a wrong count.
+ */
+async function applyInventoryDelta(
+  adjustment: InventoryAdjustment,
+  signedQty: number,
+  context: { orderId?: string | null; type: InventoryTransactionType; reason: string },
+): Promise<void> {
+  const { data, error } = await supabaseAdmin.rpc("adjust_inventory_on_sale", {
     p_slug: adjustment.slug,
     p_variant_id: adjustment.variantId,
     p_qty: signedQty,
@@ -71,15 +122,50 @@ async function applyInventoryDelta(adjustment: InventoryAdjustment, signedQty: n
   if (error) {
     throw error;
   }
+
+  // `false` means the shelf did not move. For a decrement that is a sale we
+  // could not take stock for — the single most important inventory event there
+  // is, and previously silent.
+  if (data === false) {
+    const detail = `${adjustment.slug}${adjustment.variantId ? `::${adjustment.variantId}` : ""} x${Math.abs(signedQty)}`;
+    console.error("Inventory movement did not apply", detail, context);
+    await recordSystemAlert({
+      type: signedQty < 0 ? "inventory_decrement_not_applied" : "inventory_restock_not_applied",
+      severity: signedQty < 0 ? "critical" : "warning",
+      message:
+        signedQty < 0
+          ? `Sold ${detail} but stock did not move — the row is untracked, missing, or already at 0. Physical count and recorded count now disagree.`
+          : `Could not return ${detail} to stock.`,
+      context: { orderId: context.orderId ?? null, slug: adjustment.slug, variantId: adjustment.variantId, quantity: signedQty },
+    });
+    return;
+  }
+
+  const { after, productId } = await readQuantityAfter(adjustment);
+  await recordInventoryTransaction({
+    productId: productId ?? adjustment.slug,
+    doseId: adjustment.variantId,
+    type: context.type,
+    delta: signedQty,
+    quantityBefore: after === null ? null : after - signedQty,
+    quantityAfter: after,
+    reason: context.reason,
+    actor: "payment_webhook",
+    orderId: context.orderId ?? null,
+  });
 }
 
 // Commit stock for a newly-paid order. Best-effort per line: a decrement that
 // can't apply (untracked item, or a stock number that would go negative) is a
 // no-op, and a single failing line is logged and never strands the paid order.
-export async function decrementInventoryForOrder(items: OrderItemRef[]): Promise<void> {
+export async function decrementInventoryForOrder(items: OrderItemRef[], orderId?: string | null): Promise<void> {
   for (const adjustment of planInventoryAdjustments(items)) {
     try {
-      await applyInventoryDelta(adjustment, -adjustment.quantity);
+      await applyInventoryDelta(adjustment, -adjustment.quantity, {
+        orderId,
+        type: "order_completed",
+        reason: orderId ? `Sold on ${orderId}` : "Sold",
+      });
     } catch (error) {
       console.error("Unable to decrement inventory for", adjustment, error);
     }
@@ -136,10 +222,14 @@ export async function claimInventoryRestock(orderId: string): Promise<InventoryR
 // Return stock when a paid order is fully refunded or canceled — the exact
 // inverse of the decrement above, so tracked stock nets back to where it began.
 // Gate every call with claimInventoryRestock(orderId) so it runs at most once.
-export async function restockInventoryForOrder(items: OrderItemRef[]): Promise<void> {
+export async function restockInventoryForOrder(items: OrderItemRef[], orderId?: string | null): Promise<void> {
   for (const adjustment of planInventoryAdjustments(items)) {
     try {
-      await applyInventoryDelta(adjustment, adjustment.quantity);
+      await applyInventoryDelta(adjustment, adjustment.quantity, {
+        orderId,
+        type: "order_canceled",
+        reason: orderId ? `Returned to stock from ${orderId}` : "Returned to stock",
+      });
     } catch (error) {
       console.error("Unable to restock inventory for", adjustment, error);
     }

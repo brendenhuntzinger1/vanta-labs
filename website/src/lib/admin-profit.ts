@@ -240,18 +240,46 @@ async function commissionByOrderId(orderIds: string[]): Promise<Map<string, numb
 
   for (let i = 0; i < orderIds.length; i += IN_CHUNK) {
     const chunk = orderIds.slice(i, i + IN_CHUNK);
-    const { data } = await supabaseAdmin
+    // `status`, NOT `payment_status`. The column is `status` on `commissions`
+    // and `payment_status` on `referral_orders`, and this read had the two
+    // crossed: PostgREST answered 42703 with `data: null`, the error was never
+    // destructured, and `data ?? []` turned a failed query into "this order
+    // owed no commission". Profit was therefore overstated by the FULL
+    // commission on every referred order. Guarded by
+    // supabase-schema-parity.test.ts, and by the behavioural cover in
+    // admin-profit-commission.test.ts.
+    const { data, error } = await supabaseAdmin
       .from("commissions")
-      .select("order_id, commission_amount, payment_status")
+      .select("order_id, commission_amount, status")
       .in("order_id", chunk);
 
-    for (const raw of (data ?? []) as Array<{ order_id: string; commission_amount: number | null; payment_status: string | null }>) {
+    // A FAILED READ MUST NOT LOOK LIKE "NO COMMISSION WAS PAID".
+    //
+    // Those two produced the identical answer, and $0.00 of commission is the
+    // most flattering number available: profit came out overstated on the
+    // dashboard, in the CSV export and in the operator's push notification,
+    // with nothing to notice. The shipping overlay a few lines down degrades on
+    // error deliberately — it can only make profit look WORSE, and the
+    // migration may genuinely not have run. This one moves the figure the other
+    // way, so it fails loudly.
+    if (error) {
+      console.error("Unable to read commissions for profit; profit would overstate by the commission owed", error);
+      // WRAPPED, not rethrown raw. A PostgREST error is a plain object, so
+      // `throw error` produces a rejection with no stack and no indication of
+      // which read failed. Same shape as readAllRowsBounded's
+      // "<label> failed: <message>" for the cost lines, which is what a reader
+      // of the logs will already recognise.
+      const message = (error as { message?: string })?.message ?? String(error);
+      throw new Error(`commission read failed: ${message}`);
+    }
+
+    for (const raw of (data ?? []) as Array<{ order_id: string; commission_amount: number | null; status: string | null }>) {
       // Only subtract commission the owner actually pays out. A reversed /
       // voided / manual-review commission was clawed back (e.g. refunded order),
       // so it must NOT reduce profit — otherwise the owner is charged for a
       // commission that was never paid. The recorded amount is already at the
       // ambassador's effective (tiered) rate, so this is their exact payout.
-      if (!isEarnedCommission(raw.payment_status)) continue;
+      if (!isEarnedCommission(raw.status)) continue;
       byOrder.set(raw.order_id, (byOrder.get(raw.order_id) ?? 0) + Math.max(0, Number(raw.commission_amount ?? 0)));
     }
   }

@@ -32,7 +32,11 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   const { data: order, error } = await supabaseAdmin
     .from("orders")
     .select(
-      "order_id, order_number, customer_name, customer_email, shipping_address, city, state, postal_code, country, phone, created_at, tracking_number, carrier, order_items(product_name, product_id, quantity, unit_price, line_total)",
+      // `shipping_carrier` — there is no `orders.carrier`. Selecting it made
+      // PostgREST answer 42703, which this route (correctly) surfaces as a 500,
+      // so EVERY packing slip failed to print. Guarded by
+      // supabase-schema-parity.test.ts.
+      "order_id, order_number, customer_name, customer_email, shipping_address, shipping_address_2, city, state, postal_code, country, phone, created_at, tracking_number, shipping_carrier, order_items(product_name, product_id, quantity, unit_price, line_total)",
     )
     .eq("order_id", orderId)
     .maybeSingle();
@@ -67,6 +71,10 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
   const addressLines = [
     esc(order.customer_name),
     esc(order.shipping_address),
+    // Apartment / suite / unit. Omitted here originally, so a slip for
+    // "Apt 4B" printed only the street — the packer copies this onto the
+    // parcel, so a dropped line is a misdelivery.
+    order.shipping_address_2 ? esc(order.shipping_address_2) : "",
     [order.city, order.state, order.postal_code].filter(Boolean).map(esc).join(", "),
     esc(order.country),
     order.phone ? esc(order.phone) : "",
@@ -122,7 +130,7 @@ export async function GET(request: Request, context: { params: Promise<{ orderId
       <div style="text-align:right">
         <div><strong>Order ${esc(orderNumber)}</strong></div>
         <div class="muted">${esc(createdAt)}</div>
-        ${order.tracking_number ? `<div class="muted">${esc(order.carrier ?? "Tracking")}: ${esc(order.tracking_number)}</div>` : ""}
+        ${order.tracking_number ? `<div class="muted">${esc(order.shipping_carrier ?? "Tracking")}: ${esc(order.tracking_number)}</div>` : ""}
       </div>
     </div>
 

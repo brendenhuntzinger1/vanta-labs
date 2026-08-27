@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
+import { DEFAULT_COMMISSION_HOLD_DAYS } from "@/lib/referral-config";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 
 function formatCurrency(value: number) {
@@ -71,7 +72,7 @@ export function AmbassadorPageClient() {
               { k: "You earn 15%", v: "15% commission on every qualifying order placed with your code. Higher tiers unlock as your volume grows." },
               { k: "Your audience saves 10%", v: "Anyone who uses your referral code gets 10% off their order — a real reason for them to buy through you." },
               { k: "$100 minimum order", v: "Orders must be at least $100 (before shipping) to earn a commission, so every payout is on a real sale." },
-              { k: "14-day hold", v: "Commissions are held 14 days after an order to clear the return window, then become payable." },
+              { k: `${DEFAULT_COMMISSION_HOLD_DAYS}-day hold`, v: `Commissions are held ${DEFAULT_COMMISSION_HOLD_DAYS} days after an order to clear the return window, then become payable.` },
               { k: "$100 payout minimum", v: "Once your cleared balance reaches $100, you can be paid out." },
               { k: "Fair & transparent", v: "One discount per order, no self-referrals, live tracking in your dashboard. What you see is what you earn." },
             ].map((item) => (

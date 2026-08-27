@@ -588,6 +588,34 @@ export function AdminControlCenterClient() {
             ) : null}
             <div className="mt-3 space-y-3 text-sm">
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralEnabled} onChange={(e) => setReferralEnabled(e.target.checked)} /> Referral program enabled</label>
+              {/* WHY THIS WARNING EXISTS, AND WHAT IT IS CAREFUL NOT TO SAY.
+                  Turning the program off does not just stop NEW codes: every
+                  link already shared keeps sending shoppers, and each of them
+                  now checks out at full price with no attribution, so the
+                  ambassador earns nothing on a sale she generated. It used to
+                  be worse — the order was refused outright at the pay button —
+                  and the cart now drops the code instead, but "the customer
+                  quietly loses the discount you promised them" is still the
+                  consequence an operator needs to see before ticking this.
+                  The pause switch below is almost always the intended action,
+                  so it is named here rather than left to be discovered. */}
+              {!referralEnabled ? (
+                <p className="rounded-lg border border-amber-400/30 bg-amber-400/[0.06] px-3 py-2 text-xs leading-5 text-amber-200/90">
+                  <strong className="font-semibold">Every referral link you have already shared stops giving a discount.</strong>{" "}
+                  Those links keep working and keep sending shoppers, but the code is dropped from their cart: they
+                  pay full price, and the ambassador earns nothing on a sale she sent you. Nobody is blocked from
+                  checking out. Ambassadors still get their own personal discount while this is off.
+                  <br />
+                  To stop paying new commissions while your ambassadors&apos; customers keep their discount, use{" "}
+                  <span className="font-semibold">Pause new commissions</span> below instead.
+                </p>
+              ) : (
+                <p className="text-xs leading-5 text-zinc-500">
+                  Turning this off drops the code from the cart of everyone already holding a referral link — they pay
+                  full price and the ambassador earns nothing on the sale. To stop paying commissions while their
+                  customers keep the discount, use <span className="text-zinc-400">Pause new commissions</span> below.
+                </p>
+              )}
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralCommissionsPaused} onChange={(e) => setReferralCommissionsPaused(e.target.checked)} /> Pause new commissions (codes still give the customer discount)</label>
               <label className="block text-zinc-300">Ambassador personal discount (% off their own orders)<input value={referralPersonalDiscount} onChange={(e) => setReferralPersonalDiscount(e.target.value)} placeholder="20" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="block text-zinc-300">Default commission rate (% when an ambassador has no custom rate)<input value={referralDefaultCommission} onChange={(e) => setReferralDefaultCommission(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
