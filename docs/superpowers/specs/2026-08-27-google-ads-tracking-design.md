@@ -345,6 +345,17 @@ after declining; and no request when the conversion ID is absent.
 2. **Reconciliation job.** The server leg fires only when the customer opens the
    confirmation page. Closing that gap needs a job sweeping paid orders — a known,
    documented, pre-existing gap affecting all four channels equally.
+
+2a. **Retrying failed sends — POST-LAUNCH, explicitly out of scope (owner decision,
+   2026-08-27).** `wasAlreadySent` returns true for a ledger row regardless of its
+   `delivered` value, so a send that a platform hard-rejected is never retried. This is
+   exactly the behaviour TikTok has today and it is deliberate: a rejection must not
+   re-fire on every confirmation-page refresh. It does mean the enforced invariant is
+   *at most one attempt record per platform*, marginally narrower than *exactly one
+   successful record per platform*. Closing that gap needs a repair job re-sending where
+   `delivered = false and event_id <> 'backfill-no-send'`. That is a separate piece of
+   work with its own financial-event risk, and it is NOT part of the Google Ads
+   programme.
 3. **Compliance encoding.** Google's policy rules for this product category belong in
    `compliance.ts` before the campaign stage. Specified there, not here.
 
