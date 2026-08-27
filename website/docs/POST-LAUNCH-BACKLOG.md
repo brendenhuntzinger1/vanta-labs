@@ -149,7 +149,7 @@ not after it.
 | PLB-01 | P2 | zero callers, so it cannot return a wrong answer | wire it up or delete it — not a comment edit |
 | PLB-02 | P2 | production has zero refunded orders | one rule, one implementation, both comments corrected |
 | PLB-03 | P2 | nothing has ever shipped, so nothing has returned | owner decision, then alert (recommended) or restock |
-| PLB-04 | P3 | the probe degrades correctly; the offers bar renders | apply `coupon-storefront-fields.sql` |
+| PLB-04 | P3 | the probe degrades correctly; the offers bar renders | **CLOSED 2026-08-27** — migration applied to production, and the probe now remembers its answer |
 
 None of these blocks the launch. All three should be closed before the store has
 enough volume to make them reachable — PLB-03 the soonest, since it becomes
@@ -197,6 +197,40 @@ fix, and customer-invisible.
 `storefront_headline` and `storefront_priority`). Additive, zero blast radius.
 Alternatively, probe `information_schema` once per process instead of probing by
 provoking an error — but the migration is the smaller change.
+
+### CLOSED — 2026-08-27
+
+Both halves were done, because they close different failure modes.
+
+**The migration was applied to production** (`coupon_storefront_fields`), on the
+owner's explicit instruction. Verified before and after with the publishable key
+against the live REST endpoint, using the exact tier-1 column list from
+`storefront-offers.ts`:
+
+```
+before   [HTTP 400]  {"code":"42703","message":"column coupons.storefront_headline does not exist"}
+after    [HTTP 200]  []
+```
+
+`information_schema` confirms both columns present, `text` and `integer`, both
+nullable. No existing row was touched and no default was set.
+
+**The probe also got a memory**, which the migration alone would not have
+provided: `selectColumnTier` (`storefront-offers.ts`) now remembers the tier
+that worked for the life of the process, so ANY future unrun optional migration
+costs one probe per cold start rather than one per page load. Only a success is
+cached, and a remembered tier that later fails re-probes the whole ladder, so
+the fallback stays migration-tolerant in both directions.
+
+Rediscovered from production edge logs during the 2026-08-27 alert review before
+this entry was read — which is the thing this document exists to prevent. The
+volume it was costing, measured over 24h: **2,350 × 400 on `/rest/v1/coupons`**,
+roughly one per page load.
+
+Worth recording separately, because it was found while chasing the same logs and
+is NOT what the offers bar's emptiness is about: all 335 active coupons carry an
+`assigned_email`, so there are currently **zero** publicly advertisable coupons.
+The bar has nothing to show for reasons that have nothing to do with this probe.
 
 
 ---
