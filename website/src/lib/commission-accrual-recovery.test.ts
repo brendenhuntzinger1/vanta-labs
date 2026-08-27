@@ -184,17 +184,26 @@ vi.mock("@/lib/supabase-server", () => {
       return {
         select: () => {
           const filters: Array<[string, unknown]> = [];
+          let offset = 0;
+          // The repair sweep's scan: paid orders carrying an ambassador. It
+          // PAGES the candidate select now (`.range()`), because bounding the
+          // scan with `.limit()` is what made the 101st order with a missing
+          // commission unreachable.
+          const scan = () => {
+            const row = ORDER_ROW();
+            const paid = filters.some(([c, v]) => c === "payment_status" && v === "paid");
+            const rows = paid && db.orderStatus === "paid" ? [row] : [];
+            return { data: offset === 0 ? rows : [], error: null };
+          };
           const builder: Record<string, unknown> = {
             eq(column: string, value: unknown) { filters.push([column, value]); return builder; },
             not() { return builder; },
             gte() { return builder; },
+            or() { return builder; },
             order() { return builder; },
-            limit: async () => {
-              // The repair sweep's scan: paid orders carrying an ambassador.
-              const row = ORDER_ROW();
-              const paid = filters.some(([c, v]) => c === "payment_status" && v === "paid");
-              return { data: paid && db.orderStatus === "paid" ? [row] : [], error: null };
-            },
+            limit: async () => scan(),
+            range(from: number) { offset = from; return builder; },
+            then(resolve: (v: unknown) => unknown) { return Promise.resolve(scan()).then(resolve); },
             maybeSingle: async () => ({ data: ORDER_ROW(), error: null }),
           };
           return builder;
@@ -256,10 +265,31 @@ vi.mock("@/lib/supabase-server", () => {
 
     if (table === "commissions") {
       return {
+        // The mirror the confirming read now has to see. Modelled, because
+        // "converged" is a claim about BOTH ledgers and this table is half of
+        // it — a double that cannot answer for the mirror cannot tell a real
+        // convergence from a half-written one.
+        select: () => ({
+          eq: (_c: string, value: unknown) => ({
+            maybeSingle: async () => ({ data: db.commissions.get(String(value)) ?? null, error: null }),
+          }),
+        }),
         upsert: async (row: Record<string, unknown>) => {
           db.commissions.set(String(row.order_id), row);
           return { error: null };
         },
+      };
+    }
+
+    if (table === "partners") {
+      // The commissions mirror is FK'd to this table
+      // (`partner_id uuid not null references partners(id)`), and production
+      // keeps `partners` and `ambassadors` in step — 9 rows each, 0 orphans.
+      // A double that omitted it would describe a database that cannot exist.
+      return {
+        select: () => ({
+          eq: () => ({ maybeSingle: async () => ({ data: { id: AMBASSADOR_ID }, error: null }) }),
+        }),
       };
     }
 

@@ -37,7 +37,24 @@ const AMBASSADOR_ID = "amb-race-1";
 
 type Row = Record<string, unknown>;
 
-const constraints = { uniqueOrderId: true };
+/**
+ * THE MUTATION SWITCH, AND WHY IT LIVES IN TWO PLACES.
+ *
+ * `constraints.uniqueOrderId` exists so a reviewer can turn
+ * referral_orders_order_id_key OFF and watch this file go red — the control
+ * that proves the constraint, not the application, is what stops a double
+ * commission.
+ *
+ * It did not work as documented. The switch was a single mutable object that
+ * `beforeEach` reset to `true`, so flipping it AT THE DECLARATION (mutation
+ * M11) was a no-op: every test re-armed it before running, the suite stayed
+ * green, and the control silently proved nothing. The default now lives in its
+ * own constant and `beforeEach` restores THAT, so flipping this one line really
+ * does drop the constraint for the whole file.
+ */
+const CONSTRAINTS_DEFAULT: { uniqueOrderId: boolean } = { uniqueOrderId: true };
+
+const constraints = { ...CONSTRAINTS_DEFAULT };
 
 const db: {
   orders: Row[];
@@ -154,20 +171,89 @@ vi.mock("@/lib/env", () => ({ getSiteUrl: () => "https://example.test" }));
 vi.mock("@/lib/supabase-server", () => {
   type Pred = (row: Row) => boolean;
 
+  /**
+   * PostgREST's `.or()` grammar, as far as this codebase uses it:
+   *   term        := col.op.value | and(term, term, ...)
+   *   or-filter   := term, term, ...      (top-level commas)
+   * Modelled rather than waved through, because the commission sweep's window
+   * ("paid inside the window, OR paid with a NULL paid_at and created inside
+   * it") is exactly the thing that used to make an order invisible forever.
+   */
+  function splitTop(expr: string): string[] {
+    const parts: string[] = [];
+    let depth = 0;
+    let current = "";
+    for (const ch of expr) {
+      if (ch === "(") depth += 1;
+      if (ch === ")") depth -= 1;
+      if (ch === "," && depth === 0) { parts.push(current); current = ""; continue; }
+      current += ch;
+    }
+    if (current.trim() !== "") parts.push(current);
+    return parts.map((part) => part.trim()).filter(Boolean);
+  }
+
+  function evalTerm(row: Row, term: string): boolean {
+    if (term.startsWith("and(") && term.endsWith(")")) {
+      return splitTop(term.slice(4, -1)).every((sub) => evalTerm(row, sub));
+    }
+    const first = term.indexOf(".");
+    const second = term.indexOf(".", first + 1);
+    if (first < 0 || second < 0) throw new Error(`unsupported or() term: ${term}`);
+    const column = term.slice(0, first);
+    const op = term.slice(first + 1, second);
+    const value = term.slice(second + 1);
+    if (op === "is") {
+      if (value !== "null") throw new Error(`unsupported is.${value}`);
+      return (row[column] ?? null) === null;
+    }
+    if (op === "gte") return row[column] != null && String(row[column]) >= value;
+    throw new Error(`unsupported or() operator: ${op}`);
+  }
+
   function select(rows: () => Row[], table: string) {
     const preds: Pred[] = [];
+    const sortKeys: Array<{ col: string; asc: boolean; nullsFirst: boolean }> = [];
     let take: number | null = null;
+    let skip = 0;
     const matched = () => {
-      const hit = rows().filter((row) => preds.every((p) => p(row)));
+      let hit = rows().filter((row) => preds.every((p) => p(row)));
+      if (sortKeys.length > 0) {
+        hit = [...hit].sort((a, b2) => {
+          for (const { col, asc, nullsFirst } of sortKeys) {
+            const av = a[col] ?? null;
+            const bv = b2[col] ?? null;
+            if (av === null && bv === null) continue;
+            // NULL ordering is a real, observable behaviour here: the sweep
+            // deliberately puts NULL paid_at first.
+            if (av === null) return nullsFirst ? -1 : 1;
+            if (bv === null) return nullsFirst ? 1 : -1;
+            const cmp = String(av).localeCompare(String(bv));
+            if (cmp !== 0) return asc ? cmp : -cmp;
+          }
+          return 0;
+        });
+      }
+      if (skip > 0) hit = hit.slice(skip);
       return (take == null ? hit : hit.slice(0, take)).map((row) => ({ ...row }));
     };
     const b: Record<string, unknown> = {
       eq(c: string, v: unknown) { preds.push((r) => String(r[c] ?? "") === String(v)); return b; },
       not(c: string) { preds.push((r) => r[c] != null); return b; },
       gte(c: string, v: unknown) { preds.push((r) => r[c] != null && String(r[c]) >= String(v)); return b; },
+      or(expr: string) {
+        const terms = splitTop(expr);
+        preds.push((r) => terms.some((term) => evalTerm(r, term)));
+        return b;
+      },
       in(c: string, vs: unknown[]) { preds.push((r) => vs.map(String).includes(String(r[c]))); return b; },
-      order() { return b; },
+      order(c: string, opts?: { ascending?: boolean; nullsFirst?: boolean }) {
+        sortKeys.push({ col: c, asc: opts?.ascending !== false, nullsFirst: opts?.nullsFirst === true });
+        return b;
+      },
       limit(n: number) { take = n; return b; },
+      // Offset paging, as PostgREST implements .range(): inclusive both ends.
+      range(from: number, to: number) { skip = from; take = to - from + 1; return b; },
       async maybeSingle() {
         // The ONE await point that decides this race.
         if (table === "referral_orders") await gate.pause();
@@ -307,7 +393,7 @@ function obligationDollars() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  constraints.uniqueOrderId = true;
+  Object.assign(constraints, CONSTRAINTS_DEFAULT);
   db.orders = [];
   db.referralOrders = [];
   db.commissions = [];

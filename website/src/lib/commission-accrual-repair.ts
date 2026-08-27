@@ -70,11 +70,32 @@ import { recordSystemAlert } from "@/lib/monitoring";
 const DEFAULT_LOOKBACK_DAYS = 30;
 
 /**
- * Orders examined per run. The sweep shares a 60-second window with a dozen
+ * ACCRUALS ATTEMPTED per run. The sweep shares a 60-second window with a dozen
  * other jobs, so it takes a bite rather than the whole backlog; the next run
  * takes the next bite, oldest first.
+ *
+ * THIS BOUNDS THE WORK, NOT THE SCAN. It used to be applied as `.limit(100)` on
+ * the candidate SELECT while the "has no accrual" filter ran in JavaScript
+ * afterwards, so 100 already-accrued orders at the oldest end of the window
+ * filled the page on every tick and the 101st order — the one with a genuinely
+ * missing commission — was never even read. That is MISSED COMMISSION: a real
+ * obligation to a real person that is never created. The shipping sweep had the
+ * same defect and the same fix (shipping-cost-repair.ts:123-183); the two are
+ * deliberately the same shape now.
  */
 const DEFAULT_LIMIT = 100;
+
+/** Rows read per page of the candidate SELECT. The select is cheap and indexed. */
+const CANDIDATE_PAGE_SIZE = 200;
+
+/**
+ * Ceiling on candidate rows READ per run, so scan cost cannot grow without
+ * bound as the window fills. Reaching it is reported, never silent.
+ */
+const MAX_CANDIDATE_SCAN = 5000;
+
+/** PostgREST puts the `.in()` list in the URL, so it is chunked like every other one. */
+const IN_CHUNK = 200;
 
 export interface CommissionAccrualRepairResult {
   /** Paid, ambassador-carrying orders inspected in the window. */
@@ -91,6 +112,18 @@ export interface CommissionAccrualRepairResult {
   converged: number;
   /** Orders that had no accrual and still do not — the accrual failed again. */
   failed: number;
+  /**
+   * Orders found to be missing an accrual that this run did not get to, because
+   * `limit` accruals had already been attempted. They are not lost: they sort
+   * ahead of everything that arrives later, so the next tick starts with them.
+   */
+  deferred?: number;
+  /**
+   * The window held more candidates than MAX_CANDIDATE_SCAN, so this run did
+   * not read all of them. Reported rather than silent: it is the ONE condition
+   * under which the scan can fail to SEE an order with a missing commission.
+   */
+  scanTruncated?: boolean;
 }
 
 /** PostgREST hands back a plain object, not an Error. Pull the code off either. */
@@ -126,25 +159,173 @@ function describeError(error: unknown): string {
   return String(error);
 }
 
+function round2(value: unknown): number {
+  return Math.round(Number(value ?? 0) * 100) / 100;
+}
+
 /**
- * Did somebody else accrue this order while we were working on it?
+ * Did somebody else record this order's WHOLE obligation while we were working
+ * on it?
  *
- * Only ever true for a 23505, and only after POSITIVELY CONFIRMING the row is
- * there. If the confirming read fails we return false and the order is reported
- * as failed — the conservative direction, because the cost of a false "all
- * clear" here is an ambassador silently going unpaid.
+ * WHY "A ROW EXISTS" IS NOT THAT QUESTION. This classified on the error CODE
+ * and then confirmed with "is there a referral_orders row for this order_id?",
+ * which is TRIVIALLY TRUE WHEN THIS RUN WROTE IT. `ensureCommissionRecord`
+ * performs two non-transactional writes:
+ *
+ *     referral_orders  insert   (the ledger the payout reads)
+ *     commissions      upsert   (the mirror the profit report reads)
+ *
+ * If the ledger insert succeeds and the mirror upsert then raises 23505 —
+ * commissions.order_id is unique too — the old check saw its OWN ledger row and
+ * called it `converged`. Reproduced: ledger row present, mirror absent,
+ * {scanned:1, repaired:0, converged:1, failed:0}, no alert. The ambassador is
+ * paid from the ledger, the profit report never sees the expense, and the next
+ * sweep is a no-op because it keys on the ledger row's ABSENCE. Permanent, and
+ * the one alert that would have said so had been switched off.
+ *
+ * So the confirming read has to establish that the obligation is FULLY
+ * RECORDED, on BOTH ledgers, FOR THIS AMBASSADOR, AT ONE AGREED AMOUNT.
+ * Anything less is reported as `failed`, which alerts — the conservative
+ * direction, because the cost of a false "all clear" here is an ambassador
+ * silently going unpaid or an expense silently vanishing from profit.
+ *
+ * A commission_amount of 0 is NOT treated as absence: ensureCommissionRecord
+ * legitimately writes 0 with an `ineligible_reason` (program off, commissions
+ * paused, ambassador not active, under the minimum order). What must hold is
+ * that the two ledgers AGREE about the number, whatever it is.
  */
-async function accrualLandedConcurrently(orderId: string, error: unknown): Promise<boolean> {
-  if (errorCode(error) !== "23505") return false;
+async function accrualLandedConcurrently(
+  order: { orderId: string; ambassadorId: string | null },
+  error: unknown,
+): Promise<{ converged: true } | { converged: false; reason: string }> {
+  if (errorCode(error) !== "23505") return { converged: false, reason: describeError(error) };
 
-  const { data, error: readError } = await supabaseAdmin
-    .from("referral_orders")
-    .select("id")
-    .eq("order_id", orderId)
-    .limit(1);
+  const [ledger, mirror] = await Promise.all([
+    supabaseAdmin
+      .from("referral_orders")
+      .select("id, ambassador_id, commission_amount")
+      .eq("order_id", order.orderId)
+      .maybeSingle(),
+    supabaseAdmin
+      .from("commissions")
+      .select("id, partner_id, commission_amount")
+      .eq("order_id", order.orderId)
+      .maybeSingle(),
+  ]);
 
-  if (readError) return false;
-  return (data ?? []).length > 0;
+  // A read that FAILED is not a read that found nothing.
+  if (ledger.error) return { converged: false, reason: `ledger confirm read failed: ${describeError(ledger.error)}` };
+  if (mirror.error) return { converged: false, reason: `mirror confirm read failed: ${describeError(mirror.error)}` };
+
+  if (!ledger.data) {
+    return { converged: false, reason: "23505 raised but no referral_orders row exists for this order" };
+  }
+  if (!mirror.data) {
+    // The exact half-written state described above.
+    return {
+      converged: false,
+      reason: "referral_orders row present but the commissions mirror is MISSING — the payout ledger and the "
+        + "profit report disagree about this order. Profit is overstated by this commission until it is written.",
+    };
+  }
+
+  if (order.ambassadorId) {
+    if (String(ledger.data.ambassador_id ?? "") !== order.ambassadorId) {
+      return {
+        converged: false,
+        reason: `referral_orders row belongs to ambassador ${String(ledger.data.ambassador_id ?? "null")}, `
+          + `not ${order.ambassadorId} — this order's obligation was not the one that landed`,
+      };
+    }
+    if (String(mirror.data.partner_id ?? "") !== order.ambassadorId) {
+      return {
+        converged: false,
+        reason: `commissions row belongs to partner ${String(mirror.data.partner_id ?? "null")}, `
+          + `not ${order.ambassadorId}`,
+      };
+    }
+  }
+
+  const ledgerAmount = round2(ledger.data.commission_amount);
+  const mirrorAmount = round2(mirror.data.commission_amount);
+  if (ledgerAmount !== mirrorAmount) {
+    return {
+      converged: false,
+      reason: `the two ledgers disagree about the money: referral_orders ${ledgerAmount.toFixed(2)} vs `
+        + `commissions ${mirrorAmount.toFixed(2)}`,
+    };
+  }
+
+  return { converged: true };
+}
+
+/**
+ * Every paid, ambassador-carrying order in the window, oldest first, read in
+ * cheap pages. `limit` deliberately does NOT appear here — see DEFAULT_LIMIT.
+ */
+async function collectCandidates(since: string): Promise<{
+  rows: Array<Record<string, unknown>>;
+  truncated: boolean;
+}> {
+  // A PAID ORDER WITH A NULL paid_at IS STILL A PAID ORDER.
+  //
+  // `.gte("paid_at", since)` alone never matches NULL, so such an order was
+  // invisible to this sweep FOREVER — the ambassador's commission could never
+  // be repaired at all, at any limit. The window is still bounded (an order
+  // with no paid_at is admitted on its created_at instead) so the scan cannot
+  // grow without end.
+  const windowFilter = `paid_at.gte.${since},and(paid_at.is.null,created_at.gte.${since})`;
+
+  const page = (offset: number) =>
+    supabaseAdmin
+      .from("orders")
+      .select("order_id, subtotal, discount_amount, ambassador_id, referral_code, customer_email, shipping_address, city, postal_code, paid_at, created_at")
+      .eq("payment_status", "paid")
+      .not("ambassador_id", "is", null)
+      .or(windowFilter)
+      // Oldest first: a backlog is cleared in the order it accrued, so the
+      // ambassador who has been waiting longest is paid first. NULL paid_at
+      // sorts FIRST because those are precisely the rows that were starved.
+      .order("paid_at", { ascending: true, nullsFirst: true })
+      // order_id IS A TIEBREAK, NOT DECORATION. Orders paid in the same second
+      // share a paid_at, and without a total order the page boundaries are not
+      // stable, so offset paging could skip a row.
+      .order("order_id", { ascending: true })
+      .range(offset, offset + CANDIDATE_PAGE_SIZE - 1);
+
+  const rows: Array<Record<string, unknown>> = [];
+  let offset = 0;
+  for (;;) {
+    const { data, error } = await page(offset);
+    // A sweep that cannot read is not a sweep that found nothing.
+    if (error) throw error;
+    const batch = (data ?? []) as Array<Record<string, unknown>>;
+    rows.push(...batch);
+    if (batch.length < CANDIDATE_PAGE_SIZE) return { rows, truncated: false };
+    offset += CANDIDATE_PAGE_SIZE;
+    if (offset >= MAX_CANDIDATE_SCAN) {
+      // TRUNCATION IS A CLAIM ABOUT ROWS WE DID NOT READ, SO PROVE IT.
+      const probe = await page(offset);
+      if (probe.error) throw probe.error;
+      return { rows, truncated: (probe.data ?? []).length > 0 };
+    }
+  }
+}
+
+/** Which of these order ids already carry a referral_orders row. */
+async function accruedOrderIds(orderIds: string[]): Promise<Set<string>> {
+  const accrued = new Set<string>();
+  for (let i = 0; i < orderIds.length; i += IN_CHUNK) {
+    const { data, error } = await supabaseAdmin
+      .from("referral_orders")
+      .select("order_id")
+      .in("order_id", orderIds.slice(i, i + IN_CHUNK));
+    if (error) throw error;
+    for (const row of (data ?? []) as Array<{ order_id: unknown }>) {
+      accrued.add(String(row.order_id));
+    }
+  }
+  return accrued;
 }
 
 export async function repairMissingCommissionAccruals(options?: {
@@ -159,44 +340,25 @@ export async function repairMissingCommissionAccruals(options?: {
 
   const result: CommissionAccrualRepairResult = { scanned: 0, repaired: 0, converged: 0, failed: 0 };
 
-  // Oldest first: a backlog is cleared in the order it accrued, so the
-  // ambassador who has been waiting longest is paid first.
-  const { data: orders, error: ordersError } = await supabaseAdmin
-    .from("orders")
-    .select("order_id, subtotal, discount_amount, ambassador_id, referral_code, customer_email, shipping_address, city, postal_code")
-    .eq("payment_status", "paid")
-    .not("ambassador_id", "is", null)
-    .gte("paid_at", since)
-    .order("paid_at", { ascending: true })
-    .limit(limit);
-
-  if (ordersError) {
-    // A sweep that cannot read is not a sweep that found nothing.
-    throw ordersError;
-  }
-
-  const candidates = (orders ?? []) as Array<Record<string, unknown>>;
+  const { rows: candidates, truncated } = await collectCandidates(since);
   result.scanned = candidates.length;
+  if (truncated) result.scanTruncated = true;
   if (candidates.length === 0) return result;
 
-  const orderIds = candidates.map((order) => String(order.order_id));
-  const { data: existing, error: existingError } = await supabaseAdmin
-    .from("referral_orders")
-    .select("order_id")
-    .in("order_id", orderIds);
-
-  if (existingError) {
-    throw existingError;
-  }
-
-  const accrued = new Set((existing ?? []).map((row) => String((row as { order_id: unknown }).order_id)));
+  const accrued = await accruedOrderIds(candidates.map((order) => String(order.order_id)));
   const missing = candidates.filter((order) => !accrued.has(String(order.order_id)));
   if (missing.length === 0) return result;
 
+  // `limit` bounds the ACCRUALS ATTEMPTED, applied AFTER the absence filter, so
+  // a window full of already-accrued orders cannot hide a missing one.
+  const toRepair = missing.slice(0, Math.max(0, limit));
+  if (missing.length > toRepair.length) result.deferred = missing.length - toRepair.length;
+
   const failures: Array<{ orderId: string; error: string }> = [];
 
-  for (const order of missing) {
+  for (const order of toRepair) {
     const orderId = String(order.order_id);
+    const ambassadorId = order.ambassador_id == null ? null : String(order.ambassador_id);
     try {
       await accrueCommissionForPaidOrder(order as Parameters<typeof accrueCommissionForPaidOrder>[0]);
       result.repaired += 1;
@@ -207,13 +369,19 @@ export async function repairMissingCommissionAccruals(options?: {
       // critical "Ambassadors are not being credited" on every referred order
       // paid inside a sweep window, which trains the operator to ignore the one
       // alert that matters.
-      if (await accrualLandedConcurrently(orderId, error)) {
+      //
+      // But ONLY when the whole obligation is confirmed on both ledgers — see
+      // accrualLandedConcurrently. A 23505 from the commissions mirror after
+      // the referral_orders insert has already committed is NOT convergence,
+      // and it used to be counted as one.
+      const outcome = await accrualLandedConcurrently({ orderId, ambassadorId }, error);
+      if (outcome.converged) {
         result.converged += 1;
         continue;
       }
 
       result.failed += 1;
-      failures.push({ orderId, error: describeError(error) });
+      failures.push({ orderId, error: `${describeError(error)} | not converged: ${outcome.reason}` });
     }
   }
 
@@ -232,6 +400,22 @@ export async function repairMissingCommissionAccruals(options?: {
       context: { failures: failures.slice(0, 25), totalFailed: failures.length },
     }).catch((alertError) => {
       console.error("Unable to record a commission-accrual repair alert", alertError);
+    });
+  }
+
+  if (result.scanTruncated) {
+    // The one condition under which this sweep can fail to SEE a missing
+    // commission. Silent truncation is how the old `.limit()` scan hid the
+    // backlog in the first place, so it is said out loud.
+    await recordSystemAlert({
+      type: "commission_accrual_scan_truncated",
+      severity: "warning",
+      message:
+        `The commission-accrual sweep hit its ${MAX_CANDIDATE_SCAN}-row candidate ceiling with rows still unread. `
+        + "Orders past the ceiling are not being checked for a missing commission this tick.",
+      context: { scanned: result.scanned, maxCandidateScan: MAX_CANDIDATE_SCAN },
+    }).catch((alertError) => {
+      console.error("Unable to record a commission-accrual scan-truncation alert", alertError);
     });
   }
 
