@@ -71,6 +71,59 @@ type CouponRow = {
  *   member_scope 'all' is advertised to an anonymous storefront, because that
  *   is the only scope everyone reading the bar can actually use.
  */
+/**
+ * The column tier that last satisfied the database, for the life of this
+ * process. `null` until something has actually worked.
+ *
+ * WHY THIS EXISTS. The ladder below is migration-tolerant by design, and that
+ * part is right. What it lacked was memory: production has never run
+ * coupon-storefront-fields.sql, so the widest tier asked for
+ * `coupons.storefront_headline` on every single request and Postgres answered
+ * `42703 column does not exist` every single time — 2,350 guaranteed-failing
+ * requests in 24 hours, one per page load, for a column that cannot appear
+ * without a migration.
+ *
+ * Deliberately per-process rather than persisted: a cold start re-probes, so
+ * running the migration is still picked up without a code change, and there is
+ * no cache to invalidate. A remembered tier that later fails re-probes the
+ * whole ladder immediately (see selectColumnTier), so this is not a one-way
+ * door into a narrower tier.
+ */
+let cachedColumnTier: string | null = null;
+
+/** Test-only: the cache is module state and would leak between cases. */
+export function __resetColumnTierCache(): void {
+  cachedColumnTier = null;
+}
+
+/**
+ * Run `attempt` against the first column list the database accepts, preferring
+ * whichever one worked last time.
+ *
+ * Only a SUCCESS is remembered. Caching a tier that merely happened to be tried
+ * last during a total outage would pin every subsequent request to it.
+ */
+export async function selectColumnTier<T>(
+  tiers: readonly string[],
+  attempt: (columns: string) => Promise<{ ok: true; value: T } | { ok: false; error: unknown }>,
+): Promise<{ ok: true; value: T } | { ok: false; error: unknown }> {
+  const remembered = cachedColumnTier;
+  const order = remembered === null
+    ? [...tiers]
+    : [remembered, ...tiers.filter((tier) => tier !== remembered)];
+
+  let error: unknown = new Error("No column tier was attempted.");
+  for (const columns of order) {
+    const result = await attempt(columns);
+    if (result.ok) {
+      cachedColumnTier = columns;
+      return result;
+    }
+    error = result.error;
+  }
+  return { ok: false, error };
+}
+
 async function publicCoupons(nowIso: string): Promise<CouponRow[]> {
   // Ordered widest-first. storefront_* are optional conveniences
   // (coupon-storefront-fields.sql), is_private/member_scope are older but still
@@ -83,9 +136,7 @@ async function publicCoupons(nowIso: string): Promise<CouponRow[]> {
     "code, discount_type, discount_value, starts_at, ends_at, max_redemptions, redemptions_count",
   ];
 
-  let data: CouponRow[] | null = null;
-  let error: unknown = null;
-  for (const columns of tiers) {
+  const attempted = await selectColumnTier<CouponRow[]>(tiers, async (columns) => {
     const result = await supabaseAdmin
       .from("coupons")
       .select(columns)
@@ -98,14 +149,12 @@ async function publicCoupons(nowIso: string): Promise<CouponRow[]> {
       .order("created_at", { ascending: false })
       .limit(20);
 
-    if (!result.error) {
-      data = result.data as unknown as CouponRow[];
-      error = null;
-      break;
-    }
-    error = result.error;
-  }
-  if (error) throw error;
+    return result.error
+      ? { ok: false, error: result.error }
+      : { ok: true, value: result.data as unknown as CouponRow[] };
+  });
+  if (!attempted.ok) throw attempted.error;
+  const data = attempted.value;
 
   return ((data ?? []) as CouponRow[]).filter((row) => {
     if (row.is_private) return false;
