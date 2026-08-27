@@ -25,6 +25,34 @@
 // Sales tax is intentionally NOT counted as profit: tax collected is remitted
 // to the state, so it's a pass-through, not earnings. It's carried through only
 // so reports can display "Sales tax collected".
+//
+// STORE CREDIT AND LOYALTY POINTS ARE NON-CASH TENDER, AND THEY ARE CONTRA-
+// REVENUE. Both are granted by the store (a monthly membership perk, and points
+// earned on earlier orders); neither is money a customer ever paid in. When a
+// buyer settles part of an order with either, the merchandise still leaves the
+// building at list price but that portion of the invoice is never collected, so
+// `creditRedeemed` is deducted from gross revenue. The property that keeps the
+// whole engine honest is then true on EVERY order, redemption or not:
+//
+//     grossRevenue == orders.amount_paid          (when tax counts as profit)
+//     grossRevenue == orders.amount_paid - tax    (when tax is pass-through)
+//
+// which is the same cash definition ledger.netOrderRevenue uses, so the profit
+// report and the revenue/analytics pages describe the same dollars.
+//
+// THE REJECTED ALTERNATIVE: booking the redemption as a marketing EXPENSE line
+// instead. It produces the IDENTICAL net profit, because an expense and a
+// contra-revenue of the same size subtract equally — but it leaves revenue
+// stating money the store never received, and revenue is not only a display
+// number: gross margin %, net margin % and average order value are all computed
+// against it. A member spending a $75 credit on a $117 order would report an
+// AOV of $117 against $42 of cash. Contra-revenue is the treatment that makes
+// every figure downstream reconcile, so it is the one implemented.
+//
+// EARNING points accrues NOTHING here, deliberately. Recognising the cost when
+// the credit is spent, and only then, is what stops the same dollar being
+// counted twice — once as an accrued liability at earn time and again as a
+// deduction at redemption. Cash basis, applied consistently at both ends.
 // -------------------------------------------------------------------------
 
 export interface OrderProfitLine {
@@ -77,6 +105,19 @@ export interface OrderProfitInput {
   countTaxAsProfit?: boolean;
   /** COGS lines (snapshotted unit cost × qty). */
   lines: OrderProfitLine[];
+  /**
+   * Non-cash tender applied to this order, in dollars: store credit redeemed
+   * plus the dollar value of loyalty points redeemed.
+   *
+   * CONTRA-REVENUE, NOT AN EXPENSE — see the module docblock. Deducted from
+   * gross revenue so what is reported is what was actually collected.
+   *
+   * NOT clamped to the order total on purpose: store credit may be applied
+   * against collected sales tax as well as merchandise, so on a pass-through
+   * tax configuration a large redemption can legitimately push revenue below
+   * zero — the store really did remit that tax out of its own pocket.
+   */
+  creditRedeemed?: number;
   /** Ambassador commission paid on this order (0 if none). */
   commission: number;
   /** Card processing fee the store paid (0 for fee-free / manual methods). */
@@ -144,6 +185,12 @@ export interface OrderProfitResult {
   shippingCharged: number;
   /** Other customer-paid revenue counted in (shipping protection, fees). */
   additionalRevenue: number;
+  /**
+   * Store credit + points redeemed, in dollars, already deducted from
+   * grossRevenue. Surfaced so a breakdown can show the deduction rather than
+   * leaving the revenue lines failing to add up to the total.
+   */
+  creditRedeemed: number;
   /** True when collected sales tax was counted toward profit. */
   taxCountedAsProfit: boolean;
   cogs: number;
@@ -199,6 +246,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   const refund = round(Math.max(0, input.refund));
   const taxCollected = round(Math.max(0, input.taxCollected ?? 0));
   const additionalRevenue = round(Math.max(0, input.additionalRevenue ?? 0));
+  const creditRedeemed = round(Math.max(0, input.creditRedeemed ?? 0));
   const countTaxAsProfit = input.countTaxAsProfit ?? false;
   const shippingCostIsEstimate = input.shippingCostIsEstimate ?? false;
   // Defaults TRUE — see the field comment. Nothing ingests a settled fee yet.
@@ -238,7 +286,12 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
   // Gross revenue = merchandise + shipping charged + other customer-paid fees
   // (shipping protection, surcharge). Collected sales tax is added only when the
   // owner opts to count it (otherwise it's a pass-through, remitted to the state).
-  const grossRevenue = round(merchandiseRevenue + shippingRevenue + additionalRevenue + (countTaxAsProfit ? taxCollected : 0));
+  // Store credit and points come off here, as contra-revenue: the merchandise
+  // was invoiced at list price, and that slice of the invoice was settled with
+  // tender the store issued rather than money the customer paid.
+  const grossRevenue = round(
+    merchandiseRevenue + shippingRevenue + additionalRevenue + (countTaxAsProfit ? taxCollected : 0) - creditRedeemed,
+  );
   // THE REVERSAL MUST MATCH WHAT WAS COUNTED. `refund` is everything handed
   // back, tax included. When tax counts as profit it is inside grossRevenue and
   // the two cancel exactly — a fully refunded order nets to zero. When tax is a
@@ -261,6 +314,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     shippingRevenue,
     shippingCharged: shippingRevenue,
     additionalRevenue,
+    creditRedeemed,
     taxCountedAsProfit: countTaxAsProfit,
     cogs,
     commission,

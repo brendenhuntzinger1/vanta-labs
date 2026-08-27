@@ -5,6 +5,8 @@ export interface OrderProfitView {
   merchandiseRevenue: number;
   shippingCharged: number;
   additionalRevenue: number;
+  /** Store credit + points redeemed, already deducted from grossRevenue. */
+  creditRedeemed: number;
   taxCountedAsProfit: boolean;
   cogs: number;
   shippingCost: number;
@@ -95,6 +97,13 @@ export function AdminOrderProfitPanel({
         {profit.shippingCharged > 0 ? <Line label="Shipping collected" amount={profit.shippingCharged} /> : null}
         {profit.additionalRevenue > 0 ? (
           <Line label="Shipping protection & fees" amount={profit.additionalRevenue} />
+        ) : null}
+        {/* Non-cash tender. Above the Net profit line, and NEGATIVE, because it
+            is a reduction of what was collected rather than a cost that was
+            paid out — without it the revenue lines above simply do not add up
+            to the total on any order a member settled with credit. */}
+        {profit.creditRedeemed > 0 ? (
+          <Line label="Store credit & points redeemed" amount={-profit.creditRedeemed} />
         ) : null}
 
         <div className="!mt-3 border-t border-white/10 pt-2" />

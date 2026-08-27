@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
 import { isEarnedCommission, isRevenueOrderStatus, isSaleOrder } from "@/lib/ledger";
+import { pointsToDollars } from "@/lib/points-math";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 
 // The order fields profit needs. Everything is stored on the order at checkout,
@@ -105,29 +106,36 @@ function profitForOrder(
   const taxCollected = Math.max(0, Number(order.tax_amount ?? 0));
   const amountPaid = Math.max(0, Number(order.amount_paid ?? 0));
   // Other customer-paid revenue beyond merchandise + shipping + tax — the
-  // shipping-protection add-on and any card surcharge. Derived as the residual
-  // of what the customer actually paid (bounded ≥ 0; store-credit / points
-  // redemption simply make it 0).
+  // shipping-protection add-on and any card surcharge. READ FROM THE COLUMNS
+  // THAT RECORD THEM, always.
   //
-  // PREFER THE RECORDED FEE. The residual is what the customer paid beyond
-  // merchandise, shipping and tax, which expands to
-  //     cardFee + protection − storeCredit − points
-  // so on an order with no redemption it already equals protection + cardFee
-  // exactly. Reading the recorded columns instead of subtracting makes that
-  // robust rather than incidental, and lets the breakdown name the two parts.
+  // This used to fall back to a residual (amountPaid − merch − shipping − tax,
+  // clamped at ≥ 0) on any order that redeemed store credit or points, because
+  // the policy question "is a redemption contra-revenue or an expense?" had
+  // never been answered. The residual answered it by accident, and answered it
+  // wrong: it expands to `cardFee + protection − storeCredit − points`, so on a
+  // redeeming order it conflated two unrelated things — real protection revenue
+  // the customer DID pay, and non-cash tender the customer did NOT — and then
+  // clamped the mixture at zero. A $100 order settled with $20 of store credit
+  // reported $110 of gross revenue against $97 of cash, and $2 of "shipping
+  // protection & fees" on an order that collected $7 of it.
   //
-  // On an order that DID redeem store credit or points the residual is smaller
-  // by the redemption and the clamp can drive it to zero, losing real
-  // protection revenue. Whether a redemption should reduce revenue or be an
-  // expense line is an accounting policy this codebase has never stated, so the
-  // residual is kept verbatim there — this change must not silently pick a
-  // side. (No order in the system has redeemed either today.)
-  const redeemed =
-    Number(order.store_credit_redeemed_cents ?? 0) > 0 || Number(order.points_redeemed ?? 0) > 0;
+  // The two are now separate terms: fees are read from their own columns, and
+  // the redemption is passed to the engine as contra-revenue (see
+  // OrderProfitInput.creditRedeemed). Revenue then equals cash on EVERY order.
   const recordedProtection = Math.max(0, Number(order.shipping_protection_fee ?? 0));
   const cardSurcharge = Math.max(0, Number(order.card_processing_fee ?? 0));
-  const residualAdditional = Math.max(0, amountPaid - merch - shippingRevenue - taxCollected);
-  const additionalRevenue = redeemed ? residualAdditional : Math.round((recordedProtection + cardSurcharge) * 100) / 100;
+  const additionalRevenue = Math.round((recordedProtection + cardSurcharge) * 100) / 100;
+
+  // Non-cash tender applied to this order. store_credit_redeemed_cents is
+  // integer CENTS; points_redeemed is a count of POINTS, converted through the
+  // one exported redemption rate rather than a local copy of "100" — the same
+  // rule admin-reconciliation uses to decide what this order should have
+  // charged, so the two screens cannot disagree about the same order.
+  const creditRedeemed = Math.round(
+    (Math.max(0, Number(order.store_credit_redeemed_cents ?? 0)) / 100
+      + Math.max(0, pointsToDollars(Number(order.points_redeemed ?? 0)))) * 100,
+  ) / 100;
 
   // Memberships are pure revenue: they have no product cost and never ship, so
   // they must not carry COGS (the worst-case fallback) or a shipping cost.
@@ -145,6 +153,10 @@ function profitForOrder(
     shippingRevenue,
     // Shipping protection + any card surcharge the customer paid.
     additionalRevenue,
+    // Store credit + points redeemed — contra-revenue, so gross revenue ties
+    // to orders.amount_paid on a redeeming order exactly as it does on any
+    // other one.
+    creditRedeemed,
     // Exact label cost once reconciled; the configured estimate until then.
     // Memberships never ship, so their cost is a hard 0 (already finalized).
     shippingCost,

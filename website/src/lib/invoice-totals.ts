@@ -17,6 +17,8 @@
 // Kept apart from the route so the arithmetic can be tested without rendering
 // HTML, and so there is exactly one place that decides what an invoice says.
 
+import { pointsToDollars } from "@/lib/points-math";
+
 export interface InvoiceLine {
   label: string;
   /** Signed dollars: negative for anything deducted from what was owed. */
@@ -49,9 +51,6 @@ export interface InvoiceOrderFields {
   refundAmount: number;
 }
 
-/** 100 points = $1 — points-math.POINTS_PER_DOLLAR_REDEMPTION. */
-const POINTS_PER_DOLLAR = 100;
-
 export function buildInvoiceTotals(order: InvoiceOrderFields): InvoiceTotals {
   const lines: InvoiceLine[] = [];
   const push = (label: string, amount: number) => {
@@ -70,7 +69,13 @@ export function buildInvoiceTotals(order: InvoiceOrderFields): InvoiceTotals {
   push("Service Fee", order.cardProcessingFee);
   push("Tax", order.taxAmount);
   push("Store credit", -(order.storeCreditRedeemedCents / 100));
-  push("Points redeemed", -(order.pointsRedeemed / POINTS_PER_DOLLAR));
+  // THE SHARED RATE, NOT A LOCAL COPY OF IT. This was `/ 100` beside a comment
+  // naming the exported constant it was duplicating. The two agree today, which
+  // is exactly what makes a copy dangerous: the day the redemption rate changes,
+  // the customer's invoice keeps valuing their points at the old rate and stops
+  // adding up to what they paid — and "the lines add up to the total" is the one
+  // property this module exists to guarantee.
+  push("Points redeemed", -pointsToDollars(order.pointsRedeemed));
 
   const totalPaid = round2(order.amountPaid);
 

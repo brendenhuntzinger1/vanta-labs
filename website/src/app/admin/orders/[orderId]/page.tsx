@@ -261,6 +261,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
               merchandiseRevenue: profit.merchandiseRevenue,
               shippingCharged: profit.shippingCharged,
               additionalRevenue: profit.additionalRevenue,
+              creditRedeemed: profit.creditRedeemed,
               taxCountedAsProfit: profit.taxCountedAsProfit,
               processingFeeIsEstimate: profit.processingFeeIsEstimate,
               cogs: profit.cogs,
