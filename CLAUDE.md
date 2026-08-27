@@ -67,14 +67,14 @@ cloud environment rather than `vanta`. Say so rather than working around it.
 
 ## Local permission allowlist
 
-`.claude/settings.local.json` holds per-developer permission grants (currently
-Supabase `execute_sql` and `apply_migration`, so SQL calls don't prompt). It is
-gitignored, so a fresh clone — including every cloud session — won't have it.
+Supabase `execute_sql` and `apply_migration` are auto-approved in the checked-in
+`.claude/settings.json`, so SQL calls don't prompt in any session, cloud or
+local. Auto-approval only removes the permission dialog — the production
+Supabase rules above still apply.
 
-`scripts/setup-claude-local-settings.sh` recreates it. The `vanta` cloud
-environment's setup script calls it; run it by hand after a fresh clone locally.
-Auto-approval only removes the permission dialog — the production Supabase rules
-above still apply.
+`.claude/settings.local.json` is gitignored and available for per-developer
+grants on top of that; `scripts/setup-claude-local-settings.sh` recreates it
+after a fresh clone.
 
 ## Out of scope
 
