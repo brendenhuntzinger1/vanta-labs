@@ -1116,7 +1116,21 @@ export async function finalizeManualPayment(
       postalCode: order.postal_code ? String(order.postal_code) : null,
     });
   } catch (commissionError) {
+    // An ambassador's money just failed to accrue. This used to be a bare
+    // console.error, which reaches nobody: the webhook catches its own errors
+    // and returns JSON, so Next.js never sees a throw and Sentry never fires.
+    // recordSystemAlert is the one path that reaches both the admin alert list
+    // and Sentry. The commission is not lost — repairMissingCommissionAccruals
+    // re-derives it from the order row on the next half-hourly sweep — but
+    // "recovers silently" and "recovered" are not the same fact, and the owner
+    // must be able to tell whether a partner is waiting on a repair.
     console.error("Unable to record commission for manually approved order", orderId, commissionError);
+    await recordSystemAlert({
+      type: "commission_accrual_failed",
+      severity: "critical",
+      message: `Commission accrual failed for manually approved order ${orderId}. The half-hourly repair sweep should re-derive it; verify it did.`,
+      context: { orderId, lane: "manual", error: commissionError instanceof Error ? commissionError.message : String(commissionError) },
+    });
   }
 
   try {
@@ -1634,7 +1648,15 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           postalCode: eventPayload.customer?.postalCode,
         });
       } catch (commissionError) {
+        // Same reasoning as the manual lane above: reach the operator, not just
+        // the log stream. Recoverable via the repair sweep, but never silent.
         console.error("Unable to record commission for order", orderId, commissionError);
+        await recordSystemAlert({
+          type: "commission_accrual_failed",
+          severity: "critical",
+          message: `Commission accrual failed for order ${orderId}. The half-hourly repair sweep should re-derive it; verify it did.`,
+          context: { orderId, lane: "card", error: commissionError instanceof Error ? commissionError.message : String(commissionError) },
+        });
       }
 
       try {
