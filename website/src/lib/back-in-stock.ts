@@ -40,21 +40,36 @@ export async function requestBackInStock(input: {
     return { ok: false, error: "Unknown product." };
   }
 
+  // Plain insert, NOT upsert.
+  //
+  // Uniqueness here is held by a partial index over an expression:
+  //   (product_slug, COALESCE(variant_id, ''), email) WHERE notified = false
+  // PostgREST's `onConflict` takes a bare column list, so it can express
+  // neither the COALESCE nor the WHERE — every upsert against this table got
+  // 42P10 and wrote nothing, and 42P10 says "no unique or exclusion constraint
+  // matching...", which contains no "duplicate", so the check below rejected it
+  // as a hard failure. Enrolment returned "try again later" every time, for
+  // everyone, and the table stayed empty.
+  //
+  // Letting the index reject the duplicate is also the race-safe form: two
+  // simultaneous requests both insert, Postgres fails one with 23505, and being
+  // already on the list is success. The partial predicate is what allows
+  // re-enrolment after a notification has been sent.
   const { error } = await supabaseAdmin
     .from("back_in_stock_requests")
-    .upsert(
-      {
-        product_slug: productSlug,
-        variant_id: variantId,
-        email,
-        notified: false,
-        created_at: new Date().toISOString(),
-      },
-      { onConflict: "product_slug,variant_id,email", ignoreDuplicates: true },
-    );
+    .insert({
+      product_slug: productSlug,
+      variant_id: variantId,
+      email,
+      notified: false,
+      created_at: new Date().toISOString(),
+    });
 
-  // A duplicate is fine — they're already on the list.
-  if (error && !String(error.message ?? "").toLowerCase().includes("duplicate")) {
+  // Already on the list — the outcome the customer asked for either way.
+  const alreadyEnrolled =
+    String(error?.code ?? "") === "23505"
+    || String(error?.message ?? "").toLowerCase().includes("duplicate");
+  if (error && !alreadyEnrolled) {
     return { ok: false, error: "Unable to save your request right now." };
   }
   return { ok: true };
