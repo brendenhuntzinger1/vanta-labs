@@ -64,6 +64,17 @@ describe("exactly one TikTok data source", () => {
   });
 });
 
+describe("exactly one Google Ads data source", () => {
+  // Matches the env READ, not the bare name: google-health.ts names the variable
+  // in the action text it shows an operator, which is not a second source.
+  it("declares the Google Ads conversion id in exactly one file", () => {
+    const offenders = sourceFiles(SRC)
+      .filter((path) => !path.endsWith("google-conversion-id.ts"))
+      .filter((path) => /process\.env\.NEXT_PUBLIC_GOOGLE_ADS_ID|["'`]AW-\d+["'`]/.test(readFileSync(path, "utf8")));
+    expect(offenders).toEqual([]);
+  });
+});
+
 describe("the access token never reaches the browser", () => {
   it("is read only in server-only modules", () => {
     const readers = files.filter((path) => read(path).includes("env.TIKTOK_EVENTS_API_ACCESS_TOKEN"));
