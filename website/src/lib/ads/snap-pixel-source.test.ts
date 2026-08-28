@@ -168,8 +168,17 @@ describe("the Snap pixel is gated on consent, exactly like the TikTok pixel", ()
   const tiktok = read(TIKTOK_PIXEL);
 
   it("reads the same stored consent key as every other tracker", () => {
-    expect(snap).toContain('"vl_cookie_consent"');
-    expect(snap).toContain('window.localStorage.getItem(STORAGE_KEY) === "accepted"');
+    // Asserted as a SHARED IMPORT rather than as a matching string literal —
+    // see the same test on the Reddit pixel. A test that pins one copy of a
+    // magic string cannot tell "every tracker agrees" from "this file happens
+    // to contain the same characters", which is exactly the drift risk the
+    // shared module removes.
+    expect(snap).toContain('from "@/lib/cookie-consent-client"');
+    expect(snap).toContain("hasAcceptedConsent()");
+    expect(snap).not.toContain('"vl_cookie_consent"');
+    const shared = read(join(SRC, "lib", "cookie-consent-client.ts"));
+    expect(shared).toContain('CONSENT_STORAGE_KEY = "vl_cookie_consent"');
+    expect(shared).toContain('window.localStorage.getItem(CONSENT_STORAGE_KEY) === "accepted"');
   });
 
   it("renders nothing at all until consent is recorded", () => {
@@ -186,11 +195,18 @@ describe("the Snap pixel is gated on consent, exactly like the TikTok pixel", ()
   it("reacts to consent being granted later in the visit", () => {
     // Someone who accepts the banner on a product page must start being
     // measured there, not on their next page load.
+    // Both subscribe through the shared module, which is what registers the
+    // custom event AND `storage` (a withdrawal in another tab is a withdrawal
+    // here too). Pinning the two addEventListener lines per file is what let
+    // the gate be copy-pasted four times in the first place.
     for (const source of [snap, tiktok]) {
-      expect(source).toContain('window.addEventListener(CONSENT_EVENT, sync)');
-      expect(source).toContain('window.addEventListener("storage", sync)');
+      expect(source).toContain("subscribeToConsent(sync)");
+      expect(source).toContain('from "@/lib/cookie-consent-client"');
     }
-    expect(snap).toContain('const CONSENT_EVENT = "vanta:cookie-consent"');
+    const shared = read(join(SRC, "lib", "cookie-consent-client.ts"));
+    expect(shared).toContain('CONSENT_EVENT = "vanta:cookie-consent"');
+    expect(shared).toContain('window.addEventListener(CONSENT_EVENT, onChange)');
+    expect(shared).toContain('window.addEventListener("storage", onChange)');
   });
 
   it("takes its id from a public env name, never a secret one", () => {

@@ -23,17 +23,17 @@ import {
   type TikTokEvent,
 } from "@/lib/ads/tiktok-events";
 import type { BrowserHealthInput } from "@/lib/ads/tracking-health";
+import { CONSENT_STORAGE_KEY, announceConsentChange } from "@/lib/cookie-consent-client";
 
 /** Set by the commerce listener while it is mounted. */
 export const LISTENER_FLAG = "__vlTikTokCommerceListener";
 /** Incremented by the pixel each time it reports a page view. */
 export const PAGEVIEW_COUNTER = "__vlTikTokPageViews";
 
-const CONSENT_KEY = "vl_cookie_consent";
 
 export function readConsent(): BrowserHealthInput["consent"] {
   try {
-    const raw = window.localStorage.getItem(CONSENT_KEY);
+    const raw = window.localStorage.getItem(CONSENT_STORAGE_KEY);
     if (raw === "accepted") return "accepted";
     if (raw === "declined") return "declined";
     return "unset";
@@ -142,12 +142,12 @@ export function runFunnelProbes(): BrowserHealthInput["probes"] {
  */
 export function setConsentForThisBrowser(choice: "accepted" | "declined" | null): void {
   try {
-    if (choice === null) window.localStorage.removeItem(CONSENT_KEY);
-    else window.localStorage.setItem(CONSENT_KEY, choice);
+    if (choice === null) window.localStorage.removeItem(CONSENT_STORAGE_KEY);
+    else window.localStorage.setItem(CONSENT_STORAGE_KEY, choice);
   } catch {
     return;
   }
-  window.dispatchEvent(new Event("vanta:cookie-consent"));
+  announceConsentChange();
 }
 
 export function observeBrowser(): BrowserHealthInput {

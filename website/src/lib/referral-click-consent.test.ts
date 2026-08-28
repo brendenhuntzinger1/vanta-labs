@@ -111,7 +111,16 @@ describe("the banner publishes the choice where the server can read it", () => {
 
   it("writes the consent cookie as well as localStorage", () => {
     expect(banner).toContain("localStorage.setItem");
-    expect(banner).toContain(CONSENT_COOKIE_NAME);
+    // Asserted on the CONSTANTS, not on the literal value.
+    //
+    // The banner used to spell "vl_cookie_consent" out itself, so this checked
+    // for the raw string. Both halves of the name now come from their modules —
+    // CONSENT_COOKIE_NAME (server) and CONSENT_STORAGE_KEY (client) — and
+    // cookie-consent-client.test.ts asserts the two are equal, which is the
+    // property this test actually cares about: the cookie the server reads and
+    // the key the browser writes are the same name.
+    expect(banner).toContain("CONSENT_STORAGE_KEY");
+    expect(banner).toContain("CONSENT_COOKIE_NAME");
     expect(banner).toContain("document.cookie");
   });
 
@@ -132,7 +141,7 @@ describe("the banner publishes the choice where the server can read it", () => {
     // Asserted on the mechanism rather than on a comment: the mount effect must
     // read the STORED value (not merely test for its presence) and write the
     // cookie when it is missing.
-    expect(banner).toMatch(/const stored = window\.localStorage\.getItem\(STORAGE_KEY\)/);
+    expect(banner).toMatch(/const stored = window\.localStorage\.getItem\(CONSENT_STORAGE_KEY\)/);
     expect(banner).toMatch(/stored === "accepted" \|\| stored === "declined"/);
     expect(banner).toMatch(/publishConsentCookie\(stored\)/);
   });

@@ -210,10 +210,35 @@ async function applyReferralCodeChange(input: ApplyCodeInput): Promise<{ code: s
   }
 
   // Mirror to the partners table (shared id).
-  await supabaseAdmin
+  //
+  // CHECKED, LIKE THE WRITE ABOVE IT. This was fire-and-forget: no destructure,
+  // no error check. The two tables are read by different halves of the system —
+  // checkout and commission accrual resolve the code from `ambassadors`
+  // (quote-order.ts, ambassador-commission.ts, payment-webhook.ts) while the
+  // admin partner list and detail page read `partners` (partner-portal.ts
+  // getPartnerDetail). So a mirror that failed on RLS, a constraint, or a
+  // transient still returned success to the caller, and left the storefront
+  // honouring a code the owner could not see. Worse, isCodeTakenByOther queries
+  // both tables, so the stale code in `partners` made itself permanently
+  // unclaimable by anyone else, with nothing logging, alerting or sweeping it.
+  //
+  // Same ordering and same failure direction as the equivalent mirror in
+  // partner-portal.ts (updatePartnerStatus): the money side is already
+  // committed and correct, so failing here reports an honest error about a
+  // stale display copy rather than hiding a divergence.
+  //
+  // A zero-row result is deliberately NOT fatal, matching that function: not
+  // every ambassador is required to have a `partners` row, and an update
+  // matching nothing is not an error in PostgREST.
+  const { error: partnerMirrorError } = await supabaseAdmin
     .from("partners")
     .update({ referral_code: newCode, referral_code_changed_at: now })
     .eq("id", ambassador.id);
+  if (partnerMirrorError) {
+    throw new Error(
+      `Your code was changed to ${newCode} and checkout is already honouring it, but the admin copy could not be updated (${partnerMirrorError.message}). Tell support so the two records can be reconciled.`,
+    );
+  }
 
   // Immutable history (never deleted).
   await supabaseAdmin.from("referral_code_changes").insert({

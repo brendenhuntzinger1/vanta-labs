@@ -5,7 +5,9 @@ import { runAbandonedCartSweep } from "@/lib/cart-recovery";
 import { autoApproveEligibleCommissions } from "@/lib/partner-portal";
 import { repairMissingCommissionAccruals } from "@/lib/commission-accrual-repair";
 import { expireStaleReservations } from "@/lib/inventory-reservation";
+import { releaseAbandonedTenderHolds } from "@/lib/tender-reservation";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
+import { reapStrandedOrderEmails } from "@/lib/email/order-email-reaper";
 import { expireStaleExpressIntents, reconcileVeyraPendingPayments } from "@/lib/express-reconcile";
 import { sweepMissingShipments, sweepUnsyncedOrders } from "@/lib/shippo/order-sync";
 import { runCampaignSweep } from "@/lib/email/campaign-sender";
@@ -56,6 +58,17 @@ const JOBS = {
   refundEffectRepair: { label: "refund_effect_repair", run: repairIncompleteRefunds },
   // Reclaim inventory held by abandoned checkouts past their expiry window.
   reservationsExpired: { label: "reservation_expiry", run: expireStaleReservations },
+  // Release send-once slots stranded at 'sending' by a send that never
+  // finished (E-03). A stranded claim holds the partial unique index for ever
+  // and blocks that order's confirmation permanently. Jobs here run
+  // concurrently, so the release and the retry below may land in either order;
+  // whichever way, the next sweep pass delivers what this one unblocked.
+  orderEmailReaper: { label: "order_email_reaper", run: reapStrandedOrderEmails },
+  // The same reclaim for money-like balances: store credit and points held by a
+  // checkout that was cancelled, declined, or simply walked away from. Without
+  // it a shopper's own credit stays locked to an order that will never settle.
+  // Idempotent, and it never touches an order that has been paid.
+  tenderHoldsReleased: { label: "tender_hold_release", run: releaseAbandonedTenderHolds },
   // Retry transactional emails (receipts/shipping) that failed to send.
   emailRetry: { label: "email_retry", run: retryPendingEmails },
   // Settle charges whose confirmation webhook was lost. This is the only thing

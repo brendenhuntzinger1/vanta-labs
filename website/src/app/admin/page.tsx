@@ -283,6 +283,11 @@ export default async function AdminHomePage() {
             <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
               {([
                 ["Gross revenue", money(profitDashboard.lifetime.grossRevenue)],
+                // Gross revenue is what was invoiced BEFORE refunds, and fully
+                // refunded orders are counted (their COGS, postage and fee are
+                // real money the store spent). Without this line beside it, a
+                // refunded sale is indistinguishable from a kept one.
+                ["Refunds", money(profitDashboard.lifetime.totalRefunds)],
                 // "n/a", never "0.0%": a margin is a proportion of revenue, and
                 // at or below zero revenue there is none to take a proportion of.
                 ["Net margin", percent(profitDashboard.lifetime.netMarginPercent)],
@@ -301,8 +306,15 @@ export default async function AdminHomePage() {
                 </div>
               ))}
             </div>
+            {/* "orders that took payment", not "paid orders": the count now
+                includes fully refunded ones, whose costs the store really
+                bore. Orders that never took a payment are still excluded.
+
+                And whether that count is the WHOLE history is a separate
+                question, which admin-profit has always answered and no screen
+                used to ask — see ProfitDashboard.truncated. */}
             <p className="mt-3 text-[11px] text-zinc-500">
-              Lifetime figures across {profitDashboard.lifetime.orderCount} paid order{profitDashboard.lifetime.orderCount === 1 ? "" : "s"}
+              Lifetime figures across {profitDashboard.lifetime.orderCount} order{profitDashboard.lifetime.orderCount === 1 ? "" : "s"} that took payment (refunds included)
               {profitDashboard.truncated ? " — and that is a floor: the read stopped before the whole history had been seen." : "."}
             </p>
           </section>

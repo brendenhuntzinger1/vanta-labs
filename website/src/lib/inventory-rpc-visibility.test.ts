@@ -28,6 +28,7 @@ const store = vi.hoisted(() => ({
   fail: null as null | { message: string },
   throwInstead: false,
   data: 0 as number,
+  onRpc: null as null | (() => { data: unknown; error: unknown }),
   alerts: [] as Array<{ type: string; severity: string; context: Record<string, unknown> }>,
 }));
 
@@ -41,6 +42,7 @@ vi.mock("@/lib/monitoring", () => ({
 vi.mock("@/lib/supabase-server", () => ({
   supabaseAdmin: {
     rpc: async () => {
+      if (store.onRpc) return store.onRpc();
       if (store.throwInstead) throw new Error("connection reset");
       if (store.fail) return { data: null, error: store.fail };
       return { data: store.data, error: null };
@@ -59,6 +61,7 @@ beforeEach(() => {
   store.fail = null;
   store.throwInstead = false;
   store.data = 0;
+  store.onRpc = null;
   store.alerts = [];
   __resetInventoryAlertThrottle();
 });
@@ -67,7 +70,7 @@ describe("finalize", () => {
   it("reports the lines it moved on the happy path, and raises nothing", async () => {
     store.data = 3;
 
-    expect(await finalizeInventoryForOrder("order-1")).toEqual({ finalized: 3, degraded: false });
+    expect(await finalizeInventoryForOrder("order-1")).toMatchObject({ finalized: 3, degraded: false });
     expect(store.alerts).toHaveLength(0);
   });
 
@@ -75,7 +78,7 @@ describe("finalize", () => {
     store.fail = { message: 'function finalize_inventory_for_order does not exist' };
 
     // The posture is deliberate and is kept.
-    expect(await finalizeInventoryForOrder("order-1")).toEqual({ finalized: 0, degraded: true });
+    expect(await finalizeInventoryForOrder("order-1")).toEqual({ finalized: 0, degraded: true, finalizedLines: null });
   });
 
   it("raises a critical alert instead of degrading in silence", async () => {
@@ -91,7 +94,7 @@ describe("finalize", () => {
   it("raises it when the client throws outright, not only on a returned error", async () => {
     store.throwInstead = true;
 
-    expect(await finalizeInventoryForOrder("order-2")).toEqual({ finalized: 0, degraded: true });
+    expect(await finalizeInventoryForOrder("order-2")).toEqual({ finalized: 0, degraded: true, finalizedLines: null });
     expect(store.alerts).toHaveLength(1);
   });
 });
@@ -132,6 +135,44 @@ describe("release", () => {
 
     expect(store.alerts).toHaveLength(1);
     expect(store.alerts[0].context).toMatchObject({ rpc: "release_inventory_for_order", orderId: "order-3" });
+  });
+
+  // P2-5. The release was the one RPC here that only ever guarded with
+  // try/catch. supabase-js does NOT throw on a rejected request — it RESOLVES
+  // with `{ data: null, error }`. So the 401s production serves roughly 0.1% of
+  // the time (and every missing grant, and every RPC that isn't deployed) went
+  // straight past the catch: the hold stayed on the shelf, the caller was told
+  // nothing, and inventory_rpc_failed could not fire for this RPC at all.
+  it("raises when the RPC RESOLVES with an error instead of throwing", async () => {
+    store.fail = { message: "permission denied for function release_inventory_for_order" };
+
+    await releaseInventoryForOrder("order-4");
+
+    expect(store.alerts).toHaveLength(1);
+    expect(store.alerts[0].type).toBe("inventory_rpc_failed");
+    expect(store.alerts[0].severity).toBe("critical");
+    expect(store.alerts[0].context).toMatchObject({ rpc: "release_inventory_for_order", orderId: "order-4" });
+  });
+
+  it("retries an edge rejection once, exactly like the other inventory RPCs", async () => {
+    // A 401 refused at the edge never reached Postgres, so re-issuing it cannot
+    // double-release. Stranding a hold over a momentary blip is the worse trade.
+    let calls = 0;
+    store.onRpc = () => {
+      calls += 1;
+      return calls === 1 ? { data: null, error: { message: "JWT issued at future" } } : { data: 1, error: null };
+    };
+
+    await releaseInventoryForOrder("order-5");
+
+    expect(calls).toBe(2);
+    expect(store.alerts).toHaveLength(0);
+  });
+
+  it("stays silent when the hold is released cleanly", async () => {
+    await releaseInventoryForOrder("order-6");
+
+    expect(store.alerts).toHaveLength(0);
   });
 });
 

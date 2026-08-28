@@ -77,11 +77,15 @@ vi.mock("@/lib/email/templates", () => ({
   orderConfirmationTemplate: () => ({ subject: "s", html: "h" }),
   refundConfirmationTemplate: () => ({ subject: "s", html: "h" }),
 }));
-vi.mock("@/lib/inventory-fulfillment", () => ({
-  decrementInventoryForOrder: legacyDecrement,
-  restockInventoryForOrder: vi.fn(async () => {}),
-  claimInventoryRestock: vi.fn(async () => true),
-}));
+vi.mock("@/lib/inventory-fulfillment", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/inventory-fulfillment")>();
+  return {
+    ...actual,
+    decrementInventoryForOrder: legacyDecrement,
+    restockInventoryForOrder: vi.fn(async () => {}),
+    claimInventoryRestock: vi.fn(async () => true),
+  };
+});
 vi.mock("@/lib/inventory-reservation", () => ({
   finalizeInventoryForOrder: async () => holder.finalizeResult,
   releaseInventoryForOrder: vi.fn(async () => {}),
@@ -210,6 +214,23 @@ vi.mock("@/lib/supabase-server", () => {
             }
             return { data: [{ id: "row-1" }], error: null };
           }
+          return b;
+        },
+      };
+    }
+
+    if (table === "order_items") {
+      // The card lane re-reads the sold lines from the DB before falling back.
+      // Without this the fallback ran against an empty list, so these tests
+      // asserted that a decrement was ATTEMPTED rather than that stock moved.
+      return {
+        select: () => {
+          const b: Record<string, unknown> = {
+            eq() { return b; },
+            then(resolve: (v: { data: unknown; error: unknown }) => unknown) {
+              return Promise.resolve({ data: [{ product_id: "p1", quantity: 1 }], error: null }).then(resolve);
+            },
+          };
           return b;
         },
       };

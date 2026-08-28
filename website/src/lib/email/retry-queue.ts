@@ -108,6 +108,30 @@ async function closeSendOnceSlot(
   }
 }
 
+/**
+ * Does the send-once log already say this (order, kind) email was DELIVERED?
+ *
+ * Used by the manual retry to refuse to re-send something the customer already
+ * has (E-02). Reads as `false` when it cannot tell — an unreadable or
+ * unmigrated log must not block an owner's only recovery tool, and the
+ * idempotency key on the send remains as the second line.
+ */
+async function sendOnceSlotIsSent(orderId: string, kind: OrderEmailKind): Promise<boolean> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("order_email_log")
+      .select("id")
+      .eq("order_id", orderId)
+      .eq("kind", kind)
+      .eq("status", "sent")
+      .limit(1);
+    if (error || !data) return false;
+    return (data as unknown[]).length > 0;
+  } catch {
+    return false;
+  }
+}
+
 // Drain due pending emails (called by the scheduled sweep). Retries each, marks
 // it sent on success, or backs off exponentially (5→10→20→40→60 min) and gives
 // up after MAX_ATTEMPTS. Never throws.
@@ -212,40 +236,99 @@ export async function retryPendingEmails(maxPerRun = 50): Promise<{ sent: number
  * increment `attempts`: that budget belongs to the automatic sweep, and an
  * owner clicking twice should not exhaust it.
  *
+ * IT OBEYS SEND-ONCE (E-02). The automatic sweep passes the queued email's
+ * (order, kind) identity to the provider as an idempotency key and closes the
+ * send-once slot it satisfies. This path did neither: it re-rendered a stored
+ * payload and pushed it straight at the provider, so an owner clicking "retry"
+ * on a receipt the sweep had ALREADY delivered sent the customer a second one —
+ * the exact duplicate order_email_log exists to make impossible. Manual now:
+ *
+ *   * skips a row whose send-once slot already reads 'sent' — that email
+ *     reached the customer, and the queue row is a leftover from the failed
+ *     attempt before it — and marks the leftover 'sent' so the panel stops
+ *     reporting a failure that was since made good;
+ *   * sends with the same `kind:orderId` idempotency key the original used, so
+ *     our guard and the provider's agree on what "the same email" is;
+ *   * closes the slot on success, exactly as the sweep does.
+ *
+ * A row with no (order_id, email_kind) — queued before
+ * sql/pending-emails-order-link.sql ran, or an email that is not about one
+ * order — behaves as it always did. There is no identity to dedupe on, and
+ * refusing to retry it would take away the only recovery this panel offers.
+ *
  * Matched on the order number in the subject, the same join the admin display
- * uses. `pending_emails` carries no order id by design — it has to survive the
- * failure of everything around it.
+ * uses; the order link, where present, is what the send-once checks use.
  */
 export async function retryPendingEmailsForOrder(
   orderNumber: string,
-): Promise<{ found: number; sent: number; stillFailing: number }> {
+): Promise<{ found: number; sent: number; stillFailing: number; skippedAlreadySent: number }> {
   let found = 0;
   let sent = 0;
   let stillFailing = 0;
+  let skippedAlreadySent = 0;
   const needle = String(orderNumber ?? "").trim();
-  if (!needle) return { found, sent, stillFailing };
+  if (!needle) return { found, sent, stillFailing, skippedAlreadySent };
 
   try {
-    const { data, error } = await supabaseAdmin
+    type ManualRow = {
+      id: string;
+      to_email: string | null;
+      subject: string | null;
+      html: string | null;
+      text_body: string | null;
+      reply_to: string | null;
+      attempts: number | null;
+      status: string | null;
+      order_id?: string | null;
+      email_kind?: string | null;
+    };
+    const BASE_COLUMNS = "id, to_email, subject, html, text_body, reply_to, attempts, status";
+    const matching = (columns: string) => supabaseAdmin
       .from("pending_emails")
-      .select("id, to_email, subject, html, text_body, reply_to, attempts, status")
+      .select(columns)
       .in("status", ["pending", "failed"])
       .ilike("subject", `%${needle}%`)
-      .limit(20);
-    if (error || !data) return { found, sent, stillFailing };
+      .limit(20) as unknown as PromiseLike<{ data: ManualRow[] | null; error: { code?: string; message?: string } | null }>;
+
+    let { data, error } = await matching(`${BASE_COLUMNS}, order_id, email_kind`);
+    if (error && isMissingSchema(error)) {
+      // The order link column is not migrated yet. Retry the way this always
+      // did — there is simply no identity to dedupe against.
+      ({ data, error } = await matching(BASE_COLUMNS));
+    }
+    if (error || !data) return { found, sent, stillFailing, skippedAlreadySent };
 
     found = data.length;
     for (const row of data) {
+      const orderId = row.order_id ? String(row.order_id) : null;
+      const kind = row.email_kind ? (String(row.email_kind) as OrderEmailKind) : null;
+
+      // ALREADY DELIVERED? Then this queue row is history, not work. Sending it
+      // is the duplicate receipt this whole mechanism exists to prevent.
+      if (orderId && kind && await sendOnceSlotIsSent(orderId, kind)) {
+        skippedAlreadySent += 1;
+        await supabaseAdmin
+          .from("pending_emails")
+          .update({ status: "sent", updated_at: new Date().toISOString() })
+          .eq("id", row.id);
+        continue;
+      }
+
       const result = await sendEmail({
         to: String(row.to_email),
         subject: String(row.subject),
         html: String(row.html ?? ""),
         text: String(row.text_body ?? ""),
         replyTo: row.reply_to ? String(row.reply_to) : undefined,
+        ...(orderId && kind ? { idempotencyKey: `${kind}:${orderId}` } : {}),
       });
       const now = new Date().toISOString();
       if (result.success) {
         await supabaseAdmin.from("pending_emails").update({ status: "sent", updated_at: now }).eq("id", row.id);
+        // Re-take the slot this manual retry just satisfied, so the next caller
+        // — sweep, webhook or another click — sees a delivered receipt rather
+        // than a released slot to send into.
+        if (orderId && kind) await closeSendOnceSlot(orderId, kind, result.provider, result.providerMessageId);
         sent += 1;
       } else {
         // Attempts untouched on purpose; only the reason is refreshed.
@@ -261,5 +344,5 @@ export async function retryPendingEmailsForOrder(
     // will still pick these up on its own schedule.
   }
 
-  return { found, sent, stillFailing };
+  return { found, sent, stillFailing, skippedAlreadySent };
 }

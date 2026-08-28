@@ -61,19 +61,54 @@ import { recordSystemAlert } from "@/lib/monitoring";
  *                  removed — phantom stock, which oversells. That order needs its
  *                  RESERVATION RELEASED instead.
  *
- * `orders.paid_side_effects_at` is the signal, because it is the latch under
- * which the paid side effects — the inventory decrement among them — actually
- * ran. Asking "was this order paid?" via `payment_status` would be a proxy;
- * asking whether the decrement happened is the question itself.
+ * `orders.inventory_committed_at` is the signal: the latch both paid lanes write
+ * AFTER their stock has actually moved. Asking "was this order paid?" via
+ * `payment_status` would be a proxy; asking whether the decrement happened is
+ * the question itself.
  *
- * THAT LATCH IS WRITTEN BY BOTH PAID LANES, and only became true of both in
- * review finding 2. It was originally set in ONE place — processPaymentWebhook,
- * the card lane — while finalizeManualPayment ran the identical side effects
- * behind its own claim and left it NULL. Every manually-paid order therefore
- * took the "never decremented" branch here and had its stock written off. If a
- * third paid lane is ever added, it MUST stamp this latch after its stock moves;
- * the two current writers are the only ones, and both are named here so the next
- * author does not have to discover the contract by losing inventory.
+ * IT USED TO READ `paid_side_effects_at`, AND THAT COLUMN CANNOT ANSWER THIS
+ * QUESTION (VL-10 / INV-01 / F1). In the card lane that latch is the
+ * exactly-once CLAIM over every paid side effect, so it is taken BEFORE they run
+ * — it has to be, or a duplicate webhook delivery pays the ambassador twice. It
+ * means "this delivery won the right to try", not "the units left the shelf",
+ * and it is stamped whether the decrement then succeeds, fails, or moves only
+ * some lines. Reading it here as proof of the decrement meant that cancelling an
+ * order whose decrement had FAILED took the restock branch below and returned
+ * units that were never removed: invented stock, which oversells — the exact
+ * failure this branch exists to prevent.
+ *
+ * The manual lane had already reached this conclusion and simply withholds its
+ * latch when the decrement does not complete. The card lane cannot do that
+ * without giving up its claim, so the claim and the receipt are two columns now.
+ *
+ * THE RECEIPT IS WRITTEN BY BOTH PAID LANES — processPaymentWebhook and
+ * finalizeManualPayment, the only two, both named here so the next author does
+ * not have to discover the contract by losing inventory. If a third is ever
+ * added it MUST stamp `inventory_committed_at` after its stock moves, and only
+ * then. A partial decrement deliberately leaves it NULL: restocking returns
+ * EVERY line, so a receipt on a partial would invent units for the lines that
+ * never moved. Under-restock is a recoverable inconvenience; over-restock is a
+ * money-losing oversell, and `inventory_partially_decremented` tells a human
+ * which units to correct by hand.
+ *
+ * WHY THE ITEM SELECT NAMES NO `variant_id` (VL-1 / DB-01). It used to, and
+ * `order_items` HAS NO SUCH COLUMN — not in production, and not in any of the
+ * four `create table public.order_items` statements in src/lib/sql/. PostgREST
+ * answers a select naming an absent column with 42703, an ERROR rather than a
+ * null field, so `error` was always set, this function always took its "do not
+ * guess" branch, and EVERY cancellation returned `unavailable`. The whole return
+ * path was inert: no cancel ever put stock back, and the alert it raised each
+ * time named the read rather than the schema. The variant lives INSIDE
+ * `product_id` as `"<slug>::<dose-uuid>"`, which is what `parseOrderItemRef`
+ * exists to split apart — so `product_id` alone carries everything the restock
+ * needs.
+ *
+ * WHAT NOW CATCHES IT. supabase-schema-parity.test.ts used to STRIP embedded
+ * resources — `order_items(...)` named a relation, not a column of `orders`, so
+ * its columns were discarded rather than checked against anything. That is the
+ * blind spot VL-1 walked through. It now resolves each embedded select against
+ * the EMBEDDED table, so a repeat of this select fails the suite instead of
+ * production.
  *
  * WHO CALLS THIS, AND WHY YOU SHOULD NOT NEED TO KNOW.
  *
@@ -122,7 +157,7 @@ export async function returnInventoryForCancelledOrder(
 ): Promise<CancellationInventoryOutcome> {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("order_id, paid_side_effects_at, order_items(product_id, variant_id, quantity)")
+    .select("order_id, inventory_committed_at, order_items(product_id, quantity)")
     .eq("order_id", orderId)
     .maybeSingle();
 
@@ -139,12 +174,14 @@ export async function returnInventoryForCancelledOrder(
     return { action: "unavailable" };
   }
 
-  const order = data as { paid_side_effects_at: string | null; order_items?: OrderItemRef[] | null } | null;
+  const order = data as { inventory_committed_at: string | null; order_items?: OrderItemRef[] | null } | null;
   if (!order) return { action: "order_not_found" };
 
-  // The decrement runs under paid_side_effects_at. Null means it never ran, so
-  // there is nothing decremented to give back — only a hold to let go of.
-  if (!order.paid_side_effects_at) {
+  // Null means this order's units never left the shelf — it was never paid, or a
+  // paid lane's decrement did not complete. Either way there is nothing
+  // decremented to give back, only a hold to let go of. Restocking on a NULL
+  // would invent units.
+  if (!order.inventory_committed_at) {
     await releaseInventoryForOrder(orderId);
     return { action: "released" };
   }

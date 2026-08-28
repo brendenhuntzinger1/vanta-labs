@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { CONSENT_COOKIE_NAME } from "@/lib/cookie-consent-server";
+import { CONSENT_STORAGE_KEY, announceConsentChange } from "@/lib/cookie-consent-client";
 
-const STORAGE_KEY = "vl_cookie_consent";
 const CONSENT_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 
 /**
@@ -53,7 +53,7 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
 
   useEffect(() => {
     try {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
+      const stored = window.localStorage.getItem(CONSENT_STORAGE_KEY);
       if (!stored) {
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setVisible(true);
@@ -104,12 +104,12 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
 
   const dismiss = (choice: "accepted" | "declined") => {
     try {
-      window.localStorage.setItem(STORAGE_KEY, choice);
+      window.localStorage.setItem(CONSENT_STORAGE_KEY, choice);
     } catch {
       /* no-op */
     }
     publishConsentCookie(choice);
-    window.dispatchEvent(new Event("vanta:cookie-consent"));
+    announceConsentChange();
     setVisible(false);
   };
 

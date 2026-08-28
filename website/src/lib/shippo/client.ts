@@ -466,6 +466,76 @@ export function settledCentsFromTransaction(rate: ShippoTransaction["rate"]): nu
 }
 
 /**
+ * Read a quoted rate back by id.
+ *
+ * A GET on /rates/<id>: it prices a rate that already exists and cannot buy
+ * anything. This is the ONLY way to price a label bought in Shippo's dashboard,
+ * whose transaction comes back with `rate` as a bare object_id reference rather
+ * than an expanded object.
+ */
+export async function getRate(rateId: string): Promise<ShippoResult<ShippoRate>> {
+  const id = asNonEmptyString(rateId);
+  if (!id) {
+    return {
+      ok: false,
+      kind: "rejected",
+      message: "No Shippo rate id was provided.",
+      safeToRetry: false,
+    };
+  }
+
+  const result = await shippoRequest<ShippoRate>({
+    method: "GET",
+    path: `/rates/${encodeURIComponent(id)}`,
+  });
+  if (!result.ok) return result;
+
+  if (!asNonEmptyString(result.data?.object_id)) {
+    return {
+      ok: false,
+      kind: "invalid_response",
+      message: "Shippo returned a rate without an id.",
+      safeToRetry: true,
+    };
+  }
+
+  return result;
+}
+
+/**
+ * WHAT A SETTLED TRANSACTION COST, FROM EITHER SHAPE SHIPPO SENDS.
+ *
+ * `rate` arrives expanded when WE bought the label, and as a bare object_id
+ * string when the label was bought in Shippo's DASHBOARD — which is the owner's
+ * normal workflow. The bare form carries no price, so every dashboard label
+ * landed with no recorded postage, was classified "manual entry required" by
+ * the repair sweep, and alerted an operator forever about a cost that Shippo
+ * could have answered all along.
+ *
+ * A bare reference is not absence: it is an id, and an id can be read. One
+ * extra GET, only on the shape that needs it, and only for a row that has no
+ * cost recorded.
+ *
+ * Returns null only when the price genuinely cannot be established — never a 0,
+ * which would silently overstate the margin instead of asking for a human.
+ */
+export async function settledCentsForTransaction(
+  transaction: ShippoTransaction,
+): Promise<number | null> {
+  const expanded = settledCentsFromTransaction(transaction.rate);
+  if (expanded !== null) return expanded;
+
+  const rateId = typeof transaction.rate === "string" ? asNonEmptyString(transaction.rate) : null;
+  if (!rateId) return null;
+
+  const rate = await getRate(rateId);
+  if (!rate.ok) return null;
+
+  const cents = parseAmountToCents(rate.data.amount);
+  return cents !== null && cents > 0 ? cents : null;
+}
+
+/**
  * BUY THE POSTAGE. The one call in this codebase that spends money.
  *
  * Restored deliberately (owner decision, recorded 2026-08) under the inverse of

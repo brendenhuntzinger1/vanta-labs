@@ -9,7 +9,9 @@
 Everything below follows from that. A migration that is already live is not a
 step. A migration that is *not* live but whose code *is* about to be, is.
 
-**Nothing in this file has been applied.** Every step is staged for the owner.
+**Steps 1b and 1c have been APPLIED** (2026-08-28, at the owner's request) — see
+those steps for the migration versions and the verification. Everything else in
+this file is still staged for the owner.
 
 Companion: [`INTEGRATION-LOG.md`](./INTEGRATION-LOG.md) (why each change exists,
 with its evidence) · [`FINAL-CERTIFICATION-AUDIT.md`](./FINAL-CERTIFICATION-AUDIT.md).
@@ -114,6 +116,7 @@ commissions, and what happens to those is the owner's decision, not a migration'
 | **Why** | Step 1 widened the commission lifecycle but left out `manual_review`, and that is the value the REFUND path writes: a refund of an order whose commission was already paid out cannot claw the money back, so it is flagged for an admin instead. The write is refused with `23514`. Because it happens *inside* the webhook's refund branch, the exception used to abort the whole refund — no commission reversal, **no restock**, no points or store-credit return — and the processor's retry was short-circuited by the already-terminal guard, so the work was lost rather than deferred. (VL-7 / P12-01, and the trigger for REF-02) |
 | **Rollback** | `ROLLBACK-referral-orders-manual-review-status.sql` |
 | **Blast radius** | Widening a CHECK cannot invalidate an existing row. Drops by RULE, so it also removes the harness's `pc_ro_ps` duplicate. |
+| **APPLIED** | ✅ 2026-08-28 as migration `20260828002848_referral_orders_manual_review_status`. Pre-flight found `referral_orders` at **0 rows** and a single constraint carrying Step 1's list without `manual_review` — no `pc_ro_ps` duplicate in production, as documented. Verified after: the constraint admits all eight lifecycle values including `manual_review`, exactly one payment_status CHECK remains, and the default is still `'pending'`. |
 
 **Verify:**
 ```sql
@@ -137,6 +140,7 @@ refund down with it (REF-02) is independent and ships in Step 7; both are needed
 | **Why** | The three refund effects that hand money back — points reversal, points restore, store-credit return — enforce "once per order" with a SELECT immediately before the INSERT. There are **two writers by design** (the refund webhook and the half-hourly repair sweep, which selects on exactly the absence those guards read), so both can pass the check and both insert: the customer is credited twice and neither caller reports anything wrong. (REF-03 / F3) |
 | **Rollback** | `ROLLBACK-refund-exactly-once-indexes.sql` |
 | **Blast radius** | Two partial unique indexes over refund rows only; ordinary grants, earns and redemptions are untouched. The file REFUSES to run if duplicates already exist — those are money already handed out, and a migration must not pick which copy to delete. |
+| **APPLIED** | ✅ 2026-08-28 as migration `20260828002900_refund_exactly_once_indexes`. Pre-flight found **0** refund rows in either ledger (17 points_ledger rows, 3 store_credit_ledger rows overall), so the duplicate guard had nothing to refuse. Both indexes verified present with the expected partial predicates. |
 
 **Verify:**
 ```sql

@@ -60,7 +60,13 @@ const REVENUE_ORDERS = PAID_STATUS_ORDERS + PER_THOUSAND; // + partially_refunde
 // but are not sales (ledger.NON_SALE_ORDER_TYPES, mirrored in the rollup SQL).
 // Counting them adds a $0 denominator to average order value.
 const REVENUE_SALES = REVENUE_ORDERS - PER_THOUSAND;
-const PROFIT_ELIGIBLE_ORDERS = REVENUE_ORDERS;
+/**
+ * Orders the PROFIT report computes — ledger.CAPTURED_PAYMENT_STATUSES: every
+ * revenue order PLUS the fully refunded ones. The refund returned their
+ * revenue; it did not return the COGS, the postage or the processor fee, and
+ * dropping the rows dropped those costs with them (VL-24).
+ */
+const PROFIT_ELIGIBLE_ORDERS = REVENUE_ORDERS + PER_THOUSAND;
 
 const SCHEMA = `
 drop table if exists commissions;
@@ -265,14 +271,14 @@ describeDb("financial reporting at 21,000 orders", () => {
     const { getProfitDashboard } = await import("@/lib/admin-profit");
     const dashboard = await getProfitDashboard(NOW);
 
-    // Ground truth for the same predicate the dashboard uses (paid or
-    // partially refunded, replacements counted separately).
+    // Ground truth for the same predicate the dashboard uses — every order that
+    // took money (fully refunded included), replacements counted separately.
     const truth = await client.query(`
       select
         count(*) filter (where order_type <> 'replacement')::int as sales,
         count(*) filter (where order_type = 'replacement')::int as replacements
       from orders
-      where payment_status in ('paid','completed','succeeded','partially_refunded')
+      where payment_status in ('paid','completed','succeeded','partially_refunded','refunded')
     `);
     expect(truth.rows[0].sales + truth.rows[0].replacements).toBe(PROFIT_ELIGIBLE_ORDERS);
 

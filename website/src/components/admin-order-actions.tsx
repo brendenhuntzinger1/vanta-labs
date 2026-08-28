@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { pointsToDollars } from "@/lib/points-math";
+import { hasCapturedPayment, isRevenueOrderStatus } from "@/lib/ledger";
 
 function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
@@ -111,13 +112,17 @@ export function AdminOrderActions({
   //
   // Tender is only returnable once it was actually taken, which is what these
   // two statuses mean.
+  //
+  // BOTH PREDICATES COME FROM THE LEDGER, NOT FROM A STRING COMPARISON HERE.
+  // ledger.ts is the canonical answer to "did this order take money", and its
+  // docblock names this exact trap (M-03): amount_paid is written at INSERT, so
+  // any surface that reads it without asking this question reports a sale that
+  // never happened. A local copy of the status list here would be the fifth.
   const paymentStatusNow = String(initialPaymentStatus ?? "").toLowerCase();
   /** The order took money/credit at some point — 'refunded' included. */
-  const everPaid = paymentStatusNow === "paid"
-    || paymentStatusNow === "partially_refunded"
-    || paymentStatusNow === "refunded";
+  const everPaid = hasCapturedPayment(paymentStatusNow);
   /** ...and there is still something to act on. A refunded order is finished. */
-  const tenderWasTaken = paymentStatusNow === "paid" || paymentStatusNow === "partially_refunded";
+  const tenderWasTaken = isRevenueOrderStatus(paymentStatusNow);
 
   /** Cash is what an amount box can be about. Nothing else. */
   const cashAvailable = remaining > 0 && tenderWasTaken;
