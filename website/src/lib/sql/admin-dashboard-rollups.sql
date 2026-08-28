@@ -210,9 +210,13 @@ $rpc_lockdown$;
 -- amount_paid for status='paid' only, which both ignored refunds and dropped
 -- partly refunded orders.
 --
--- NOTE FOR BLOCK M: partner-portal.ts getAdminOperationsSummary is the JS twin
--- of this function and is owned by block A+B. If its reduce still sums gross
--- amount_paid, the two paths disagree exactly the way admin-revenue's did.
+-- Replacement reships are excluded, exactly as admin_revenue_summary excludes
+-- them: order_type='replacement' is paid with amount_paid 0, so counting it as
+-- a sale drags the same tile the revenue page reports differently.
+--
+-- The JS twin (partner-portal.ts getAdminOperationsSummary, used when this RPC
+-- is not migrated) now resolves the identical definition through ledger.ts.
+-- ledger-sql-parity.test.ts fails if either side changes alone.
 -- ---------------------------------------------------------------------------
 create or replace function public.admin_ops_summary(
   p_today_start timestamptz,
@@ -240,10 +244,12 @@ as $$
     coalesce((select sum(round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2))
               from public.orders
               where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
+                and coalesce(order_type, 'product') <> 'replacement'
                 and created_at >= p_today_start), 0) as live_sales_today,
     coalesce((select sum(round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2))
               from public.orders
               where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
+                and coalesce(order_type, 'product') <> 'replacement'
                 and created_at >= p_month_start), 0) as live_sales_month,
     coalesce((select count(*) from per_customer where cnt = 1), 0) as new_customers,
     coalesce((select count(*) from per_customer where cnt > 1), 0) as returning_customers,

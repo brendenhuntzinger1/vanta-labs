@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { browserFiredStore, emitEvent, type TikTokEvent } from "@/lib/ads/tiktok-events";
 import { emitSnapEvent, type SnapEvent } from "@/lib/ads/snap-events";
 import { emitRedditEvent, type RedditEvent } from "@/lib/ads/reddit-events";
+import { hasAcceptedConsent } from "@/lib/cookie-consent-client";
 
 /**
  * Purchase — the only event that represents money.
@@ -69,7 +70,7 @@ export function TikTokPurchaseEvent({
     // be requested. The inline stub defines ttq before the remote script
     // loads, so this also stays correct when the SDK is merely slow.
     try {
-      if (window.localStorage.getItem("vl_cookie_consent") !== "accepted") return;
+      if (!hasAcceptedConsent()) return;
     } catch {
       return;
     }

@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { captureAttribution } from "@/lib/attribution-client";
+import { hasAcceptedConsent, subscribeToConsent } from "@/lib/cookie-consent-client";
 
 const SESSION_KEY = "vl_analytics_session_id";
 const VISITOR_KEY = "vl_analytics_visitor_id";
@@ -48,8 +49,7 @@ export function SiteAnalyticsTracker() {
 
   useEffect(() => {
     const handleConsentChange = () => setConsentRevision((revision) => revision + 1);
-    window.addEventListener("vanta:cookie-consent", handleConsentChange);
-    return () => window.removeEventListener("vanta:cookie-consent", handleConsentChange);
+    return subscribeToConsent(handleConsentChange);
   }, []);
 
   const currentUrl = useMemo(() => {
@@ -70,7 +70,7 @@ export function SiteAnalyticsTracker() {
     // Analytics is opt-in. Do not create analytics storage or send events until
     // the visitor explicitly accepts; this makes Decline a real no-track path.
     try {
-      if (window.localStorage.getItem("vl_cookie_consent") !== "accepted") {
+      if (!hasAcceptedConsent()) {
         return;
       }
     } catch {
@@ -138,7 +138,7 @@ export function SiteAnalyticsTracker() {
     // Analytics is opt-in. Do not create analytics storage or send events until
     // the visitor explicitly accepts; this makes Decline a real no-track path.
     try {
-      if (window.localStorage.getItem("vl_cookie_consent") !== "accepted") {
+      if (!hasAcceptedConsent()) {
         return;
       }
     } catch {

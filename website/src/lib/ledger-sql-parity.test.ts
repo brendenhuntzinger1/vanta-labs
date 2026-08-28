@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { PAID_ORDER_STATUSES, REVENUE_ORDER_STATUSES, netOrderRevenue } from "@/lib/ledger";
 
@@ -22,8 +22,44 @@ import { PAID_ORDER_STATUSES, REVENUE_ORDER_STATUSES, netOrderRevenue } from "@/
 // without being added to the ledger. Changing one side alone fails here.
 // ---------------------------------------------------------------------------
 
-const SQL_PATH = path.resolve(__dirname, "sql/admin-dashboard-rollups.sql");
+const SQL_DIR = path.resolve(__dirname, "sql");
+const SQL_PATH = path.resolve(SQL_DIR, "admin-dashboard-rollups.sql");
 const sql = readFileSync(SQL_PATH, "utf8");
+
+/**
+ * ONE FILE IS NOT THE SURFACE.
+ *
+ * The gross-revenue assertion below used to read only admin-dashboard-rollups.
+ * That is the file where revenue was CORRECTED, so scanning it alone proved
+ * nothing about the copies that had not been: harness-prod-parity-functions.sql
+ * carried a second, competing definition of `admin_ops_summary` whose body
+ * summed gross `amount_paid` for payment_status='paid' only, and
+ * setup-local-harness.sh applied it LAST — so the mandated verification harness
+ * ran the wrong definition while this test stayed green.
+ *
+ * The check now runs over every .sql file in the directory. Adding a new
+ * migration that sums gross revenue fails here without anyone remembering to
+ * list it.
+ */
+const NOT_A_SHIPPED_DEFINITION = new Set([
+  // One-off, read-only verification scripts. They report on live rows for a
+  // specific investigation and define nothing the app calls; their gross sums
+  // are deliberate ("what was actually collected"), not a revenue definition.
+  "ambassador-e2e-verify.sql",
+  "elijah-live-order-verify.sql",
+]);
+
+/** Strip SQL comments so prose ABOUT a defect is not mistaken for the defect. */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/--[^\n]*/g, " ");
+}
+
+function shippedSqlFiles(): Array<{ name: string; source: string }> {
+  return readdirSync(SQL_DIR)
+    .filter((name) => name.endsWith(".sql") && !NOT_A_SHIPPED_DEFINITION.has(name))
+    .sort()
+    .map((name) => ({ name, source: stripComments(readFileSync(path.join(SQL_DIR, name), "utf8")) }));
+}
 
 /**
  * Every `sum( ... )` expression in the source, matched by BALANCED PARENS.
@@ -120,10 +156,15 @@ describe("ledger revenue statuses vs the SQL rollups", () => {
     // A textual check is still the WEAKER half of this guard. The strong half is
     // sql/bulk-savings-rollup-executed.test.ts, which executes the shipped
     // definition against a real Postgres and compares it to the ledger.
-    for (const expression of sumExpressions(sql)) {
-      if (!expression.includes("amount_paid")) continue;
-      expect(expression, `gross revenue sum: ${expression}`).toContain("refund_amount");
+    const offenders: string[] = [];
+    for (const { name, source } of shippedSqlFiles()) {
+      for (const expression of sumExpressions(source)) {
+        if (!expression.includes("amount_paid")) continue;
+        if (expression.includes("refund_amount")) continue;
+        offenders.push(`${name}: ${expression.replace(/\s+/g, " ")}`);
+      }
     }
+    expect(offenders, `\n${offenders.join("\n")}\n`).toEqual([]);
   });
 
   it("no revenue aggregation clamps the refund off at zero", () => {

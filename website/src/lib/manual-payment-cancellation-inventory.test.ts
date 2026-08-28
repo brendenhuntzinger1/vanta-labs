@@ -88,6 +88,7 @@ function freshOrder(): OrderRow {
     shipping_amount: 0,
     card_processing_fee: 0,
     currency: "USD",
+    // No variant_id — production's order_items has no such column (VL-1).
     order_items: [{ product_id: "p1", quantity: 3, product_name: "Item", line_total: 200 }],
   };
 }

@@ -73,6 +73,11 @@ function freshOrder(overrides: Partial<OrderRow> = {}): OrderRow {
     customer_name: "A Buyer",
     tracking_number: null,
     carrier: null,
+    // Production's order_items has NO variant_id column. The variant travels
+    // inside product_id as `slug::variantId` (parseOrderItemRef). This fixture
+    // used to invent the column, so the suite proved the reader worked against
+    // a schema production does not have — while the real embedded select was
+    // failing 42703 in production and restocking nothing (VL-1).
     order_items: [{ product_id: "bpc-157-10mg::dose-5mg", quantity: 4 }],
     ...overrides,
   };

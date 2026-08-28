@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { browserAdsReportingAllowed } from "@/lib/ads/ads-environment";
 import { REDDIT_PIXEL_ID } from "@/lib/ads/reddit-pixel-id";
+import { hasAcceptedConsent, subscribeToConsent } from "@/lib/cookie-consent-client";
 
 /**
  * Reddit Pixel — installed globally, behind the same consent gate as TikTok and
@@ -47,8 +48,6 @@ import { REDDIT_PIXEL_ID } from "@/lib/ads/reddit-pixel-id";
 
 // Single source of truth, shared with the server-side Conversions API.
 export { REDDIT_PIXEL_ID } from "@/lib/ads/reddit-pixel-id";
-const STORAGE_KEY = "vl_cookie_consent";
-const CONSENT_EVENT = "vanta:cookie-consent";
 
 declare global {
   interface Window {
@@ -56,15 +55,6 @@ declare global {
   }
 }
 
-function hasAccepted(): boolean {
-  try {
-    return window.localStorage.getItem(STORAGE_KEY) === "accepted";
-  } catch {
-    // Storage blocked (private mode, some in-app browsers). Absence of a
-    // recorded "yes" is a no.
-    return false;
-  }
-}
 
 type MatchKeys = { email?: string; externalId?: string };
 
@@ -102,14 +92,9 @@ export function RedditPixel() {
   const initialPageSent = useRef(false);
 
   useEffect(() => {
-    const sync = () => setAccepted(hasAccepted());
+    const sync = () => setAccepted(hasAcceptedConsent());
     sync();
-    window.addEventListener(CONSENT_EVENT, sync);
-    window.addEventListener("storage", sync);
-    return () => {
-      window.removeEventListener(CONSENT_EVENT, sync);
-      window.removeEventListener("storage", sync);
-    };
+    return subscribeToConsent(sync);
   }, []);
 
   // Resolve the match keys once, after consent. Deliberately not re-run on
