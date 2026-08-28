@@ -41,6 +41,8 @@ interface OrderRow {
   payment_method: string;
   order_type: string;
   paid_side_effects_at: string | null;
+  /** The receipt the cancel path reads: written only after stock moved. */
+  inventory_committed_at: string | null;
   inventory_restocked_at: string | null;
   [key: string]: unknown;
 }
@@ -71,6 +73,7 @@ function freshOrder(): OrderRow {
     payment_method: "zelle",
     order_type: "product",
     paid_side_effects_at: null,
+    inventory_committed_at: null,
     inventory_restocked_at: null,
     customer_email: null,
     customer_name: "A Buyer",
@@ -85,7 +88,7 @@ function freshOrder(): OrderRow {
     shipping_amount: 0,
     card_processing_fee: 0,
     currency: "USD",
-    // No variant_id — production's order_items has no such column.
+    // No variant_id — production's order_items has no such column (VL-1).
     order_items: [{ product_id: "p1", quantity: 3, product_name: "Item", line_total: 200 }],
   };
 }
@@ -110,7 +113,7 @@ vi.mock("@/lib/inventory-fulfillment", async (importOriginal) => {
   };
 });
 vi.mock("@/lib/inventory-reservation", () => ({
-  finalizeInventoryForOrder: vi.fn(async () => { db.decremented += 1; return { finalized: 1, degraded: false }; }),
+  finalizeInventoryForOrder: vi.fn(async () => { db.decremented += 1; return { finalized: 1, degraded: false, finalizedLines: null }; }),
   releaseInventoryForOrder: vi.fn(async (orderId: string) => { db.released.push(orderId); }),
 }));
 
@@ -287,6 +290,14 @@ describe("cancelling an order that was paid through the MANUAL lane", () => {
     expect(db.order.paid_side_effects_at).not.toBeNull();
   });
 
+  it("also records the inventory receipt the cancel path actually reads", async () => {
+    // VL-10. paid_side_effects_at is the card lane's CLAIM, taken before its
+    // side effects run, so it cannot answer "did the units leave the shelf?".
+    // inventory_committed_at is that answer, and both lanes write it.
+    await approveManualPayment();
+    expect(db.order.inventory_committed_at).not.toBeNull();
+  });
+
   it("leaves the latch NULL if the stock never actually moved, so a cancel cannot INVENT units", async () => {
     // The latch must mean "the decrement happened", not "the decrement was
     // about to be attempted". Writing it up with the paid-flip would mark stock
@@ -304,6 +315,7 @@ describe("cancelling an order that was paid through the MANUAL lane", () => {
     await expect(approveManualPayment()).resolves.toBeTruthy();
     expect(db.order.payment_status).toBe("paid");
     expect(db.order.paid_side_effects_at).toBeNull();
+    expect(db.order.inventory_committed_at).toBeNull();
     expect(db.alerts.map((a) => a.type)).toContain("unsafe_effect_failed_inventory_decrement");
 
     const outcome = await cancel();
@@ -323,7 +335,7 @@ describe("cancelling an order that was paid through the MANUAL lane", () => {
   it("leaves the latch NULL when the degraded fallback decrement fails on every line", async () => {
     const reservation = await import("@/lib/inventory-reservation");
     const fulfillment = await import("@/lib/inventory-fulfillment");
-    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true });
+    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true, finalizedLines: null });
     vi.mocked(fulfillment.decrementInventoryForOrder).mockResolvedValueOnce({
       attempted: 1,
       failed: 1,
@@ -333,6 +345,7 @@ describe("cancelling an order that was paid through the MANUAL lane", () => {
     await expect(approveManualPayment()).resolves.toBeTruthy();
     expect(db.order.payment_status).toBe("paid");
     expect(db.order.paid_side_effects_at).toBeNull();
+    expect(db.order.inventory_committed_at).toBeNull();
     expect(db.alerts.map((a) => a.type)).toContain("unsafe_effect_failed_inventory_decrement");
 
     // And the consequence the latch exists to prevent: no invented units.
@@ -354,7 +367,7 @@ describe("cancelling an order that was paid through the MANUAL lane", () => {
   it("names a PARTIAL decrement separately, so the lost units can be corrected by hand", async () => {
     const reservation = await import("@/lib/inventory-reservation");
     const fulfillment = await import("@/lib/inventory-fulfillment");
-    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true });
+    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true, finalizedLines: null });
     vi.mocked(fulfillment.decrementInventoryForOrder).mockResolvedValueOnce({
       attempted: 3,
       failed: 1,
@@ -375,7 +388,7 @@ describe("cancelling an order that was paid through the MANUAL lane", () => {
   it("does NOT raise the partial alert when nothing moved at all", async () => {
     const reservation = await import("@/lib/inventory-reservation");
     const fulfillment = await import("@/lib/inventory-fulfillment");
-    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true });
+    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true, finalizedLines: null });
     vi.mocked(fulfillment.decrementInventoryForOrder).mockResolvedValueOnce({
       attempted: 3,
       failed: 3,

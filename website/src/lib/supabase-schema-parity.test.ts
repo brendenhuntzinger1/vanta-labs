@@ -190,11 +190,23 @@ export function scanSource(src: string, fileLabel = "<inline>"): ColumnReference
 
       const select = /\.select\(\s*["'`]([^"'`]*)["'`]/.exec(window);
       if (select) {
-        // Embedded-resource selects (`items:order_items(a,b)`, `order_items(a,b)`)
-        // name a RELATION, not a column of `table`. They are lifted out and
-        // checked against that relation instead of being discarded.
+        // Embedded-resource selects (`items:order_items(a,b)`,
+        // `order_items(a,b)`) name a RELATION, so their columns belong to THAT
+        // table, not to this one. They used to be dropped here and checked
+        // nowhere — which is precisely how VL-1 survived: the cancel path asked
+        // for `order_items(product_id, variant_id, quantity)` against a table
+        // that has no variant_id, PostgREST answered 42703, and EVERY
+        // cancellation returned "unavailable" instead of returning stock. The
+        // scanner reported no violation because it had thrown the embed away.
+        // They are checked against their own table now.
+        //
+        // The `!hint` group matches PostgREST's disambiguating FK hint
+        // (`order_items!fk_order(...)`), so a hinted embed is resolved to its
+        // real table rather than skipped.
         const body = select[1];
-        for (const rel of body.matchAll(/(?:([a-z_0-9]+)\s*:\s*)?([a-z_0-9]+)\s*\(([^()]*)\)/gi)) {
+        for (const rel of body.matchAll(
+          /(?:([a-z_0-9]+)\s*:\s*)?([a-z_0-9]+)(?:!\s*[a-z_0-9]+)?\s*\(([^()]*)\)/gi,
+        )) {
           // `alias:real_table(cols)` — the REAL table is group 2 either way.
           const relation = rel[2].toLowerCase();
           const bucket = embedded.get(relation) ?? new Set<string>();

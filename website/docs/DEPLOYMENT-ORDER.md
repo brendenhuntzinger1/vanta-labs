@@ -106,6 +106,50 @@ commissions, and what happens to those is the owner's decision, not a migration'
 
 ---
 
+## STEP 1b — `manual_review` commission status  ⚠️ **LAUNCH BLOCKER**
+
+| | |
+|---|---|
+| **Apply** | `website/src/lib/sql/referral-orders-manual-review-status.sql` |
+| **Why** | Step 1 widened the commission lifecycle but left out `manual_review`, and that is the value the REFUND path writes: a refund of an order whose commission was already paid out cannot claw the money back, so it is flagged for an admin instead. The write is refused with `23514`. Because it happens *inside* the webhook's refund branch, the exception used to abort the whole refund — no commission reversal, **no restock**, no points or store-credit return — and the processor's retry was short-circuited by the already-terminal guard, so the work was lost rather than deferred. (VL-7 / P12-01, and the trigger for REF-02) |
+| **Rollback** | `ROLLBACK-referral-orders-manual-review-status.sql` |
+| **Blast radius** | Widening a CHECK cannot invalidate an existing row. Drops by RULE, so it also removes the harness's `pc_ro_ps` duplicate. |
+
+**Verify:**
+```sql
+select pg_get_constraintdef(oid) from pg_constraint
+where conrelid = 'public.referral_orders'::regclass and contype = 'c'
+  and pg_get_constraintdef(oid) like '%payment_status%';
+-- expect ONE row, including 'manual_review'
+```
+
+**Apply with or before Step 1** — the file is standalone and supersedes Step 1's
+constraint list. The code fix that stops a `23514` here taking the rest of the
+refund down with it (REF-02) is independent and ships in Step 7; both are needed.
+
+---
+
+## STEP 1c — refund exactly-once indexes
+
+| | |
+|---|---|
+| **Apply** | `website/src/lib/sql/refund-exactly-once-indexes.sql` |
+| **Why** | The three refund effects that hand money back — points reversal, points restore, store-credit return — enforce "once per order" with a SELECT immediately before the INSERT. There are **two writers by design** (the refund webhook and the half-hourly repair sweep, which selects on exactly the absence those guards read), so both can pass the check and both insert: the customer is credited twice and neither caller reports anything wrong. (REF-03 / F3) |
+| **Rollback** | `ROLLBACK-refund-exactly-once-indexes.sql` |
+| **Blast radius** | Two partial unique indexes over refund rows only; ordinary grants, earns and redemptions are untouched. The file REFUSES to run if duplicates already exist — those are money already handed out, and a migration must not pick which copy to delete. |
+
+**Verify:**
+```sql
+select indexname from pg_indexes where schemaname='public'
+  and indexname in ('idx_points_ledger_order_refund_once',
+                    'idx_store_credit_ledger_order_refund_once');  -- expect 2 rows
+```
+
+**Code-first is fine, and slightly preferable.** `refundStoreCreditForOrder` now
+writes ONE aggregated refund row per account per order instead of one per
+redemption row, which is the shape the store-credit index requires; deploying
+the code first means an order refunded in the gap already has that shape.
+
 ## STEP 2 — the inventory return path  ⚠️ **LAUNCH BLOCKER**
 
 | | |

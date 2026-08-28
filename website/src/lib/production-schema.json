@@ -682,7 +682,8 @@
     "attributed_campaign_id",
     "attributed_at",
     "shipping_protection_fee",
-    "inventory_restocked_at"
+    "inventory_restocked_at",
+    "inventory_committed_at"
   ],
   "partner_clicks": [
     "id",

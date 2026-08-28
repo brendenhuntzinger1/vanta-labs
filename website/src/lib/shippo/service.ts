@@ -1862,8 +1862,62 @@ export async function applyTrackingUpdate(payload: ShippoWebhookPayload): Promis
 
   if (!transition.ok) {
     // "unchanged", "terminal" and "regression" are all normal for an
-    // at-least-once, out-of-order feed. The event is marked processed so it is
-    // never reconsidered, and nothing else happens — in particular, no email.
+    // at-least-once, out-of-order feed. No status move, no history row and no
+    // email — a refused transition is a claim about progress this order has
+    // already passed.
+    //
+    // THE TRACKING NUMBER IS NOT THAT CLAIM. It is a fact about the parcel that
+    // is true whenever it arrives, and this path discarded it: an order whose
+    // label was bought in the Shippo dashboard has no tracking number locally,
+    // and its FIRST scan often lands as a refused transition (a "delivered"
+    // order re-scanned, or a status the pipeline already holds). The event was
+    // matched by transaction id, marked processed so it is never redelivered,
+    // and the number went in the bin — leaving the customer's tracking link
+    // empty on an order that really did ship. The label path in order-sync.ts
+    // already separates label FACTS from the status move for exactly this
+    // reason; this is the same rule.
+    //
+    // Only ever filling absence or a genuine change, and never touching
+    // fulfillment_status, so this cannot regress an order.
+    if (trackingNumber && trackingNumber !== text(order.tracking_number)) {
+      const factUpdate: Record<string, unknown> = {
+        tracking_number: trackingNumber,
+        updated_at: new Date().toISOString(),
+      };
+      // Same rule as the applied path: the purchased rate's provider ("USPS")
+      // is better data than the webhook's free text ("usps"), so a carrier we
+      // already hold is never overwritten.
+      if (!text(order.shipping_carrier) && text(data.carrier)) {
+        factUpdate.shipping_carrier = text(data.carrier);
+      }
+      // COMPARE-AND-SET on the value this decision was made against, so a
+      // number written by a concurrent scan (or by the label path) is never
+      // overwritten with the one this stale event happens to carry.
+      const factWrite = supabaseAdmin.from("orders").update(factUpdate).eq("order_id", order.order_id);
+      const { error: factError, data: factTouched } =
+        text(order.tracking_number) === null
+          ? await factWrite.is("tracking_number", null).select("order_id")
+          : await factWrite.eq("tracking_number", order.tracking_number).select("order_id");
+      if (factError) {
+        // Never a reason to fail the event: the status decision stands either
+        // way, and Shippo redelivering this would change nothing.
+        console.error("Unable to record tracking facts from a refused transition", order.order_id, factError);
+      } else if (Array.isArray(factTouched) && factTouched.length > 0) {
+        // The shipment row mirrors the order, so it carries the same number —
+        // at the order's CURRENT status, because nothing moved. An order with
+        // no status yet has nothing to mirror, so it is left alone rather than
+        // written with an empty one.
+        const currentStatus = text(order.fulfillment_status);
+        if (currentStatus) {
+          await upsertShipment({
+            orderId: order.order_id,
+            carrier: text(order.shipping_carrier) ?? text(data.carrier),
+            trackingNumber,
+            status: currentStatus,
+          });
+        }
+      }
+    }
     await markEventProcessed(eventKey);
     return {
       ok: true,

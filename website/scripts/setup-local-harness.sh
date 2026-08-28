@@ -58,7 +58,7 @@ for f in inventory-reservations inventory-ledger order-email-log v1.1-features \
          add-order-items-order-id-index BASELINE-live-functions-2026-08-25 \
          admin-control-current-view \
          inventory-enforce-positive-stock inventory-return-path \
-         add-inventory-restock-claim; do
+         add-inventory-restock-claim add-inventory-committed-latch; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 
@@ -73,11 +73,28 @@ $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-columns.sql"     >>/tmp/vl-sc
 $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-constraints.sql" >>/tmp/vl-schema.log 2>&1 || true
 $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-functions.sql"   >>/tmp/vl-schema.log 2>&1 || true
 
-# LAST, and deliberately so. These rollups read columns the parity step above
-# adds (orders.refund_amount among them), so applying them with the feature
-# files fails on a fresh database — and they own admin_ops_summary, which
-# harness-prod-parity-functions.sql used to re-create with its pre-fix gross
-# body. Applying them here means the corrected definition is the one that wins.
+# POST-PARITY. Two independent reasons a file must land after the parity step,
+# both of which produce a harness that silently tests the wrong system.
+#
+# 1. Parity re-creates the very production drift the migration exists to
+#    correct. harness-prod-parity-constraints.sql adds `pc_ro_ps`, the narrow
+#    three-value CHECK on referral_orders.payment_status, so a harness built
+#    without the commission-lifecycle pair refuses every commission accrual AND
+#    every refund of an order whose commission was paid — the same 23514 the
+#    deployment steps fix in production. Both files drop by RULE, so they remove
+#    pc_ro_ps as well as the by-name constraint.
+#
+# 2. The migration READS columns the parity step adds. The revenue rollups need
+#    orders.refund_amount, so applying them with the feature files fails on a
+#    fresh database. They also own admin_ops_summary, which
+#    harness-prod-parity-functions.sql used to re-create with its pre-fix gross
+#    body — applying them here is what makes the corrected definition win.
+echo "==> post-parity migrations"
+for f in referral-orders-commission-lifecycle referral-orders-manual-review-status \
+         refund-exactly-once-indexes; do
+  [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
+done
+
 echo "==> revenue rollups (net revenue definition — must apply AFTER parity columns)"
 $PSQL -q -f "$HERE/src/lib/sql/admin-dashboard-rollups.sql"         >>/tmp/vl-schema.log 2>&1 || true
 $PSQL -q -f "$HERE/src/lib/sql/admin-partner-rollups.sql"           >>/tmp/vl-schema.log 2>&1 || true
@@ -116,6 +133,8 @@ check() { # name, sql returning boolean
 
 check "orders.inventory_restocked_at exists (cancel/refund restock claim)" \
   "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='inventory_restocked_at');"
+check "orders.inventory_committed_at exists (the restock SIGNAL)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='inventory_committed_at');"
 check "adjust_inventory_on_sale maintains stock_status (inventory-return-path.sql)" \
   "select coalesce(bool_or(prosrc like '%stock_status%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='adjust_inventory_on_sale';"
 check "reserve_inventory enforces untracked-but-stocked (inventory-enforce-positive-stock.sql)" \
