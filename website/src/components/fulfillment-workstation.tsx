@@ -175,6 +175,43 @@ export function FulfillmentWorkstation({
 
 
   /**
+   * Discard a batch. CHANGES NO ORDER AND SPENDS NOTHING — a batch is only a
+   * grouping, so deleting it releases its orders back to Ready to Fulfill and
+   * leaves postage, payment and fulfillment state exactly where they were.
+   *
+   * The confirm names the count because "delete" next to a row of pick/pack
+   * buttons is the one control here an operator could hit by reflex, and the
+   * grouping is the only thing on this screen that cannot be reconstructed.
+   */
+  const discardBatch = async (batch: FulfillmentBatch) => {
+    const ok = window.confirm(
+      `Delete batch ${batch.label}?\n\n`
+      + `Its ${batch.orderCount} order${batch.orderCount === 1 ? "" : "s"} go back to Ready to Fulfill. `
+      + "No order changes, and any postage already bought in Shippo is untouched.",
+    );
+    if (!ok) return;
+
+    setBusy(true); setMessage(null); setRejections([]);
+    try {
+      const body = await call(
+        `/api/admin/fulfillment/batches?batchId=${encodeURIComponent(batch.id)}`,
+        { method: "DELETE" },
+      );
+      if (!body.success) { setMessage(String(body.error ?? "Could not delete the batch.")); return; }
+
+      const released = Number(body.released ?? 0);
+      setMessage(
+        `Batch ${batch.label} deleted · ${released} order${released === 1 ? "" : "s"} back in Ready to Fulfill.`,
+      );
+      // Anything on screen that was a view OF this batch is now stale.
+      if (activeBatch === batch.id) {
+        setActiveBatch(null); setPickList(null); setPacking(null); setReview(null);
+      }
+      router.refresh();
+    } finally { setBusy(false); }
+  };
+
+  /**
    * Verified → the order moves to `packed` through the canonical pipeline, and
    * the bench advances on its own. ONE action, because the label was printed
    * with the batch — see the note in the packing panel.
@@ -443,6 +480,13 @@ export function FulfillmentWorkstation({
                 <button type="button" disabled={busy} onClick={() => { setActiveBatch(batch.id); loadNext(batch.id); }}
                   className="vl-btn-primary px-3 py-1 text-xs disabled:opacity-50">
                   4 · Start packing
+                </button>
+                {/* Last, and visually quietest, because it is the only
+                    destructive control in the row. */}
+                <button type="button" disabled={busy} onClick={() => discardBatch(batch)}
+                  title="Removes the grouping only. Orders return to Ready to Fulfill; postage is not voided."
+                  className="ml-auto rounded-full border border-rose-500/20 px-3 py-1 text-xs text-rose-300 hover:bg-rose-500/10 disabled:opacity-50">
+                  Delete
                 </button>
               </li>
             ))}
