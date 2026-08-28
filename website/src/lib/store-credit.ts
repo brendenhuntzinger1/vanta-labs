@@ -192,11 +192,29 @@ export async function refundStoreCreditForOrder(orderId: string): Promise<boolea
   const monthStart = startOfCurrentMonthIso();
   // Only re-credit redemptions that are still refundable — see
   // isRefundableRedemption.
-  const refundRows = (data ?? [])
-    .filter((row) => isRefundableRedemption(row, monthStart))
-    .map((row) => ({
-      user_id: String(row.user_id),
-      amount_cents: Math.abs(Number(row.amount_cents ?? 0)),
+  //
+  // ONE REFUND ROW PER (ORDER, ACCOUNT), NOT ONE PER REDEMPTION ROW. The
+  // amount returned is identical — the redemptions are summed — but the shape
+  // is now something a unique index can hold: an order with two redemption
+  // rows used to produce two refund rows, so "one refund row per order" was not
+  // a rule the database could enforce, and the read-then-insert guard above was
+  // the ONLY thing standing between a concurrent webhook and sweep and a
+  // double credit. See idx_store_credit_ledger_order_refund_once
+  // (sql/refund-exactly-once-indexes.sql). Grouped by user_id rather than
+  // flattened outright: the index is per account, and an order's redemptions
+  // all belong to one buyer, so this is one row in every real case.
+  const refundableTotals = new Map<string, number>();
+  for (const row of data ?? []) {
+    if (!isRefundableRedemption(row, monthStart)) continue;
+    const userId = String(row.user_id);
+    refundableTotals.set(userId, (refundableTotals.get(userId) ?? 0) + Math.abs(Number(row.amount_cents ?? 0)));
+  }
+
+  const refundRows = [...refundableTotals.entries()]
+    .filter(([, amountCents]) => amountCents > 0)
+    .map(([userId, amountCents]) => ({
+      user_id: userId,
+      amount_cents: amountCents,
       reason: "membership_redemption_refund",
       order_id: orderId,
       created_at: new Date().toISOString(),
@@ -219,7 +237,19 @@ export async function refundStoreCreditForOrder(orderId: string): Promise<boolea
   // first refunded, and the already-refunded guard above then declined to ever
   // finish the job.
   const { error: insertError } = await supabaseAdmin.from("store_credit_ledger").insert(refundRows);
-  if (insertError) throw insertError;
+  // THE ALREADY-REFUNDED READ ABOVE IS NOT EXACTLY-ONCE ON ITS OWN. Two
+  // callers — the webhook's refund branch and the half-hourly refund sweep —
+  // can both read "no refund row yet" and both insert, returning the
+  // customer's credit twice for one refund. `idx_store_credit_ledger_order_refund_once`
+  // (sql/refund-exactly-once-indexes.sql) makes the database refuse the second
+  // one; 23505 here therefore means the credit HAS been returned, by somebody
+  // else, so this call returned nothing and must say so rather than throwing.
+  // Reporting it as an error would have the sweep counting a failure and
+  // alerting on a refund that is correctly applied.
+  if (insertError) {
+    if (String((insertError as { code?: unknown }).code ?? "") === "23505") return false;
+    throw insertError;
+  }
 
   return true;
 }
