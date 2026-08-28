@@ -450,31 +450,11 @@ export function AdminMembershipClient({
 
               {tier.slug !== "free" ? (
                 <div className="mt-4 border-t border-white/10 pt-4">
-                  <p className="text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Intro offer</p>
-                  <div className="mt-3 grid gap-3 sm:grid-cols-4">
-                    <label className="flex items-center gap-1.5 text-xs text-zinc-300">
-                      <input type="checkbox" checked={tier.introOfferEnabled} onChange={(e) => saveTier(tier, { introOfferEnabled: e.target.checked })} />
-                      Enabled
-                    </label>
-                    <label className="text-xs text-zinc-400">
-                      Intro price ($)
-                      <input
-                        type="number"
-                        step="0.01"
-                        defaultValue={(tier.introPriceCents / 100).toFixed(2)}
-                        onBlur={(e) => saveTier(tier, { introPriceCents: Math.round(Number(e.target.value) * 100) })}
-                        className="vl-input mt-1 w-full px-2 py-1.5"
-                      />
-                    </label>
-                    <label className="text-xs text-zinc-400">
-                      Intro duration (days)
-                      <input
-                        type="number"
-                        defaultValue={tier.introDurationDays}
-                        onBlur={(e) => saveTier(tier, { introDurationDays: Number(e.target.value) })}
-                        className="vl-input mt-1 w-full px-2 py-1.5"
-                      />
-                    </label>
+                  <div className="grid gap-3 sm:grid-cols-4">
+                    {/* Member discount IS live — it drives member pricing on every
+                        product card and the cart. It used to sit inside the intro
+                        block below, which now reads "not implemented"; moved out so
+                        that note cannot be read as applying to it. */}
                     <label className="text-xs text-zinc-400">
                       Member discount (%)
                       <input
@@ -483,6 +463,51 @@ export function AdminMembershipClient({
                         defaultValue={tier.memberDiscountPercent}
                         onBlur={(e) => saveTier(tier, { memberDiscountPercent: Number(e.target.value) })}
                         className="vl-input mt-1 w-full px-2 py-1.5"
+                      />
+                    </label>
+                  </div>
+
+                  {/* READ-ONLY ON PURPOSE. These three fields were live controls
+                      wired to saveTier, but the flow behind them does not exist:
+                      intro/trial pricing was removed by the owner in 2026-07 (see
+                      "No intro/trial flow" in src/lib/membership-billing.ts), the
+                      subscribe page hard-codes usesIntroOffer = false, and no code
+                      path writes intro_status 'active'. An operator ticking
+                      "Enabled" and typing $1 therefore configured a trial that
+                      silently never happened — a worse outcome than not offering
+                      the control at all. The stored values stay visible because
+                      they are the record of what was configured before the offer
+                      was withdrawn; clearing them is the owner's call, not a
+                      display decision. */}
+                  <p className="mt-4 text-xs font-semibold uppercase tracking-[0.14em] text-zinc-500">Intro offer — not implemented</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-zinc-500">
+                    Intro/trial pricing was removed in July 2026. Every signup charges the full period amount
+                    immediately, so these values are stored but never applied. Shown read-only.
+                  </p>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                    <label className="flex items-center gap-1.5 text-xs text-zinc-500">
+                      <input type="checkbox" checked={tier.introOfferEnabled} readOnly disabled />
+                      Enabled
+                    </label>
+                    <label className="text-xs text-zinc-500">
+                      Intro price ($)
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={(tier.introPriceCents / 100).toFixed(2)}
+                        readOnly
+                        disabled
+                        className="vl-input mt-1 w-full px-2 py-1.5 opacity-60"
+                      />
+                    </label>
+                    <label className="text-xs text-zinc-500">
+                      Intro duration (days)
+                      <input
+                        type="number"
+                        value={tier.introDurationDays}
+                        readOnly
+                        disabled
+                        className="vl-input mt-1 w-full px-2 py-1.5 opacity-60"
                       />
                     </label>
                   </div>

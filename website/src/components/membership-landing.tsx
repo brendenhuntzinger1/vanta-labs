@@ -10,6 +10,8 @@
 import { useMemo, useState } from "react";
 import Link from "next/link";
 import type { MembershipTier } from "@/lib/membership";
+import { POINTS_PER_DOLLAR_REDEMPTION } from "@/lib/points-math";
+import { DEFAULT_BULK_SAVINGS_CONFIG, type BulkSavingsConfig } from "@/lib/bulk-savings";
 import { ScrollReveal } from "@/components/scroll-reveal";
 import { useCart, formatCartCurrency } from "@/components/cart-context";
 // Shared with checkout so the calculator's shipping assumption always matches
@@ -26,39 +28,54 @@ function moneyWhole(cents: number) {
   return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
 }
 
-const FAQ_ITEMS = [
-  {
-    q: "When do my benefits start?",
-    a: "Immediately. Member pricing, free shipping, priority processing, and your points multiplier are live from the moment you join — your very next order gets member treatment.",
-  },
-  {
-    q: "Can I cancel or change my plan?",
-    a: "Yes, any time from your account dashboard — no calls, no forms. Cancel before your next renewal date and you keep every benefit through the period you already paid for. No hidden fees, ever.",
-  },
-  {
-    q: "Does my member discount combine with promo codes or other sales?",
-    a: "No — exactly one discount applies per order, and discounts never stack. Your member pricing is applied automatically whenever you're signed in, no code needed. If a promo or ambassador code would save you more than your member discount, checkout automatically applies that better discount instead — you always get the single best deal without doing anything.",
-  },
-  {
-    q: "How does the monthly store credit work?",
-    a: "Paying tiers receive store credit every month, automatically applied at checkout once your order meets the tier's minimum. It's real money off your total, on top of your member pricing.",
-  },
-  {
-    q: "How do reward points work?",
-    a: "Every paid order earns points based on your membership tier (2x, 3x, or 5x points per $1 spent on the merchandise total). 100 points equals $1 in store credit, redeemable at checkout on any future order. Points never expire.",
-  },
-  {
-    q: "Is billing live yet?",
-    a: "The membership signup flow, billing schedule, and dashboard are fully built and active — a payment processor isn't connected yet, so a card can't be charged until that's finished. Signing up saves your membership request, and billing begins automatically the moment a processor is connected.",
-  },
-];
+// The FAQ quotes numbers the tiers really carry, so an edit in /admin/membership
+// cannot leave the answers behind. Hard-coded copy had already drifted here: the
+// points answer said "2x, 3x, or 5x" while the seeded tiers are 2/3/4/5, so
+// Elite's 4x was missing from the only place a shopper reads the range in prose
+// (the comparison table further down prints every tier's real figure).
+export function buildFaqItems(tiers: MembershipTier[]) {
+  const multipliers = tiers.map((tier) => tier.pointsPerDollar).filter((value) => value > 0);
+  const multiplierRange = multipliers.length
+    ? `${Math.min(...multipliers)}x to ${Math.max(...multipliers)}x points`
+    : "points";
 
-function FaqAccordion() {
+  return [
+    {
+      q: "When do my benefits start?",
+      // Free shipping and priority processing are per-tier columns, not universal
+      // — Essential is seeded with both off — so promising them to everyone who
+      // joins contradicts the very card the shopper is reading them next to.
+      a: "Immediately. Member pricing and your points multiplier are live from the moment you join, along with every other benefit your tier includes — your very next order gets member treatment.",
+    },
+    {
+      q: "Can I cancel or change my plan?",
+      a: "Yes, any time from your account dashboard — no calls, no forms. Cancel before your next renewal date and you keep every benefit through the period you already paid for. No hidden fees, ever.",
+    },
+    {
+      q: "Does my member discount combine with promo codes or other sales?",
+      a: "No — exactly one discount applies per order, and discounts never stack. Your member pricing is applied automatically whenever you're signed in, no code needed. If a promo or ambassador code would save you more than your member discount, checkout automatically applies that better discount instead — you always get the single best deal without doing anything.",
+    },
+    {
+      q: "How does the monthly store credit work?",
+      a: "Paying tiers receive store credit every month, automatically applied at checkout once your order meets the tier's minimum. It's real money off your total, on top of your member pricing.",
+    },
+    {
+      q: "How do reward points work?",
+      a: `Every paid order earns points based on your membership tier (${multiplierRange} per $1 spent on the merchandise total). ${POINTS_PER_DOLLAR_REDEMPTION} points equals $1 in store credit, redeemable at checkout on any future order. Points never expire.`,
+    },
+    {
+      q: "Is billing live yet?",
+      a: "The membership signup flow, billing schedule, and dashboard are fully built and active — a payment processor isn't connected yet, so a card can't be charged until that's finished. Signing up saves your membership request, and billing begins automatically the moment a processor is connected.",
+    },
+  ];
+}
+
+function FaqAccordion({ items }: { items: ReturnType<typeof buildFaqItems> }) {
   const [openIndex, setOpenIndex] = useState<number | null>(0);
 
   return (
     <div className="space-y-3">
-      {FAQ_ITEMS.map((item, index) => {
+      {items.map((item, index) => {
         const isOpen = openIndex === index;
         return (
           <div key={item.q} className="border border-white/10 bg-black/30">
@@ -214,7 +231,7 @@ function SavingsCalculator({ tiers }: { tiers: MembershipTier[] }) {
   );
 }
 
-export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = false }: { tiers: MembershipTier[]; isSignedInCustomer: boolean; loadFailed?: boolean }) {
+export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = false, bulkSavings = DEFAULT_BULK_SAVINGS_CONFIG }: { tiers: MembershipTier[]; isSignedInCustomer: boolean; loadFailed?: boolean; bulkSavings?: BulkSavingsConfig }) {
   const [billingCycle, setBillingCycle] = useState<BillingCycle>("monthly");
   // Per-tier benefit-list disclosure, mobile only (see the toggle below).
   const [expandedBenefits, setExpandedBenefits] = useState<Record<string, boolean>>({});
@@ -223,6 +240,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
     () => tiers.filter((tier) => tier.slug !== "free" && tier.monthlyPriceCents > 0).sort((a, b) => a.monthlyPriceCents - b.monthlyPriceCents),
     [tiers],
   );
+  const faqItems = useMemo(() => buildFaqItems(tiers), [tiers]);
   const strongestSlug = useMemo(
     () => (paidTiers.length ? paidTiers.reduce((best, t) => (t.memberDiscountPercent > best.memberDiscountPercent ? t : best)).slug : null),
     [paidTiers],
@@ -511,9 +529,13 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
         <ScrollReveal delayMs={80}>
           <div className="mt-14 border-t border-white/10 pt-10 text-center">
             <p className="vl2-eyebrow">How membership works</p>
+            {/* Same correction as the "When do my benefits start?" answer:
+                priority handling is a per-tier column (Essential is seeded with
+                it off), so it cannot go in a list of what EVERY member gets on
+                joining. */}
             <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/60 sm:text-base">
               Join in one click and your benefits are live immediately: member pricing on every product, monthly store
-              credit, points on every order, and priority handling. Cancel anytime from your dashboard — you keep every
+              credit, and points on every order. Cancel anytime from your dashboard — you keep every
               benefit through the period you&apos;ve paid for.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-x-8 gap-y-2 text-[10px] uppercase tracking-[0.14em] text-white/45">
@@ -531,13 +553,18 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
               Exclusive Buy In Bulk Savings
             </h2>
             <div className="mx-auto mt-8 grid max-w-3xl gap-4 sm:grid-cols-3">
+              {/* The four numbers below are the ones calculateBulkSavingsDiscount
+                  actually applies at checkout, passed down from the admin control
+                  config — not a second hand-written copy of them. Hard-coded
+                  "5% / $500 / 12% / $1,000" advertised a program the admin can
+                  retune in /admin/control, with nothing to keep the two in step. */}
               <div className="border border-white/12 bg-black/40 p-5 text-center">
-                <p className="vl2-serif text-3xl text-white">5% OFF</p>
-                <p className="mt-2 text-sm text-white/70">Orders of $500 or more</p>
+                <p className="vl2-serif text-3xl text-white">{bulkSavings.tier1Percent}% OFF</p>
+                <p className="mt-2 text-sm text-white/70">Orders of ${bulkSavings.tier1Threshold.toLocaleString()} or more</p>
               </div>
               <div className="border border-white/12 bg-black/40 p-5 text-center">
-                <p className="vl2-serif text-3xl text-white">12% OFF</p>
-                <p className="mt-2 text-sm text-white/70">Orders of $1,000 or more</p>
+                <p className="vl2-serif text-3xl text-white">{bulkSavings.tier2Percent}% OFF</p>
+                <p className="mt-2 text-sm text-white/70">Orders of ${bulkSavings.tier2Threshold.toLocaleString()} or more</p>
               </div>
               <div className="border border-white/12 bg-black/40 p-5 text-center">
                 <p className="vl2-serif text-3xl text-white">Free Shipping</p>
@@ -546,7 +573,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
             </div>
             <ul className="mx-auto mt-8 max-w-2xl space-y-2 text-sm text-white/60">
               <li>• Discounts are automatically applied at checkout — no code needed.</li>
-              <li>• Exclusive to active, paying Elite Research members (trial members qualify once they convert to a paying member).</li>
+              <li>• Exclusive to active, paying Elite and Black members (trial members qualify once they convert to a paying member).</li>
               <li>• One discount per order — bulk savings automatically applies if it beats any other discount you&apos;re eligible for.</li>
             </ul>
           </div>
@@ -596,7 +623,7 @@ export function MembershipLanding({ tiers, isSignedInCustomer, loadFailed = fals
           <div className="mt-16">
             <h2 className="vl2-serif text-center text-2xl text-white">Frequently asked questions</h2>
             <div className="mx-auto mt-6 max-w-2xl">
-              <FaqAccordion />
+              <FaqAccordion items={faqItems} />
             </div>
           </div>
         </ScrollReveal>

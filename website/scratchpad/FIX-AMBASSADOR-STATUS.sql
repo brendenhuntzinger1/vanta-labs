@@ -1,5 +1,10 @@
 -- =====================================================================
 -- VANTA LABS — AMBASSADOR STATUS CONSTRAINT
+-- SUPERSEDED — DO NOT RUN. The four statements in STEP 2 below are byte-for-byte
+-- the ones shipped in src/lib/sql/ambassador-mirror-repair.sql (:165-174), which
+-- is the copy on the documented path and the one an operator is told to run.
+-- Kept only as the record of how the constraint gap was diagnosed. Two runnable
+-- copies of one DDL is how the next edit lands in the copy nobody applies.
 --
 -- WHAT IS WRONG
 -- The application has five ambassador statuses. It writes all five, its API

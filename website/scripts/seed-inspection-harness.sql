@@ -1,3 +1,11 @@
+-- NOT WIRED UP, AND NOT THE HARNESS SEED. setup-local-harness.sh runs
+-- src/lib/sql/harness-seed.sql; nothing in the repository references this file.
+-- Its product slugs ('bpc-157', 'glp-1', 'dsip', 'lastone') deliberately differ
+-- from that seed's ('bpc-157-10mg' and friends), and harness-seed.sql truncates
+-- these tables before inserting, so running both leaves only whichever ran last.
+-- Retained as the one-off inspection fixture it was written as (a92fad9); do not
+-- add it to the harness setup without reconciling the two catalogues first.
+--
 -- Seed the local harness with a small catalogue and one ambassador, mirroring
 -- production shapes so the transactional tests mean something.
 -- Development-only. Never run against production.

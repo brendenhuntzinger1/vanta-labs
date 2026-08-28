@@ -3,6 +3,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { generateReferralCode } from "@/lib/referral-code-utils";
 import { validateReferralCodeFormat } from "@/lib/referral-code-validation";
 import { isEarnedCommission, isRevenueOrderStatus, isSaleOrder, netOrderRevenue, REVENUE_ORDER_STATUSES } from "@/lib/ledger";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 import { sendEmail } from "@/lib/email/send";
 import {
   ambassadorApplicationReceivedTemplate,
@@ -172,6 +173,27 @@ export interface PartnerRecord {
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
+}
+
+// Ceiling on ONE paged read, not a definition of the answer — the same value
+// admin-analytics.ts and admin-revenue.ts put on their money reads. It exists so
+// a runaway table bounds memory, not so a number can quietly come back short:
+// readAllRowsBounded reports `truncated` rather than returning a smaller total
+// as though it were the answer.
+const MAX_PARTNER_ROWS = 200_000;
+
+// PostgREST puts an `in.(...)` filter in the REQUEST URL, so a filter built from
+// a paged read is a 414 rather than a write once the list is long enough. Any
+// filter whose length is now bounded by the table rather than by one page is
+// applied in slices of this size.
+const ID_FILTER_SLICE = 150;
+
+function chunkIds<T>(ids: T[], size = ID_FILTER_SLICE): T[][] {
+  const chunks: T[][] = [];
+  for (let index = 0; index < ids.length; index += size) {
+    chunks.push(ids.slice(index, index + size));
+  }
+  return chunks;
 }
 
 /**
@@ -686,32 +708,50 @@ export async function getPartnerProgramStats(): Promise<PartnerProgramStats> {
   // This stats read is served by the UNAUTHENTICATED /api/partner/program-stats
   // endpoint, and money-state transitions must not be drivable (or DoS-able) by
   // anonymous traffic. The scheduled cron (/api/cron/sweep) owns the sweep.
-  const [
-    { data: payoutRows, error: payoutError },
-    { data: partnerRows, error: partnerError },
-    { data: programStatsRows, error: statsError },
-  ] = await Promise.all([
-    supabaseAdmin.from("partner_payouts").select("amount"),
+
+  // PAGED, BECAUSE A WHOLE-TABLE `select` IS NOT UNBOUNDED.
+  //
+  // PostgREST caps every response at its `db-max-rows` (Supabase's default is
+  // 1,000) and says nothing when it does — the response is a valid array that
+  // simply stops. Both of these reads are whole-table and feed PUBLIC numbers:
+  // past a thousand payouts "total commissions paid" would silently stop
+  // growing, and past a thousand commission rows the average and top-earner
+  // figures would be computed from an arbitrary slice of ambassadors.
+  //
+  // `.order("id")` is the deterministic tiebreak paging needs — without a
+  // stable key a page can repeat or skip rows.
+  const [payoutRead, { data: partnerRows, error: partnerError }, { data: programStatsRows, error: statsError }] = await Promise.all([
+    readAllRowsBounded<{ amount: number | null }>(
+      (from, to) => supabaseAdmin
+        .from("partner_payouts")
+        .select("amount")
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: Array<{ amount: number | null }> | null; error: { message?: string } | null }>,
+      { maxRows: MAX_PARTNER_ROWS, label: "program payouts read" },
+    ),
     supabaseAdmin.from("partners").select("id, invited_at, approved_at"),
     supabaseAdmin.from("partner_program_stats").select("key, value_numeric"),
   ]);
 
-  assertNoSupabaseError("partner_payouts.select(program payouts)", payoutError);
   assertNoSupabaseError("partners.select(program partner approvals)", partnerError);
   assertNoSupabaseError("partner_program_stats.select(configurable stats)", statsError);
 
   const overrides = new Map((programStatsRows ?? []).map((row) => [row.key, Number(row.value_numeric ?? 0)]));
 
-  const totalCommissionsPaid = roundMoney((payoutRows ?? []).reduce((sum, row) => sum + Number(row.amount ?? 0), 0));
+  const totalCommissionsPaid = roundMoney(payoutRead.rows.reduce((sum, row) => sum + Number(row.amount ?? 0), 0));
 
   const commissionByPartner = new Map<string, number>();
-  const { data: partnerCommissionRows, error: partnerCommissionError } = await supabaseAdmin
-    .from("referral_orders")
-    .select("ambassador_id, commission_amount, payment_status");
+  type ProgramCommissionRow = { ambassador_id: string | null; commission_amount: number | null; payment_status: string | null };
+  const { rows: partnerCommissionRows } = await readAllRowsBounded<ProgramCommissionRow>(
+    (from, to) => supabaseAdmin
+      .from("referral_orders")
+      .select("ambassador_id, commission_amount, payment_status")
+      .order("id", { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: ProgramCommissionRow[] | null; error: { message?: string } | null }>,
+    { maxRows: MAX_PARTNER_ROWS, label: "program partner commission totals read" },
+  );
 
-  assertNoSupabaseError("referral_orders.select(program partner commission totals)", partnerCommissionError);
-
-  for (const row of partnerCommissionRows ?? []) {
+  for (const row of partnerCommissionRows) {
     const partnerId = row.ambassador_id;
     // Canonical earned-commission rule (excludes reversed/voided/manual_review)
     // so program stats reconcile exactly with the ambassador + admin surfaces.
@@ -977,52 +1017,113 @@ export async function getPayoutQueue(): Promise<PayoutQueue> {
   };
 }
 
+type PartnerSummaryCommissionRow = {
+  order_id: string;
+  commission_amount: number | null;
+  // `referral_orders.payment_status` is `text not null default 'pending'`.
+  payment_status: string;
+  created_at: string;
+};
+
+type PartnerSummaryOrderRow = {
+  order_id: string;
+  customer_email: string | null;
+  amount_paid: number | null;
+  refund_amount: number | null;
+  order_type: string | null;
+  payment_status: string | null;
+  created_at: string;
+};
+
+type PartnerSummaryPayoutRow = {
+  id: string;
+  amount: number | null;
+  note: string | null;
+  created_at: string;
+};
+
 export async function getPartnerSummary(partnerId: string, siteUrl: string): Promise<PartnerSummary> {
   // The hold period, read from the function that decides it rather than typed
   // into the page. `referralProgram` is already read further down for the
   // customer discount and is reused for the personal one — one read, one
   // answer. Both fall back to the shared defaults, as every other reader does.
   const ambassadorSettings = await getAmbassadorProgramSettings().catch(() => null);
-  const [{ data: partner, error: partnerError }, { data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }, { data: payoutRows, error: payoutError }] = await Promise.all([
+
+  // PAGED, LIKE EVERY OTHER READ THAT FEEDS A MONEY FIGURE.
+  //
+  // These carried no `.range()` and no `.limit()`, which is not the same as
+  // unbounded: PostgREST caps every response at its `db-max-rows` (Supabase's
+  // default is 1,000) and says nothing when it does. That direction is
+  // especially bad here because both reads are DESCENDING, so a capped page
+  // drops the OLDEST rows first — the long-unpaid `pending` and
+  // `approved_for_payout` commissions are exactly the ones an ambassador is
+  // chasing, and their balance would come back short with no error anywhere.
+  //
+  // The descending sort is kept (recentOrders below slices the newest 50 off
+  // the front) with `.order("id")` added as the deterministic tiebreak paging
+  // needs — created_at is not unique, so ordering on it alone can repeat or
+  // skip rows between pages.
+  const [{ data: partner, error: partnerError }, commissionRead, orderRead, clickRead, payoutRead] = await Promise.all([
     supabaseAdmin
       .from("partners")
       .select("id, name, referral_code, commission_percent, customer_discount_percent, status, payout_method, payout_handle")
       .eq("id", partnerId)
       .single(),
-    supabaseAdmin
-      .from("referral_orders")
-      .select("order_id, commission_amount, payment_status, created_at")
-      .eq("ambassador_id", partnerId)
-      .order("created_at", { ascending: false }),
-    supabaseAdmin
-      .from("orders")
-      .select("order_id, customer_email, amount_paid, payment_status, created_at")
-      .eq("ambassador_id", partnerId)
-      .order("created_at", { ascending: false }),
-    supabaseAdmin
-      .from("partner_clicks")
-      .select("created_at")
-      .eq("ambassador_id", partnerId),
-    supabaseAdmin
-      .from("partner_payouts")
-      .select("id, amount, note, created_at")
-      .eq("ambassador_id", partnerId)
-      .order("created_at", { ascending: false }),
+    readAllRowsBounded<PartnerSummaryCommissionRow>(
+      (from, to) => supabaseAdmin
+        .from("referral_orders")
+        .select("order_id, commission_amount, payment_status, created_at")
+        .eq("ambassador_id", partnerId)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: PartnerSummaryCommissionRow[] | null; error: { message?: string } | null }>,
+      { maxRows: MAX_PARTNER_ROWS, label: "partner summary commissions read" },
+    ),
+    readAllRowsBounded<PartnerSummaryOrderRow>(
+      (from, to) => supabaseAdmin
+        .from("orders")
+        .select("order_id, customer_email, amount_paid, refund_amount, order_type, payment_status, created_at")
+        .eq("ambassador_id", partnerId)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: PartnerSummaryOrderRow[] | null; error: { message?: string } | null }>,
+      { maxRows: MAX_PARTNER_ROWS, label: "partner summary orders read" },
+    ),
+    // Only the COUNT of clicks is used — it is the conversion-rate denominator,
+    // and a capped read inflated the rate by pretending the ambassador had
+    // fewer clicks than they did. Paged rather than counted with `head: true`
+    // because `.range()` is what the local verification harness's PostgREST
+    // stand-in implements; a HEAD request is not.
+    readAllRowsBounded<{ id: string }>(
+      (from, to) => supabaseAdmin
+        .from("partner_clicks")
+        .select("id")
+        .eq("ambassador_id", partnerId)
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: Array<{ id: string }> | null; error: { message?: string } | null }>,
+      { maxRows: MAX_PARTNER_ROWS, label: "partner summary clicks read" },
+    ),
+    readAllRowsBounded<PartnerSummaryPayoutRow>(
+      (from, to) => supabaseAdmin
+        .from("partner_payouts")
+        .select("id, amount, note, created_at")
+        .eq("ambassador_id", partnerId)
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: PartnerSummaryPayoutRow[] | null; error: { message?: string } | null }>,
+      { maxRows: MAX_PARTNER_ROWS, label: "partner summary payouts read" },
+    ),
   ]);
 
   assertNoSupabaseError("partners.select(partner summary)", partnerError);
-  assertNoSupabaseError("referral_orders.select(partner summary commissions)", commissionError);
-  assertNoSupabaseError("orders.select(partner summary orders)", orderError);
-  assertNoSupabaseError("partner_clicks.select(partner summary clicks)", clickError);
-  assertNoSupabaseError("partner_payouts.select(partner summary payouts)", payoutError);
 
   if (!partner) {
     throw new Error(`Partner not found for id ${partnerId}`);
   }
 
-  const commissions = commissionRows ?? [];
-  const orders = orderRows ?? [];
-  const clicks = clickRows ?? [];
+  const commissions = commissionRead.rows;
+  const orders = orderRead.rows;
+  const payoutRows = payoutRead.rows;
 
   // Reversed/refunded (and under-review) commissions must NOT inflate the
   // ambassador's displayed lifetime earnings — only genuinely earned
@@ -1047,8 +1148,19 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     .filter((row) => row.payment_status === "commission_paid" || row.payment_status === "paid")
     .reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0));
 
-  const paidOrders = orders.filter((order) => order.payment_status === "paid");
-  const totalRevenue = roundMoney(paidOrders.reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0));
+  // THE LEDGER'S DEFINITION OF REVENUE, not `status === "paid"` and gross
+  // `amount_paid`. This drives the ambassador's "Sales generated" tile and the
+  // series under it, and it disagreed with the RPC that serves the admin's view
+  // of the same partner (admin_partner_rollups already nets refunds over
+  // REVENUE_ORDER_STATUSES with replacements excluded). Concretely: a $200 order
+  // refunded by $50 vanished entirely, because `partially_refunded` is not
+  // "paid" — and a replacement reship, written paid with amount_paid 0, counted
+  // as one of the ambassador's orders and dragged their average order value
+  // down with a $0 denominator.
+  const paidOrders = orders.filter(
+    (order) => isRevenueOrderStatus(order.payment_status) && isSaleOrder(order.order_type),
+  );
+  const totalRevenue = roundMoney(paidOrders.reduce((sum, row) => sum + netOrderRevenue(row), 0));
   const totalOrders = paidOrders.length;
   const averageOrderValue = totalOrders > 0 ? roundMoney(totalRevenue / totalOrders) : 0;
 
@@ -1064,7 +1176,7 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     : 0;
 
   const conversions = totalOrders;
-  const totalClicks = clicks.length;
+  const totalClicks = clickRead.rows.length;
   const conversionRate = totalClicks > 0 ? roundMoney((conversions / totalClicks) * 100) : 0;
 
   // This calendar month's earned commissions (excludes clawed-back rows).
@@ -1133,11 +1245,13 @@ export async function getPartnerSummary(partnerId: string, siteUrl: string): Pro
     conversionRate,
     monthlyCommissions,
     recentOrders,
-    monthlyRevenueSeries: buildRevenueSeriesByMonth(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) }))),
-    lifetimeRevenueSeries: buildLifetimeSeries(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: Number(row.amount_paid ?? 0) }))),
+    // NET, so the chart totals to the headline above it rather than to a
+    // gross number the tile no longer shows.
+    monthlyRevenueSeries: buildRevenueSeriesByMonth(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: netOrderRevenue(row) }))),
+    lifetimeRevenueSeries: buildLifetimeSeries(paidOrders.map((row) => ({ created_at: row.created_at, amount_paid: netOrderRevenue(row) }))),
     marketingResources,
     accountStatus: String(partner.status ?? "approved"),
-    payoutHistory: (payoutRows ?? []).map((row) => ({
+    payoutHistory: payoutRows.map((row) => ({
       id: String(row.id),
       amount: roundMoney(Number(row.amount ?? 0)),
       note: row.note ? String(row.note) : null,
@@ -1244,7 +1358,7 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
     // before the migration is applied.
     const [{ data: commissionRows, error: commissionError }, { data: orderRows, error: orderError }, { data: clickRows, error: clickError }] = await Promise.all([
       supabaseAdmin.from("referral_orders").select("ambassador_id, commission_amount, payment_status"),
-      supabaseAdmin.from("orders").select("ambassador_id, amount_paid, payment_status"),
+      supabaseAdmin.from("orders").select("ambassador_id, amount_paid, refund_amount, order_type, payment_status"),
       supabaseAdmin.from("partner_clicks").select("ambassador_id"),
     ]);
     assertNoSupabaseError("referral_orders.select(admin commission rows)", commissionError);
@@ -1270,9 +1384,14 @@ export async function getAdminPartnerRows(input?: { search?: string; status?: st
     }
     for (const row of orderRows ?? []) {
       const partnerId = row.ambassador_id;
-      if (!partnerId || row.payment_status !== "paid") continue;
+      // Same ledger rule the RPC above already applies (admin-partner-rollups.sql
+      // nets refunds over REVENUE_ORDER_STATUSES and drops replacements). This
+      // branch summed gross amount_paid for status 'paid' only, so whether a
+      // partner's revenue column included a partly refunded order depended on
+      // whether the rollup migration happened to be present.
+      if (!partnerId || !isRevenueOrderStatus(row.payment_status) || !isSaleOrder(row.order_type)) continue;
       const current = ordersByPartner.get(partnerId) ?? { totalRevenue: 0, totalOrders: 0 };
-      current.totalRevenue += Number(row.amount_paid ?? 0);
+      current.totalRevenue += netOrderRevenue(row);
       current.totalOrders += 1;
       ordersByPartner.set(partnerId, current);
     }
@@ -1409,7 +1528,13 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
         .select("amount_paid, refund_amount, payment_status, order_type")
         .in("payment_status", revenueStatuses)
         .gte("created_at", monthStart),
-      supabaseAdmin.from("orders").select("customer_email").eq("payment_status", "paid"),
+      // Replacements are excluded for the same reason admin_ops_summary's
+      // per_customer CTE excludes them: admin-replacements.ts writes a reship as
+      // a paid order under the ORIGINAL BUYER'S email, so a one-time buyer who
+      // was sent one had two paid rows and was counted as a RETURNING customer.
+      // The repeat-purchase tile was counting the store's own warranty
+      // shipments as repeat business, and improved the more reships it sent.
+      supabaseAdmin.from("orders").select("customer_email").eq("payment_status", "paid").neq("order_type", "replacement"),
     ]);
     assertNoSupabaseError("orders.select(live sales today)", todayError);
     assertNoSupabaseError("orders.select(live sales month)", monthError);
@@ -1943,6 +2068,17 @@ export async function markCommissionsPaid(input: {
     throw new Error(`This ambassador is not currently approved (status: ${reported}). Re-approve them before releasing a payout, or handle the held balance manually.`);
   }
 
+  // NOT YET PAGED, AND IT SHOULD BE. This read decides what an ambassador is
+  // paid and carries no `.range()` and no `.limit()`, which is not the same as
+  // unbounded: PostgREST silently caps every response at its `db-max-rows`
+  // (Supabase's default is 1,000). Past that many approved commissions the
+  // eligibility read comes back short with no error, `pendingTotal`
+  // under-reports what is owed, and only the rows the read happened to return
+  // can be claimed. The remainder stays `approved_for_payout` and is picked up
+  // by the next run, so nothing is lost — but the ambassador is paid short with
+  // nothing on the screen saying so. Phase 11 / F-A-10; the paged version needs
+  // the supabase double in affiliate-end-to-end.test.ts to model
+  // `.order()`/`.range()` first.
   const { data: pendingRows, error: pendingError } = await supabaseAdmin
     .from("referral_orders")
     .select("id, commission_amount")
@@ -1977,18 +2113,31 @@ export async function markCommissionsPaid(input: {
   // guard means a concurrent second call (double-click / two admins) claims ZERO
   // rows because they are already "paid", so it inserts no duplicate payout.
   // `.select()` returns exactly the rows this call claimed, which is what we pay.
-  const { data: claimedRows, error: updateError } = await supabaseAdmin
-    .from("referral_orders")
-    .update({ payment_status: "paid", commission_paid_at: new Date().toISOString(), updated_at: new Date().toISOString() })
-    .in("id", ids)
-    .eq("payment_status", "approved_for_payout")
-    .select("id, commission_amount, order_id");
+  //
+  // SLICED. PostgREST puts the `in.(...)` filter in the request URL, and a full
+  // page of uuids there (db-max-rows is 1,000 — nearly seven times what fits) is
+  // a 414 rather than a payout. The per-ROW guard is what makes the claim safe,
+  // not the fact that it used to be one statement: a row can still only be
+  // claimed once, so no commission is paid twice and none is lost. What slicing
+  // does allow is a concurrent second payout claiming the slices this call has
+  // not reached yet; that produces two payout rows which each accurately cover
+  // the commissions they claimed, which is the safe direction.
+  const claimedAt = new Date().toISOString();
+  const claimed: Array<{ id: string; commission_amount: number | null; order_id: string }> = [];
+  for (const slice of chunkIds(ids)) {
+    const { data: claimedRows, error: updateError } = await supabaseAdmin
+      .from("referral_orders")
+      .update({ payment_status: "paid", commission_paid_at: claimedAt, updated_at: claimedAt })
+      .in("id", slice)
+      .eq("payment_status", "approved_for_payout")
+      .select("id, commission_amount, order_id");
 
-  if (updateError) {
-    assertNoSupabaseError("referral_orders.update(mark paid)", updateError);
+    if (updateError) {
+      assertNoSupabaseError("referral_orders.update(mark paid)", updateError);
+    }
+    claimed.push(...((claimedRows ?? []) as Array<{ id: string; commission_amount: number | null; order_id: string }>));
   }
 
-  const claimed = claimedRows ?? [];
   if (claimed.length === 0) {
     // Another concurrent payout already claimed these commissions.
     return { payoutId: null, orderCount: 0, amount: 0 };
@@ -2014,12 +2163,13 @@ export async function markCommissionsPaid(input: {
   // paid in THIS run; the old partner_id+status filter would flip those too and
   // drift the two ledgers. Keying on the claimed order_ids keeps them exact.
   const claimedOrderIds = claimed.map((row) => row.order_id).filter(Boolean);
-  if (claimedOrderIds.length > 0) {
+  const mirrorUpdatedAt = new Date().toISOString();
+  for (const slice of chunkIds(claimedOrderIds)) {
     const { error: commissionMirrorError } = await supabaseAdmin
       .from("commissions")
-      .update({ status: "paid", updated_at: new Date().toISOString() })
+      .update({ status: "paid", updated_at: mirrorUpdatedAt })
       .eq("partner_id", input.partnerId)
-      .in("order_id", claimedOrderIds);
+      .in("order_id", slice);
 
     if (commissionMirrorError) {
       assertNoSupabaseError("commissions.update(mark paid mirror)", commissionMirrorError);
@@ -2031,10 +2181,12 @@ export async function markCommissionsPaid(input: {
   // Link the just-paid commissions to this payout so it can be reversed later
   // (best-effort — pre-migration the payout_id column doesn't exist and this
   // update simply no-ops without affecting the payout).
-  await supabaseAdmin
-    .from("referral_orders")
-    .update({ payout_id: payoutId })
-    .in("id", claimed.map((row) => String(row.id)));
+  for (const slice of chunkIds(claimed.map((row) => String(row.id)))) {
+    await supabaseAdmin
+      .from("referral_orders")
+      .update({ payout_id: payoutId })
+      .in("id", slice);
+  }
 
   const { error: payoutError } = await supabaseAdmin
     .from("partner_payouts")

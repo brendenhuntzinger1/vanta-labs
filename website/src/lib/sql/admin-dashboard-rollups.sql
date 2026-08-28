@@ -205,6 +205,13 @@ $rpc_lockdown$;
 -- getAdminOperationsSummary). new/returning are computed by grouping PAID orders
 -- on the RAW customer_email (matches the JS map key — no lower/trim).
 --
+-- The customer counts exclude replacements for the same reason the live-sales
+-- sums below do. admin-replacements.ts writes a reship as payment_status 'paid'
+-- under the ORIGINAL BUYER'S email, so a one-time buyer who was sent a
+-- replacement had two 'paid' rows and was counted as a RETURNING customer — the
+-- store's repeat-purchase tile counted its own warranty shipments as repeat
+-- business, and got better the more reships it sent.
+--
 -- Live sales now sum NET revenue over REVENUE_ORDER_STATUSES, so they agree
 -- with the revenue page and the profit dashboard. They previously summed GROSS
 -- amount_paid for status='paid' only, which both ignored refunds and dropped
@@ -238,6 +245,7 @@ as $$
     select customer_email, count(*) as cnt
     from public.orders
     where payment_status = 'paid' and customer_email is not null and customer_email <> ''
+      and coalesce(order_type, 'product') <> 'replacement'
     group by customer_email
   )
   select

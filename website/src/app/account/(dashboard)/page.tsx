@@ -14,6 +14,7 @@ import {
   getPointsHistory,
   getProgressToNextReward,
   pointsToDollars,
+  POINTS_PER_DOLLAR_REDEMPTION,
 } from "@/lib/membership";
 import { getActiveCouponsForDisplay } from "@/lib/coupons";
 import { getLifetimeSavings } from "@/lib/member-savings";
@@ -98,7 +99,11 @@ export default async function AccountDashboardPage() {
       getCustomerOrders(user.id, ownershipEmail(user)).catch(() => []),
       getCustomerMembership(user.id),
       getMembershipPerks(user.id),
-      getPointsBalance(user.id).catch(() => 0),
+      // A points read that FAILED is not a balance of zero. Rendering a
+      // confident "0" for a statement timeout told the customer their points
+      // were gone and gave support nothing to go on; null is rendered as an
+      // unknown below instead.
+      getPointsBalance(user.id).catch(() => null),
       getPointsHistory(user.id, 5).catch(() => []),
       getActiveCouponsForDisplay().catch(() => []),
       getActivePointsMultiplier().catch(() => ({ multiplier: 1, eventName: null as string | null })),
@@ -115,7 +120,7 @@ export default async function AccountDashboardPage() {
 
   const fullName = (user.user_metadata?.full_name as string | undefined)?.trim() || "";
   const firstName = fullName ? fullName.split(/\s+/)[0] : "there";
-  const progress = getProgressToNextReward(pointsBalance);
+  const progress = pointsBalance === null ? null : getProgressToNextReward(pointsBalance);
 
   // Recommended (store-wide best sellers) and wishlist previews are hydrated
   // from the live catalog — real products, real images, never placeholders.
@@ -208,7 +213,12 @@ export default async function AccountDashboardPage() {
 
       {/* Stat tiles */}
       <section className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile label="Point balance" value={pointsBalance.toLocaleString()} sub={`≈ ${money(pointsToDollars(pointsBalance))} in rewards`} href="/account/rewards" />
+        <StatTile
+          label="Point balance"
+          value={pointsBalance === null ? "—" : pointsBalance.toLocaleString()}
+          sub={pointsBalance === null ? "Couldn't load right now" : `≈ ${money(pointsToDollars(pointsBalance))} in rewards`}
+          href="/account/rewards"
+        />
         <StatTile
           label="Earn rate"
           value={`${perks.pointsPerDollar}×`}
@@ -224,15 +234,21 @@ export default async function AccountDashboardPage() {
 
       {/* Progress to next reward */}
       <section className="vl-panel rounded-2xl p-5 sm:p-6">
-        <div className="flex items-center justify-between text-xs text-zinc-400">
-          <span className="font-medium text-zinc-300">Progress to your next reward</span>
-          <span>{progress.pointsIntoMilestone} / {progress.milestone} pts</span>
-        </div>
-        <div className="mt-2.5 h-2.5 overflow-hidden rounded-full bg-white/10">
-          <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-cyan-300 transition-[width] duration-500" style={{ width: `${progress.progressPercent}%` }} />
-        </div>
+        {progress === null ? (
+          <p className="text-xs text-zinc-400">Your point balance couldn&apos;t be loaded right now — refresh in a moment to see your progress.</p>
+        ) : (
+          <>
+            <div className="flex items-center justify-between text-xs text-zinc-400">
+              <span className="font-medium text-zinc-300">Progress to your next reward</span>
+              <span>{progress.pointsIntoMilestone} / {progress.milestone} pts</span>
+            </div>
+            <div className="mt-2.5 h-2.5 overflow-hidden rounded-full bg-white/10">
+              <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-cyan-300 transition-[width] duration-500" style={{ width: `${progress.progressPercent}%` }} />
+            </div>
+          </>
+        )}
         <p className="mt-2 text-xs text-zinc-500">
-          Redeem points at checkout — 100 points = $1 off. <Link href="/account/rewards" className="text-cyan-300 underline-offset-2 hover:underline">See rewards →</Link>
+          Redeem points at checkout — {POINTS_PER_DOLLAR_REDEMPTION} points = $1 off. <Link href="/account/rewards" className="text-cyan-300 underline-offset-2 hover:underline">See rewards →</Link>
         </p>
       </section>
 

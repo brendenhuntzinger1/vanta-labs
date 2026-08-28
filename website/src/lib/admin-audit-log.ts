@@ -1,6 +1,7 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 import { redactAuditMetadata } from "@/lib/admin-audit-redaction";
 
 // Every homepage/promotions/settings save in the control center writes a
@@ -99,19 +100,33 @@ export async function getAuditLogRows(filters: AuditLogFilters = {}): Promise<Au
 }
 
 export async function getAuditLogTargetTables(): Promise<string[]> {
-  const { data, error } = await supabaseAdmin
-    .from("admin_audit_logs")
-    .select("target_table")
-    .neq("action", CONFIG_ACTION)
-    .not("target_table", "is", null)
-    .limit(2000);
-
-  if (error) {
-    throw error;
-  }
+  // This builds the "target table" FILTER options, so it has to see every
+  // distinct value in the log or the dropdown silently stops offering some of
+  // them - and an operator who cannot select a table reasonably concludes
+  // nothing was ever done to it.
+  //
+  // `.limit(2000)` could not do that. PostgREST caps a single response at
+  // `db-max-rows` (Supabase ships 1000) and does it SILENTLY, so the request
+  // was never able to exceed the cap it was written to raise - see the
+  // supabase-page.ts docblock. Paging is the only way to read past it.
+  //
+  // Ordered by the primary key because paging without a stable total order can
+  // return one row twice and skip another. Cost is one request per 1000 rows
+  // plus a terminating one, on a page an operator opens deliberately.
+  const { rows } = await readAllRowsBounded<{ target_table: string | null }>(
+    (from, to) =>
+      supabaseAdmin
+        .from("admin_audit_logs")
+        .select("target_table")
+        .neq("action", CONFIG_ACTION)
+        .not("target_table", "is", null)
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: { target_table: string | null }[] | null; error: unknown }>,
+    { maxRows: 200_000, label: "audit log target tables" },
+  );
 
   const tables = new Set<string>();
-  for (const row of data ?? []) {
+  for (const row of rows) {
     if (row.target_table) {
       tables.add(String(row.target_table));
     }

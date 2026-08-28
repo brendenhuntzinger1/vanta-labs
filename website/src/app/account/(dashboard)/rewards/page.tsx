@@ -9,6 +9,7 @@ import {
   getPointsHistory,
   getProgressToNextReward,
   pointsToDollars,
+  POINTS_PER_DOLLAR_REDEMPTION,
 } from "@/lib/membership";
 import { getActiveCouponsForDisplay } from "@/lib/coupons";
 
@@ -36,13 +37,16 @@ export default async function AccountRewardsPage() {
 
   const [membership, pointsBalance, pointsHistory, pointsMultiplier, activeCoupons] = await Promise.all([
     getCustomerMembership(user.id),
-    getPointsBalance(user.id).catch(() => 0),
+    // A points read that FAILED is not a balance of zero. Showing a confident
+    // "0" on the rewards page told the customer their points were gone; null is
+    // rendered as an unknown below instead.
+    getPointsBalance(user.id).catch(() => null),
     getPointsHistory(user.id, 40).catch(() => []),
     getActivePointsMultiplier().catch(() => ({ multiplier: 1, eventName: null as string | null })),
     getActiveCouponsForDisplay().catch(() => []),
   ]);
 
-  const progress = getProgressToNextReward(pointsBalance);
+  const progress = pointsBalance === null ? null : getProgressToNextReward(pointsBalance);
 
   return (
     <div className="space-y-5">
@@ -57,8 +61,12 @@ export default async function AccountRewardsPage() {
         <div className="grid gap-5 sm:grid-cols-3">
           <div className="rounded-xl border border-cyan-300/20 bg-gradient-to-br from-cyan-400/[0.12] to-transparent p-5">
             <p className="text-[11px] uppercase tracking-[0.2em] text-cyan-200/70">Point balance</p>
-            <p className="mt-2 text-4xl font-semibold text-white">{pointsBalance.toLocaleString()}</p>
-            <p className="mt-1 text-sm text-zinc-400">≈ {money(pointsToDollars(pointsBalance))} in rewards</p>
+            <p className="mt-2 text-4xl font-semibold text-white">{pointsBalance === null ? "—" : pointsBalance.toLocaleString()}</p>
+            <p className="mt-1 text-sm text-zinc-400">
+              {pointsBalance === null
+                ? "Couldn't load right now — refresh in a moment."
+                : `≈ ${money(pointsToDollars(pointsBalance))} in rewards`}
+            </p>
           </div>
           <div className="vl-panel-soft rounded-xl p-5">
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Earn rate</p>
@@ -69,20 +77,22 @@ export default async function AccountRewardsPage() {
           </div>
           <div className="vl-panel-soft rounded-xl p-5">
             <p className="text-[11px] uppercase tracking-[0.2em] text-zinc-500">Redemption</p>
-            <p className="mt-2 text-3xl font-semibold text-white">100 = $1</p>
+            <p className="mt-2 text-3xl font-semibold text-white">{POINTS_PER_DOLLAR_REDEMPTION} = $1</p>
             <p className="mt-1 text-sm text-zinc-500">applied at checkout</p>
           </div>
         </div>
 
-        <div className="mt-6">
-          <div className="flex items-center justify-between text-xs text-zinc-400">
-            <span className="font-medium text-zinc-300">Progress to your next reward</span>
-            <span>{progress.pointsIntoMilestone} / {progress.milestone} pts</span>
+        {progress === null ? null : (
+          <div className="mt-6">
+            <div className="flex items-center justify-between text-xs text-zinc-400">
+              <span className="font-medium text-zinc-300">Progress to your next reward</span>
+              <span>{progress.pointsIntoMilestone} / {progress.milestone} pts</span>
+            </div>
+            <div className="mt-2.5 h-2.5 overflow-hidden rounded-full bg-white/10">
+              <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-cyan-300 transition-[width] duration-500" style={{ width: `${progress.progressPercent}%` }} />
+            </div>
           </div>
-          <div className="mt-2.5 h-2.5 overflow-hidden rounded-full bg-white/10">
-            <div className="h-full rounded-full bg-gradient-to-r from-cyan-400 to-cyan-300 transition-[width] duration-500" style={{ width: `${progress.progressPercent}%` }} />
-          </div>
-        </div>
+        )}
       </section>
 
       {activeCoupons.length > 0 ? (

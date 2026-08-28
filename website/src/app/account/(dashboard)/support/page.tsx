@@ -2,6 +2,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
+import { POINTS_PER_DOLLAR_REDEMPTION } from "@/lib/points-math";
 
 export const dynamic = "force-dynamic";
 
@@ -12,7 +13,7 @@ const FAQ: Array<{ q: string; a: string }> = [
   },
   {
     q: "How do points and rewards work?",
-    a: "You earn points on every paid order at your membership's earn rate. 100 points equals $1 off, applied automatically at checkout. See your balance and history under Rewards.",
+    a: `You earn points on every paid order at your membership's earn rate. ${POINTS_PER_DOLLAR_REDEMPTION} points equals $1 off, applied automatically at checkout. See your balance and history under Rewards.`,
   },
   {
     q: "How do I cancel or change my membership?",

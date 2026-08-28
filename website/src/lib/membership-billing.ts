@@ -13,7 +13,7 @@ import {
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase, membershipTermPlan } from "@/lib/membership-billing-math";
 import { recordMembershipChargeOrder } from "@/lib/membership-orders";
-import { PAID_EVENT_TYPES, skipUsedThisPaidPeriod } from "@/lib/membership-status";
+import { PAID_EVENT_TYPES, isMembershipActive, skipUsedThisPaidPeriod } from "@/lib/membership-status";
 import { currentPeriodMonth, grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
 import { sendMarketingEmail } from "@/lib/email/marketing";
@@ -43,12 +43,18 @@ interface TierRow {
   intro_duration_days: number;
   intro_offer_enabled: boolean;
   monthly_store_credit_cents?: number;
+  /**
+   * Optional because a database that predates the column must not break
+   * activation: `=== false` is the only test used below, so an absent column
+   * reads as "not withdrawn" rather than as "withdrawn".
+   */
+  is_active?: boolean;
 }
 
 async function getTierById(tierId: string): Promise<TierRow | null> {
   const { data, error } = await supabaseAdmin
     .from("membership_tiers")
-    .select("id, slug, name, monthly_price_cents, annual_price_cents, intro_price_cents, intro_duration_days, intro_offer_enabled, monthly_store_credit_cents")
+    .select("id, slug, name, monthly_price_cents, annual_price_cents, intro_price_cents, intro_duration_days, intro_offer_enabled, monthly_store_credit_cents, is_active")
     .eq("id", tierId)
     .maybeSingle();
 
@@ -152,69 +158,14 @@ function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
 }
 
-// Creates a one-time ORDER for an ANNUAL membership paid via a manual method
-// (Cash App / Zelle / PayPal). It flows through the same manual-payment panel
-// and admin Payment Verification dashboard as product orders; on approval,
-// finalizeManualPayment activates the membership. No card, no fee, non-refundable.
-export async function createAnnualMembershipManualOrder(input: {
-  userId: string;
-  tierId: string;
-  paymentMethod: string;
-}): Promise<{ orderId: string; orderNumber: string; amount: number }> {
-  const tier = await getTierById(input.tierId);
-  if (!tier) {
-    throw new Error("Membership tier not found");
-  }
-
-  const amount = roundMoney((tier.annual_price_cents ?? 0) / 100);
-  if (amount <= 0) {
-    throw new Error("This membership has no annual price set.");
-  }
-
-  const contact = await getAuthUserContact(input.userId);
-  if (!contact) {
-    throw new Error("Unable to load your account details.");
-  }
-
-  const orderId = `order-${randomUUID()}`;
-  const orderNumber = `VL-${randomUUID().replace(/-/g, "").slice(0, 8).toUpperCase()}`;
-  const now = new Date().toISOString();
-
-  const { error } = await supabaseAdmin.from("orders").insert({
-    order_id: orderId,
-    order_number: orderNumber,
-    order_type: "membership",
-    membership_tier_id: tier.id,
-    membership_cycle: "annual",
-    payment_method: input.paymentMethod,
-    customer_email: contact.email,
-    customer_name: contact.name,
-    currency: "USD",
-    subtotal: amount,
-    shipping_amount: 0,
-    handling_fee: 0,
-    tax_amount: 0,
-    discount_amount: 0,
-    amount_paid: amount,
-    customer_user_id: input.userId,
-    payment_status: "pending_payment",
-    fulfillment_status: "pending",
-    created_at: now,
-    updated_at: now,
-  });
-  if (error) throw error;
-
-  await supabaseAdmin.from("order_items").insert({
-    order_id: orderId,
-    product_id: `membership:${tier.slug ?? tier.id}`,
-    product_name: `Annual Membership — ${tier.name}`,
-    unit_price: amount,
-    quantity: 1,
-    line_total: amount,
-  });
-
-  return { orderId, orderNumber, amount };
-}
+// createAnnualMembershipManualOrder lived here: a second hand-rolled
+// `orders` insert for a manual-payment ANNUAL membership, duplicating the
+// 21-column row createMembershipCheckoutSession builds and bypassing
+// insertOrderRow (quote-order.ts), which is what both LIVE order lanes use.
+// Removed 2026-08-28: it had zero callers anywhere in the repo, so the only
+// thing it could still do was drift out of step with the row shape the rest
+// of the system writes. activateAnnualMembership below is unaffected - it
+// activates whatever legacy order_type='membership' rows already exist.
 
 // Activates an annual membership after its manual payment is approved. It's a
 // one-year, non-refundable pass paid off-platform, so it does NOT auto-renew
@@ -374,6 +325,24 @@ export async function createMembershipCheckoutSession(input: {
   const tier = await getTierById(input.tierId);
   if (!tier) {
     throw new Error("Membership tier not found");
+  }
+
+  // A WITHDRAWN TIER MUST NOT BE SELLABLE. `is_active = false` is how an
+  // operator retires a plan: getActiveMembershipTiers filters on it and the
+  // subscribe page 404s on it, so the tier simply disappears from the
+  // storefront. Nothing checked it on the way IN, though - this lane takes
+  // `tierId` from the request body, so a stale tab or a hand-made POST could
+  // still buy a plan the business had stopped offering, at whatever price the
+  // withdrawn row still carries.
+  //
+  // Checked here, at the point of PURCHASE, and deliberately NOT inside
+  // getTierById: activateAnnualMembership/activateMonthlyMembership resolve the
+  // same tier AFTER money has changed hands, and both existing production
+  // memberships sit on a tier whose is_active is false. Blocking them would
+  // strand a paying member with no membership - the exact failure their own
+  // comments warn about.
+  if (tier.is_active === false) {
+    throw new Error("That membership plan is no longer available.");
   }
 
   // NEVER CHARGE TWICE FOR THE SAME MEMBERSHIP. startMembershipSignup no-ops
@@ -551,6 +520,12 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
   const tier = await getTierById(input.tierId);
   if (!tier) {
     throw new Error("Membership tier not found");
+  }
+
+  // Same purchase-time gate as the hosted-checkout lane above; see the comment
+  // there for why it is not inside getTierById.
+  if (tier.is_active === false) {
+    throw new Error("That membership plan is no longer available.");
   }
 
   const contact = await getAuthUserContact(input.userId);
@@ -1440,6 +1415,8 @@ const STORE_CREDIT_MAX_SCAN = 5000;
 
 interface StoreCreditCandidate {
   user_id: string;
+  status: string;
+  next_billing_at: string | null;
   membership_tiers: { slug: string; monthly_store_credit_cents: number } | null;
 }
 
@@ -1472,7 +1449,7 @@ export async function grantMonthlyStoreCreditSweep(): Promise<{ granted: number;
     // pull $75 of credit.
     const { data, error } = await supabaseAdmin
       .from("customer_memberships")
-      .select("user_id, status, membership_tiers(slug, monthly_store_credit_cents)")
+      .select("user_id, status, next_billing_at, membership_tiers(slug, monthly_store_credit_cents)")
       .eq("status", "active")
       // Only members on a real recurring billing cycle earn monthly store credit.
       // Admin-assigned complimentary memberships have next_billing_at = null, so
@@ -1494,7 +1471,19 @@ export async function grantMonthlyStoreCreditSweep(): Promise<{ granted: number;
 
     const eligible = page.filter((row) => {
       const tier = row.membership_tiers;
-      return Boolean(tier) && tier?.slug !== "free" && Number(tier?.monthly_store_credit_cents ?? 0) > 0;
+      if (!tier || tier.slug === "free" || Number(tier.monthly_store_credit_cents ?? 0) <= 0) return false;
+      // ASK THE SAME QUESTION EVERY BENEFIT SURFACE ASKS. `status = 'active'`
+      // alone is not "currently a member": isMembershipActive - the stated
+      // single source of truth, and what getMembershipPerks gates on - also
+      // requires that the paid period has not clearly ended, because the status
+      // column only flips when the billing sweep manages to flip it. Without
+      // this, a member whose period ended weeks ago (a stalled sweep, a Veyra
+      // row this sweep deliberately never touches) kept accruing a monthly
+      // grant while every surface that spends it already treated them as
+      // lapsed. renewsAt is null because the query above already requires
+      // next_billing_at to be non-null, so the fallback branch cannot be taken
+      // here - that keeps a possibly-absent column out of the select.
+      return isMembershipActive({ status: String(row.status), nextBillingAt: row.next_billing_at ?? null, renewsAt: null });
     });
 
     const alreadyGranted = await alreadyGrantedThisPeriod(
@@ -1573,6 +1562,18 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
       // (Same double-fire shape as the EVO confirm-backfill leak, 2026-08-01:
       // a second system acting on rows it does not own.)
       .is("veyra_membership_id", null)
+      // UNREACHABLE AT PRESENT, AND LEFT IN DELIBERATELY. Nothing in the
+      // application writes this PAIR. Intro/trial was removed by the owner in
+      // 2026-07 (see the "No intro/trial flow" note in startMembershipSignup):
+      // every signup charges the full period immediately, the storefront hides
+      // the offer (membership-subscribe-client.tsx sets usesIntroOffer = false),
+      // and the only intro_status values written anywhere are
+      // 'not_applicable', 'cancelled' and 'converted' — never 'active'. No code
+      // path writes status 'trialing' either. So this step selects a
+      // (status, intro_status) combination that cannot exist and can only ever
+      // return zero rows. Kept rather than deleted because it is the code that
+      // resumes the flow if the offer comes back; do not read a green sweep
+      // here as evidence that remainder billing works.
       .eq("status", "trialing")
       .eq("intro_status", "active")
       .eq("cancel_at_period_end", false)
@@ -1623,6 +1624,18 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
       // (Same double-fire shape as the EVO confirm-backfill leak, 2026-08-01:
       // a second system acting on rows it does not own.)
       .is("veyra_membership_id", null)
+      // UNREACHABLE AT PRESENT, AND LEFT IN DELIBERATELY. Nothing in the
+      // application writes this PAIR. Intro/trial was removed by the owner in
+      // 2026-07 (see the "No intro/trial flow" note in startMembershipSignup):
+      // every signup charges the full period immediately, the storefront hides
+      // the offer (membership-subscribe-client.tsx sets usesIntroOffer = false),
+      // and the only intro_status values written anywhere are
+      // 'not_applicable', 'cancelled' and 'converted' — never 'active'. No code
+      // path writes status 'trialing' either. So this step selects a
+      // (status, intro_status) combination that cannot exist and can only ever
+      // return zero rows. Kept rather than deleted because it is the code that
+      // resumes the flow if the offer comes back; do not read a green sweep
+      // here as evidence that remainder billing works.
       .eq("status", "trialing")
       .eq("intro_status", "active")
       .eq("cancel_at_period_end", false)

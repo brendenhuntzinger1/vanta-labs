@@ -29,19 +29,33 @@ export async function POST(request: Request) {
       request.headers.get("x-payment-signature") ??
       "";
 
-    // Fall back to the event id in the body when no header carries one. Parsed
-    // before verification only to READ an identifier — nothing is trusted or acted
-    // on until processPaymentWebhook verifies the signature over these exact bytes.
-    let eventId = request.headers.get("x-event-id") ?? "";
-    if (!eventId) {
-      try {
-        const parsed = JSON.parse(payload) as { id?: unknown };
-        if (typeof parsed?.id === "string") {
-          eventId = parsed.id;
-        }
-      } catch {
-        // Not JSON — fall through to the missing-headers response below.
+    // THE BODY WINS, AND THE ORDER IS THE WHOLE POINT.
+    //
+    // eventId is the primary key of payment_events and the sole argument to the
+    // claimEvent dedupe. Neither signature scheme covers request headers — both
+    // hash the body alone (payment-provider.ts verifyWebhookSignature /
+    // verifyTimestampedSignature) — so an `x-event-id` header is attacker-chosen
+    // on a captured-and-replayed delivery, and reading it FIRST let a replay
+    // pick a fresh key and walk straight past the dedupe. The `id` inside the
+    // payload is inside the HMAC, so it cannot be changed without breaking the
+    // signature. Header stays as a fallback only for senders whose body carries
+    // no id (the internal/mock gateway), which is exactly where it is safe:
+    // those deliveries are still signature-checked over the same bytes.
+    //
+    // Parsed before verification only to READ an identifier — nothing is trusted
+    // or acted on until processPaymentWebhook verifies the signature over these
+    // exact bytes.
+    let eventId = "";
+    try {
+      const parsed = JSON.parse(payload) as { id?: unknown };
+      if (typeof parsed?.id === "string") {
+        eventId = parsed.id;
       }
+    } catch {
+      // Not JSON — fall through to the header, then the guard below.
+    }
+    if (!eventId) {
+      eventId = request.headers.get("x-event-id") ?? "";
     }
 
     if (!signature || !eventId) {

@@ -22,11 +22,19 @@
 --
 -- WHY THIS IS SAFE TO REVOKE
 --
--- The application never calls it. `create_partner_invite` appears nowhere in
--- this repository -- not in src/, not in any migration, not in docs. The
--- application's partner-creation RPC is `create_partner_application`, which is
--- a different function. This one is orphaned live-database drift, so revoking
--- it cannot break any code path that exists.
+-- The application never calls it. No TypeScript in src/ invokes
+-- `create_partner_invite`; the application's partner-creation RPC is
+-- `create_partner_application`, which is a different function.
+--
+-- CORRECTED 2026-08-28: when this was written the function existed only as
+-- live-database drift, and the paragraph said so ("appears nowhere in this
+-- repository"). It does now -- src/lib/sql/partner-invite-convergence.sql:56
+-- defines it, for the F-013 atomic invite path, and is called with the
+-- service-role key from partner-portal.ts. That does not weaken the revoke:
+-- partner-invite-convergence.sql:214 re-revokes EXECUTE from public, anon and
+-- authenticated and grants it only to service_role, so the two files agree and
+-- the revoke recorded here is still correct and still needed. Only the prose
+-- was stale; the statement below is unchanged.
 --
 -- Server-side callers are unaffected regardless: the service-role key bypasses
 -- these grants entirely.

@@ -54,6 +54,34 @@ Nine branches carry audit work. **All nine fork from `main` at `9aea901`.**
 interim verdict written before blocks C–K existed. It is superseded by this
 block's certification and is treated as history, not as input.
 
+## 1.1a Reading git history in this checkout — exclude the grafted boundary
+
+This checkout is **shallow** (`git rev-parse --is-shallow-repository` → `true`).
+The commits named in `.git/shallow` are **grafted**: git has no parent for them,
+so it diffs them against the *empty tree* and `--stat` / `--name-only` reports
+their **entire tree** as one commit's work. At the time of writing the boundary
+commit whose subject is a narrow RPC change reports `1050 files changed,
+210424 insertions(+)`, and a one-assertion test commit next to it reports 948
+files.
+
+Both are reachable from `HEAD`, so any `git log --name-only` / `--stat` walk
+picks them up by default. **Any per-file or per-lane ownership map computed that
+way MUST exclude them**, or it invents a mega-lane that appears to touch
+payments, orders, profit and RLS simultaneously — exactly the kind of false
+cross-lane collision §1.1 above exists to rule out.
+
+Enumerate them at run time rather than hard-coding SHAs, which change with every
+re-clone:
+
+```bash
+git log --format=%H --no-walk $(cat .git/shallow)          # the grafted boundary
+git log --name-only --no-merges HEAD --not $(cat .git/shallow)   # history without it
+```
+
+Do **not** "fix" this with `git fetch --unshallow`: it mutates the checkout,
+depends on network access, and a fresh clone lands on a different boundary
+anyway. Excluding the boundary is the durable answer.
+
 ## 1.2 The ID collisions, resolved before any merge
 
 Two pairs of block files number different defects identically.
