@@ -24,6 +24,7 @@ const db: { orders: Row[]; system_alerts: Row[] } = { orders: [], system_alerts:
 const mocks = vi.hoisted(() => ({
   getTransaction: vi.fn(),
   settledCentsFromTransaction: vi.fn(),
+  settledCentsForTransaction: vi.fn(),
   recordActualShippingCost: vi.fn(),
   recordSystemAlert: vi.fn(),
 }));
@@ -32,6 +33,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/lib/shippo/client", () => ({
   getTransaction: mocks.getTransaction,
   settledCentsFromTransaction: mocks.settledCentsFromTransaction,
+  settledCentsForTransaction: mocks.settledCentsForTransaction,
 }));
 vi.mock("@/lib/admin-profit", () => ({ recordActualShippingCost: mocks.recordActualShippingCost }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: mocks.recordSystemAlert }));
@@ -114,6 +116,11 @@ beforeEach(() => {
   });
   mocks.settledCentsFromTransaction.mockImplementation((rate: unknown) =>
     rate && typeof rate === "object" ? 742 : null);
+  // An expanded rate carries its price. A bare reference is resolved with a
+  // rate lookup — and the unrepairable class here is the one where THAT cannot
+  // be priced either, which is what leaves the sweep with nothing to record.
+  mocks.settledCentsForTransaction.mockImplementation(async (txn: { rate?: unknown }) =>
+    txn?.rate && typeof txn.rate === "object" ? 742 : null);
   mocks.getTransaction.mockImplementation(async (txnId: string) => {
     probes.set(String(txnId), (probes.get(String(txnId)) ?? 0) + 1);
     if (transientlyBroken.has(String(txnId))) return { ok: false as const, message: "Shippo timed out" };

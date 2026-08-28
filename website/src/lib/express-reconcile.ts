@@ -134,6 +134,21 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
   // reservation expiry. That is the exact failure this file exists to prevent.
   const cutoff = new Date(Date.now() - RECONCILE_AFTER_MS).toISOString();
   const orders: PendingOrderRow[] = [];
+  // A FAILED READ IS NOT AN EMPTY BACKLOG.
+  //
+  // This loop used to `break` on `error || !data || data.length === 0`, folding
+  // the one condition that means "this sweep could not look" into the one that
+  // means "there is nothing to settle". The run then returned
+  // { checked: 0, settled: 0, … } — indistinguishable from a clean sweep — and
+  // the cron route reported success. So the single job standing between a
+  // charged card and an order that reads unpaid could be failing on every tick
+  // while the sweep's own output said all was well.
+  //
+  // The failure is carried rather than thrown on the spot: the pages already
+  // read are real work, and a charge that CAN be settled should be settled on
+  // this run rather than waiting for the read to recover. It is raised once the
+  // work is done, which the sweep route turns into a critical alert.
+  let readError: unknown = null;
   for (let page = 0; page < RECONCILE_MAX_PAGES; page += 1) {
     const from = page * RECONCILE_PAGE;
     const { data, error } = await supabaseAdmin
@@ -144,7 +159,11 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
       .lt("created_at", cutoff)
       .order("created_at", { ascending: false })
       .range(from, from + RECONCILE_PAGE - 1);
-    if (error || !data || data.length === 0) break;
+    if (error) {
+      readError = error;
+      break;
+    }
+    if (!data || data.length === 0) break;
     // Collected before any row is mutated — updating rows out of the filter
     // mid-scan would shift the offsets and skip the rows in between.
     orders.push(...(data as PendingOrderRow[]));
@@ -152,6 +171,7 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
   }
 
   if (orders.length === 0) {
+    if (readError) throw asReconcileReadError(readError);
     return { checked: 0, settled: 0, failedOut: 0, unresolved: 0 };
   }
 
@@ -252,7 +272,31 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
     });
   }
 
+  if (readError) {
+    // Everything above still happened and is reported in the thrown message, so
+    // an operator can see what the partial run did achieve.
+    throw asReconcileReadError(readError, { checked: orders.length, settled, failedOut, unresolved });
+  }
+
   return { checked: orders.length, settled, failedOut, unresolved };
+}
+
+/**
+ * The read failure, as an Error the sweep route will surface.
+ *
+ * Rejecting is the whole point: /api/cron/sweep records a rejected job as a
+ * critical `cron_sweep_failed` alert, and a silent zero records nothing.
+ */
+function asReconcileReadError(cause: unknown, progress?: ReconcileResult): Error {
+  const detail = cause instanceof Error ? cause.message : String((cause as { message?: string })?.message ?? cause);
+  const done = progress
+    ? ` ${progress.settled} settled, ${progress.failedOut} failed out and ${progress.unresolved} left unresolved `
+      + `from the ${progress.checked} order(s) it did read.`
+    : "";
+  return new Error(
+    `Payment reconciliation could not read pending orders, so an unknown number of charged orders may still `
+    + `read unpaid: ${detail}.${done}`,
+  );
 }
 
 /**
