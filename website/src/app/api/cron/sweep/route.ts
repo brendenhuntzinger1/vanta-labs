@@ -94,6 +94,18 @@ const JOBS = {
 
 type JobName = keyof typeof JOBS;
 
+/**
+ * When the watchdog gives up waiting, INSIDE the function budget.
+ *
+ * Ten seconds short of maxDuration: enough to write a system_alerts row and
+ * send the operator email before the platform pulls the plug, which is the
+ * whole point of not simply awaiting the jobs.
+ */
+const SWEEP_DEADLINE_MS = 50_000;
+
+/** A sweep that overruns overruns every tick. Report the condition, once. */
+const SWEEP_TIMEOUT_ALERT_DEDUPE_MS = 6 * 60 * 60 * 1000;
+
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
   const authHeader = request.headers.get("authorization") ?? "";
@@ -108,7 +120,68 @@ export async function GET(request: Request) {
   }
 
   const names = Object.keys(JOBS) as JobName[];
-  const settled = await Promise.allSettled(names.map((name) => JOBS[name].run()));
+
+  // Settle each job into its own slot rather than awaiting Promise.allSettled,
+  // because the interesting case is the one where the await never returns —
+  // see the deadline below. This keeps whatever HAS finished readable at the
+  // moment the deadline fires.
+  const settled: Array<PromiseSettledResult<unknown> | null> = names.map(() => null);
+  const unfinished = new Set<JobName>(names);
+  const jobs = names.map((name, index) =>
+    Promise.resolve()
+      .then(() => JOBS[name].run() as Promise<unknown>)
+      .then(
+        (value) => { settled[index] = { status: "fulfilled", value }; },
+        (reason: unknown) => { settled[index] = { status: "rejected", reason }; },
+      )
+      .finally(() => { unfinished.delete(name); }),
+  );
+
+  // THE WATCHDOG.
+  //
+  // maxDuration is 60 and every alert in this file is written AFTER the jobs
+  // finish — so the one failure mode that could never report itself was the
+  // sweep running out of time. The platform kills the function, nothing is
+  // written to system_alerts, no email goes out, and the HTTP response nobody
+  // reads never arrives either. A sweep that times out every tick looks exactly
+  // like a sweep that is not scheduled at all, which is the worst thing an
+  // operational alerting system can be unable to distinguish.
+  //
+  // Racing a deadline INSIDE the budget is what makes it reportable: at 50s
+  // there are still ten seconds to write the row and send the email. The jobs
+  // are not cancelled — there is no cancellation to hand them and each is
+  // individually idempotent, so the next tick simply picks them up again.
+  const raced = await Promise.race([
+    Promise.all(jobs).then(() => "finished" as const),
+    new Promise<"timed_out">((resolve) => {
+      const timer = setTimeout(() => resolve("timed_out"), SWEEP_DEADLINE_MS);
+      // Never let the watchdog itself be the reason the function stays alive.
+      timer.unref?.();
+    }),
+  ]);
+
+  if (raced === "timed_out") {
+    const stalled = [...unfinished];
+    await recordSystemAlert({
+      type: "cron_sweep_timeout",
+      severity: "critical",
+      message:
+        `The scheduled sweep was still running ${stalled.length} job(s) after ${Math.round(SWEEP_DEADLINE_MS / 1000)}s `
+        + `and will be cut off at the ${maxDuration}s function limit: `
+        + `${stalled.map((name) => JOBS[name].label).join(", ")}. `
+        + "Whatever those jobs do has not finished this tick, and if this repeats they are not running at all.",
+      context: {
+        deadlineSeconds: Math.round(SWEEP_DEADLINE_MS / 1000),
+        maxDurationSeconds: maxDuration,
+        stalled: stalled.map((name) => JOBS[name].label),
+        finished: names.filter((name) => !unfinished.has(name)).map((name) => JOBS[name].label),
+      },
+      // A sweep that times out does so every thirty minutes. That is ONE
+      // standing problem, not forty-eight criticals and forty-eight emails a
+      // day — the exact storm that buried the criticals on /admin/status.
+      dedupeWindowMs: SWEEP_TIMEOUT_ALERT_DEDUPE_MS,
+    });
+  }
 
   // zip by index against the SAME array the calls were built from, so the
   // pairing is derived rather than hand-maintained.
@@ -118,7 +191,7 @@ export async function GET(request: Request) {
   // emails the operator). Without this a rejected sweep only appeared in the
   // HTTP response body that nobody reads, so renewals/recovery could silently
   // stall. Best-effort and never throws.
-  const failed = results.filter(([, result]) => result.status === "rejected");
+  const failed = results.filter(([, result]) => result?.status === "rejected");
   if (failed.length > 0) {
     await recordSystemAlert({
       type: "cron_sweep_failed",
@@ -132,10 +205,15 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     success: true,
+    timedOut: raced === "timed_out",
     ...Object.fromEntries(
       results.map(([name, result]) => [
         name,
-        result.status === "fulfilled" ? result.value : { error: String(result.reason) },
+        result === null
+          ? { error: "did not finish before the sweep deadline" }
+          : result.status === "fulfilled"
+            ? result.value
+            : { error: String(result.reason) },
       ]),
     ),
   });
