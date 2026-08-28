@@ -208,16 +208,24 @@ live secret key and should be confirmed rather than assumed handled.**
 Queried directly, 2026-08-28. This is the state to re-check after any future
 migration.
 
+Re-measured after the ads schema deploy, so this is the final state.
+
 | Metric | Value |
 |---|---|
-| Tables in `public` | 70 |
+| Tables in `public` | 83 *(70 + the 13 ad tables)* |
 | Tables `anon` can INSERT / UPDATE / DELETE / TRUNCATE | **0** |
-| Tables `anon` can SELECT | 27 *(was 63 before RLS-05)* |
+| Tables `anon` can SELECT | 27 *(was 63 before RLS-05; the 13 new tables added none)* |
 | RLS-on tables with zero policies still granting `anon` SELECT | **0** |
 | `SECURITY DEFINER` functions `anon` can EXECUTE | **1** — `validate_referral_code`, deliberately client-callable |
+| Views `anon` can SELECT | **none** |
 | Default privilege for `anon` on **new** tables | `rm` — SELECT and MAINTAIN only; every write letter gone |
 | `orders` / `order_items` reachable by `anon` | false |
 | `product_doses.product_cost_cents` reachable by `anon` | false |
+
+The ads deploy adding thirteen tables and moving none of the exposure numbers is
+the default-privilege fix (VL-SQL-04) doing its job: before it, those thirteen
+would each have arrived with `anon=arwdDxtm`, and a fourteenth sweep would have
+been needed to close them.
 
 The last row is the one worth re-reading after any catalogue migration: it is
 the true per-variant landed cost, and it was readable by anyone holding the
