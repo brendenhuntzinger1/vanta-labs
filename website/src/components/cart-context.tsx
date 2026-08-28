@@ -1307,11 +1307,24 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
+    // A FAILED SUBMISSION MUST NOT TAKE AWAY THE CODE THAT IS ALREADY WORKING.
+    //
+    // This branch and the two below used to clear referralCode/referralDetails
+    // before reporting the problem, so a shopper with an applied code lost the
+    // discount by pressing Apply on an empty box, by mistyping a second code,
+    // or — worst — because one validation request failed. Reproduced in the
+    // browser at /checkout: LOCKED22 applied for -$9.66, then one wrong code
+    // typed into the referral field, and the order total went UP by $9.95 with
+    // nothing on screen saying the first code had been removed.
+    //
+    // The two branches ABOVE still clear, and should: a paused program or an
+    // active Buy 3 Get 1 Free means the applied code genuinely cannot be
+    // honoured any more. These three mean only that the NEW submission failed.
+    // Both messages render (green success, red error, independently, on all
+    // three surfaces), so the shopper sees their discount intact and is told
+    // the new code did not work.
     if (!normalized) {
-      setReferralDetails(null);
-      setReferralCode(null);
       setReferralError("Enter a referral code.");
-      setReferralSuccess(null);
       return;
     }
 
@@ -1320,10 +1333,13 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       const validatedReferral = await validateReferralCodeClient(normalized);
 
       if (!validatedReferral) {
-        setReferralDetails(null);
-        setReferralCode(null);
-        setReferralError("That referral code is not active.");
-        setReferralSuccess(null);
+        // Says where the OTHER kind of code goes. The offers bar advertises
+        // promo codes ("10% OFF sitewide — use code ...") on the cart page
+        // itself, directly above this field, and the cart has no coupon box —
+        // so a shopper who copies the advertised code and pastes it here used
+        // to be told a perfectly live discount was "not active", and had no
+        // way to learn that checkout is where it goes.
+        setReferralError("That referral code is not active. Promo codes are applied at checkout.");
         return;
       }
 
@@ -1368,10 +1384,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
       }
     } catch (error) {
       console.error("Unable to validate referral code", error);
-      setReferralDetails(null);
-      setReferralCode(null);
+      // Same rule, and the sharpest case for it: a transient network failure
+      // must not silently cost the shopper a discount they already earned.
       setReferralError("Unable to check the referral code right now.");
-      setReferralSuccess(null);
     } finally {
       setIsApplyingReferral(false);
     }
