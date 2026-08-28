@@ -12,6 +12,7 @@ import {
 } from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase, membershipTermPlan } from "@/lib/membership-billing-math";
+import { recordMembershipRenewalOrder } from "@/lib/membership-orders";
 import { PAID_EVENT_TYPES, skipUsedThisPaidPeriod } from "@/lib/membership-status";
 import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
@@ -1703,6 +1704,25 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
         );
 
         await recordBillingEvent({ userId: row.user_id, tierId: tier.id, eventType: "renewal", amountCents, status: "succeeded", providerChargeId: chargeResult.providerChargeId });
+
+        // THE MONEY, WHERE THE REPORTS LOOK FOR IT (VL-29). Same reasoning as
+        // the Veyra lane in membership-webhook.ts: the billing event above is
+        // read by one admin screen, and every revenue surface reads `orders`.
+        //
+        // Keyed to the period just billed — the SAME key the charge above is
+        // deduplicated on at the processor — so a retried or overlapping sweep
+        // books one order, not two.
+        await recordMembershipRenewalOrder({
+          userId: row.user_id,
+          // The row's own column, not the embedded tier: it is the value every
+          // other membership surface reports from, and it is present even when
+          // the tier join is not.
+          tierId: row.tier_id ?? tier.id ?? null,
+          billingCycle: "monthly",
+          amountCents,
+          paymentId: `membership-renewal:${row.user_id}:${row.next_billing_at ?? now.toISOString()}`,
+          paidAt: now.toISOString(),
+        });
 
         const contact = await getAuthUserContact(row.user_id);
         if (contact) {

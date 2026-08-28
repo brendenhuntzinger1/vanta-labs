@@ -1,6 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { canManageRefunds, canViewProfit } from "@/lib/admin-roles";
+import { hasCapturedPayment } from "@/lib/ledger";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { AdminOrderActions } from "@/components/admin-order-actions";
 import { AdminOrderTimeline } from "@/components/admin-order-timeline";
@@ -289,6 +290,20 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
               createdAt: entry.createdAt,
             }))}
           />
+        ) : canSeeProfit && !hasCapturedPayment(String(data.payment_status ?? "")) ? (
+          // NOT an empty space where a panel should be. getOrderProfit returns
+          // null for an order that never captured money (M-03) — amount_paid is
+          // written at INSERT, so computing a figure from it invented revenue,
+          // a processor fee, COGS and postage for a sale that never happened.
+          // Say so, rather than leaving an operator wondering where the panel
+          // went.
+          <section className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-4 text-sm text-zinc-400 sm:p-5">
+            <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-zinc-300">Profit</h2>
+            <p className="mt-2">
+              No payment has been captured on this order, so there is no revenue, cost or profit to report.
+              The figures below are what the customer would be charged, not money received.
+            </p>
+          </section>
         ) : null}
 
         <section className="mt-6 rounded-2xl border border-white/10 bg-white/[0.02] p-4 sm:p-5">

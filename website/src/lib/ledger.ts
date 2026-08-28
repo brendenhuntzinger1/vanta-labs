@@ -45,6 +45,40 @@ export function isRevenueOrderStatus(status: string | null | undefined): boolean
   return REVENUE_ORDER_STATUSES.has(String(status ?? "").toLowerCase());
 }
 
+// The order payment states where MONEY WAS ACTUALLY CAPTURED — every revenue
+// status above, plus a FULLY REFUNDED order (it took the money, then gave it
+// back). Everything else — pending_payment, awaiting_verification, canceled,
+// payment_failed, payment_rejected — never charged anyone a cent.
+//
+// THIS IS THE PROFIT REPORT'S SET, and it answers both halves of one question.
+//
+// A refund returns the revenue. It does not return:
+//
+//   • the COGS — the vials were picked, packed and posted, and they did not
+//     come back
+//   • the postage — the label was bought and used
+//   • the processor fee — kept on a refunded charge
+//
+// Revenue surfaces are right to drop a fully refunded order (netOrderRevenue is
+// 0, and counting it would divide average order value by a $0 denominator). The
+// profit report is not: dropping the ROW drops the COSTS with it, so net profit
+// was overstated by exactly what the store lost, and the worse the refund the
+// better the dashboard looked (VL-24 / M-02 / REF-05). The engine nets such an
+// order's revenue to zero on its own, so including it adds a loss, never
+// phantom revenue.
+//
+// The other half is the mirror image (M-03). `orders.amount_paid` is written
+// when the order is CREATED, before anyone has paid, so an order that never
+// took payment carries a full basket, a subtotal and a shipping charge. Any
+// surface that computes profit from those columns without checking this
+// predicate reports revenue, COGS, postage and a processor fee for a sale that
+// never happened.
+export const CAPTURED_PAYMENT_STATUSES = new Set([...REVENUE_ORDER_STATUSES, "refunded"]);
+
+export function hasCapturedPayment(status: string | null | undefined): boolean {
+  return CAPTURED_PAYMENT_STATUSES.has(String(status ?? "").toLowerCase());
+}
+
 // The order types that are NOT sales. A `replacement` is an outbound reshipment
 // the store paid for itself: payment_status is "paid" and amount_paid is 0, so
 // every count that filters on status alone counts it as an order and divides

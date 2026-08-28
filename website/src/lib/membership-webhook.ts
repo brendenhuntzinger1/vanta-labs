@@ -30,6 +30,7 @@ import "server-only";
 // payment_events, which is the same exactly-once path the order webhooks use.
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { recordMembershipRenewalOrder } from "@/lib/membership-orders";
 
 export const MEMBERSHIP_EVENT_TYPES = new Set([
   "membership.created",
@@ -72,12 +73,16 @@ interface LocalMembershipRow {
   user_id: string;
   tier_id: string | null;
   status: string | null;
+  // Carried so the renewal ORDER can say which cycle was billed. Reading it
+  // from the event would be wrong: Veyra sends the plan's interval, and the
+  // local row is what every other membership surface reports from.
+  billing_cycle: string | null;
 }
 
 async function findLocalMembership(veyraMembershipId: string): Promise<LocalMembershipRow | null> {
   const { data, error } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status")
+    .select("user_id, tier_id, status, billing_cycle")
     .eq("veyra_membership_id", veyraMembershipId)
     .maybeSingle();
   if (error) throw error;
@@ -174,6 +179,25 @@ export async function handleMembershipEvent(
       amountCents: chargedCents,
       status: "succeeded",
       providerChargeId: veyraMembershipId,
+    });
+
+    // THE MONEY, WHERE THE REPORTS LOOK FOR IT (VL-29). The billing event above
+    // is read by one admin screen; every revenue surface reads `orders`.
+    //
+    // Keyed to the PERIOD, not the delivery: `next_renewal_at` is what Veyra
+    // says this charge bought, so a redelivery of the same renewal collapses
+    // onto the same order and next month's renewal is still its own. It falls
+    // back to the period just ended, then to the day, because an event missing
+    // both dates must still be recorded rather than dropped.
+    const renewalPeriodKey =
+      (data.next_renewal_at ?? data.current_period_end ?? nowIso.slice(0, 10)) || nowIso.slice(0, 10);
+    await recordMembershipRenewalOrder({
+      userId: local.user_id,
+      tierId: local.tier_id,
+      billingCycle: local.billing_cycle,
+      amountCents: chargedCents,
+      paymentId: `membership-renewal:${veyraMembershipId}:${renewalPeriodKey}`,
+      paidAt: nowIso,
     });
 
     return { handled: true, membershipId: veyraMembershipId, userId: local.user_id };
