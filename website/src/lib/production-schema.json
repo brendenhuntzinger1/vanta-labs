@@ -186,7 +186,9 @@
     "assigned_email",
     "source",
     "is_private",
-    "member_scope"
+    "member_scope",
+    "storefront_headline",
+    "storefront_priority"
   ],
   "customer_addresses": [
     "id",

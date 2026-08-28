@@ -40,6 +40,14 @@ export interface CouponValidationContext {
   isActiveMember?: boolean;
 }
 
+// Thrown when the welcome offer's first-order checks could not be RUN. It is a
+// distinct message rather than a reuse of "first orders only" because the two
+// say different things to the shopper — one is a rule, the other is a retry —
+// and the catch below has to be able to tell them apart from the generic
+// fall-through it also handles.
+const WELCOME_ELIGIBILITY_UNVERIFIED =
+  "We couldn't verify this welcome offer right now. Please try again in a moment.";
+
 export async function validateCoupon(code: string | undefined, subtotal: number, customerEmail?: string, context?: CouponValidationContext): Promise<CouponValidationResult | null> {
   const normalizedCode = normalizeCouponCode(code ?? "");
 
@@ -60,18 +68,27 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
         // (first-order-only), OR any earlier order that already used this
         // welcome code and isn't cancelled — this also closes the loophole of
         // stacking the code across several simultaneous unpaid orders.
-        const { data: priorPaid } = await supabaseAdmin
+        //
+        // BOTH READS FAIL CLOSED. supabase-js RESOLVES on a database error, it
+        // does not reject, so dropping `error` on the floor turned a statement
+        // timeout or an RLS refusal into `data: null` — read as "no prior
+        // order", which GRANTS the first-order-only discount to a returning
+        // customer. A check that could not run is not a check that passed.
+        const { data: priorPaid, error: priorPaidError } = await supabaseAdmin
           .from("orders")
           .select("id")
           .eq("customer_email", email)
           .eq("payment_status", "paid")
           .limit(1)
           .maybeSingle();
+        if (priorPaidError) {
+          throw new Error(WELCOME_ELIGIBILITY_UNVERIFIED);
+        }
         if (priorPaid) {
           throw new Error("This welcome offer is for first orders only.");
         }
 
-        const { data: priorWelcomeUse } = await supabaseAdmin
+        const { data: priorWelcomeUse, error: priorWelcomeUseError } = await supabaseAdmin
           .from("orders")
           .select("id")
           // Exclude BOTH cancel spellings the codebase writes ("canceled" is
@@ -83,6 +100,9 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
           .ilike("coupon_code", normalizedCode)
           .limit(1)
           .maybeSingle();
+        if (priorWelcomeUseError) {
+          throw new Error(WELCOME_ELIGIBILITY_UNVERIFIED);
+        }
         if (priorWelcomeUse) {
           throw new Error("This welcome offer is for first orders only.");
         }
@@ -95,9 +115,13 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
       };
     }
   } catch (e) {
-    // Re-throw the user-facing first-order error; otherwise fall through to the
-    // normal coupon lookup.
-    if (e instanceof Error && e.message.includes("first orders only")) {
+    // Re-throw the user-facing first-order error AND the could-not-check one;
+    // otherwise fall through to the normal coupon lookup. Letting the second
+    // one fall through is what would undo the fail-closed reads above: the
+    // welcome code has no coupons row, so the lookup below would answer
+    // "Invalid coupon code" — or, worse, apply a same-named real row.
+    if (e instanceof Error
+      && (e.message.includes("first orders only") || e.message === WELCOME_ELIGIBILITY_UNVERIFIED)) {
       throw e;
     }
   }
@@ -212,9 +236,47 @@ export async function redeemCoupon(code: string): Promise<CouponRedemptionResult
 
   // Atomic increment (single SQL statement) so simultaneous redemptions of a
   // coupon at its exact limit can't over-count - see coupon-redeem-rpc.sql.
-  const { error } = await supabaseAdmin.rpc("redeem_coupon", { input_code: normalizedCode });
+  const { data: rpcResult, error } = await supabaseAdmin.rpc("redeem_coupon", { input_code: normalizedCode });
 
   if (!error) {
+    // AND THE RPC'S FAILURE IS ALSO A RETURN VALUE. coupon-redeem-rpc.sql
+    // updates `where code = upper(trim(input_code)) and active = true and
+    // (max_redemptions is null or redemptions_count < max_redemptions)` and
+    // answers `{"redeemed": false}` when nothing matched — it does not raise.
+    // Destructuring only `error` therefore reported all three of those
+    // outcomes as a recorded redemption, which is the exact silent failure the
+    // header above says must be reported.
+    if ((rpcResult as { redeemed?: boolean } | null)?.redeemed === false) {
+      // One benign case has to be separated out first, or this alerts on every
+      // new customer: the welcome offer is a VIRTUAL coupon with no coupons
+      // row (see validateCoupon above), so every welcome-offer order reaches
+      // here with a code the RPC cannot match and legitimately gets
+      // redeemed:false. Same reasoning as the missing-RPC fallback below —
+      // no row means there is nothing to record, and retrying cannot help.
+      const { data: row, error: lookupError } = await supabaseAdmin
+        .from("coupons")
+        .select("id")
+        .ilike("code", normalizedCode)
+        .maybeSingle();
+      if (lookupError) {
+        // The disambiguation itself failed, so "there is no row" is a guess, not
+        // a fact — and this function's whole contract is not to report a
+        // redemption it cannot confirm. Both callers only alert; none blocks the
+        // order.
+        return { ok: false, error: `Coupon ${normalizedCode} redemption could not be confirmed` };
+      }
+      if (!row) {
+        return { ok: true };
+      }
+      // A row exists and was not incremented: inactive, or already at its
+      // limit — a code that keeps being redeemable past its cap if nobody is
+      // told. The ilike is also what surfaces a lower/mixed-case stored code,
+      // which the RPC's `code = upper(trim(...))` can never match.
+      return {
+        ok: false,
+        error: `Coupon ${normalizedCode} was not recorded as redeemed (inactive, or at its redemption limit)`,
+      };
+    }
     return { ok: true };
   }
 

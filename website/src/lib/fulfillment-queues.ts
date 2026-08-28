@@ -230,6 +230,11 @@ export const getBucketCounts = cache(async function getBucketCounts(): Promise<B
         .from("orders")
         .select(BUCKET_DECISION_COLUMNS)
         .neq("order_type", "membership")
+        // This list IS the predicate of idx_orders_fulfillment_counts
+        // (sql/fulfillment-batches.sql). A partial index is only usable when
+        // the query implies its predicate, so adding a status here without
+        // adding it there silently drops the index — which is how the two spent
+        // their first version disagreeing. phase11-bucket8.test.ts compares them.
         .in("payment_status", ["paid", "awaiting_verification"])
         // order_id is unique, so paging on it can neither repeat nor skip a row.
         .order("order_id", { ascending: true })
