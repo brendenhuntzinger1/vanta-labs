@@ -50,7 +50,8 @@ const state: {
 };
 
 const sideEffects = {
-  email: vi.fn(async () => ({ ok: true })),
+  // Typed so a test can read what was actually sent, not just how often.
+  email: vi.fn(async (_message?: { idempotencyKey?: string }) => ({ ok: true })),
   points: vi.fn(async () => {}),
   coupon: vi.fn(async (): Promise<{ ok: boolean; error?: string }> => ({ ok: true })),
   storeCredit: vi.fn(async () => {}),
@@ -177,6 +178,25 @@ vi.mock("@/lib/supabase-server", () => {
       };
     }
 
+    if (table === "order_items") {
+      // The card lane re-reads the sold lines from the DB before it falls back
+      // to the legacy decrement. Without this the fallback was handed an empty
+      // list, so these cases proved a call was made rather than that stock
+      // moved — and now that an empty list correctly skips the decrement, they
+      // need the real rows.
+      return {
+        select: () => {
+          const b: Record<string, unknown> = {
+            eq() { return b; },
+            then(resolve: (v: { data: unknown; error: unknown }) => unknown) {
+              return Promise.resolve({ data: [{ product_id: "p1", quantity: 1 }], error: null }).then(resolve);
+            },
+          };
+          return b;
+        },
+      };
+    }
+
     if (table === "orders") {
       return {
         select: () => {
@@ -246,6 +266,18 @@ function refundPayload() {
   return JSON.stringify({
     type: "refund.completed",
     data: { object: { metadata: { order_id: ORDER_ID }, amount: 200 } },
+  });
+}
+
+// A PARTIAL refund. The refund maths reads the TOP-LEVEL `amount`
+// (normalizeOrderPayload has no data.object.amount field), and the order was
+// paid 200 — so an amount below that is partial, which is the two-step refund
+// this store treats as ordinary practice.
+function partialRefundPayload(amount: number) {
+  return JSON.stringify({
+    type: "refund.completed",
+    amount,
+    data: { object: { metadata: { order_id: ORDER_ID } } },
   });
 }
 
@@ -488,6 +520,59 @@ describe("a points redemption that throws", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// E-04 — THE REFUND CONFIRMATION WAS THE ONE ORDER EMAIL OUTSIDE SEND-ONCE.
+//
+// order_email_log was built with two kinds, 'order_confirmation' and
+// 'refund_confirmation', and only the first was ever routed through
+// sendOrderEmailOnce. The refund path called sendEmail directly, so it had
+// neither of the two guards the receipt has: no database-enforced slot, and no
+// provider-side idempotency key. The confirmation is at least gated by the
+// atomic paid_side_effects_at claim; nothing at all gates this one, and a
+// processor that re-delivers a refund event (they retry anything not answered
+// 2xx) mailed the customer another "your refund was processed" for the same
+// money.
+//
+// The observable difference is the idempotency key: it is the identity
+// sendOrderEmailOnce attaches, and a bare sendEmail cannot produce it.
+// ---------------------------------------------------------------------------
+describe("the refund confirmation email", () => {
+  it("goes out under the send-once identity, not as a bare send", async () => {
+    await deliver("evt-refund-once", refundPayload());
+
+    const refundSend = sideEffects.email.mock.calls
+      .map(([message]) => message)
+      .find((message) => message?.idempotencyKey?.startsWith("refund_confirmation:"));
+
+    expect(refundSend).toBeDefined();
+    // The cumulative amount refunded, in cents, is part of the identity.
+    expect(refundSend!.idempotencyKey).toBe(`refund_confirmation:20000:${ORDER_ID}`);
+  });
+
+  // AND THE FIX MUST NOT SWALLOW A SECOND, REAL REFUND.
+  //
+  // A refund is not a receipt. An order has one confirmation but as many refund
+  // notices as there are refunds, and this file handles the two-step refund
+  // (goods, then shipping) explicitly — each event states a different cumulative
+  // total, so each is a different email the customer must receive. Keyed on the
+  // bare kind, closing E-04 would have silently suppressed the second one:
+  // money returned, no notice. The amount is what separates "the same refund
+  // told twice" from "a second refund".
+  it("gives a second partial refund its own slot, so it is not swallowed as a duplicate", async () => {
+    await deliver("evt-partial-1", partialRefundPayload(60));
+    await deliver("evt-partial-2", partialRefundPayload(140));
+
+    const refundKeys = sideEffects.email.mock.calls
+      .map(([message]) => message?.idempotencyKey)
+      .filter((key) => key?.startsWith("refund_confirmation:"));
+
+    expect(refundKeys).toEqual([
+      `refund_confirmation:6000:${ORDER_ID}`,
+      `refund_confirmation:14000:${ORDER_ID}`,
+    ]);
+  });
+});
+
 describe("a membership revoke that throws on a refund", () => {
   it("raises unsafe_effect_failed_membership_revoke", async () => {
     // A refunded membership whose revoke fails leaves the customer with member
@@ -554,7 +639,7 @@ describe("an unsafe effect that REPORTS its failure instead of throwing", () => 
     // The reachable failure: the reservation RPC is unavailable (returned, not
     // thrown), and the legacy decrement then errors on each line (logged, not
     // thrown). Nothing propagated, so nothing alerted.
-    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true });
+    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true, finalizedLines: null });
     vi.mocked(fulfillment.decrementInventoryForOrder).mockResolvedValueOnce({
       attempted: 2,
       failed: 2,
@@ -569,7 +654,7 @@ describe("an unsafe effect that REPORTS its failure instead of throwing", () => 
 
   it("raises nothing when the fallback decrement moves the stock", async () => {
     const reservation = await import("@/lib/inventory-reservation");
-    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true });
+    vi.mocked(reservation.finalizeInventoryForOrder).mockResolvedValueOnce({ finalized: 0, degraded: true, finalizedLines: null });
 
     await deliver("evt-1");
 

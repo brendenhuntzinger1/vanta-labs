@@ -35,15 +35,25 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // restock on it would ADD units that were never removed: phantom stock, which
 // oversells. That order needs its RESERVATION RELEASED, not a restock.
 //
-// The signal for which happened is orders.paid_side_effects_at, the latch under
-// which the paid side effects (including the inventory decrement) run.
+// The signal for which happened is orders.inventory_committed_at, the latch both
+// paid lanes write AFTER their stock has actually moved.
+//
+// IT USED TO BE paid_side_effects_at (VL-10 / INV-01 / F1). That column is the
+// card lane's exactly-once CLAIM over every paid side effect, so it is stamped
+// BEFORE they run — it means "this delivery won the right to try", not "the
+// units left the shelf". An order whose decrement then failed still carried it,
+// and cancelling that order restocked units that were never removed.
+//
+// The item rows carry NO variant_id (VL-1 / DB-01): `order_items` has no such
+// column, in production or in any of the four create-table statements in
+// src/lib/sql/. The variant lives inside product_id as "<slug>::<dose>".
 // ---------------------------------------------------------------------------
 
 interface OrderRow {
   order_id: string;
-  paid_side_effects_at: string | null;
+  inventory_committed_at: string | null;
   inventory_restocked_at: string | null;
-  order_items: Array<{ product_id: string; variant_id: string | null; quantity: number }>;
+  order_items: Array<{ product_id: string; quantity: number }>;
 }
 
 const state: { orders: OrderRow[]; restocked: Array<unknown[]>; released: string[] } = {
@@ -96,9 +106,9 @@ vi.mock("@/lib/supabase-server", () => ({
 function seedOrder(paid: boolean): OrderRow {
   const order: OrderRow = {
     order_id: "ord-1",
-    paid_side_effects_at: paid ? new Date().toISOString() : null,
+    inventory_committed_at: paid ? new Date().toISOString() : null,
     inventory_restocked_at: null,
-    order_items: [{ product_id: "bpc-157", variant_id: "dose-5mg", quantity: 2 }],
+    order_items: [{ product_id: "bpc-157-10mg::dose-5mg", quantity: 2 }],
   };
   state.orders.push(order);
   return order;
@@ -118,7 +128,7 @@ describe("returnInventoryForCancelledOrder", () => {
 
     expect(outcome.action).toBe("restocked");
     expect(state.restocked).toHaveLength(1);
-    expect(state.restocked[0]).toEqual([{ product_id: "bpc-157", variant_id: "dose-5mg", quantity: 2 }]);
+    expect(state.restocked[0]).toEqual([{ product_id: "bpc-157-10mg::dose-5mg", quantity: 2 }]);
     expect(state.released).toHaveLength(0);
   });
 

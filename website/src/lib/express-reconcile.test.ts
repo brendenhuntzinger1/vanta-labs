@@ -39,12 +39,24 @@ function makeOrdersQuery() {
   // Page 0 returns the rows; every later page is empty so paging terminates.
   let page = 0;
   q.range = (..._args: unknown[]) => {
+    // Which page of the RUN this is — the loop builds a fresh query per page,
+    // so the failure has to be counted across queries rather than within one.
+    const runPage = pagesRead;
+    pagesRead += 1;
+    if (readErrorOnPage !== null && runPage === readErrorOnPage) {
+      return Promise.resolve({ data: null, error: { message: "connection reset" } });
+    }
     const data = page === 0 ? pendingRows : [];
     page += 1;
     return Promise.resolve({ data, error: null });
   };
   return q;
 }
+
+/** Which SELECT page (if any) comes back as a database error. */
+let readErrorOnPage: number | null = null;
+/** Pages read so far in this run, counted across the per-page queries. */
+let pagesRead = 0;
 
 /** The most recent alert row of the queried type, or null for "none yet". */
 let lastAlertAt: string | null = null;
@@ -118,6 +130,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   selectFilters = {};
   lastAlertAt = null;
+  readErrorOnPage = null;
+  pagesRead = 0;
   pendingRows = [{ order_id: "order-1", payment_id: "cs_live_1", created_at: OLD }];
   vi.stubGlobal("fetch", fetchSession);
 });
@@ -295,5 +309,54 @@ describe("the backlog warning tells the truth, and only occasionally", () => {
     expect(recordSystemAlert).toHaveBeenCalledWith(
       expect.objectContaining({ type: "express_reconcile_failed", severity: "critical" }),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P9-02. The sweep must not report a clean run when it could not look.
+//
+// The paging loop used to break on `error || !data || data.length === 0`,
+// which made "the database refused the read" indistinguishable from "there is
+// nothing pending". The run returned checked: 0 and /api/cron/sweep counted it
+// as a success — so the one job standing between a charged card and an order
+// that reads unpaid could fail on every tick, silently.
+// ---------------------------------------------------------------------------
+describe("a read the sweep could not perform is never reported as a clean sweep", () => {
+  it("rejects instead of returning checked: 0 when the first page errors", async () => {
+    readErrorOnPage = 0;
+    // The route records a REJECTED job as a critical cron_sweep_failed alert;
+    // a resolved zero records nothing at all.
+    await expect(reconcileVeyraPendingPayments()).rejects.toThrow(/could not read pending orders/i);
+  });
+
+  it("names the underlying database failure so the alert is actionable", async () => {
+    readErrorOnPage = 0;
+    await expect(reconcileVeyraPendingPayments()).rejects.toThrow(/connection reset/);
+  });
+
+  it("still settles the orders it DID read before raising the failure", async () => {
+    // Page 0 reads a full page; page 1 fails. The charge on page 0 is real
+    // money owed to a real order, so it must be settled on this run rather
+    // than left waiting for the read to recover.
+    pendingRows = Array.from({ length: 50 }, (_unused, index) => ({
+      order_id: `order-${index}`,
+      payment_id: `cs_live_${index}`,
+      created_at: OLD,
+    }));
+    readErrorOnPage = 1;
+    providerSays("paid");
+
+    await expect(reconcileVeyraPendingPayments()).rejects.toThrow(/could not read pending orders/i);
+    expect(processPaymentWebhook).toHaveBeenCalledTimes(50);
+  });
+
+  it("still reports a genuinely empty backlog as a clean, successful run", async () => {
+    pendingRows = [];
+    await expect(reconcileVeyraPendingPayments()).resolves.toEqual({
+      checked: 0,
+      settled: 0,
+      failedOut: 0,
+      unresolved: 0,
+    });
   });
 });
