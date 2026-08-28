@@ -68,8 +68,20 @@ const geistMono = Geist_Mono({
 //
 // Note for later, not changed here: .vl-heading-xl asks Fraunces for 700,
 // which was never among the loaded weights, so it has always been synthesised.
+// The CSS variable was called --font-cormorant-display, left over from when
+// this slot held Cormorant. Three offers-bar rules in globals.css
+// (.vl-offer-headline, .vl-offer-sheet-title, .vl-offer-list-headline) asked
+// for --font-fraunces instead — the name the font actually has — and that
+// variable was defined nowhere, so all three had been silently rendering in
+// the Georgia fallback. Confirmed in the built CSS, not just the source:
+// grepping the shipped chunks for `--font-fraunces:` returned nothing while
+// the rule referencing it was present.
+//
+// Renamed rather than repointed. Patching the three rules at
+// --font-cormorant-display would have left a variable named after a font it
+// does not hold, which is what caused this in the first place.
 const fraunces = Fraunces({
-  variable: "--font-cormorant-display",
+  variable: "--font-fraunces",
   subsets: ["latin"],
   weight: ["400", "500"],
   style: ["normal"],

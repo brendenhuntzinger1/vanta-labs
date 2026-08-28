@@ -823,7 +823,38 @@ export default function CheckoutPage() {
         {/* Mobile order summary — collapsed, at the TOP. Previously the summary
             sat below the entire form on mobile, so a shopper couldn't see what
             they were paying without scrolling past every field. */}
-        {isHydrated && items.length > 0 ? (
+        {!isHydrated ? (
+          /* RESERVES THE MOBILE SUMMARY BAR'S HEIGHT. Same defect as the cart
+             page's item list, same fix.
+
+             The bar is in normal flow ABOVE the form, and the cart it reports
+             lives in localStorage, so the server emits nothing here and the bar
+             plus its mb-6 — about 78px — appears after hydration and pushes the
+             whole checkout form down. The only skeleton on this page is in the
+             <aside> below, which is `hidden ... lg:block`, so it does not exist
+             at the width where this matters. CLAUDE.md: most traffic is mobile.
+
+             Invisible copy of the collapsed row rather than a fixed height, so
+             it cannot drift when the row's padding or type scale changes.
+
+             TRADE-OFF, taken deliberately: an EMPTY cart at /checkout renders no
+             bar at all, so this placeholder collapses for that visitor instead.
+             Checkout does not redirect an empty cart (it shows the form with a
+             disabled CTA, page.tsx:735), so that state is reachable — it is just
+             rare, because reaching checkout normally means having items. This
+             trades a shift that almost every mobile shopper sees for one that
+             almost none do. */
+          <div
+            className="vl-skeleton mb-6 rounded-2xl border border-white/[0.06] bg-white/[0.02] lg:hidden"
+            aria-hidden="true"
+            data-testid="checkout-summary-placeholder"
+          >
+            <div className="invisible flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left">
+              <span className="flex items-center gap-2 text-sm text-white/70">Order summary</span>
+              <span className="text-base font-semibold text-white tabular-nums">{formatCartCurrency(0)}</span>
+            </div>
+          </div>
+        ) : items.length > 0 ? (
           <div className="mb-6 rounded-2xl border border-white/[0.06] bg-white/[0.02] lg:hidden">
             <button
               type="button"

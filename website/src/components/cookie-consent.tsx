@@ -17,6 +17,26 @@ const CONSENT_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
  * visitor's own privacy preference is essential storage under any reading of
  * the policy.
  */
+/**
+ * The choice the SERVER just used, read back on the client.
+ *
+ * Returns null for a missing or unrecognised cookie, so an unset visitor and a
+ * corrupted value both fall through to "ask them".
+ */
+function readConsentCookie(): "accepted" | "declined" | null {
+  try {
+    const raw = document.cookie
+      .split(";")
+      .map((entry) => entry.trim())
+      .find((entry) => entry.startsWith(`${CONSENT_COOKIE_NAME}=`))
+      ?.slice(CONSENT_COOKIE_NAME.length + 1);
+
+    return raw === "accepted" || raw === "declined" ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
 function publishConsentCookie(choice: "accepted" | "declined") {
   try {
     document.cookie =
@@ -54,7 +74,28 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(STORAGE_KEY);
+      const cookieAnswer = readConsentCookie();
+
       if (!stored) {
+        if (cookieAnswer) {
+          // THE MIRROR OF THE BACKFILL BELOW, AND IT CLOSES THE SAME SHIFT.
+          //
+          // The cookie says this visitor answered; localStorage does not. The
+          // server read that cookie and rendered the bar CLOSED, so opening it
+          // here would push the whole page down by 52px on a desktop and 86px
+          // on a phone — the exact shift `initiallyOpen` was added to remove,
+          // reintroduced for the one visitor the two stores disagree about.
+          //
+          // The disagreement is ordinary, not exotic: a browser or extension
+          // that clears site data but keeps cookies, and Safari's ITP, which
+          // evicts script-writable storage on its own schedule.
+          //
+          // The cookie is authoritative here — it is the copy the server acts
+          // on when it decides whether a route may record analytics — so write
+          // it back and leave the bar as the server rendered it.
+          window.localStorage.setItem(STORAGE_KEY, cookieAnswer);
+          return;
+        }
         // eslint-disable-next-line react-hooks/set-state-in-effect
         setVisible(true);
       } else if (stored === "accepted" || stored === "declined") {
@@ -65,13 +106,12 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
         // never written, so every server route keeps reading "unset". That
         // would leave an accepting visitor under-served and, worse, leave a
         // DECLINING visitor indistinguishable from one who never answered.
-        if (!document.cookie.split(";").some((c) => c.trim().startsWith(`${CONSENT_COOKIE_NAME}=`))) {
+        if (!cookieAnswer) {
           publishConsentCookie(stored);
           // This visitor answered before the cookie existed, so the server had
           // nothing to read and rendered the bar. They have already chosen:
           // close it, and the cookie just written means the server gets it
           // right from their next request onwards. Self-healing, once.
-          // eslint-disable-next-line react-hooks/set-state-in-effect
           setVisible(false);
         }
       }

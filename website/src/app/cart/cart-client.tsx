@@ -13,6 +13,25 @@ import { cartTotalLabel, pendingChargeNotice } from "@/lib/cart-total-disclosure
 import type { CardProcessingFeeConfig } from "@/lib/payment-methods";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 
+/**
+ * The body of the empty-cart panel.
+ *
+ * Shared, and rendered TWICE: once for real when the cart is known to be empty,
+ * and once hidden as the pre-hydration placeholder that reserves this column's
+ * height. Sharing it is the point — the placeholder is exactly as tall as what
+ * replaces it because it *is* what replaces it, so editing this copy cannot
+ * silently reintroduce the layout jump.
+ */
+const EMPTY_CART_PANEL_CONTENT = (
+  <>
+    <p className="text-lg text-white">No items yet.</p>
+    <p className="mt-3">Visit the catalog to add products.</p>
+    <Link href="/products" className="vl2-btn-primary vl-focus-ring mt-6 inline-flex px-5 py-3 text-sm">
+      Browse products
+    </Link>
+  </>
+);
+
 export function CartPageClient() {
   const router = useRouter();
   const [referralInput, setReferralInput] = useState("");
@@ -186,17 +205,53 @@ export function CartPageClient() {
 
         <div className="mt-6 sm:mt-10 grid gap-6 lg:grid-cols-[1.2fr_0.8fr] lg:gap-10">
           <div className="space-y-3">
-            {isHydrated && items.length === 0 ? (
+            {!isHydrated ? (
+              /* PRE-HYDRATION PLACEHOLDER — reserves the space the real content
+                 is about to take.
+
+                 The cart lives in localStorage, so the server cannot know what
+                 is in it and renders this column empty. Both real branches below
+                 then appear at once, and everything under them jumps down.
+                 Measured on the harness at 390x844: "Order Summary" started at
+                 y=557 — above the fold — and landed at y=745 165ms later. A
+                 188px jump, on the page a shopper is reading.
+
+                 Chromium's layout-shift API scored that 0.0000, because React
+                 replaces these nodes during hydration rather than moving them,
+                 so the entry never fires. A CLS number is not evidence that this
+                 page is stable; the y-position trace is.
+
+                 It renders the SAME children as the empty-cart panel, hidden
+                 with `invisible` (visibility: hidden keeps the box, unlike
+                 `hidden`), so the reserved height is the real height by
+                 construction. Deliberately not a stack of fixed-height skeleton
+                 bars: that version measured 178px against the panel's 184 and
+                 left a 10px jump, and it would drift again the next time anyone
+                 edits this copy. Nothing here has to be kept in sync.
+
+                 The text is not merely transparent — visibility:hidden takes the
+                 link out of the tab order too, and aria-hidden takes the whole
+                 block off the accessibility tree, so a screen reader never meets
+                 "No items yet" on a cart that has items. That flash is the
+                 failure the checkout summary's own comment warns about.
+
+                 A cart WITH items still grows past this, which no server render
+                 can prevent without knowing the item count, but it grows from a
+                 reserved floor instead of from zero. */
+              <div
+                className="vl-skeleton border border-dashed border-white/10 p-6 text-center sm:p-10"
+                aria-hidden="true"
+                data-testid="cart-items-placeholder"
+              >
+                <div className="invisible">{EMPTY_CART_PANEL_CONTENT}</div>
+              </div>
+            ) : items.length === 0 ? (
               /* p-6 on phones (p-10 stays from sm up). 40px of padding around
                  an EMPTY panel is what pushed "Browse products" — the only exit
                  from an empty cart — down into the consent banner on a short
                  in-app-browser viewport. */
               <div className="border border-dashed border-white/15 p-6 sm:p-10 text-center text-white/55">
-                <p className="text-lg text-white">No items yet.</p>
-                <p className="mt-3">Visit the catalog to add products.</p>
-                <Link href="/products" className="vl2-btn-primary vl-focus-ring mt-6 inline-flex px-5 py-3 text-sm">
-                  Browse products
-                </Link>
+                {EMPTY_CART_PANEL_CONTENT}
               </div>
             ) : (
               items.map((item) => {

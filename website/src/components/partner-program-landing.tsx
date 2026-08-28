@@ -2,7 +2,31 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { supabase } from "@/lib/supabase";
+/**
+ * The Supabase browser client, fetched only when this page actually needs it.
+ *
+ * WHY IT IS NOT A STATIC IMPORT. /partner is a public, indexable recruitment
+ * page, and a static import put the @supabase/supabase-js + auth-js +
+ * realtime-js chunk — 228 KB — into its entry bundle. Measured by summing the
+ * chunks in each route's client-reference manifest: /partner 457.5 KB against
+ * 222.0 for /ambassador, 222.8 for /, 233.2 for /products and 224.2 for /cart.
+ * It was the heaviest route on the site, and it earned that for two
+ * `auth.getSession()` calls.
+ *
+ * Dynamic import moves it out of the entry bundle: the page paints and becomes
+ * interactive without it, and the chunk is fetched afterwards for the session
+ * check, or on click for the apply handler.
+ *
+ * Further step, deliberately NOT taken here: app/partner/page.tsx is a server
+ * component and could resolve the session itself and pass the answer down,
+ * which would remove the mount-time fetch entirely and leave only the apply
+ * path needing the SDK. That changes how this page authenticates, which is
+ * more than a bundle-size finding should carry on its own.
+ */
+async function getSupabase() {
+  const mod = await import("@/lib/supabase");
+  return mod.supabase;
+}
 import {
   type PublicProgramTerms,
   formatPercent,
@@ -72,7 +96,7 @@ export function PartnerProgramLanding({ initialStats, terms }: { initialStats: P
 
     (async () => {
       try {
-        const { data } = await supabase.auth.getSession();
+        const { data } = await (await getSupabase()).auth.getSession();
         if (!data.session?.user) {
           if (active) setSessionStatus("guest");
           return;
@@ -137,7 +161,7 @@ export function PartnerProgramLanding({ initialStats, terms }: { initialStats: P
     setAuthMessage(null);
 
     try {
-      const { data } = await supabase.auth.getSession();
+      const { data } = await (await getSupabase()).auth.getSession();
       const accessToken = data.session?.access_token;
       if (!accessToken) {
         setSessionStatus("guest");
