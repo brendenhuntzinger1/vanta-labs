@@ -99,11 +99,46 @@ export async function reconcileMonthlyStoreCredit(userId: string, newTierMonthly
   });
 }
 
+/**
+ * The ledger reason a spend against an order is written under.
+ *
+ * Exported because the checkout-time HOLD (tender-reservation.ts) writes the
+ * same row this function writes: the hold IS the redemption, taken earlier. A
+ * second copy of the string in the reservation module would be a second source
+ * of truth for which rows count as spent.
+ */
+export const STORE_CREDIT_REDEMPTION_REASON = "membership_redemption";
+
+/** Is this order's spend already recorded (held at checkout, or a webhook retry)? */
+async function redemptionExistsForOrder(orderId: string): Promise<boolean> {
+  const { data, error } = await supabaseAdmin
+    .from("store_credit_ledger")
+    .select("id")
+    .eq("order_id", orderId)
+    .eq("reason", STORE_CREDIT_REDEMPTION_REASON)
+    .limit(1);
+
+  if (error) {
+    if (String(error.code) === "42P01") return false;
+    // "I could not tell" is never "no": guessing here debits the customer twice.
+    throw error;
+  }
+  return Boolean(data && data.length > 0);
+}
+
 // Records a redemption (negative) against the buyer's account for an order.
 // Capped to the LIVE remaining balance at redemption time, so two concurrent
 // pending orders that each froze the same balance can never over-spend it.
+//
+// IDEMPOTENT PER ORDER. Checkout now HOLDS the credit when the order is created
+// (tender-reservation.ts), so by settlement the row this function would write
+// usually already exists — and a webhook retry would otherwise debit a second
+// time. An order whose hold was released (abandoned, then paid late) has no row
+// and is debited here exactly as it always was.
 export async function redeemStoreCredit(userId: string, amountCents: number, orderId: string): Promise<void> {
   if (amountCents <= 0) return;
+
+  if (await redemptionExistsForOrder(orderId)) return;
 
   const liveBalance = await getStoreCreditBalanceCents(userId);
   const toRedeem = Math.min(Math.abs(Math.round(amountCents)), liveBalance);
@@ -112,7 +147,7 @@ export async function redeemStoreCredit(userId: string, amountCents: number, ord
   const { error } = await supabaseAdmin.from("store_credit_ledger").insert({
     user_id: userId,
     amount_cents: -toRedeem,
-    reason: "membership_redemption",
+    reason: STORE_CREDIT_REDEMPTION_REASON,
     order_id: orderId,
     created_at: new Date().toISOString(),
   });
@@ -159,7 +194,7 @@ export async function refundStoreCreditForOrder(orderId: string): Promise<boolea
     .from("store_credit_ledger")
     .select("user_id, amount_cents, created_at")
     .eq("order_id", orderId)
-    .eq("reason", "membership_redemption");
+    .eq("reason", STORE_CREDIT_REDEMPTION_REASON);
 
   if (error) {
     if (String(error.code) === "42P01") return false;

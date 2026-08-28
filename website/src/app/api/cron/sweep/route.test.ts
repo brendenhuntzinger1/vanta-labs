@@ -28,6 +28,7 @@ const emailCampaigns = sentinel("emailCampaigns");
 const emailAutomations = sentinel("emailAutomations");
 const shippingCostRepair = sentinel("shippingCostRepair");
 const refundEffectRepair = sentinel("refundEffectRepair");
+const tenderHolds = sentinel("tenderHolds");
 interface SystemAlert {
   type: string;
   severity: string;
@@ -44,6 +45,7 @@ vi.mock("@/lib/cart-recovery", () => ({ runAbandonedCartSweep: () => cartRecover
 vi.mock("@/lib/partner-portal", () => ({ autoApproveEligibleCommissions: () => commissions() }));
 vi.mock("@/lib/commission-accrual-repair", () => ({ repairMissingCommissionAccruals: () => commissionAccrualRepair() }));
 vi.mock("@/lib/inventory-reservation", () => ({ expireStaleReservations: () => reservations() }));
+vi.mock("@/lib/tender-reservation", () => ({ releaseAbandonedTenderHolds: () => tenderHolds() }));
 vi.mock("@/lib/email/retry-queue", () => ({ retryPendingEmails: () => emails() }));
 vi.mock("@/lib/express-reconcile", () => ({
   reconcileVeyraPendingPayments: () => paymentReconcile(),
@@ -81,6 +83,7 @@ describe("the scheduled sweep", () => {
     expect(body.storeCredit).toEqual({ job: "storeCredit" });
     expect(body.commissionApproval).toEqual({ job: "commissions" });
     expect(body.reservationsExpired).toEqual({ job: "reservations" });
+    expect(body.tenderHoldsReleased).toEqual({ job: "tenderHolds" });
     expect(body.emailRetry).toEqual({ job: "emails" });
     expect(body.paymentReconcile).toEqual({ job: "paymentReconcile" });
     // The two that were crossed.
@@ -94,7 +97,7 @@ describe("the scheduled sweep", () => {
   it("runs every job exactly once", async () => {
     await callSweep();
 
-    for (const job of [membership, storeCredit, cartRecovery, commissions, reservations, emails, paymentReconcile, expressIntents, shippoSync, shipmentRepair, shippingCostRepair, refundEffectRepair]) {
+    for (const job of [membership, storeCredit, cartRecovery, commissions, reservations, tenderHolds, emails, paymentReconcile, expressIntents, shippoSync, shipmentRepair, shippingCostRepair, refundEffectRepair]) {
       expect(job).toHaveBeenCalledTimes(1);
     }
   });
