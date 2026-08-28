@@ -67,6 +67,20 @@ $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-columns.sql"     >>/tmp/vl-sc
 $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-constraints.sql" >>/tmp/vl-schema.log 2>&1 || true
 $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-functions.sql"   >>/tmp/vl-schema.log 2>&1 || true
 
+# Migrations that must land AFTER parity, because parity re-creates the very
+# production drift they exist to correct. The commission-lifecycle pair is the
+# clearest case: harness-prod-parity-constraints.sql adds `pc_ro_ps`, the narrow
+# three-value CHECK on referral_orders.payment_status, so a harness built
+# without these two refuses every commission accrual AND every refund of an
+# order whose commission was paid — the same 23514 the deployment steps fix in
+# production. Both files drop by RULE, so they remove pc_ro_ps as well as the
+# by-name constraint.
+echo "==> post-parity migrations"
+for f in referral-orders-commission-lifecycle referral-orders-manual-review-status \
+         refund-exactly-once-indexes; do
+  [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
+done
+
 # Seed. Runbook section 3 described the required shapes but nothing applied them,
 # so a fresh harness came up with an empty catalogue and every checkout case was
 # unreachable. harness-seed.sql is synthetic and re-runnable (it truncates first).
