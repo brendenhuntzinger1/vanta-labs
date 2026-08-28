@@ -46,7 +46,11 @@ vi.mock("@/lib/supabase-server", () => {
     const rows = (db as unknown as Record<string, Row[]>)[table];
     if (!Array.isArray(rows)) throw new Error(`unexpected table in test: ${table}`);
     const filters: Array<(row: Row) => boolean> = [];
-    const settle = () => ({ data: rows.filter((row) => filters.every((f) => f(row))).map((row) => ({ ...row })), error: null });
+    let window: [number, number] | null = null;
+    const settle = () => {
+      const matched = rows.filter((row) => filters.every((f) => f(row))).map((row) => ({ ...row }));
+      return { data: window ? matched.slice(window[0], window[1] + 1) : matched, error: null };
+    };
     const b: Record<string, unknown> = {
       select() { return b; },
       eq(col: string, value: unknown) { filters.push((row) => String(row[col] ?? "") === String(value)); return b; },
@@ -57,6 +61,15 @@ vi.mock("@/lib/supabase-server", () => {
         return b;
       },
       order() { return b; },
+      // PostgREST's window, modelled as a real slice rather than a no-op.
+      // getCartRecoveryStats pages its table reads (F-A-14), so this fake has
+      // to answer `.range()` or the call throws before any assertion here runs.
+      // Implemented honestly: a `range()` that ignored its bounds would return
+      // the whole table for every page and hide a paging bug, which is the
+      // opposite of what a double for a paged read is for. Bounds-checked
+      // paging itself is covered in phase11-bucket9.test.ts; what this file
+      // asserts is the revenue DEFINITION, over however many rows it is given.
+      range(from: number, to: number) { window = [from, to]; return b; },
       limit() { return b; },
       then(resolve: (v: unknown) => unknown, reject?: (r: unknown) => unknown) {
         return Promise.resolve(settle()).then(resolve, reject);

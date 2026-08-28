@@ -53,8 +53,31 @@ describe("a replacement never touches the payment processor", () => {
   it("is a NEW order row — the original is never modified", () => {
     const fn = replacements.slice(replacements.indexOf("export async function createReplacementOrder"));
     expect(fn).toContain('from("orders").insert');
-    // No update against the original order anywhere in creation.
-    expect(fn).not.toMatch(/from\("orders"\)\s*\.update/);
+
+    // THE INTENT, ASSERTED DIRECTLY. This used to read
+    // `expect(fn).not.toMatch(/from\("orders"\)\s*\.update/)` — a proxy that
+    // banned every orders update rather than the one that would actually break
+    // the invariant. INV-04 then added a legitimate one: the replacement stamps
+    // `inventory_committed_at` on ITS OWN row after its stock decrement, which
+    // the cancel path needs in order to restock rather than no-op. That is the
+    // new order being finished, not the original being touched, and a proxy
+    // that cannot tell the two apart is a proxy that has to be replaced rather
+    // than a fix that has to be reverted.
+    //
+    // So: every orders update in this function must key on `orderId` — the
+    // deterministic `order-rp-...` id minted for the replacement — and never on
+    // the original's. Strictly stronger than the old regex in the direction
+    // that matters, and it still fails if anyone writes to the original.
+    const updates = [...fn.matchAll(/from\("orders"\)\s*\.update\([\s\S]*?\.eq\("order_id",\s*([A-Za-z0-9_.]+)\)/g)];
+    for (const [, target] of updates) {
+      expect(target, `an orders update in createReplacementOrder is keyed to \`${target}\`, not the replacement's own orderId`).toBe("orderId");
+    }
+
+    // The original's identifiers never appear as the target of a write. Reads
+    // of the original are expected and fine; `.update`/`.delete` against it are
+    // not, in any form.
+    expect(fn).not.toMatch(/\.update\([\s\S]{0,400}?\.eq\("order_id",\s*(input\.originalOrderId|original\.order_id)\)/);
+    expect(fn).not.toMatch(/\.delete\(\)[\s\S]{0,200}?\.eq\("order_id",\s*(input\.originalOrderId|original\.order_id)\)/);
   });
 
   it("stays linked to the order it replaces, with a reason", () => {

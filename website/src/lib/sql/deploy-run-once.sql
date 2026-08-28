@@ -93,7 +93,15 @@ create table if not exists public.admin_credentials (
   username text not null unique,
   password_salt text not null,
   password_hash text not null,
-  role text not null default 'super_admin',
+  -- LEAST PRIVILEGE. admin-rbac-refunds.sql declares this column with
+  -- default 'staff' and this file declared 'super_admin'; whichever file ran
+  -- first won, and deploy-run-once.sql is on every documented path while
+  -- admin-rbac-refunds.sql is on none, so every real database got the
+  -- privileged default. Nothing in the repo relies on it -- admin-team.ts and
+  -- scripts/create-admin-credential.mjs both name the role explicitly -- so the
+  -- only thing the old default could do was silently grant full admin to a row
+  -- inserted by hand or by a future writer that forgot the column.
+  role text not null default 'staff',
   is_active boolean not null default true,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -435,7 +443,13 @@ create table if not exists public.customer_memberships (
   tier_id uuid not null,
   billing_cycle text not null default 'monthly',
   status text not null default 'active',
-  intro_status text not null default 'none',
+  -- 'not_applicable', not 'none'. 'none' is outside this column's vocabulary:
+  -- membership.ts types introStatus as
+  -- "not_applicable" | "active" | "converted" | "failed" and coalesces only
+  -- NULL, so a stored 'none' passes through un-normalised. membership-billing.sql
+  -- declares the same column with 'not_applicable'; this file ran first on every
+  -- real database, so its value is the one that stuck.
+  intro_status text not null default 'not_applicable',
   intro_ends_at timestamptz,
   next_billing_at timestamptz,
   started_at timestamptz not null default now(),
@@ -577,7 +591,12 @@ create table if not exists public.product_subscriptions (
 -- shape. Harmless if the tables were just created above.
 
 alter table if exists public.admin_credentials
-  add column if not exists role text not null default 'super_admin';
+  add column if not exists role text not null default 'staff';
+-- `add column if not exists` is a no-op on a database that already has the
+-- column, so it cannot correct the 'super_admin' default those databases were
+-- built with. This line is what makes them converge. It changes no existing
+-- row: a default only applies to a future insert that omits the column.
+alter table if exists public.admin_credentials alter column role set default 'staff';
 alter table public.admin_credentials drop constraint if exists admin_credentials_role_check;
 alter table public.admin_credentials
   add constraint admin_credentials_role_check check (role in ('staff', 'manager', 'super_admin'));
@@ -666,9 +685,13 @@ alter table if exists public.membership_tiers
   add column if not exists member_discount_percent numeric(5,2) not null default 0;
 
 alter table if exists public.customer_memberships
-  add column if not exists intro_status text not null default 'none',
+  add column if not exists intro_status text not null default 'not_applicable',
   add column if not exists intro_ends_at timestamptz,
   add column if not exists next_billing_at timestamptz;
+-- Same reason as the role default above: `add column if not exists` is a no-op
+-- where the column already exists, so this is what moves an existing database
+-- off 'none'. No row changes; only future inserts that omit the column.
+alter table if exists public.customer_memberships alter column intro_status set default 'not_applicable';
 
 alter table if exists public.customer_preferences
   add column if not exists birthday date,

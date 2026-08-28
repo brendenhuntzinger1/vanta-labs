@@ -40,12 +40,36 @@ type Row = Record<string, unknown>;
 
 const state = { orders: [] as Row[], readError: null as unknown };
 
+/**
+ * PostgREST's row cap, modelled. getLifetimeSavings pages its read, so this
+ * double answers `.order()`/`.range()` — and it answers them HONESTLY: a page
+ * is a real slice, capped the way a real server caps it. A `range()` that
+ * ignored its bounds and handed back the whole array would make every paged
+ * read look correct here, including a broken one.
+ */
+const DB_MAX_ROWS = 1000;
+
 vi.mock("@/lib/supabase-server", () => {
   const builder = () => {
+    const settleAll = () => ({ data: state.readError ? null : state.orders, error: state.readError });
     const api: Record<string, unknown> = {
       select: () => api,
       eq: () => api,
-      limit: () => Promise.resolve({ data: state.readError ? null : state.orders, error: state.readError }),
+      order: () => api,
+      range: (from: number, to: number) => {
+        if (state.readError) return Promise.resolve({ data: null, error: state.readError });
+        const want = Math.min(to - from + 1, DB_MAX_ROWS);
+        return Promise.resolve({ data: state.orders.slice(from, from + want), error: null });
+      },
+      // CAPPED TOO, and this is not incidental. `.limit(n)` does not raise
+      // db-max-rows — the server still stops at 1,000 whatever the limit asks
+      // for. A double whose `limit()` returned everything would let the
+      // paging test above pass against the un-paged `.limit(2000)` read it
+      // exists to forbid; verified by reverting the fix and watching it go red.
+      limit: () => {
+        const all = settleAll();
+        return Promise.resolve(all.data ? { data: all.data.slice(0, DB_MAX_ROWS), error: all.error } : all);
+      },
     };
     return api;
   };
@@ -144,10 +168,67 @@ describe("lifetime savings values points through the shared rate", () => {
     expect(savings.total).toBe(18.5);
   });
 
-  it("reports zero rather than a wrong number when the read fails", async () => {
+  it("reports UNAVAILABLE, not zero, when the read fails (F-A-8)", async () => {
+    // The numbers stay zero — never a wrong figure — but zero on its own was
+    // indistinguishable from a customer who has genuinely saved nothing, and
+    // the dashboard renders its savings panel on `total > 0`. So a database
+    // that would not answer looked exactly like a new customer and the
+    // "Lifetime saved" tile was quietly replaced by a Free shipping advert.
     state.readError = { code: "57014", message: "canceling statement due to statement timeout" };
     const { getLifetimeSavings } = await import("@/lib/member-savings");
     expect(await getLifetimeSavings("user-1")).toEqual({
+      available: false,
+      total: 0, discounts: 0, storeCredit: 0, points: 0, paidOrders: 0,
+    });
+  });
+
+  it("reads past the 1,000-row cap, so a long history is not a short answer (F-A-8)", async () => {
+    // The read used to say `.limit(2000)` — a ceiling the server never honoured,
+    // because PostgREST stops at db-max-rows and says nothing. The double above
+    // caps at 1,000 exactly as it does, so an un-paged read comes back short
+    // here and this assertion is the thing that notices.
+    state.orders = Array.from({ length: 1500 }, () => ({
+      payment_status: "paid",
+      discount_amount: 1,
+      store_credit_redeemed_cents: 0,
+      points_redeemed: 0,
+    }));
+
+    const { getLifetimeSavings } = await import("@/lib/member-savings");
+    const savings = await getLifetimeSavings("user-1");
+
+    expect(savings.available).toBe(true);
+    expect(savings.paidOrders).toBe(1500);
+    // $1,500 of savings, not the $1,000 one page of it would have reported.
+    expect(savings.total).toBe(1500);
+    expect(savings.total).not.toBe(1000);
+  });
+
+  it("refuses rather than under-reports when the read hits its own ceiling", async () => {
+    // MAX_CUSTOMER_ORDERS is far above any real history, but if it is ever
+    // reached the honest answer is "couldn't load", not a smaller number
+    // presented to the customer as their savings.
+    state.orders = Array.from({ length: 20_001 }, () => ({
+      payment_status: "paid",
+      discount_amount: 1,
+      store_credit_redeemed_cents: 0,
+      points_redeemed: 0,
+    }));
+
+    const { getLifetimeSavings } = await import("@/lib/member-savings");
+    const savings = await getLifetimeSavings("user-1");
+
+    expect(savings.available).toBe(false);
+    expect(savings.total).toBe(0);
+  });
+
+  it("reports available on a successful read, so a real zero is still a real zero", async () => {
+    // The other half of the distinction: without this, `available: false`
+    // everywhere would pass the test above and break every genuine customer.
+    state.orders = [];
+    const { getLifetimeSavings } = await import("@/lib/member-savings");
+    expect(await getLifetimeSavings("user-1")).toEqual({
+      available: true,
       total: 0, discounts: 0, storeCredit: 0, points: 0, paidOrders: 0,
     });
   });

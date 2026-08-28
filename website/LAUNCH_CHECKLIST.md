@@ -24,7 +24,7 @@ unless it was actually executed and observed passing.
 |---|---|---|---|
 | Unit + logic (`npm test`) | Discounts, commission, membership status, profit floor, order math | 112 tests | ✅ pass, 5× identical |
 | Profit simulation | No order can finalize below the profit floor | ~7,200 | ✅ |
-| Order-math sweep | One discount wins · never negative · discount ≤ subtotal · commission on discounted subtotal · tax on merchandise only | ~6,000 | ✅ |
+| Order-math sweep | One discount wins · never negative · discount ≤ subtotal · commission on discounted subtotal · tax on post-discount merchandise, plus shipping in the states that tax delivery charges | ~6,000 | ✅ |
 | **DB integrity + concurrency** (`scripts/verify-db-locally.sh`, real Postgres) | See table below | 12 | ✅ pass |
 | Schema load | `deploy-run-once.sql` applies to a clean Postgres 16 | — | ✅ **0 errors**, 42 tables |
 

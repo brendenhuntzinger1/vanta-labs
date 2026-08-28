@@ -90,7 +90,8 @@ as an underpayment tripwire (client can never lower the charge).
   subtotal; free ≥ $250 (intl $600) or via member/bulk perk.
 - **Handling fee** — always $0 (intentionally).
 - **Card processing fee** — added on card method only.
-- **Tax** — on post-discount merchandise.
+- **Tax** — on post-discount merchandise, plus shipping where the destination
+  state taxes delivery charges (`shippingTaxable` in `sales-tax.ts`).
 - **Store credit / points** — applied after totals, capped to live balance.
 - **Profit guard** — `computeProfit` blocks any order below the configured floor
   (default break-even). Commission is priced at the **effective (max) tier %**.

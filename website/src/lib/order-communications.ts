@@ -8,11 +8,18 @@
  * something two existing systems answer between them, and second sources of
  * truth drift.
  *
- * The one thing that CANNOT be derived is positive proof of delivery. Nothing
- * writes a row on success, so the absence of a failure is not the presence of a
- * send. That distinction is preserved all the way to the label an owner reads:
- * "No failure recorded" is what the data supports, and claiming "Sent" would be
- * the system pretending it knows something it does not.
+ * POSITIVE PROOF OF DELIVERY EXISTS FOR EXACTLY ONE OF THESE ROWS (E-07). The
+ * header here used to say flatly that "nothing writes a row on success", and
+ * that stopped being true when `order_email_log` was built: sendOrderEmailOnce
+ * writes a 'sent' row with the provider and the provider's own message id. But
+ * its only caller is the order-confirmation lane, so shipping and delivery
+ * emails still have no success record and still cannot say more than "no
+ * failure recorded".
+ *
+ * So the ceiling is now per row, and the panel must not level it up or down:
+ * a CONFIRMATION with a 'sent' log row is genuinely SENT, and the other two
+ * keep the honest weaker claim. Where there is no log row the answer is
+ * unchanged — the absence of a failure is still not the presence of a send.
  */
 
 export type CommunicationState =
@@ -20,6 +27,14 @@ export type CommunicationState =
   | "not_due"
   /** Due, and nothing went wrong — but nothing proves it landed either. */
   | "no_failure_recorded"
+  /**
+   * The email provider accepted this one, and `order_email_log` says so.
+   *
+   * The only state in this union that is a POSITIVE record rather than an
+   * inference, which is why it is reachable for the confirmation row alone —
+   * nothing writes that log for shipping or delivery.
+   */
+  | "sent"
   /** Failed once and a later retry got through. */
   | "recovered"
   /** Failed and is still being retried automatically. */
@@ -74,6 +89,25 @@ export type OrderCommunicationInput = {
    * itself.
    */
   pendingEmails: PendingEmailRow[] | null;
+  /**
+   * Rows of `order_email_log`, the only table that records a SUCCESSFUL send.
+   *
+   * Optional, and absent means exactly what it did before this input existed:
+   * no positive record, so the strongest claim available is
+   * "no failure recorded". A caller that cannot read the log therefore degrades
+   * to the old behaviour rather than reporting a gap — which is right here,
+   * because unlike `pendingEmails` this table can only ever make an answer
+   * STRONGER. Losing it costs certainty, never accuracy.
+   */
+  emailLog?: OrderEmailLogRow[] | null;
+};
+
+/** A row of `order_email_log` — written by sendOrderEmailOnce, success or not. */
+export type OrderEmailLogRow = {
+  kind: string;
+  status: string;
+  provider?: string | null;
+  provider_message_id?: string | null;
 };
 
 /**
@@ -155,12 +189,30 @@ export function deriveOrderCommunications(input: OrderCommunicationInput): Commu
     }
 
     if (!row) {
+      // A POSITIVE RECORD BEATS AN INFERENCE, for the one row that can have one.
+      // `order_email_log` is written only by the order-confirmation lane, so
+      // this upgrade is deliberately scoped to that key rather than applied to
+      // all three — a SENT badge on a shipping row would be an unbacked claim.
+      const logged = key === "confirmation"
+        ? (input.emailLog ?? []).find((entry) => entry.kind === "order_confirmation" && entry.status === "sent")
+        : undefined;
+      if (logged) {
+        return {
+          key,
+          label: LABEL[key],
+          state: "sent",
+          detail: logged.provider_message_id
+            ? `Accepted by ${logged.provider ?? "the email provider"} — message id ${logged.provider_message_id}.`
+            : "Recorded as sent.",
+          retryable: false,
+        };
+      }
       return {
         key,
         label: LABEL[key],
         state: "no_failure_recorded",
-        // Deliberately not "Sent". Nothing writes a row on success, so this is
-        // the strongest true statement available.
+        // Deliberately not "Sent". Nothing recorded a success for this one, so
+        // this is the strongest true statement available.
         detail: "Due, and no delivery failure was recorded for it.",
         retryable: false,
       };

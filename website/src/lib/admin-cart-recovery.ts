@@ -12,6 +12,22 @@ import { sendMarketingEmail } from "@/lib/email/marketing";
 import { mintCartRecoveryCoupon, type AbandonedCartItemSnapshot } from "@/lib/cart-recovery";
 import { getSiteUrl } from "@/lib/env";
 import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
+import { readAllRowsBounded } from "@/lib/supabase-page";
+
+/**
+ * Ceiling on the paged reads below. Matches the figure admin-email.ts uses for
+ * the same shape of read (rates over a whole table) so the two dashboards agree
+ * on when a number stops being complete.
+ */
+const MAX_RECOVERY_ROWS = 500_000;
+
+/**
+ * `.in(...)` values travel in the request URL, so a long list has to go out in
+ * chunks or the URL is rejected. 150 is the size admin-profit.ts settled on for
+ * exactly that reason; each chunk keys on a unique column, so a chunk can never
+ * return more rows than it has ids and PostgREST's row cap cannot bite.
+ */
+const IN_CHUNK = 150;
 
 export interface AbandonedCartRow {
   id: string;
@@ -90,12 +106,30 @@ export interface CartRecoveryStats {
 }
 
 export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
-  const { data: carts, error } = await supabaseAdmin
-    .from("abandoned_carts")
-    .select("status, cart_value_cents, first_seen_at, recovered_order_id");
-  if (error) throw error;
+  // PAGED, NOT A BARE SELECT (F-A-14). PostgREST caps a single response at
+  // `max-rows` — 1000 by default — and does it SILENTLY: the response is a valid
+  // array that simply stops. Every figure below is a count of these rows, a sum
+  // over them, or a RATIO over them, so a capped read does not fail, it reports
+  // the recovery rate of whichever 1000 carts came back as though it were the
+  // store's. `id` is the deterministic page key; `first_seen_at` is not unique,
+  // so paging on it alone could repeat or skip a cart across a boundary.
+  const { rows } = await readAllRowsBounded<{
+    status: string;
+    cart_value_cents: number | null;
+    first_seen_at: string;
+    recovered_order_id: string | null;
+  }>(
+    (from, to) => supabaseAdmin
+      .from("abandoned_carts")
+      .select("status, cart_value_cents, first_seen_at, recovered_order_id")
+      .order("id", { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{
+        data: { status: string; cart_value_cents: number | null; first_seen_at: string; recovered_order_id: string | null }[] | null;
+        error: unknown;
+      }>,
+    { maxRows: MAX_RECOVERY_ROWS, label: "cart recovery stats read" },
+  );
 
-  const rows = carts ?? [];
   const totalAbandoned = rows.length;
   const recoveredRows = rows.filter((row) => row.status === "recovered");
   const totalRecovered = recoveredRows.length;
@@ -125,21 +159,44 @@ export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
     // Attribution is not lost: `totalRecovered` above counts every cart the
     // emails closed, refunded or not. The count says whether the campaign
     // worked; this says what it was worth.
-    const { data: orders } = await supabaseAdmin
-      .from("orders")
-      .select("amount_paid, refund_amount, payment_status, order_type")
-      .in("order_id", recoveredOrderIds);
-    revenueRecoveredCents = (orders ?? [])
+    //
+    // CHUNKED because the cart read above is no longer capped at one page:
+    // `recoveredOrderIds` can now be arbitrarily long, and an unchunked `.in`
+    // would either blow the URL length limit or come back one page short —
+    // undercounting a money tile.
+    const orders: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < recoveredOrderIds.length; i += IN_CHUNK) {
+      const { data } = await supabaseAdmin
+        .from("orders")
+        .select("amount_paid, refund_amount, payment_status, order_type")
+        .in("order_id", recoveredOrderIds.slice(i, i + IN_CHUNK));
+      orders.push(...((data ?? []) as Array<Record<string, unknown>>));
+    }
+    revenueRecoveredCents = orders
       .filter((row) => isRevenueOrderStatus(row.payment_status as string | null) && isSaleOrder(row.order_type as string | null))
       .reduce((sum, row) => sum + Math.round(netOrderRevenue(row as { amount_paid?: number | null; refund_amount?: number | null }) * 100), 0);
   }
 
-  const { data: emailRows, error: emailError } = await supabaseAdmin
-    .from("abandoned_cart_emails")
-    .select("sent_at, opened_at, clicked_at, coupon_id");
-  if (emailError) throw emailError;
+  // Paged for the same reason as the cart read: the open and click rates are
+  // ratios over the WHOLE of this table, and a capped read makes them the rates
+  // of one arbitrary page.
+  const { rows: sentEmails } = await readAllRowsBounded<{
+    sent_at: string | null;
+    opened_at: string | null;
+    clicked_at: string | null;
+    coupon_id: string | null;
+  }>(
+    (from, to) => supabaseAdmin
+      .from("abandoned_cart_emails")
+      .select("sent_at, opened_at, clicked_at, coupon_id")
+      .order("id", { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{
+        data: { sent_at: string | null; opened_at: string | null; clicked_at: string | null; coupon_id: string | null }[] | null;
+        error: unknown;
+      }>,
+    { maxRows: MAX_RECOVERY_ROWS, label: "cart recovery email read" },
+  );
 
-  const sentEmails = emailRows ?? [];
   const openRatePercent = sentEmails.length > 0 ? Math.round((sentEmails.filter((row) => row.opened_at).length / sentEmails.length) * 1000) / 10 : 0;
   const clickRatePercent = sentEmails.length > 0 ? Math.round((sentEmails.filter((row) => row.clicked_at).length / sentEmails.length) * 1000) / 10 : 0;
 
@@ -147,15 +204,29 @@ export async function getCartRecoveryStats(): Promise<CartRecoveryStats> {
   let couponRedemptionRatePercent = 0;
   if (couponEmails.length > 0) {
     const couponIds = couponEmails.map((row) => row.coupon_id).filter((id): id is string => Boolean(id));
-    const { data: coupons } = await supabaseAdmin.from("coupons").select("id, redemptions_count").in("id", couponIds);
-    const redeemedCount = (coupons ?? []).filter((row) => Number(row.redemptions_count ?? 0) > 0).length;
+    const coupons: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < couponIds.length; i += IN_CHUNK) {
+      const { data } = await supabaseAdmin
+        .from("coupons")
+        .select("id, redemptions_count")
+        .in("id", couponIds.slice(i, i + IN_CHUNK));
+      coupons.push(...((data ?? []) as Array<Record<string, unknown>>));
+    }
+    const redeemedCount = coupons.filter((row) => Number(row.redemptions_count ?? 0) > 0).length;
     couponRedemptionRatePercent = Math.round((redeemedCount / couponEmails.length) * 1000) / 10;
   }
 
   let averageRecoveryTimeHours: number | null = null;
   if (recoveredOrderIds.length > 0) {
-    const { data: orderTimestamps } = await supabaseAdmin.from("orders").select("order_id, created_at").in("order_id", recoveredOrderIds);
-    const orderCreatedAtByOrderId = new Map((orderTimestamps ?? []).map((row) => [row.order_id, row.created_at]));
+    const orderTimestamps: Array<{ order_id: string; created_at: string }> = [];
+    for (let i = 0; i < recoveredOrderIds.length; i += IN_CHUNK) {
+      const { data } = await supabaseAdmin
+        .from("orders")
+        .select("order_id, created_at")
+        .in("order_id", recoveredOrderIds.slice(i, i + IN_CHUNK));
+      orderTimestamps.push(...((data ?? []) as Array<{ order_id: string; created_at: string }>));
+    }
+    const orderCreatedAtByOrderId = new Map(orderTimestamps.map((row) => [row.order_id, row.created_at]));
     const durations = recoveredRows
       .map((row) => {
         const orderCreatedAt = row.recovered_order_id ? orderCreatedAtByOrderId.get(row.recovered_order_id) : null;
@@ -190,14 +261,21 @@ export interface RecoveryTrendPoint {
 
 export async function getCartRecoveryTrend(days: number): Promise<RecoveryTrendPoint[]> {
   const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-  const { data, error } = await supabaseAdmin
-    .from("abandoned_carts")
-    .select("first_seen_at, status")
-    .gte("first_seen_at", since.toISOString());
-  if (error) throw error;
+  // Paged for the same reason as getCartRecoveryStats: a date range is not a row
+  // cap, and a capped read here draws a chart that flattens out partway through
+  // the window rather than failing.
+  const { rows } = await readAllRowsBounded<{ first_seen_at: string; status: string }>(
+    (from, to) => supabaseAdmin
+      .from("abandoned_carts")
+      .select("first_seen_at, status")
+      .gte("first_seen_at", since.toISOString())
+      .order("id", { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: { first_seen_at: string; status: string }[] | null; error: unknown }>,
+    { maxRows: MAX_RECOVERY_ROWS, label: "cart recovery trend read" },
+  );
 
   const byDate = new Map<string, { abandoned: number; recovered: number }>();
-  for (const row of data ?? []) {
+  for (const row of rows) {
     const date = String(row.first_seen_at).slice(0, 10);
     const entry = byDate.get(date) ?? { abandoned: 0, recovered: 0 };
     entry.abandoned += 1;

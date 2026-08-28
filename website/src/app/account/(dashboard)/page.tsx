@@ -200,7 +200,7 @@ export default async function AccountDashboardPage() {
           </div>
         ) : null}
 
-        {lifetimeSavings.total > 0 ? (
+        {lifetimeSavings.available && lifetimeSavings.total > 0 ? (
           <div className="mt-5 rounded-xl border border-amber-200/25 bg-gradient-to-r from-amber-200/[0.10] via-amber-200/[0.04] to-transparent p-4 sm:p-5">
             <p className="text-[11px] uppercase tracking-[0.2em] text-amber-200/70">Your savings with Vanta Labs</p>
             <p className="mt-1.5 text-3xl font-semibold text-amber-200">{money(lifetimeSavings.total)}</p>
@@ -224,7 +224,16 @@ export default async function AccountDashboardPage() {
           value={`${perks.pointsPerDollar}×`}
           sub={pointsMultiplier.multiplier > 1 ? `${pointsMultiplier.eventName} (${pointsMultiplier.multiplier}× active)` : "points per $1"}
         />
-        {lifetimeSavings.total > 0 ? (
+        {/*
+          Three states, not two. A savings read that FAILED used to arrive here
+          as total: 0 and fall into the free-shipping branch — so a customer
+          whose own money could not be loaded was shown a shipping advert in
+          place of it, with nothing on screen saying anything was wrong. The
+          point-balance tile two along already gets this right; this is that.
+        */}
+        {!lifetimeSavings.available ? (
+          <StatTile label="Lifetime saved" value="—" sub="Couldn't load right now" />
+        ) : lifetimeSavings.total > 0 ? (
           <StatTile label="Lifetime saved" value={money(lifetimeSavings.total)} sub="member savings" />
         ) : (
           <StatTile label="Free shipping" value={`$${shippingConfig.freeShippingThreshold}+`} sub="on qualifying orders" />
