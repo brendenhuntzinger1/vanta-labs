@@ -64,6 +64,42 @@ export function planInventoryAdjustments(items: OrderItemRef[]): InventoryAdjust
   return [...byKey.values()];
 }
 
+/** The key an adjustment shares with the reservation row for the same line. */
+function adjustmentKey(line: { slug: string; variantId: string | null }): string {
+  return `${line.slug}::${line.variantId ?? ""}`;
+}
+
+/**
+ * The order lines a reservation finalize did NOT move (F4).
+ *
+ * A reservation can be PARTIAL. `reserveInventoryForOrder` holds line by line
+ * and gives up the moment one line's RPC fails — with the earlier lines already
+ * held — so an order can reach payment holding line 1 and nothing for line 2.
+ * The paid lanes used to fall back to the legacy decrement only when the
+ * finalize moved NOTHING, so that order finalized one line, reported success,
+ * and line 2 was sold with no stock movement at all.
+ *
+ * Matching is by slug + variant, because that is the granularity the holds and
+ * the inventory rows share; the variant lives inside `product_id` as
+ * `"<slug>::<dose>"`, which parseOrderItemRef splits. A line whose product_id is
+ * unusable is returned as unmoved: the decrement no-ops on it safely, whereas
+ * dropping it would hide a real sale.
+ *
+ * Pure + testable, and deliberately NOT quantity-aware — a hold is taken for the
+ * whole line or not at all, so a line that finalized is done.
+ */
+export function itemsNotFinalized(
+  items: OrderItemRef[],
+  finalizedLines: Array<{ slug: string; variantId: string | null }>,
+): OrderItemRef[] {
+  const moved = new Set(finalizedLines.map(adjustmentKey));
+  return (items ?? []).filter((item) => {
+    const productId = item?.productId ?? item?.product_id;
+    if (!productId) return true;
+    return !moved.has(adjustmentKey(parseOrderItemRef(String(productId))));
+  });
+}
+
 // Read the quantity the RPC just left behind, so the ledger row can carry real
 // before/after numbers instead of two nulls. Dose-authoritative for a dosed
 // line, exactly like the RPC itself. Best-effort: a failed read costs the

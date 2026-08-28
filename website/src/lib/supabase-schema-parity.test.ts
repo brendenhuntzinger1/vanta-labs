@@ -101,9 +101,29 @@ export function collectColumnReferences(files: string[]): ColumnReference[] {
 
       const columns = new Set<string>();
       const select = /\.select\(\s*["'`]([^"'`]*)["'`]/.exec(window);
+      const line = src.slice(0, match.index).split("\n").length;
       if (select) {
-        // Drop embedded-resource selects (`items:order_items(a,b)` and
-        // `order_items(a,b)`) — those name a RELATION, not a column of `table`.
+        // Embedded-resource selects (`items:order_items(a,b)`,
+        // `order_items(a,b)`) name a RELATION, so their columns belong to THAT
+        // table, not to this one. They used to be dropped here and checked
+        // nowhere — which is precisely how VL-1 survived: the cancel path asked
+        // for `order_items(product_id, variant_id, quantity)` against a table
+        // that has no variant_id, PostgREST answered 42703, and EVERY
+        // cancellation returned "unavailable" instead of returning stock. The
+        // scanner reported no violation because it had thrown the embed away.
+        // They are checked against their own table now.
+        for (const embed of select[1].matchAll(
+          /(?:([a-z_0-9]+)\s*:\s*)?([a-z_0-9]+)(?:!\s*[a-z_0-9]+)?\s*\(([^()]*)\)/gi,
+        )) {
+          const embedded = embed[2];
+          const embeddedColumns = embed[3]
+            .split(",")
+            .map((raw) => raw.trim().split(":").pop()!.trim())
+            .filter((column) => /^[a-z_][a-z_0-9]*$/.test(column));
+          if (embeddedColumns.length > 0) {
+            refs.push({ file: file.slice(process.cwd().length + 1), line, table: embedded, columns: embeddedColumns });
+          }
+        }
         const flat = select[1]
           .replace(/[a-z_0-9]+\s*:\s*[a-z_0-9]+\s*\([^)]*\)/gi, "")
           .replace(/[a-z_0-9]+\s*\([^)]*\)/gi, "");
@@ -124,12 +144,7 @@ export function collectColumnReferences(files: string[]): ColumnReference[] {
       }
 
       if (columns.size === 0) continue;
-      refs.push({
-        file: file.slice(process.cwd().length + 1),
-        line: src.slice(0, match.index).split("\n").length,
-        table: match[1],
-        columns: [...columns],
-      });
+      refs.push({ file: file.slice(process.cwd().length + 1), line, table: match[1], columns: [...columns] });
     }
   }
   return refs;

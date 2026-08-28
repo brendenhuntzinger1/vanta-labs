@@ -22,16 +22,43 @@ const mocks = vi.hoisted(() => {
     },
   );
 
-  const getTransaction = vi.fn(async () => ({
+  const getTransaction = vi.fn(async (): Promise<{
+    ok: true;
+    data: { status: string; rate: string | { amount: string; currency: string } };
+  }> => ({
     ok: true as const,
     data: { status: "SUCCESS", rate: { amount: "7.42", currency: "USD" } },
   }));
 
-  const settledCentsFromTransaction = vi.fn(() => 742);
+  // Faithful to the real one: an EXPANDED rate carries a price, a bare
+  // object_id reference does not.
+  const settledCentsFromTransaction = vi.fn((rate?: unknown) =>
+    rate && typeof rate === "object" ? 742 : null,
+  );
+
+  // The real one reads an expanded rate, and falls back to a GET on /rates/<id>
+  // when the transaction prices its rate by bare reference — which is what a
+  // label bought in Shippo's DASHBOARD looks like. The double mirrors that:
+  // whatever `rateAmountCents` says the rate lookup would answer.
+  const rateLookupCents = { value: null as number | null };
+  const settledCentsForTransaction = vi.fn(
+    async (transaction: { rate?: unknown }) =>
+      typeof transaction?.rate === "string"
+        ? rateLookupCents.value
+        : settledCentsFromTransaction(transaction?.rate),
+  );
 
   const recordSystemAlert = vi.fn(async () => {});
 
-  return { row, recordActualShippingCost, getTransaction, settledCentsFromTransaction, recordSystemAlert };
+  return {
+    row,
+    recordActualShippingCost,
+    getTransaction,
+    settledCentsFromTransaction,
+    settledCentsForTransaction,
+    rateLookupCents,
+    recordSystemAlert,
+  };
 });
 
 vi.mock("server-only", () => ({}));
@@ -43,6 +70,7 @@ vi.mock("@/lib/admin-profit", () => ({
 vi.mock("@/lib/shippo/client", () => ({
   getTransaction: mocks.getTransaction,
   settledCentsFromTransaction: mocks.settledCentsFromTransaction,
+  settledCentsForTransaction: mocks.settledCentsForTransaction,
 }));
 
 vi.mock("@/lib/monitoring", () => ({
@@ -197,5 +225,66 @@ describe("repairMissingShippingCosts — running twice over the same order", () 
     expect(mocks.getTransaction).not.toHaveBeenCalled();
     expect(mocks.recordActualShippingCost).not.toHaveBeenCalled();
     expect(mocks.row.actual_shipping_cost_cents).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-16-01. A DASHBOARD-BOUGHT LABEL IS RECOVERABLE, NOT A HAND-ENTRY CASE.
+//
+// A label bought in Shippo's dashboard — the owner's normal workflow — comes
+// back with `rate` as a bare object_id string, which carries no price. That
+// shape was declared unrecoverable: the sweep raised ManualEntryRequired, the
+// order joined the manual-entry backlog permanently, and the operator was
+// alerted about a figure Shippo would have answered on request. A bare rate
+// reference is an id, and an id can be read.
+// ---------------------------------------------------------------------------
+describe("a label priced by bare rate reference", () => {
+  beforeEach(() => {
+    mocks.row.actual_shipping_cost_cents = null;
+    mocks.row.label_voided_at = null;
+    mocks.row.postage_cost_cents = null;
+    mocks.recordActualShippingCost.mockClear();
+    mocks.recordSystemAlert.mockClear();
+    mocks.rateLookupCents.value = null;
+    // What Shippo returns for a label bought in its dashboard: settled, real,
+    // and priced by reference rather than by an expanded rate object.
+    mocks.getTransaction.mockResolvedValue({
+      ok: true as const,
+      data: { status: "SUCCESS", rate: "rate-shippo-1" },
+    });
+  });
+
+  it("records the postage the rate lookup recovers", async () => {
+    mocks.rateLookupCents.value = 1187;
+
+    const result = await repairMissingShippingCosts();
+
+    expect(result).toEqual({ scanned: 1, repaired: 1, failed: 0 });
+    expect(mocks.recordActualShippingCost).toHaveBeenCalledWith(
+      expect.objectContaining({ orderId: "order-1", amountCents: 1187 }),
+    );
+    expect(mocks.row.actual_shipping_cost_cents).toBe(1187);
+  });
+
+  it("no longer asks an operator to type in a cost Shippo can answer", async () => {
+    mocks.rateLookupCents.value = 1187;
+
+    await repairMissingShippingCosts();
+
+    const alertTypes = mocks.recordSystemAlert.mock.calls.map(
+      (call) => (call as unknown as [{ type?: string }])[0]?.type,
+    );
+    expect(alertTypes).not.toContain("shipping_cost_manual_entry_required");
+  });
+
+  it("still asks for a human when the price genuinely cannot be established", async () => {
+    // The rate reference itself came back unreadable. Guessing a number here
+    // would silently overstate the margin, so this one really is hand entry.
+    mocks.rateLookupCents.value = null;
+
+    const result = await repairMissingShippingCosts();
+
+    expect(result).toEqual({ scanned: 1, repaired: 0, failed: 1 });
+    expect(mocks.recordActualShippingCost).not.toHaveBeenCalled();
   });
 });

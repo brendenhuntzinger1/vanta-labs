@@ -3,7 +3,12 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getShippingAddresses } from "@/lib/shipping-origin";
 import { recordActualShippingCost } from "@/lib/admin-profit";
-import { createShipmentWithRates, createShippoOrder, getTransaction } from "@/lib/shippo/client";
+import {
+  createShipmentWithRates,
+  createShippoOrder,
+  getTransaction,
+  settledCentsForTransaction,
+} from "@/lib/shippo/client";
 import { isShippoConfigured } from "@/lib/shippo/config";
 import { buildOrderParcel, toCountryCode } from "@/lib/shippo/service";
 import type { ShippoAddress, ShippoOrderLineItem, ShippoTransactionCreated } from "@/lib/shippo/types";
@@ -766,6 +771,17 @@ export async function applyTransactionCreated(
         trackingNumber: facts.trackingNumber ?? expanded.trackingNumber,
         labelUrl: facts.labelUrl ?? expanded.labelUrl,
       };
+      // A DASHBOARD LABEL PRICES ITS RATE BY REFERENCE. The transaction Shippo
+      // returns for a label bought in its dashboard carries `rate` as a bare
+      // object_id, so labelFactsFrom — which can only read an expanded rate —
+      // still leaves the cost NULL here. That is precisely the owner's normal
+      // workflow, so it left every dashboard label with no postage recorded,
+      // profit stuck on the flat estimate, and a manual-entry alert repeating
+      // until somebody typed the figure in by hand. The reference is readable:
+      // one GET on the rate, only when nothing else answered.
+      if (facts.amountCents === null) {
+        facts = { ...facts, amountCents: await settledCentsForTransaction(fetched.data) };
+      }
     } else {
       // Not fatal: the status move and whatever the webhook did carry are still
       // worth writing. The cost stays NULL, which is what makes the admin show

@@ -45,7 +45,7 @@ interface OrderRow {
   order_id: string;
   fulfillment_status: string;
   payment_status: string;
-  paid_side_effects_at: string | null;
+  inventory_committed_at: string | null;
   inventory_restocked_at: string | null;
   [key: string]: unknown;
 }
@@ -64,14 +64,16 @@ function freshOrder(overrides: Partial<OrderRow> = {}): OrderRow {
     order_number: "VL-CX1",
     fulfillment_status: "paid",
     payment_status: "paid",
-    // Paid side effects ran, so the units ARE decremented and must come back.
-    paid_side_effects_at: "2026-08-26T00:00:00.000Z",
+    // The paid lane recorded that this order's units left the shelf, so they
+    // must come back. (The signal is inventory_committed_at, not the card lane's
+    // paid_side_effects_at claim — see VL-10 in order-cancellation-inventory.ts.)
+    inventory_committed_at: "2026-08-26T00:00:00.000Z",
     inventory_restocked_at: null,
     customer_email: "buyer@example.test",
     customer_name: "A Buyer",
     tracking_number: null,
     carrier: null,
-    order_items: [{ product_id: "bpc-157", variant_id: "dose-5mg", quantity: 4 }],
+    order_items: [{ product_id: "bpc-157-10mg::dose-5mg", quantity: 4 }],
     ...overrides,
   };
 }
@@ -90,7 +92,7 @@ vi.mock("@/lib/inventory-fulfillment", async (importOriginal) => {
 });
 vi.mock("@/lib/inventory-reservation", () => ({
   releaseInventoryForOrder: vi.fn(async (orderId: string) => { db.released.push(orderId); }),
-  finalizeInventoryForOrder: vi.fn(async () => ({ finalized: 1, degraded: false })),
+  finalizeInventoryForOrder: vi.fn(async () => ({ finalized: 1, degraded: false, finalizedLines: null })),
 }));
 vi.mock("@/lib/email/send", () => ({ sendEmail: vi.fn(async () => ({ ok: true })) }));
 vi.mock("@/lib/email/templates", () => ({
@@ -183,7 +185,7 @@ describe("every path that cancels an order returns its stock", () => {
     expect(result.ok).toBe(true);
     expect(db.order.fulfillment_status).toBe("cancelled");
     expect(db.restocked).toHaveLength(1);
-    expect(db.restocked[0]).toEqual([{ product_id: "bpc-157", variant_id: "dose-5mg", quantity: 4 }]);
+    expect(db.restocked[0]).toEqual([{ product_id: "bpc-157-10mg::dose-5mg", quantity: 4 }]);
   });
 
   it("covers the BULK cancel, which never called the restock at all", async () => {

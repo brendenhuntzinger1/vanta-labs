@@ -3,7 +3,7 @@ import { getPaymentProvider } from "@/lib/payment-provider";
 import type { OrderStatus } from "@/lib/payment-types";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
-import { sendOrderEmailOnce } from "@/lib/email/order-email-once";
+import { refundEmailKind, sendOrderEmailOnce } from "@/lib/email/order-email-once";
 import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { commissionEarnedTemplate, orderConfirmationTemplate, refundConfirmationTemplate } from "@/lib/email/templates";
 import { scheduleOrderPushNotification } from "@/lib/order-push-notification";
@@ -15,7 +15,7 @@ import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/li
 import { getAmbassadorProgramSettings } from "@/lib/ambassador-settings";
 import { getReferralProgramConfig } from "@/lib/admin-control";
 import { markAbandonedCartsRecovered } from "@/lib/cart-recovery";
-import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock } from "@/lib/inventory-fulfillment";
+import { decrementInventoryForOrder, restockInventoryForOrder, claimInventoryRestock, itemsNotFinalized } from "@/lib/inventory-fulfillment";
 import { finalizeInventoryForOrder, releaseInventoryForOrder } from "@/lib/inventory-reservation";
 import { after } from "next/server";
 import { syncOrderToShippo } from "@/lib/shippo/order-sync";
@@ -1500,14 +1500,31 @@ export async function finalizeManualPayment(
     // Note also what `failed === 0` does NOT prove: adjust_inventory_on_sale
     // no-ops for an untracked slug, so the latch means "the RPC accepted every
     // line", not "the shelf really moved". The earlier wording overclaimed.
+    //
+    // F4 — WHAT THE FINALIZE DID NOT COVER STILL HAS TO MOVE.
+    //
+    // The fallback used to run only when the finalize moved NOTHING
+    // (`fin.finalized === 0`). But a reservation can be PARTIAL:
+    // reserveInventoryForOrder holds line by line and gives up the moment one
+    // line's RPC fails, with the earlier lines already held. That order arrives
+    // here holding line 1 and nothing for line 2, finalizes one line, reports
+    // `degraded: false, finalized: 1` — and the fallback was skipped, so line 2
+    // was sold with no stock movement whatsoever and nothing said so.
+    // `finalizedLines` names what actually moved, so the rest can be decremented.
+    const orderItems = (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>;
     let partialLines: { attempted: number; failed: number; errors: string[] } | null = null;
     try {
       const fin = await finalizeInventoryForOrder(orderId);
-      if (fin.degraded || fin.finalized === 0) {
-        const decrement = await decrementInventoryForOrder(
-          (order.order_items ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
-          orderId,
-        );
+      // A degraded RPC moved nothing reliable, and holds it could not enumerate
+      // leave no usable diff — both fall back to the coarse, safe rule.
+      const finalizedLines = fin.finalizedLines ?? null;
+      const unmoved = fin.degraded || finalizedLines === null
+        // No usable diff: fall back only when the finalize moved nothing, which
+        // is the coarse rule this lane has always used.
+        ? (fin.degraded || fin.finalized === 0 ? orderItems : [])
+        : itemsNotFinalized(orderItems, finalizedLines);
+      if (unmoved.length > 0) {
+        const decrement = await decrementInventoryForOrder(unmoved, orderId);
         if (decrement.failed > 0) {
           if (decrement.failed < decrement.attempted) partialLines = decrement;
           throw new Error(
@@ -1561,6 +1578,15 @@ export async function finalizeManualPayment(
   // already finalized — a no-op — so cancelling a manually-paid order destroyed
   // its stock and reported "released".
   //
+  // IT NOW WRITES BOTH COLUMNS (VL-10 / INV-01 / F1). `paid_side_effects_at` is
+  // still the shared vocabulary for "the paid side effects ran". But it cannot
+  // answer the cancel path's question in the OTHER lane, where it is the
+  // exactly-once claim and is therefore stamped BEFORE the decrement — so an
+  // order whose decrement failed still carried it, and cancelling that order
+  // restocked units that were never removed. `inventory_committed_at` is the
+  // receipt the cancel path reads, and this lane's guard is already exactly the
+  // one a receipt needs: it is written only when the stock really moved.
+  //
   // WRITTEN LAST, NOT AS PART OF THE CLAIM. The latch has to mean "the decrement
   // happened", not "the decrement was about to be attempted". Setting it up with
   // the paid-flip would mark stock as decremented before finalizeInventoryForOrder
@@ -1570,11 +1596,30 @@ export async function finalizeManualPayment(
   // behaviour for one narrow window, and this codebase's stated rule for
   // inventory ambiguity is to never guess in the direction that invents units.
   if (stockCommitted) {
+    const committedAt = new Date().toISOString();
+    // TWO STATEMENTS, DELIBERATELY. Writing both columns in one update couples
+    // them: PostgREST refuses the WHOLE statement over one unknown column, so
+    // until add-inventory-committed-latch.sql is applied, a combined write would
+    // take paid_side_effects_at down with the new column — losing a latch this
+    // lane has written correctly since review finding 2. Separate writes mean
+    // the new column can only cost the new fact.
     const { error: latchError } = await supabaseAdmin
       .from("orders")
-      .update({ paid_side_effects_at: new Date().toISOString() })
+      .update({ paid_side_effects_at: committedAt })
       .eq("order_id", orderId)
       .is("paid_side_effects_at", null);
+
+    const { error: committedError } = await supabaseAdmin
+      .from("orders")
+      .update({ inventory_committed_at: committedAt })
+      .eq("order_id", orderId)
+      .is("inventory_committed_at", null);
+
+    if (committedError) {
+      // The cancel path reads this one. Without it a cancel will under-restock
+      // — recoverable by hand, unlike the over-restock the old signal caused.
+      console.error("Unable to record inventory_committed_at for manual order", orderId, committedError);
+    }
 
     if (latchError) {
       // Never fails the approval — the payment is verified and the stock has
@@ -1649,6 +1694,40 @@ export class WebhookSignatureError extends Error {
   }
 }
 
+/**
+ * How long the unattributed-event WARNING stays quiet after firing.
+ *
+ * Persisted rather than held in memory: each webhook is a fresh serverless
+ * invocation, so an in-process timestamp is always empty and throttles nothing.
+ * Same shape as express-reconcile's backlog throttle.
+ */
+const UNATTRIBUTED_WARNING_THROTTLE_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Has the warning lane been quiet long enough to fire again?
+ *
+ * FAILS OPEN in every error path — a throttle must never be the reason a real
+ * warning goes unsent. Only ever consulted for the warning; a critical
+ * unattributed charge is never throttled.
+ */
+async function unattributedWarningIsDue(): Promise<boolean> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("system_alerts")
+      .select("created_at")
+      .eq("type", "payment_event_unattributed")
+      .eq("severity", "warning")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error || !data || data.length === 0) return true;
+    const last = Date.parse(String((data[0] as { created_at?: string }).created_at ?? ""));
+    if (!Number.isFinite(last)) return true;
+    return Date.now() - last > UNATTRIBUTED_WARNING_THROTTLE_MS;
+  } catch {
+    return true;
+  }
+}
+
 export async function processPaymentWebhook(payload: string, signature: string, secret: string, eventId: string) {
   const provider = getPaymentProvider();
   const isValid = provider.verifyWebhookSignature(payload, signature, secret);
@@ -1692,7 +1771,10 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // real sender uses.
   const sessionId = resolveWebhookSessionId(eventPayload);
   const orderIdFromSession = sessionId ? await findOrderIdByPaymentId(sessionId) : null;
-  const orderId = orderIdFromSession ?? resolveWebhookOrderId(eventPayload) ?? `order-${randomUUID()}`;
+  const resolvedOrderId = orderIdFromSession ?? resolveWebhookOrderId(eventPayload);
+  // The synthetic id exists so the EVENT is still recorded under a unique scope
+  // when no sender put an order reference anywhere. It identifies nothing.
+  const orderId = resolvedOrderId ?? `order-${randomUUID()}`;
   const nextStatus = getOrderStatusForEventType(eventPayload.type ?? "");
 
   // Claim the event up front (atomic) so concurrent duplicate deliveries can't
@@ -1709,6 +1791,68 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   }
 
   try {
+  // AN EVENT THAT NAMES NO ORDER MUST NOT CREATE ONE.
+  //
+  // When neither the session id nor any metadata resolves, `orderId` above is a
+  // freshly minted `order-<uuid>` that exists nowhere. getOrderByOrderId then
+  // returns null, and `if (!orderRecord || nextStatus !== "paid")` read that
+  // absence as "a brand-new webhook-created order" — so upsertOrderRecord
+  // INSERTED one: a row with no customer, no email, no address, no items, a $0
+  // total and fulfillment_status "pending". It landed in Needs Fulfillment
+  // looking exactly like a real order nobody could fulfil, and one arrived per
+  // unresolvable delivery — every '*' subscription event from the processor
+  // that carries no order reference at all.
+  //
+  // The event is still claimed and still marked processed (so a redelivery is
+  // not reprocessed), and an operator is told, because an unattributable money
+  // event is worth a human's attention. What does not happen is inventing the
+  // order it failed to name.
+  if (!resolvedOrderId) {
+    await markEventProcessed(eventId, orderId, nextStatus);
+    if (isRecognisedMoneyEvent(eventPayload.type ?? "")) {
+      // Critical only where money actually moved and is now unaccounted for. A
+      // failed or cancelled charge that names no order took nobody's money, and
+      // paging the owner for one at 3am is how a real critical gets ignored.
+      const moneyMoved = nextStatus === "paid" || nextStatus === "refunded" || nextStatus === "partially_refunded";
+      // THROTTLE THE NOISY LANE, NEVER THE MONEY ONE.
+      //
+      // Each critical here is a DISTINCT real charge that only a human can
+      // match, so suppressing one loses money visibility — those always fire.
+      // The warning lane is the one that can repeat: a processor that stopped
+      // sending our order reference produces one per delivery, and an operator
+      // who is emailed forty times learns to ignore the type, which is how the
+      // critical above gets missed too.
+      const due = moneyMoved || (await unattributedWarningIsDue());
+      if (due) {
+      await recordSystemAlert({
+        type: "payment_event_unattributed",
+        severity: moneyMoved ? "critical" : "warning",
+        message:
+          `A ${eventPayload.type ?? "payment"} webhook carried no order reference and no known session id, so `
+          + "it could not be matched to an order. No order was created for it"
+          + (moneyMoved
+            ? ": money moved for an order this system cannot name. Find this event in the processor's dashboard "
+              + "and match it by hand — the order it belongs to still reads unpaid."
+            : ", and nothing was charged. Worth a look only if these keep arriving, which would mean the "
+              + "processor stopped sending our order reference."),
+        context: {
+          event_id: eventId,
+          event_type: eventPayload.type ?? null,
+          provider_status: eventPayload.status ?? null,
+          amount: eventPayload.amount ?? null,
+        },
+      }).catch(() => {});
+      }
+    }
+    return {
+      duplicate: false,
+      eventId,
+      orderId,
+      status: nextStatus,
+      providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
+    } satisfies WebhookEventState;
+  }
+
   const orderRecord = await getOrderByOrderId(orderId);
 
   // An event that says nothing about a money state must never write one. A '*'
@@ -1942,6 +2086,9 @@ export async function processPaymentWebhook(payload: string, signature: string, 
 
     if (runSideEffects) {
       const isMembershipOrder = String(orderRecord?.order_type ?? "product") === "membership";
+      // Did this order's stock actually move? A membership order holds none, so
+      // it is vacuously true there; a product order has to earn it below.
+      let stockCommitted = isMembershipOrder;
 
       // Ambassador commission — MUST be gated (an ungated replay reset a paid
       // commission back to pending and paid the ambassador twice).
@@ -2177,15 +2324,34 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       if (!isMembershipOrder) {
         try {
           // Finalize the checkout reservation (permanent deduct). Fall back to
-          // the legacy atomic decrement only when there's no active hold to
-          // finalize (untracked item, expired hold, or pre-migration order).
+          // the legacy atomic decrement for whatever the finalize did NOT move —
+          // an untracked item, an expired hold, a pre-migration order, or (F4) a
+          // line the reservation never managed to hold in the first place.
           //
           // THE DECREMENT REPORTS ITS FAILURE RATHER THAN THROWING IT — see the
           // manual lane. Without reading the returned result this catch, and
           // the alert in it, were unreachable on the real failure path.
+          //
+          // F4. The condition used to be `fin.degraded || fin.finalized === 0`,
+          // which asks "did the finalize do nothing?" rather than "did it do
+          // everything?". reserveInventoryForOrder holds line by line and gives
+          // up the moment one line's RPC fails, with the earlier lines already
+          // held, so a two-line order can arrive here with a hold on line 1 and
+          // none on line 2. It finalizes one line, reports `degraded: false,
+          // finalized: 1`, and the fallback never ran: line 2 was sold with no
+          // stock movement at all, silently. `finalizedLines` says which lines
+          // moved so the rest can be decremented — and only the rest, because
+          // decrementing a finalized line again would take its units twice.
           let decrement = { attempted: 0, failed: 0, errors: [] as string[] };
           const fin = await finalizeInventoryForOrder(orderId);
-          if (fin.degraded || fin.finalized === 0) {
+          // The one case with nothing left to do: the RPC was healthy, it moved
+          // lines, and the holds behind them could not be enumerated — so the
+          // coarse rule (which is all that read supports) says it covered the
+          // order. A degraded RPC moved nothing reliable, and an enumerable
+          // finalize gets the real per-line diff below.
+          const finalizedLines = fin.finalizedLines ?? null;
+          const finalizeCoveredOrder = !fin.degraded && finalizedLines === null && fin.finalized > 0;
+          if (!finalizeCoveredOrder) {
             // An unreadable line-item list is not an order with no lines: it
             // would decrement nothing and report success, leaving sold stock on
             // the shelf with the side-effects claim already spent.
@@ -2194,10 +2360,13 @@ export async function processPaymentWebhook(payload: string, signature: string, 
               .select("product_id, quantity")
               .eq("order_id", orderId);
             if (soldItemsError) throw soldItemsError;
-            decrement = await decrementInventoryForOrder(
-              (soldItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
-              orderId,
-            );
+            const items = (soldItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>;
+            const unmoved = fin.degraded || finalizedLines === null
+              ? items
+              : itemsNotFinalized(items, finalizedLines);
+            if (unmoved.length > 0) {
+              decrement = await decrementInventoryForOrder(unmoved, orderId);
+            }
           }
           if (decrement.failed > 0) {
             throw new Error(
@@ -2205,10 +2374,47 @@ export async function processPaymentWebhook(payload: string, signature: string, 
               + decrement.errors.join("; "),
             );
           }
+          stockCommitted = true;
         } catch (inventoryError) {
           console.error("Unable to decrement inventory for order", orderId, inventoryError);
           await recordSystemAlert(unsafeEffectAlert("inventory_decrement", orderId, inventoryError))
             .catch(() => {});
+        }
+      }
+
+      // VL-10 / INV-01 / F1 — RECORD THAT THE STOCK ACTUALLY MOVED.
+      //
+      // `paid_side_effects_at` cannot carry this fact in THIS lane. It is the
+      // exactly-once claim over every paid side effect, so it has to be taken
+      // BEFORE they run — otherwise a duplicate delivery pays the ambassador
+      // twice. It therefore means "this delivery won the right to try", never
+      // "the units left the shelf", and it is stamped whether the decrement
+      // above then succeeds, fails, or half-succeeds.
+      //
+      // returnInventoryForCancelledOrder read it as the second thing. So
+      // cancelling an order whose decrement had FAILED took the restock branch
+      // and returned units that were never removed — invented stock, which
+      // oversells, and the precise failure the latch was introduced to prevent.
+      // The manual lane had already reasoned its way here and simply withholds
+      // its latch on a failed decrement; the card lane cannot copy that without
+      // giving up its claim.
+      //
+      // So the claim and the receipt become two columns. This one is written
+      // only after the stock has moved, it is what the cancel path reads, and
+      // both paid lanes write it. A partial decrement deliberately leaves it
+      // NULL: restockInventoryForOrder returns EVERY line, so a receipt here
+      // would invent units for the lines that never moved. Under-restock is a
+      // recoverable inconvenience; over-restock is a money-losing oversell.
+      if (stockCommitted) {
+        const { error: committedError } = await supabaseAdmin
+          .from("orders")
+          .update({ inventory_committed_at: new Date().toISOString() })
+          .eq("order_id", orderId)
+          .is("inventory_committed_at", null);
+        if (committedError) {
+          // Never fails the webhook — the payment is verified and the stock has
+          // moved. But a later cancel will now under-restock, so say so.
+          console.error("Unable to record inventory_committed_at for order", orderId, committedError);
         }
       }
 
@@ -2247,13 +2453,44 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // includes tax/shipping/card fee) wrongly claws back commission when a
     // shipping/tax-only amount is refunded. A refund at/above the merchandise
     // base is a full reversal. Cancels/failures also fully reverse.
-    await updateCommissionOnRefund(orderId, { refundedFraction: refundOutcome.refundedFraction });
+    //
+    // EVERY EFFECT IN THIS BLOCK CARRIES ITS OWN try/catch, AND THAT IS THE
+    // POINT (REF-02). `upsertOrderRecord` above has ALREADY written
+    // payment_status = 'refunded'/'canceled'. A throw escaping from here is
+    // caught by the outer handler, which releases the event claim and rethrows
+    // so the processor retries — but the retry re-reads the order, finds it
+    // already FULLY terminal, and returns at the FULLY_TERMINAL_REFUND_STATES
+    // guard without running a single effect. So an exception here does not
+    // defer the work, it DELETES it: the commission is never reversed and the
+    // stock is never returned, permanently and silently.
+    //
+    // A live example was one line down: `updateCommissionOnRefund` writes
+    // 'manual_review' into referral_orders.payment_status, which production's
+    // CHECK constraint rejected with 23514 (VL-7). Every refund of an order
+    // with a PAID commission threw there, so the restock below never ran.
+    //
+    // Best-effort + a critical alert is the same contract the paid side-effects
+    // above already use, and it keeps one failing effect from taking the rest
+    // of the refund down with it.
+    try {
+      await updateCommissionOnRefund(orderId, { refundedFraction: refundOutcome.refundedFraction });
+    } catch (commissionReversalError) {
+      console.error("Unable to reverse commission for refunded order", orderId, commissionReversalError);
+      await recordSystemAlert(unsafeEffectAlert("commission_reversal", orderId, commissionReversalError))
+        .catch(() => {});
+    }
 
     // Release any still-active inventory hold. For a never-paid order (failed /
     // canceled) this returns the reserved units immediately; for a paid order
     // the hold was already finalized, so this no-ops and the restock below does
     // the work. Idempotent and best-effort.
-    await releaseInventoryForOrder(orderId);
+    try {
+      await releaseInventoryForOrder(orderId);
+    } catch (releaseError) {
+      console.error("Unable to release inventory hold for order", orderId, releaseError);
+      await recordSystemAlert(unsafeEffectAlert("inventory_hold_release", orderId, releaseError))
+        .catch(() => {});
+    }
 
     // Return committed stock — but ONLY when this order was actually paid (so
     // its inventory was decremented). A refund/cancel of an order that never
@@ -2273,25 +2510,36 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // Only the caller that WON the claim restocks. "already_claimed" means
       // somebody else returned these units; "unavailable" means the claim could
       // not be evaluated, and restocking blind could double-return them.
-      if (!isMembershipOrder && await claimInventoryRestock(orderId) === "claimed") {
-        // THE CLAIM IS ALREADY SPENT BY THE TIME THIS READ RUNS, so an
-        // unreadable line-item list cannot simply be retried: restocking
-        // nothing here means these units are never returned by anybody. It used
-        // to do exactly that, silently. Alert instead — this is a hand repair.
-        const { data: refundItems, error: refundItemsError } = await supabaseAdmin
-          .from("order_items")
-          .select("product_id, quantity")
-          .eq("order_id", orderId);
-        if (refundItemsError) {
-          console.error("Unable to read order items for restock on order", orderId, refundItemsError);
-          await recordSystemAlert(unsafeEffectAlert("inventory_restock", orderId, refundItemsError))
-            .catch(() => {});
-        } else {
-          await restockInventoryForOrder(
-            (refundItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
-            orderId,
-          );
+      // The claim itself, the item read and the restock all sit inside one
+      // try/catch for the REF-02 reason above: a throw from any of them used to
+      // escape the whole refund block, taking the customer's points, store
+      // credit and membership revocation with it — none of which the retry
+      // would ever reach.
+      try {
+        if (!isMembershipOrder && await claimInventoryRestock(orderId) === "claimed") {
+          // THE CLAIM IS ALREADY SPENT BY THE TIME THIS READ RUNS, so an
+          // unreadable line-item list cannot simply be retried: restocking
+          // nothing here means these units are never returned by anybody. It used
+          // to do exactly that, silently. Alert instead — this is a hand repair.
+          const { data: refundItems, error: refundItemsError } = await supabaseAdmin
+            .from("order_items")
+            .select("product_id, quantity")
+            .eq("order_id", orderId);
+          if (refundItemsError) {
+            console.error("Unable to read order items for restock on order", orderId, refundItemsError);
+            await recordSystemAlert(unsafeEffectAlert("inventory_restock", orderId, refundItemsError))
+              .catch(() => {});
+          } else {
+            await restockInventoryForOrder(
+              (refundItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+              orderId,
+            );
+          }
         }
+      } catch (restockError) {
+        console.error("Unable to restock inventory for refunded order", orderId, restockError);
+        await recordSystemAlert(unsafeEffectAlert("inventory_restock", orderId, restockError))
+          .catch(() => {});
       }
     }
 
@@ -2318,55 +2566,127 @@ export async function processPaymentWebhook(payload: string, signature: string, 
             refundAmount: refundOutcome.recordedRefundAmount,
             isFullRefund: refundOutcome.isFullRefund,
           });
-          await sendEmail({ to: String(orderRecord.customer_email), ...refundEmail });
+          // SEND-ONCE, LIKE THE RECEIPT (E-04). This called sendEmail directly,
+          // outside the send-once guard, even though 'refund_confirmation' is
+          // one of the two kinds order_email_log was built for. Nothing here is
+          // behind a once-only claim the way the confirmation is behind
+          // paid_side_effects_at: a processor that re-delivers a refund webhook
+          // (they retry anything not answered 2xx), or the refund-effect repair
+          // sweep re-entering this path, each mailed the customer another "your
+          // refund was processed" for the same money.
+          //
+          // KEYED ON THE AMOUNT, NOT THE BARE KIND. A refund is not like a
+          // receipt: an order has one confirmation but as many refund notices as
+          // there are refunds, and the two-step refund this file handles
+          // explicitly (goods, then shipping) produces two, each stating a
+          // different cumulative total. On the bare kind the second would be
+          // swallowed as a duplicate and the customer refunded in silence — a
+          // regression, not a fix. The cumulative amount is exactly what
+          // separates "the same refund told twice" from "a second refund".
+          const refundKind = refundEmailKind(refundOutcome.recordedRefundAmount);
+          const refundResult = await sendOrderEmailOnce({
+            orderId,
+            kind: refundKind,
+            to: String(orderRecord.customer_email),
+            template: refundEmail,
+          });
+          if (refundResult.attempted && !refundResult.sent) {
+            console.error("Refund confirmation email not sent for order", orderId, refundResult.error);
+            // (orderId, kind) so the sweep closes this send-once slot when it
+            // delivers, rather than leaving it released for a second send.
+            await enqueueFailedEmail(
+              {
+                to: String(orderRecord.customer_email),
+                subject: refundEmail.subject,
+                html: refundEmail.html,
+                text: refundEmail.text,
+              },
+              refundResult.error,
+              { orderId, kind: refundKind },
+            );
+          }
         } catch (refundEmailError) {
           console.error("Unable to send refund confirmation email for order", orderId, refundEmailError);
         }
       }
-      try {
-        await reverseOrderPoints(orderId);
-      } catch (pointsError) {
-        console.error("Unable to reverse membership points for order", orderId, pointsError);
-      }
-      try {
-        await restoreRedeemedPoints(orderId);
-      } catch (restoreError) {
-        console.error("Unable to restore redeemed points for order", orderId, restoreError);
-      }
-      try {
-        await refundStoreCreditForOrder(orderId);
-      } catch (creditError) {
-        console.error("Unable to return store credit for order", orderId, creditError);
+      // ALL-OR-NOTHING TENDER REVERSALS ONLY RUN ON AN ALL-OR-NOTHING REFUND
+      // (REF-01).
+      //
+      // `nextStatus` is "refunded" for a $10 goodwill refund on a $200 order
+      // just as it is for the full $200 — the partial/full distinction lives in
+      // refundOutcome, and everything below used to ignore it. Each of these
+      // four effects returns the WHOLE of something:
+      //
+      //   reverseOrderPoints        debits every point the order earned
+      //   restoreRedeemedPoints     re-credits every point it spent
+      //   refundStoreCreditForOrder returns the entire redemption
+      //   revokeMembershipForRefund ends the membership outright
+      //
+      // So a $10 partial refund handed back the customer's full store-credit
+      // redemption and all of their redeemed points — real money, on an order
+      // they mostly kept — and cancelled a membership that had been paid for.
+      // Each is also idempotent-by-absence (one row per order), so a later FULL
+      // refund cannot re-run what a partial already spent: getting this wrong
+      // once is permanent.
+      //
+      // There is no proportional version of any of them to fall back on
+      // (points are reversed per order, store credit is returned per order,
+      // membership is binary), so a partial does NONE of them, exactly
+      // like the admin lane. The customer keeps their points, their credit and
+      // their membership; the cash they were owed is what came back.
+      // updateCommissionOnRefund above already prorates properly, and the
+      // refund sweep only ever plans work for payment_status = 'refunded', so
+      // it will not apply these behind our back either.
+      if (refundOutcome.isFullRefund) {
+        try {
+          await reverseOrderPoints(orderId);
+        } catch (pointsError) {
+          console.error("Unable to reverse membership points for order", orderId, pointsError);
+        }
+        try {
+          await restoreRedeemedPoints(orderId);
+        } catch (restoreError) {
+          console.error("Unable to restore redeemed points for order", orderId, restoreError);
+        }
+        try {
+          await refundStoreCreditForOrder(orderId);
+        } catch (creditError) {
+          console.error("Unable to return store credit for order", orderId, creditError);
+        }
       }
       // A refunded/charged-back MEMBERSHIP order ends the membership immediately
       // so its benefits stop — otherwise a customer could buy a membership, get
       // it refunded, and keep member pricing/free shipping/points forever.
-      try {
-        // An unreadable order is not a non-membership order: swallowing this
-        // read's error skipped the revocation and left the alert below blind to
-        // it, which is the exact failure that alert exists for.
-        const { data: refundedOrder, error: refundedOrderError } = await supabaseAdmin
-          .from("orders")
-          .select("order_type, customer_user_id")
-          .eq("order_id", orderId)
-          .maybeSingle();
-        if (refundedOrderError) throw refundedOrderError;
-        if (
-          refundedOrder
-          && String(refundedOrder.order_type ?? "product") === "membership"
-          && refundedOrder.customer_user_id
-        ) {
-          await revokeMembershipForRefund(String(refundedOrder.customer_user_id));
+      // Full reversals only: a partial refund on a membership order (a prorated
+      // month, a shipping adjustment) leaves the paid-for membership running.
+      if (refundOutcome.isFullRefund) {
+        try {
+          // An unreadable order is not a non-membership order: swallowing this
+          // read's error skipped the revocation and left the alert below blind to
+          // it, which is the exact failure that alert exists for.
+          const { data: refundedOrder, error: refundedOrderError } = await supabaseAdmin
+            .from("orders")
+            .select("order_type, customer_user_id")
+            .eq("order_id", orderId)
+            .maybeSingle();
+          if (refundedOrderError) throw refundedOrderError;
+          if (
+            refundedOrder
+            && String(refundedOrder.order_type ?? "product") === "membership"
+            && refundedOrder.customer_user_id
+          ) {
+            await revokeMembershipForRefund(String(refundedOrder.customer_user_id));
+          }
+        } catch (membershipError) {
+          console.error("Unable to revoke membership for refunded order", orderId, membershipError);
+          // NEITHER SWEPT NOR ALERTED until now. The refund sweep repairs the
+          // four idempotent refund effects; membership revocation is not one of
+          // them, so this failure had no console reader, no alert and no repair
+          // path — a customer whose membership was refunded kept member pricing,
+          // free shipping and points multipliers indefinitely.
+          await recordSystemAlert(unsafeEffectAlert("membership_revoke", orderId, membershipError))
+            .catch(() => {});
         }
-      } catch (membershipError) {
-        console.error("Unable to revoke membership for refunded order", orderId, membershipError);
-        // NEITHER SWEPT NOR ALERTED until now. The refund sweep repairs the
-        // four idempotent refund effects; membership revocation is not one of
-        // them, so this failure had no console reader, no alert and no repair
-        // path — a customer whose membership was refunded kept member pricing,
-        // free shipping and points multipliers indefinitely.
-        await recordSystemAlert(unsafeEffectAlert("membership_revoke", orderId, membershipError))
-          .catch(() => {});
       }
     }
 

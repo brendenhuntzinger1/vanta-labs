@@ -258,17 +258,23 @@ export function __resetInventoryAlertThrottle(): void {
  *
  * Best-effort. A failed read costs the ledger its rows, never the deduction —
  * the RPC that actually moves the stock does not depend on this.
+ *
+ * NULL, NOT AN EMPTY LIST, WHEN THE READ FAILED (F4). The caller now uses these
+ * lines to decide which of the order's lines the finalize did NOT cover, and
+ * "no holds existed" points at the opposite conclusion from "I could not find
+ * out". Conflating them would let a failed read turn a fully-finalized order
+ * into a full legacy decrement on top — every unit leaving the shelf twice.
  */
 async function readPendingHolds(
   orderId: string,
-): Promise<Array<{ slug: string; variantId: string | null; quantity: number }>> {
+): Promise<Array<{ slug: string; variantId: string | null; quantity: number }> | null> {
   try {
     const { data, error } = await supabaseAdmin
       .from("inventory_reservations")
       .select("slug, variant_id, quantity")
       .eq("order_id", orderId)
       .eq("status", "active");
-    if (error || !data) return [];
+    if (error || !data) return null;
     return (data as Array<{ slug?: string | null; variant_id?: string | null; quantity?: number | null }>)
       .map((row) => ({
         slug: String(row.slug ?? ""),
@@ -277,7 +283,7 @@ async function readPendingHolds(
       }))
       .filter((line) => line.slug.length > 0 && line.quantity > 0);
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -321,11 +327,35 @@ async function recordFinalizedHolds(
   }
 }
 
+/** What the finalize actually managed to commit. */
+export interface FinalizeInventoryResult {
+  /** Lines the RPC deducted. */
+  finalized: number;
+  /** The RPC is unavailable — the caller must fall back for the whole order. */
+  degraded: boolean;
+  /**
+   * WHICH lines were deducted, so the caller can decrement the rest (F4).
+   *
+   * `null` means the holds could not be enumerated, NOT that there were none.
+   * A caller that cannot see the lines must fall back to the coarse rule
+   * (decrement only when nothing finalized) rather than guess, because guessing
+   * the wrong way here decrements paid stock twice.
+   */
+  finalizedLines: Array<{ slug: string; variantId: string | null; quantity: number }> | null;
+}
+
 // A verified payment permanently deducts every active hold for the order.
 // Idempotent (a replay finds them already finalized). `finalized` is the number
 // of lines deducted; `degraded` means the RPC is unavailable so the caller must
 // fall back to the legacy decrement.
-export async function finalizeInventoryForOrder(orderId: string): Promise<{ finalized: number; degraded: boolean }> {
+//
+// F4. A RESERVATION CAN BE PARTIAL, AND THIS IS WHERE THAT BECOMES VISIBLE.
+// reserveInventoryForOrder holds line by line and returns `degraded: true` the
+// moment one line's RPC fails — after the earlier lines are already held. So an
+// order can arrive here with a hold on line 1 and none on line 2, and the count
+// alone cannot say which. `finalizedLines` is that missing fact; the caller
+// diffs it against the order's lines and decrements only what never moved.
+export async function finalizeInventoryForOrder(orderId: string): Promise<FinalizeInventoryResult> {
   // Captured before the RPC — see readPendingHolds. On a replay this is empty,
   // which is exactly why a replay adds no ledger rows.
   const pendingHolds = await readPendingHolds(orderId);
@@ -334,7 +364,7 @@ export async function finalizeInventoryForOrder(orderId: string): Promise<{ fina
       supabaseAdmin.rpc("finalize_inventory_for_order", { p_order_id: orderId }));
     if (error) {
       await reportInventoryRpcFailure("finalize_inventory_for_order", orderId, error);
-      return { finalized: 0, degraded: true };
+      return { finalized: 0, degraded: true, finalizedLines: null };
     }
     invalidateCatalogCache();
     const finalized = Number(data ?? 0);
@@ -342,21 +372,47 @@ export async function finalizeInventoryForOrder(orderId: string): Promise<{ fina
     // not happen is the same class of error as not recording one that did, and
     // the caller runs the fallback decrement on `finalized === 0` — which
     // writes its own rows.
-    if (finalized > 0) {
+    if (finalized > 0 && pendingHolds) {
       await recordFinalizedHolds(orderId, pendingHolds);
     }
-    return { finalized, degraded: false };
+    // A count the holds cannot account for is not a usable diff: the RPC moved
+    // more lines than this read can name, so the caller must not treat the
+    // remainder as unmoved.
+    const finalizedLines = pendingHolds && pendingHolds.length >= finalized ? pendingHolds : null;
+    return { finalized, degraded: false, finalizedLines };
   } catch (error) {
     await reportInventoryRpcFailure("finalize_inventory_for_order", orderId, error);
-    return { finalized: 0, degraded: true };
+    return { finalized: 0, degraded: true, finalizedLines: null };
   }
 }
 
 // Return every active hold for the order (failed/canceled/abandoned checkout).
 // Idempotent and best-effort — a release failure never blocks the caller.
+//
+// P2-5. THE ERROR WAS NEVER LOOKED AT. This awaited the rpc and guarded it with
+// try/catch alone — but supabase-js does not throw on a rejected request, it
+// RESOLVES with `{ data: null, error }`. So the failure this module cares most
+// about went past the catch untouched: production rejects roughly 0.1% of this
+// app's Supabase calls with a 401 (see isTransientAuthRejection), and every one
+// of them left a hold sitting on the shelf while this function returned as if it
+// had released it. `inventory_rpc_failed` could not fire for release at all —
+// the alert existed, but only for the throw path, which is the rare one. A
+// stranded hold makes stock unsellable until the expiry sweep reclaims it, and
+// for an order cancelled before payment there is no sweep window short enough
+// for the shopper who wanted that unit.
+//
+// Now it observes the error, retries the one narrow class of rejection that
+// provably never reached Postgres (identical to finalize and the sweep), and
+// alerts when the release really did not happen. Still best-effort for the
+// caller: the posture is fail-soft-but-loud, not fail-hard.
 export async function releaseInventoryForOrder(orderId: string): Promise<void> {
   try {
-    await supabaseAdmin.rpc("release_inventory_for_order", { p_order_id: orderId });
+    const { error } = await rpcWithAuthRetry(async () =>
+      supabaseAdmin.rpc("release_inventory_for_order", { p_order_id: orderId }));
+    if (error) {
+      await reportInventoryRpcFailure("release_inventory_for_order", orderId, error);
+      return;
+    }
     invalidateCatalogCache();
   } catch (error) {
     await reportInventoryRpcFailure("release_inventory_for_order", orderId, error);

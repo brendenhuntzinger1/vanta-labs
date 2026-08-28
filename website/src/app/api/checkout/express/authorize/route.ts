@@ -21,6 +21,7 @@ import {
 import { recordSystemAlert } from "@/lib/monitoring";
 import { isCheckoutOpen } from "@/lib/payment-provider";
 import { buildOrderRow, insertOrderItems, insertOrderRow, quoteOrder } from "@/lib/quote-order";
+import { describeTenderShortfall, releaseOrderTender, reserveOrderTender } from "@/lib/tender-reservation";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import type { CustomerInput } from "@/lib/payment-types";
 import { recordOrderAttribution } from "@/lib/order-attribution";
@@ -331,6 +332,33 @@ export async function POST(request: Request) {
     return refuse(message);
   }
 
+  // Hold the store credit this wallet order was priced with, exactly as the
+  // card lane does. quoteA READ the balance; without a hold the same balance
+  // funds this order and every other checkout the shopper has open, and the
+  // wallet lane is the one that sends no expectedTotal — the sheet is charged
+  // whatever the server computed, so an unfunded discount is never questioned.
+  //
+  // A hold that FAILS is treated as one that was refused: this lane promises
+  // "no charge was made", so it must not proceed to the charge on a balance it
+  // could not claim.
+  const tender = await reserveOrderTender({
+    orderId: claimed.order_id,
+    userId: claimed.customer_user_id,
+    storeCreditCents: quoteA.storeCreditRedeemedCents,
+    // This lane redeems no points (buildOrderRow above records pointsRedeemed: 0).
+    pointsRedeemed: 0,
+  }).catch((holdError: unknown) => {
+    console.error("Unable to hold store credit for express order", claimed.order_id, holdError);
+    return { ok: false as const, shortOf: null };
+  });
+  if (!tender.ok) {
+    await cancelOrder(claimed.order_id);
+    await releaseInventoryForOrder(claimed.order_id);
+    const message = describeTenderShortfall(tender.shortOf);
+    await finish(sessionId, { ok: false, outcome: "refused", message }, "failed");
+    return refuse(message);
+  }
+
   // ---- 5.8 Charge ---------------------------------------------------------
   const { outcome, redirectUrl } = await chargeViaVeyra({
     sessionId,
@@ -359,6 +387,9 @@ export async function POST(request: Request) {
       .update({ payment_status: "payment_failed", updated_at: new Date().toISOString() })
       .eq("order_id", claimed.order_id);
     await releaseInventoryForOrder(claimed.order_id);
+    // Veyra said no, so this order will never settle: the credit it is holding
+    // has to go back to the shopper with the stock.
+    await releaseOrderTender(claimed.order_id).catch(() => {});
     const result: AuthorizeResult = {
       ok: false,
       outcome,
@@ -382,6 +413,9 @@ export async function POST(request: Request) {
     // charge may have landed; here Veyra told us it explicitly did not.
     await cancelOrder(claimed.order_id);
     await releaseInventoryForOrder(claimed.order_id);
+    // Same reasoning as the stock release directly above: Veyra told us
+    // explicitly that this order was not charged.
+    await releaseOrderTender(claimed.order_id).catch(() => {});
     await recordSystemAlert({
       type: "express_duplicate_refused",
       severity: "warning",

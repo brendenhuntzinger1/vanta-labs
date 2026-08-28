@@ -368,6 +368,28 @@ export async function recordPointsLedgerEntry(input: {
 }
 
 /**
+ * Was this write refused because the row it would have created ALREADY EXISTS?
+ *
+ * The refund reversals below are exactly-once per (order_id, reason), and until
+ * now the only thing enforcing that was a SELECT immediately before the INSERT
+ * (`ledgerRowExists`). Read-then-insert is not exactly-once: the webhook's
+ * refund branch and the half-hourly refund sweep can — and on a slow refund do
+ * — both read "no row", and both insert. The customer is then credited twice
+ * for one refund.
+ *
+ * `idx_points_ledger_order_refund_once` (sql/refund-exactly-once-indexes.sql)
+ * closes that window in the database, where the race actually lives. This
+ * helper is the other half: the loser of the race gets 23505, and 23505 on
+ * these reasons means "somebody else already applied this refund effect",
+ * which is the same answer the guard above would have given a moment later.
+ * It is a NO-OP, not a failure — reporting it as a failure would have the
+ * sweep alerting on refunds that are, in fact, correctly applied.
+ */
+export function isDuplicateLedgerRow(error: unknown): boolean {
+  return String((error as { code?: unknown } | null)?.code ?? "") === "23505";
+}
+
+/**
  * HAS THIS ORDER ALREADY GOT A LEDGER ROW FOR THIS REASON?
  *
  * TWO DEFECTS IN ONE LINE LIVED HERE, THREE TIMES OVER.
@@ -397,12 +419,25 @@ async function ledgerRowExists(orderId: string, reason: string): Promise<boolean
   return Boolean(data && data.length > 0);
 }
 
+/**
+ * The ledger reason a points spend against an order is written under.
+ *
+ * Exported for the same reason as STORE_CREDIT_REDEMPTION_REASON: the
+ * checkout-time hold (tender-reservation.ts) writes this very row, so the two
+ * modules must agree on which rows mean "these points are spoken for".
+ */
+export const POINTS_REDEMPTION_REASON = "redeem";
+
 // Records a points REDEMPTION debit for an order, capped to the customer's LIVE
 // balance and idempotent per order — mirroring redeemStoreCredit. This prevents
 // two concurrent pending orders that each froze the same balance from
 // over-redeeming it (which would otherwise drive the ledger negative and hand
 // out more discount than the customer had points for), and prevents a webhook
 // retry from double-debiting.
+//
+// Checkout now HOLDS the points when the order is created, so the guard below
+// is usually what runs at settlement: the debit is already on the ledger and
+// this is a no-op. An order whose hold was released still debits here.
 export async function redeemPoints(userId: string, points: number, orderId: string): Promise<void> {
   const requested = Math.floor(Number(points));
   if (!userId || !Number.isFinite(requested) || requested <= 0) {
@@ -410,7 +445,7 @@ export async function redeemPoints(userId: string, points: number, orderId: stri
   }
 
   // Idempotent: if this order already recorded a redemption, don't debit again.
-  if (await ledgerRowExists(orderId, "redeem")) {
+  if (await ledgerRowExists(orderId, POINTS_REDEMPTION_REASON)) {
     return;
   }
 
@@ -420,7 +455,7 @@ export async function redeemPoints(userId: string, points: number, orderId: stri
     return;
   }
 
-  await recordPointsLedgerEntry({ userId, amount: -toRedeem, reason: "redeem", orderId });
+  await recordPointsLedgerEntry({ userId, amount: -toRedeem, reason: POINTS_REDEMPTION_REASON, orderId });
 }
 
 // Claws back the points a specific order earned. This is a simple full
@@ -458,12 +493,19 @@ export async function reverseOrderPoints(orderId: string): Promise<boolean> {
     return false;
   }
 
-  await recordPointsLedgerEntry({
-    userId: String(order.customer_user_id),
-    amount: -pointsEarned,
-    reason: "order_refund_reversal",
-    orderId,
-  });
+  try {
+    await recordPointsLedgerEntry({
+      userId: String(order.customer_user_id),
+      amount: -pointsEarned,
+      reason: "order_refund_reversal",
+      orderId,
+    });
+  } catch (error) {
+    // Lost the race to a concurrent webhook/sweep — see isDuplicateLedgerRow.
+    // The reversal exists, it just was not written by this caller.
+    if (isDuplicateLedgerRow(error)) return false;
+    throw error;
+  }
   return true;
 }
 
@@ -512,7 +554,7 @@ export async function restoreRedeemedPoints(orderId: string): Promise<boolean> {
     .from("points_ledger")
     .select("amount")
     .eq("order_id", orderId)
-    .eq("reason", "redeem");
+    .eq("reason", POINTS_REDEMPTION_REASON);
 
   if (debitError) throw debitError;
 
@@ -524,12 +566,18 @@ export async function restoreRedeemedPoints(orderId: string): Promise<boolean> {
     return false;
   }
 
-  await recordPointsLedgerEntry({
-    userId: String(order.customer_user_id),
-    amount: debited,
-    reason: "order_refund_points_restore",
-    orderId,
-  });
+  try {
+    await recordPointsLedgerEntry({
+      userId: String(order.customer_user_id),
+      amount: debited,
+      reason: "order_refund_points_restore",
+      orderId,
+    });
+  } catch (error) {
+    // Same race, same answer: the restore is already on the ledger.
+    if (isDuplicateLedgerRow(error)) return false;
+    throw error;
+  }
   return true;
 }
 

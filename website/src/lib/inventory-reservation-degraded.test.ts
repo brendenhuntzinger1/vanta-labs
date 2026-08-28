@@ -51,7 +51,7 @@ describe("finalize tells the caller when it could not do the job", () => {
     rpc.mockResolvedValue({ data: 3, error: null });
     const { finalizeInventoryForOrder } = await mod();
 
-    expect(await finalizeInventoryForOrder("order-1")).toEqual({ finalized: 3, degraded: false });
+    expect(await finalizeInventoryForOrder("order-1")).toMatchObject({ finalized: 3, degraded: false });
   });
 
   it("reports DEGRADED when the RPC returns an error", async () => {
@@ -60,14 +60,14 @@ describe("finalize tells the caller when it could not do the job", () => {
     rpc.mockResolvedValue({ data: null, error: { message: "function does not exist" } });
     const { finalizeInventoryForOrder } = await mod();
 
-    expect(await finalizeInventoryForOrder("order-1")).toEqual({ finalized: 0, degraded: true });
+    expect(await finalizeInventoryForOrder("order-1")).toMatchObject({ finalized: 0, degraded: true });
   });
 
   it("reports DEGRADED when the call throws", async () => {
     rpc.mockRejectedValue(new Error("connection reset"));
     const { finalizeInventoryForOrder } = await mod();
 
-    expect(await finalizeInventoryForOrder("order-1")).toEqual({ finalized: 0, degraded: true });
+    expect(await finalizeInventoryForOrder("order-1")).toMatchObject({ finalized: 0, degraded: true });
   });
 
   it("never claims to have deducted a line it did not deduct", async () => {
