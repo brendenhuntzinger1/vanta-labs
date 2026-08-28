@@ -52,6 +52,23 @@ select id, name, email, referral_code, commission_percent, customer_discount_per
 insert into coupons (code, discount_type, discount_value, active, member_scope)
 values ('HARNESS10','percent',10,true,'all');
 
+-- PRODUCTION'S REAL TIER STRUCTURE, ids and all.
+--
+-- The harness used to carry one invented tier ("core"), which is not a tier
+-- production has. That is not a cosmetic difference: the app HARD FAILS with
+-- "Free membership tier is not configured" when no `free` tier exists, so a
+-- signed-in customer with no membership row 500'd on the harness while behaving
+-- correctly in production — a defect that exists only in the test rig, which is
+-- exactly the kind that burns an afternoon and gets reported as a false P0.
+--
+-- Mirrored from production 2026-08-28 (5 tiers; `essential` is deliberately
+-- inactive there). `core` is kept so older harness fixtures still resolve.
 insert into membership_tiers (id, slug, name, monthly_price_cents, annual_price_cents, member_discount_percent, is_active, position)
-values ('eeeeeeee-0000-4000-8000-000000000001','core','Core Member',2900,29000,10,true,1);
+values
+  ('ab7024d9-49f1-4fa7-888d-bb3171633443','free','Research Member',0,0,0,true,0),
+  ('eeeeeeee-0000-4000-8000-000000000001','core','Core Member',2900,29000,10,true,1),
+  ('a6b2dabf-c808-4185-bb1a-ae87efd5b86e','essential','Vanta Essential',999,0,5,false,2),
+  ('7b8411bc-5920-4243-bdc0-9d974462cabc','pro','Vanta Pro',2499,0,8,true,3),
+  ('04710059-a614-477d-a52a-ccc163119e45','elite','Vanta Elite',3999,0,10,true,4),
+  ('2b470dfa-c479-47db-b78e-6dfcfa2946f9','black','Vanta Black',8999,0,12,true,5);
 commit;
