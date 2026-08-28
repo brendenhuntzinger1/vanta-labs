@@ -180,6 +180,26 @@ inert behind a `qual false` policy.
 
 ## Not restated here, deliberately
 
+## The one item I could not do from here
+
+**Enable Supabase Auth's leaked-password protection.** It checks new and changed
+passwords against HaveIBeenPwned and refuses known-breached ones. It is off. For
+a store holding customer accounts this is free protection against credential
+stuffing, and it is the only WARN left in Supabase's own security advisor that
+is both real and unaddressed.
+
+It is an Auth **project setting**, not SQL, so no migration can turn it on and
+none of the tools available here reach it. One toggle:
+<https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection>
+
+Everything else the advisor reports is intended and documented in
+`migrations-applied/20260828T0518_pin_function_search_path.sql`: ~50 INFO
+`rls_enabled_no_policy` entries are the deny-all lock, not a gap, and the two
+`validate_referral_code` warnings are the one deliberately client-callable
+function.
+
+---
+
 **F-16-04 update, 2026-08-28.** The repository half of this is now checked and
 clean: a scan for `sk_live_`, `rk_live_`, `sk-`, `SG.` and `xox[baprs]-` key
 shapes across every `.ts/.tsx/.js/.mjs/.json/.md/.sql/.sh/.yml` file found
