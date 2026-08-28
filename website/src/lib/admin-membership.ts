@@ -1,10 +1,17 @@
 import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 import { isPaidBillingEvent } from "@/lib/membership-status";
 import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
 import { startOfCurrentMonthIso } from "@/lib/store-credit";
 import type { MembershipTier } from "@/lib/membership";
+
+// Ceiling on the two ledger reads these admin screens fold in JS. Same value
+// the money reads in admin-analytics/admin-revenue use: it bounds memory, it
+// does not define the answer — `truncated` is checked and refused, because a
+// balance that is quietly too low is worse than a screen that says it broke.
+const MAX_LEDGER_ROWS = 200_000;
 
 function mapTier(row: Record<string, unknown>): MembershipTier {
   return {
@@ -270,17 +277,35 @@ async function listAllAuthUsers(): Promise<AuthUser[]> {
 // customer_memberships only store user_id. Pages through ALL users so balances
 // aren't silently capped at the first 1000 as the customer base grows.
 export async function listCustomerBalances(search?: string): Promise<CustomerBalanceRow[]> {
-  const [authUsersAll, { data: ledgerRows, error: ledgerError }, { data: memberships, error: membershipError }] = await Promise.all([
+  const [authUsersAll, ledger, { data: memberships, error: membershipError }] = await Promise.all([
     listAllAuthUsers(),
-    supabaseAdmin.from("points_ledger").select("user_id, amount"),
+    // PAGED. points_ledger gets a row per earn AND per redemption, so it grows
+    // faster than the order table itself; an unpaged read stops silently at the
+    // server's row cap and every balance computed from it comes out LOW — a
+    // customer's points look spent when they are not. The auth read beside it
+    // has always paged for exactly this reason.
+    readAllRowsBounded<{ user_id: string; amount: number | null }>(
+      (from, to) => supabaseAdmin
+        .from("points_ledger")
+        .select("user_id, amount")
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: Array<{ user_id: string; amount: number | null }> | null; error: unknown }>,
+      { maxRows: MAX_LEDGER_ROWS, label: "points_ledger read (customer balances)" },
+    ),
     supabaseAdmin.from("customer_memberships").select("user_id, status, membership_tiers(name)"),
   ]);
 
-  if (ledgerError) throw ledgerError;
   if (membershipError) throw membershipError;
+  if (ledger.truncated) {
+    // Refuse rather than render balances that are quietly too low: this screen
+    // is what an admin uses to answer "how many points does this customer have".
+    throw new Error(
+      `Points ledger exceeded ${MAX_LEDGER_ROWS} rows; refusing to show balances computed from part of it.`,
+    );
+  }
 
   const balanceByUser = new Map<string, number>();
-  for (const row of ledgerRows ?? []) {
+  for (const row of ledger.rows) {
     const userId = String(row.user_id);
     balanceByUser.set(userId, (balanceByUser.get(userId) ?? 0) + Number(row.amount ?? 0));
   }
@@ -345,7 +370,7 @@ export interface MembershipRosterRow {
 // exact tier, billing cycle, status, join date, next billing, and store-credit
 // balance. Powers the Members section of Admin → Membership.
 export async function listMembershipRoster(): Promise<MembershipRosterRow[]> {
-  const [authUsers, { data: memberships, error }, { data: creditRows }] = await Promise.all([
+  const [authUsers, { data: memberships, error }, credit] = await Promise.all([
     listAllAuthUsers(),
     supabaseAdmin
       .from("customer_memberships")
@@ -356,18 +381,31 @@ export async function listMembershipRoster(): Promise<MembershipRosterRow[]> {
     // the whole ledger here made admin report $35.00 for an account whose real
     // spendable balance was $5.00: a $30 grant from a previous month plus this
     // month's $5. Admin must show the same money the customer has.
-    supabaseAdmin
-      .from("store_credit_ledger")
-      .select("user_id, amount_cents")
-      .gte("created_at", startOfCurrentMonthIso())
-      .then((r) => r, () => ({ data: null })),
+    //
+    // PAGED, for the same reason as points_ledger above: a short read here does
+    // not fail, it just reports less credit than the customer can actually
+    // spend, and admin and checkout then disagree about the same money.
+    readAllRowsBounded<{ user_id: string | null; amount_cents: number | null }>(
+      (from, to) => supabaseAdmin
+        .from("store_credit_ledger")
+        .select("user_id, amount_cents")
+        .gte("created_at", startOfCurrentMonthIso())
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: Array<{ user_id: string | null; amount_cents: number | null }> | null; error: unknown }>,
+      { maxRows: MAX_LEDGER_ROWS, label: "store_credit_ledger read (membership roster)" },
+    ).then((r) => r, () => ({ rows: [] as Array<{ user_id: string | null; amount_cents: number | null }>, truncated: false })),
   ]);
   if (error) throw error;
+  if (credit.truncated) {
+    throw new Error(
+      `Store credit ledger exceeded ${MAX_LEDGER_ROWS} rows this month; refusing to show balances computed from part of it.`,
+    );
+  }
 
   const userById = new Map(authUsers.map((user) => [user.id, user]));
 
   const creditByUser = new Map<string, number>();
-  for (const row of (creditRows ?? []) as Array<{ user_id?: string; amount_cents?: number }>) {
+  for (const row of credit.rows) {
     const id = String(row.user_id ?? "");
     creditByUser.set(id, (creditByUser.get(id) ?? 0) + Number(row.amount_cents ?? 0));
   }

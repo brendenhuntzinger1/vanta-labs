@@ -188,6 +188,13 @@ const MAX_PARTNER_ROWS = 200_000;
 // applied in slices of this size.
 const ID_FILTER_SLICE = 150;
 
+// Per-tick ceiling for the auto-approval sweep. Sized far above any plausible
+// one-hour backlog so it is normally never the binding limit, but finite so a
+// runaway pending table cannot pull the whole thing into memory. Rows it does
+// not reach stay `pending` and are picked up by the next tick — the sweep is
+// idempotent and ordered oldest-first.
+const MAX_AUTO_APPROVE_ROWS = 50_000;
+
 function chunkIds<T>(ids: T[], size = ID_FILTER_SLICE): T[][] {
   const chunks: T[][] = [];
   for (let index = 0; index < ids.length; index += size) {
@@ -366,15 +373,56 @@ export async function autoApproveEligibleCommissions() {
   }
 
   const holdPeriodMs = Math.max(1, ambassadorSettings.commissionHoldDays) * 24 * 60 * 60 * 1000;
+  // `now - created_at >= holdPeriodMs` is exactly `created_at <= now - hold`.
+  // Applying it in the query rather than only in JS below is what keeps this
+  // read from growing with the whole pending backlog: rows still inside their
+  // hold window, and fraud-flagged rows (which never auto-approve at all), are
+  // the two groups that otherwise sit in `pending` and get re-read every tick.
+  const holdCutoffIso = new Date(now.getTime() - holdPeriodMs).toISOString();
 
-  const { data: pendingRows, error: pendingError } = await supabaseAdmin
-    .from("referral_orders")
-    .select("id, order_id, ambassador_id, created_at, payment_status, ineligible_reason, fraud_flag")
-    .eq("payment_status", "pending");
+  // PAGED. This is a cron sweep over a table that grows with every referred
+  // order, and an unpaged read stops silently at the server's row cap — which
+  // here means commissions past the cap simply never auto-approve, with no
+  // error anywhere. The JS filter below still decides eligibility; the query
+  // only narrows what has to be read.
+  const { rows: pendingRows, truncated: pendingTruncated } = await readAllRowsBounded<{
+    id: string;
+    order_id: string;
+    ambassador_id: string | null;
+    created_at: string;
+    payment_status: string | null;
+    ineligible_reason: string | null;
+    fraud_flag: boolean | null;
+  }>(
+    (from, to) => supabaseAdmin
+      .from("referral_orders")
+      .select("id, order_id, ambassador_id, created_at, payment_status, ineligible_reason, fraud_flag")
+      .eq("payment_status", "pending")
+      .not("fraud_flag", "is", true)
+      .lte("created_at", holdCutoffIso)
+      .order("created_at", { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: Array<{
+        id: string;
+        order_id: string;
+        ambassador_id: string | null;
+        created_at: string;
+        payment_status: string | null;
+        ineligible_reason: string | null;
+        fraud_flag: boolean | null;
+      }> | null; error: unknown }>,
+    { maxRows: MAX_AUTO_APPROVE_ROWS, label: "referral_orders.select(auto approve pending)" },
+  );
 
-  assertNoSupabaseError("referral_orders.select(auto approve pending)", pendingError);
+  if (pendingTruncated) {
+    // Not an error: the sweep is idempotent and runs again, and rows it did not
+    // reach are still `pending`. Worth saying out loud, because a backlog this
+    // size means approvals are falling behind the order rate.
+    console.warn(
+      `autoApproveEligibleCommissions: more than ${MAX_AUTO_APPROVE_ROWS} pending commissions are past their hold period; approving the oldest ${MAX_AUTO_APPROVE_ROWS} this run.`,
+    );
+  }
 
-  if (!pendingRows || pendingRows.length === 0) {
+  if (pendingRows.length === 0) {
     return;
   }
 
@@ -387,22 +435,31 @@ export async function autoApproveEligibleCommissions() {
   // before releasing a payout. Gating accrual on `ambassadors` alone while the
   // payout gate read `partners` let commissions advance to approved_for_payout
   // for someone the payout gate would then refuse forever.
-  const [
-    { data: ambassadorRows, error: ambassadorError },
-    { data: partnerStatusRows, error: partnerStatusError },
-  ] = ambassadorIds.length
-    ? await Promise.all([
-      supabaseAdmin.from("ambassadors").select("id, status").in("id", ambassadorIds),
-      supabaseAdmin.from("partners").select("id, status").in("id", ambassadorIds),
-    ])
-    : [{ data: [], error: null }, { data: [], error: null }];
-  assertNoSupabaseError("ambassadors.select(auto approve status)", ambassadorError);
-  assertNoSupabaseError("partners.select(auto approve status)", partnerStatusError);
+  //
+  // SLICED, like markCommissionsPaid below: `ambassadorIds` is now bounded by
+  // the pending backlog rather than by one page, and PostgREST puts `in.(...)`
+  // in the request URL — a few hundred uuids there is a 414, which would abort
+  // the sweep and stop every payout rather than approve anything.
+  const ambassadorRows: Array<{ id: string; status: string | null }> = [];
+  const partnerStatusRows: Array<{ id: string; status: string | null }> = [];
+  for (const slice of chunkIds(ambassadorIds)) {
+    const [
+      { data: ambassadorSlice, error: ambassadorError },
+      { data: partnerSlice, error: partnerStatusError },
+    ] = await Promise.all([
+      supabaseAdmin.from("ambassadors").select("id, status").in("id", slice),
+      supabaseAdmin.from("partners").select("id, status").in("id", slice),
+    ]);
+    assertNoSupabaseError("ambassadors.select(auto approve status)", ambassadorError);
+    assertNoSupabaseError("partners.select(auto approve status)", partnerStatusError);
+    ambassadorRows.push(...((ambassadorSlice ?? []) as Array<{ id: string; status: string | null }>));
+    partnerStatusRows.push(...((partnerSlice ?? []) as Array<{ id: string; status: string | null }>));
+  }
   const approvedInPartners = new Set(
-    (partnerStatusRows ?? []).filter((row) => row.status === "approved").map((row) => row.id),
+    partnerStatusRows.filter((row) => row.status === "approved").map((row) => row.id),
   );
   const approvedAmbassadorIds = new Set(
-    (ambassadorRows ?? [])
+    ambassadorRows
       .filter((row) => row.status === "approved" && approvedInPartners.has(row.id))
       .map((row) => row.id),
   );
@@ -412,14 +469,18 @@ export async function autoApproveEligibleCommissions() {
     return;
   }
 
-  const { data: orderRows, error: orderError } = await supabaseAdmin
-    .from("orders")
-    .select("order_id, payment_status")
-    .in("order_id", orderIds);
+  const orderRows: Array<{ order_id: string; payment_status: string | null }> = [];
+  for (const slice of chunkIds(orderIds)) {
+    const { data: orderSlice, error: orderError } = await supabaseAdmin
+      .from("orders")
+      .select("order_id, payment_status")
+      .in("order_id", slice);
 
-  assertNoSupabaseError("orders.select(auto approve pending)", orderError);
+    assertNoSupabaseError("orders.select(auto approve pending)", orderError);
+    orderRows.push(...((orderSlice ?? []) as Array<{ order_id: string; payment_status: string | null }>));
+  }
 
-  const orderStatusById = new Map((orderRows ?? []).map((row) => [row.order_id, row.payment_status]));
+  const orderStatusById = new Map(orderRows.map((row) => [row.order_id, row.payment_status]));
 
   const eligibleIds = pendingRows
     .filter((row) => {
@@ -458,25 +519,35 @@ export async function autoApproveEligibleCommissions() {
   // money that was reversed (or already paid) back into the payout queue, where
   // it gets paid again. markCommissionsPaid has always claimed its rows this
   // way; this path never did.
-  const { data: claimedRows, error: approveError } = await supabaseAdmin
-    .from("referral_orders")
-    .update({ payment_status: "approved_for_payout", approved_for_payout_at: approvedAt, updated_at: approvedAt })
-    .in("id", eligibleIds)
-    .eq("payment_status", "pending")
-    .select("id, order_id");
+  //
+  // SLICED for the URL-length reason above. Safe to split: the per-ROW
+  // `.eq("payment_status", "pending")` guard is what makes the claim correct,
+  // not the fact that it used to be one statement — a row can still only be
+  // claimed once, so nothing is approved twice and nothing is lost. A slice
+  // that fails leaves the rows it did not claim `pending` for the next tick.
+  const claimedRows: Array<{ id: string; order_id: string }> = [];
+  for (const slice of chunkIds(eligibleIds)) {
+    const { data: claimedSlice, error: approveError } = await supabaseAdmin
+      .from("referral_orders")
+      .update({ payment_status: "approved_for_payout", approved_for_payout_at: approvedAt, updated_at: approvedAt })
+      .in("id", slice)
+      .eq("payment_status", "pending")
+      .select("id, order_id");
 
-  assertNoSupabaseError("referral_orders.update(auto approve)", approveError);
+    assertNoSupabaseError("referral_orders.update(auto approve)", approveError);
+    claimedRows.push(...((claimedSlice ?? []) as Array<{ id: string; order_id: string }>));
+  }
 
   // Mirror only what this call actually claimed, not what it hoped to claim.
   // Keying off the pre-read list would move `commissions` rows whose
   // authoritative row was just claimed by someone else.
-  const claimedOrderIds = (claimedRows ?? []).map((row) => row.order_id).filter(Boolean);
+  const claimedOrderIds = claimedRows.map((row) => row.order_id).filter(Boolean);
 
-  if (claimedOrderIds.length > 0) {
+  for (const slice of chunkIds(claimedOrderIds)) {
     const { error: mirrorError } = await supabaseAdmin
       .from("commissions")
       .update({ status: "approved_for_payout", updated_at: approvedAt })
-      .in("order_id", claimedOrderIds)
+      .in("order_id", slice)
       // Same reasoning one statement later: a reversal can land between the two
       // ledger writes, and an unguarded mirror would silently undo it on this
       // side only, leaving the two ledgers disagreeing about the same order.

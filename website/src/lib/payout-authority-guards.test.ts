@@ -93,23 +93,46 @@ vi.mock("@/lib/ambassador-settings", () => ({
 vi.mock("@/lib/supabase-server", () => {
   const from = (table: string) => {
     if (table === "referral_orders") {
+      // The sweep's pending read now narrows in the QUERY — it excludes
+      // fraud-flagged rows and rows still inside the hold window, and it pages.
+      // The fake applies all three: a stub that accepted `.not`/`.lte`/`.range`
+      // and ignored them would let the suite pass while the gates it is here to
+      // prove had moved somewhere that nothing checks.
+      const q: {
+        statuses: string[];
+        excludeFraud: boolean;
+        createdAtMax: string | null;
+        from: number | null;
+        to: number | null;
+      } = { statuses: [], excludeFraud: false, createdAtMax: null, from: null, to: null };
       const b: Record<string, unknown> = {
-        _statuses: [] as string[],
         select: () => b,
         eq(_column: string, value: string) {
-          (b as { _statuses: string[] })._statuses = [value];
+          q.statuses = [value];
           return b;
         },
         in(column: string, values: string[]) {
-          if (column === "payment_status") (b as { _statuses: string[] })._statuses = values;
+          if (column === "payment_status") q.statuses = values;
           return b;
         },
+        not(column: string, op: string, value: unknown) {
+          if (column === "fraud_flag" && op === "is" && value === true) q.excludeFraud = true;
+          return b;
+        },
+        lte(column: string, value: string) {
+          if (column === "created_at") q.createdAtMax = value;
+          return b;
+        },
+        order: () => b,
+        range(from: number, to: number) { q.from = from; q.to = to; return b; },
         then(resolve: (v: unknown) => unknown) {
-          const statuses = (b as { _statuses: string[] })._statuses;
           // Snapshot: the caller holds these rows even if the table moves on.
-          const rows = db.referralOrders
-            .filter((r) => statuses.includes(r.payment_status))
+          let rows = db.referralOrders
+            .filter((r) => q.statuses.includes(r.payment_status))
+            .filter((r) => (q.excludeFraud ? (r as unknown as Record<string, unknown>).fraud_flag !== true : true))
+            .filter((r) => (q.createdAtMax === null ? true : String(r.created_at) <= q.createdAtMax))
             .map((r) => ({ ...r }));
+          if (q.from !== null) rows = rows.slice(q.from, q.to === null ? undefined : q.to + 1);
           const hook = db.mutateAfterRead;
           db.mutateAfterRead = null;
           hook?.();

@@ -49,6 +49,7 @@ function matches(row: Row, filters: Filter[]) {
     const held = row[column] ?? null;
     if (op === "eq") return held === value;
     if (op === "is") return held === value;
+    if (op === "gte") return String(held ?? "") >= String(value ?? "");
     return true;
   });
 }
@@ -66,8 +67,17 @@ function selectBuilder(table: string) {
     eq(column: string, value: unknown) { filters.push(["eq", column, value]); return builder; },
     is(column: string, value: unknown) { filters.push(["is", column, value]); return builder; },
     in() { return builder; },
+    gte(column: string, value: unknown) { filters.push(["gte", column, value]); return builder; },
     order() { return builder; },
     limit: async (n: number) => settle(n),
+    // PostgREST's Range, inclusive at both ends. Needed since the tier count
+    // began paging; a stub that ignored it would hand the pager the same page
+    // forever.
+    range: async (from: number, to: number) => {
+      const result = settle();
+      if (result.error) return result;
+      return { data: (result.data ?? []).slice(from, to + 1), error: null };
+    },
     // PostgREST returns PGRST116 for maybeSingle() when MORE THAN ONE row
     // matches — the behaviour that turned the first duplicate into a
     // permanently disabled guard.

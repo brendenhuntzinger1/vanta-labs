@@ -5,6 +5,7 @@ import {
 } from "@/lib/store-credit";
 import { POINTS_REDEMPTION_REASON } from "@/lib/membership";
 import { UNPAID_STATUSES } from "@/lib/order-status";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 
 // ---------------------------------------------------------------------------
 // NON-CASH TENDER IS HELD AT CHECKOUT, THE WAY STOCK IS.
@@ -97,6 +98,11 @@ interface LedgerRow {
   [column: string]: unknown;
 }
 
+// Ceiling on ONE customer's ledger read. Far above any real customer's
+// lifetime row count, so it is never the binding limit in practice; it exists
+// so a runaway ledger cannot be silently half-read into a spend authorisation.
+const MAX_LEDGER_SCAN_ROWS = 100_000;
+
 /** The one ordering every writer agrees on, so exactly one of them wins a race. */
 function inLedgerOrder(a: LedgerRow, b: LedgerRow): number {
   const byTime = String(a.created_at ?? "").localeCompare(String(b.created_at ?? ""));
@@ -165,19 +171,49 @@ async function claim(
   // Was the balance actually there? Sum the ledger in the agreed order and stop
   // at our own row: everything ahead of us has a prior claim on it.
   const windowStart = spec.windowStartIso();
-  let query = supabaseAdmin
-    .from(spec.table)
-    .select(`id, created_at, ${spec.amountColumn}`)
-    .eq("user_id", userId);
-  if (windowStart) query = query.gte("created_at", windowStart);
-  const { data: ledger, error: readError } = await query;
-  if (readError) {
+  // PAGED, and ordered in the QUERY so the pages join up.
+  //
+  // Points have no window at all (POINTS.windowStartIso returns null), so this
+  // is the customer's whole lifetime ledger — and an unpaged read of it stops
+  // at the server's row cap without saying so. That is not a slow read, it is a
+  // wrong one: the rows come back in no particular order, so a truncated read
+  // may not even contain OUR row, in which case the loop below never breaks and
+  // sums an arbitrary subset of the ledger. The result is a solvency proof for
+  // a balance nobody checked. A read that could not be completed is treated the
+  // same way a failed one already is — the hold goes back.
+  let ledger: LedgerRow[];
+  let ledgerTruncated: boolean;
+  try {
+    const read = await readAllRowsBounded<LedgerRow>(
+      (from, to) => {
+        let query = supabaseAdmin
+          .from(spec.table)
+          .select(`id, created_at, ${spec.amountColumn}`)
+          .eq("user_id", userId);
+        if (windowStart) query = query.gte("created_at", windowStart);
+        return query
+          .order("created_at", { ascending: true })
+          .order("id", { ascending: true })
+          .range(from, to) as unknown as PromiseLike<{ data: LedgerRow[] | null; error: unknown }>;
+      },
+      { maxRows: MAX_LEDGER_SCAN_ROWS, label: `${spec.table} solvency read` },
+    );
+    ledger = read.rows;
+    ledgerTruncated = read.truncated;
+  } catch (readError) {
     // Cannot prove the claim is solvent. Take it back rather than assume.
     await releaseHold(spec, orderId);
     throw readError;
   }
 
-  const rows = ((ledger ?? []) as LedgerRow[]).slice().sort(inLedgerOrder);
+  if (ledgerTruncated) {
+    await releaseHold(spec, orderId);
+    throw new Error(
+      `${spec.table} exceeded ${MAX_LEDGER_SCAN_ROWS} rows for one customer; the ${spec.label} hold was released rather than granted on an incomplete balance.`,
+    );
+  }
+
+  const rows = ledger.slice().sort(inLedgerOrder);
   let running = 0;
   for (const row of rows) {
     running += Number(row[spec.amountColumn] ?? 0);
