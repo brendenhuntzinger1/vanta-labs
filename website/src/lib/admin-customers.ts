@@ -2,6 +2,7 @@ import "server-only";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { netOrderRevenue } from "@/lib/ledger";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 
 // There is no customer-account system yet (Phase 5) - this aggregates the
 // guest checkout orders already in Supabase by email. It is a reporting
@@ -190,9 +191,34 @@ function csvEscape(value: unknown) {
   return text;
 }
 
+// Ceiling on the export. Bounds memory for a file an admin downloads; the read
+// below observes whether it bound the answer, and says so rather than handing
+// over a CSV that is quietly missing customers.
+const MAX_EXPORT_ROWS = 200_000;
+
 export async function exportCustomersCsv(): Promise<string> {
-  // Prefer the RPC (all rows, no cap); fall back to the legacy 5k JS path.
-  const rpc = await rpcCustomerRows(null, null, 0);
+  // The RPC aggregates in Postgres, but the RESPONSE still comes back through
+  // PostgREST, which caps it at db-max-rows (1,000) and says nothing — so
+  // "p_limit null = all rows" was true of the function and false of the export.
+  // Page it through the RPC's own p_limit/p_offset, advancing by the rows
+  // actually received and stopping only on an empty page.
+  const rpc = await readAllRowsBounded<AdminCustomerRow>(
+    async (from, to) => {
+      const page = await rpcCustomerRows(null, to - from + 1, from);
+      // null means the RPC isn't migrated — surface it as an error so the
+      // legacy fallback below still runs instead of exporting an empty file.
+      if (!page) return { data: null, error: new Error("admin_customer_rollup unavailable") };
+      return { data: page.rows, error: null };
+    },
+    { maxRows: MAX_EXPORT_ROWS, label: "customer export" },
+  ).catch(() => null);
+
+  if (rpc?.truncated) {
+    throw new Error(
+      `Customer export exceeded ${MAX_EXPORT_ROWS} rows; refusing to download a file that silently stops part-way.`,
+    );
+  }
+
   const customers = rpc ? rpc.rows : await aggregateCustomers();
   const header = ["email", "name", "orderCount", "totalSpent", "firstOrderAt", "lastOrderAt"];
 

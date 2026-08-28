@@ -284,6 +284,12 @@ export class FakeDb {
         }
         if (limitCount != null) rows = rows.slice(0, limitCount);
         if (rangeFrom != null) rows = rows.slice(rangeFrom, rangeTo == null ? undefined : rangeTo + 1);
+        // ...and then the server's own ceiling, which it applies LAST and does
+        // not mention. Without this the fake happily returns 5,000 rows to a
+        // caller that asked for "everything", so a read that pages and a read
+        // that does not are indistinguishable here — and the one bug paging
+        // exists to prevent is exactly the one this fake could not show.
+        rows = rows.slice(0, DB_MAX_ROWS);
         const projected = rows.map((row) => {
           const copy: Row = { ...row };
           for (const embed of embeds) {
@@ -602,6 +608,11 @@ export class FakeDb {
     }
   }
 }
+
+// What PostgREST will answer in ONE request, however many rows the query
+// matches (Supabase ships `db-max-rows=1000`). It is applied silently: the
+// response is a valid, short array with no error and no flag.
+const DB_MAX_ROWS = 1000;
 
 export function createFakeDb(): FakeDb {
   return new FakeDb();

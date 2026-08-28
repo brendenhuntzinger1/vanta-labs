@@ -99,13 +99,19 @@ create table public.admin_audit_logs (
 `;
 
 let pool: Pool | null = null;
-type Filter = { op: "eq" | "neq" | "in" | "is"; col: string; val: unknown };
+type Filter = { op: "eq" | "neq" | "in" | "is" | "isnot" | "lte" | "gte"; col: string; val: unknown };
+
+// PostgREST answers at most `db-max-rows` per request, silently.
+const DB_MAX_ROWS = 1000;
 
 class Query implements PromiseLike<{ data: unknown; error: unknown }> {
   private filters: Filter[] = [];
   private cols = "*";
   private returning = false;
   private singleMode: "none" | "maybe" | "one" = "none";
+  private orderBy: Array<{ col: string; asc: boolean }> = [];
+  private rangeFrom: number | null = null;
+  private rangeTo: number | null = null;
   constructor(private table: string, private mode: "select" | "update" | "insert",
               private payload?: Record<string, unknown>) {}
   select(cols?: string) {
@@ -117,6 +123,18 @@ class Query implements PromiseLike<{ data: unknown; error: unknown }> {
   neq(col: string, val: unknown) { this.filters.push({ op: "neq", col, val }); return this; }
   in(col: string, val: unknown[]) { this.filters.push({ op: "in", col, val }); return this; }
   is(col: string, val: unknown) { this.filters.push({ op: "is", col, val }); return this; }
+  not(col: string, op: string, val: unknown) {
+    if (op !== "is") throw new Error(`double does not model .not(${op})`);
+    this.filters.push({ op: "isnot", col, val });
+    return this;
+  }
+  lte(col: string, val: unknown) { this.filters.push({ op: "lte", col, val }); return this; }
+  gte(col: string, val: unknown) { this.filters.push({ op: "gte", col, val }); return this; }
+  order(col: string, opts?: { ascending?: boolean }) {
+    this.orderBy.push({ col, asc: opts?.ascending !== false });
+    return this;
+  }
+  range(from: number, to: number) { this.rangeFrom = from; this.rangeTo = to; return this; }
   maybeSingle() { this.singleMode = "maybe"; return this.run(); }
   single() { this.singleMode = "one"; return this.run(); }
   then<R1, R2>(ok?: ((v: { data: unknown; error: unknown }) => R1 | PromiseLike<R1>) | null,
@@ -126,18 +144,35 @@ class Query implements PromiseLike<{ data: unknown; error: unknown }> {
   private where(values: unknown[]) {
     const parts = this.filters.map((f) => {
       if (f.op === "is") return `${f.col} is ${f.val === null ? "null" : "not null"}`;
+      if (f.op === "isnot") return `${f.col} is not ${f.val === null ? "null" : String(f.val)}`;
       values.push(f.val);
       if (f.op === "eq") return `${f.col} = $${values.length}`;
       if (f.op === "neq") return `${f.col} <> $${values.length}`;
+      if (f.op === "lte") return `${f.col} <= $${values.length}`;
+      if (f.op === "gte") return `${f.col} >= $${values.length}`;
       return `${f.col} = any($${values.length})`;
     });
     return parts.length ? ` where ${parts.join(" and ")}` : "";
+  }
+
+  /** ORDER BY plus the LIMIT/OFFSET PostgREST derives from Range, capped. */
+  private tail() {
+    let sql = "";
+    if (this.orderBy.length) {
+      sql += ` order by ${this.orderBy.map((o) => `${o.col} ${o.asc ? "asc" : "desc"}`).join(", ")}`;
+    }
+    const offset = this.rangeFrom ?? 0;
+    const asked = this.rangeTo === null ? Number.POSITIVE_INFINITY : this.rangeTo - offset + 1;
+    const limit = Math.max(0, Math.min(asked, DB_MAX_ROWS));
+    if (Number.isFinite(limit)) sql += ` limit ${limit}`;
+    if (offset > 0) sql += ` offset ${offset}`;
+    return sql;
   }
   private async run(): Promise<{ data: unknown; error: unknown }> {
     const values: unknown[] = [];
     let sql: string;
     if (this.mode === "select") {
-      sql = `select ${this.cols} from public.${this.table}${this.where(values)}`;
+      sql = `select ${this.cols} from public.${this.table}${this.where(values)}${this.tail()}`;
     } else if (this.mode === "update") {
       const sets = Object.entries(this.payload ?? {}).map(([k, v]) => {
         values.push(v !== null && typeof v === "object" && !(v instanceof Date) ? JSON.stringify(v) : v);

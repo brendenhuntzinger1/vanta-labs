@@ -34,6 +34,31 @@ const RECONCILE_MAX_PAGES = 10;
 /** Past this a still-unknown charge needs a human, not another poll. */
 const RECONCILE_STALE_MS = 24 * 60 * 60 * 1000;
 /**
+ * Timeout on ONE poll of the processor.
+ *
+ * K-19 gave every outbound Veyra call in veyra-membership.ts a 15s timeout,
+ * because "a hung processor held a checkout or a renewal open until the
+ * platform killed it". This file calls the same API and was missed. It is the
+ * worse place to miss: fetch has no default request timeout, so one hung
+ * connection here consumed the WHOLE 60s function budget, and every other job
+ * sharing the sweep — campaigns, automations, expiry — was cut off with it.
+ * 15s matches the value the codebase already chose for this third party.
+ */
+const RECONCILE_REQUEST_TIMEOUT_MS = 15_000;
+/**
+ * How long the polling loop may run before it stops and leaves the rest to the
+ * next tick.
+ *
+ * The read is bounded at 500 rows (10 pages x 50) but the WORK was not: 500
+ * sequential HTTP round trips cannot finish inside maxDuration = 60 whatever
+ * each one costs, so at any real backlog this job tripped the route's watchdog
+ * on every single tick and got killed mid-run. Stopping deliberately is
+ * strictly better than being killed: the sweep is idempotent, the read is
+ * NEWEST FIRST (see below), and a freshly charged order is therefore always at
+ * the front of the queue. 30s leaves the other sweep jobs half the budget.
+ */
+const RECONCILE_WORK_BUDGET_MS = 30_000;
+/**
  * How long the backlog warning stays quiet after firing.
  *
  * One aggregate row per sweep was not enough. A backlog only clears when a
@@ -111,6 +136,9 @@ export interface ReconcileResult {
 async function fetchSessionStatus(sessionId: string): Promise<VeyraSessionStatus | null> {
   try {
     const response = await fetch(`${veyraApiBase()}/api/v1/checkout_sessions/${encodeURIComponent(sessionId)}`, {
+      // AbortSignal.timeout rejects with a TimeoutError, which the catch below
+      // already treats as "no answer" — the same outcome as a non-ok response.
+      signal: AbortSignal.timeout(RECONCILE_REQUEST_TIMEOUT_MS),
       headers: { Authorization: `Bearer ${veyraSecretKey()}` },
       cache: "no-store",
     });
@@ -181,11 +209,27 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
   let failedOut = 0;
   let unresolved = 0;
   let stale = 0;
+  let ranOutOfTime = false;
+  // What this run actually POLLED, which is not the same as what it read once a
+  // budget can end the loop early. `checked` reports this, so the number an
+  // operator reads is the work done rather than the size of the queue.
+  let polled = 0;
+
+  const deadline = Date.now() + RECONCILE_WORK_BUDGET_MS;
 
   for (const order of orders) {
+    // Stop BEFORE starting another round trip we may not be able to finish.
+    // Newest first, so what is left behind is the oldest and least urgent, and
+    // the next tick starts again from the top.
+    if (Date.now() >= deadline) {
+      ranOutOfTime = true;
+      break;
+    }
+
     const sessionId = String(order.payment_id ?? "");
     if (!sessionId) continue;
 
+    polled += 1;
     const session = await fetchSessionStatus(sessionId);
     const status = String(session?.status ?? "").toLowerCase();
 
@@ -272,13 +316,23 @@ export async function reconcileVeyraPendingPayments(): Promise<ReconcileResult> 
     });
   }
 
+  if (ranOutOfTime) {
+    // Not an alert: this is the designed behaviour at a backlog, it is safe
+    // (idempotent, newest-first), and the next tick continues. Worth saying
+    // once per run so a persistent backlog is visible in the logs.
+    console.warn(
+      `reconcileVeyraPendingPayments: stopped after ${Math.round(RECONCILE_WORK_BUDGET_MS / 1000)}s having polled `
+      + `${polled} of ${orders.length} pending order(s); the rest are picked up on the next sweep.`,
+    );
+  }
+
   if (readError) {
     // Everything above still happened and is reported in the thrown message, so
     // an operator can see what the partial run did achieve.
-    throw asReconcileReadError(readError, { checked: orders.length, settled, failedOut, unresolved });
+    throw asReconcileReadError(readError, { checked: polled, settled, failedOut, unresolved });
   }
 
-  return { checked: orders.length, settled, failedOut, unresolved };
+  return { checked: polled, settled, failedOut, unresolved };
 }
 
 /**

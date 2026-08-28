@@ -106,6 +106,11 @@ export function couponDiscountLabel(coupon: Pick<AdminCoupon, "discountType" | "
     : `${coupon.discountValue}% off`;
 }
 
+// Ceiling on the dedup read, matching the 500k the recipient read above uses:
+// one row per (coupon, recipient) send, so it can only be as large as the list.
+// It bounds memory; it never defines the answer — `truncated` is checked.
+const MAX_DEDUP_ROWS = 500_000;
+
 export interface BroadcastResult {
   recipients: number;
   sent: number;
@@ -130,22 +135,36 @@ export async function broadcastCouponAnnouncement(input: {
   let skipped = 0;
   let failed = 0;
 
-  // Load everyone who already received THIS coupon announcement in ONE query,
-  // instead of a per-recipient lookup inside the loop (was O(N) round-trips).
-  const { data: sentRows, error: sentError } = await supabaseAdmin
-    .from("email_send_log")
-    .select("recipient_email")
-    .eq("campaign_type", "coupon_announcement")
-    .eq("reference_id", input.coupon.id);
-  // If the dedup lookup fails we must NOT proceed with an empty "already sent"
-  // set — that would re-blast the entire list on the next click. Fail the run
-  // so the admin can retry rather than double-send. (sendMarketingEmail also
-  // suppresses per-recipient, but we don't rely on that as the only guard.)
-  if (sentError) {
-    throw sentError;
+  // Load everyone who already received THIS coupon announcement in ONE paged
+  // read, instead of a per-recipient lookup inside the loop (was O(N)
+  // round-trips).
+  //
+  // PAGED for the same reason the subscriber read above is: this is the only
+  // per-(coupon, recipient) dedup, and a short read of it does not fail — it
+  // just stops mentioning people who already got the mail, and the next click
+  // sends to them again. One send_log row is written per recipient, so the very
+  // first broadcast to a list of 1000+ leaves a log this read cannot see the
+  // end of. readAllRowsBounded throws on a page error, which keeps the existing
+  // fail-closed behaviour: we must NOT proceed with an empty "already sent" set,
+  // because that re-blasts the entire list. (sendMarketingEmail also suppresses
+  // per-recipient, but we don't rely on that as the only guard.)
+  const { rows: sentRows, truncated: sentTruncated } = await readAllRowsBounded<{ recipient_email: string | null }>(
+    (from, to) => supabaseAdmin
+      .from("email_send_log")
+      .select("recipient_email")
+      .eq("campaign_type", "coupon_announcement")
+      .eq("reference_id", input.coupon.id)
+      .order("id", { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: Array<{ recipient_email: string | null }> | null; error: unknown }>,
+    { maxRows: MAX_DEDUP_ROWS, label: "coupon broadcast dedup read" },
+  );
+  if (sentTruncated) {
+    throw new Error(
+      "Could not read the whole already-sent list for this coupon; the broadcast was refused rather than risk sending it twice.",
+    );
   }
   const alreadySent = new Set(
-    (sentRows ?? []).map((row) => String(row.recipient_email ?? "").trim().toLowerCase()),
+    sentRows.map((row) => String(row.recipient_email ?? "").trim().toLowerCase()),
   );
 
   for (const email of emails) {

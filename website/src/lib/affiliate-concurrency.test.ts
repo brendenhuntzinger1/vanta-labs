@@ -122,7 +122,18 @@ let pool: Pool | null = null;
  */
 let gate: ((table: string, mode: string) => Promise<void> | void) | null = null;
 
-type Filter = { op: "eq" | "in" | "is"; col: string; val: unknown };
+type Filter = { op: "eq" | "in" | "is" | "isnot" | "lte" | "gte"; col: string; val: unknown };
+
+// PostgREST answers at most `db-max-rows` rows per request and says nothing
+// about it. The double enforces the same cap so a read that pages correctly
+// and one that does not are distinguishable here, instead of both passing.
+const DB_MAX_ROWS = 1000;
+
+// PostgREST puts `in.(...)` in the request URL. A uuid list long enough makes
+// that URL a 414, which is a thrown request rather than a write. The double
+// cannot produce a URL, so it records every list length instead and the scale
+// test below asserts none of them could have built one.
+let inFilterWidths: number[] = [];
 
 /**
  * A PostgREST-shaped builder backed by a real connection POOL. Each terminal
@@ -134,6 +145,9 @@ class Query implements PromiseLike<{ data: unknown; error: unknown }> {
   private cols = "*";
   private returning = false;
   private singleMode: "none" | "maybe" = "none";
+  private orderBy: Array<{ col: string; asc: boolean }> = [];
+  private rangeFrom: number | null = null;
+  private rangeTo: number | null = null;
 
   constructor(
     private table: string,
@@ -147,8 +161,25 @@ class Query implements PromiseLike<{ data: unknown; error: unknown }> {
     return this;
   }
   eq(col: string, val: unknown) { this.filters.push({ op: "eq", col, val }); return this; }
-  in(col: string, val: unknown[]) { this.filters.push({ op: "in", col, val }); return this; }
+  in(col: string, val: unknown[]) {
+    inFilterWidths.push(val.length);
+    this.filters.push({ op: "in", col, val });
+    return this;
+  }
   is(col: string, val: unknown) { this.filters.push({ op: "is", col, val }); return this; }
+  // PostgREST's `.not(col, "is", x)` — the only negation these callers use.
+  not(col: string, op: string, val: unknown) {
+    if (op !== "is") throw new Error(`double does not model .not(${op})`);
+    this.filters.push({ op: "isnot", col, val });
+    return this;
+  }
+  lte(col: string, val: unknown) { this.filters.push({ op: "lte", col, val }); return this; }
+  gte(col: string, val: unknown) { this.filters.push({ op: "gte", col, val }); return this; }
+  order(col: string, opts?: { ascending?: boolean }) {
+    this.orderBy.push({ col, asc: opts?.ascending !== false });
+    return this;
+  }
+  range(from: number, to: number) { this.rangeFrom = from; this.rangeTo = to; return this; }
   maybeSingle() { this.singleMode = "maybe"; return this.run(); }
   then<R1, R2>(
     onOk?: ((v: { data: unknown; error: unknown }) => R1 | PromiseLike<R1>) | null,
@@ -160,10 +191,30 @@ class Query implements PromiseLike<{ data: unknown; error: unknown }> {
   private where(values: unknown[]) {
     const parts = this.filters.map((f) => {
       if (f.op === "is") return `${f.col} is ${f.val === null ? "null" : "not null"}`;
+      // `.not(col, "is", true)` in PostgREST is `col is not true`, which keeps
+      // NULLs — matching the JS predicate `row.fraud_flag === true` it replaces.
+      if (f.op === "isnot") return `${f.col} is not ${f.val === null ? "null" : String(f.val)}`;
       values.push(f.val);
-      return f.op === "eq" ? `${f.col} = $${values.length}` : `${f.col} = any($${values.length})`;
+      if (f.op === "eq") return `${f.col} = $${values.length}`;
+      if (f.op === "lte") return `${f.col} <= $${values.length}`;
+      if (f.op === "gte") return `${f.col} >= $${values.length}`;
+      return `${f.col} = any($${values.length})`;
     });
     return parts.length ? ` where ${parts.join(" and ")}` : "";
+  }
+
+  /** ORDER BY + the LIMIT/OFFSET that PostgREST derives from Range, capped. */
+  private tail() {
+    let sql = "";
+    if (this.orderBy.length) {
+      sql += ` order by ${this.orderBy.map((o) => `${o.col} ${o.asc ? "asc" : "desc"}`).join(", ")}`;
+    }
+    const offset = this.rangeFrom ?? 0;
+    const asked = this.rangeTo === null ? Number.POSITIVE_INFINITY : this.rangeTo - offset + 1;
+    const limit = Math.max(0, Math.min(asked, DB_MAX_ROWS));
+    if (Number.isFinite(limit)) sql += ` limit ${limit}`;
+    if (offset > 0) sql += ` offset ${offset}`;
+    return sql;
   }
 
   private async run(): Promise<{ data: unknown; error: unknown }> {
@@ -172,7 +223,7 @@ class Query implements PromiseLike<{ data: unknown; error: unknown }> {
     let sql: string;
 
     if (this.mode === "select") {
-      sql = `select ${this.cols} from public.${this.table}${this.where(values)}`;
+      sql = `select ${this.cols} from public.${this.table}${this.where(values)}${this.tail()}`;
     } else if (this.mode === "update") {
       const sets = Object.entries(this.payload ?? {}).map(([k, v]) => {
         values.push(v);
@@ -479,5 +530,95 @@ describeDb("affiliate money path under concurrency (real Postgres, pooled connec
     const results = await Promise.all(Array.from({ length: 8 }, claim));
 
     expect(results.filter((r) => r.rowCount === 1)).toHaveLength(1);
+  });
+
+  // -------------------------------------------------------------------------
+  // THE SWEEP AT VOLUME.
+  //
+  // autoApproveEligibleCommissions is the only path by which an accrued
+  // commission becomes payable, and it is a cron job — nobody watches it. Both
+  // of its scale failures are silent in opposite directions:
+  //
+  //   * an unpaged read of `pending` stops at the server's row cap, so
+  //     commissions past the cap simply never approve, with no error; and
+  //   * an `in.(...)` filter built from that read goes in the request URL, so
+  //     once the list is long enough the whole sweep 414s and NOTHING approves.
+  //
+  // 1,500 rows is deliberately just over the 1,000-row cap the double enforces:
+  // enough to tell a paged read from an unpaged one, and to make every id
+  // filter in the function wider than one slice.
+  // -------------------------------------------------------------------------
+  describe("the auto-approval sweep at volume", () => {
+    const BACKLOG = 1_500;
+    const ID_FILTER_SLICE = 150; // mirrors partner-portal.ts
+
+    beforeEach(async () => {
+      await seedAmbassador();
+      // One multi-row insert per table — 1,500 round trips would dominate the run.
+      const ids = Array.from({ length: BACKLOG }, (_, i) => `VL-B${i}`);
+      await pool!.query(
+        `insert into public.orders (order_id, payment_status)
+         select unnest($1::text[]), 'paid'`, [ids],
+      );
+      await pool!.query(
+        `insert into public.referral_orders
+           (order_id, ambassador_id, referral_code, original_subtotal, customer_discount,
+            amount_paid, commission_amount, payment_status, commission_percent, created_at)
+         select unnest($1::text[]), $2, 'MIZZY', 400, 0, 400, 60, 'pending', 15,
+                now() - interval '30 days'`, [ids, AMB_ID],
+      );
+      await pool!.query(
+        `insert into public.commissions (partner_id, order_id, referral_code, commission_amount, status)
+         select $1, unnest($2::text[]), 'MIZZY', 60, 'pending'`, [AMB_ID, ids],
+      );
+      inFilterWidths = [];
+    });
+
+    it("approves every eligible commission past the server's row cap, in both ledgers", async () => {
+      await autoApproveEligibleCommissions();
+
+      const ro = await pool!.query(
+        "select count(*)::int as n from public.referral_orders where payment_status='approved_for_payout'",
+      );
+      const co = await pool!.query(
+        "select count(*)::int as n from public.commissions where status='approved_for_payout'",
+      );
+
+      // An unpaged read sees only the first page and leaves the rest pending
+      // forever; the two ledgers must also still agree with each other.
+      expect({ referralOrders: ro.rows[0].n, commissions: co.rows[0].n })
+        .toEqual({ referralOrders: BACKLOG, commissions: BACKLOG });
+    });
+
+    it("never builds an id filter wide enough to 414", async () => {
+      await autoApproveEligibleCommissions();
+
+      // Sanity: the sweep really did filter by id lists at this volume, so a
+      // pass here cannot come from having made no `in.(...)` call at all.
+      expect(inFilterWidths.length).toBeGreaterThan(BACKLOG / ID_FILTER_SLICE);
+      expect(Math.max(...inFilterWidths)).toBeLessThanOrEqual(ID_FILTER_SLICE);
+    });
+
+    it("leaves a commission still inside its hold period pending", async () => {
+      // The hold window moved from a JS filter into the query. It must still
+      // hold: a fresh commission is not payable however large the backlog is.
+      await seedPendingCommission("VL-FRESH", 60);
+      await pool!.query("update public.referral_orders set created_at = now() where order_id='VL-FRESH'");
+
+      await autoApproveEligibleCommissions();
+
+      expect(await statusOf("VL-FRESH")).toBe("pending");
+    });
+
+    it("leaves a fraud-flagged commission pending", async () => {
+      // Same move for the fraud flag — it is now excluded in the query, and
+      // still must never auto-approve.
+      await seedPendingCommission("VL-FRAUD", 60);
+      await pool!.query("update public.referral_orders set fraud_flag = true where order_id='VL-FRAUD'");
+
+      await autoApproveEligibleCommissions();
+
+      expect(await statusOf("VL-FRAUD")).toBe("pending");
+    });
   });
 });

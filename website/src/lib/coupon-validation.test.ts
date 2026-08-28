@@ -40,6 +40,10 @@ const state: {
   liveUses: 0,
 };
 
+// Every filter the `orders` reads applied, in order, so a test can assert HOW
+// the guard matched and not only what it decided.
+let ordersFilters: Array<Array<[string, string, unknown]>> = [];
+
 // The suite-wide setup replaces @/lib/coupons with a stub whose validateCoupon
 // always returns null. That stub is exactly why the eight guards below were
 // invisible: the real function never ran in any test. Unmock it here so this
@@ -55,6 +59,7 @@ vi.mock("@/lib/supabase-server", () => {
       return {
         select: (_cols: string, opts?: { count?: string; head?: boolean }) => {
           const filters: Array<[string, string, unknown]> = [];
+          ordersFilters.push(filters);
           const b: Record<string, unknown> = {
             eq(c: string, v: unknown) { filters.push(["eq", c, v]); return b; },
             ilike(c: string, v: unknown) { filters.push(["ilike", c, v]); return b; },
@@ -121,6 +126,7 @@ beforeEach(() => {
   state.priorPaidOrder = false;
   state.priorWelcomeUse = false;
   state.liveUses = 0;
+  ordersFilters = [];
 });
 
 describe("an ordinary valid coupon", () => {
@@ -253,5 +259,46 @@ describe("the welcome offer is for first orders only", () => {
     state.welcome = { enabled: true, percent: 0, code: "WELCOME15" };
     state.coupon = null;
     await expect(validate("WELCOME15", 200, "new@example.test")).rejects.toThrow(/invalid/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HOW the guards match, not just what they decide.
+//
+// Both `orders` reads used to match the coupon with ILIKE. There is nothing to
+// fold — normalizeCouponCode has already uppercased the code and stripped
+// everything outside [A-Z0-9-], so no wildcard can survive it — but ILIKE is
+// not indexable, so Postgres could only apply it as a filter over every
+// coupon-bearing order. The redemption-limit read runs on the create-session
+// path for every checkout carrying a limited coupon, which is exactly when a
+// promo is live and order volume is at its highest.
+//
+// These assert the predicate itself, because a test on the DECISION passes
+// either way: `=` and ILIKE agree on every value the app can store.
+// ---------------------------------------------------------------------------
+describe("the coupon_code predicate is indexable", () => {
+  const couponCodeFilters = () =>
+    ordersFilters.flat().filter(([, column]) => column === "coupon_code");
+
+  it("matches the redemption-limit count with equality, not ILIKE", async () => {
+    state.coupon = coupon({ max_redemptions: 5 });
+    state.liveUses = 1;
+
+    await validate("SAVE20");
+
+    const applied = couponCodeFilters();
+    expect(applied).toContainEqual(["eq", "coupon_code", "SAVE20"]);
+    expect(applied.map(([op]) => op)).not.toContain("ilike");
+  });
+
+  it("matches the welcome-offer in-flight lookup with equality, not ILIKE", async () => {
+    state.welcome = { enabled: true, percent: 15, code: "WELCOME15" };
+    state.coupon = null;
+
+    await validate("WELCOME15", 200, "new@example.test");
+
+    const applied = couponCodeFilters();
+    expect(applied).toContainEqual(["eq", "coupon_code", "WELCOME15"]);
+    expect(applied.map(([op]) => op)).not.toContain("ilike");
   });
 });

@@ -9,6 +9,8 @@ import { commissionEarnedTemplate, orderConfirmationTemplate, refundConfirmation
 import { scheduleOrderPushNotification } from "@/lib/order-push-notification";
 import { getSiteUrl } from "@/lib/env";
 import { redeemCoupon } from "@/lib/coupons";
+import { normalizeCouponCode } from "@/lib/coupon-code";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 import { calculateEarnedPoints, getActivePointsMultiplier, getActivePointsPerDollar, recordPointsLedgerEntry, redeemPoints, restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
 import { redeemStoreCredit, refundStoreCreditForOrder } from "@/lib/store-credit";
 import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
@@ -591,7 +593,12 @@ async function upsertOrderRecord(input: {
     amount_paid: roundMoney(input.amountPaid ?? 0),
     referral_code: input.referralCode ?? null,
     ambassador_id: input.ambassadorId ?? null,
-    coupon_code: input.couponCode ?? null,
+    // NORMALIZED on the way in. Every other lane writes the canonical form —
+    // quote-order.ts stores validateCoupon's own uppercased code — but this one
+    // takes the value straight from processor metadata. The redemption-limit
+    // count matches on `=`, so a row stored in any other spelling would not be
+    // counted against the coupon's limit.
+    coupon_code: input.couponCode ? (normalizeCouponCode(input.couponCode) || null) : null,
     customer_user_id: input.customerUserId ?? null,
     points_redeemed: input.pointsRedeemed ?? 0,
     payment_status: input.paymentStatus,
@@ -969,6 +976,11 @@ async function ensureCommissionRecord(input: {
   return { id: data.id };
 }
 
+// Ceiling on the unpaid-balance read. Far above any real ambassador's unpaid
+// commission count, so it is never the binding limit in practice; it is here so
+// the read cannot be silently half-summed into a figure a partner is owed.
+const MAX_UNPAID_COMMISSION_ROWS = 100_000;
+
 // Sends the ambassador the minimal "you earned a commission" email. Contains
 // ONLY commission earned, running unpaid balance, referral code, and the
 // biweekly-payout reminder — no order totals, customer data, or revenue.
@@ -990,14 +1002,42 @@ async function notifyAmbassadorOfNewCommission(input: {
   // Running unpaid balance = every commission still owed (pending or approved
   // for payout, not yet paid) for this ambassador. The row just inserted is
   // "pending", so it's already included.
-  const { data: unpaidRows } = await supabaseAdmin
-    .from("referral_orders")
-    .select("commission_amount, payment_status")
-    .eq("ambassador_id", input.ambassadorId)
-    .in("payment_status", ["pending", "approved_for_payout"]);
+  //
+  // PAGED. This is a money figure sent to the person it is owed to, summed in
+  // JS from an unbounded read — so past the server's silent row cap it told a
+  // productive ambassador they were owed LESS than they are. The cost is one
+  // extra request on a path that already makes many, which is the right trade
+  // for a number a partner reads as what the store owes them.
+  const { rows: unpaidRows, truncated: unpaidTruncated } = await readAllRowsBounded<{
+    commission_amount: number | null;
+    payment_status: string | null;
+  }>(
+    (from, to) => supabaseAdmin
+      .from("referral_orders")
+      .select("commission_amount, payment_status")
+      .eq("ambassador_id", input.ambassadorId)
+      .in("payment_status", ["pending", "approved_for_payout"])
+      .order("id", { ascending: true })
+      .range(from, to) as unknown as PromiseLike<{ data: Array<{
+        commission_amount: number | null;
+        payment_status: string | null;
+      }> | null; error: unknown }>,
+    { maxRows: MAX_UNPAID_COMMISSION_ROWS, label: "ambassador unpaid balance read" },
+  );
+
+  if (unpaidTruncated) {
+    // Send nothing rather than a number that is wrong in the direction of
+    // paying them less. The commission itself is already recorded; only this
+    // courtesy email is skipped, and the ambassador dashboard shows the real
+    // balance.
+    console.error(
+      `notifyAmbassadorOfNewCommission: ambassador ${input.ambassadorId} has more than ${MAX_UNPAID_COMMISSION_ROWS} unpaid commissions; skipped the email rather than understate the balance owed.`,
+    );
+    return;
+  }
 
   const unpaidBalance = roundMoney(
-    (unpaidRows ?? []).reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0),
+    unpaidRows.reduce((sum, row) => sum + Number(row.commission_amount ?? 0), 0),
   );
 
   const template = commissionEarnedTemplate({

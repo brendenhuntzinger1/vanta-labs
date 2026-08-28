@@ -893,7 +893,7 @@ export function ProductDetailClient({
                   // champagne or charcoal so this reads as THE action.
                   className="vl-focus-ring flex-1 rounded-2xl bg-[color:var(--accent-gold-bright)] px-5 py-4 text-sm font-semibold uppercase tracking-[0.08em] text-black shadow-[0_10px_26px_-16px_rgba(199,174,94,0.55)] transition duration-200 hover:-translate-y-px hover:bg-[color:var(--accent-gold-bright-hover)] hover:shadow-[0_14px_32px_-16px_rgba(199,174,94,0.6)] active:translate-y-0 active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 motion-reduce:hover:translate-y-0"
                 >
-                  {isOutOfStock ? "Currently Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
+                  {isOutOfStock ? "Currently Unavailable" : `Add ${quantity > 1 ? `${quantity} ` : ""}to Cart`}
                 </button>
                 <WishlistButton
                   slug={product.slug}
@@ -1001,7 +1001,7 @@ export function ProductDetailClient({
             disabled={isOutOfStock}
             className="vl2-btn-primary vl-focus-ring shrink-0 rounded-full px-7 py-3.5 text-xs"
           >
-            {isOutOfStock ? "Unavailable" : `Add ${quantity > 1 ? `${quantity} × ` : ""}to Cart`}
+            {isOutOfStock ? "Unavailable" : `Add ${quantity > 1 ? `${quantity} ` : ""}to Cart`}
           </button>
         </div>
       </div>

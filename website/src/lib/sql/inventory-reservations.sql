@@ -228,9 +228,21 @@ begin
     update public.inventory_reservations set status = 'released', updated_at = now() where id = r.id;
     n := n + 1;
   end loop;
+
+  -- Hitting the ceiling every tick means holds are being created faster than
+  -- they are reclaimed, which is worth seeing in the Postgres log.
+  if n >= batch_limit then
+    raise warning 'expire_stale_reservations released the full per-tick batch of % holds; more remain for the next sweep', batch_limit;
+  end if;
+
   return n;
 end;
 $$;
+
+-- Server-side sweep only. `create or replace` does not touch a function ACL, so
+-- this restates the posture rather than changing it: anon and authenticated
+-- must never be able to release another shopper's inventory hold.
+revoke all on function public.expire_stale_reservations() from public, anon, authenticated;
 
 -- ----------------------------------------------------------------------------
 -- expire_stale_reservations: release every active hold past its expiry (called
@@ -248,6 +260,20 @@ as $$
 declare
   r record;
   n integer := 0;
+  -- BOUNDED PER TICK. This used to drain the whole backlog in one transaction.
+  -- `for update skip locked` stops it blocking a live checkout, but it does not
+  -- bound the WORK: the transaction holds every row it touches until commit, so
+  -- an overrun rolls back every hold it had already released and the next tick
+  -- attempts the same, larger, doomed drain — past which expired reservations
+  -- keep stock off sale indefinitely. Every other sweep here already carries a
+  -- per-tick bound; this one was the outlier.
+  --
+  -- Safe to split: a released row leaves the `status = 'active'` filter, so the
+  -- next tick continues rather than repeating, and OLDEST FIRST means the holds
+  -- sitting on stock longest are always released first. 20,000 is far above any
+  -- plausible half-hour of abandoned checkouts (holds expire in 15 minutes, the
+  -- sweep runs every 30) while still bounding the transaction.
+  batch_limit constant integer := 20000;
 begin
   for r in
     select res.id, res.slug, res.variant_id, res.quantity
@@ -258,7 +284,9 @@ begin
           where o.order_id = res.order_id
             and o.payment_status in ('paid', 'partially_refunded')
        )
+     order by res.expires_at
      for update skip locked
+     limit batch_limit
   loop
     if r.variant_id is not null and r.variant_id <> '' then
       update public.product_doses

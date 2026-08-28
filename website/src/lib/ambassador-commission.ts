@@ -1,4 +1,5 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 
 export interface CommissionTierRule {
   id: string;
@@ -117,20 +118,56 @@ export function monthStartUtc(now: Date): Date {
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 }
 
+// Ceiling on the tier read. The tier ladder tops out in the tens of qualifying
+// orders a month (Starter 0 / Growth 20-25 / Elite 50), so any count that
+// reaches this number is already in the highest tier and reading further rows
+// cannot change the answer. It exists so one very large month cannot pull an
+// unbounded result into a request that a shopper is waiting on.
+const MAX_TIER_SCAN_ROWS = 5_000;
+
+// Ceiling on the repeat-identity fraud scan. The heuristic flags on the 3rd
+// order sharing one identity, so the newest few thousand orders under a code is
+// far more history than the rule can use; the bound is here to keep one very
+// large ambassador from turning a per-order check into a full-history PII read.
+const MAX_FRAUD_SCAN_ROWS = 2_000;
+
 async function getQualifyingMonthlySalesCount(ambassadorId: string): Promise<number> {
   const monthStart = monthStartUtc(new Date());
 
-  const { data, error } = await supabaseAdmin
-    .from("referral_orders")
-    .select("created_at, payment_status, ineligible_reason, commission_amount, fraud_flag")
-    .eq("ambassador_id", ambassadorId)
-    .order("created_at", { ascending: false });
+  // The month window is applied in the QUERY, not only in the JS filter below.
+  // This runs on the shopper's critical path (quoteOrder → getEffectiveCommissionPercent)
+  // and again on every paid webhook, and without it the read grew with the
+  // ambassador's entire lifetime referral history — sorted — to answer a
+  // question about one calendar month. Worse, past the server's silent row cap
+  // a lifetime-ordered read returns the NEWEST rows only by luck of the sort;
+  // a truncated read here does not fail, it just reports a lower qualifying
+  // count, which is a lower tier and a smaller commission. Filtering to the
+  // month makes the read proportional to the month, and paging makes any
+  // remaining truncation observable instead of silent.
+  //
+  // `created_at >= monthStart` is exactly the last line of
+  // qualifiesForMonthlyTierCount, which still applies every other rule.
+  const { rows, truncated } = await readAllRowsBounded<TierQualifyingRow>(
+    (from, to) => supabaseAdmin
+      .from("referral_orders")
+      .select("created_at, payment_status, ineligible_reason, commission_amount, fraud_flag")
+      .eq("ambassador_id", ambassadorId)
+      .gte("created_at", monthStart.toISOString())
+      .order("created_at", { ascending: false })
+      .range(from, to) as unknown as PromiseLike<{ data: TierQualifyingRow[] | null; error: unknown }>,
+    { maxRows: MAX_TIER_SCAN_ROWS, label: "referral_orders.select(monthly tier count)" },
+  );
 
-  if (error) {
-    throw error;
+  if (truncated) {
+    // Cannot change the tier — see MAX_TIER_SCAN_ROWS — but it means one
+    // ambassador is doing thousands of referred orders a month, which is worth
+    // knowing about on its own.
+    console.warn(
+      `getQualifyingMonthlySalesCount: ambassador ${ambassadorId} has more than ${MAX_TIER_SCAN_ROWS} referral orders this month; counting the first ${MAX_TIER_SCAN_ROWS}.`,
+    );
   }
 
-  return (data ?? []).filter((row) => qualifiesForMonthlyTierCount(row, monthStart)).length;
+  return rows.filter((row) => qualifiesForMonthlyTierCount(row, monthStart)).length;
 }
 
 export interface EffectiveCommission {
@@ -284,17 +321,42 @@ export async function detectCommissionFraudSignal(input: {
   // enhancement. This heuristic covers the common repeat-identity case.
   const REPEAT_THRESHOLD = 3;
 
-  const { data, error } = await supabaseAdmin
-    .from("orders")
-    .select("order_id, customer_email, shipping_address, city, postal_code")
-    .eq("ambassador_id", input.ambassadorId)
-    .order("created_at", { ascending: false });
+  // BOUNDED. This runs on every paid referred order, and the read is by
+  // ambassador with no filter of its own — so without a ceiling it grows with
+  // the ambassador's entire lifetime referred-order history, and pulls customer
+  // PII (email + address) for all of it into memory to count three matches.
+  // Newest-first, so the window is the most recent orders under this code,
+  // which is where a repeat-identity pattern shows up; the threshold is 3, so
+  // nothing realistic is missed by not reading further back.
+  const { rows: recentOrders, truncated } = await readAllRowsBounded<{
+    order_id: string;
+    customer_email: string | null;
+    shipping_address: string | null;
+    city: string | null;
+    postal_code: string | null;
+  }>(
+    (from, to) => supabaseAdmin
+      .from("orders")
+      .select("order_id, customer_email, shipping_address, city, postal_code")
+      .eq("ambassador_id", input.ambassadorId)
+      .order("created_at", { ascending: false })
+      .range(from, to) as unknown as PromiseLike<{ data: Array<{
+        order_id: string;
+        customer_email: string | null;
+        shipping_address: string | null;
+        city: string | null;
+        postal_code: string | null;
+      }> | null; error: unknown }>,
+    { maxRows: MAX_FRAUD_SCAN_ROWS, label: "orders.select(commission fraud signal)" },
+  );
 
-  if (error) {
-    throw error;
+  if (truncated) {
+    console.warn(
+      `detectCommissionFraudSignal: ambassador ${input.ambassadorId} has more than ${MAX_FRAUD_SCAN_ROWS} referred orders; checking the most recent ${MAX_FRAUD_SCAN_ROWS}.`,
+    );
   }
 
-  const priorOrders = (data ?? []).filter((row) => String(row.order_id) !== input.orderId);
+  const priorOrders = recentOrders.filter((row) => String(row.order_id) !== input.orderId);
 
   if (input.customerEmail) {
     const normalizedEmail = input.customerEmail.trim().toLowerCase();
