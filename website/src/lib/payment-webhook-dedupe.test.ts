@@ -250,6 +250,18 @@ function refundPayload() {
   });
 }
 
+// A PARTIAL refund. The refund maths reads the TOP-LEVEL `amount`
+// (normalizeOrderPayload has no data.object.amount field), and the order was
+// paid 200 — so an amount below that is partial, which is the two-step refund
+// this store treats as ordinary practice.
+function partialRefundPayload(amount: number) {
+  return JSON.stringify({
+    type: "refund.completed",
+    amount,
+    data: { object: { metadata: { order_id: ORDER_ID } } },
+  });
+}
+
 function successPayload() {
   return JSON.stringify({
     type: "payment.succeeded",
@@ -514,7 +526,31 @@ describe("the refund confirmation email", () => {
       .find((message) => message?.idempotencyKey?.startsWith("refund_confirmation:"));
 
     expect(refundSend).toBeDefined();
-    expect(refundSend!.idempotencyKey).toBe(`refund_confirmation:${ORDER_ID}`);
+    // The cumulative amount refunded, in cents, is part of the identity.
+    expect(refundSend!.idempotencyKey).toBe(`refund_confirmation:20000:${ORDER_ID}`);
+  });
+
+  // AND THE FIX MUST NOT SWALLOW A SECOND, REAL REFUND.
+  //
+  // A refund is not a receipt. An order has one confirmation but as many refund
+  // notices as there are refunds, and this file handles the two-step refund
+  // (goods, then shipping) explicitly — each event states a different cumulative
+  // total, so each is a different email the customer must receive. Keyed on the
+  // bare kind, closing E-04 would have silently suppressed the second one:
+  // money returned, no notice. The amount is what separates "the same refund
+  // told twice" from "a second refund".
+  it("gives a second partial refund its own slot, so it is not swallowed as a duplicate", async () => {
+    await deliver("evt-partial-1", partialRefundPayload(60));
+    await deliver("evt-partial-2", partialRefundPayload(140));
+
+    const refundKeys = sideEffects.email.mock.calls
+      .map(([message]) => message?.idempotencyKey)
+      .filter((key) => key?.startsWith("refund_confirmation:"));
+
+    expect(refundKeys).toEqual([
+      `refund_confirmation:6000:${ORDER_ID}`,
+      `refund_confirmation:14000:${ORDER_ID}`,
+    ]);
   });
 });
 

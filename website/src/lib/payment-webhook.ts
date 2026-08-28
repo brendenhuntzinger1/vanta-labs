@@ -3,7 +3,7 @@ import { getPaymentProvider } from "@/lib/payment-provider";
 import type { OrderStatus } from "@/lib/payment-types";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
-import { sendOrderEmailOnce } from "@/lib/email/order-email-once";
+import { refundEmailKind, sendOrderEmailOnce } from "@/lib/email/order-email-once";
 import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { commissionEarnedTemplate, orderConfirmationTemplate, refundConfirmationTemplate } from "@/lib/email/templates";
 import { scheduleOrderPushNotification } from "@/lib/order-push-notification";
@@ -2304,15 +2304,22 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           // one of the two kinds order_email_log was built for. Nothing here is
           // behind a once-only claim the way the confirmation is behind
           // paid_side_effects_at: a processor that re-delivers a refund webhook
-          // (they retry anything not answered 2xx), a partial refund followed by
-          // the rest, or the refund-effect repair sweep re-entering this path
-          // each mailed the customer another "your refund was processed" for the
-          // same money. Routing through sendOrderEmailOnce makes the second one
-          // impossible at the database level and leaves the same audit row the
-          // receipt leaves.
+          // (they retry anything not answered 2xx), or the refund-effect repair
+          // sweep re-entering this path, each mailed the customer another "your
+          // refund was processed" for the same money.
+          //
+          // KEYED ON THE AMOUNT, NOT THE BARE KIND. A refund is not like a
+          // receipt: an order has one confirmation but as many refund notices as
+          // there are refunds, and the two-step refund this file handles
+          // explicitly (goods, then shipping) produces two, each stating a
+          // different cumulative total. On the bare kind the second would be
+          // swallowed as a duplicate and the customer refunded in silence — a
+          // regression, not a fix. The cumulative amount is exactly what
+          // separates "the same refund told twice" from "a second refund".
+          const refundKind = refundEmailKind(refundOutcome.recordedRefundAmount);
           const refundResult = await sendOrderEmailOnce({
             orderId,
-            kind: "refund_confirmation",
+            kind: refundKind,
             to: String(orderRecord.customer_email),
             template: refundEmail,
           });
@@ -2328,7 +2335,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
                 text: refundEmail.text,
               },
               refundResult.error,
-              { orderId, kind: "refund_confirmation" },
+              { orderId, kind: refundKind },
             );
           }
         } catch (refundEmailError) {
