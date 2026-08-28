@@ -36,6 +36,12 @@ const shippo = vi.hoisted(() => ({
   settledCentsFromTransaction: vi.fn((rate: unknown) =>
     rate && typeof rate === "object" ? 742 : null,
   ),
+  // Same rule one level up: an expanded rate prices itself, and the
+  // permanently-unrepairable class is the transaction whose bare rate
+  // reference cannot be priced by a lookup either.
+  settledCentsForTransaction: vi.fn(async (txn: { rate?: unknown }) =>
+    txn?.rate && typeof txn.rate === "object" ? 742 : null,
+  ),
   recordActualShippingCost: vi.fn(),
   recordSystemAlert: vi.fn(),
 }));
@@ -44,6 +50,7 @@ vi.mock("server-only", () => ({}));
 vi.mock("@/lib/shippo/client", () => ({
   getTransaction: shippo.getTransaction,
   settledCentsFromTransaction: shippo.settledCentsFromTransaction,
+  settledCentsForTransaction: shippo.settledCentsForTransaction,
 }));
 vi.mock("@/lib/admin-profit", () => ({ recordActualShippingCost: shippo.recordActualShippingCost }));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: shippo.recordSystemAlert }));

@@ -1630,6 +1630,40 @@ function scheduleShippoSync(orderId: string): void {
   }
 }
 
+/**
+ * How long the unattributed-event WARNING stays quiet after firing.
+ *
+ * Persisted rather than held in memory: each webhook is a fresh serverless
+ * invocation, so an in-process timestamp is always empty and throttles nothing.
+ * Same shape as express-reconcile's backlog throttle.
+ */
+const UNATTRIBUTED_WARNING_THROTTLE_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Has the warning lane been quiet long enough to fire again?
+ *
+ * FAILS OPEN in every error path — a throttle must never be the reason a real
+ * warning goes unsent. Only ever consulted for the warning; a critical
+ * unattributed charge is never throttled.
+ */
+async function unattributedWarningIsDue(): Promise<boolean> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("system_alerts")
+      .select("created_at")
+      .eq("type", "payment_event_unattributed")
+      .eq("severity", "warning")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error || !data || data.length === 0) return true;
+    const last = Date.parse(String((data[0] as { created_at?: string }).created_at ?? ""));
+    if (!Number.isFinite(last)) return true;
+    return Date.now() - last > UNATTRIBUTED_WARNING_THROTTLE_MS;
+  } catch {
+    return true;
+  }
+}
+
 export async function processPaymentWebhook(payload: string, signature: string, secret: string, eventId: string) {
   const provider = getPaymentProvider();
   const isValid = provider.verifyWebhookSignature(payload, signature, secret);
@@ -1673,7 +1707,10 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // real sender uses.
   const sessionId = resolveWebhookSessionId(eventPayload);
   const orderIdFromSession = sessionId ? await findOrderIdByPaymentId(sessionId) : null;
-  const orderId = orderIdFromSession ?? resolveWebhookOrderId(eventPayload) ?? `order-${randomUUID()}`;
+  const resolvedOrderId = orderIdFromSession ?? resolveWebhookOrderId(eventPayload);
+  // The synthetic id exists so the EVENT is still recorded under a unique scope
+  // when no sender put an order reference anywhere. It identifies nothing.
+  const orderId = resolvedOrderId ?? `order-${randomUUID()}`;
   const nextStatus = getOrderStatusForEventType(eventPayload.type ?? "");
 
   // Claim the event up front (atomic) so concurrent duplicate deliveries can't
@@ -1690,6 +1727,68 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   }
 
   try {
+  // AN EVENT THAT NAMES NO ORDER MUST NOT CREATE ONE.
+  //
+  // When neither the session id nor any metadata resolves, `orderId` above is a
+  // freshly minted `order-<uuid>` that exists nowhere. getOrderByOrderId then
+  // returns null, and `if (!orderRecord || nextStatus !== "paid")` read that
+  // absence as "a brand-new webhook-created order" — so upsertOrderRecord
+  // INSERTED one: a row with no customer, no email, no address, no items, a $0
+  // total and fulfillment_status "pending". It landed in Needs Fulfillment
+  // looking exactly like a real order nobody could fulfil, and one arrived per
+  // unresolvable delivery — every '*' subscription event from the processor
+  // that carries no order reference at all.
+  //
+  // The event is still claimed and still marked processed (so a redelivery is
+  // not reprocessed), and an operator is told, because an unattributable money
+  // event is worth a human's attention. What does not happen is inventing the
+  // order it failed to name.
+  if (!resolvedOrderId) {
+    await markEventProcessed(eventId, orderId, nextStatus);
+    if (isRecognisedMoneyEvent(eventPayload.type ?? "")) {
+      // Critical only where money actually moved and is now unaccounted for. A
+      // failed or cancelled charge that names no order took nobody's money, and
+      // paging the owner for one at 3am is how a real critical gets ignored.
+      const moneyMoved = nextStatus === "paid" || nextStatus === "refunded" || nextStatus === "partially_refunded";
+      // THROTTLE THE NOISY LANE, NEVER THE MONEY ONE.
+      //
+      // Each critical here is a DISTINCT real charge that only a human can
+      // match, so suppressing one loses money visibility — those always fire.
+      // The warning lane is the one that can repeat: a processor that stopped
+      // sending our order reference produces one per delivery, and an operator
+      // who is emailed forty times learns to ignore the type, which is how the
+      // critical above gets missed too.
+      const due = moneyMoved || (await unattributedWarningIsDue());
+      if (due) {
+      await recordSystemAlert({
+        type: "payment_event_unattributed",
+        severity: moneyMoved ? "critical" : "warning",
+        message:
+          `A ${eventPayload.type ?? "payment"} webhook carried no order reference and no known session id, so `
+          + "it could not be matched to an order. No order was created for it"
+          + (moneyMoved
+            ? ": money moved for an order this system cannot name. Find this event in the processor's dashboard "
+              + "and match it by hand — the order it belongs to still reads unpaid."
+            : ", and nothing was charged. Worth a look only if these keep arriving, which would mean the "
+              + "processor stopped sending our order reference."),
+        context: {
+          event_id: eventId,
+          event_type: eventPayload.type ?? null,
+          provider_status: eventPayload.status ?? null,
+          amount: eventPayload.amount ?? null,
+        },
+      }).catch(() => {});
+      }
+    }
+    return {
+      duplicate: false,
+      eventId,
+      orderId,
+      status: nextStatus,
+      providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
+    } satisfies WebhookEventState;
+  }
+
   const orderRecord = await getOrderByOrderId(orderId);
 
   // An event that says nothing about a money state must never write one. A '*'
@@ -2228,13 +2327,44 @@ export async function processPaymentWebhook(payload: string, signature: string, 
     // includes tax/shipping/card fee) wrongly claws back commission when a
     // shipping/tax-only amount is refunded. A refund at/above the merchandise
     // base is a full reversal. Cancels/failures also fully reverse.
-    await updateCommissionOnRefund(orderId, { refundedFraction: refundOutcome.refundedFraction });
+    //
+    // EVERY EFFECT IN THIS BLOCK CARRIES ITS OWN try/catch, AND THAT IS THE
+    // POINT (REF-02). `upsertOrderRecord` above has ALREADY written
+    // payment_status = 'refunded'/'canceled'. A throw escaping from here is
+    // caught by the outer handler, which releases the event claim and rethrows
+    // so the processor retries — but the retry re-reads the order, finds it
+    // already FULLY terminal, and returns at the FULLY_TERMINAL_REFUND_STATES
+    // guard without running a single effect. So an exception here does not
+    // defer the work, it DELETES it: the commission is never reversed and the
+    // stock is never returned, permanently and silently.
+    //
+    // A live example was one line down: `updateCommissionOnRefund` writes
+    // 'manual_review' into referral_orders.payment_status, which production's
+    // CHECK constraint rejected with 23514 (VL-7). Every refund of an order
+    // with a PAID commission threw there, so the restock below never ran.
+    //
+    // Best-effort + a critical alert is the same contract the paid side-effects
+    // above already use, and it keeps one failing effect from taking the rest
+    // of the refund down with it.
+    try {
+      await updateCommissionOnRefund(orderId, { refundedFraction: refundOutcome.refundedFraction });
+    } catch (commissionReversalError) {
+      console.error("Unable to reverse commission for refunded order", orderId, commissionReversalError);
+      await recordSystemAlert(unsafeEffectAlert("commission_reversal", orderId, commissionReversalError))
+        .catch(() => {});
+    }
 
     // Release any still-active inventory hold. For a never-paid order (failed /
     // canceled) this returns the reserved units immediately; for a paid order
     // the hold was already finalized, so this no-ops and the restock below does
     // the work. Idempotent and best-effort.
-    await releaseInventoryForOrder(orderId);
+    try {
+      await releaseInventoryForOrder(orderId);
+    } catch (releaseError) {
+      console.error("Unable to release inventory hold for order", orderId, releaseError);
+      await recordSystemAlert(unsafeEffectAlert("inventory_hold_release", orderId, releaseError))
+        .catch(() => {});
+    }
 
     // Return committed stock — but ONLY when this order was actually paid (so
     // its inventory was decremented). A refund/cancel of an order that never
@@ -2254,25 +2384,36 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // Only the caller that WON the claim restocks. "already_claimed" means
       // somebody else returned these units; "unavailable" means the claim could
       // not be evaluated, and restocking blind could double-return them.
-      if (!isMembershipOrder && await claimInventoryRestock(orderId) === "claimed") {
-        // THE CLAIM IS ALREADY SPENT BY THE TIME THIS READ RUNS, so an
-        // unreadable line-item list cannot simply be retried: restocking
-        // nothing here means these units are never returned by anybody. It used
-        // to do exactly that, silently. Alert instead — this is a hand repair.
-        const { data: refundItems, error: refundItemsError } = await supabaseAdmin
-          .from("order_items")
-          .select("product_id, quantity")
-          .eq("order_id", orderId);
-        if (refundItemsError) {
-          console.error("Unable to read order items for restock on order", orderId, refundItemsError);
-          await recordSystemAlert(unsafeEffectAlert("inventory_restock", orderId, refundItemsError))
-            .catch(() => {});
-        } else {
-          await restockInventoryForOrder(
-            (refundItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
-            orderId,
-          );
+      // The claim itself, the item read and the restock all sit inside one
+      // try/catch for the REF-02 reason above: a throw from any of them used to
+      // escape the whole refund block, taking the customer's points, store
+      // credit and membership revocation with it — none of which the retry
+      // would ever reach.
+      try {
+        if (!isMembershipOrder && await claimInventoryRestock(orderId) === "claimed") {
+          // THE CLAIM IS ALREADY SPENT BY THE TIME THIS READ RUNS, so an
+          // unreadable line-item list cannot simply be retried: restocking
+          // nothing here means these units are never returned by anybody. It used
+          // to do exactly that, silently. Alert instead — this is a hand repair.
+          const { data: refundItems, error: refundItemsError } = await supabaseAdmin
+            .from("order_items")
+            .select("product_id, quantity")
+            .eq("order_id", orderId);
+          if (refundItemsError) {
+            console.error("Unable to read order items for restock on order", orderId, refundItemsError);
+            await recordSystemAlert(unsafeEffectAlert("inventory_restock", orderId, refundItemsError))
+              .catch(() => {});
+          } else {
+            await restockInventoryForOrder(
+              (refundItems ?? []) as Array<{ product_id?: string | null; quantity?: number | null }>,
+              orderId,
+            );
+          }
         }
+      } catch (restockError) {
+        console.error("Unable to restock inventory for refunded order", orderId, restockError);
+        await recordSystemAlert(unsafeEffectAlert("inventory_restock", orderId, restockError))
+          .catch(() => {});
       }
     }
 
@@ -2342,50 +2483,84 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           console.error("Unable to send refund confirmation email for order", orderId, refundEmailError);
         }
       }
-      try {
-        await reverseOrderPoints(orderId);
-      } catch (pointsError) {
-        console.error("Unable to reverse membership points for order", orderId, pointsError);
-      }
-      try {
-        await restoreRedeemedPoints(orderId);
-      } catch (restoreError) {
-        console.error("Unable to restore redeemed points for order", orderId, restoreError);
-      }
-      try {
-        await refundStoreCreditForOrder(orderId);
-      } catch (creditError) {
-        console.error("Unable to return store credit for order", orderId, creditError);
+      // ALL-OR-NOTHING TENDER REVERSALS ONLY RUN ON AN ALL-OR-NOTHING REFUND
+      // (REF-01).
+      //
+      // `nextStatus` is "refunded" for a $10 goodwill refund on a $200 order
+      // just as it is for the full $200 — the partial/full distinction lives in
+      // refundOutcome, and everything below used to ignore it. Each of these
+      // four effects returns the WHOLE of something:
+      //
+      //   reverseOrderPoints        debits every point the order earned
+      //   restoreRedeemedPoints     re-credits every point it spent
+      //   refundStoreCreditForOrder returns the entire redemption
+      //   revokeMembershipForRefund ends the membership outright
+      //
+      // So a $10 partial refund handed back the customer's full store-credit
+      // redemption and all of their redeemed points — real money, on an order
+      // they mostly kept — and cancelled a membership that had been paid for.
+      // Each is also idempotent-by-absence (one row per order), so a later FULL
+      // refund cannot re-run what a partial already spent: getting this wrong
+      // once is permanent.
+      //
+      // There is no proportional version of any of them to fall back on
+      // (points are reversed per order, store credit is returned per order,
+      // membership is binary), so a partial does NONE of them, exactly
+      // like the admin lane. The customer keeps their points, their credit and
+      // their membership; the cash they were owed is what came back.
+      // updateCommissionOnRefund above already prorates properly, and the
+      // refund sweep only ever plans work for payment_status = 'refunded', so
+      // it will not apply these behind our back either.
+      if (refundOutcome.isFullRefund) {
+        try {
+          await reverseOrderPoints(orderId);
+        } catch (pointsError) {
+          console.error("Unable to reverse membership points for order", orderId, pointsError);
+        }
+        try {
+          await restoreRedeemedPoints(orderId);
+        } catch (restoreError) {
+          console.error("Unable to restore redeemed points for order", orderId, restoreError);
+        }
+        try {
+          await refundStoreCreditForOrder(orderId);
+        } catch (creditError) {
+          console.error("Unable to return store credit for order", orderId, creditError);
+        }
       }
       // A refunded/charged-back MEMBERSHIP order ends the membership immediately
       // so its benefits stop — otherwise a customer could buy a membership, get
       // it refunded, and keep member pricing/free shipping/points forever.
-      try {
-        // An unreadable order is not a non-membership order: swallowing this
-        // read's error skipped the revocation and left the alert below blind to
-        // it, which is the exact failure that alert exists for.
-        const { data: refundedOrder, error: refundedOrderError } = await supabaseAdmin
-          .from("orders")
-          .select("order_type, customer_user_id")
-          .eq("order_id", orderId)
-          .maybeSingle();
-        if (refundedOrderError) throw refundedOrderError;
-        if (
-          refundedOrder
-          && String(refundedOrder.order_type ?? "product") === "membership"
-          && refundedOrder.customer_user_id
-        ) {
-          await revokeMembershipForRefund(String(refundedOrder.customer_user_id));
+      // Full reversals only: a partial refund on a membership order (a prorated
+      // month, a shipping adjustment) leaves the paid-for membership running.
+      if (refundOutcome.isFullRefund) {
+        try {
+          // An unreadable order is not a non-membership order: swallowing this
+          // read's error skipped the revocation and left the alert below blind to
+          // it, which is the exact failure that alert exists for.
+          const { data: refundedOrder, error: refundedOrderError } = await supabaseAdmin
+            .from("orders")
+            .select("order_type, customer_user_id")
+            .eq("order_id", orderId)
+            .maybeSingle();
+          if (refundedOrderError) throw refundedOrderError;
+          if (
+            refundedOrder
+            && String(refundedOrder.order_type ?? "product") === "membership"
+            && refundedOrder.customer_user_id
+          ) {
+            await revokeMembershipForRefund(String(refundedOrder.customer_user_id));
+          }
+        } catch (membershipError) {
+          console.error("Unable to revoke membership for refunded order", orderId, membershipError);
+          // NEITHER SWEPT NOR ALERTED until now. The refund sweep repairs the
+          // four idempotent refund effects; membership revocation is not one of
+          // them, so this failure had no console reader, no alert and no repair
+          // path — a customer whose membership was refunded kept member pricing,
+          // free shipping and points multipliers indefinitely.
+          await recordSystemAlert(unsafeEffectAlert("membership_revoke", orderId, membershipError))
+            .catch(() => {});
         }
-      } catch (membershipError) {
-        console.error("Unable to revoke membership for refunded order", orderId, membershipError);
-        // NEITHER SWEPT NOR ALERTED until now. The refund sweep repairs the
-        // four idempotent refund effects; membership revocation is not one of
-        // them, so this failure had no console reader, no alert and no repair
-        // path — a customer whose membership was refunded kept member pricing,
-        // free shipping and points multipliers indefinitely.
-        await recordSystemAlert(unsafeEffectAlert("membership_revoke", orderId, membershipError))
-          .catch(() => {});
       }
     }
 
