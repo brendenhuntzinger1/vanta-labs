@@ -30,7 +30,7 @@ import "server-only";
 // payment_events, which is the same exactly-once path the order webhooks use.
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { recordMembershipRenewalOrder } from "@/lib/membership-orders";
+import { recordMembershipChargeOrder } from "@/lib/membership-orders";
 
 export const MEMBERSHIP_EVENT_TYPES = new Set([
   "membership.created",
@@ -191,11 +191,12 @@ export async function handleMembershipEvent(
     // both dates must still be recorded rather than dropped.
     const renewalPeriodKey =
       (data.next_renewal_at ?? data.current_period_end ?? nowIso.slice(0, 10)) || nowIso.slice(0, 10);
-    await recordMembershipRenewalOrder({
+    await recordMembershipChargeOrder({
       userId: local.user_id,
       tierId: local.tier_id,
       billingCycle: local.billing_cycle,
       amountCents: chargedCents,
+      kind: "renewal",
       paymentId: `membership-renewal:${veyraMembershipId}:${renewalPeriodKey}`,
       paidAt: nowIso,
     });

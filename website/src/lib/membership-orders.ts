@@ -5,22 +5,27 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { recordSystemAlert } from "@/lib/monitoring";
 
 // ---------------------------------------------------------------------------
-// A MEMBERSHIP RENEWAL IS A SALE, SO IT HAS TO BE AN ORDER (VL-29 / VL-REV-01).
+// A MEMBERSHIP CHARGE IS A SALE, SO IT HAS TO BE AN ORDER (VL-29 / VL-REV-01).
 //
-// Both renewal lanes — Veyra's `membership.renewed` webhook and our own billing
-// sweep — recorded a `membership_billing_events` row and stopped there. Exactly
-// ONE screen in this application reads that table (admin/membership's analytics
-// tile). Every other money surface reads `orders`:
+// Every lane that takes membership money — the FIRST charge in
+// startMembershipSignup, Veyra's `membership.renewed` webhook, and our own
+// billing sweep — recorded a `membership_billing_events` row and stopped there.
+// Exactly ONE screen in this application reads that table (admin/membership's
+// analytics tile). Every other money surface reads `orders`:
 //
 //   • /admin/revenue                (admin-revenue.ts)
 //   • the dashboard + profit engine (admin-profit.ts, admin-dashboard-rollups.sql)
 //   • analytics and the trend chart (admin-analytics.ts)
 //   • the orders CSV export, the tax report, reconciliation
 //
-// So a member on $29/month was, to all of them, a customer who bought once and
-// never came back. Recurring revenue — the whole point of the membership
-// product — was invisible to the owner's actual reporting, and it got worse
-// every month the store ran.
+// So a member on $29/month was, to all of them, a customer who never bought
+// anything at all. Not "bought once and never came back" — the signup lane is
+// the same hole: the two lanes that DO write an order (createMembershipCheckout
+// Session's hosted checkout and createAnnualMembershipManualOrder's manual
+// annual) have no callers left, so /api/membership/subscribe's token lane is the
+// only live way to buy a membership and it wrote nothing. Membership revenue,
+// month one included, was invisible to the owner's actual reporting, and the gap
+// grew every month the store ran.
 //
 // This module writes the missing row, and it writes it the way the rest of the
 // system already describes a membership sale (see membership-billing.ts's
@@ -48,26 +53,35 @@ import { recordSystemAlert } from "@/lib/monitoring";
 // alert for the operator, not a lapsed membership for the customer.
 // ---------------------------------------------------------------------------
 
-export interface MembershipRenewalOrderInput {
+export interface MembershipChargeOrderInput {
   userId: string;
-  /** The tier renewed. Used for the order's tier column and the line item. */
+  /** The tier bought or renewed. Used for the tier column and the line item. */
   tierId: string | null;
   /** "monthly" | "annual" — anything else is treated as monthly (see below). */
   billingCycle: string | null;
   /** What the processor actually CAPTURED, in cents. */
   amountCents: number;
   /**
-   * Stable identity for the period being billed — NOT for the delivery or the
-   * attempt. `membership-renewal:<subscription or user>:<period>`, so every
-   * retry of the same renewal collapses onto one order and next month's
-   * renewal is still its own.
+   * Stable identity for the CHARGE — never for the delivery or the attempt.
+   *
+   * `membership-renewal:<subscription or user>:<period>` for a renewal, so every
+   * retry of the same renewal collapses onto one order while next month's is
+   * still its own; `membership-signup:<subscription>` for a first charge, keyed
+   * to the processor subscription the charge created, so a retry that finds no
+   * local membership row still cannot book the same sale twice.
    */
   paymentId: string;
+  /**
+   * Which charge this was. Display only — it changes the line item's wording so
+   * an operator reading the order can tell a first purchase from a rebill. The
+   * money, the columns and the idempotency behave identically either way.
+   */
+  kind?: "signup" | "renewal";
   /** Defaults to now. */
   paidAt?: string;
 }
 
-export interface MembershipRenewalOrderResult {
+export interface MembershipChargeOrderResult {
   recorded: boolean;
   orderId?: string;
   orderNumber?: string;
@@ -130,17 +144,18 @@ async function existingOrderFor(paymentId: string): Promise<{ order_id: string; 
 }
 
 /**
- * Book a membership renewal charge as a paid order.
+ * Book a captured membership charge — a signup or a renewal — as a paid order.
  *
- * Call this ONLY once the money is captured — a failed or pending renewal must
- * not appear on any revenue surface (M-03 is the same rule seen from the other
- * side: an order that never took payment must not report revenue or profit).
+ * Call this ONLY once the money is captured. A failed or pending charge must
+ * never appear on a revenue surface (M-03 is the same rule seen from the other
+ * side: an order that never took payment must not report revenue or profit),
+ * which is also why a declined signup books nothing at all.
  */
-export async function recordMembershipRenewalOrder(
-  input: MembershipRenewalOrderInput,
-): Promise<MembershipRenewalOrderResult> {
+export async function recordMembershipChargeOrder(
+  input: MembershipChargeOrderInput,
+): Promise<MembershipChargeOrderResult> {
   const amountCents = Math.round(Number(input.amountCents) || 0);
-  // A $0 "renewal" moved no money. Booking it would add a $0 order to the
+  // A $0 charge moved no money. Booking it would add a $0 order to the
   // count and drag average order value down with an empty denominator — the
   // same defect ledger.isSaleOrder exists to keep replacements out of.
   if (amountCents <= 0) return { recorded: false, reason: "no_amount" };
@@ -208,10 +223,16 @@ export async function recordMembershipRenewalOrder(
     // a membership has no product cost, which is also why admin-profit passes no
     // COGS lines for order_type "membership".
     const tierLabel = tier?.name ?? "Membership";
+    const term = cycle === "annual" ? "Annual" : "Monthly";
     await supabaseAdmin.from("order_items").insert({
       order_id: orderId,
       product_id: `membership:${tier?.slug ?? input.tierId ?? "unknown"}`,
-      product_name: `${cycle === "annual" ? "Annual" : "Monthly"} Membership renewal — ${tierLabel}`,
+      // Worded like the signup order the hosted-checkout lane writes
+      // (membership-billing.ts), plus "renewal" on a rebill so an operator can
+      // tell a first purchase from the twelve that follow it.
+      product_name: input.kind === "signup"
+        ? `${term} Membership — ${tierLabel}`
+        : `${term} Membership renewal — ${tierLabel}`,
       unit_price: amount,
       quantity: 1,
       line_total: amount,
@@ -224,15 +245,16 @@ export async function recordMembershipRenewalOrder(
     // regardless. An unrecorded renewal is money the reports cannot see, which
     // is exactly the defect this module exists to close — so it raises an alert
     // rather than disappearing into a log line.
+    const kind = input.kind === "signup" ? "signup" : "renewal";
     const message = error instanceof Error ? error.message : String((error as { message?: unknown })?.message ?? error);
-    console.error(`[membership] could not record a renewal order for user ${input.userId}: ${message}`);
+    console.error(`[membership] could not record a ${kind} order for user ${input.userId}: ${message}`);
     await recordSystemAlert({
-      type: "membership_renewal_order_not_recorded",
+      type: "membership_charge_order_not_recorded",
       severity: "critical",
       message:
-        `A membership renewal of ${(amountCents / 100).toFixed(2)} USD for user ${input.userId} was charged, but its order row could not be written (${message}). `
+        `A membership ${kind} charge of ${(amountCents / 100).toFixed(2)} USD for user ${input.userId} was captured, but its order row could not be written (${message}). `
         + "The money is real and the member keeps their benefits; every revenue surface is short by this amount until the row is added.",
-      context: { userId: input.userId, tierId: input.tierId, amountCents, paymentId },
+      context: { userId: input.userId, tierId: input.tierId, amountCents, paymentId, kind },
     }).catch(() => {});
     return { recorded: false, reason: "write_failed" };
   }

@@ -12,7 +12,7 @@ import {
 } from "@/lib/veyra-membership";
 import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase, membershipTermPlan } from "@/lib/membership-billing-math";
-import { recordMembershipRenewalOrder } from "@/lib/membership-orders";
+import { recordMembershipChargeOrder } from "@/lib/membership-orders";
 import { PAID_EVENT_TYPES, skipUsedThisPaidPeriod } from "@/lib/membership-status";
 import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
@@ -819,6 +819,41 @@ export async function startMembershipSignup(input: StartMembershipSignupInput) {
 
     if (chargeResult.success) {
       await recordBillingEvent({ userId: input.userId, tierId: tier.id, eventType: "renewal", amountCents, status: "succeeded", providerChargeId: chargeResult.providerChargeId });
+
+      // THE MONEY, WHERE THE REPORTS LOOK FOR IT (VL-29).
+      //
+      // This lane is the ONLY live way to buy a membership — the hosted-checkout
+      // lane (createMembershipCheckoutSession) and the manual annual lane
+      // (createAnnualMembershipManualOrder) both write orders and both have no
+      // callers left — and it wrote no order at all. So month one of every
+      // membership was as invisible to /admin/revenue, the profit engine,
+      // analytics and the CSV export as the renewals were.
+      //
+      // KEYED TO THE PROCESSOR SUBSCRIPTION, NOT TO THE ATTEMPT. The guard that
+      // normally stops a double signup is the "already active" branch above, and
+      // it reads the LOCAL membership row — so a retry that lands after the
+      // charge but before (or instead of) that row falls straight through to
+      // here a second time. `veyraMembershipId` is minted once per subscription
+      // by the processor, so keying on it means the same subscription can never
+      // book two sales, while a genuine cancel-and-rejoin mints a new id and is
+      // correctly a second one.
+      //
+      // The legacy local lane has no such id; it takes the same date-scoped key
+      // its own charge is deduplicated on (`signup-<user>-<tier>-<cycle>-<day>`),
+      // so a retry inside the day that the provider deduplicates cannot book a
+      // second order either.
+      await recordMembershipChargeOrder({
+        userId: input.userId,
+        tierId: tier.id,
+        billingCycle: input.billingCycle,
+        amountCents,
+        kind: "signup",
+        paymentId: veyraMembershipId
+          ? `membership-signup:${veyraMembershipId}`
+          : `membership-signup:${input.userId}:${tier.id}:${input.billingCycle}:${now.toISOString().slice(0, 10)}`,
+        paidAt: now.toISOString(),
+      });
+
       if (contact) {
         await sendMarketingEmail({
           to: contact.email,
@@ -1712,7 +1747,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
         // Keyed to the period just billed — the SAME key the charge above is
         // deduplicated on at the processor — so a retried or overlapping sweep
         // books one order, not two.
-        await recordMembershipRenewalOrder({
+        await recordMembershipChargeOrder({
           userId: row.user_id,
           // The row's own column, not the embedded tier: it is the value every
           // other membership surface reports from, and it is present even when
@@ -1720,6 +1755,7 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
           tierId: row.tier_id ?? tier.id ?? null,
           billingCycle: "monthly",
           amountCents,
+          kind: "renewal",
           paymentId: `membership-renewal:${row.user_id}:${row.next_billing_at ?? now.toISOString()}`,
           paidAt: now.toISOString(),
         });
