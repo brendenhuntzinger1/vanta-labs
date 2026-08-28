@@ -67,6 +67,33 @@ Use judgement: a typo fix doesn't need a plan.
 If these skills are missing, the session is probably running in the `Default`
 cloud environment rather than `vanta`. Say so rather than working around it.
 
+## Plugins (checked in)
+
+`.claude/settings.json` enables these for every session in this repo, so they
+need no per-session install:
+
+- **context7** — pulls version-specific docs straight from a library's source.
+  This repo runs **Next.js 16.2.10**, which is newer than most models' training
+  data; `website/AGENTS.md` exists because working from memory produces
+  plausible-looking Next.js that is wrong for this version. Use it before
+  writing against an unfamiliar API, alongside `node_modules/next/dist/docs/`.
+  It reaches a hosted service (`mcp.context7.com`), so queries leave the
+  machine — library names only, never repository content.
+- **typescript-lsp** — go-to-definition, find-references and live type errors
+  across `.ts/.tsx/.js/.jsx`. Resolved by the type system rather than by text
+  match, so it finds every real call site and no false ones.
+
+**typescript-lsp needs a binary the settings file cannot carry.** The plugin is
+enabled by the checked-in settings, but the language server itself is a global
+npm package:
+
+    npm install -g typescript-language-server typescript
+
+The cloud container is ephemeral, so this must live in the `vanta` environment's
+setup script next to the Superpowers install — otherwise the plugin loads with
+nothing behind it and its features silently do nothing. If go-to-definition is
+unavailable, check for the binary before assuming the plugin is broken.
+
 ## Other tooling
 
 - **Supabase MCP** — inspect schema and query data when a bug may be
