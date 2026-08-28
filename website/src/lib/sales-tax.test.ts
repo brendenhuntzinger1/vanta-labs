@@ -179,3 +179,93 @@ describe("resolveSalesTax — money invariants", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// FLORIDA, PINNED — because it is the home state and the one nexus will be
+// switched on first.
+//
+// Vanta Labs' registered address is San Antonio, FL 33576 (Pasco County), and
+// as of 2026-08-28 `tax.nexus_states` in production is EMPTY. The store
+// therefore collects $0 in every state, Florida included — the test above
+// ("collects nothing anywhere with no nexus configured") is not a hypothetical,
+// it is the live configuration.
+//
+// That is an owner decision, not a defect, and nothing here changes it. What
+// these tests do is remove the second risk: that switching nexus on quietly
+// starts collecting the WRONG number. Under-collecting leaves a liability;
+// over-collecting owes refunds to customers. Both are worse than the current
+// $0, because both are silent.
+//
+// So this pins exactly what a Florida order pays the moment "FL" is added, and
+// nothing else changes by accident.
+// ---------------------------------------------------------------------------
+describe("Florida, the home state, the day nexus is switched on", () => {
+  it("charges 7.0% — Florida's 6% state rate plus Pasco County's 1% surtax", () => {
+    const q = resolveSalesTax({
+      taxableAmount: 100,
+      shippingAmount: 0,
+      country: "United States",
+      state: "FL",
+      config: nexus(["FL"]),
+    });
+
+    expect(q.collected).toBe(true);
+    expect(q.ratePercent).toBe(7.0);
+    expect(q.amount).toBe(7.0);
+    expect(q.reason).toBe("collected");
+  });
+
+  it("does NOT tax the shipping fee, which is correct for Florida", () => {
+    // Florida taxes delivery only when it is not separately stated and the
+    // buyer cannot avoid it. This store states shipping separately, so the
+    // table's shippingTaxable: false is the right reading — and a $200 order
+    // with $15 shipping must be taxed on $200, not $215.
+    expect(US_STATE_TAX_TABLE.FL.shippingTaxable).toBe(false);
+
+    const q = resolveSalesTax({
+      taxableAmount: 200,
+      shippingAmount: 15,
+      country: "US",
+      state: "FL",
+      config: nexus(["FL"]),
+    });
+
+    expect(q.amount).toBe(calculateTaxAmount(200, 7.0));
+    expect(q.amount).not.toBe(calculateTaxAmount(215, 7.0));
+  });
+
+  it("still collects nothing outside Florida when only FL is registered", () => {
+    // The reason this matters: registering one state must not start collecting
+    // in forty-nine others. Each of those would be tax taken with no obligation
+    // to remit it, which is the harder mistake to unwind.
+    for (const state of Object.keys(US_STATE_TAX_TABLE).filter((s) => s !== "FL")) {
+      const q = resolveSalesTax({
+        taxableAmount: 100,
+        shippingAmount: 10,
+        country: "US",
+        state,
+        config: nexus(["FL"]),
+      });
+      expect(q.amount, `expected $0 for ${state}`).toBe(0);
+      expect(q.collected).toBe(false);
+      expect(q.reason).toBe("no_nexus");
+    }
+  });
+
+  it("honours an admin override, so a better local figure wins over the table", () => {
+    // The table is a population-weighted county average, not a rooftop rate.
+    // If the owner's shipping mix justifies a different Florida figure, the
+    // Control Center override is the supported way to say so — and it must
+    // actually take effect, or the override screen is decoration.
+    const q = resolveSalesTax({
+      taxableAmount: 100,
+      shippingAmount: 0,
+      country: "US",
+      state: "FL",
+      config: nexus(["FL"], { FL: 6.5 }),
+    });
+
+    expect(q.ratePercent).toBe(6.5);
+    expect(q.amount).toBe(6.5);
+  });
+});
