@@ -2,6 +2,16 @@
 
 import { useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { TurnstileWidget } from "@/components/turnstile-widget";
+
+// Every other auth call in the app (signup, password login, phone OTP) carries
+// a Turnstile token. This one did not, and password reset is the single path a
+// locked-out user has left. Turnstile is currently unconfigured in production,
+// so the omission was dormant — but the moment a secret is set in the Supabase
+// dashboard, Auth starts rejecting tokenless calls and reset would break for
+// EVERY user, silently, with no code change to point at. Wiring it now means
+// enabling the CAPTCHA is a config change rather than an outage.
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY?.trim() || "";
 
 function getEmailRedirectUrl(path: string) {
   const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.trim();
@@ -21,6 +31,9 @@ export function AccountForgotPasswordForm() {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Single-use token; the bump counter re-renders the widget after each attempt.
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -33,17 +46,22 @@ export function AccountForgotPasswordForm() {
     try {
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(email.trim(), {
         redirectTo: getEmailRedirectUrl("/account/reset-password"),
+        captchaToken: captchaToken ?? undefined,
       });
 
       if (resetError) {
         throw new Error(resetError.message);
       }
 
-      setMessage("If an account exists for that email, a password reset link is on its way.");
+      setMessage("If an account exists for that email, a password reset link is on its way. It can take a minute — check your spam folder too.");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to send reset email");
     } finally {
       setLoading(false);
+      if (TURNSTILE_SITE_KEY) {
+        setCaptchaToken(null);
+        setCaptchaResetKey((key) => key + 1);
+      }
     }
   };
 
@@ -64,6 +82,10 @@ export function AccountForgotPasswordForm() {
           required
         />
       </label>
+
+      {TURNSTILE_SITE_KEY ? (
+        <TurnstileWidget siteKey={TURNSTILE_SITE_KEY} onToken={setCaptchaToken} resetKey={captchaResetKey} />
+      ) : null}
 
       {message ? <p className="mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">{message}</p> : null}
       {error ? <p className="mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">{error}</p> : null}
