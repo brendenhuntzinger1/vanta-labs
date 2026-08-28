@@ -42,9 +42,18 @@ as $$
     group by ambassador_id
   ),
   o as (
-    select ambassador_id::text as ambassador_id, sum(coalesce(amount_paid, 0)) as revenue, count(*) as cnt
+    -- NET revenue over the ledger's revenue statuses, not gross amount_paid
+    -- over 'paid' alone. Gross counted a fully refunded order at face value in
+    -- the ambassador's attributed revenue and dropped partially refunded ones
+    -- entirely — the same drift ledger.ts exists to prevent, on the partner
+    -- surface. See src/lib/ledger.ts netOrderRevenue / REVENUE_ORDER_STATUSES.
+    select ambassador_id::text as ambassador_id,
+           sum(round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2)) as revenue,
+           count(*) as cnt
     from public.orders
-    where ambassador_id is not null and payment_status = 'paid'
+    where ambassador_id is not null
+      and payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
+      and coalesce(order_type, 'product') <> 'replacement'
     group by ambassador_id
   ),
   k as (

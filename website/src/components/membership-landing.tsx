@@ -14,7 +14,6 @@ import { ScrollReveal } from "@/components/scroll-reveal";
 import { useCart, formatCartCurrency } from "@/components/cart-context";
 // Shared with checkout so the calculator's shipping assumption always matches
 // what an order is actually charged.
-import { FREE_SHIPPING_THRESHOLD, DOMESTIC_SHIPPING_FEE } from "@/lib/shipping";
 
 type BillingCycle = "monthly" | "annual";
 
@@ -119,7 +118,7 @@ function restatesStructuredPerk(benefit: string, tier: MembershipTier): boolean 
 // are added). With an empty cart it falls back to a spend slider so the page
 // still demonstrates value.
 function SavingsCalculator({ tiers }: { tiers: MembershipTier[] }) {
-  const { subtotal, shipping } = useCart();
+  const { subtotal, shipping, shippingConfig } = useCart();
   const paidTiers = tiers.filter((tier) => tier.monthlyPriceCents > 0);
   const [tierSlug, setTierSlug] = useState(paidTiers.find((t) => t.slug === "pro")?.slug ?? paidTiers[0]?.slug ?? "");
   const [simulatedSpend, setSimulatedSpend] = useState(200);
@@ -129,7 +128,11 @@ function SavingsCalculator({ tiers }: { tiers: MembershipTier[] }) {
 
   const usingCart = subtotal > 0;
   const basis = usingCart ? subtotal : simulatedSpend;
-  const basisShipping = usingCart ? shipping : basis >= FREE_SHIPPING_THRESHOLD ? 0 : DOMESTIC_SHIPPING_FEE;
+  const basisShipping = usingCart
+    ? shipping
+    : basis >= shippingConfig.freeShippingThreshold
+      ? 0
+      : shippingConfig.domesticFee;
 
   const discountSavings = Math.round(basis * tier.memberDiscountPercent) / 100;
   const shippingSavings = tier.freeShipping ? basisShipping : 0;

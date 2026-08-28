@@ -2,7 +2,7 @@ import { randomUUID } from "crypto";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { generateReferralCode } from "@/lib/referral-code-utils";
 import { validateReferralCodeFormat } from "@/lib/referral-code-validation";
-import { isEarnedCommission } from "@/lib/ledger";
+import { isEarnedCommission, isRevenueOrderStatus, isSaleOrder, netOrderRevenue, REVENUE_ORDER_STATUSES } from "@/lib/ledger";
 import { sendEmail } from "@/lib/email/send";
 import {
   ambassadorApplicationReceivedTemplate,
@@ -1382,22 +1382,52 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
     returningCustomers = Number(opsRow.returning_customers ?? 0);
     totalCustomers = Number(opsRow.total_customers ?? 0);
   } else {
-    // Fallback: RPC not present — legacy scans + JS aggregation (identical math).
+    // Fallback: RPC not migrated yet — legacy scans + JS aggregation.
+    //
+    // This MUST reach the same number as admin_ops_summary above. It used to
+    // claim "identical math" in a comment while summing GROSS amount_paid over
+    // payment_status='paid' only: refunds were ignored, partially-refunded
+    // orders were dropped entirely, and replacement reships (paid, $0) were
+    // counted as sales. The RPC path had already been corrected, so whether
+    // "live sales today" included a refund depended on whether the rollup
+    // migration happened to be present. Both paths now resolve revenue through
+    // ledger.ts — netOrderRevenue over REVENUE_ORDER_STATUSES, replacements
+    // excluded — which is what makes this tile agree with /admin/revenue.
+    const revenueStatuses = [...REVENUE_ORDER_STATUSES];
     const [
       { data: todayOrders, error: todayError },
       { data: monthOrders, error: monthError },
       { data: allPaidOrders, error: paidError },
     ] = await Promise.all([
-      supabaseAdmin.from("orders").select("amount_paid").eq("payment_status", "paid").gte("created_at", todayStart),
-      supabaseAdmin.from("orders").select("amount_paid").eq("payment_status", "paid").gte("created_at", monthStart),
+      supabaseAdmin
+        .from("orders")
+        .select("amount_paid, refund_amount, payment_status, order_type")
+        .in("payment_status", revenueStatuses)
+        .gte("created_at", todayStart),
+      supabaseAdmin
+        .from("orders")
+        .select("amount_paid, refund_amount, payment_status, order_type")
+        .in("payment_status", revenueStatuses)
+        .gte("created_at", monthStart),
       supabaseAdmin.from("orders").select("customer_email").eq("payment_status", "paid"),
     ]);
     assertNoSupabaseError("orders.select(live sales today)", todayError);
     assertNoSupabaseError("orders.select(live sales month)", monthError);
     assertNoSupabaseError("orders.select(customer analytics)", paidError);
 
-    liveSalesToday = roundMoney((todayOrders ?? []).reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0));
-    liveSalesMonth = roundMoney((monthOrders ?? []).reduce((sum, row) => sum + Number(row.amount_paid ?? 0), 0));
+    const sumLiveSales = (rows: Array<Record<string, unknown>> | null) =>
+      roundMoney(
+        (rows ?? [])
+          .filter(
+            (row) =>
+              isRevenueOrderStatus(row.payment_status as string | null) &&
+              isSaleOrder(row.order_type as string | null),
+          )
+          .reduce((sum, row) => sum + netOrderRevenue(row as { amount_paid?: number | null; refund_amount?: number | null }), 0),
+      );
+
+    liveSalesToday = sumLiveSales(todayOrders as Array<Record<string, unknown>> | null);
+    liveSalesMonth = sumLiveSales(monthOrders as Array<Record<string, unknown>> | null);
 
     const customerOrderCount = new Map<string, number>();
     for (const row of allPaidOrders ?? []) {

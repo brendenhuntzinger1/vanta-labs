@@ -3,19 +3,15 @@ create or replace function public.current_auth_role() returns text language sql 
 create or replace function public.current_auth_uid() returns uuid language sql stable as $function$ select auth.uid(); $function$;
 create or replace function public.order_attribution_touch_updated_at() returns trigger language plpgsql security definer set search_path to 'public' as $function$
 begin new.updated_at := now(); return new; end; $function$;
-create or replace function public.admin_ops_summary(p_today_start timestamptz, p_month_start timestamptz)
- returns table(live_sales_today numeric, live_sales_month numeric, new_customers bigint, returning_customers bigint, total_customers bigint)
- language sql stable security definer set search_path to 'public','pg_temp' as $function$
-  with per_customer as (
-    select customer_email, count(*) as cnt from public.orders
-    where payment_status = 'paid' and customer_email is not null group by customer_email
-  )
-  select coalesce((select sum(coalesce(amount_paid,0)) from public.orders where payment_status='paid' and created_at >= p_today_start),0),
-         coalesce((select sum(coalesce(amount_paid,0)) from public.orders where payment_status='paid' and created_at >= p_month_start),0),
-         coalesce((select count(*) from per_customer where cnt=1),0),
-         coalesce((select count(*) from per_customer where cnt>1),0),
-         coalesce((select count(*) from per_customer),0);
-$function$;
+-- admin_ops_summary is deliberately NOT defined here.
+--
+-- This file is a point-in-time dump of the live functions, and the copy it
+-- carried was the PRE-FIX body: gross sum(amount_paid) over payment_status
+-- 'paid' only. setup-local-harness.sh applies this file LAST, so that stale
+-- body overwrote the corrected one and the harness reported "live sales"
+-- ignoring refunds — the exact drift admin-dashboard-rollups.sql was written
+-- to remove. The harness now applies admin-dashboard-rollups.sql, which owns
+-- this function; re-adding it here would silently win again.
 create or replace function public.admin_points_outstanding() returns numeric language sql stable security definer set search_path to 'public','pg_temp' as $function$
   select coalesce(sum(amount),0) from public.points_ledger;
 $function$;
@@ -45,12 +41,6 @@ begin
   -- authenticated and service_role are Supabase-managed roles that do not exist
   -- in a bare cluster. Without this, a database-backed test executing this file
   -- dies on the grant rather than on whatever it was testing.
-  if exists (select 1 from pg_roles where rolname='anon') then
-    execute $q$revoke all on function public.admin_ops_summary(timestamptz, timestamptz) from public, anon, authenticated;$q$;
-  end if;
-  if exists (select 1 from pg_roles where rolname='service_role') then
-    execute $q$grant execute on function public.admin_ops_summary(timestamptz, timestamptz) to service_role;$q$;
-  end if;
   if exists (select 1 from pg_roles where rolname='anon') then
     execute $q$revoke all on function public.admin_points_outstanding() from public, anon, authenticated;$q$;
   end if;

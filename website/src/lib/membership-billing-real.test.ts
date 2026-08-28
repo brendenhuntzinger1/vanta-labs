@@ -95,12 +95,35 @@ vi.mock("@/lib/supabase-server", () => {
       return {
         select: () => {
           const filters: Array<[string, string, unknown]> = [];
+          // The sweep now orders and bounds every due window, so the double has
+          // to honour both — a `limit()` that returned everything would let an
+          // unbounded sweep pass a test written to prove it is bounded.
+          const sorts: Array<{ col: string; asc: boolean }> = [];
+          let take: number | null = null;
+          const settle = () => {
+            const rows = state.memberships.filter((m) => matches(m, filters)).map((m) => ({ ...m }));
+            rows.sort((a, b2) => {
+              for (const { col, asc } of sorts) {
+                const cmp = String((a as Record<string, unknown>)[col] ?? "")
+                  .localeCompare(String((b2 as Record<string, unknown>)[col] ?? ""));
+                if (cmp !== 0) return asc ? cmp : -cmp;
+              }
+              return 0;
+            });
+            return take === null ? rows : rows.slice(0, take);
+          };
           const b: Record<string, unknown> = {
             eq(c: string, v: unknown) { filters.push(["eq", c, v]); return b; },
             is(c: string, v: unknown) { filters.push(["is", c, v]); return b; },
+            not(c: string, op: string, v: unknown) { filters.push([`not_${op}`, c, v]); return b; },
             gt(c: string, v: unknown) { filters.push(["gt", c, v]); return b; },
             lte(c: string, v: unknown) { filters.push(["lte", c, v]); return b; },
-            limit() { return b; },
+            order(c: string, o?: { ascending?: boolean }) { sorts.push({ col: c, asc: o?.ascending !== false }); return b; },
+            limit(n: number) { take = n; return b; },
+            range(from: number, to: number) {
+              const rows = settle().slice(from, to + 1);
+              return Promise.resolve({ data: rows, error: null });
+            },
             async maybeSingle() {
               if (state.failNextMembershipRead) {
                 state.failNextMembershipRead = false;
@@ -110,8 +133,7 @@ vi.mock("@/lib/supabase-server", () => {
               return { data: found ? { ...found } : null, error: null };
             },
             then(resolve: (v: { data: unknown; error: null }) => unknown) {
-              const rows = state.memberships.filter((m) => matches(m, filters)).map((m) => ({ ...m }));
-              return Promise.resolve({ data: rows, error: null }).then(resolve);
+              return Promise.resolve({ data: settle(), error: null }).then(resolve);
             },
           };
           return b;
@@ -187,6 +209,7 @@ vi.mock("@/lib/supabase-server", () => {
   function matches(row: MembershipRow, filters: Array<[string, string, unknown]>) {
     return filters.every(([op, col, val]) => {
       const actual = (row as unknown as Record<string, unknown>)[col];
+      if (op === "not_is") return (actual ?? null) !== val;
       if (op === "eq") return actual === val;
       if (op === "is") return actual === val;
       if (op === "gt") return actual !== null && String(actual) > String(val);
@@ -786,5 +809,82 @@ describe("revokeMembershipForRefund", () => {
 
     await expect(revokeMembershipForRefund("user-1")).rejects.toBeDefined();
     expect(state.memberships[0].status).toBe("active");
+  });
+});
+
+// =========================================================================
+// CRON-03: THE SWEEP'S COST USED TO BE THE SIZE OF THE MEMBERSHIP BASE
+// =========================================================================
+//
+// Each of the five steps read its whole due window with no limit and then
+// awaited per row — a card charge and an email each. On a function capped at 60
+// seconds that is a ceiling on how many members the business may have before
+// renewals stop being collected, and nothing anywhere said so: an overrun is
+// killed by the platform mid-flight.
+//
+// Bounding is only safe because every window DRAINS — a reminder stamps
+// `*_reminder_sent_at`, a successful charge advances `next_billing_at`, a
+// declined one moves the member to `past_due` — so a handled row leaves the
+// window and cannot hold the budget next tick. These assert both halves: the
+// bound exists, and the queue is oldest-first so the longest-waiting member is
+// never the one that gets skipped.
+describe("what one tick of the billing sweep may do", () => {
+  it("does not attempt a charge for every due member in one tick", async () => {
+    state.memberships = Array.from({ length: 500 }, (_unused, i) => membership({
+      user_id: `user-${String(i).padStart(4, "0")}`,
+      intro_ends_at: new Date(Date.now() - (500 - i) * DAY).toISOString(),
+    }));
+    const { runMembershipBillingSweep } = await mod();
+
+    const result = await runMembershipBillingSweep();
+
+    expect(result.remainderChargesAttempted).toBeGreaterThan(0);
+    expect(result.remainderChargesAttempted).toBeLessThan(500);
+  });
+
+  it("takes the longest-waiting members first, so nobody is starved behind a queue", async () => {
+    state.memberships = Array.from({ length: 500 }, (_unused, i) => membership({
+      user_id: `user-${String(i).padStart(4, "0")}`,
+      // user-0000 has been due longest.
+      intro_ends_at: new Date(Date.now() - (500 - i) * DAY).toISOString(),
+    }));
+    const { runMembershipBillingSweep } = await mod();
+
+    await runMembershipBillingSweep();
+
+    const charged = chargeCard.mock.calls.map(([input]) => String((input as { idempotencyKey: string }).idempotencyKey));
+    expect(charged[0]).toContain("user-0000");
+  });
+
+  it("drains: successive ticks reach the whole backlog", async () => {
+    state.memberships = Array.from({ length: 60 }, (_unused, i) => membership({
+      user_id: `user-${String(i).padStart(4, "0")}`,
+      intro_ends_at: new Date(Date.now() - (60 - i) * DAY).toISOString(),
+    }));
+    const { runMembershipBillingSweep } = await mod();
+
+    // A charged member is advanced to active with a future next_billing_at, so
+    // the window they were in no longer contains them.
+    await runMembershipBillingSweep();
+    await runMembershipBillingSweep();
+    await runMembershipBillingSweep();
+
+    const stillDue = state.memberships.filter((m) => m.status === "trialing" && m.intro_status === "active");
+    expect(stillDue).toHaveLength(0);
+  });
+
+  it("bounds the renewal charges too, not only the first-month remainders", async () => {
+    state.memberships = Array.from({ length: 400 }, (_unused, i) => membership({
+      user_id: `user-${String(i).padStart(4, "0")}`,
+      status: "active",
+      intro_status: "converted",
+      next_billing_at: new Date(Date.now() - (400 - i) * DAY).toISOString(),
+    }));
+    const { runMembershipBillingSweep } = await mod();
+
+    const result = await runMembershipBillingSweep();
+
+    expect(result.renewalChargesAttempted).toBeGreaterThan(0);
+    expect(result.renewalChargesAttempted).toBeLessThan(400);
   });
 });

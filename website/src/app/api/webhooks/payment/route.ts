@@ -1,7 +1,14 @@
 import { NextResponse } from "next/server";
 import { getRequiredEnv } from "@/lib/env";
-import { processPaymentWebhook } from "@/lib/payment-webhook";
+import { processPaymentWebhook, WebhookSignatureError } from "@/lib/payment-webhook";
 import { recordSystemAlert } from "@/lib/monitoring";
+
+/**
+ * At most one `payment_webhook_error` row per half hour while the condition
+ * lasts. Long enough that a retry storm collapses to a single line, short
+ * enough that a NEW failure the next time the cron sweep runs still lands.
+ */
+const PAYMENT_WEBHOOK_ALERT_DEDUPE_MS = 30 * 60 * 1000;
 
 export async function POST(request: Request) {
   try {
@@ -59,14 +66,30 @@ export async function POST(request: Request) {
       );
     }
 
-    // Record a durable, dashboard-visible alert. Warning (not critical) so
-    // routine bad-signature probes from the internet don't email the operator,
-    // but a genuine settlement failure is still surfaced for review.
-    await recordSystemAlert({
-      type: "payment_webhook_error",
-      severity: "warning",
-      message: `A payment webhook failed to process: ${error instanceof Error ? error.message : "unknown error"}. If this coincides with a real order, that order may not have settled.`,
-    });
+    // THIS ROUTE IS PUBLIC, AND `recordSystemAlert` WRITES A ROW.
+    //
+    // Every failure used to be recorded, signature failures included — so
+    // anything on the internet could POST here in a loop and mint `system_alerts`
+    // rows at whatever rate it liked, with no authentication and no ceiling.
+    // Those rows then filled the ten-row window on /admin/status and buried the
+    // criticals underneath them, which is the same storm this phase is clearing
+    // up. A refused signature is not a fact about this store; it is a fact about
+    // the internet, and the 400 below is the whole of the correct response.
+    //
+    // Everything past the signature check is different: the sender proved it
+    // holds PAYMENT_WEBHOOK_SECRET, so a failure there means a real card event
+    // may not have settled and is worth waking someone for.
+    if (!(error instanceof WebhookSignatureError)) {
+      await recordSystemAlert({
+        type: "payment_webhook_error",
+        severity: "warning",
+        message: `A payment webhook failed to process: ${error instanceof Error ? error.message : "unknown error"}. If this coincides with a real order, that order may not have settled.`,
+        // Second bound, and the one that holds even if a future edit lets an
+        // unauthenticated path back through: a provider retrying a broken event
+        // every few seconds is one problem, not three hundred rows.
+        dedupeWindowMs: PAYMENT_WEBHOOK_ALERT_DEDUPE_MS,
+      });
+    }
 
     return NextResponse.json({ success: false, error: "Webhook processing failed" }, { status: 400 });
   }

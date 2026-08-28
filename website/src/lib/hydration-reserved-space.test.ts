@@ -94,7 +94,11 @@ describe("the consent bar does not overrule the server after hydration", () => {
   });
 
   it("heals the missing localStorage entry from the cookie", () => {
-    expect(consent).toContain("window.localStorage.setItem(STORAGE_KEY, cookieAnswer);");
+    // CONSENT_STORAGE_KEY, not STORAGE_KEY: the constant was renamed and moved
+    // into lib/cookie-consent-client.ts on main after this test was written.
+    // The rename is what made this assertion fail, which is the tripwire doing
+    // its job — the behaviour it guards is unchanged.
+    expect(consent).toContain("window.localStorage.setItem(CONSENT_STORAGE_KEY, cookieAnswer);");
   });
 
   it("reads the cookie in one place, so the two branches cannot disagree", () => {

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { browserAdsReportingAllowed } from "@/lib/ads/ads-environment";
 import { PAGEVIEW_COUNTER } from "@/lib/ads/tracking-health-browser";
+import { hasAcceptedConsent, subscribeToConsent } from "@/lib/cookie-consent-client";
 
 /**
  * TikTok Pixel.
@@ -24,8 +25,6 @@ import { PAGEVIEW_COUNTER } from "@/lib/ads/tracking-health-browser";
  */
 
 const PIXEL_ID = process.env.NEXT_PUBLIC_TIKTOK_PIXEL_ID ?? "D9SAES3C77U40SOI9D70";
-const STORAGE_KEY = "vl_cookie_consent";
-const CONSENT_EVENT = "vanta:cookie-consent";
 
 declare global {
   interface Window {
@@ -57,15 +56,6 @@ function countPageView(): void {
   w[PAGEVIEW_COUNTER] = Number(w[PAGEVIEW_COUNTER] ?? 0) + 1;
 }
 
-function hasAccepted(): boolean {
-  try {
-    return window.localStorage.getItem(STORAGE_KEY) === "accepted";
-  } catch {
-    // Storage blocked (private mode, some in-app browsers). Absence of a
-    // recorded "yes" is a no.
-    return false;
-  }
-}
 
 export function TikTokPixel() {
   const [accepted, setAccepted] = useState(false);
@@ -95,14 +85,9 @@ export function TikTokPixel() {
   const initialPageSent = useRef(false);
 
   useEffect(() => {
-    const sync = () => setAccepted(hasAccepted());
+    const sync = () => setAccepted(hasAcceptedConsent());
     sync();
-    window.addEventListener(CONSENT_EVENT, sync);
-    window.addEventListener("storage", sync);
-    return () => {
-      window.removeEventListener(CONSENT_EVENT, sync);
-      window.removeEventListener("storage", sync);
-    };
+    return subscribeToConsent(sync);
   }, []);
 
   // This is a single-page app: after the first load, navigation never reloads

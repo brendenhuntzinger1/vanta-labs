@@ -83,21 +83,30 @@ let cartAgeHours = 25;
 vi.mock("@/lib/supabase-server", () => {
   const from = (table: string) => {
     if (table === "abandoned_carts") {
+      // The sweep pages this window now (oldest cart first) instead of reading
+      // it whole, so the double answers .range() as well as the plain await.
+      const page = () => ({
+        data: [{
+          id: CART_ID,
+          email: SHOPPER,
+          customer_name: "Test Shopper",
+          items: [{ productId: "p1", name: "Item", quantity: 1, priceCents: 5000 }],
+          cart_value_cents: 5000,
+          first_seen_at: new Date(Date.now() - cartAgeHours * 60 * 60 * 1000).toISOString(),
+        }],
+        error: null,
+      });
       const b: Record<string, unknown> = {
         select: () => b,
         eq: () => b,
-        async gte() {
-          return {
-            data: [{
-              id: CART_ID,
-              email: SHOPPER,
-              customer_name: "Test Shopper",
-              items: [{ productId: "p1", name: "Item", quantity: 1, priceCents: 5000 }],
-              cart_value_cents: 5000,
-              first_seen_at: new Date(Date.now() - cartAgeHours * 60 * 60 * 1000).toISOString(),
-            }],
-            error: null,
-          };
+        gte: () => b,
+        order: () => b,
+        async range(from: number) {
+          // One cart in this fixture: the first page has it, later pages do not.
+          return from === 0 ? page() : { data: [], error: null };
+        },
+        then(resolve: (v: unknown) => unknown) {
+          return Promise.resolve(page()).then(resolve);
         },
       };
       return b;
@@ -133,6 +142,17 @@ vi.mock("@/lib/supabase-server", () => {
           if (column === "abandoned_cart_id") (b as { _cartId: string })._cartId = value;
           if (column === "stage") (b as { _stage: string })._stage = value;
           return b;
+        },
+        // The sweep reads the claimed (cart, stage) slots for a whole page in
+        // one query, so it can skip carts with nothing outstanding without
+        // paying a round trip for each of them.
+        async in(_column: string, values: string[]) {
+          return {
+            data: db.cartEmails
+              .filter((r) => values.includes(r.abandoned_cart_id))
+              .map((r) => ({ abandoned_cart_id: r.abandoned_cart_id, stage: r.stage })),
+            error: null,
+          };
         },
         async maybeSingle() {
           const hit = db.cartEmails.find(

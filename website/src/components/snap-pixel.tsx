@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { browserAdsReportingAllowed } from "@/lib/ads/ads-environment";
 import { countSnapPageView } from "@/lib/ads/snap-health-browser";
+import { hasAcceptedConsent, subscribeToConsent } from "@/lib/cookie-consent-client";
 
 /**
  * Snap Pixel — installed globally, behind the same consent gate as everything
@@ -37,8 +38,6 @@ import { countSnapPageView } from "@/lib/ads/snap-health-browser";
  */
 
 export const SNAP_PIXEL_ID = process.env.NEXT_PUBLIC_SNAP_PIXEL_ID ?? "b6e3f2b8-0d0a-4d4e-b547-24b5a20d2a6e";
-const STORAGE_KEY = "vl_cookie_consent";
-const CONSENT_EVENT = "vanta:cookie-consent";
 
 declare global {
   interface Window {
@@ -46,15 +45,6 @@ declare global {
   }
 }
 
-function hasAccepted(): boolean {
-  try {
-    return window.localStorage.getItem(STORAGE_KEY) === "accepted";
-  } catch {
-    // Storage blocked (private mode, some in-app browsers). Absence of a
-    // recorded "yes" is a no.
-    return false;
-  }
-}
 
 export function SnapPixel() {
   const [accepted, setAccepted] = useState(false);
@@ -84,14 +74,9 @@ export function SnapPixel() {
   const initialPageSent = useRef(false);
 
   useEffect(() => {
-    const sync = () => setAccepted(hasAccepted());
+    const sync = () => setAccepted(hasAcceptedConsent());
     sync();
-    window.addEventListener(CONSENT_EVENT, sync);
-    window.addEventListener("storage", sync);
-    return () => {
-      window.removeEventListener(CONSENT_EVENT, sync);
-      window.removeEventListener("storage", sync);
-    };
+    return subscribeToConsent(sync);
   }, []);
 
   // A single-page app: after the first load, navigation never reloads the

@@ -103,6 +103,13 @@ import { recordSystemAlert } from "@/lib/monitoring";
  * exists to split apart — so `product_id` alone carries everything the restock
  * needs.
  *
+ * WHAT NOW CATCHES IT. supabase-schema-parity.test.ts used to STRIP embedded
+ * resources — `order_items(...)` named a relation, not a column of `orders`, so
+ * its columns were discarded rather than checked against anything. That is the
+ * blind spot VL-1 walked through. It now resolves each embedded select against
+ * the EMBEDDED table, so a repeat of this select fails the suite instead of
+ * production.
+ *
  * WHO CALLS THIS, AND WHY YOU SHOULD NOT NEED TO KNOW.
  *
  * The earlier wording here said "Any future path that cancels an order must call

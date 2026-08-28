@@ -3,20 +3,10 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { CONSENT_COOKIE_NAME } from "@/lib/cookie-consent-server";
+import { CONSENT_STORAGE_KEY, announceConsentChange } from "@/lib/cookie-consent-client";
 
-const STORAGE_KEY = "vl_cookie_consent";
 const CONSENT_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
 
-/**
- * Publish the choice where the SERVER can see it.
- *
- * localStorage alone is invisible to route handlers, and `/r/[code]` was
- * recording consent-gated data (utm_*, referrer, user agent, IP) because of it
- * — see src/lib/cookie-consent-server.ts. The cookie holds the same literal
- * "accepted"/"declined" string and no identifier of any kind; storing a
- * visitor's own privacy preference is essential storage under any reading of
- * the policy.
- */
 /**
  * The choice the SERVER just used, read back on the client.
  *
@@ -37,6 +27,16 @@ function readConsentCookie(): "accepted" | "declined" | null {
   }
 }
 
+/**
+ * Publish the choice where the SERVER can see it.
+ *
+ * localStorage alone is invisible to route handlers, and `/r/[code]` was
+ * recording consent-gated data (utm_*, referrer, user agent, IP) because of it
+ * — see src/lib/cookie-consent-server.ts. The cookie holds the same literal
+ * "accepted"/"declined" string and no identifier of any kind; storing a
+ * visitor's own privacy preference is essential storage under any reading of
+ * the policy.
+ */
 function publishConsentCookie(choice: "accepted" | "declined") {
   try {
     document.cookie =
@@ -73,7 +73,7 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
 
   useEffect(() => {
     try {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
+      const stored = window.localStorage.getItem(CONSENT_STORAGE_KEY);
       const cookieAnswer = readConsentCookie();
 
       if (!stored) {
@@ -93,7 +93,7 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
           // The cookie is authoritative here — it is the copy the server acts
           // on when it decides whether a route may record analytics — so write
           // it back and leave the bar as the server rendered it.
-          window.localStorage.setItem(STORAGE_KEY, cookieAnswer);
+          window.localStorage.setItem(CONSENT_STORAGE_KEY, cookieAnswer);
           return;
         }
         // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -144,12 +144,12 @@ export function CookieConsent({ initiallyOpen = false }: { initiallyOpen?: boole
 
   const dismiss = (choice: "accepted" | "declined") => {
     try {
-      window.localStorage.setItem(STORAGE_KEY, choice);
+      window.localStorage.setItem(CONSENT_STORAGE_KEY, choice);
     } catch {
       /* no-op */
     }
     publishConsentCookie(choice);
-    window.dispatchEvent(new Event("vanta:cookie-consent"));
+    announceConsentChange();
     setVisible(false);
   };
 

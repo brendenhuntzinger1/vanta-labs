@@ -10,6 +10,7 @@ import { US_STATE_TAX_TABLE } from "@/lib/sales-tax";
 // This client-safe file holds the one piece this component actually needs.
 import { describeEffectiveRate, PROCESSING_FEE_DEFAULT_PERCENT } from "@/lib/admin-control-shared";
 import { buildControlUpdates, type ControlUpdate } from "@/lib/admin-control-updates";
+import { DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
 
 type ControlSnapshot = Record<string, Record<string, unknown>>;
 
@@ -478,10 +479,14 @@ export function AdminControlCenterClient() {
 
           <section className="vl-panel-soft rounded-2xl p-4">
             <h3 className="text-sm font-semibold uppercase tracking-[0.2em] text-zinc-200">{SECTION_LABELS.shipping}</h3>
-            <p className="mt-2 text-xs text-zinc-400">These apply live at checkout. Leave a field blank to keep the default (domestic flat rate $15, free over $200).</p>
+            {/* Rendered from DEFAULT_SHIPPING_CONFIG, never retyped: this
+                sentence is the admin's only statement of what "blank" means,
+                so a hard-coded $200 here would go on promising the old
+                threshold the moment the coded default changed. */}
+            <p className="mt-2 text-xs text-zinc-400">These apply live at checkout. Leave a field blank to keep the default (domestic flat rate ${DEFAULT_SHIPPING_CONFIG.domesticFee}, free over ${DEFAULT_SHIPPING_CONFIG.freeShippingThreshold}).</p>
             <div className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
               <label className="text-zinc-300">Domestic flat rate ($)<input value={shippingFlatRate} onChange={(e) => setShippingFlatRate(e.target.value)} placeholder="15" className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">Free shipping over ($)<input value={shippingFreeThreshold} onChange={(e) => setShippingFreeThreshold(e.target.value)} placeholder="200" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">Free shipping over ($)<input value={shippingFreeThreshold} onChange={(e) => setShippingFreeThreshold(e.target.value)} placeholder={String(DEFAULT_SHIPPING_CONFIG.freeShippingThreshold)} className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Canada flat rate ($)<input value={shippingNaFlatRate} onChange={(e) => setShippingNaFlatRate(e.target.value)} placeholder="25" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Canada free shipping over ($)<input value={shippingNaFreeThreshold} onChange={(e) => setShippingNaFreeThreshold(e.target.value)} placeholder="400" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">International flat rate ($)<input value={shippingIntlFlatRate} onChange={(e) => setShippingIntlFlatRate(e.target.value)} placeholder="60" className="vl-input mt-1 w-full px-3 py-2" /></label>

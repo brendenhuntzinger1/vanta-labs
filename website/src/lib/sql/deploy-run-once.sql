@@ -616,6 +616,18 @@ alter table if exists public.payment_events
 alter table if exists public.orders
   add column if not exists paid_side_effects_at timestamptz;
 
+-- Exactly-once inventory restock claim (see add-inventory-restock-claim.sql).
+-- inventory-fulfillment.ts claims this column before returning stock, and
+-- treats an error as "unavailable" — which order-cancellation-inventory.ts
+-- turns into a critical alert and NO restock. Without the column, every cancel
+-- and every refund silently restocks nothing, so it belongs in the file the
+-- runbooks tell an operator to re-run rather than only in its own migration.
+alter table if exists public.orders
+  add column if not exists inventory_restocked_at timestamptz;
+create index if not exists idx_orders_inventory_restock_pending
+  on public.orders(order_id)
+  where inventory_restocked_at is null;
+
 -- Ambassador payout method (see ambassador-payout-method.sql).
 alter table if exists public.partners
   add column if not exists payout_method text,
@@ -846,8 +858,14 @@ begin
     'valid', true,
     'referral_code', a.referral_code,
     'ambassador_id', a.id,
-    'ambassador_name', a.name,
-    'commission_percent', a.commission_percent
+    'ambassador_name', a.name
+    -- commission_percent deliberately omitted: this is the ONE SECURITY
+    -- DEFINER function anonymous callers may execute, so what it returns is
+    -- the entire anonymous read surface of the ambassador programme, and the
+    -- commission rate is a confidential business term nothing renders. It was
+    -- removed by sql/referral-rpc-minimise.sql; this file is what the runbooks
+    -- tell an operator to re-run, so leaving it here re-opened the leak on
+    -- every fresh deploy. See that file for the full rationale.
   )
   into result
   from public.ambassadors a
@@ -980,13 +998,35 @@ begin
   if p_variant_id is not null and p_variant_id <> '' then
     update public.product_doses
        set inventory_quantity = inventory_quantity + p_qty,
+           -- Move the status with the quantity, but only the automatic pair.
+           -- 'Limited' and 'Reserved' are deliberate editorial states and must
+           -- survive a stock movement (inventory-operations.ts:102-108).
+           --
+           -- Without this, finalize_inventory_for_order stamps 'Out of Stock'
+           -- when a sale empties a line and nothing ever stamps it back: a
+           -- refunded unit returns to the shelf with the count correct and the
+           -- storefront still refusing to sell it. Added by
+           -- sql/inventory-return-path.sql; carried here because this file is
+           -- what the runbooks tell an operator to re-run.
+           stock_status = case
+             when stock_status in ('In Stock', 'Out of Stock')
+               then case when inventory_quantity + p_qty > 0 then 'In Stock' else 'Out of Stock' end
+             else stock_status
+           end,
            updated_at = now()
      where id::text = p_variant_id
+       -- Never below zero. A delta that would go negative applies to nothing,
+       -- which is what makes the decrement safe under concurrency.
        and inventory_quantity + p_qty >= 0;
     get diagnostics moved = row_count;
   else
     update public.products
        set inventory_quantity = inventory_quantity + p_qty,
+           stock_status = case
+             when stock_status in ('In Stock', 'Out of Stock')
+               then case when inventory_quantity + p_qty > 0 then 'In Stock' else 'Out of Stock' end
+             else stock_status
+           end,
            updated_at = now()
      where slug = p_slug
        and inventory_quantity + p_qty >= 0;

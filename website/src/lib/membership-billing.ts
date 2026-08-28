@@ -14,7 +14,7 @@ import { getPaymentProvider, isCheckoutOpen } from "@/lib/payment-provider";
 import { computeTierChangeBilling, decideMembershipAttempt, guardDuplicateMembershipPurchase, membershipTermPlan } from "@/lib/membership-billing-math";
 import { recordMembershipChargeOrder } from "@/lib/membership-orders";
 import { PAID_EVENT_TYPES, skipUsedThisPaidPeriod } from "@/lib/membership-status";
-import { grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
+import { currentPeriodMonth, grantMonthlyStoreCredit, reconcileMonthlyStoreCredit } from "@/lib/store-credit";
 import { sendEmail } from "@/lib/email/send";
 import { sendMarketingEmail } from "@/lib/email/marketing";
 import { getSiteUrl } from "@/lib/env";
@@ -1413,39 +1413,139 @@ export interface MembershipBillingSweepResult {
 // Idempotent per member per month (unique index on the grant), so it's safe
 // to run on every cron tick — a member only ever gets one grant per month, and
 // it stops the instant their membership is no longer active/trialing.
-export async function grantMonthlyStoreCreditSweep(): Promise<{ granted: number }> {
-  // Only fully-active (paid) members receive store credit — NOT $1 trial
-  // members (mirrors the bulk-savings rule), so a $1 trial can't immediately
-  // pull $75 of credit.
-  const { data, error } = await supabaseAdmin
-    .from("customer_memberships")
-    .select("user_id, status, membership_tiers(slug, monthly_store_credit_cents)")
-    .eq("status", "active")
-    // Only members on a real recurring billing cycle earn monthly store credit.
-    // Admin-assigned complimentary memberships have next_billing_at = null, so
-    // they are excluded — a comp must NOT silently hand out credit every month.
-    .not("next_billing_at", "is", null);
+/**
+ * HOW MANY GRANTS ONE TICK MAY WRITE, and how far it may look for them.
+ *
+ * This sweep read EVERY active member and awaited an insert for each one, every
+ * thirty minutes, for ever. The insert is idempotent — a unique index on
+ * (user_id, period_month) refuses the second one — so after the first tick of
+ * the month essentially all of that work was round trips that could only fail.
+ * The cost was one database call per member per tick regardless, which on a
+ * 60-second function is a ceiling on the membership base rather than on
+ * anything the business chose.
+ *
+ * A plain `.limit()` would have been WORSE than the unbounded version: the same
+ * already-granted members sort first every tick and would spend the whole
+ * budget being refused, so members past the limit would never be granted at
+ * all. So the period's existing grants are read first and subtracted, and the
+ * budget is spent only on members who genuinely have none. That drains: a
+ * member granted this tick is excluded from the next one, permanently, until
+ * the period rolls over.
+ */
+const STORE_CREDIT_GRANT_BUDGET = 200;
 
-  if (error) {
-    if (String(error.code) === "42P01") return { granted: 0 };
-    throw error;
+/** Members examined per tick while looking for that many ungranted ones. */
+const STORE_CREDIT_SCAN_PAGE = 500;
+const STORE_CREDIT_MAX_SCAN = 5000;
+
+interface StoreCreditCandidate {
+  user_id: string;
+  membership_tiers: { slug: string; monthly_store_credit_cents: number } | null;
+}
+
+/** Which of these members already hold this period's grant. */
+async function alreadyGrantedThisPeriod(userIds: string[], period: string): Promise<Set<string>> {
+  if (userIds.length === 0) return new Set();
+  const { data, error } = await supabaseAdmin
+    .from("store_credit_ledger")
+    .select("user_id")
+    .eq("reason", "membership_monthly_grant")
+    .eq("period_month", period)
+    .in("user_id", userIds);
+
+  // Fail OPEN — an unreadable ledger means we cannot subtract anyone, so every
+  // candidate is attempted and the unique index does the deduplication as
+  // before. Slower, never wrong.
+  if (error || !data) return new Set();
+  return new Set(data.map((row) => String(row.user_id)));
+}
+
+export async function grantMonthlyStoreCreditSweep(): Promise<{ granted: number; scanned: number }> {
+  const period = currentPeriodMonth();
+  let granted = 0;
+  let scanned = 0;
+  const pending: Array<{ userId: string; cents: number }> = [];
+
+  for (let offset = 0; offset < STORE_CREDIT_MAX_SCAN && pending.length < STORE_CREDIT_GRANT_BUDGET; offset += STORE_CREDIT_SCAN_PAGE) {
+    // Only fully-active (paid) members receive store credit — NOT $1 trial
+    // members (mirrors the bulk-savings rule), so a $1 trial can't immediately
+    // pull $75 of credit.
+    const { data, error } = await supabaseAdmin
+      .from("customer_memberships")
+      .select("user_id, status, membership_tiers(slug, monthly_store_credit_cents)")
+      .eq("status", "active")
+      // Only members on a real recurring billing cycle earn monthly store credit.
+      // Admin-assigned complimentary memberships have next_billing_at = null, so
+      // they are excluded — a comp must NOT silently hand out credit every month.
+      .not("next_billing_at", "is", null)
+      // A stable order is what makes the paging mean anything: without it two
+      // pages can return the same row and miss another.
+      .order("user_id", { ascending: true })
+      .range(offset, offset + STORE_CREDIT_SCAN_PAGE - 1);
+
+    if (error) {
+      if (String(error.code) === "42P01") return { granted: 0, scanned: 0 };
+      throw error;
+    }
+
+    const page = (data ?? []) as unknown as StoreCreditCandidate[];
+    if (page.length === 0) break;
+    scanned += page.length;
+
+    const eligible = page.filter((row) => {
+      const tier = row.membership_tiers;
+      return Boolean(tier) && tier?.slug !== "free" && Number(tier?.monthly_store_credit_cents ?? 0) > 0;
+    });
+
+    const alreadyGranted = await alreadyGrantedThisPeriod(
+      eligible.map((row) => String(row.user_id)),
+      period,
+    );
+
+    for (const row of eligible) {
+      const userId = String(row.user_id);
+      if (alreadyGranted.has(userId)) continue;
+      pending.push({ userId, cents: Number(row.membership_tiers?.monthly_store_credit_cents ?? 0) });
+      if (pending.length >= STORE_CREDIT_GRANT_BUDGET) break;
+    }
+
+    if (page.length < STORE_CREDIT_SCAN_PAGE) break;
   }
 
-  let granted = 0;
-  for (const row of (data ?? []) as unknown as Array<{ user_id: string; membership_tiers: { slug: string; monthly_store_credit_cents: number } | null }>) {
-    const tier = row.membership_tiers;
-    if (!tier || tier.slug === "free") continue;
-    const cents = Number(tier.monthly_store_credit_cents ?? 0);
-    if (cents <= 0) continue;
+  for (const { userId, cents } of pending) {
     try {
-      if (await grantMonthlyStoreCredit(String(row.user_id), cents)) granted += 1;
+      if (await grantMonthlyStoreCredit(userId, cents)) granted += 1;
     } catch {
       // One member's grant failing must not stop the rest of the sweep.
     }
   }
 
-  return { granted };
+  return { granted, scanned };
 }
+
+/**
+ * HOW MUCH BILLING ONE TICK MAY DO.
+ *
+ * Every step below used to select its whole due window with no limit and then
+ * await per row — a card charge, a provider round trip and an email each. Cost
+ * per tick therefore grew with the membership base, on a function capped at 60
+ * seconds, so past some number of members the sweep stopped finishing and the
+ * renewals at the back were never reached. Nothing said so: an overrun is
+ * killed by the platform, which is why the watchdog in the cron route exists.
+ *
+ * Bounding is safe here BECAUSE EVERY STEP DRAINS. Each window is defined by
+ * the state the step then changes — a reminder sets `*_reminder_sent_at`, a
+ * charge advances `next_billing_at`, a declined charge moves the member to
+ * `past_due` — so a row that has been handled leaves the window and cannot
+ * hold the budget on the next tick. Oldest-due-first, so the queue is FIFO and
+ * the longest-waiting member is never the one that gets skipped.
+ *
+ * At a tick every 30 minutes these are ~1,200 charges and ~2,400 notices a day.
+ */
+const MEMBERSHIP_CHARGE_BATCH = 25;
+
+/** Reminders and cancellations: an email and an update, no card call. */
+const MEMBERSHIP_NOTICE_BATCH = 50;
 
 export async function runMembershipBillingSweep(): Promise<MembershipBillingSweepResult> {
   const now = new Date();
@@ -1478,7 +1578,9 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
       .eq("cancel_at_period_end", false)
       .is("first_month_reminder_sent_at", null)
       .lte("intro_ends_at", in3Days.toISOString())
-      .gt("intro_ends_at", now.toISOString());
+      .gt("intro_ends_at", now.toISOString())
+      .order("intro_ends_at", { ascending: true })
+      .limit(MEMBERSHIP_NOTICE_BATCH);
 
     if (error) throw error;
 
@@ -1524,7 +1626,9 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
       .eq("status", "trialing")
       .eq("intro_status", "active")
       .eq("cancel_at_period_end", false)
-      .lte("intro_ends_at", now.toISOString());
+      .lte("intro_ends_at", now.toISOString())
+      .order("intro_ends_at", { ascending: true })
+      .limit(MEMBERSHIP_CHARGE_BATCH);
 
     if (error) throw error;
 
@@ -1600,7 +1704,9 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
       .is("veyra_membership_id", null)
       .eq("status", "active")
       .eq("cancel_at_period_end", true)
-      .lte("next_billing_at", now.toISOString());
+      .lte("next_billing_at", now.toISOString())
+      .order("next_billing_at", { ascending: true })
+      .limit(MEMBERSHIP_NOTICE_BATCH);
 
     if (error) throw error;
 
@@ -1647,7 +1753,9 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
       .eq("cancel_at_period_end", false)
       .is("renewal_reminder_sent_at", null)
       .lte("next_billing_at", in3Days.toISOString())
-      .gt("next_billing_at", now.toISOString());
+      .gt("next_billing_at", now.toISOString())
+      .order("next_billing_at", { ascending: true })
+      .limit(MEMBERSHIP_NOTICE_BATCH);
 
     if (error) throw error;
 
@@ -1692,7 +1800,9 @@ export async function runMembershipBillingSweep(): Promise<MembershipBillingSwee
       .is("veyra_membership_id", null)
       .eq("status", "active")
       .eq("cancel_at_period_end", false)
-      .lte("next_billing_at", now.toISOString());
+      .lte("next_billing_at", now.toISOString())
+      .order("next_billing_at", { ascending: true })
+      .limit(MEMBERSHIP_CHARGE_BATCH);
 
     if (error) throw error;
 

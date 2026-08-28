@@ -22,7 +22,8 @@ import { getBestSellerSlugs } from "@/lib/best-sellers";
 import type { Product } from "@/lib/catalog-types";
 import { ReorderButton } from "@/components/reorder-button";
 import { AccountRecentlyViewed } from "@/components/account-recently-viewed";
-import { FREE_SHIPPING_THRESHOLD } from "@/lib/shipping";
+import { getShippingConfig } from "@/lib/admin-control";
+import { DEFAULT_SHIPPING_CONFIG } from "@/lib/shipping";
 import { displayOrderReference } from "@/lib/order-reference";
 import { formatDisplayDate } from "@/lib/format-date";
 import { resolveProductImage } from "@/lib/product-image";
@@ -92,7 +93,7 @@ export default async function AccountDashboardPage() {
   const preferences = await getCustomerPreferences(user.id);
   await checkAndAwardBirthdayBonus(user.id, preferences.birthday).catch(() => {});
 
-  const [orders, membership, perks, pointsBalance, pointsHistory, activeCoupons, pointsMultiplier, lifetimeSavings, defaultAddress, wishlistSlugs, bestSellerSlugs] =
+  const [orders, membership, perks, pointsBalance, pointsHistory, activeCoupons, pointsMultiplier, lifetimeSavings, defaultAddress, wishlistSlugs, bestSellerSlugs, shippingConfig] =
     await Promise.all([
       getCustomerOrders(user.id, ownershipEmail(user)).catch(() => []),
       getCustomerMembership(user.id),
@@ -105,6 +106,11 @@ export default async function AccountDashboardPage() {
       getDefaultCustomerAddress(user.id).catch(() => null),
       getWishlistSlugs(user.id).catch(() => [] as string[]),
       getBestSellerSlugs().catch(() => new Set<string>()),
+      // Live admin config, not the coded constant. This tile states a term of
+      // sale to a signed-in customer, so it has to say what checkout will
+      // actually charge; DEFAULT_SHIPPING_CONFIG is only the fallback when the
+      // admin leaves the field blank, and getShippingConfig already applies it.
+      getShippingConfig().catch(() => DEFAULT_SHIPPING_CONFIG),
     ]);
 
   const fullName = (user.user_metadata?.full_name as string | undefined)?.trim() || "";
@@ -211,7 +217,7 @@ export default async function AccountDashboardPage() {
         {lifetimeSavings.total > 0 ? (
           <StatTile label="Lifetime saved" value={money(lifetimeSavings.total)} sub="member savings" />
         ) : (
-          <StatTile label="Free shipping" value={`$${FREE_SHIPPING_THRESHOLD}+`} sub="on qualifying orders" />
+          <StatTile label="Free shipping" value={`$${shippingConfig.freeShippingThreshold}+`} sub="on qualifying orders" />
         )}
         <StatTile label="Orders" value={orders.length.toLocaleString()} sub="all time" href="/account/orders" />
       </section>

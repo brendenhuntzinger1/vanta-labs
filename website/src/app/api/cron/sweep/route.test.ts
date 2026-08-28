@@ -164,3 +164,87 @@ describe("the scheduled sweep", () => {
     expect(route.GET).toBeTypeOf("function");
   });
 });
+
+// ---------------------------------------------------------------------------
+// CRON-04: THE ONE FAILURE THAT COULD NEVER REPORT ITSELF.
+//
+// maxDuration is 60 and every alert in the route is written AFTER the jobs
+// settle. So when the sweep ran out of time, the platform killed the function
+// before a single line of alerting code executed: no system_alerts row, no
+// operator email, and the HTTP response nobody reads never arrived either. A
+// sweep that times out on every tick was indistinguishable, from every screen
+// in the application, from a sweep that was never scheduled.
+//
+// The watchdog gives up INSIDE the budget so there is still time to say so.
+// ---------------------------------------------------------------------------
+describe("a sweep that runs out of time", () => {
+  it("raises a critical alert naming the jobs that were still running", async () => {
+    vi.useFakeTimers();
+    // Never settles: exactly what a job blocked on a slow provider looks like.
+    // Once, so the hang does not leak into the next test.
+    membership.mockImplementationOnce(() => new Promise(() => {}));
+
+    const { GET } = await import("./route");
+    const response = GET(new Request("https://vantalabsresearch.com/api/cron/sweep", {
+      headers: { authorization: `Bearer ${SECRET}` },
+    }));
+    await vi.advanceTimersByTimeAsync(60_000);
+    const body = (await (await response).json()) as Record<string, unknown>;
+    vi.useRealTimers();
+
+    expect(recordSystemAlert).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "cron_sweep_timeout", severity: "critical" }),
+    );
+    const [alert] = recordSystemAlert.mock.calls[0] as unknown as [
+      { message: string; context: { stalled: string[] }; dedupeWindowMs?: number },
+    ];
+    expect(alert.context.stalled).toEqual(["membership_billing"]);
+    expect(alert.message).toContain("membership_billing");
+    expect(body.timedOut).toBe(true);
+  });
+
+  it("still reports every job that DID finish", async () => {
+    vi.useFakeTimers();
+    // Once, so the hang does not leak into the next test.
+    membership.mockImplementationOnce(() => new Promise(() => {}));
+
+    const { GET } = await import("./route");
+    const response = GET(new Request("https://vantalabsresearch.com/api/cron/sweep", {
+      headers: { authorization: `Bearer ${SECRET}` },
+    }));
+    await vi.advanceTimersByTimeAsync(60_000);
+    const body = (await (await response).json()) as Record<string, { job?: string; error?: string }>;
+    vi.useRealTimers();
+
+    // A partial sweep is still information. The one that hung is named as such
+    // rather than silently reported as an empty result.
+    expect(body.shippoSync).toEqual({ job: "shippoSync" });
+    expect(body.membershipBilling).toEqual({ error: "did not finish before the sweep deadline" });
+  });
+
+  it("collapses the repeat, because a sweep that overruns overruns every tick", async () => {
+    vi.useFakeTimers();
+    // Once, so the hang does not leak into the next test.
+    membership.mockImplementationOnce(() => new Promise(() => {}));
+
+    const { GET } = await import("./route");
+    const response = GET(new Request("https://vantalabsresearch.com/api/cron/sweep", {
+      headers: { authorization: `Bearer ${SECRET}` },
+    }));
+    await vi.advanceTimersByTimeAsync(60_000);
+    await response;
+    vi.useRealTimers();
+
+    // 48 criticals and 48 emails a day for one unchanging fact is the storm
+    // that buried the real criticals on /admin/status in the first place.
+    const [alert] = recordSystemAlert.mock.calls[0] as unknown as [{ dedupeWindowMs?: number }];
+    expect(alert.dedupeWindowMs).toBeGreaterThan(0);
+  });
+
+  it("says nothing about a timeout when the sweep finishes in time", async () => {
+    const body = (await (await callSweep()).json()) as Record<string, unknown>;
+
+    expect(body.timedOut).toBe(false);
+    expect(recordSystemAlert).not.toHaveBeenCalled();
+  });
+});
