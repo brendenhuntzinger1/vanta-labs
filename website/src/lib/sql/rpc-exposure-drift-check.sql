@@ -59,16 +59,42 @@ where n.nspname = 'public'
        or has_function_privilege('authenticated', p.oid, 'EXECUTE'))
 order by p.prosecdef desc, p.proname;
 
--- THE DURABLE FIX, NOT YET APPLIED -- needs the owner (audit Rule 4).
+-- THE DURABLE FIX -- APPLIED 2026-08-28, AND IT DOES NOT DO WHAT THIS FILE USED
+-- TO CLAIM. Corrected after an adversarial review found this file still telling
+-- the reader the change was outstanding and still describing the wrong
+-- mechanism.
 --
--- The one-off revoke in 20260826014217 closes today's hole. It does NOT stop
--- the next one: the default privilege is still in place, so the next brand-new
--- SECURITY DEFINER function is exposed on creation exactly as this one was.
--- Removing the default is what makes the lockdown durable rather than repeated:
+-- The one-off revoke in 20260826014217 closes today's hole. It does NOT stop the
+-- next one, and that much was right. What was wrong is the remedy:
 --
 --   alter default privileges in schema public
 --     revoke execute on functions from anon, authenticated;
 --
--- Note this affects only functions created AFTER it runs, and only those
--- created by the role that runs it -- so it belongs with a re-run of the
--- rpc_execute_lockdown sweep, not instead of one.
+-- ran on 2026-08-28 (migrations-applied/20260828T0240_default_privilege_table_
+-- write_lockdown.sql:107-108) and changed NOTHING OBSERVABLE. Measured on the
+-- harness with three probe functions, one created in a later transaction to
+-- rule out visibility: a new function's ACL comes out as
+--
+--   =X/postgres | postgres=X/postgres | service_role=X/postgres
+--
+-- There is no `anon=X` entry to remove. anon reaches EXECUTE through **PUBLIC**,
+-- which is PostgreSQL's own hard-wired default for functions, not a Supabase
+-- default privilege. Revoking the anon/authenticated default entries removes
+-- entries that PUBLIC was already covering. `alter default privileges ... revoke
+-- execute on functions from public` was tried too and does not suppress it.
+--
+-- SO THE CONTROL IS NOT A DEFAULT PRIVILEGE AT ALL. It is the per-migration
+--
+--   revoke all on function public.<name>(<args>) from public, anon, authenticated;
+--   grant execute on function public.<name>(<args>) to service_role;
+--
+-- with `public` in that list being the word that does the work — and
+-- rpc-security-posture.test.ts fails the build when a migration omits it. That
+-- test has already caught a real omission in this repository.
+--
+-- The TABLE half of the same default WAS a genuine open hole (every new table
+-- arriving with anon=arwdDxtm, which is where the 64-of-70 grant sweep came
+-- from) and is closed by that same migration.
+--
+-- Sibling file rpc-default-privilege-lockdown.sql carries the same correction at
+-- its CORRECTION 2026-08-28 block; this file was missed at the time.

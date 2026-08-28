@@ -67,10 +67,34 @@ create index if not exists idx_referral_orders_fraud_flag on public.referral_ord
 
 alter table public.commission_tier_rules enable row level security;
 
+-- THE LADDER IS NOT PUBLIC. Corrected 2026-08-28; the policy this used to
+-- create was `commission_tier_rules_read_all`, PERMISSIVE, for PUBLIC,
+-- `using (true)`, over a table anon held SELECT on. Reproduced against
+-- production with the storefront's own publishable key before changing it:
+--
+--   GET /rest/v1/commission_tier_rules?select=*  -> 200
+--     Starter 10 sales -> 10.00%   Growth 25 -> 12.50%   Elite 50 -> 15.00%
+--
+-- Two recorded decisions in this repository say that is not meant to be
+-- readable: referral-rpc-minimise.sql keeps commission_percent out of
+-- validate_referral_code ("stop handing out commission terms to the internet"),
+-- and public-program-terms.ts:33-38 records the 2026-08-27 audit finding that
+-- /ambassador and /partner were advertising "15% Base Commission" precisely
+-- BECAUSE 15 is the top tier of this table.
+--
+-- Every reader is server-side under service_role (ambassador-commission.ts's
+-- admin CRUD), which bypasses RLS and grants alike, so closing it changes
+-- nothing the application does.
+--
+-- Deny-by-default: RLS on, no SELECT policy, no client-key grant. Applied to
+-- production as migrations-applied/20260828T0540_close_commission_tier_rules_to_public.sql.
+--
+-- If the ladder is ever deliberately published, do it as a named COLUMN grant
+-- and name the policy `commission_tier_rules_select_public` so the decision is
+-- greppable — client-key-table-access.test.ts enforces that convention.
 drop policy if exists commission_tier_rules_read_all on public.commission_tier_rules;
-create policy commission_tier_rules_read_all on public.commission_tier_rules
-for select
-using (true);
+
+revoke all on public.commission_tier_rules from anon, authenticated;
 
 -- All writes to commission_tier_rules go through server API routes using
 -- the service-role client - no anon/authenticated write policy is defined

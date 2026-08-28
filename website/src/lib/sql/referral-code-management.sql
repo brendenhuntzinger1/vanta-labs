@@ -71,3 +71,38 @@ select
 --   drop table if exists public.referral_code_changes;
 --   alter table public.ambassadors drop column if exists referral_code_locked, drop column if exists referral_code_changed_at;
 --   alter table public.partners    drop column if exists referral_code_locked, drop column if exists referral_code_changed_at;
+
+-- ============================================================================
+-- CLOSE THE TWO TABLES THIS FILE CREATES. Added 2026-08-28 after an adversarial
+-- review pointed out that this file is DEPLOYMENT-ORDER.md STEP 4 — a file
+-- someone runs — and it created two tables with no RLS, no revoke, no policy
+-- and no grant anywhere in it.
+--
+-- Protection existed only in a separate sweep (rls-enforce-all-tables.sql:69)
+-- that has to be remembered and run afterwards. That is the same
+-- non-self-contained shape already ruled a defect on ads-system.sql: a migration
+-- cannot assume the database it lands in has already been hardened, and
+-- Supabase's default privilege deliberately keeps SELECT for anon, so a table
+-- created in `public` with RLS off is anon-readable from the moment it exists.
+--
+-- What that would have leaked on a fresh environment is not abstract.
+-- referral_code_changes records `ip_address` and `user_agent` alongside each
+-- ambassador's old and new code and who changed it; referral_code_aliases is the
+-- full retired-code-to-ambassador map. rls-enforce-all-tables.sql:68 names it
+-- exactly: "Ambassador code history, including the actor's IP address and user
+-- agent."
+--
+-- SCOPE, honestly: in the CURRENT production database both tables are already
+-- locked — they are among the 36 policy-less RLS tables that RLS-05 revoked
+-- SELECT on, verified by probe (both return 42501 to the publishable key). The
+-- defect was in the file, for the next environment, not in today's database.
+--
+-- RLS with no policy denies every row to anon and authenticated; service_role
+-- bypasses it, and every reader of these two tables is server-side. Idempotent.
+-- ============================================================================
+
+alter table public.referral_code_changes enable row level security;
+alter table public.referral_code_aliases enable row level security;
+
+revoke all on public.referral_code_changes from anon, authenticated;
+revoke all on public.referral_code_aliases from anon, authenticated;

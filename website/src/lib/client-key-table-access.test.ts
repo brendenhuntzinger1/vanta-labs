@@ -250,6 +250,64 @@ describe("schema files close their own tables to the publishable key", () => {
     expect(revokes).toBe(enables);
   });
 
+  it("referral-code-management.sql closes the two tables it creates", () => {
+    // DEPLOYMENT-ORDER.md STEP 4 — a file someone runs. It created
+    // referral_code_changes (ip_address, user_agent) and referral_code_aliases
+    // with no RLS and no revoke, relying on a separate sweep being remembered
+    // afterwards. rls-enforce-all-tables.sql:68 names the stake: "Ambassador
+    // code history, including the actor's IP address and user agent."
+    const file = sqlFiles.find((c) => c.path === "src/lib/sql/referral-code-management.sql");
+    expect(file, "referral-code-management.sql not found — was it moved?").toBeDefined();
+
+    for (const table of ["referral_code_changes", "referral_code_aliases"]) {
+      expect(file!.text).toContain(`alter table public.${table} enable row level security`);
+      expect(file!.text).toContain(`revoke all on public.${table} from anon, authenticated`);
+    }
+  });
+
+  it("a world-readable SELECT policy has to SAY it is public, in its name", () => {
+    // commission_tier_rules carried `commission_tier_rules_read_all` —
+    // PERMISSIVE, for PUBLIC, `using (true)` — over a granted table, which
+    // published the whole ambassador commission ladder to anyone holding the
+    // publishable key. A `true` policy is not a lock; it is the absence of one
+    // written in the shape of one, and "read_all" does not read as a decision.
+    //
+    // Some tables ARE deliberately world-readable and must stay that way:
+    // partner_program_stats holds the baseline figures the /partner recruitment
+    // page advertises (total_commissions_paid_base and friends), served by the
+    // unauthenticated /api/partner/program-stats. Its policy is named
+    // `partner_program_stats_select_public`.
+    //
+    // So the rule is not "no true policies" — it is that publishing a table to
+    // the internet must be DECLARED where the next reader will see it. A policy
+    // whose name ends `_select_public` is someone saying so on purpose; anything
+    // else with `using (true)` is an accident waiting to be found by an
+    // outsider, which is exactly how the commission ladder was found.
+    const offenders = sqlFiles
+      // migrations-applied/ records what already ran, including the DROP of the
+      // offending policy, so scanning it would flag the fix as the defect.
+      .filter((f) => !f.path.includes("migrations-applied/"))
+      .flatMap((f) =>
+        [...f.text.matchAll(/create policy\s+"?([a-z_]+)"?\s+on\s+public\.([a-z_]+)\s+for select[\s\S]{0,120}?using\s*\(\s*true\s*\)/gi)]
+          .filter((m) => !m[1].endsWith("_select_public"))
+          .map((m) => `${f.path}: ${m[1]} on ${m[2]}`),
+      );
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("the public-policy scan can actually see policies, or it proves nothing", () => {
+    // Negative control. If the regex matched nothing at all — a formatting
+    // change, a renamed clause — the assertion above would pass over a file
+    // full of world-readable tables. It must find the one deliberate case.
+    const declared = sqlFiles.flatMap((f) =>
+      [...f.text.matchAll(/create policy\s+"?([a-z_]+_select_public)"?\s+on\s+public\.([a-z_]+)\s+for select[\s\S]{0,120}?using\s*\(\s*true\s*\)/gi)]
+        .map((m) => m[1]),
+    );
+
+    expect(declared).toContain("partner_program_stats_select_public");
+  });
+
   it("closes its trigger function to PUBLIC, not just to anon", () => {
     // PostgreSQL grants EXECUTE on a new function to PUBLIC. A revoke naming
     // only anon and authenticated leaves PUBLIC covering both of them — the

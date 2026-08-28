@@ -101,8 +101,8 @@ alter table public.customer_memberships enable row level security;
 alter table public.points_ledger enable row level security;
 alter table public.promotional_point_events enable row level security;
 
-drop policy if exists membership_tiers_read_all on public.membership_tiers;
-create policy membership_tiers_read_all on public.membership_tiers
+drop policy if exists membership_tiers_select_public on public.membership_tiers;
+create policy membership_tiers_select_public on public.membership_tiers
 for select
 using (true);
 
@@ -122,8 +122,8 @@ create policy points_ledger_select_own on public.points_ledger
 for select
 using (user_id = (select public.current_auth_uid()));
 
-drop policy if exists promotional_point_events_read_all on public.promotional_point_events;
-create policy promotional_point_events_read_all on public.promotional_point_events
+drop policy if exists promotional_point_events_select_public on public.promotional_point_events;
+create policy promotional_point_events_select_public on public.promotional_point_events
 for select
 using (true);
 

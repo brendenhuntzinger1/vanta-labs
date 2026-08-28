@@ -1,9 +1,49 @@
 -- ============================================================================
 -- VANTA LABS — STOP THE PUBLIC KEY READING THE SHELF DEPTH
 --
--- Finding RLS-07. NOT APPLIED YET — unlike its neighbours in this directory,
--- this one still has to be pasted into Supabase -> SQL Editor -> New query ->
--- Run. Safe to re-run: revoking a privilege that is not held is a no-op.
+-- Finding RLS-07. APPLIED TO PRODUCTION 2026-08-28. Safe to re-run: revoking a
+-- privilege that is not held is a no-op.
+--
+-- IT SAT IN THIS DIRECTORY UNAPPLIED, WHICH IS WORSE THAN SITTING ANYWHERE ELSE.
+-- The header used to read "NOT APPLIED YET", while
+-- products-hide-cost-columns-from-public.sql:126 and its product_doses sibling
+-- had both been edited to say "WITHHELD SINCE 2026-08-28 (finding RLS-07)". So
+-- two files asserted the hole was closed, a third said it was open, and the
+-- directory those three live in is treated as the record of what ran. Anyone
+-- auditing the repo would have concluded the columns were withheld.
+--
+-- They were not. Reproduced 2026-08-28 against production with the storefront's
+-- OWN publishable key, before changing anything:
+--
+--   GET /rest/v1/products?select=slug,inventory_quantity,reserved_quantity,
+--                                incoming_quantity,low_stock_threshold
+--     -> 200  [{"slug":"igf-1-lr3","inventory_quantity":19,"reserved_quantity":0,
+--               "incoming_quantity":0,"low_stock_threshold":5}, ...]
+--
+--   GET /rest/v1/product_doses?select=label,inventory_quantity,reserved_quantity,
+--                                     incoming_quantity
+--     -> 200  [{"label":"5mg","inventory_quantity":29, ...}, ...]
+--
+-- Controls run in the same breath, so the probe proves something: the cost
+-- columns returned 42501, and label/price_cents/stock_status returned 200. The
+-- key could read exactly what it should not and nothing more.
+--
+-- AFTER APPLYING, same key:
+--   products.inventory_quantity   -> 42501
+--   product_doses.reserved_quantity -> 42501
+--   all four columns on both tables: has_column_privilege(anon) = false
+--   KEPT: products.stock_status = true, product_doses.price_cents = true
+--
+--   www.vantalabsresearch.com / /products /products/bpc-157 /cart /checkout
+--   /api/catalog/products -> 200 on all six; 36 products, 36 with doses, and a
+--   dose still published as {"availableQuantity":10,"stockStatus":"In Stock"} —
+--   the CLAMPED figure, which is the whole point of the finding.
+--
+-- Found by an adversarial review of the repository, not by a test.
+-- phase11-bucket7.test.ts:387 asserts these revoke statements exist as TEXT in
+-- this file; it cannot assert the file was ever run, which is why the suite was
+-- green throughout. A repo test cannot close this class of gap — only a probe
+-- against the real database can, and that is now recorded above.
 --
 -- WHAT IS WRONG. products-hide-cost-columns-from-public.sql revoked table-level
 -- SELECT and re-granted a named column list. That list included the raw stock
