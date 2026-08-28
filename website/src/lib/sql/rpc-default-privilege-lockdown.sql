@@ -63,6 +63,39 @@
 -- ===========================================================================
 
 -- ===========================================================================
+-- CORRECTION 2026-08-28 (VL-SQL-04). THE CONCLUSION ABOVE IS RIGHT AND ITS
+-- STATED MECHANISM IS WRONG — which matters, because the wrong mechanism sends
+-- the next reader to Supabase support instead of to the remedy.
+--
+-- The header says a function created after the ALTER stays anon-executable
+-- because `supabase_admin` also grants the default and is out of reach. It is
+-- not that. Measured on the vanta-audit-harness project by creating three
+-- probe functions as `postgres` — one of them in a later transaction, to rule
+-- out visibility — and reading the raw ACL rather than has_function_privilege:
+--
+--   postgres/public/f default AFTER the ALTER:  postgres=X | service_role=X
+--   probe function's own proacl:  "=X/postgres | postgres=X/postgres | service_role=X/postgres"
+--                                  ^^^^^^^^^^^ PUBLIC. There is no anon=X entry.
+--
+-- anon reaches EXECUTE through PUBLIC — PostgreSQL's own hard-wired default for
+-- functions — not through any anon grant, from either grantor. The revokes
+-- below therefore do exactly what they say (the anon and authenticated entries
+-- ARE removed from the default) and change nothing observable, because PUBLIC
+-- masks them. `alter default privileges ... revoke execute on functions from
+-- public` was tried as well and did not suppress it either.
+--
+-- CONSEQUENCE FOR WHOEVER READS THIS NEXT: there is nothing to ask Supabase
+-- for. The remedy is the per-function `revoke all on function ... from public`
+-- that item 1 already describes — note `public` in that list, which is the word
+-- doing the work — enforced by rpc-security-posture.test.ts. That test caught a
+-- missing revoke during the Phase 11 session, so it is not theoretical either.
+--
+-- The TABLE half of the same default was a genuinely open hole and IS now
+-- closed in production: see
+-- migrations-applied/20260828T0240_default_privilege_table_write_lockdown.sql.
+-- ===========================================================================
+
+-- ===========================================================================
 -- CORRECTED 2026-08-26 by the final verification session.
 --
 -- THE PREVIOUS VERSION OF THIS FILE COULD NOT RUN. It read:

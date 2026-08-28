@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // ---------------------------------------------------------------------------
@@ -191,5 +193,49 @@ describe("the Purchase conversion ledger stops the second send", () => {
 
     expect(tiktokSends).toHaveLength(0);
     expect(redditSends).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F-02 — AND THE DDL FILE HAS TO SAY THE SAME THING THE MODEL ABOVE ASSUMES.
+//
+// Everything above encodes `PRIMARY KEY (order_id, platform)` and proves the
+// route breaks without it. Nothing asserted that the repo's own DDL declared
+// it — and it did not: ads-purchase-idempotency.sql said `order_id text
+// primary key` while production carried the composite key. Queried 2026-08-28:
+//
+//   select conname, pg_get_constraintdef(oid) from pg_constraint
+//   where conrelid = 'public.ad_purchase_events_sent'::regclass;
+//   -> ad_purchase_events_sent_pkey  PRIMARY KEY (order_id, platform)
+//
+// So the drift was repo-only and the file has been corrected. It was not
+// harmless while it lasted: `create table if not exists` is what the local
+// harness and any fresh environment run, and there the route's every upsert
+// would have hit 42P10 against a conflict target that does not exist — the
+// exact inert-ledger failure this file was written to catch, reintroduced by
+// the schema rather than the code, where none of the tests above would see it.
+// ---------------------------------------------------------------------------
+describe("F-02: the ledger DDL declares the key the route upserts on", () => {
+  const ddl = readFileSync(resolve(process.cwd(), "src/lib/sql/ads-purchase-idempotency.sql"), "utf8");
+
+  /** Comments stripped: the prose above quotes the very form being banned. */
+  const body = ddl.split("\n").filter((line) => !line.trim().startsWith("--")).join("\n");
+
+  it("declares the composite primary key production actually has", () => {
+    expect(body).toMatch(/primary\s+key\s*\(\s*order_id\s*,\s*platform\s*\)/i);
+  });
+
+  it("does not declare order_id as a primary key on its own", () => {
+    // The stale form. One row per ORDER means TikTok's send permanently
+    // suppresses Reddit's, and every upsert naming the composite target fails.
+    expect(body).not.toMatch(/order_id\s+text\s+primary\s+key/i);
+  });
+
+  it("agrees with the conflict target the route names", () => {
+    const route = readFileSync(
+      resolve(process.cwd(), "src/app/api/ads/purchase-event/[orderId]/route.ts"),
+      "utf8",
+    );
+    expect(route).toContain('onConflict: "order_id,platform"');
   });
 });

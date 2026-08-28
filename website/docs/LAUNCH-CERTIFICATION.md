@@ -288,7 +288,7 @@ Only four categories may remain open. Every item below is in one of them.
 
 | Item | Status |
 |---|---|
-| **I-11 (half)** | Two grantors hold the default privilege. The `postgres` half is closed by the staged migration; **`supabase_admin`'s half needs Supabase support.** Measured, not assumed. |
+| **I-11 (half)** | ~~Two grantors hold the default privilege; `supabase_admin`'s half needs Supabase support.~~ **Re-measured 2026-08-28 and the diagnosis was wrong.** The residual function exposure reaches `anon` through **PUBLIC** in the object ACL, not through any `supabase_admin` grant — so no support ticket exists to raise, and the control is the per-migration `revoke ... from public` that `rpc-security-posture.test.ts` enforces. The **table** half of the same default was a genuine open hole (every new table fully writable by `anon` — the origin of the 64-of-70 sweep) and is now closed in production. |
 | **Realtime, GoTrue auth, RLS policy correctness** | The harness has no realtime and no GoTrue, and connects as superuser. **NOT VERIFIED — and deliberately not upgraded.** |
 | **Live processor, live email, Shippo label purchase** | No real charge, mail or label was permitted. |
 

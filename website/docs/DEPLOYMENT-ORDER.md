@@ -268,6 +268,8 @@ There are two grantors and only the `postgres` half is reachable from this
 project's access — measured on the harness, not assumed. The `supabase_admin`
 half needs Supabase support and is listed under EXTERNAL DEPENDENCIES.
 
+> **CORRECTED 2026-08-28 (VL-SQL-04):** there is no Supabase support ticket here. A function created after the ALTER stays anon-executable via **PUBLIC** in the object ACL (`=X/postgres` — no `anon=X` entry exists), which is PostgreSQL's own hard-wired default for functions, not a `supabase_admin` grant. Proven with three probe functions on the harness. The remedy is the per-migration `revoke all on function ... from public` already enforced by `rpc-security-posture.test.ts`. Separately, the **table** half of the same default WAS a real open hole — every new table started fully writable by `anon`, which is where the 64-of-70 sweep came from — and it is now closed in production (`migrations-applied/20260828T0240_default_privilege_table_write_lockdown.sql`).
+
 **Verify:**
 ```sql
 select exists (select 1 from pg_default_acl d join pg_namespace n on n.oid=d.defaclnamespace
@@ -424,5 +426,5 @@ Every one is additive and `9aea901` ignores all of them.
 |---|---|
 | Historical refund restock | Orders refunded before Step 2 already lost their units. Replaying that is a data decision — which orders, and does the physical shelf agree — not a migration. Query in `inventory-return-path.sql`. |
 | `email_suppressions` backfill | Nothing to backfill; the table is correct. |
-| The `supabase_admin` default privilege | **EXTERNAL DEPENDENCY** — needs Supabase support. |
+| The `supabase_admin` default privilege | ~~**EXTERNAL DEPENDENCY** — needs Supabase support.~~ **NOT AN EXTERNAL DEPENDENCY (corrected 2026-08-28).** The residual function exposure is PUBLIC in the object ACL, not a `supabase_admin` grant; the control is the per-migration `revoke ... from public`. The table half is closed in production. |
 | COA documents | **EXTERNAL DEPENDENCY** — the store advertises COA documentation and `coa_records` is empty (F-006). |

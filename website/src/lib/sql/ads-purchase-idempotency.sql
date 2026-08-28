@@ -21,14 +21,49 @@
 -- the order itself remains the source of truth for everything that matters.
 -- =============================================================================
 
+-- ---------------------------------------------------------------------------
+-- THE KEY IS COMPOSITE, AND THIS FILE USED TO SAY IT WAS NOT (F-02).
+--
+-- This declared `order_id text primary key` while the route upserts with
+-- `onConflict: "order_id,platform"` (api/ads/purchase-event/[orderId]/route.ts).
+-- Production was queried on 2026-08-28 to settle which record was wrong:
+--
+--   select conname, pg_get_constraintdef(oid) from pg_constraint
+--   where conrelid = 'public.ad_purchase_events_sent'::regclass;
+--   -> ad_purchase_events_sent_pkey  PRIMARY KEY (order_id, platform)
+--
+-- Production carries the composite key. The ROUTE was right and this FILE was
+-- the stale record, so the file is corrected rather than the code — no
+-- production change was made or needed.
+--
+-- The composite key is also the correct one on the merits, which is why the
+-- drift mattered beyond tidiness. One row per ORDER would mean the TikTok send
+-- permanently blocks the Reddit send for the same order: they are separate
+-- conversions on separate platforms, and the second would be recorded as an
+-- already-sent duplicate and never dispatched. One row per (order, platform) is
+-- the invariant the route actually enforces.
+--
+-- Left uncorrected, this file was a live hazard rather than a stale comment: a
+-- fresh environment (or the local harness) built from it would get the
+-- single-column key, and every upsert the route makes would fail against a
+-- conflict target that does not exist there.
+--
+-- NOTE for anyone re-running this against a database that already has the OLD
+-- single-column key: `create table if not exists` will NOT fix it. Drop and
+-- recreate the constraint deliberately —
+--   alter table public.ad_purchase_events_sent
+--     drop constraint ad_purchase_events_sent_pkey,
+--     add primary key (order_id, platform);
+-- ---------------------------------------------------------------------------
 create table if not exists public.ad_purchase_events_sent (
-  order_id      text primary key,
+  order_id      text not null,
   event_id      text not null,
   platform      text not null default 'tiktok',
   delivered     boolean not null default false,
   tiktok_code   integer,
   first_sent_at timestamptz not null default now(),
-  attempts      integer not null default 1
+  attempts      integer not null default 1,
+  primary key (order_id, platform)
 );
 
 create index if not exists ad_purchase_events_sent_at_idx
@@ -37,4 +72,4 @@ create index if not exists ad_purchase_events_sent_at_idx
 alter table public.ad_purchase_events_sent enable row level security;
 
 comment on table public.ad_purchase_events_sent is
-  'One row per order whose Purchase has been reported server-side. Prevents a re-opened confirmation link from creating a second conversion after TikTok''s 48-hour dedup window closes.';
+  'One row per (order, platform) whose Purchase has been reported server-side. Prevents a re-opened confirmation link from creating a second conversion after TikTok''s 48-hour dedup window closes.';

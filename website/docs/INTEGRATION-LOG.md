@@ -1448,7 +1448,9 @@ the next arrival.
    disarmed, re-sweeps anything that drifted, and states the limitation in the
    file rather than in a commit message.
 
-3. **The `supabase_admin` half is an EXTERNAL DEPENDENCY** and is listed as one.
+3. ~~**The `supabase_admin` half is an EXTERNAL DEPENDENCY** and is listed as one.~~
+
+   > **CORRECTED 2026-08-28 (VL-SQL-04):** there is no Supabase support ticket here. A function created after the ALTER stays anon-executable via **PUBLIC** in the object ACL (`=X/postgres` — no `anon=X` entry exists), which is PostgreSQL's own hard-wired default for functions, not a `supabase_admin` grant. Proven with three probe functions on the harness. The remedy is the per-migration `revoke all on function ... from public` already enforced by `rpc-security-posture.test.ts`. Separately, the **table** half of the same default WAS a real open hole — every new table started fully writable by `anon`, which is where the 64-of-70 sweep came from — and it is now closed in production (`migrations-applied/20260828T0240_default_privilege_table_write_lockdown.sql`).
 
 Every generated revoke line was executed against the harness to prove it parses
 and does what it says:

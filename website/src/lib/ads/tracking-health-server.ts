@@ -50,10 +50,11 @@ async function readPurchaseLedger(): Promise<ServerHealthInput["purchaseLedger"]
     // events the board froze at "1000 attempted" forever and the delivered
     // share was computed over an arbitrary window rather than the ledger.
     // A head count is one round trip and is not subject to any row cap.
-    // `order_id`, not `id`: this table's primary key IS order_id and it has no
-    // `id` column at all (sql/ads-purchase-idempotency.sql:24). Naming a column
-    // that does not exist errors 42703, which the branch below would then read
-    // as "table missing" and report the ledger as unavailable.
+    // `order_id`, not `id`: this table has no `id` column at all — its key is
+    // (order_id, platform), verified against production 2026-08-28 (F-02; the
+    // repo's DDL had said `order_id text primary key` and was the stale record).
+    // Naming a column that does not exist errors 42703, which the branch below
+    // would then read as "table missing" and report the ledger as unavailable.
     const [{ count: total, error: totalError }, { count: delivered, error: deliveredError }] = await Promise.all([
       supabaseAdmin.from("ad_purchase_events_sent").select("order_id", { count: "exact", head: true }),
       supabaseAdmin

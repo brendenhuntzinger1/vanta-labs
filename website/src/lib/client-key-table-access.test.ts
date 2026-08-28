@@ -39,6 +39,19 @@ const sourceFiles = walk(SRC).map((path) => ({
   text: readFileSync(path, "utf8"),
 }));
 
+/** The .sql files, where a table's existence is declared. */
+const walkSql = (dir: string): string[] =>
+  readdirSync(dir).flatMap((entry) => {
+    const full = join(dir, entry);
+    if (statSync(full).isDirectory()) return walkSql(full);
+    return entry.endsWith(".sql") ? [full] : [];
+  });
+
+const sqlFiles = walkSql(SRC).map((path) => ({
+  path: path.slice(resolve(process.cwd()).length + 1),
+  text: readFileSync(path, "utf8"),
+}));
+
 // The browser client. `@/lib/supabase-server` is the service-role client and is
 // deliberately not matched.
 const BROWSER_CLIENT_IMPORT = /from\s+["']@\/lib\/supabase["']/;
@@ -49,6 +62,43 @@ const LOCKED_TABLES = [
   "referrals",
   "partner_clicks",
   "website_analytics_events",
+] as const;
+
+/**
+ * RLS-05, applied 2026-08-28: SELECT was revoked from anon and authenticated on
+ * every table in `public` that has RLS enabled and ZERO policies —
+ * migrations-applied/20260828T0245_rls05_revoke_select_policyless_rls_tables.sql.
+ *
+ * Those tables already returned nothing to the publishable key (RLS on with no
+ * policy denies every row), so the revoke changed no answer. What it changed is
+ * the failure mode of a future mistake: before, a browser-client read of one of
+ * these returned an empty array, which reads as "no rows" and can sit in a
+ * feature for weeks. Now it returns 42501 in production and only in production
+ * — passing review, the harness and a Vercel preview, then failing for
+ * customers. Exactly the shape the list above exists to catch, so it is caught
+ * the same way.
+ *
+ * Enumerated deliberately rather than derived: this list is the production
+ * grant state as applied, and a test that recomputed it from the same source it
+ * is checking would assert nothing. If a table gains a policy and a deliberate
+ * column-enumerated grant, remove it from here in the same change.
+ *
+ * As with the list above: if one of these fails, move the call server-side. Do
+ * NOT re-grant the table.
+ */
+const POLICYLESS_RLS_TABLES = [
+  "abandoned_cart_emails", "abandoned_carts", "ad_purchase_events_sent",
+  "back_in_stock_requests", "coa_records", "email_automations",
+  "email_campaign_clicks", "email_campaign_recipients", "email_campaigns",
+  "email_send_log", "email_suppressions", "express_checkout_intents",
+  "express_shipping_quotes", "fulfillment_batch_orders", "fulfillment_batches",
+  "fulfillment_events", "fulfillment_orders", "fulfillment_payouts",
+  "inventory_reservations", "inventory_transactions", "marketing_subscribers",
+  "membership_billing_events", "order_amount_backfills", "order_attribution",
+  "order_email_log", "order_shipping_cost_audit", "order_status_history",
+  "pending_emails", "product_cost_changes", "product_subscriptions",
+  "rate_limit_hits", "referral_code_aliases", "referral_code_changes",
+  "shipping_package_presets", "shippo_webhook_events", "system_alerts",
 ] as const;
 
 describe("tables the publishable key can no longer reach", () => {
@@ -67,6 +117,43 @@ describe("tables the publishable key can no longer reach", () => {
       expect(offenders).toEqual([]);
     });
   }
+
+  it("no browser-client file reads any policy-less RLS table (RLS-05)", () => {
+    // One case over all 36 rather than 36 cases: the per-table loop above earns
+    // its granularity because those five are individually load-bearing. These
+    // are one revoke with one remedy, and a failure names the offenders anyway.
+    const offenders = browserFiles.flatMap((file) =>
+      POLICYLESS_RLS_TABLES
+        .filter((table) => file.text.includes(`.from("${table}")`))
+        .map((table) => `${file.path} -> ${table}`),
+    );
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("the RLS-05 list is real, so the assertion above cannot pass on a typo", () => {
+    // If every name in that array were misspelled the scan would find nothing
+    // and report a clean pass. So each name has to be traceable to something
+    // in the repository.
+    //
+    // The corpus is TypeScript AND the .sql files, which is the correction this
+    // assertion made when first written: it scanned only TypeScript and failed
+    // on fulfillment_events, fulfillment_orders, fulfillment_payouts and
+    // order_amount_backfills. Those are not typos and not dead schema — they
+    // carry live production rows (194 / 2 / 2 / 3 at the time of the revoke)
+    // and are declared in phase2-financial-remediation.sql,
+    // schema-complete-sync.sql and shipping-protection-persistence.sql. They
+    // simply have no TypeScript reader at all, which is precisely why revoking
+    // their client-key SELECT could not break anything.
+    const corpus = [
+      ...sourceFiles.map((file) => file.text),
+      ...sqlFiles.map((file) => file.text),
+    ].join("\n");
+    const unknown = POLICYLESS_RLS_TABLES.filter((table) => !corpus.includes(table));
+
+    expect(unknown).toEqual([]);
+    expect(POLICYLESS_RLS_TABLES).toHaveLength(36);
+  });
 
   it("ambassadors stays readable from the browser, and unwritable", () => {
     // referral-client.ts falls back to a narrow browser read when the
