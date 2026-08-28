@@ -189,6 +189,18 @@ export async function handleMembershipEvent(
     // onto the same order and next month's renewal is still its own. It falls
     // back to the period just ended, then to the day, because an event missing
     // both dates must still be recorded rather than dropped.
+    //
+    // THIS ASSUMES VEYRA DOES NOT SEND membership.renewed FOR THE FIRST INVOICE.
+    // The signup charge is booked by startMembershipSignup under a
+    // `membership-signup:<subscription>` key, and the two key namespaces cannot
+    // collide by construction — so a `renewed` event covering the period the
+    // signup already paid for would book a SECOND order for ONE charge. The
+    // event vocabulary this handler was written from says the signup event is
+    // `membership.created`, which is a no-op above, and no first-invoice
+    // `renewed` has ever been observed in production. If one ever is, note that
+    // the duplicate would already be visible one layer earlier, as two
+    // "renewal" rows in membership_billing_events for a single charge — that is
+    // the cheaper thing to watch, and it predates this order write.
     const renewalPeriodKey =
       (data.next_renewal_at ?? data.current_period_end ?? nowIso.slice(0, 10)) || nowIso.slice(0, 10);
     await recordMembershipChargeOrder({
