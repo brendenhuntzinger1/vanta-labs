@@ -9,3 +9,6 @@ node_modules/
 .claude/settings.local.json
 .perf-audit/
 .playwright-mcp/
+
+# Ephemeral git worktrees created for isolated review agents.
+.claude/worktrees/
