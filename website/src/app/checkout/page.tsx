@@ -704,7 +704,7 @@ export default function CheckoutPage() {
     return (
       <div className="min-h-screen bg-[#0a0a0a] text-white">
         <SiteHeaderV2 />
-        <main className="mx-auto max-w-3xl px-5 pb-24 pt-20 sm:px-6 sm:pt-24 lg:px-12">
+        <main className="vl-nav-clearance mx-auto max-w-3xl px-5 pb-24 pt-20 sm:px-6 sm:pt-24 lg:px-12">
           <div className="rounded-2xl border border-white/[0.06] bg-white/[0.015] p-5 sm:p-7">
             <CheckoutProgress onPayment />
             <p className="mt-6 text-[10px] uppercase tracking-[0.34em] text-white/35">Almost there</p>
@@ -806,7 +806,7 @@ export default function CheckoutPage() {
       <SiteHeaderV2 />
 
       {/* pb allows for the sticky mobile CTA bar so nothing is ever covered. */}
-      <main className="mx-auto max-w-[1200px] px-5 pb-44 pt-20 sm:px-6 sm:pt-24 lg:px-10 lg:pb-24">
+      <main className="vl-nav-clearance mx-auto max-w-[1200px] px-5 pb-44 pt-20 sm:px-6 sm:pt-24 lg:px-10 lg:pb-24">
         {/* Compact hero — ~40% shorter than before, so the form starts almost
             immediately on a phone. */}
         <header className="pb-6">

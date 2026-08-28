@@ -3522,6 +3522,37 @@ a.vl-rail-item:hover .vl-rail-icon { color: var(--accent-gold-bright, #c7ae5e); 
   position: static;
 }
 
+/* AND ITS CLEARANCE GOES WITH IT.
+   ---------------------------------------------------------------------------
+   Because `.vl2-nav` is fixed, every storefront <main> pads its top to clear
+   it — pt-16 through pt-32 depending on the page. The rule above makes the nav
+   `static` whenever an in-flow bar sits on top of it, and a static nav takes
+   its own height in the document: there is nothing left to clear, so that
+   padding becomes dead space stacked underneath the very bars that caused it.
+
+   Measured on /products at 375x548, a new visitor inside TikTok: consent bar
+   0..86, offers bar 86..135, nav 135..204 — and then <main> added another 64px
+   before its first word. The first product card sat at y=733 on a 548px
+   screen. This is the same condition, applied to the same problem, one element
+   further down.
+
+   Opt-in via .vl-nav-clearance rather than a bare `main`, so a page whose top
+   padding is aesthetic keeps it — /not-found centres its message at pt-40 and
+   has no clearance to give back. A little padding is kept so the content is
+   not flush against the header's hairline. */
+:root[data-consent-pending] .vl-nav-clearance,
+:root:has(.vl-consent-bar) .vl-nav-clearance,
+:root:has(.vl-offer-bar) .vl-nav-clearance {
+  padding-top: 1.25rem;
+}
+@media (min-width: 640px) {
+  :root[data-consent-pending] .vl-nav-clearance,
+  :root:has(.vl-consent-bar) .vl-nav-clearance,
+  :root:has(.vl-offer-bar) .vl-nav-clearance {
+    padding-top: 2.5rem;
+  }
+}
+
 .vl-consent-bar {
   position: relative;
   z-index: 1;

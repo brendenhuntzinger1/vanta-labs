@@ -182,7 +182,7 @@ function ProductsPageContent() {
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
 
-      <main className="vl-catalog-ground mx-auto max-w-[1440px] px-4 sm:px-6 pb-14 pt-16 sm:pb-20 sm:pt-32 lg:px-12">
+      <main className="vl-nav-clearance vl-catalog-ground mx-auto max-w-[1440px] px-4 sm:px-6 pb-14 pt-16 sm:pb-20 sm:pt-32 lg:px-12">
         {/* The catalogue header carries the quality claim, so it gets the one
             piece of real emphasis on this page. The glow is a wide, very low
             opacity champagne radial behind the type -- it reads as light on a
@@ -205,23 +205,13 @@ function ProductsPageContent() {
           <span aria-hidden="true" className="vl-catalog-rule relative mt-6 hidden h-px w-14 sm:block" />
 
           {/* The explanatory paragraph and the three-claim line that used to sit
-              here are gone. Five signals in the rail below carry the same
-              meaning in a fraction of the height, and the opening reads as a
-              catalogue rather than an About page. */}
+              here are gone. The trust rail carries the same meaning in a
+              fraction of the height, and the opening reads as a catalogue
+              rather than an About page. The rail itself now renders BELOW the
+              product grid — see the note there — so nothing but the title and
+              the filters stands between a visitor and something to buy. */}
         </header>
 
-        {/* The COA claim is decided by the catalogue that actually loaded, not
-            hard-coded. See catalogTrustRail() — the coverage wording appears
-            only when every product on the page has a document.
-
-            Deliberately conservative in two ways. An empty/loading list is not
-            treated as coverage, and `coaUrl` does not see a COA that exists
-            only as a `coa_records` row, so the rail can under-claim but never
-            over-claim. Under-claiming costs a weaker word; over-claiming is an
-            unsupported testing statement on every catalogue page. */}
-        <CatalogTrustRail
-          everyProductHasCoa={products.length > 0 && products.every((product) => hasCoa(product.coaUrl))}
-        />
 
         {/* THE COUPON BANNER THAT WAS HERE MOVED TO THE TOP OF THE PAGE.
             StorefrontOffersBar (rendered in the root layout) now carries every
@@ -464,6 +454,31 @@ function ProductsPageContent() {
             </section>
           )}
         </section>
+
+        {/* THE TRUST RAIL SITS BELOW THE GRID, NOT IN FRONT OF IT.
+            It used to be the last thing between a visitor and the products.
+            On a phone that cost 102px of the only screen they see: measured
+            2026-08-28 at 375x548 and 393x664, the first product card sat at
+            y=733 with the rail above it. Every in-app visitor lands here —
+            the age gate sends them, because the hero cannot play in a social
+            WebView — so this page opening with nothing to buy on screen was
+            the whole storefront opening that way.
+
+            The copy is unchanged and still reads: "should I trust these
+            people" is a better question once the visitor has found something
+            worth asking it about. */}
+        {/* The COA claim is decided by the catalogue that actually loaded, not
+            hard-coded. See catalogTrustRail() — the coverage wording appears
+            only when every product on the page has a document.
+
+            Deliberately conservative in two ways. An empty/loading list is not
+            treated as coverage, and `coaUrl` does not see a COA that exists
+            only as a `coa_records` row, so the rail can under-claim but never
+            over-claim. Under-claiming costs a weaker word; over-claiming is an
+            unsupported testing statement on every catalogue page. */}
+        <CatalogTrustRail
+          everyProductHasCoa={products.length > 0 && products.every((product) => hasCoa(product.coaUrl))}
+        />
       </main>
     </div>
   );
@@ -514,7 +529,7 @@ function CatalogGridSkeleton() {
 function CatalogFallback() {
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
-      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-14 pt-16 sm:pb-20 sm:pt-32 lg:px-12">
+      <main className="vl-nav-clearance mx-auto max-w-[1440px] px-4 sm:px-6 pb-14 pt-16 sm:pb-20 sm:pt-32 lg:px-12">
         {/* Stands in for the catalogue header + filter row. */}
         <div className="h-[13.5rem] sm:h-[15.5rem]" aria-hidden="true" />
         <section className="mt-8">

@@ -124,7 +124,7 @@ export default async function OrderConfirmationPage({ params }: { params: Promis
       {/* pt clears the fixed header and no more. This was pt-28/32, which left a
           screen-height gap above the confirmation on a phone — the first thing a
           customer saw after paying was empty space. */}
-      <main className="mx-auto max-w-xl px-4 pb-16 pt-20 sm:px-6 sm:pt-24">
+      <main className="vl-nav-clearance mx-auto max-w-xl px-4 pb-16 pt-20 sm:px-6 sm:pt-24">
         <section className="rounded-2xl border border-white/10 bg-white/[0.02] px-5 py-7 text-center sm:px-8 sm:py-9">
           <OrderConfirmationStatus
             orderId={String(order.order_id)}

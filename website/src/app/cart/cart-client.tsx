@@ -194,7 +194,7 @@ export function CartPageClient() {
           cart's only way out — "Browse products" — landed at y=473, inside the
           consent banner sitting at y=464. Reclaiming 32px lifts it clear.
           Desktop spacing is unchanged. */}
-      <main className="mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-20 sm:pt-32 lg:px-12">
+      <main className="vl-nav-clearance mx-auto max-w-[1440px] px-4 sm:px-6 pb-20 pt-20 sm:pt-32 lg:px-12">
         <div className="max-w-2xl">
           <p className="vl2-eyebrow">Shopping Cart</p>
           <h1 className="vl2-serif mt-3 text-4xl text-white sm:text-5xl">Review your materials.</h1>

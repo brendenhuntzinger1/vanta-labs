@@ -329,7 +329,7 @@ export function ProductDetailClient({
 
       <SiteHeaderV2 />
 
-      <main className="relative mx-auto max-w-[1440px] px-4 sm:px-6 pb-12 pt-24 sm:pb-16 sm:pt-28 lg:px-12 lg:pt-32">
+      <main className="vl-nav-clearance relative mx-auto max-w-[1440px] px-4 sm:px-6 pb-12 pt-24 sm:pb-16 sm:pt-28 lg:px-12 lg:pt-32">
         <nav aria-label="Breadcrumb" className="flex items-center gap-2 text-xs text-[#a3a3a3]">
           {/* min-h-6 lifts these to a 24px tap target (WCAG 2.2 AA 2.5.8). At
               text-xs the breadcrumb links were 16px tall — the standalone

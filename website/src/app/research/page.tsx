@@ -30,7 +30,7 @@ export default async function ResearchLibraryPage() {
       <SiteHeaderV2 />
       {/* Widened from max-w-4xl. Four cards in a narrow column left the page
           mostly empty and made the library look unfinished rather than curated. */}
-      <main className="mx-auto max-w-[1200px] px-4 pb-24 pt-28 sm:px-6 sm:pt-32 lg:px-12">
+      <main className="vl-nav-clearance mx-auto max-w-[1200px] px-4 pb-24 pt-28 sm:px-6 sm:pt-32 lg:px-12">
         <header className="max-w-2xl">
           <p className="vl2-eyebrow">Research Library</p>
           <h1 className="vl2-serif mt-3 text-[2.25rem] leading-[1.1] text-white sm:text-5xl">Guides &amp; education</h1>

@@ -41,7 +41,7 @@ export default async function ArticlePage({ params }: { params: Promise<{ slug: 
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
-      <main className="mx-auto max-w-3xl px-6 pb-24 pt-32 lg:px-12">
+      <main className="vl-nav-clearance mx-auto max-w-3xl px-6 pb-24 pt-32 lg:px-12">
         <Link href="/research" className="text-xs text-white/45 transition hover:text-white">← Research Library</Link>
         <p className="vl2-eyebrow mt-6">Research Library</p>
         <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">{article.title}</h1>

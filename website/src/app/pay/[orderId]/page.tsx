@@ -40,7 +40,7 @@ export default async function ResubmitPaymentPage({ params }: { params: Promise<
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
-      <main className="mx-auto max-w-3xl px-6 pb-20 pt-32 lg:px-12">
+      <main className="vl-nav-clearance mx-auto max-w-3xl px-6 pb-20 pt-32 lg:px-12">
         <section className="border border-white/10 p-5 sm:p-8">
           <p className="vl2-eyebrow">Complete your payment</p>
           <h1 className="vl2-serif mt-3 text-3xl text-white sm:text-4xl">Order {orderNumber}</h1>

@@ -112,7 +112,7 @@ export function ContactPageClient() {
   return (
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
-      <main className="px-6 pb-20 pt-32 lg:px-12">
+      <main className="vl-nav-clearance px-6 pb-20 pt-32 lg:px-12">
       <div className="mx-auto grid max-w-6xl gap-8 lg:grid-cols-[0.92fr_1.08fr]">
         <section className="border border-white/10 p-6 sm:p-8">
           <p className="vl2-eyebrow">Support</p>

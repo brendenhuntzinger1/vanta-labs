@@ -79,7 +79,7 @@ export default async function WholesalePage() {
     <div className="min-h-screen bg-[#0b0b0b] text-white">
       <SiteHeaderV2 />
 
-      <main className="pt-24 sm:pt-28">
+      <main className="vl-nav-clearance pt-24 sm:pt-28">
         {/* ── HERO ─────────────────────────────────────────────────────────
             Type left, product right, no containing box. On a phone the copy
             and both CTAs come first and the photograph follows, so the offer
