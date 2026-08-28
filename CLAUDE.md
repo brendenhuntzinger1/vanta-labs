@@ -79,12 +79,14 @@ need no per-session install:
   writing against an unfamiliar API, alongside `node_modules/next/dist/docs/`.
   It reaches a hosted service (`mcp.context7.com`), so queries leave the
   machine — library names only, never repository content.
-  It runs anonymously unless `CONTEXT7_API_KEY` is set, and the anonymous tier
-  is a shared monthly quota that does run out — when it does, every lookup
-  returns "Monthly quota exceeded" rather than failing loudly at connect time.
-  Set the key in the `vanta` environment if you rely on it; until then fall
-  back to `website/node_modules/next/dist/docs/`, which is version-exact
-  anyway.
+  `CONTEXT7_API_KEY` is configured in the `vanta` environment, so lookups are
+  keyed rather than running on the shared anonymous quota. The key is injected
+  into the MCP transport and is deliberately *not* a shell variable — `env |
+  grep CONTEXT7` comes back empty in a working session, so that is not a
+  health check. Test it by making a lookup instead. Unkeyed, the anonymous
+  quota returns "Monthly quota exceeded" as ordinary tool output rather than
+  failing at connect time, so it degrades silently; when a lookup looks thin,
+  `website/node_modules/next/dist/docs/` is version-exact and needs no network.
 - **typescript-lsp** — go-to-definition, find-references and live type errors
   across `.ts/.tsx/.js/.jsx`. Resolved by the type system rather than by text
   match, so it finds every real call site and no false ones.
