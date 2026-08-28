@@ -243,12 +243,37 @@ describe("the admin dashboard describes the rows it actually shows", () => {
   });
 
   it("renders the truncation flag every report already returns", () => {
-    expect(home).toContain("profitWindows.truncated");
-    expect(home).toContain("revenueWindows.truncated");
-    expect(home).toContain("profitDashboard?.truncated");
-    expect(revenue).toContain("taxReport?.truncated");
-    // A fallback that omits the flag would claim a complete report on the very
-    // path where the read failed.
+    // ASSERTS THE INVARIANT, NOT ONE IMPLEMENTATION OF IT.
+    //
+    // This first read `home` for `profitWindows.truncated` and two siblings —
+    // the inline banner written here. Phase 7 landed on main in the same hour
+    // and replaced the whole page's read layer: `settleRead` for every figure,
+    // and a shared <AdminTruncationNotice sources={...}> fed by a
+    // `truncatedSources` list. That is a strictly better version of the same
+    // fix, so the merge took it and the literals below moved with it.
+    //
+    // What must stay true is that a report which stopped early SAYS SO on this
+    // page. That is what is checked now, against whichever mechanism carries
+    // it.
+    expect(home).toContain("truncatedSources");
+    expect(home).toContain("AdminTruncationNotice");
+    expect(home).toMatch(/profitDashboard\?\.truncated/);
+    expect(home).toMatch(/profitWindowsRead\.value\.truncated/);
+    expect(revenue).toMatch(/truncated/);
+
+    // And that no catch-fallback quietly claims a complete report on the very
+    // path where the read failed. Phase 7 removed those fallbacks outright and
+    // routed every read through settleRead.
     expect(home).not.toMatch(/hasEstimatedCost: false \}\)\)/);
+    expect(home).toContain("settleRead(");
+
+    // Comment lines are excluded deliberately: Phase 7's own explanation of what
+    // it removed quotes `.catch(() => 0)` in prose, and a bare toContain matched
+    // that and went red on a page with no such fallback left in it.
+    const executable = home
+      .split("\n")
+      .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+      .join("\n");
+    expect(executable).not.toContain(".catch(() => 0)");
   });
 });
