@@ -55,9 +55,45 @@ to be a real open hole and was closed.
 
 ---
 
-## Still open — these need you
+## DECIDED AND APPLIED 2026-08-28 — nothing below is waiting on anyone
+
+Brenden's instruction was to stop asking and do what is logical for a store that
+lives on these numbers. All five were settled on the merits, applied to
+production, and guarded. The original write-ups are kept verbatim below so the
+reasoning behind each answer is auditable, with the decision stated at the top
+of each.
+
+| # | Decision | Outcome |
+|---|---|---|
+| 1 | Live sales basis | **`paid_at`.** Revenue is recognised when the money arrives, and it now agrees with /admin/revenue. Applied to the RPC and its TS twin. |
+| 2 | Customer "Orders" count | **Exclude warranty replacements.** A reship is the store's own shipment, not an order the customer placed. Applied to both CTEs and the TS twin. |
+| 3 | Deploy `ads-system.sql` | **Yes, deployed.** 13 tables, RLS-denied, anon SELECT and INSERT both 0, guardrails in `recommend` mode. |
+| 4 | `payment_status` CHECK | **No**, and it stays no. See the reasoning under 4. |
+| 5 | `referral-client.ts` fallback | **Leave it.** See the reasoning under 5. |
+
+Decisions 1 and 2 were applied at the only moment they were free, which is why
+they were not deferred: production has issued **zero** replacements, and **every
+one of its 7 revenue-bearing orders was paid on the day it was created, with no
+null `paid_at`**. Both figures were captured before and after and are identical
+— `admin_ops_summary` returned `0 | 335.76 | 1 | 1 | 2` either side, and all
+four customer rows kept their exact `order_count` and `total_spent`. After the
+first order placed near midnight and paid the next morning, that would no longer
+have been true.
+
+Migrations: `20260828T0510_live_sales_paid_at_and_customer_order_count.sql`,
+`20260828T0515_ads_system_schema.sql`. Guards:
+`src/lib/admin-metric-definitions.test.ts` (7 cases, falsified — 4 of them fail
+against the reverted code).
+
+---
+
+## The original write-ups, kept for the reasoning
 
 ### 1. "Live sales today / this month" on /admin/partners: placed, or paid?
+
+**DECIDED: `paid_at`.** Applied to `admin_ops_summary` and to
+`getAdminOperationsSummary`'s fallback. The null-`paid_at` follow-up below turned
+out to be moot — production has none.
 *(ADM-11 and VL-PARITY-01 are the same question.)*
 
 `admin_revenue_summary` keys revenue on `paid_at`; `admin_ops_summary` keys live
@@ -76,6 +112,12 @@ Both the RPC and its JS fallback in `partner-portal.ts` move together whichever
 way you answer. This is a displayed money figure, which is why nobody guessed.
 
 ### 2. /admin/customers "orders" column: every order, or only purchases?
+
+**DECIDED: exclude warranty replacements, keep every status.** A cancelled order
+is something the customer did; a reship is something the store did. Applied to
+both CTEs of `admin_customer_rollup` and to `aggregateCustomers`. The absent
+status filter is preserved on purpose — `total_spent` is the column that filters
+on status, and `admin-customers-revenue.test.ts` still pins that split.
 *(M-14.)*
 
 `admin_customer_rollup`'s `count(*) as order_count` has no `order_type` filter —
@@ -89,6 +131,15 @@ purchases? Whichever you pick, the SQL and its JS twin `aggregateCustomers`
 change together.
 
 ### 3. Deploy `ads-system.sql`? (13 tables, one view, one trigger)
+
+**DECIDED: deployed.** A store that runs paid acquisition needs its ads
+dashboard, the schema touches no commerce table (verified by grep — zero
+references to orders, products, coupons, referrals or ambassadors), and every
+statement is `if not exists`. Applied with the RLS-05 revoke folded in at
+creation, so these thirteen never spent a moment in the state that sweep
+existed to fix: 14 `ad_` tables, all RLS-enabled, anon SELECT 0, anon INSERT 0,
+view `security_invoker = true`, guardrails `mode = 'recommend'` so nothing can
+move a budget on its own.
 *(VL-SQL-03, remaining half.)*
 
 The time-sensitive part is already done. This is a **feature deployment**, not a
@@ -128,6 +179,17 @@ inert behind a `qual false` policy.
 ---
 
 ## Not restated here, deliberately
+
+**F-16-04 update, 2026-08-28.** The repository half of this is now checked and
+clean: a scan for `sk_live_`, `rk_live_`, `sk-`, `SG.` and `xox[baprs]-` key
+shapes across every `.ts/.tsx/.js/.mjs/.json/.md/.sql/.sh/.yml` file found
+exactly two matches, both deliberate fake sentinels inside redaction tests
+(`sk_live_sentinelsentinel` in `sentry-privacy.test.ts`, `sk_live_PROCESSOR` in
+`admin-audit-log-redaction.test.ts`) — the values those tests use to PROVE
+redaction works. No `.env` file is tracked by git except `.env.example`. So no
+live key is committed. What that scan cannot see is the Vercel environment
+itself; if F-16-04 was about a key held there, it still needs confirming from
+the chat that raised it.
 
 The earlier phases recorded further owner items under the ids **VL-25, VL-30,
 LF-02, F-16-04** (the Arcline `sk_live_` key), **RLS-08, P2-4** and **INV-06**.

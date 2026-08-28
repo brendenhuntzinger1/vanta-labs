@@ -1,9 +1,22 @@
 -- =============================================================================
 -- VANTA ADS — advertising operating system schema
 --
--- NOT YET APPLIED. Review before running. Every statement is additive and
--- guarded with IF NOT EXISTS; nothing here alters, drops or reads a commerce
--- table. The ad system observes commerce and never participates in it.
+-- APPLIED TO PRODUCTION 2026-08-28 (migration `ads_system_schema`). Recorded
+-- under the same version in
+-- migrations-applied/20260828T0515_ads_system_schema.sql, which carries the
+-- verification. Every statement is additive and guarded with IF NOT EXISTS;
+-- nothing here alters, drops or reads a commerce table. The ad system observes
+-- commerce and never participates in it — verified by grep before applying:
+-- zero references to orders, order_items, products, customers, payments,
+-- coupons, referrals or ambassadors anywhere in this file.
+--
+-- ONE DEVIATION FROM WHAT IS WRITTEN BELOW, applied deliberately. Section 6
+-- enables RLS on all thirteen and stops there; the production run also did
+-- `revoke all on public.<table> from anon, authenticated` for each, matching the
+-- RLS-05 posture (migrations-applied/20260828T0245_...). A policy-less RLS table
+-- already returns nothing to a client key, so that revoke changes no answer —
+-- it means a future permissive policy is not on its own enough to publish the
+-- store's ad spend, CPA and ROAS.
 --
 -- The one join that matters: utm_content == creative_id. It is stamped on the
 -- landing URL at publish time, captured by the existing attribution layer, and

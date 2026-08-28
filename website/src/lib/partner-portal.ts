@@ -1522,12 +1522,15 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
         .from("orders")
         .select("amount_paid, refund_amount, payment_status, order_type")
         .in("payment_status", revenueStatuses)
-        .gte("created_at", todayStart),
+        // paid_at, matching the RPC and /admin/revenue — see ADM-11 in
+        // admin-dashboard-rollups.sql. `gte` on a null paid_at is not true, so
+        // an unpaid order cannot reach the sum through this filter either.
+        .gte("paid_at", todayStart),
       supabaseAdmin
         .from("orders")
         .select("amount_paid, refund_amount, payment_status, order_type")
         .in("payment_status", revenueStatuses)
-        .gte("created_at", monthStart),
+        .gte("paid_at", monthStart),
       // Replacements are excluded for the same reason admin_ops_summary's
       // per_customer CTE excludes them: admin-replacements.ts writes a reship as
       // a paid order under the ORIGINAL BUYER'S email, so a one-time buyer who

@@ -38,6 +38,15 @@ async function aggregateCustomers(search?: string): Promise<AdminCustomerRow[]> 
     .from("orders")
     .select("customer_email, customer_name, amount_paid, refund_amount, payment_status, created_at")
     .not("customer_email", "is", null)
+    // A warranty reship is written as a paid order under the ORIGINAL BUYER'S
+    // email (admin-replacements.ts), so it would be counted here as an order
+    // this customer placed. It is the store's own shipment. Excluded to match
+    // admin_customer_rollup's `agg` CTE — see M-14 in admin-dashboard-rollups.sql.
+    // The two must agree, or /admin/customers changes meaning depending on
+    // whether the rollup migration happens to be present. `orders.order_type` is
+    // `text not null default 'product'`, so `neq` cannot silently drop rows to a
+    // null comparison.
+    .neq("order_type", "replacement")
     .order("created_at", { ascending: false })
     .limit(5000);
 

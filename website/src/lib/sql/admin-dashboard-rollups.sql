@@ -148,6 +148,20 @@ stable
 security definer
 set search_path = public, pg_temp
 as $$
+  -- REPLACEMENTS ARE NOT THIS CUSTOMER'S ORDERS (M-14).
+  --
+  -- admin-replacements.ts writes a warranty reship as a paid, $0 order under the
+  -- ORIGINAL BUYER'S email. It is the store's own shipment, not something the
+  -- customer placed, so counting it in the "Orders" column beside their name
+  -- overstates their history — and the count grew the more the store had to
+  -- reship, which is the wrong direction for a number used to judge who a good
+  -- customer is.
+  --
+  -- The STATUS filter is deliberately still absent: order_count means "orders
+  -- this person placed", which legitimately includes ones that were cancelled or
+  -- never paid. total_spent is the column that filters on status, and it does.
+  -- admin-customers-revenue.test.ts records that split as intended, and this
+  -- change does not disturb it.
   with agg as (
     select
       lower(trim(customer_email)) as email,
@@ -159,6 +173,7 @@ as $$
       max(created_at) as last_order_at
     from public.orders
     where customer_email is not null and trim(customer_email) <> ''
+      and coalesce(order_type, 'product') <> 'replacement'
     group by lower(trim(customer_email))
   ),
   named as (
@@ -167,6 +182,7 @@ as $$
       customer_name as name
     from public.orders
     where customer_email is not null and trim(customer_email) <> ''
+      and coalesce(order_type, 'product') <> 'replacement'
     order by lower(trim(customer_email)), created_at desc
   ),
   joined as (
@@ -248,17 +264,37 @@ as $$
       and coalesce(order_type, 'product') <> 'replacement'
     group by customer_email
   )
+  -- LIVE SALES IS KEYED ON paid_at, NOT created_at (ADM-11 / VL-PARITY-01).
+  --
+  -- "Live sales today" is a revenue figure, and revenue is recognised when the
+  -- money arrives, not when the cart was submitted. Keying on created_at counted
+  -- an order placed today and never paid, and missed one placed yesterday and
+  -- paid this morning.
+  --
+  -- It also made two admin screens disagree about the same day:
+  -- admin_revenue_summary keys today's revenue on
+  -- `paid_at is not null and paid_at >= p_start_of_today` (:72). /admin/revenue
+  -- and the /admin/partners tile could therefore print different numbers for
+  -- "today" and both be behaving as written. One store, one definition.
+  --
+  -- Changed at the only moment it is free, which is why it was done now rather
+  -- than deferred: measured against production first —
+  --   revenue-bearing orders                          7
+  --   with paid_at null                               0
+  --   paid on a different day than they were created  0
+  -- so no figure moves today, and the legacy-null case that would have forced a
+  -- coalesce() compromise does not exist in this database.
   select
     coalesce((select sum(round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2))
               from public.orders
               where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
                 and coalesce(order_type, 'product') <> 'replacement'
-                and created_at >= p_today_start), 0) as live_sales_today,
+                and paid_at is not null and paid_at >= p_today_start), 0) as live_sales_today,
     coalesce((select sum(round(coalesce(amount_paid, 0) - coalesce(refund_amount, 0), 2))
               from public.orders
               where payment_status in ('paid', 'completed', 'succeeded', 'partially_refunded')
                 and coalesce(order_type, 'product') <> 'replacement'
-                and created_at >= p_month_start), 0) as live_sales_month,
+                and paid_at is not null and paid_at >= p_month_start), 0) as live_sales_month,
     coalesce((select count(*) from per_customer where cnt = 1), 0) as new_customers,
     coalesce((select count(*) from per_customer where cnt > 1), 0) as returning_customers,
     coalesce((select count(*) from per_customer), 0) as total_customers;

@@ -32,11 +32,25 @@ const state = { orders: [] as Row[] };
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase-server", () => {
   const builder = () => {
+    // `neq` FILTERS FOR REAL rather than returning the builder untouched.
+    // aggregateCustomers excludes warranty replacements (M-14), and a double
+    // that swallowed the filter would let the replacement case below pass
+    // against code that never applied it — which is the whole thing that case
+    // exists to prove.
+    const rejects: Array<(row: Row) => boolean> = [];
     const api: Record<string, unknown> = {
       select: () => api,
       not: () => api,
+      neq: (column: string, value: unknown) => {
+        rejects.push((row) => String(row[column] ?? "") === String(value));
+        return api;
+      },
       order: () => api,
-      limit: () => Promise.resolve({ data: state.orders, error: null }),
+      limit: () =>
+        Promise.resolve({
+          data: state.orders.filter((row) => !rejects.some((reject) => reject(row))),
+          error: null,
+        }),
     };
     return api;
   };
