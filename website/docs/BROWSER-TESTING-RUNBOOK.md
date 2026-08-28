@@ -358,6 +358,33 @@ class of defects this audit exists to find lives in that gap.
   it: the order-detail page could not be browser-tested at all, a membership
   store-credit grant fell back to unit tests, and a nested `order_items` read
   of a column that does not exist stayed invisible.
+- **The mock payment gateway is NOT reachable through the harness**, despite
+  `PAYMENT_PROVIDER=mock` and `harness-server.mjs` putting `NODE_ENV` back to
+  `test`. Measured 2026-08-28 on a clean restart:
+
+      GET /api/catalog/payment-methods  ->  500
+      "PAYMENT_PROVIDER=mock/test is forbidden in production."
+
+  The lockout reads `process.env.NODE_ENV` at call time and the value is not
+  inlined at build, so this is not a build-constant problem — Next
+  re-establishes its own environment after `prepare()` and the parent's
+  reassignment does not follow. See the long comment in `harness-server.mjs`.
+
+  What this costs: **the card service-fee row has never rendered in any browser
+  evidence gathered through this harness.** Cart and checkout still load and
+  still total correctly, because the route fails closed and the page degrades —
+  but any claim about the fee disclosure on those pages is NOT browser-proven,
+  and a completed mock purchase cannot be driven here at all.
+
+  Do not "fix" this by weakening the lockout. It is the control that stops
+  `/api/checkout/mock-pay` marking orders paid in production, and it
+  deliberately has no override variable.
+
+- **`bac-water` is not seeded**, so `/api/catalog/bac-water` 404s on every page
+  that renders the bacteriostatic-water upsell — which is most of them,
+  including the cart. Production returns 200 for it. It is a seed gap, not a
+  defect, but it means the upsell and its cart checkboxes are untested here.
+
 - If a query fails with a SQL error, **that is a finding until proven
   otherwise** — it may be a genuine schema/query mismatch, not a shim gap.
   Check which before dismissing it.
