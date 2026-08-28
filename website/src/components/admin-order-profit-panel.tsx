@@ -136,7 +136,17 @@ export function AdminOrderProfitPanel({
           amount={profit.processingFee}
         />
         {profit.commission > 0 ? <ExpenseRow label="Ambassador commission" amount={profit.commission} /> : null}
-        {profit.refund > 0 ? <ExpenseRow label="Refunds" amount={profit.refund} /> : null}
+        {/* The REVERSAL THE ENGINE APPLIED, not the whole refund. When collected
+            tax is a pass-through it was never added to revenue, so the engine
+            only takes back the non-tax part (order-profit.ts revenueRefund).
+            Printing the gross refund here left the visible lines short of the
+            Net profit below by exactly the tax returned. */}
+        {profit.revenueRefund > 0 ? (
+          <ExpenseRow
+            label={profit.revenueRefund < profit.refund ? "Refunds (excl. tax returned)" : "Refunds"}
+            amount={profit.revenueRefund}
+          />
+        ) : null}
 
         <div className="!mt-2 flex justify-between border-t border-white/10 pt-2 text-base font-semibold">
           <dt className={profit.profit >= 0 ? "text-emerald-300" : "text-rose-300"}>Net profit</dt>

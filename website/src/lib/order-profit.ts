@@ -205,6 +205,15 @@ export interface OrderProfitResult {
   /** Sales tax collected (pass-through, shown but not profit). */
   taxCollected: number;
   refund: number;
+  /**
+   * The portion of `refund` actually reversed out of revenue. Equal to `refund`
+   * when collected tax counts as profit; otherwise `refund` minus the tax
+   * returned, because that tax was never inside grossRevenue to take back out.
+   * Surfaced so a breakdown can show the figure the total was computed from —
+   * rendering the whole `refund` beside `profit` makes the visible lines fail
+   * to add up whenever tax is a pass-through.
+   */
+  revenueRefund: number;
   /** Every deduction, in a stable display order. */
   expenses: OrderExpenseLine[];
   /** Sum of all expense line items (excludes the refund revenue reversal). */
@@ -349,6 +358,7 @@ export function computeOrderProfit(input: OrderProfitInput): OrderProfitResult {
     shippingProfit,
     taxCollected,
     refund,
+    revenueRefund,
     expenses,
     totalExpenses,
     profit,

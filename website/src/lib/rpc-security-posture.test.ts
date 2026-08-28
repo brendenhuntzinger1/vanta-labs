@@ -37,7 +37,19 @@ const SQL_DIR = path.resolve(process.cwd(), "src/lib/sql");
  * list is a deliberate act and should be argued for in review — which is the
  * point of it being a list rather than a heuristic.
  */
-const CLIENT_CALLABLE = new Set(["validate_referral_code"]);
+const CLIENT_CALLABLE = new Set([
+  "validate_referral_code",
+  // The three JWT helpers. They are SECURITY INVOKER (see the functionsCreatedBy
+  // docblock below) and RLS policies call them as the caller, so revoking them
+  // from anon breaks customer-accounts.sql's policies. They are named here only
+  // because the 1200-char window in functionsCreatedBy is wide enough to read a
+  // LATER definition's `security definer` clause in a densely packed file --
+  // harness-prod-parity-functions.sql fits six definitions into 21 lines. Do not
+  // read their presence in this list as a claim that they are SECURITY DEFINER.
+  "current_auth_email",
+  "current_auth_role",
+  "current_auth_uid",
+]);
 
 /**
  * Files that are captures or historical records rather than migrations to run.

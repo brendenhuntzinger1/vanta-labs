@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
-import { verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
+import { supabaseAdmin } from "@/lib/supabase-server";
 import { canManageProducts } from "@/lib/admin-roles";
 import {
   deleteAdminProduct,
@@ -155,7 +156,36 @@ export async function DELETE(_: Request, context: { params: Promise<{ productId:
 
   try {
     const { productId } = await context.params;
+    // Read the product BEFORE the delete: once the rows are gone the audit row
+    // could only name an opaque id, and "which product was this?" is the first
+    // question anyone asks of a deletion. Best-effort — a product that cannot
+    // be loaded must still be deletable.
+    const product = await getAdminProductById(productId).catch(() => null);
     await deleteAdminProduct(productId);
+
+    // Deleting a product cascades to its images, dose rows and COAs and cannot
+    // be undone, yet it was the one destructive admin action leaving no trace —
+    // partner deletion has recorded actor, IP and user agent since I-09
+    // (api/admin/partners/[partnerId]/route.ts). Logged after the delete and
+    // wrapped, so a failure to write the log never fails the delete itself.
+    try {
+      await supabaseAdmin.from("admin_audit_logs").insert({
+        action: "product_delete",
+        target_table: "products",
+        target_id: productId,
+        metadata: {
+          name: product?.name ?? null,
+          slug: product?.slug ?? null,
+          performedBy: session.username,
+          ipAddress: getRequestIpAddress(_),
+          userAgent: getRequestUserAgent(_),
+          performedAt: new Date().toISOString(),
+        },
+      });
+    } catch (auditError) {
+      console.error("Unable to write product delete audit log", productId, auditError);
+    }
+
     return NextResponse.json({ success: true });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to delete product";

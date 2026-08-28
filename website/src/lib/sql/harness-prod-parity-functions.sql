@@ -1,3 +1,10 @@
+-- The three current_auth_* helpers below are deliberately left EXECUTABLE by
+-- anon and authenticated. They are SECURITY INVOKER and only read the caller's
+-- own JWT claims, and customer-accounts.sql's RLS policies call them as the
+-- caller -- revoking them locks those policies out and the harness stops
+-- matching production, whose recorded ACL is `f | t | t` for all three
+-- (rpc-exposure-drift-check.sql). Only the SECURITY DEFINER functions in this
+-- file get a revoke; see the lockdown block at the bottom.
 create or replace function public.current_auth_email() returns text language sql stable as $function$ select lower(auth.jwt() ->> 'email'); $function$;
 create or replace function public.current_auth_role() returns text language sql stable as $function$ select auth.jwt() ->> 'role'; $function$;
 create or replace function public.current_auth_uid() returns uuid language sql stable as $function$ select auth.uid(); $function$;
@@ -46,12 +53,6 @@ begin
   end if;
   if exists (select 1 from pg_roles where rolname='service_role') then
     execute $q$grant execute on function public.admin_points_outstanding() to service_role;$q$;
-  end if;
-  if exists (select 1 from pg_roles where rolname='anon') then
-    execute $q$revoke all on function public.current_auth_email() from public, anon, authenticated;$q$;
-  end if;
-  if exists (select 1 from pg_roles where rolname='service_role') then
-    execute $q$grant execute on function public.current_auth_email() to service_role;$q$;
   end if;
 end
 $rpc_lockdown$;

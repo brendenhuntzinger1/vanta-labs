@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import type { Product, ProductBadge, ProductDose } from "@/lib/catalog-types";
 import { resolveHeadlineAvailability, availabilityLabel } from "@/lib/product-availability";
+import { PROCESSING_FEE_DEFAULT_PERCENT } from "@/lib/admin-control-shared";
 
 type ProductStatusFilter = "all" | "published" | "draft" | "archived" | "disabled";
 
@@ -642,7 +643,13 @@ export default function AdminProductsPage() {
   };
 
   const deleteProduct = async (productId: string) => {
-    const confirmed = window.confirm("Delete this product permanently?");
+    // Names the cascade. The delete removes the product's images and dose rows
+    // with it (deleteAdminProduct), and anything keyed to those rows goes too —
+    // "Delete this product permanently?" reads like it removes one catalogue
+    // entry, which is not what the operator is about to do.
+    const confirmed = window.confirm(
+      "Delete this product permanently? Its images, dose rows and Certificates of Analysis are deleted with it. This cannot be undone.",
+    );
     if (!confirmed) {
       return;
     }
@@ -683,13 +690,32 @@ export default function AdminProductsPage() {
 
     const [moved] = rows.splice(fromIndex, 1);
     rows.splice(toIndex, 0, moved);
+
+    // The optimistic move is ROLLED BACK when the save fails. /reorder is gated
+    // to manager+ and this page has no client-side role gate, so a staff user
+    // could drag a row, watch it settle into its new position, and see a 403 the
+    // UI never mentioned — the order looked saved until the next page load put
+    // it back. Same for any 500 or dropped connection, for every role.
+    const previous = products;
     setProducts(rows);
 
-    await fetch("/api/admin/products/reorder", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productIds: rows.map((row) => row.id) }),
-    });
+    try {
+      const res = await fetch("/api/admin/products/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: rows.map((row) => row.id) }),
+      });
+      const json = await res.json() as { success: boolean; error?: string };
+      if (!res.ok || !json.success) {
+        setProducts(previous);
+        setMessage(json.error ?? "Unable to save the new order.");
+        clearMessageSoon();
+      }
+    } catch {
+      setProducts(previous);
+      setMessage("Unable to save the new order.");
+      clearMessageSoon();
+    }
   };
 
   return (
@@ -1203,11 +1229,16 @@ function ProductEditor({
                 return <p className="text-[11px] text-zinc-500">Enter a Product Cost to preview profit for this dose. Internal only — never shown to customers, and it doesn&apos;t change the price.</p>;
               }
               // Mirror the real net-profit engine at the per-unit level: subtract
-              // the all-in product cost AND the payment-processor fee (8% of the
-              // selling price — the store default). Shipping is a per-ORDER cost,
-              // so it's noted separately rather than folded into a per-unit view.
-              const PROCESSOR_FEE_PERCENT = 8;
-              const feeCents = priceCents * (PROCESSOR_FEE_PERCENT / 100);
+              // the all-in product cost AND the payment-processor fee (the store
+              // DEFAULT rate — this is a Client Component and cannot read the
+              // Control Center override). The rate is single-sourced from
+              // admin-control-shared.ts: the private `const PROCESSOR_FEE_PERCENT
+              // = 8` that used to live here was a second copy of the same number,
+              // free to drift from DEFAULT_PROFIT_CONFIG without anything failing.
+              // Shipping is a per-ORDER cost, and ambassador commission depends on
+              // who referred the sale, so neither is folded into a per-unit view —
+              // the caption says so rather than leaving the figure to read as final.
+              const feeCents = priceCents * (PROCESSING_FEE_DEFAULT_PERCENT / 100);
               const profit = (priceCents - costCents - feeCents) / 100;
               const margin = ((priceCents - costCents - feeCents) / priceCents) * 100;
               const good = profit >= 0;
@@ -1215,7 +1246,7 @@ function ProductEditor({
                 <p className={`text-[11px] ${good ? "text-emerald-300" : "text-rose-300"}`}>
                   Selling ${(priceCents / 100).toFixed(2)} &nbsp;·&nbsp; Cost ${(costCents / 100).toFixed(2)} &nbsp;·&nbsp; Fee ${(feeCents / 100).toFixed(2)} &nbsp;·&nbsp;
                   <span className="font-semibold"> Net ${profit.toFixed(2)}</span> &nbsp;·&nbsp; Margin {margin.toFixed(1)}%
-                  <span className="text-zinc-500"> · before per-order shipping</span>
+                  <span className="text-zinc-500"> · at the default {PROCESSING_FEE_DEFAULT_PERCENT}% processing fee, before per-order shipping and ambassador commission</span>
                 </p>
               );
             })()}

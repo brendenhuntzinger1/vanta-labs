@@ -97,7 +97,11 @@ export function WholesaleForm() {
         <p className="vl2-eyebrow text-[color:var(--accent-gold)]">Request received</p>
         <h3 className="vl2-serif mt-3 text-2xl text-white">Thanks — we have your inquiry</h3>
         <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-white/55">
-          We&rsquo;ve sent a confirmation to your email and will review the details you submitted.
+          {/* Says only what the route actually guarantees. Success here means the
+              enquiry reached us; the customer auto-reply is sent best-effort and
+              its result is discarded (api/wholesale/route.ts), so claiming "we've
+              sent a confirmation to your email" was a promise nothing checked. */}
+          We&rsquo;ve got your details and will review them. Watch your inbox &mdash; we&rsquo;ll be in touch by email.
         </p>
         <button
           type="button"
