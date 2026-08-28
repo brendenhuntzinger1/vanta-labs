@@ -29,6 +29,24 @@ export function getOrderProgress(paymentStatus: string, fulfillmentStatus: strin
   const pay = String(paymentStatus ?? "").toLowerCase();
   const ful = String(fulfillmentStatus ?? "").toLowerCase();
 
+  // TWO COLUMNS, TWO SPELLINGS — not one column with a spelling problem.
+  // Censused against production 2026-08-28 (finding F5, which asked for exactly
+  // this before anyone considered a CHECK constraint):
+  //
+  //   payment_status      paid 7 | canceled 5 | pending_payment 5 | payment_failed 2
+  //   fulfillment_status  pending 8 | cancelled 5 | awaiting_fulfillment 3
+  //                       | label_purchased 2 | shipped 1
+  //
+  // payment_status is written with ONE l at all four write sites
+  // (payment-service.ts x3, membership-billing.ts, express/authorize) and holds
+  // one l in every production row. fulfillment_status uses TWO, consistently,
+  // and order-pipeline.ts's ladder is spelled that way throughout.
+  //
+  // So `pay === "cancelled"` below is a dead branch: nothing writes it and no
+  // row carries it. It is kept because it costs nothing and a two-l value
+  // arriving from an import or a hand-edit should still read as cancelled —
+  // but it should NOT be read as evidence that payment_status has a dual
+  // spelling to be reconciled. It does not.
   const cancelled = pay === "canceled" || pay === "cancelled" || ful === "cancelled";
   const refunded = pay === "refunded" || pay === "partially_refunded";
   const paid = pay === "paid";

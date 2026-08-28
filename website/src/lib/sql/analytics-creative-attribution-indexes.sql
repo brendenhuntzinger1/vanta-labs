@@ -2,6 +2,9 @@
 -- Per-creative attribution indexes — run this SEPARATELY, after
 -- analytics-creative-attribution.sql.
 --
+-- APPLIED TO PRODUCTION 2026-08-28, each statement on its own. Both reported
+-- indisvalid = true afterwards; no INVALID index was left behind.
+--
 -- CONCURRENTLY cannot run inside a transaction block. Run each statement on its
 -- own; if your SQL client wraps scripts in a transaction, paste them one at a
 -- time. Building concurrently takes longer but never blocks writes, which

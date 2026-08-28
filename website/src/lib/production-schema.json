@@ -1041,7 +1041,10 @@
     "utm_medium",
     "utm_campaign",
     "event_payload",
-    "created_at"
+    "created_at",
+    "utm_content",
+    "utm_term",
+    "ttclid"
   ],
   "wishlist_items": [
     "id",

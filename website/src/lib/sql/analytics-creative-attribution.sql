@@ -1,7 +1,10 @@
 -- =============================================================================
 -- Per-creative funnel attribution — additive columns on website_analytics_events
 --
--- NOT YET APPLIED.
+-- APPLIED TO PRODUCTION 2026-08-28. Recorded under the same version in
+-- migrations-applied/20260828T0250_analytics_creative_attribution_columns.sql,
+-- which carries the verification. Kept here as the source file; safe to re-run
+-- (every statement is `if not exists`).
 --
 -- Why: the events table carries utm_source, utm_medium and utm_campaign only.
 -- utm_content — the field that identifies WHICH creative produced a visit —
