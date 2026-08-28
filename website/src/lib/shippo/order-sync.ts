@@ -117,6 +117,122 @@ function destinationAddress(order: OrderRow): ShippoAddress {
 }
 
 /**
+ * HOW LONG A SYNC CLAIM IS BELIEVED.
+ *
+ * The claim is a LEASE, not a tombstone. It was written as a tombstone: taken
+ * before the push and cleared on exactly one path (a Shippo failure that is
+ * demonstrably safe to retry), so a run that simply STOPPED — the 60s function
+ * limit, a redeploy mid-request, a container reaped — left the column set with
+ * nothing anywhere that would ever clear it. That order then matched
+ * sweepUnsyncedOrders' window for ever (it selects on `shippo_order_id is
+ * null`), was picked up every thirty minutes, lost the claim every time, and
+ * occupied one of the twenty slots per tick while newer paid orders queued
+ * behind it. One stranded order is a paid parcel that never reaches Shippo;
+ * twenty of them is the sweep doing nothing at all.
+ *
+ * Thirty minutes: far longer than any run can live (maxDuration is 60s and a
+ * Shippo call gives up at 15s), so a lease this old cannot belong to a process
+ * that is still working.
+ */
+const SYNC_CLAIM_TTL_MS = 30 * 60 * 1000;
+
+/** One reclaim notice per order per day, not one per sweep tick. */
+const STALE_CLAIM_ALERT_DEDUPE_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Take over a lease whose owner is gone.
+ *
+ * Only reached when the ordinary claim lost, and deliberately narrow — three
+ * conditions have to hold before a second push is allowed to happen:
+ *
+ *  • `shippo_order_id` is still null. If a push finished, there is nothing to
+ *    retry and re-pushing is exactly the duplicate this claim exists to prevent.
+ *  • The lease is older than SYNC_CLAIM_TTL_MS, so no live run owns it.
+ *  • `shippo_sync_status` is not 'error'. THIS IS THE DELIBERATE HOLD. When
+ *    Shippo answers in a way that means "the order may exist but I cannot tell
+ *    you" (a 5xx, a timeout — `safeToRetry: false`), syncOrderToShippo keeps the
+ *    claim on purpose and stamps 'error'. That combination — a held claim with
+ *    no Shippo id and an error status — is only ever written by that one branch,
+ *    because the other writer of 'error' with no id (releaseSync) clears the
+ *    claim in the same statement. Reclaiming it would re-push an order Shippo
+ *    might already hold. A human clears that one, from the admin retry button,
+ *    which is the confirmation that it is not in Shippo.
+ *
+ * The retake is a compare-and-swap on the lease being STILL EXPIRED, so two
+ * sweeps racing to reclaim the same dead lease cannot both win it: the winner's
+ * write moves the timestamp to now, and `lt(cutoff)` then excludes the row for
+ * everyone else.
+ *
+ * WHY THE SWAP IS A RANGE AND NOT AN EQUALITY. The obvious compare-and-swap is
+ * `eq(shippo_sync_claimed_at, <the value just read>)`. It does not work, and it
+ * fails SILENTLY, which is worse: the timestamp goes out over the wire as JSON
+ * and comes back rounded. Postgres holds `22:20:11.710961+00`; the value this
+ * code receives is `22:20:11.710Z`. Comparing that back for equality matches
+ * nothing, so the reclaim quietly never fires and the TTL is decoration. Caught
+ * against a real Postgres — no in-memory double can show it, because the double
+ * hands back the string it was given.
+ *
+ * `lt` is immune: a lease half an hour old is not going to be misjudged by a
+ * fraction of a millisecond.
+ */
+async function reclaimStaleSync(orderId: string, nowMs: number): Promise<"won" | "lost" | "error"> {
+  const { data, error } = await supabaseAdmin
+    .from("orders")
+    .select("shippo_order_id, shippo_sync_claimed_at, shippo_sync_status")
+    .eq("order_id", orderId)
+    .maybeSingle<{
+      shippo_order_id: string | null;
+      shippo_sync_claimed_at: string | null;
+      shippo_sync_status: string | null;
+    }>();
+
+  if (error) return "error";
+  if (!data || data.shippo_order_id) return "lost";
+
+  const claimedAt = data.shippo_sync_claimed_at ? Date.parse(data.shippo_sync_claimed_at) : Number.NaN;
+  if (!Number.isFinite(claimedAt) || nowMs - claimedAt < SYNC_CLAIM_TTL_MS) return "lost";
+  // The deliberate hold, checked HERE rather than as an `or(...)` group on the
+  // update. PostgREST expresses "status is null OR status <> 'error'" as a
+  // nested boolean group, and a layer that does not implement it drops the
+  // filter without complaining — which would reclaim exactly the hold this
+  // guard exists to protect. A guard that can silently evaporate is not a
+  // guard. Nothing can turn this row into a deliberate hold between the read
+  // and the write: doing so requires holding the claim, and the claim is dead.
+  if (String(data.shippo_sync_status ?? "").toLowerCase() === "error") return "lost";
+
+  const staleBefore = new Date(nowMs - SYNC_CLAIM_TTL_MS).toISOString();
+  const { data: retaken, error: retakeError } = await supabaseAdmin
+    .from("orders")
+    .update({ shippo_sync_claimed_at: new Date(nowMs).toISOString() })
+    .eq("order_id", orderId)
+    // Compare-and-swap: only a caller that still sees an EXPIRED lease wins it.
+    .lt("shippo_sync_claimed_at", staleBefore)
+    .is("shippo_order_id", null)
+    .select("id");
+
+  if (retakeError) return "error";
+  if (!retaken || retaken.length === 0) return "lost";
+
+  // Visible, not silent. A lease that had to be reclaimed means a run died
+  // holding it, and the operator should be able to see that happening rather
+  // than only its symptom weeks later. Deduped per day so a persistently
+  // crashing sync reports a condition rather than a stream.
+  await recordSystemAlert({
+    type: "shippo_sync_claim_reclaimed",
+    severity: "warning",
+    message:
+      "A Shippo sync claim was still held long after any run could have been using it, so it was released and the "
+      + "order re-queued. This means an earlier sync stopped mid-push (a function timeout or a redeploy).",
+    context: { orderId, claimedAt: data.shippo_sync_claimed_at, ttlMinutes: SYNC_CLAIM_TTL_MS / 60_000 },
+    dedupeWindowMs: STALE_CLAIM_ALERT_DEDUPE_MS,
+  }).catch(() => {
+    // Never let the alert be what stops the repair it is reporting on.
+  });
+
+  return "won";
+}
+
+/**
  * Claim the right to push this order, exactly once.
  *
  * Creating a Shippo order costs nothing, but a DUPLICATE is genuinely harmful:
@@ -127,11 +243,15 @@ function destinationAddress(order: OrderRow): ShippoAddress {
  * Same single conditional UPDATE used for the label purchase and for paid
  * side-effects. Postgres serializes concurrent updates on the row, so exactly
  * one caller sees a returned row.
+ *
+ * Losing that update no longer ends the story: see reclaimStaleSync for the
+ * one case where a lost claim is a dead lease rather than a live competitor.
  */
 async function claimSync(orderId: string): Promise<"won" | "lost" | "error"> {
+  const nowMs = Date.now();
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .update({ shippo_sync_claimed_at: new Date().toISOString() })
+    .update({ shippo_sync_claimed_at: new Date(nowMs).toISOString() })
     .eq("order_id", orderId)
     .is("shippo_sync_claimed_at", null)
     .select("id");
@@ -140,7 +260,9 @@ async function claimSync(orderId: string): Promise<"won" | "lost" | "error"> {
     // Fail closed: an unknown claim state must never read as "go ahead".
     return "error";
   }
-  return data && data.length > 0 ? "won" : "lost";
+  if (data && data.length > 0) return "won";
+
+  return reclaimStaleSync(orderId, nowMs);
 }
 
 async function releaseSync(orderId: string, reason: string): Promise<void> {
