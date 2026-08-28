@@ -33,6 +33,15 @@ do $$ begin create role authenticated nologin noinherit; exception when duplicat
 do $$ begin create role service_role nologin noinherit bypassrls; exception when duplicate_object then null; end $$;
 create schema if not exists auth;
 create table if not exists auth.users (id uuid primary key default gen_random_uuid(), email text unique);
+-- The columns GoTrue exposes and the application reads back. scripts/gotrue-shim.mjs
+-- is backed by THIS table, so a user it creates is the same row the app's
+-- foreign keys point at. Harness-only: passwords are clear text here, which is
+-- why that shim documents itself as not a security boundary.
+alter table auth.users add column if not exists encrypted_password text;
+alter table auth.users add column if not exists raw_user_meta_data jsonb default '{}'::jsonb;
+alter table auth.users add column if not exists raw_app_meta_data jsonb default '{}'::jsonb;
+alter table auth.users add column if not exists phone text;
+alter table auth.users add column if not exists created_at timestamptz default now();
 create or replace function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
 create or replace function auth.jwt() returns jsonb language sql stable as $$ select '{}'::jsonb $$;
 create or replace function auth.role() returns text language sql stable as $$ select coalesce(current_setting('request.jwt.claim.role', true), 'anon') $$;

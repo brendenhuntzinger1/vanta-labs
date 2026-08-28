@@ -38,6 +38,7 @@
 
 import http from "node:http";
 import pg from "pg";
+import { handleAuth } from "./gotrue-shim.mjs";
 
 const args = process.argv.slice(2);
 const argOf = (name, fallback) => {
@@ -300,6 +301,17 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "OPTIONS") return send(res, 204);
 
   const url = new URL(req.url, `http://127.0.0.1:${PORT}`);
+
+  // GoTrue lives on its own path prefix. Routed before the REST translation so
+  // an auth call is never mistaken for a table named "auth".
+  if (url.pathname.startsWith("/auth/v1")) {
+    try {
+      if (await handleAuth(req, res, url, pool, send, readBody)) return;
+    } catch (e) {
+      return send(res, 500, { error: "gotrue_shim_error", error_description: String(e?.message ?? e) });
+    }
+  }
+
   const path = url.pathname.replace(/^\/rest\/v1/, "");
 
   if (path === "/" || path === "") return send(res, 200, {});
