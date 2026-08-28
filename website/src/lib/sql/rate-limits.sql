@@ -16,6 +16,14 @@ create table if not exists public.rate_limit_hits (
 create index if not exists rate_limit_hits_bucket_time_idx
   on public.rate_limit_hits (bucket, created_at desc);
 
+-- The sampled cleanup in rate-limit.ts deletes by AGE ALONE
+-- (`where created_at < now() - 24h`), and the index above leads on `bucket`,
+-- so that delete could only be a sequential scan — taken on the request path
+-- of the busiest routes, over a table that is largest exactly when traffic is
+-- heaviest. This one turns it into a range delete.
+create index if not exists rate_limit_hits_created_at_idx
+  on public.rate_limit_hits (created_at);
+
 alter table public.rate_limit_hits enable row level security;
 -- No policies => deny-by-default for the anon/auth roles; the app uses the
 -- service-role key (BYPASSRLS) server-side.

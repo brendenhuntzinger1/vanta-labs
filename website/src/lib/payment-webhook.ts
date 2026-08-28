@@ -9,6 +9,7 @@ import { commissionEarnedTemplate, orderConfirmationTemplate, refundConfirmation
 import { scheduleOrderPushNotification } from "@/lib/order-push-notification";
 import { getSiteUrl } from "@/lib/env";
 import { redeemCoupon } from "@/lib/coupons";
+import { normalizeCouponCode } from "@/lib/coupon-code";
 import { calculateEarnedPoints, getActivePointsMultiplier, getActivePointsPerDollar, recordPointsLedgerEntry, redeemPoints, restoreRedeemedPoints, reverseOrderPoints } from "@/lib/membership";
 import { redeemStoreCredit, refundStoreCreditForOrder } from "@/lib/store-credit";
 import { detectCommissionFraudSignal, getEffectiveCommissionPercent } from "@/lib/ambassador-commission";
@@ -591,7 +592,12 @@ async function upsertOrderRecord(input: {
     amount_paid: roundMoney(input.amountPaid ?? 0),
     referral_code: input.referralCode ?? null,
     ambassador_id: input.ambassadorId ?? null,
-    coupon_code: input.couponCode ?? null,
+    // NORMALIZED on the way in. Every other lane writes the canonical form —
+    // quote-order.ts stores validateCoupon's own uppercased code — but this one
+    // takes the value straight from processor metadata. The redemption-limit
+    // count matches on `=`, so a row stored in any other spelling would not be
+    // counted against the coupon's limit.
+    coupon_code: input.couponCode ? (normalizeCouponCode(input.couponCode) || null) : null,
     customer_user_id: input.customerUserId ?? null,
     points_redeemed: input.pointsRedeemed ?? 0,
     payment_status: input.paymentStatus,

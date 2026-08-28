@@ -1,5 +1,10 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getWelcomeOffer } from "@/lib/admin-control";
+import { normalizeCouponCode } from "@/lib/coupon-code";
+
+// Re-exported so every existing importer keeps working; the implementation
+// lives in a module with no Supabase dependency (see coupon-code.ts).
+export { normalizeCouponCode };
 
 export interface CouponValidationResult {
   code: string;
@@ -8,9 +13,6 @@ export interface CouponValidationResult {
   discountAmount: number;
 }
 
-export function normalizeCouponCode(code: string) {
-  return code.trim().toUpperCase().replace(/[^A-Z0-9-]/g, "");
-}
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -97,7 +99,14 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
           // welcome code would permanently block the customer's real first order.
           .not("payment_status", "in", "(canceled,cancelled,payment_failed)")
           .eq("customer_email", email)
-          .ilike("coupon_code", normalizedCode)
+          // `=`, not ILIKE. normalizeCouponCode has already uppercased this and
+          // stripped everything outside [A-Z0-9-], so there is no wildcard and
+          // no case to fold — but ILIKE is not indexable, so the planner could
+          // only apply it as a filter over every coupon-bearing order. Every
+          // lane that writes orders.coupon_code stores the normalized form
+          // (see the migration alongside this change), so the match is the same
+          // one and it can now use idx_orders_coupon_code.
+          .eq("coupon_code", normalizedCode)
           .limit(1)
           .maybeSingle();
         if (priorWelcomeUseError) {
@@ -191,10 +200,17 @@ export async function validateCoupon(code: string | undefined, subtotal: number,
     // welcome-offer in-flight guard above. Terminal orders (canceled/failed/
     // refunded — both cancel spellings) don't consume a slot. Degrades to the
     // counter check if the count query fails (count → null → 0).
+    //
+    // `=`, not ILIKE, for the reason given on the welcome-offer read above.
+    // This one matters more: it runs on the create-session path for every
+    // checkout carrying a limited coupon, and again on every /api/coupons/validate
+    // call, which is exactly when a promo is live and order volume is highest.
+    // An unindexable predicate here means a scan of every coupon-bearing order
+    // per request, at the busiest moment the store has.
     const { count: liveUses } = await supabaseAdmin
       .from("orders")
       .select("id", { count: "exact", head: true })
-      .ilike("coupon_code", normalizedCode)
+      .eq("coupon_code", normalizedCode)
       .not("payment_status", "in", "(canceled,cancelled,payment_failed,refunded)");
     const used = Math.max(Number(data.redemptions_count ?? 0), Number(liveUses ?? 0));
     if (used >= data.max_redemptions) {

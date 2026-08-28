@@ -65,6 +65,16 @@ create index if not exists idx_orders_referral_code on public.orders(referral_co
 create index if not exists idx_orders_customer_email on public.orders(customer_email);
 create index if not exists idx_payment_events_order_id on public.payment_events(order_id);
 create index if not exists idx_referral_orders_ambassador_id on public.referral_orders(ambassador_id);
+-- Composite for the reads that take ONE ambassador newest-first or within a
+-- month: the monthly tier count (getQualifyingMonthlySalesCount, which runs
+-- inside quoteOrder with the shopper waiting) and the payout reads. With the
+-- single-column index above, the ORDER BY had to sort every one of that
+-- ambassador's rows first.
+create index if not exists idx_referral_orders_ambassador_created_at
+  on public.referral_orders (ambassador_id, created_at desc);
+-- Same shape for the repeat-identity fraud scan on the paid webhook.
+create index if not exists idx_orders_ambassador_created_at
+  on public.orders (ambassador_id, created_at desc);
 create index if not exists idx_referral_orders_order_id on public.referral_orders(order_id);
 create index if not exists idx_referral_orders_payment_status on public.referral_orders(payment_status);
 
