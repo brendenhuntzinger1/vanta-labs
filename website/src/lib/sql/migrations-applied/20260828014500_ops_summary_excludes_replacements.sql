@@ -95,6 +95,39 @@ as $$
     coalesce((select count(*) from per_customer), 0) as total_customers;
 $$;
 
+-- ----------------------------------------------------------------------------
+-- CLOSE IT TO ANON, because a function created without this is a function
+-- anyone with the publishable key can call.
+--
+-- Not needed for THIS production run: `create or replace function` preserves
+-- the existing ACL, and production was checked after applying — SECURITY
+-- DEFINER intact, anon and authenticated both false, service_role true. It is
+-- needed because a migration file has to be self-contained. Re-run against a
+-- fresh database this file would otherwise create a SECURITY DEFINER function
+-- over the orders table with PostgREST's default EXECUTE-to-public.
+--
+-- rpc-security-posture.test.ts caught exactly that and named this file. The
+-- guard was right and the omission was mine.
+--
+-- Guarded on pg_roles so the file also runs against a bare Postgres, where the
+-- Supabase-managed roles do not exist — matching admin-dashboard-rollups.sql.
+-- ----------------------------------------------------------------------------
+do $rpc_lockdown$
+begin
+  execute $q$revoke all on function public.admin_ops_summary(timestamptz, timestamptz) from public$q$;
+
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    execute $q$revoke all on function public.admin_ops_summary(timestamptz, timestamptz) from anon$q$;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    execute $q$revoke all on function public.admin_ops_summary(timestamptz, timestamptz) from authenticated$q$;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    execute $q$grant execute on function public.admin_ops_summary(timestamptz, timestamptz) to service_role$q$;
+  end if;
+end
+$rpc_lockdown$;
+
 -- Verification. Must return true, and the md5 must equal what
 -- admin-dashboard-rollups.sql produces (67ef7e01d349f03939e2e05c593900fd at
 -- the time of applying — recompute rather than trusting this literal if the
