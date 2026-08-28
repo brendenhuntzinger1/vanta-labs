@@ -279,6 +279,32 @@ describe("the sweep reclaims what the checkout paths missed", () => {
     expect(await creditBalance()).toBe(20000 - 4000);
   });
 
+  it("releases a manual order left waiting for an admin who never came", async () => {
+    // Manual/off-platform payments sit at `awaiting_verification`, not
+    // `pending_payment`. One that is never approved would otherwise hold the
+    // shopper's own credit for good.
+    seed({ cents: 20000 });
+    await holdFor("order-manual", { payment_status: "awaiting_verification", created_at: ancient });
+
+    const { releaseAbandonedTenderHolds } = await tender();
+    expect(await releaseAbandonedTenderHolds()).toBe(1);
+    expect(await creditBalance()).toBe(20000);
+  });
+
+  it("never unspends an order that actually took money, whatever its status now reads", async () => {
+    // An admin can set a payment status by hand. `paid_at` is the fact that
+    // cannot be retyped: money arrived, so the redemption is real.
+    seed({ cents: 20000 });
+    await holdFor("order-was-paid", {
+      payment_status: "canceled", paid_at: nowIso, amount_paid: 120,
+    });
+
+    const { releaseAbandonedTenderHolds, releaseOrderTender } = await tender();
+    expect(await releaseOrderTender("order-was-paid")).toBe(0);
+    expect(await releaseAbandonedTenderHolds()).toBe(0);
+    expect(await creditBalance()).toBe(18000);
+  });
+
   it("is safe to run twice", async () => {
     seed({ cents: 20000 });
     await holdFor("order-dead", { payment_status: "canceled" });

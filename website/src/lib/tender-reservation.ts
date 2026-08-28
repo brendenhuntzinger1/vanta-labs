@@ -4,6 +4,7 @@ import {
   startOfCurrentMonthIso,
 } from "@/lib/store-credit";
 import { POINTS_REDEMPTION_REASON } from "@/lib/membership";
+import { UNPAID_STATUSES } from "@/lib/order-status";
 
 // ---------------------------------------------------------------------------
 // NON-CASH TENDER IS HELD AT CHECKOUT, THE WAY STOCK IS.
@@ -261,17 +262,26 @@ export function describeTenderShortfall(shortOf: string | null): string {
  * deleting it would hand back money the customer has already spent. Every other
  * state is fair game — the caller (a cancelled checkout, a declined wallet
  * charge, the sweep below) knows the order will never settle.
+ *
+ * THE MONEY DECIDES, NOT ONLY THE WORD. Refusing on the status string alone
+ * makes this correct exactly as long as nothing ever moves a settled order to
+ * another status — and an admin can set an order's payment status by hand
+ * (admin-order-actions.tsx). `paid_at` is stamped once, when money actually
+ * arrived, so an order that has ever settled is refused whatever its status
+ * reads today. Deleting a redemption on a paid order would return credit the
+ * customer really spent.
  */
 export async function releaseOrderTender(orderId: string): Promise<number> {
   const { data: order, error } = await supabaseAdmin
     .from("orders")
-    .select("payment_status")
+    .select("payment_status, paid_at, amount_paid")
     .eq("order_id", orderId)
     .maybeSingle();
   if (error) throw error;
 
   const status = String(order?.payment_status ?? "").toLowerCase();
   if (status === "paid" || status === "refunded" || status === "partially_refunded") return 0;
+  if (order?.paid_at && Number(order.amount_paid ?? 0) > 0) return 0;
 
   const credit = await releaseHold(STORE_CREDIT, orderId);
   const points = await releaseHold(POINTS, orderId);
@@ -332,7 +342,12 @@ export async function releaseAbandonedTenderHolds(): Promise<number> {
       supabaseAdmin
         .from("orders")
         .select(HELD_ORDER_COLUMNS)
-        .eq("payment_status", "pending_payment")
+        // EVERY unpaid status, not just the card lane's. A manual/off-platform
+        // order moves to `awaiting_verification` while it waits for an admin
+        // (checkout/submit-payment), and one that is never approved would
+        // otherwise hold the shopper's own credit for good — the balance is
+        // spendable nowhere while it sits against an order that never settles.
+        .in("payment_status", UNPAID_STATUSES)
         .lt("created_at", cutoff)
         .gt(column, 0)
         .order("created_at", { ascending: false })
