@@ -70,6 +70,51 @@ const OPS = [
   ["in.", (c, v) => [`${c}::text = ANY(${lit(splitList(v))})`, []]],
 ];
 
+
+/**
+ * PostgREST boolean groups: `or=(a.eq.1,b.eq.2)`, with nesting such as
+ * `or=(paid_at.gte.X,and(paid_at.is.null,created_at.gte.X))`.
+ *
+ * THIS USED TO BE SILENTLY DROPPED, and that is far worse than not supporting
+ * it. The unknown-filter branch below said `continue`, so an `or=` ownership
+ * filter vanished and the query returned EVERY row — which on the account pages
+ * meant one signed-in customer appearing to see all seven customers' orders.
+ * The application was correct the whole time; the harness fabricated a
+ * catastrophic-looking leak. A test rig that quietly widens a query is worse
+ * than one that cannot run it.
+ */
+function splitGroup(body) {
+  const parts = [];
+  let depth = 0, current = "";
+  for (const ch of body) {
+    if (ch === "(") depth++;
+    if (ch === ")") depth--;
+    if (ch === "," && depth === 0) { parts.push(current); current = ""; continue; }
+    current += ch;
+  }
+  if (current) parts.push(current);
+  return parts;
+}
+
+function buildBoolean(kind, raw, bind) {
+  const body = raw.replace(/^\(/, "").replace(/\)$/, "");
+  const clauses = splitGroup(body).map((part) => {
+    const nested = part.match(/^(or|and)\((.*)\)$/s);
+    if (nested) return buildBoolean(nested[1], `(${nested[2]})`, bind);
+    const dot = part.indexOf(".");
+    if (dot < 0) throw new Error(`unparsable condition in ${kind}(): ${part}`);
+    const col = part.slice(0, dot);
+    const rest = part.slice(dot + 1);
+    const op = OPS.find(([prefix]) => rest.startsWith(prefix));
+    if (!op) throw new Error(`unsupported operator in ${kind}(): ${part}`);
+    const [prefix, fn] = op;
+    // Values may be quoted by PostgREST ("a@b.com"); strip one layer.
+    const value = rest.slice(prefix.length).replace(/^"(.*)"$/s, "$1");
+    return fn(ident(col), value, bind)[0];
+  });
+  return `(${clauses.join(kind === "or" ? " OR " : " AND ")})`;
+}
+
 function isLiteral(v) {
   const s = String(v).toLowerCase();
   if (s === "null") return "NULL";
@@ -255,8 +300,21 @@ async function parseQuery(url, parentTable) {
     if (key === "offset") { offset = ` OFFSET ${Number(raw) || 0}`; continue; }
     if (key.startsWith("on_conflict")) continue;
 
+    if (key === "or" || key === "and") {
+      where.push(buildBoolean(key, raw, bind));
+      continue;
+    }
+
     const op = OPS.find(([prefix]) => raw.startsWith(prefix));
-    if (!op) continue;
+    if (!op) {
+      // NEVER silently drop a filter. Dropping one WIDENS the query, so the
+      // caller gets more rows than it asked for and believes the extra rows are
+      // real. That is how this shim once made correctly-scoped account pages
+      // look like a cross-customer data leak.
+      throw Object.assign(new Error(
+        `pgrst-shim does not implement the filter ${key}=${raw}. Refusing to run a WIDER query than asked for. Add it to OPS in scripts/pgrst-shim.mjs.`,
+      ), { code: "PGRST_SHIM_UNSUPPORTED_FILTER" });
+    }
     const [prefix, fn] = op;
     const [clause] = fn(ident(key), raw.slice(prefix.length), bind);
     where.push(clause);
