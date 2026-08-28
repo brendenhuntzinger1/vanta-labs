@@ -196,6 +196,18 @@ export default async function AccountSubscriptionsPage() {
               <div className="vl-panel-soft rounded-xl p-4">
                 <p className="text-[11px] uppercase tracking-[0.18em] text-zinc-500">Monthly credit</p>
                 <p className="mt-1.5 text-xl font-semibold text-emerald-300">{money(membership.tier.monthlyStoreCreditCents)}/mo</p>
+                {/* The line above is the tier ENTITLEMENT, not money the member
+                    holds. Checkout spends the BALANCE, which can differ (already
+                    spent this month, or accrued). Showing only the entitlement
+                    left members unable to see their own money anywhere in the
+                    account area, so the balance is stated here, from the same
+                    source checkout reads. */}
+                <p className="mt-1 text-[11px] text-zinc-400">
+                  {money(perks.storeCreditBalanceCents)} available now
+                  {perks.storeCreditMinOrderCents > 0
+                    ? ` · on ${money(perks.storeCreditMinOrderCents)}+ orders`
+                    : ""}
+                </p>
               </div>
             ) : null}
             <div className="vl-panel-soft rounded-xl p-4">

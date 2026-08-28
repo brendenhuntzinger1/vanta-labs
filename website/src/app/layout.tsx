@@ -273,14 +273,26 @@ export default async function RootLayout({
             {/* vl-bottom-bar lifts this out of the consent banner's way while
                 the banner is on screen. Being fixed, the link cannot be
                 scrolled clear, so without it the admin entry point is
-                untappable on a phone until cookies are answered. */}
+                untappable on a phone until cookies are answered.
+
+                z-30 keeps it BENEATH the app's full-width fixed bottom bars
+                (account nav, product CTA, checkout CTA — all z-40/z-50). It
+                used to be z-40 like them and, being rendered last, won the tie
+                and painted on top: on a phone its 38x24 box sat over the
+                bottom-right of every one of those bars. On /account that is
+                exactly the "More" tab, the only route to Sign out and to
+                Addresses/Notifications/Settings/Support/Wishlist — all of them
+                untappable. On /checkout it sat over the corner of the pay
+                button. A discreet staff shortcut must never outrank a
+                customer's primary navigation, so it now yields to those bars
+                and stays tappable everywhere they are absent. */}
             <Link
               href="/vault"
               aria-label="Secure access"
               /* inline-flex + min-h-6 gives the box a 24px tap height while the
                  10px label and its faint colour are untouched — the link looks
                  exactly as before, it is simply reachable. */
-              className="vl-bottom-bar fixed bottom-2 right-2 z-40 inline-flex min-h-6 items-center text-[10px] uppercase tracking-[0.2em] text-white/15 transition hover:text-white/45"
+              className="vl-bottom-bar fixed bottom-2 right-2 z-30 inline-flex min-h-6 items-center text-[10px] uppercase tracking-[0.2em] text-white/15 transition hover:text-white/45"
             >
               vault
             </Link>

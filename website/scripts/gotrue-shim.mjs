@@ -29,7 +29,7 @@
  *
  * Development-only. Never imported by the Next.js app.
  */
-import { createHmac, randomUUID } from "node:crypto";
+import crypto, { createHmac, randomUUID } from "node:crypto";
 
 const DEV_JWT_SECRET = "harness-only-not-a-real-jwt-secret";
 const TOKEN_TTL_SECONDS = 60 * 60;
@@ -57,16 +57,40 @@ function mintAccessToken(user) {
   return `${header}.${payload}.${signature}`;
 }
 
+// GoTrue revokes a session server-side on admin.signOut, so a token captured
+// before logout stops working immediately. Held in memory: the harness process
+// is the whole auth backend and lives only for the run.
+const revokedTokens = new Set();
+
+// Real GoTrue verifies the HS256 signature and the `exp` claim before it will
+// answer /user. A stand-in that merely base64-decodes the payload accepts a
+// forged or long-expired token, so every "does an expired session still get in"
+// test passes vacuously against it — the rig reports safe because it cannot
+// tell unsafe from safe. Same failure mode as the shim that silently widened
+// queries: verify here, or the test proves nothing.
 function readToken(req) {
   const raw = String(req.headers.authorization ?? "");
   const token = raw.startsWith("Bearer ") ? raw.slice(7) : "";
   const parts = token.split(".");
   if (parts.length !== 3) return null;
+
+  const expected = crypto.createHmac("sha256", DEV_JWT_SECRET)
+    .update(`${parts[0]}.${parts[1]}`).digest("base64")
+    .replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const given = Buffer.from(parts[2]);
+  const want = Buffer.from(expected);
+  if (given.length !== want.length || !crypto.timingSafeEqual(given, want)) return null;
+
+  let claims;
   try {
-    return JSON.parse(Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString());
+    claims = JSON.parse(Buffer.from(parts[1].replace(/-/g, "+").replace(/_/g, "/"), "base64").toString());
   } catch {
     return null;
   }
+
+  if (typeof claims?.exp === "number" && claims.exp <= Math.floor(Date.now() / 1000)) return null;
+  if (revokedTokens.has(token)) return null;
+  return claims;
 }
 
 /** The user shape GoTrue returns; the app reads role off app_metadata first. */
@@ -170,7 +194,32 @@ export async function handleAuth(req, res, url, pool, send, readBody) {
     return send(res, 200, toUser(found.rows[0])), true;
   }
 
-  if (path === "/logout" && req.method === "POST") return send(res, 204), true;
+  // ---- password recovery -------------------------------------------------
+  // Real GoTrue emails a magic link carrying a recovery token in the URL hash.
+  // There is no mail service here, so this returns the same unconditional 200
+  // GoTrue does (never confirming whether the address exists) and, for a known
+  // address, hands the caller the link the email WOULD have contained under
+  // `harness_recovery_url`. Production never returns that field, and the app
+  // never reads it — it exists so the browser test can follow the link a real
+  // shopper would click. Everything after the click is the real product code.
+  if (path === "/recover" && req.method === "POST") {
+    const body = (await readBody(req)) ?? {};
+    const email = String(body.email ?? "").trim().toLowerCase();
+    const found = await q("select * from auth.users where lower(email) = $1", [email]);
+    const payload = { };
+    if (found.rows.length) {
+      const token = mintAccessToken(toUser(found.rows[0]));
+      const redirect = String(body.redirect_to ?? body.gotrue_meta_security?.redirect_to ?? "");
+      payload.harness_recovery_url = `${redirect}#access_token=${token}&type=recovery&expires_in=${TOKEN_TTL_SECONDS}&refresh_token=harness-refresh-${found.rows[0].id}&token_type=bearer`;
+    }
+    return send(res, 200, payload), true;
+  }
+
+  if (path === "/logout" && req.method === "POST") {
+    const raw = String(req.headers.authorization ?? "");
+    if (raw.startsWith("Bearer ")) revokedTokens.add(raw.slice(7));
+    return send(res, 204), true;
+  }
 
   // ---- admin API ---------------------------------------------------------
   if (path.startsWith("/admin/users")) {
