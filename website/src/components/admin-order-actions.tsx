@@ -94,10 +94,48 @@ export function AdminOrderActions({
   ) / 100;
   /** The route's own idempotency guard: this order's refund has already run. */
   const alreadyRefunded = String(initialPaymentStatus ?? "").toLowerCase() === "refunded";
+
+  // THE TENDER COLUMNS ARE WRITTEN AT ORDER CREATION, NOT AT PAYMENT.
+  //
+  // quote-order.ts writes points_redeemed and store_credit_redeemed_cents in the
+  // same row as `payment_status: "pending_payment"`; the credit is not debited
+  // until redeemStoreCredit runs in the payment-success webhook. So `amount_paid
+  // === 0` does NOT mean "settled entirely with credit" — on an order that has
+  // not been paid it means nothing has been settled at all.
+  //
+  // Reading cash alone therefore offered a "Return store credit & points" button
+  // on a fully credit-funded order still awaiting payment, and the route would
+  // have taken it: it guards on `payment_status === 'refunded'` and on
+  // nonCashTender, never on the order being paid. That writes `refunded` onto an
+  // order whose money is still coming, and the payment can then never land.
+  //
+  // Tender is only returnable once it was actually taken, which is what these
+  // two statuses mean.
+  const paymentStatusNow = String(initialPaymentStatus ?? "").toLowerCase();
+  /** The order took money/credit at some point — 'refunded' included. */
+  const everPaid = paymentStatusNow === "paid"
+    || paymentStatusNow === "partially_refunded"
+    || paymentStatusNow === "refunded";
+  /** ...and there is still something to act on. A refunded order is finished. */
+  const tenderWasTaken = paymentStatusNow === "paid" || paymentStatusNow === "partially_refunded";
+
   /** Cash is what an amount box can be about. Nothing else. */
-  const cashAvailable = remaining > 0;
-  const nonCashOutstanding = !alreadyRefunded && nonCashTender > 0;
-  const canRecordReimbursement = !alreadyRefunded && (cashAvailable || nonCashTender > 0);
+  const cashAvailable = remaining > 0 && tenderWasTaken;
+  const nonCashOutstanding = tenderWasTaken && !alreadyRefunded && nonCashTender > 0;
+  const canRecordReimbursement = tenderWasTaken && !alreadyRefunded && (cashAvailable || nonCashTender > 0);
+  /** Non-cash tender is on this order, whatever state it is in now. */
+  const usedNonCashTender = nonCashTender > 0;
+
+  /**
+   * The order's date as an unambiguous UTC calendar date.
+   *
+   * The expiry rule is measured against startOfCurrentMonthIso(), which is built
+   * from Date.UTC. Rendering this through toLocaleDateString() named a different
+   * month either side of a boundary — an order paid 2026-09-01T03:00Z displays
+   * as 8/31/2026 to an admin in UTC-7, who then tells a customer their live
+   * credit has expired. An ISO calendar date cannot drift.
+   */
+  const orderPlacedDate = orderPlacedIso ? String(orderPlacedIso).slice(0, 10) : null;
 
   const runAction = async (action: string, promptMessage?: string, extra?: Record<string, unknown>) => {
     if (promptMessage && !window.confirm(promptMessage)) {
@@ -168,7 +206,7 @@ export function AdminOrderActions({
         "Return this customer's store credit and points?\n\n"
         + "This order collected no cash, so nothing you have paid is being recorded. Vanta puts the points back, and "
         + "the store credit too IF it was spent this calendar month — credit older than that has expired and cannot be returned.",
-        { reimbursementMethod, note: reimbursementNote.trim() || undefined },
+        { note: reimbursementNote.trim() || undefined },
       );
       return;
     }
@@ -295,7 +333,7 @@ export function AdminOrderActions({
                 <p className="rounded-lg border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
                   <strong>Store credit is only returnable in the month it was spent.</strong>{" "}
                   {storeCreditRedeemedCents > 0
-                    ? `This order spent ${money(Math.max(0, storeCreditRedeemedCents) / 100)} of credit${orderPlacedIso ? ` on ${new Date(orderPlacedIso).toLocaleDateString()}` : ""}. If that is not this calendar month it has already expired, and refunding will return the points but not the credit.`
+                    ? `This order spent ${money(Math.max(0, storeCreditRedeemedCents) / 100)} of credit${orderPlacedDate ? ` on ${orderPlacedDate} (UTC)` : ""}. If that is not this calendar month it has already expired, and refunding will return the points but not the credit.`
                     : "This order spent no store credit, so only points are returned."}
                 </p>
               ) : null}
@@ -310,17 +348,23 @@ export function AdminOrderActions({
                     />
                   </label>
                 ) : null}
-                <label className="text-sm text-zinc-300">How you sent it
-                  <select
-                    value={reimbursementMethod}
-                    onChange={(e) => setReimbursementMethod(e.target.value)}
-                    className="vl-input mt-1 w-full px-3 py-2 text-sm"
-                  >
-                    <option value="zelle">Zelle</option>
-                    <option value="cashapp">Cash App</option>
-                    <option value="other">Other</option>
-                  </select>
-                </label>
+                {/* ONLY WHERE MONEY MOVED. This select defaults to "zelle" and is
+                    posted with the refund, so a credit-only return wrote an audit
+                    row asserting the owner sent money by Zelle — on the screen
+                    that says "there is nothing for you to send". */}
+                {cashAvailable ? (
+                  <label className="text-sm text-zinc-300">How you sent it
+                    <select
+                      value={reimbursementMethod}
+                      onChange={(e) => setReimbursementMethod(e.target.value)}
+                      className="vl-input mt-1 w-full px-3 py-2 text-sm"
+                    >
+                      <option value="zelle">Zelle</option>
+                      <option value="cashapp">Cash App</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </label>
+                ) : null}
                 <label className="text-sm text-zinc-300">Internal note (optional)
                   <input
                     value={reimbursementNote}
@@ -345,6 +389,26 @@ export function AdminOrderActions({
                 </p>
               ) : null}
             </div>
+          ) : !everPaid ? (
+            /* Not finished — never started. An unpaid order has taken nothing,
+               so there is nothing to give back, and saying "fully reimbursed"
+               here would be the same unearned all-clear in a new place. */
+            <p className="mt-3 text-sm text-zinc-400">
+              This order has not been paid ({paymentStatusNow.replace(/_/g, " ") || "unknown status"}), so no money,
+              store credit or points have been taken. There is nothing to return.
+            </p>
+          ) : usedNonCashTender ? (
+            /* REFUNDED IS A STATUS, NOT A RECEIPT. The route writes it from its
+               compare-and-set claim BEFORE the side effects run and regardless
+               of what they return, and refundStoreCreditForOrder returns false
+               without throwing when the redemption predates the current month —
+               so nothing alerts, the repair sweep skips it, and an emerald
+               "Fully reimbursed." would assert a return that never happened. */
+            <p className="mt-3 text-sm text-zinc-300">
+              Recorded as refunded. The points were returned; the {money(nonCashTender)} of store credit came back
+              only if it was spent in the same calendar month. Check the customer&apos;s balance before telling them
+              it is settled.
+            </p>
           ) : (
             <p className="mt-3 text-sm text-emerald-300">Fully reimbursed.</p>
           )

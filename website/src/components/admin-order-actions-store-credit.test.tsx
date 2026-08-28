@@ -109,9 +109,28 @@ describe("what the control promises about store credit", () => {
     expect(html).not.toContain("only returnable in the month it was spent");
   });
 
-  it("names the order's own date, so the operator can apply the rule", () => {
-    const html = render({ ...creditOnly, orderPlacedIso: "2026-06-14T10:00:00.000Z" });
-    expect(html).toMatch(/6\/14\/2026|14\/06\/2026|2026/);
+  it("names the order's date as a UTC calendar date, the same clock the rule uses", () => {
+    // isRefundableRedemption compares against startOfCurrentMonthIso(), which is
+    // built from Date.UTC. Rendering the date in the viewer's locale timezone
+    // named a different month either side of a boundary — an order paid
+    // 2026-09-01T03:00Z displays as 8/31/2026 to an admin in UTC-7, who then
+    // tells the customer their still-live credit has expired. An unambiguous
+    // ISO calendar date cannot drift.
+    const html = render({ ...creditOnly, orderPlacedIso: "2026-09-01T03:00:00.000Z" });
+    expect(html).toContain("2026-09-01");
+    expect(html).not.toContain("8/31/2026");
+  });
+
+  it("does not ask how the money was sent when no money is being sent", () => {
+    // The method select defaults to "zelle" and is posted with the refund, so a
+    // credit-only return wrote an audit row asserting the owner paid by Zelle —
+    // on the same screen that says "there is nothing for you to send".
+    const html = render(creditOnly);
+    expect(html).not.toContain("How you sent it");
+  });
+
+  it("still asks how the money was sent on a cash refund", () => {
+    expect(render({ amountPaid: 120, refundAmount: 0 })).toContain("How you sent it");
   });
 });
 
@@ -124,6 +143,47 @@ describe("an order settled with points", () => {
   });
 });
 
+describe("an order that has not been paid yet", () => {
+  // THE TENDER COLUMNS ARE WRITTEN AT ORDER CREATION, NOT AT PAYMENT.
+  // quote-order.ts:1088-1090 writes points_redeemed and
+  // store_credit_redeemed_cents alongside payment_status 'pending_payment';
+  // the credit is not actually debited until redeemStoreCredit runs in the
+  // payment-success webhook. So amount_paid === 0 does NOT mean "settled with
+  // credit" — on an unpaid order it means nothing has been settled at all.
+  //
+  // Gating on cash alone therefore offered a "Return store credit & points"
+  // button on a fully credit-funded order that was still awaiting payment, and
+  // the route would have taken it: it guards on payment_status === 'refunded'
+  // and on nonCashTender, never on the order being paid. That marks an unpaid
+  // order refunded and blocks the payment that was still coming.
+  const unpaidCreditOrder = {
+    initialPaymentStatus: "pending_payment",
+    amountPaid: 0,
+    refundAmount: 0,
+    storeCreditRedeemedCents: 4_500,
+  };
+
+  it("offers no return control, because nothing has been tendered", () => {
+    const html = render(unpaidCreditOrder);
+    expect(html).not.toContain("Return store credit");
+  });
+
+  it("does not claim the order was settled with credit", () => {
+    expect(render(unpaidCreditOrder)).not.toContain("It was settled with");
+  });
+
+  it("says why, rather than showing the green all-clear", () => {
+    const html = render(unpaidCreditOrder);
+    expect(html).not.toContain("Fully reimbursed.");
+    expect(html).toContain("has not been paid");
+  });
+
+  it("is equally silent on an order awaiting payment verification", () => {
+    const html = render({ ...unpaidCreditOrder, initialPaymentStatus: "awaiting_verification" });
+    expect(html).not.toContain("Return store credit");
+  });
+});
+
 describe("orders that really are finished", () => {
   it("says fully reimbursed when the cash is back and no credit was used", () => {
     const html = render({ amountPaid: 100, refundAmount: 100 });
@@ -131,14 +191,25 @@ describe("orders that really are finished", () => {
     expect(html).not.toContain("Record manual reimbursement</button>");
   });
 
-  it("says fully reimbursed once the refund has actually run", () => {
-    // payment_status "refunded" is the route's own idempotency guard: the
-    // credit and points were handed back by that refund's side effects.
+  it("does NOT claim the credit came back just because the order says refunded", () => {
+    // payment_status 'refunded' is written by the route's compare-and-set claim
+    // BEFORE the side effects run, and independently of what they return.
+    // refundStoreCreditForOrder returns false without throwing when the
+    // redemption predates the current month, runRefundEffect only alerts on a
+    // throw, and the repair sweep skips it too — so an emerald "Fully
+    // reimbursed." here is the same unearned all-clear LF-01 exists to remove,
+    // on an order where the customer's balance never moved.
     const html = render({
       initialPaymentStatus: "refunded",
       amountPaid: 0,
       storeCreditRedeemedCents: 4_500,
     });
+    expect(html).not.toContain("Fully reimbursed.");
+    expect(html).toContain("Recorded as refunded");
+  });
+
+  it("still says fully reimbursed on a plain cash order with no tender to trace", () => {
+    const html = render({ initialPaymentStatus: "refunded", amountPaid: 100, refundAmount: 100 });
     expect(html).toContain("Fully reimbursed.");
   });
 });
