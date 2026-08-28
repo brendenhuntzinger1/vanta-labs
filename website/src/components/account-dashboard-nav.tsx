@@ -325,7 +325,7 @@ function MobileNav({
       {/* Bottom tab bar — fixed, safe-area aware */}
       <nav
         aria-label="Account"
-        className="vl-bottom-bar fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#0b0b0b]/95 px-2 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl lg:hidden"
+        className="vl-bottom-bar vl-cta-bar fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-[#0b0b0b]/95 px-2 pb-[env(safe-area-inset-bottom)] backdrop-blur-xl lg:hidden"
       >
         <div className="mx-auto flex max-w-md items-stretch gap-1 py-1.5">
           {bottomItems.map((item) => (

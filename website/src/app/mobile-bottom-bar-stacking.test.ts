@@ -12,6 +12,13 @@ import { describe, expect, it } from "vitest";
 //
 // These pin the invariant: the staff shortcut stacks BELOW the customer-facing
 // bottom bars, never level with or above them.
+//
+// That ordering is no longer the primary defence — z-index only orders within
+// one stacking context, and .vl2-lab-page's `isolation: isolate` trapped the
+// product bar's z-50 inside the page, letting the shortcut win anyway (see
+// staff-shortcut-never-steals-a-tap.test.ts, which covers the presence-based
+// rule that replaced it). It is still the FALLBACK for Safari <15.4 and
+// Chrome <105, which ignore :has(), so it must not regress.
 const read = (p: string) => readFileSync(path.join(process.cwd(), p), "utf8");
 
 const BOTTOM_BARS: Array<[string, string]> = [
@@ -36,7 +43,11 @@ describe("fixed bottom-bar stacking on mobile", () => {
   });
 
   it.each(BOTTOM_BARS)("keeps the vault shortcut below the %s", (file) => {
-    const barZ = zOf(read(file), "vl-bottom-bar fixed");
+    // Anchored on vl-cta-bar: the marker carried by exactly these three
+    // full-width bars, and the hook the presence-based rule uses. The old
+    // anchor was the literal "vl-bottom-bar fixed", which broke the moment a
+    // class was inserted between the two words.
+    const barZ = zOf(read(file), "vl-cta-bar");
     expect(barZ).not.toBeNull();
     expect(vaultZ as number).toBeLessThan(barZ as number);
   });

@@ -1364,7 +1364,7 @@ export default function CheckoutPage() {
 
       {/* Sticky mobile CTA — the primary action is always within thumb reach. */}
       {isHydrated && items.length > 0 ? (
-        <div className="vl-bottom-bar fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.06] bg-[#0a0a0a]/95 px-5 pt-3.5 pb-[max(env(safe-area-inset-bottom),0.875rem)] backdrop-blur-2xl lg:hidden">
+        <div className="vl-bottom-bar vl-cta-bar fixed inset-x-0 bottom-0 z-40 border-t border-white/[0.06] bg-[#0a0a0a]/95 px-5 pt-3.5 pb-[max(env(safe-area-inset-bottom),0.875rem)] backdrop-blur-2xl lg:hidden">
           {!checkoutOpen ? (
             <p className="mb-2 text-center text-[11px] text-[color:var(--accent-gold)]">Checkout is opening soon — your cart is saved.</p>
           ) : checkoutMessage ? (

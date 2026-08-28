@@ -989,7 +989,7 @@ export function ProductDetailClient({
 
       {/* Sticky add-to-cart: charcoal bar under a thin gold hairline, so it
           reads as part of the brand rather than a floating utility strip. */}
-      <div className="vl-bottom-bar fixed inset-x-0 bottom-0 z-50 border-t border-[color:var(--accent-gold)]/20 bg-[#141414]/95 px-5 pt-4 pb-[max(env(safe-area-inset-bottom),1rem)] shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.8)] backdrop-blur-xl lg:hidden">
+      <div className="vl-bottom-bar vl-cta-bar fixed inset-x-0 bottom-0 z-50 border-t border-[color:var(--accent-gold)]/20 bg-[#141414]/95 px-5 pt-4 pb-[max(env(safe-area-inset-bottom),1rem)] shadow-[0_-12px_32px_-16px_rgba(0,0,0,0.8)] backdrop-blur-xl lg:hidden">
         <div className="flex items-center gap-4">
           <div className="min-w-0 flex-1">
             <p className="truncate text-xs text-[#a3a3a3]">{product.name}</p>

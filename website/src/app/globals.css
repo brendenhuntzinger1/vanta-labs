@@ -1408,6 +1408,44 @@ body[data-cookie-banner="true"] .vl-bottom-bar {
   bottom: calc(var(--cookie-banner-height, 0px) + 1.5rem);
 }
 
+/* THE STAFF SHORTCUT STEPS ASIDE FOR A CUSTOMER'S CTA BAR.
+   .vl-staff-shortcut is the /vault link: a 39x24 box at bottom-2 right-2,
+   painted at 15% opacity. .vl-cta-bar marks the three full-width bars that
+   claim that same corner — Add to Cart, checkout's pay bar, the account nav.
+   They overlap, and 27x16px of the product page's ADD TO CART belonged to the
+   shortcut: a tap at (360,640) on a 393px phone opened /vault and added
+   nothing (measured 2026-08-28, TikTok WebView).
+
+   The shortcut already sits at z-30, beneath those bars' z-40/z-50, and that
+   works wherever the two share a stacking context. The product page is the
+   exception: .vl2-lab-page is `isolation: isolate` (for its z-index:-2
+   ::before), which traps the bar's z-50 inside the page's own context while
+   the page itself is z-index:auto at the root — so the root compares auto
+   against 30 and the shortcut wins.
+
+   Paint order cannot express this safely: any future transform, filter,
+   opacity or isolation on a page wrapper re-opens the hole with no visible
+   symptom. Presence can. While a CTA bar is in the document the shortcut is
+   not, so there is nothing to hit-test and no ordering to get wrong. Staff
+   reach /vault from any screen without such a bar, or by typing the URL.
+
+   The z-30 above is deliberately kept: Safari <15.4 and Chrome <105 ignore
+   :has(), and there the original ordering still protects checkout and the
+   account nav, which stack normally.
+
+   SCOPED TO THE WIDTHS WHERE THOSE BARS ACTUALLY RENDER. All three are
+   `lg:hidden`, which is `display:none` — the element stays in the DOM, so a
+   bare :has() matches on a desktop too and hid the shortcut on every product,
+   checkout and account page there. That is precisely where no overlap exists
+   and where staff are most likely to want it. Measured at 1440px and 1024px
+   before this media query was added. 1023px is `lg - 1`, matching the
+   sm-scoped rule above. */
+@media (max-width: 1023px) {
+  body:has(.vl-cta-bar) .vl-staff-shortcut {
+    display: none;
+  }
+}
+
 /* The cart drawer's pay bar needs the same treatment but cannot use the rule
    above: it is not `fixed`, it is the last flex child of a full-height drawer
    panel, so there is no `bottom` to shift. Below `sm` that panel fills the
