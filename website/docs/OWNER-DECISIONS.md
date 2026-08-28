@@ -138,3 +138,45 @@ They are **not** repeated from memory here, because a half-remembered security
 finding is worse than a missing one. Retrieve them from the phase chats that
 raised them, or re-run that phase's checks. **F-16-04 in particular concerns a
 live secret key and should be confirmed rather than assumed handled.**
+
+---
+
+## Production security posture at the end of this session
+
+Queried directly, 2026-08-28. This is the state to re-check after any future
+migration.
+
+| Metric | Value |
+|---|---|
+| Tables in `public` | 70 |
+| Tables `anon` can INSERT / UPDATE / DELETE / TRUNCATE | **0** |
+| Tables `anon` can SELECT | 27 *(was 63 before RLS-05)* |
+| RLS-on tables with zero policies still granting `anon` SELECT | **0** |
+| `SECURITY DEFINER` functions `anon` can EXECUTE | **1** — `validate_referral_code`, deliberately client-callable |
+| Default privilege for `anon` on **new** tables | `rm` — SELECT and MAINTAIN only; every write letter gone |
+| `orders` / `order_items` reachable by `anon` | false |
+| `product_doses.product_cost_cents` reachable by `anon` | false |
+
+The last row is the one worth re-reading after any catalogue migration: it is
+the true per-variant landed cost, and it was readable by anyone holding the
+publishable key until the Phase 1 pass.
+
+### How the RLS-05 revoke was verified against shipped code, not just source
+
+A source scan proves what `main` says; production runs a bundle. So the revoke
+was also checked against the built client bundle — all 83 chunks, 2.7 MB, which
+includes lazily-loaded ones a page-by-page fetch would miss.
+
+The scan carries its own negative control, because a scan that cannot see
+browser Supabase calls would report a clean pass over anything. It looks for
+`validate_referral_code`, `"ambassadors"` and `vanta-labs-cart` first — all
+three present — and only then reports:
+
+- none of the 36 RLS-05 tables appear as a string literal in the client bundle
+- of the five Phase 1 locked tables, only `"orders"` appears, and it is
+  pluralisation copy (`e => e === 1 ? "order" : "orders"`), not a table name
+
+An earlier version of this check scanned only the JS referenced by the live
+pages' HTML and found no `.from(<table>)` calls at all — which looked like a
+pass and was actually a blind scan of the eagerly-loaded chunks only. The
+control is what caught it.
