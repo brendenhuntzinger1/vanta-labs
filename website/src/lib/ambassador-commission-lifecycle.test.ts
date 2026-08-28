@@ -246,7 +246,11 @@ vi.mock("@/lib/supabase-server", () => {
     return null;
   }
 
-  function keyedTable(
+  // What PostgREST answers in ONE request whatever the query matches
+// (Supabase ships db-max-rows=1000), applied silently.
+const DB_MAX_ROWS = 1000;
+
+function keyedTable(
     store: Map<string, CommissionRow>,
     onInsert: () => void,
     onUpsert: () => void,
@@ -255,13 +259,21 @@ vi.mock("@/lib/supabase-server", () => {
     return {
       select: () => {
         const filters: Record<string, unknown> = {};
+        let rangeFrom: number | null = null;
+        let rangeTo: number | null = null;
         const b: Record<string, unknown> = {
           eq(column: string, value: unknown) { filters[column] = value; return b; },
           in(column: string, values: unknown[]) { filters[`in:${column}`] = values; return b; },
+          order() { return b; },
+          // PostgREST's Range, inclusive at both ends, capped at db-max-rows the
+          // way the server caps it. The unpaid-balance read pages now, and a
+          // stub that accepted `.range()` and ignored it would hand the pager
+          // the same page forever.
+          range(from: number, to: number) { rangeFrom = from; rangeTo = to; return b; },
           async maybeSingle() { return { data: store.get(String(filters.order_id)) ?? null, error: null }; },
           then(resolve: (v: unknown) => unknown) {
             // Used by the unpaid-balance read, which filters by ambassador.
-            const rows = [...store.values()].filter((row) => {
+            let rows = [...store.values()].filter((row) => {
               for (const [column, value] of Object.entries(filters)) {
                 if (column.startsWith("in:")) {
                   if (!(value as unknown[]).includes(row[column.slice(3)])) return false;
@@ -271,6 +283,8 @@ vi.mock("@/lib/supabase-server", () => {
               }
               return true;
             });
+            if (rangeFrom !== null) rows = rows.slice(rangeFrom, rangeTo === null ? undefined : rangeTo + 1);
+            rows = rows.slice(0, DB_MAX_ROWS);
             return Promise.resolve(resolve({ data: rows, error: null }));
           },
         };
