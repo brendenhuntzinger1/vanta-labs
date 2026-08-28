@@ -2,7 +2,7 @@ import "server-only";
 import crypto from "crypto";
 
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { getCartRecoveryControlConfig } from "@/lib/admin-control";
+import { getCartRecoveryControlConfig, type CartRecoveryConfig } from "@/lib/admin-control";
 import { getSiteUrl } from "@/lib/env";
 import { formatDisplayDate } from "@/lib/format-date";
 import { isMarketingSuppressed, sendMarketingEmail } from "@/lib/email/marketing";
@@ -354,6 +354,76 @@ export interface AbandonedCartSweepResult {
   t12hSent: number;
   t24hSent: number;
   t72hSent: number;
+  /** Carts read while looking for work — the bound, made visible. */
+  scanned: number;
+  /** Carts that actually had an unsent stage due. */
+  eligible: number;
+}
+
+/**
+ * WHEN EACH STAGE BECOMES DUE. Stated once, because two things now need it:
+ * the send blocks below, and the candidate filter that decides which carts are
+ * worth spending the tick's budget on. Two copies of these numbers would drift,
+ * and the drift would be silent — a cart the filter thought had nothing due
+ * simply never gets its email.
+ */
+const STAGE_DUE_AFTER_MS = {
+  t30m: 30 * MINUTE_MS,
+  t12h: 12 * HOUR_MS,
+  t24h: 24 * HOUR_MS,
+  t72h: 72 * HOUR_MS,
+} as const;
+
+type RecoveryStage = keyof typeof STAGE_DUE_AFTER_MS;
+
+const STAGE_ENABLED: Record<RecoveryStage, (config: CartRecoveryConfig) => boolean> = {
+  t30m: (config) => config.t30mEnabled,
+  t12h: (config) => config.t12hEnabled,
+  t24h: (config) => config.t24hEnabled,
+  t72h: (config) => config.t72hEnabled,
+};
+
+/**
+ * HOW MUCH RECOVERY ONE TICK MAY DO.
+ *
+ * The sweep used to read every active cart in the 96-hour window and then await
+ * per cart — a suppression check, and an insert for each of the four stages
+ * whether or not that stage could still fire. On a 60-second function the cost
+ * per tick therefore grew with the number of shoppers, and past some traffic
+ * level the sweep simply stopped finishing.
+ *
+ * A bare `.limit()` would have been actively harmful here: the oldest carts sort
+ * first and have already had every stage claimed, so the budget would have been
+ * spent proving that, tick after tick, while newer carts — the ones with a
+ * t30m email actually due — were never reached. So the stage claims are read in
+ * bulk first and carts with nothing outstanding are dropped for free; the
+ * budget is spent only on carts that have an unsent stage due right now. That
+ * drains, because sending a stage removes it from the outstanding set for good.
+ */
+const CART_SWEEP_BUDGET = 200;
+const CART_SCAN_PAGE = 500;
+const CART_MAX_SCAN = 5000;
+
+/** Stages this cart is old enough for, that the operator has left switched on. */
+function dueStages(elapsedMs: number, config: CartRecoveryConfig): RecoveryStage[] {
+  return (Object.keys(STAGE_DUE_AFTER_MS) as RecoveryStage[]).filter(
+    (stage) => STAGE_ENABLED[stage](config) && elapsedMs >= STAGE_DUE_AFTER_MS[stage],
+  );
+}
+
+/** Which (cart, stage) slots are already claimed, for a page of carts. */
+async function claimedStagesFor(cartIds: string[]): Promise<Set<string>> {
+  if (cartIds.length === 0) return new Set();
+  const { data, error } = await supabaseAdmin
+    .from("abandoned_cart_emails")
+    .select("abandoned_cart_id, stage")
+    .in("abandoned_cart_id", cartIds);
+
+  // Fail OPEN: an unreadable claim table means we cannot subtract anything, so
+  // every cart stays a candidate and the unique index does the deduplication as
+  // it always did. Slower for a tick, never a wrong send.
+  if (error || !data) return new Set();
+  return new Set(data.map((row) => `${String(row.abandoned_cart_id)}::${String(row.stage)}`));
 }
 
 // Idempotent - each stage reserves its slot in abandoned_cart_emails via a
@@ -363,7 +433,9 @@ export interface AbandonedCartSweepResult {
 export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult> {
   const config = await getCartRecoveryControlConfig();
   const now = Date.now();
-  const result: AbandonedCartSweepResult = { t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0 };
+  const result: AbandonedCartSweepResult = {
+    t30mSent: 0, t12hSent: 0, t24hSent: 0, t72hSent: 0, scanned: 0, eligible: 0,
+  };
 
   // Only sweep carts new enough to still have a pending stage. The last stage
   // fires at 72h; past ~96h every stage has been sent (or is past its value), so
@@ -373,15 +445,43 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
   // anyway.)
   const RECOVERY_MAX_AGE_MS = 96 * HOUR_MS;
   const oldestFirstSeenIso = new Date(now - RECOVERY_MAX_AGE_MS).toISOString();
-  const { data, error } = await supabaseAdmin
-    .from("abandoned_carts")
-    .select("id, email, customer_name, items, cart_value_cents, first_seen_at")
-    .eq("status", "active")
-    .gte("first_seen_at", oldestFirstSeenIso);
 
-  if (error) throw error;
+  const candidates: DueCartRow[] = [];
+  for (let offset = 0; offset < CART_MAX_SCAN && candidates.length < CART_SWEEP_BUDGET; offset += CART_SCAN_PAGE) {
+    const { data, error } = await supabaseAdmin
+      .from("abandoned_carts")
+      .select("id, email, customer_name, items, cart_value_cents, first_seen_at")
+      .eq("status", "active")
+      .gte("first_seen_at", oldestFirstSeenIso)
+      // Oldest first: the cart closest to ageing out of the window is the one
+      // with the least time left to be recovered.
+      .order("first_seen_at", { ascending: true })
+      .range(offset, offset + CART_SCAN_PAGE - 1);
 
-  for (const row of (data ?? []) as unknown as DueCartRow[]) {
+    if (error) throw error;
+
+    const page = (data ?? []) as unknown as DueCartRow[];
+    if (page.length === 0) break;
+    result.scanned += page.length;
+
+    const claimed = await claimedStagesFor(page.map((row) => String(row.id)));
+
+    for (const row of page) {
+      const elapsedMs = now - new Date(row.first_seen_at).getTime();
+      const outstanding = dueStages(elapsedMs, config).some(
+        (stage) => !claimed.has(`${String(row.id)}::${stage}`),
+      );
+      if (!outstanding) continue;
+      candidates.push(row);
+      if (candidates.length >= CART_SWEEP_BUDGET) break;
+    }
+
+    if (page.length < CART_SCAN_PAGE) break;
+  }
+
+  result.eligible = candidates.length;
+
+  for (const row of candidates) {
     const elapsedMs = now - new Date(row.first_seen_at).getTime();
     const items = Array.isArray(row.items) ? row.items : [];
     if (items.length === 0) continue;
@@ -402,7 +502,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
 
     const name = row.customer_name ?? "";
 
-    if (config.t30mEnabled && elapsedMs >= 30 * MINUTE_MS) {
+    if (config.t30mEnabled && elapsedMs >= STAGE_DUE_AFTER_MS.t30m) {
       const sent = await reserveAndSendStage({
         cartId: row.id,
         stage: "t30m",
@@ -414,7 +514,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       if (sent) result.t30mSent += 1;
     }
 
-    if (config.t12hEnabled && elapsedMs >= 12 * HOUR_MS) {
+    if (config.t12hEnabled && elapsedMs >= STAGE_DUE_AFTER_MS.t12h) {
       const sent = await reserveAndSendStage({
         cartId: row.id,
         stage: "t12h",
@@ -426,7 +526,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       if (sent) result.t12hSent += 1;
     }
 
-    if (config.t24hEnabled && elapsedMs >= 24 * HOUR_MS) {
+    if (config.t24hEnabled && elapsedMs >= STAGE_DUE_AFTER_MS.t24h) {
       // C-06: the mint is handed to reserveAndSendStage rather than performed
       // here, so it cannot run until the (cart, stage) slot is claimed. Minting
       // first, then claiming, is what let a failed send re-mint on every sweep —
@@ -452,7 +552,7 @@ export async function runAbandonedCartSweep(): Promise<AbandonedCartSweepResult>
       if (sent) result.t24hSent += 1;
     }
 
-    if (config.t72hEnabled && elapsedMs >= 72 * HOUR_MS) {
+    if (config.t72hEnabled && elapsedMs >= STAGE_DUE_AFTER_MS.t72h) {
       // Both fixes, and they need each other.
       //
       // C-06 says claim the slot BEFORE resolving a coupon, so a failed send can

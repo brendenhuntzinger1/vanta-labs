@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { AdminAlertResolveButton } from "@/components/admin-alert-resolve-button";
 import { extractAlertOrderIds, type SystemAlertRow } from "@/lib/monitoring";
 
 // ---------------------------------------------------------------------------
@@ -11,7 +12,16 @@ import { extractAlertOrderIds, type SystemAlertRow } from "@/lib/monitoring";
 // The order links are the point. `shipping_cost_manual_entry_required` ends
 // with "Enter the cost by hand in Admin -> Orders" and the ids it means are in
 // `context`, which the page never read -- so the instruction named a task
-// without naming its subjects. Server component: nothing here is interactive.
+// without naming its subjects.
+//
+// ONE ROW IS NOW ONE KIND OF ALERT, not one database row. Production carried 52
+// open alerts of which 44 were the same warning repeating every half hour; at
+// ten rows a page that is the entire window, which is exactly how the badge
+// came to say "4 critical" above a list showing two. `occurrences` is that
+// count, folded back in so nothing is hidden by the folding.
+//
+// Still a server component apart from the resolve control, which has to be a
+// client component because it posts.
 // ---------------------------------------------------------------------------
 
 const DOT_BY_SEVERITY: Record<string, string> = {
@@ -25,18 +35,44 @@ function shortOrderId(orderId: string): string {
   return bare.length > 8 ? bare.slice(0, 8) : bare;
 }
 
-export function AdminSystemAlertRow({ alert }: { alert: SystemAlertRow }) {
+export function AdminSystemAlertRow({
+  alert,
+  occurrences = 1,
+  alertIds,
+}: {
+  alert: SystemAlertRow;
+  /** How many unresolved alerts of this type this row stands for. */
+  occurrences?: number;
+  /** Every id in the group, so resolving clears all of them. */
+  alertIds?: string[];
+}) {
   const orderIds = extractAlertOrderIds(alert.context);
 
   return (
     <div className="bg-white/[0.02] p-4">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <span
           className={`inline-block h-2 w-2 rounded-full ${DOT_BY_SEVERITY[alert.severity] ?? "bg-sky-400"}`}
           aria-hidden
         />
         <span className="text-sm font-medium text-white">{alert.type}</span>
-        <span className="text-xs text-zinc-500">{new Date(alert.created_at).toLocaleString()}</span>
+        {occurrences > 1 ? (
+          <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-zinc-400">
+            ×{occurrences}
+          </span>
+        ) : null}
+        <span className="text-xs text-zinc-500">
+          {occurrences > 1 ? "latest " : ""}
+          {new Date(alert.created_at).toLocaleString()}
+        </span>
+        <span className="ml-auto">
+          <AdminAlertResolveButton
+            type={alert.type}
+            severity={alert.severity}
+            alertIds={alertIds ?? [alert.id]}
+            occurrences={occurrences}
+          />
+        </span>
       </div>
       <p className="mt-1 pl-4 text-xs text-zinc-400">{alert.message}</p>
       {orderIds.length > 0 ? (

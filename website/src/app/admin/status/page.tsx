@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { getSystemStatus, type StatusLevel } from "@/lib/system-status";
-import { getRecentSystemAlerts } from "@/lib/monitoring";
+import { getOpenSystemAlerts, groupOpenAlerts } from "@/lib/monitoring";
 import { AdminSystemAlertRow } from "@/components/admin-system-alert-row";
 import { CheckoutPreflight } from "@/components/checkout-preflight";
 import { InventoryReservationCheck } from "@/components/inventory-reservation-check";
@@ -21,13 +21,30 @@ export default async function AdminStatusPage() {
     redirect("/vault");
   }
 
-  const [statuses, recentAlerts] = await Promise.all([
+  // TWO QUERIES, ON PURPOSE.
+  //
+  // This page used to read the ten most recent alerts of any severity and drop
+  // the resolved ones afterwards — which is the whole of the badge-vs-page
+  // disagreement. Production carried 44 repetitions of one warning against 4
+  // criticals: the warnings owned the ten-row window, so the badge said "4
+  // critical" above a list showing two, and an operator had no way to reach the
+  // other two from any screen.
+  //
+  // Fetching the criticals on their own budget is what makes the two agree. The
+  // badge counts unresolved criticals; this query returns unresolved criticals;
+  // the grouping below cannot drop one, because it only ever folds rows of the
+  // same type together and reports the count.
+  const [statuses, criticalAlerts, recentAlerts] = await Promise.all([
     getSystemStatus(),
-    getRecentSystemAlerts(10).catch(() => []),
+    getOpenSystemAlerts({ severity: "critical", limit: 200 }).catch(() => []),
+    getOpenSystemAlerts({ limit: 100 }).catch(() => []),
   ]);
   const blockers = statuses.filter((s) => s.blocksLaunch && (s.level === "not_configured" || s.level === "error"));
   const readyForOrders = blockers.length === 0;
-  const unresolvedAlerts = recentAlerts.filter((a) => !a.resolved_at);
+  // Criticals first so a storm in the second query cannot displace one; the
+  // grouping deduplicates the overlap between the two.
+  const alertGroups = groupOpenAlerts([...criticalAlerts, ...recentAlerts]);
+  const openCriticals = criticalAlerts.length;
 
   return (
     <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -75,15 +92,28 @@ export default async function AdminStatusPage() {
         </div>
 
         <div className="mt-8">
-          <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Recent alerts</h2>
-          {unresolvedAlerts.length === 0 ? (
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-400">Open alerts</h2>
+            {/* The same number the nav badge shows, stated next to the list it
+                describes. When they disagree, that is now visible here rather
+                than only to someone counting rows. */}
+            <span className={`text-xs ${openCriticals > 0 ? "text-rose-300" : "text-zinc-500"}`}>
+              {openCriticals} unresolved critical{openCriticals === 1 ? "" : "s"}
+            </span>
+          </div>
+          {alertGroups.length === 0 ? (
             <p className="mt-2 rounded-xl border border-white/10 bg-white/[0.02] p-4 text-sm text-zinc-400">
               No unresolved system alerts. 🎉 Failures (payment, email, cron, fulfillment) will appear here.
             </p>
           ) : (
             <div className="mt-2 divide-y divide-white/5 overflow-hidden rounded-xl border border-white/10">
-              {unresolvedAlerts.map((a) => (
-                <AdminSystemAlertRow key={a.id} alert={a} />
+              {alertGroups.map((group) => (
+                <AdminSystemAlertRow
+                  key={`${group.latest.severity}::${group.latest.type}`}
+                  alert={group.latest}
+                  occurrences={group.occurrences}
+                  alertIds={group.ids}
+                />
               ))}
             </div>
           )}

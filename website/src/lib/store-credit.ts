@@ -7,7 +7,14 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 // month's unspent credit simply stops counting. This keeps the liability
 // bounded and protects margin.
 
-function currentPeriodMonth(now = new Date()): string {
+/**
+ * The grant period key, "YYYY-MM" in UTC. Exported so the monthly sweep can ask
+ * the ledger which members it has ALREADY granted this period and skip them,
+ * rather than re-attempting an insert that the unique index will refuse. That
+ * is what lets the sweep take a per-tick budget without the same handful of
+ * members consuming it every half hour for the rest of the month.
+ */
+export function currentPeriodMonth(now = new Date()): string {
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 

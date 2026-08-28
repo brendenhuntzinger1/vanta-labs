@@ -1676,6 +1676,25 @@ function scheduleShippoSync(orderId: string): void {
 }
 
 /**
+ * THE REQUEST WAS NOT FROM THE PAYMENT PROVIDER.
+ *
+ * A distinct type rather than a message to string-match on, because the route
+ * has to tell this apart from every other failure and get it right: this one is
+ * anonymous internet traffic, and everything after it is a real settlement
+ * problem. Reaching for `message.includes(...)` to make that distinction is how
+ * a later reworded error silently turns a public endpoint back into an
+ * unauthenticated write to `system_alerts`.
+ *
+ * Keeps the original message so existing callers and tests read the same.
+ */
+export class WebhookSignatureError extends Error {
+  constructor(message = "Invalid webhook signature") {
+    super(message);
+    this.name = "WebhookSignatureError";
+  }
+}
+
+/**
  * How long the unattributed-event WARNING stays quiet after firing.
  *
  * Persisted rather than held in memory: each webhook is a fresh serverless
@@ -1713,7 +1732,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   const provider = getPaymentProvider();
   const isValid = provider.verifyWebhookSignature(payload, signature, secret);
   if (!isValid) {
-    throw new Error("Invalid webhook signature");
+    throw new WebhookSignatureError();
   }
 
   const eventPayload = normalizeOrderPayload(payload);

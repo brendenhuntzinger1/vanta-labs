@@ -99,6 +99,7 @@ vi.mock("@/lib/supabase-server", () => {
       if (op === "eq") return String(cell) === String(val);
       if (op === "gte") return String(cell) >= String(val);
       if (op === "is") return cell === val;
+      if (op === "in") return (val as unknown[]).map(String).includes(String(cell));
       return true;
     });
 
@@ -115,8 +116,13 @@ vi.mock("@/lib/supabase-server", () => {
         eq(c: string, v: unknown) { filters.push(["eq", c, v]); return b; },
         gte(c: string, v: unknown) { filters.push(["gte", c, v]); return b; },
         is(c: string, v: unknown) { filters.push(["is", c, v]); return b; },
+        in(c: string, v: unknown[]) { filters.push(["in", c, v]); return b; },
         limit() { return b; },
         order() { return b; },
+        // The cart sweep pages its window instead of reading it whole.
+        range(from: number, to: number) {
+          return Promise.resolve({ data: rows().slice(from, to + 1), error: null });
+        },
         async maybeSingle() { const r = rows(); return { data: r[0] ?? null, error: null }; },
         async single() { const r = rows(); return { data: r[0] ?? null, error: r[0] ? null : { code: "PGRST116" } }; },
         then(resolve: (v: { data: unknown; error: null }) => unknown) {
