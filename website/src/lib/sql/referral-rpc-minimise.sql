@@ -1,3 +1,13 @@
+-- SUPERSEDED — DO NOT RUN. src/lib/sql/referral-code-customer-discount.sql is
+-- the canonical definition of validate_referral_code and is what production
+-- has. It already omits commission_percent, so the leak this file was written
+-- to close is closed; what running this file would actually do is REMOVE
+-- customer_discount_percent, which the cart reads at referral-client.ts:81 and
+-- resolves in cart-context.tsx. That regresses the fix documented in
+-- referral-code-customer-discount.sql:4 — "A 15% ambassador's customers were
+-- offered 10%." The reasoning below is kept because it is still the reason
+-- commission_percent stays out.
+--
 -- =============================================================================
 -- validate_referral_code — stop handing out commission terms to the internet.
 --

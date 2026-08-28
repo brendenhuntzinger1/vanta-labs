@@ -113,7 +113,22 @@ alter table public.fulfillment_batch_orders enable row level security;
 --   bucket list, single-status equality   10.78 ms -> 0.075 ms
 --     (seq scan + sort  ->  ordered index scan reading exactly 25 rows)
 --   bucket counts, all buckets            17.93 ms -> 7.08 ms
---     (seq scan  ->  index-only scan)
+--     (seq scan  ->  index scan + heap fetch)
+--
+-- THE COUNTS INDEX AND ITS CALLER WERE WRITTEN TO DIFFERENT SPECS, in this same
+-- commit, and nothing compared them. The index predicate was
+-- `payment_status = 'paid'`; getBucketCounts in src/lib/fulfillment-queues.ts
+-- has always asked for `payment_status in ('paid','awaiting_verification')`, and
+-- an IN over two values does not imply the equality, so Postgres could not prove
+-- the predicate and could not use this index at all. The predicate below now
+-- matches the caller's list exactly; phase11-bucket8.test.ts fails if the two
+-- drift apart again.
+--
+-- It is also NOT an index-only scan and never could have been: the counts query
+-- selects nine columns (BUCKET_DECISION_COLUMNS) and this index carries one, so
+-- every matching row needs a heap fetch regardless. The claim above is corrected
+-- rather than deleted because the 17.93 -> 7.08 ms measurement is still the
+-- reason the index exists; only its plan shape was described wrongly.
 --
 -- COLUMN ORDER IS THE WHOLE POINT of the first index. Equality columns first,
 -- then the sort key: with paid_at third, Postgres walks the index already in
@@ -122,8 +137,9 @@ alter table public.fulfillment_batch_orders enable row level security;
 -- discards the ordering — measured at 4.04 ms, ~50x slower than this one.
 --
 -- CONCURRENTLY: no ACCESS EXCLUSIVE lock, so reads and writes continue during
--- the build. It cannot run inside a transaction block, which is why these two
--- statements are at the end of the file and must not be wrapped in BEGIN/COMMIT.
+-- the build. It cannot run inside a transaction block, which is why these
+-- statements (the drop included) are at the end of the file and must not be
+-- wrapped in BEGIN/COMMIT.
 -- A failed build leaves an INVALID index that is dropped and retried; nothing
 -- is corrupted.
 --
@@ -137,6 +153,13 @@ alter table public.fulfillment_batch_orders enable row level security;
 create index concurrently if not exists idx_orders_fulfillment_queue
   on public.orders (payment_status, fulfillment_status, paid_at);
 
+-- The drop is not optional and must come FIRST: `if not exists` matches on the
+-- NAME only, so on any database still carrying the old `payment_status = 'paid'`
+-- definition the create below would be a silent no-op and the index would stay
+-- unusable by its own caller.
+drop index concurrently if exists idx_orders_fulfillment_counts;
+
 create index concurrently if not exists idx_orders_fulfillment_counts
-  on public.orders (fulfillment_status)
-  where payment_status = 'paid' and order_type is distinct from 'membership';
+  on public.orders (payment_status, fulfillment_status)
+  where payment_status in ('paid', 'awaiting_verification')
+    and order_type is distinct from 'membership';
