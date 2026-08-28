@@ -3,7 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, marginPercentOf, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
-import { isEarnedCommission, isRevenueOrderStatus, isSaleOrder } from "@/lib/ledger";
+import { hasCapturedPayment, isEarnedCommission, isSaleOrder } from "@/lib/ledger";
 import { refundedTaxFor } from "@/lib/admin-tax-report";
 import { pointsToDollars } from "@/lib/points-math";
 import { readAllRowsBounded } from "@/lib/supabase-page";
@@ -395,7 +395,18 @@ function toOrderProfit(order: OrderRecord, result: OrderProfitResult, overlay: S
 
 // ---- Single order (Order Details page) ----
 
-export async function getOrderProfit(orderId: string): Promise<OrderProfit | null> {
+/**
+ * The engine's answer for one order, WHATEVER its payment status.
+ *
+ * Internal on purpose. The only caller that wants an unfiltered figure is the
+ * shipping-cost audit, which records profit before/after a label cost is
+ * reconciled in and must not start answering "Order not found" for a row that
+ * plainly exists. Every reporting surface goes through `getOrderProfit`, which
+ * refuses an order that never took payment (M-03).
+ */
+async function computeProfitForOrderId(
+  orderId: string,
+): Promise<{ record: OrderRecord; profit: OrderProfit } | null> {
   // NULL MEANS "NO SUCH ORDER", AND NOTHING ELSE.
   //
   // This destructured only `{ data: order }` and dropped the error, so a
@@ -423,26 +434,61 @@ export async function getOrderProfit(orderId: string): Promise<OrderProfit | nul
 
   const overlay = overlays.get(orderId);
   const result = profitForOrder(record, lines.get(orderId) ?? [], commissions.get(orderId) ?? 0, config, overlay);
-  return toOrderProfit(record, result, overlay);
+  return { record, profit: toOrderProfit(record, result, overlay) };
+}
+
+/**
+ * Profit for one order, for every reporting surface — the admin order-detail
+ * panel, the operator push notification, and (through getOrderProfitMap) the
+ * orders CSV export.
+ *
+ * NULL FOR AN ORDER THAT NEVER TOOK PAYMENT, AND THAT IS THE POINT (M-03).
+ *
+ * `amount_paid` is written at INSERT, before capture, so a `pending_payment`,
+ * `awaiting_verification`, `canceled`, `payment_failed` or `payment_rejected`
+ * row carries a full basket and a full total. Fed to the engine it produced a
+ * complete, entirely fictional P&L: revenue nobody sent, a percentage
+ * processing fee on that revenue, COGS for stock still on the shelf and postage
+ * for a parcel never packed. The dashboard filtered these out; the two
+ * per-order surfaces did not, so an abandoned checkout showed up in the owner's
+ * spreadsheet as a sale with a margin.
+ *
+ * A fully refunded order is NOT in this category — it captured the money and
+ * gave it back, and its costs are real (VL-24). See
+ * ledger.CAPTURED_PAYMENT_STATUSES, which draws exactly that line.
+ *
+ * Callers already treat null as "no panel / blank cells", which is the right
+ * rendering: the order is still listed, it simply has no profit to report.
+ */
+export async function getOrderProfit(orderId: string): Promise<OrderProfit | null> {
+  const loaded = await computeProfitForOrderId(orderId);
+  if (!loaded) return null;
+  if (!hasCapturedPayment(loaded.record.payment_status)) return null;
+  return loaded.profit;
 }
 
 // ---- Many orders, computed once (used by dashboard + analytics) ----
 
-function paidAndPartiallyRefunded(orders: OrderRecord[]): OrderRecord[] {
-  // Include paid orders AND partially-refunded ones (they still netted
-  // revenue; the refund is subtracted per-order). Fully "refunded" orders
-  // netted ~nothing and are excluded, matching the revenue reports.
+function ordersThatTookMoney(orders: OrderRecord[]): OrderRecord[] {
+  // EVERY order that captured money, INCLUDING the fully refunded ones.
   //
-  // This was a SECOND, hand-written implementation of isRevenueOrderStatus
-  // (review finding 4). It happened to agree, which is exactly why it was
-  // dangerous: widening the ledger's definition would have moved four surfaces
-  // and silently left this one behind. One rule, one place.
-  return orders.filter((o) => isRevenueOrderStatus(o.payment_status));
+  // This filtered on isRevenueOrderStatus, which excludes a fully refunded
+  // order — right for a revenue report, wrong for a profit one. The refund
+  // returns the revenue; it does not return the COGS, the postage or the
+  // processor fee, and dropping the row dropped all three. Net profit was
+  // overstated by exactly what the store lost on the refund (VL-24 / M-02 /
+  // REF-05). The engine already nets a refunded order's revenue to zero, so
+  // including it here adds its loss and no phantom revenue.
+  //
+  // Still a SINGLE shared rule, not a hand-written status list: see
+  // ledger.CAPTURED_PAYMENT_STATUSES, which is also what keeps orders that
+  // never took payment out of the per-order surfaces (M-03).
+  return orders.filter((o) => hasCapturedPayment(o.payment_status));
 }
 
 async function computeProfitForOrders(orders: OrderRecord[]): Promise<OrderProfit[]> {
   const config = await getProfitSettings();
-  const paid = paidAndPartiallyRefunded(orders);
+  const paid = ordersThatTookMoney(orders);
   const orderIds = paid.map((o) => o.order_id).filter(Boolean);
 
   const [lines, commissions, overlays] = await Promise.all([
@@ -457,9 +503,17 @@ async function computeProfitForOrders(orders: OrderRecord[]): Promise<OrderProfi
   });
 }
 
-// Profit for an explicit set of order ids (any status), keyed by order id.
-// Used by the CSV export so it reports the SAME net profit as every other
-// surface — the engine stays the single source of truth.
+// Profit for an explicit set of order ids, keyed by order id. Used by the CSV
+// export so it reports the SAME net profit as every other surface — the engine
+// stays the single source of truth.
+//
+// An id whose order never took payment is simply ABSENT from the map (M-03).
+// This used to compute one for any status at all, so the export's profit
+// columns carried a full P&L for every abandoned checkout and cancelled order:
+// revenue nobody sent, a fee on that revenue, COGS for stock still on the shelf.
+// The export already writes an empty cell for a missing entry, which is the
+// honest rendering — the order is still listed, it just has no profit to
+// report. Same rule, same predicate, as the per-order getOrderProfit above.
 export async function getOrderProfitMap(orderIds: string[]): Promise<Map<string, OrderProfit>> {
   const map = new Map<string, OrderProfit>();
   const ids = orderIds.filter(Boolean);
@@ -484,6 +538,7 @@ export async function getOrderProfitMap(orderIds: string[]): Promise<Map<string,
   ]);
 
   for (const record of records) {
+    if (!hasCapturedPayment(record.payment_status)) continue;
     const overlay = overlays.get(record.order_id);
     map.set(
       record.order_id,
@@ -623,6 +678,17 @@ export interface ProfitDashboard {
     averageOrderValue: number;
     averageProfitPerOrder: number;
     orderCount: number;
+    /**
+     * Money handed back, across the same orders.
+     *
+     * `grossRevenue` above is what was invoiced BEFORE refunds — the convention
+     * a partially refunded order has always had here — and fully refunded
+     * orders now count too (their costs are real; see
+     * ledger.CAPTURED_PAYMENT_STATUSES). Without this line a reader cannot tell
+     * gross revenue that was kept from gross revenue that went straight back
+     * out, and net profit would look inexplicably low beside it.
+     */
+    totalRefunds: number;
     /** Outbound reshipments — real cost, zero revenue, never counted as sales. */
     replacementCount: number;
     totalProductCosts: number;
@@ -689,6 +755,7 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
   let totalProcessorFees = 0;
   let totalShippingRevenue = 0;
   let totalShippingExpense = 0;
+  let totalRefunds = 0;
   // SALES, not outbound shipments. See OrderProfit.orderType.
   let orderCount = 0;
   let replacementCount = 0;
@@ -715,6 +782,7 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
     totalProcessorFees += row.processingFee;
     totalShippingRevenue += row.shippingCharged;
     totalShippingExpense += row.shippingCost;
+    totalRefunds += row.refund;
     if (row.profitStatus === "estimated") estimatedOrderCount += 1;
     salesTaxCollected += row.taxCollected;
     if (row.taxCountedAsProfit) salesTaxCountedAsProfit = true;
@@ -750,6 +818,7 @@ export async function getProfitDashboard(nowMs: number = Date.now()): Promise<Pr
       averageOrderValue: orderCount > 0 ? round(grossRevenue / orderCount) : 0,
       averageProfitPerOrder: orderCount > 0 ? round(netProfit / orderCount) : 0,
       orderCount,
+      totalRefunds: round(totalRefunds),
       /** Outbound reshipments — real cost, zero revenue, never a sale. */
       replacementCount,
       totalProductCosts: round(totalProductCosts),
@@ -834,9 +903,13 @@ export async function recordActualShippingCost(input: RecordShippingCostInput): 
   // and the sweep then raised a critical alert naming a cause that was not the
   // cause. Separate the two: a throw is an unreadable order, null is a missing
   // one.
-  let before: Awaited<ReturnType<typeof getOrderProfit>> | null = null;
+  // The UNFILTERED figure on purpose: this is the audit trail for a label cost,
+  // not a report, and an order whose payment has not landed still has a real
+  // postage cost to record. Going through getOrderProfit here would answer
+  // "Order not found" for a row that plainly exists.
+  let before: OrderProfit | null = null;
   try {
-    before = await getOrderProfit(input.orderId);
+    before = (await computeProfitForOrderId(input.orderId))?.profit ?? null;
   } catch (profitError) {
     // A POSTGREST ERROR IS A PLAIN OBJECT, NOT AN Error. `String(err)` on one
     // renders "[object Object]", which tells an operator nothing at all — and
@@ -940,7 +1013,7 @@ export async function recordActualShippingCost(input: RecordShippingCostInput): 
   }
 
   // Profit AFTER reconciliation (now on the exact cost).
-  const after = await getOrderProfit(input.orderId).catch(() => null);
+  const after = await computeProfitForOrderId(input.orderId).then((r) => r?.profit ?? null).catch(() => null);
 
   const priorAudit = await getShippingCostAudit(input.orderId);
   if (shouldWriteShippingAudit(priorAudit, amountCents)) {

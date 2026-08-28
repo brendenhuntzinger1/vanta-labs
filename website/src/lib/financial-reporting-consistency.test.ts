@@ -65,6 +65,12 @@ const LEDGER: Seed[] = [
 
 const id = (n: number) => `order-${String(n).padStart(4, "0")}`;
 const revenueStatuses = new Set(["paid", "completed", "succeeded", "partially_refunded"]);
+// Orders that TOOK MONEY — ledger.CAPTURED_PAYMENT_STATUSES, which is the
+// revenue set PLUS the fully refunded ones. A refund returns the revenue and
+// nothing else: the COGS went out of the door, the label was bought, the
+// processor kept its fee. The revenue page is right to drop such an order; the
+// PROFIT report was not, and the loss on order #6 was invisible until VL-24.
+const capturedStatuses = new Set([...revenueStatuses, "refunded"]);
 // A reship is not a sale. It is `paid` with amount_paid 0, so a filter on status
 // alone counts it as an order and divides revenue by a denominator that includes
 // it — the same exclusion `ledger.NON_SALE_ORDER_TYPES` and the rollup SQL apply.
@@ -149,7 +155,12 @@ describeDb("the four surfaces agree on the owner's rules", () => {
   // -- the arithmetic, derived from LEDGER rather than typed in --------------
   const revenueOrders = LEDGER.filter((o) => revenueStatuses.has(o.status) && !nonSaleTypes.has(o.type));
   const netRevenueGross = revenueOrders.reduce((s, o) => s + (o.paid - o.refund), 0);
-  const taxLiability = LEDGER.filter((o) => revenueStatuses.has(o.status)).reduce((s, o) => s + o.tax, 0);
+  // The PROFIT report's set: every order that took money, refunds included.
+  const capturedOrders = LEDGER.filter((o) => capturedStatuses.has(o.status));
+  // Tax COLLECTED, across the same orders — which is what the sales-tax report
+  // also calls "collected". (Its own netTax subtracts the refunded portion; the
+  // dashboard tile does not, and the two are reconciled below.)
+  const taxLiability = capturedOrders.reduce((s, o) => s + o.tax, 0);
 
   it("the headline case: a $200 order refunded by $50 is $150 of revenue", () => {
     const o = LEDGER.find((x) => x.n === 5)!;
@@ -187,11 +198,14 @@ describeDb("the four surfaces agree on the owner's rules", () => {
     expect(d.salesTaxCollected).toBeCloseTo(taxLiability, 2);
     expect(d.salesTaxCollected).toBeGreaterThan(0);
 
-    // Gross revenue excludes every cent of that tax.
-    const revenueExTax = revenueOrders.reduce(
+    // Gross revenue excludes every cent of that tax. It is money INVOICED,
+    // before refunds — so the fully refunded order's $114 is in here, and the
+    // refund that reversed it is reported on its own line.
+    const revenueExTax = capturedOrders.reduce(
       (s, o) => s + (o.subtotal - o.discount) + o.shipping + o.cardFee, 0,
     );
     expect(d.lifetime.grossRevenue).toBeCloseTo(revenueExTax, 2);
+    expect(d.lifetime.totalRefunds).toBeCloseTo(capturedOrders.reduce((s, o) => s + o.refund, 0), 2);
   }, 60_000);
 
   it("a partial refund reduces revenue by the refund and nothing else", async () => {
@@ -235,8 +249,13 @@ describeDb("the four surfaces agree on the owner's rules", () => {
     expect(report.totals.netTax).toBeCloseTo(48.8, 2);
 
     // And the liability the profit dashboard reports is the same money, before
-    // the refund: the two views agree on what was collected.
-    expect(d.salesTaxCollected).toBeCloseTo(report.totals.taxCollected - 8, 2);
+    // the refund: the two views agree on what was COLLECTED.
+    //
+    // This assertion used to subtract the $8 — not as a definition, but because
+    // the dashboard dropped the fully refunded order entirely and never saw its
+    // tax at all (VL-24). With the order counted, the two surfaces agree
+    // exactly, which is what the comment above always claimed.
+    expect(d.salesTaxCollected).toBeCloseTo(report.totals.taxCollected, 2);
   }, 60_000);
 
   it("reconciliation flags none of these orders — every total is internally consistent", async () => {
@@ -251,7 +270,7 @@ describeDb("the four surfaces agree on the owner's rules", () => {
     const d = await getProfitDashboard(NOW);
 
     // Built from LEDGER independently of anything the modules computed.
-    const counted = LEDGER.filter((o) => revenueStatuses.has(o.status) || o.status === "partially_refunded");
+    const counted = capturedOrders;
     let revenue = 0, cogs = 0, processing = 0, shipping = 0;
     for (const o of counted) {
       revenue += (o.subtotal - o.discount) + o.shipping + o.cardFee - Math.max(0, o.refund - o.tax);
@@ -264,7 +283,11 @@ describeDb("the four surfaces agree on the owner's rules", () => {
     expect(d.lifetime.netProfit).toBeCloseTo(expectedProfit, 2);
     // Pinned, so the assertion above cannot pass by both sides drifting
     // together, and so a change to any term shows up as a changed number here.
-    expect(d.lifetime.netProfit).toBeCloseTo(484.52, 2);
+    //
+    // 436.32, not the 484.52 this file pinned before VL-24: the fully refunded
+    // order #6 cost the store $30 of goods, $12.20 of processor fee and $6 of
+    // postage that the report used to throw away with its revenue.
+    expect(d.lifetime.netProfit).toBeCloseTo(436.32, 2);
     // Expenses really were deducted: profit is meaningfully below revenue.
     expect(d.lifetime.netProfit).toBeLessThan(d.lifetime.grossRevenue - 100);
   }, 60_000);
