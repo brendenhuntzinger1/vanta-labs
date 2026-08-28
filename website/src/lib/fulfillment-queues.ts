@@ -178,9 +178,26 @@ const BUCKET_DECISION_COLUMNS =
   + "label_purchased_at, shipped_at, updated_at";
 
 // Ceiling on one board, not a definition of the answer — see `truncated`.
-// Matched to the reporting modules (admin-profit, admin-tax-report,
-// admin-reconciliation) so no surface has a lower ceiling than another.
-const MAX_BUCKET_ORDERS = 200_000;
+//
+// DELIBERATELY LOWER THAN THE REPORTING MODULES' 200,000, because this is not a
+// report. Those run on a screen an owner opens occasionally; these two run on
+// the shared admin layout and the workstation, on every page load.
+//
+// 200,000 was incoherent as a ceiling here: readAllRowsBounded pages strictly
+// sequentially, so reaching it costs 201 round trips — ~10s at a 50ms RTT before
+// Postgres does the OFFSET work — and no admin route sets maxDuration, so the
+// function is killed long before the loop ends. `truncated` would never be
+// returned, which means the "these counts are a floor" banner this change added
+// could never render at exactly the scale it was written for: the page would
+// 504 instead.
+//
+// 25,000 costs at most 26 sequential requests and about 25 MB, both of which
+// finish inside a default function budget — so a store past the ceiling gets the
+// honest banner instead of a dead page. A store that sustains more than 25,000
+// live paid orders needs the exception predicates pushed into SQL, which means
+// moving the rules out of fulfillment-buckets.ts and is a design decision, not a
+// constant.
+const MAX_BUCKET_ORDERS = 25_000;
 
 /** Exactly the shape BUCKET_DECISION_COLUMNS selects. */
 type BucketDecisionRow = OrderBucketInput & { order_id: string };
