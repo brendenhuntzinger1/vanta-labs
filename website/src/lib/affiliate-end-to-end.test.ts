@@ -185,10 +185,43 @@ vi.mock("@/lib/supabase-server", () => {
         const b: Record<string, unknown> = {
           eq(c: string, v: unknown) { f[c] = v; return b; },
           in(c: string, v: unknown[]) { f[`in:${c}`] = v; return b; },
+          // ORDER AND RANGE, so a PAGED read can be modelled here at all.
+          //
+          // Without these the double answers eq/in/maybeSingle and nothing
+          // else, so any caller that pages — `.order("id").range(from, to)`,
+          // which is how every other financial read in this codebase reaches
+          // past PostgREST's 1,000-row cap — dies with "order is not a
+          // function". That is a limit of the double, not of the code under
+          // test, and it blocked the F-A-10 paging fix until this landed.
+          //
+          // `order` sorts the filtered rows; `range` slices them inclusively,
+          // matching PostgREST. Both keep returning the builder so the chain
+          // composes in any order.
+          order(c: string, opts?: { ascending?: boolean }) {
+            f[`order:${c}`] = opts?.ascending === false ? "desc" : "asc";
+            return b;
+          },
+          range(from: number, to: number) { f["range"] = [from, to]; return b; },
           async maybeSingle() { return { data: store.get(String(f.order_id)) ?? null, error: null }; },
           then(res: (v: unknown) => unknown) {
-            const rows = [...store.values()].filter((r) => Object.entries(f).every(([k, v]) =>
-              k.startsWith("in:") ? (v as unknown[]).includes(r[k.slice(3)]) : r[k] === v));
+            let rows = [...store.values()].filter((r) => Object.entries(f).every(([k, v]) => {
+              if (k.startsWith("in:")) return (v as unknown[]).includes(r[k.slice(3)]);
+              if (k.startsWith("order:") || k === "range") return true;
+              return r[k] === v;
+            }));
+
+            const orderKey = Object.keys(f).find((k) => k.startsWith("order:"));
+            if (orderKey) {
+              const col = orderKey.slice(6);
+              const dir = f[orderKey] === "desc" ? -1 : 1;
+              rows = [...rows].sort((x, y) =>
+                String(x[col] ?? "") < String(y[col] ?? "") ? -dir
+                  : String(x[col] ?? "") > String(y[col] ?? "") ? dir : 0);
+            }
+
+            const range = f["range"] as [number, number] | undefined;
+            if (range) rows = rows.slice(range[0], range[1] + 1);
+
             return Promise.resolve(res({ data: rows, error: null }));
           },
         };

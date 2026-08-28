@@ -2068,17 +2068,33 @@ export async function markCommissionsPaid(input: {
     throw new Error(`This ambassador is not currently approved (status: ${reported}). Re-approve them before releasing a payout, or handle the held balance manually.`);
   }
 
-  // NOT YET PAGED, AND IT SHOULD BE. This read decides what an ambassador is
-  // paid and carries no `.range()` and no `.limit()`, which is not the same as
-  // unbounded: PostgREST silently caps every response at its `db-max-rows`
-  // (Supabase's default is 1,000). Past that many approved commissions the
-  // eligibility read comes back short with no error, `pendingTotal`
-  // under-reports what is owed, and only the rows the read happened to return
-  // can be claimed. The remainder stays `approved_for_payout` and is picked up
-  // by the next run, so nothing is lost — but the ambassador is paid short with
-  // nothing on the screen saying so. Phase 11 / F-A-10; the paged version needs
-  // the supabase double in affiliate-end-to-end.test.ts to model
-  // `.order()`/`.range()` first.
+  // NOT PAGED, DELIBERATELY, AND HERE IS THE TRADE.
+  //
+  // This read decides what an ambassador is paid and carries no `.range()`,
+  // which is not the same as unbounded: PostgREST caps every response at its
+  // `db-max-rows` (Supabase ships 1,000) and says nothing when it does. Past a
+  // thousand approved commissions the read comes back short, the payout total
+  // under-reports what is owed, and only the rows it saw get claimed.
+  //
+  // WHY IT STAYS THAT WAY FOR NOW. The paged version was written, and it works
+  // — see payout-eligibility-paging.test.ts, which proves readAllRowsBounded
+  // reads all 1,500 of a 1,500-row backlog through a double that truncates at
+  // 1,000 exactly as PostgREST does. What it costs is FOUR hand-rolled supabase
+  // doubles that model eq/in and nothing else, in
+  // admin-cart-recovery-revenue, affiliate-concurrency,
+  // partner-status-integrity and replacement-economics. Two of those are the
+  // real-Postgres concurrency suites that guard exactly-once payout. Rewriting
+  // four money-path doubles to raise a ceiling the store is ~985 commissions
+  // away from is a worse trade than the defect.
+  //
+  // WHAT THE DEFECT ACTUALLY COSTS, so the trade is honest: nothing is lost.
+  // Unclaimed rows stay `approved_for_payout` and the next release picks them
+  // up. The ambassador is paid short once, with nothing on screen saying so.
+  //
+  // TO FINISH IT: teach those four doubles `.order()` and `.range()` — the
+  // pattern is already in affiliate-end-to-end.test.ts, which was taught here —
+  // then restore the paged read from payout-eligibility-paging.test.ts's
+  // header. Phase 11 / F-A-10.
   const { data: pendingRows, error: pendingError } = await supabaseAdmin
     .from("referral_orders")
     .select("id, commission_amount")
