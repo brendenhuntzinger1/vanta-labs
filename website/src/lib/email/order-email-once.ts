@@ -42,7 +42,35 @@ import { supabaseAdmin } from "@/lib/supabase-server";
  * would be a far worse bug than the one this fixes.
  */
 
-export type OrderEmailKind = "order_confirmation" | "refund_confirmation";
+/**
+ * Which email about an order this is — and therefore which send-once slot it
+ * claims, since the unique index is on (order_id, kind).
+ *
+ * REFUNDS CARRY THE AMOUNT IN THE KIND, receipts do not. An order has exactly
+ * one confirmation, so 'order_confirmation' is a complete identity. It has as
+ * many refund notices as there are refunds: two-step refunds (goods, then
+ * shipping) are ordinary practice here — see the cumulative-refund handling in
+ * payment-webhook — and each states a different amount, so each is a DIFFERENT
+ * email the customer must receive. Keyed on the bare kind, the second one would
+ * be swallowed as a duplicate and the customer would be refunded in silence.
+ * Keyed on the cumulative amount, a re-delivered event for the same refund still
+ * collapses (same total, same slot) while a genuinely new refund total sends.
+ */
+export type OrderEmailKind =
+  | "order_confirmation"
+  | "refund_confirmation"
+  | `refund_confirmation:${number}`;
+
+/**
+ * The send-once identity of a refund confirmation: the kind plus the CUMULATIVE
+ * amount refunded, in cents, which is the figure the email itself states.
+ *
+ * Cents because the slot is a string equality test and dollars are a float —
+ * 20.1 + 0.2 must not produce a different slot than 20.3.
+ */
+export function refundEmailKind(cumulativeRefundAmount: number): OrderEmailKind {
+  return `refund_confirmation:${Math.round(Number(cumulativeRefundAmount) * 100)}`;
+}
 
 export interface OrderEmailOutcome {
   /** True when this call actually handed a message to the provider. */
