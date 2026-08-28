@@ -17,11 +17,18 @@ export async function GET(request: Request) {
 
   try {
     if (!bucket) {
-      const [counts, cancelledWithLabel] = await Promise.all([
+      const [board, cancelledWithLabel] = await Promise.all([
         getBucketCounts(),
         getCancelledWithLabel({ limit: 25 }),
       ]);
-      return NextResponse.json({ success: true, counts, cancelledWithLabel });
+      // `countsTruncated` travels with the counts. A consumer that renders the
+      // board must be able to tell a quiet store from a short read.
+      return NextResponse.json({
+        success: true,
+        counts: board.counts,
+        countsTruncated: board.truncated,
+        cancelledWithLabel,
+      });
     }
 
     if (!BUCKETS.some((b) => b.id === bucket)) {

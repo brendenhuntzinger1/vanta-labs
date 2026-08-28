@@ -39,7 +39,7 @@ export default async function FulfillmentWorkstationPage() {
   // Exceptions are loaded FIRST in the sense that matters: they are rendered
   // above the queues, because an operator who picks before reading them has
   // already wasted the trip for any order that turns out to be held.
-  const [counts, exceptions, ready, inProgress, awaitingCarrier, cancelledWithLabel, batches] =
+  const [board, exceptionQueue, ready, inProgress, awaitingCarrier, cancelledWithLabel, batches] =
     await Promise.all([
       getBucketCounts(),
       getExceptionOrders({ limit: 50 }),
@@ -91,9 +91,16 @@ export default async function FulfillmentWorkstationPage() {
         transitStaleDays={TRANSIT_STALE_DAYS}
       />
 
+      {board.truncated || exceptionQueue.truncated ? (
+        <p className="mb-6 rounded-xl border border-amber-300/40 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
+          <strong>This board is incomplete.</strong> The store holds more orders than one scan reads, so the
+          counts below are a floor, not a total — there is at least this much waiting, and possibly more.
+        </p>
+      ) : null}
+
       <FulfillmentWorkstation
-        counts={counts}
-        exceptions={exceptions}
+        counts={board.counts}
+        exceptions={exceptionQueue.orders}
         exceptionReasons={[...EXCEPTION_REASONS]}
         ready={ready}
         inProgress={inProgress}

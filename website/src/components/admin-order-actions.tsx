@@ -3,6 +3,8 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { pointsToDollars } from "@/lib/points-math";
+
 function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 }
@@ -14,6 +16,8 @@ export function AdminOrderActions({
   initialTrackingNumber,
   amountPaid,
   refundAmount,
+  storeCreditRedeemedCents = 0,
+  pointsRedeemed = 0,
   canRefund,
   initialCarrier,
   initialEstimatedDelivery,
@@ -25,6 +29,10 @@ export function AdminOrderActions({
   initialTrackingNumber: string | null;
   amountPaid: number;
   refundAmount: number;
+  /** `orders.store_credit_redeemed_cents` — tender, and refundable. */
+  storeCreditRedeemedCents?: number;
+  /** `orders.points_redeemed` — tender, and refundable. */
+  pointsRedeemed?: number;
   canRefund: boolean;
   initialCarrier?: string | null;
   initialEstimatedDelivery?: string | null;
@@ -58,6 +66,35 @@ export function AdminOrderActions({
   );
 
   const remaining = Math.max(0, amountPaid - refundAmount);
+
+  // ---------------------------------------------------------------------
+  // STORE CREDIT AND POINTS ARE TENDER, AND THIS PANEL USED TO FORGET IT.
+  //
+  // `remaining` above is a statement about CASH. The refund route is explicit
+  // that it is not the whole question: it computes the same `nonCashTender`
+  // from these two columns and deliberately accepts a refund on an order whose
+  // amount_paid is zero, because that is the only path by which a customer's
+  // store credit ever comes back.
+  //
+  // Gating the control on `remaining > 0` alone meant an order settled entirely
+  // with credit — amount_paid 0 — rendered "Fully reimbursed." in green on its
+  // first ever view, with no control anywhere in the admin able to return the
+  // credit. The screen reported a closed matter and the customer was out the
+  // money.
+  //
+  // Computed from the same two columns and the same exported points rate the
+  // server uses, so the panel cannot offer a refund the route would reject, or
+  // hide one it would accept.
+  // ---------------------------------------------------------------------
+  const nonCashTender = Math.round(
+    (Math.max(0, storeCreditRedeemedCents) / 100 + Math.max(0, pointsToDollars(pointsRedeemed))) * 100,
+  ) / 100;
+  /** The route's own idempotency guard: this order's refund has already run. */
+  const alreadyRefunded = String(initialPaymentStatus ?? "").toLowerCase() === "refunded";
+  /** Cash is what an amount box can be about. Nothing else. */
+  const cashAvailable = remaining > 0;
+  const nonCashOutstanding = !alreadyRefunded && nonCashTender > 0;
+  const canRecordReimbursement = !alreadyRefunded && (cashAvailable || nonCashTender > 0);
 
   const runAction = async (action: string, promptMessage?: string, extra?: Record<string, unknown>) => {
     if (promptMessage && !window.confirm(promptMessage)) {
@@ -116,6 +153,18 @@ export function AdminOrderActions({
 
     if (trimmed && (!Number.isFinite(parsedAmount) || (parsedAmount as number) <= 0)) {
       setMessage("Enter a valid refund amount, or leave blank to refund the remaining balance.");
+      return;
+    }
+
+    // A CREDIT-ONLY RETURN IS A DIFFERENT ACT AND GETS DIFFERENT WORDS. No cash
+    // moved and none is being claimed to have moved; Vanta itself puts the
+    // credit and the points back.
+    if (!cashAvailable) {
+      void runAction(
+        "refund",
+        `Return ${money(nonCashTender)} of store credit and points to this customer?\n\nThis order collected no cash, so nothing you have paid is being recorded. Vanta puts the credit and points back on the customer's account.`,
+        { reimbursementMethod, note: reimbursementNote.trim() || undefined },
+      );
       return;
     }
 
@@ -193,6 +242,11 @@ export function AdminOrderActions({
         </p>
         <p className="mt-2 text-sm text-zinc-300">
           Paid {money(amountPaid)} • Reimbursed {money(refundAmount)} • Remaining {money(remaining)}
+          {nonCashTender > 0 ? (
+            <>
+              {" "}• Store credit &amp; points {money(nonCashTender)}
+            </>
+          ) : null}
         </p>
         {/* The most consequential sentence on the page gets the most prominent
             styling on it. Someone skimming must not read "reimbursement",
@@ -207,17 +261,30 @@ export function AdminOrderActions({
           adjust the count yourself in Inventory.
         </p>
         {canRefund ? (
-          remaining > 0 ? (
+          canRecordReimbursement ? (
             <div className="mt-3 space-y-3">
-              <div className="grid gap-3 sm:grid-cols-3">
-                <label className="text-sm text-zinc-300">Amount
-                  <input
-                    value={refundInput}
-                    onChange={(e) => setRefundInput(e.target.value)}
-                    placeholder={`Full remaining (${money(remaining)})`}
-                    className="vl-input mt-1 w-full px-3 py-2 text-sm"
-                  />
-                </label>
+              {/* CREDIT-ONLY ORDERS GET NO AMOUNT BOX. The route rejects any
+                  non-zero amount on an order that collected no cash — recording
+                  cash returned that never was would push reported revenue below
+                  zero — so offering the field could only produce a 400. */}
+              {!cashAvailable ? (
+                <p className="rounded-lg border border-sky-300/40 bg-sky-300/10 px-3 py-2 text-[13px] text-sky-100">
+                  <strong>This order collected no cash.</strong> It was settled with {money(nonCashTender)} of store
+                  credit and points, so there is nothing for you to send. Vanta returns the credit and the points to
+                  the customer&apos;s account itself.
+                </p>
+              ) : null}
+              <div className={`grid gap-3 ${cashAvailable ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+                {cashAvailable ? (
+                  <label className="text-sm text-zinc-300">Amount
+                    <input
+                      value={refundInput}
+                      onChange={(e) => setRefundInput(e.target.value)}
+                      placeholder={`Full remaining (${money(remaining)})`}
+                      className="vl-input mt-1 w-full px-3 py-2 text-sm"
+                    />
+                  </label>
+                ) : null}
                 <label className="text-sm text-zinc-300">How you sent it
                   <select
                     value={reimbursementMethod}
@@ -239,8 +306,18 @@ export function AdminOrderActions({
                 </label>
               </div>
               <button type="button" disabled={saving} onClick={handleRefund} className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60">
-                {saving ? "Recording…" : "Record manual reimbursement"}
+                {saving
+                  ? "Recording…"
+                  : cashAvailable
+                    ? "Record manual reimbursement"
+                    : `Return store credit & points (${money(nonCashTender)})`}
               </button>
+              {cashAvailable && nonCashOutstanding ? (
+                <p className="text-[13px] text-zinc-400">
+                  This order also used {money(nonCashTender)} of store credit and points. Refunding the full remaining
+                  balance returns those too; a partial refund does not.
+                </p>
+              ) : null}
             </div>
           ) : (
             <p className="mt-3 text-sm text-emerald-300">Fully reimbursed.</p>

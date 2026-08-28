@@ -244,6 +244,11 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
           initialTrackingNumber={data.tracking_number ? String(data.tracking_number) : null}
           amountPaid={Number(data.amount_paid ?? 0)}
           refundAmount={Number(data.refund_amount ?? 0)}
+          // Tender, and refundable. Without these the panel can only reason
+          // about cash, and an order settled entirely with store credit reads
+          // as "Fully reimbursed" before anything has been reimbursed at all.
+          storeCreditRedeemedCents={Number(data.store_credit_redeemed_cents ?? 0)}
+          pointsRedeemed={Number(data.points_redeemed ?? 0)}
           canRefund={canManageRefunds(session.role)}
           initialCarrier={shipment?.carrier ?? null}
           initialEstimatedDelivery={shipment?.estimated_delivery ?? null}
