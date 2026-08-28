@@ -1630,6 +1630,40 @@ function scheduleShippoSync(orderId: string): void {
   }
 }
 
+/**
+ * How long the unattributed-event WARNING stays quiet after firing.
+ *
+ * Persisted rather than held in memory: each webhook is a fresh serverless
+ * invocation, so an in-process timestamp is always empty and throttles nothing.
+ * Same shape as express-reconcile's backlog throttle.
+ */
+const UNATTRIBUTED_WARNING_THROTTLE_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Has the warning lane been quiet long enough to fire again?
+ *
+ * FAILS OPEN in every error path — a throttle must never be the reason a real
+ * warning goes unsent. Only ever consulted for the warning; a critical
+ * unattributed charge is never throttled.
+ */
+async function unattributedWarningIsDue(): Promise<boolean> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("system_alerts")
+      .select("created_at")
+      .eq("type", "payment_event_unattributed")
+      .eq("severity", "warning")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error || !data || data.length === 0) return true;
+    const last = Date.parse(String((data[0] as { created_at?: string }).created_at ?? ""));
+    if (!Number.isFinite(last)) return true;
+    return Date.now() - last > UNATTRIBUTED_WARNING_THROTTLE_MS;
+  } catch {
+    return true;
+  }
+}
+
 export async function processPaymentWebhook(payload: string, signature: string, secret: string, eventId: string) {
   const provider = getPaymentProvider();
   const isValid = provider.verifyWebhookSignature(payload, signature, secret);
@@ -1716,6 +1750,16 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       // failed or cancelled charge that names no order took nobody's money, and
       // paging the owner for one at 3am is how a real critical gets ignored.
       const moneyMoved = nextStatus === "paid" || nextStatus === "refunded" || nextStatus === "partially_refunded";
+      // THROTTLE THE NOISY LANE, NEVER THE MONEY ONE.
+      //
+      // Each critical here is a DISTINCT real charge that only a human can
+      // match, so suppressing one loses money visibility — those always fire.
+      // The warning lane is the one that can repeat: a processor that stopped
+      // sending our order reference produces one per delivery, and an operator
+      // who is emailed forty times learns to ignore the type, which is how the
+      // critical above gets missed too.
+      const due = moneyMoved || (await unattributedWarningIsDue());
+      if (due) {
       await recordSystemAlert({
         type: "payment_event_unattributed",
         severity: moneyMoved ? "critical" : "warning",
@@ -1734,6 +1778,7 @@ export async function processPaymentWebhook(payload: string, signature: string, 
           amount: eventPayload.amount ?? null,
         },
       }).catch(() => {});
+      }
     }
     return {
       duplicate: false,

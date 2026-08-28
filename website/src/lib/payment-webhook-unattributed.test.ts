@@ -8,7 +8,34 @@ vi.mock("@/lib/monitoring", async (importOriginal) => ({
   recordSystemAlert,
 }));
 vi.mock("@/lib/catalog", async () => (await import("@/test-support/payment-suite-fakes")).catalogModule());
-vi.mock("@/lib/supabase-server", async () => (await import("@/test-support/payment-suite-fakes")).supabaseServerModule());
+// The shared payment fake knows nothing about system_alerts, and the warning
+// throttle reads the newest one back. Wrap it: everything else behaves exactly
+// as it does for every other payment suite, and this suite decides what the
+// alerts table says was written last.
+const alertsTable = vi.hoisted(() => ({ lastWarningAt: null as string | null }));
+
+vi.mock("@/lib/supabase-server", async () => {
+  const fake = (await import("@/test-support/payment-suite-fakes")).supabaseServerModule() as {
+    supabaseAdmin: { from: (table: string) => unknown };
+  };
+  const from = (table: string) => {
+    if (table === "system_alerts") {
+      const chain: Record<string, unknown> = {
+        select: () => chain,
+        eq: () => chain,
+        order: () => chain,
+        limit: async () => ({
+          data: alertsTable.lastWarningAt ? [{ created_at: alertsTable.lastWarningAt }] : [],
+          error: null,
+        }),
+        insert: async () => ({ error: null }),
+      };
+      return chain;
+    }
+    return fake.supabaseAdmin.from(table);
+  };
+  return { supabaseAdmin: { ...fake.supabaseAdmin, from } };
+});
 
 // ---------------------------------------------------------------------------
 // VL-28 / P9-01. AN EVENT THAT NAMES NO ORDER MUST NOT CREATE ONE.
@@ -45,6 +72,7 @@ const alertsOfType = (type: string) =>
 beforeEach(() => {
   store().clear();
   recordSystemAlert.mockClear();
+  alertsTable.lastWarningAt = null;
 });
 
 describe("a webhook that cannot be attributed to an order", () => {
@@ -89,6 +117,41 @@ describe("a webhook that cannot be attributed to an order", () => {
     await processPaymentWebhook(payload, sign(payload), SECRET, "evt-unattributed-failed");
 
     expect(alertsOfType("payment_event_unattributed")[0]?.severity).toBe("warning");
+  });
+
+  it("stays quiet on a repeat WARNING inside the throttle window", async () => {
+    // A processor that stopped sending our order reference produces one of
+    // these per delivery. Forty emails is how the critical above gets ignored.
+    alertsTable.lastWarningAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+
+    const payload = unattributed("payment.failed");
+    await processPaymentWebhook(payload, sign(payload), SECRET, "evt-throttled");
+
+    expect(alertsOfType("payment_event_unattributed")).toHaveLength(0);
+  });
+
+  it("warns again once the throttle window has passed", async () => {
+    alertsTable.lastWarningAt = new Date(Date.now() - 7 * 60 * 60 * 1000).toISOString();
+
+    const payload = unattributed("payment.failed");
+    await processPaymentWebhook(payload, sign(payload), SECRET, "evt-throttle-expired");
+
+    expect(alertsOfType("payment_event_unattributed")).toHaveLength(1);
+  });
+
+  it("never lets the throttle silence an unattributable real charge", async () => {
+    // Each critical is a DISTINCT charge only a human can match. Suppressing
+    // one loses the money, so the throttle must not reach this lane.
+    alertsTable.lastWarningAt = new Date().toISOString();
+
+    for (const eventId of ["evt-charge-a", "evt-charge-b"]) {
+      const payload = unattributed("payment.succeeded", { amount: 120 });
+      await processPaymentWebhook(payload, sign(payload), SECRET, eventId);
+    }
+
+    const alerts = alertsOfType("payment_event_unattributed");
+    expect(alerts).toHaveLength(2);
+    expect(alerts.every((alert) => alert?.severity === "critical")).toBe(true);
   });
 
   it("still reports the event as handled rather than throwing", async () => {
