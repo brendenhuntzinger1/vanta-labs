@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { TurnstileWidget } from "@/components/turnstile-widget";
+import { resolveSignupOutcome } from "@/lib/auth-signup-outcome";
 
 // When a Turnstile site key is configured, every auth call carries a CAPTCHA
 // token that Supabase verifies — blocking bots from draining email + SMS spend.
@@ -240,24 +241,30 @@ export function AccountAuthForm() {
         },
       });
 
-      if (signUpError || !data.user) {
-        throw new Error(signUpError?.message ?? "Unable to create account");
+      if (signUpError) {
+        throw new Error(signUpError.message);
       }
 
-      // SECURITY: Supabase intentionally returns an obfuscated user with an
-      // empty identities array (and sends no email) when the address already
-      // exists — precisely so signup can't be used to enumerate which emails
-      // have accounts. Branching the UI on that signal would re-expose it. We
-      // therefore show the SAME neutral outcome whether the email is new or
-      // already registered; the emailed link (confirm vs. "you already have an
-      // account, sign in") resolves the distinction privately, to the inbox
-      // owner only. A brand-new signup that returns a session still proceeds.
-      if (!data.session?.access_token) {
-        setMessage("Check your email to continue — we've sent a secure link to finish setting up or accessing your account.");
+      // SECURITY: Supabase returns an obfuscated user with an empty identities
+      // array — and sends NO email — when the address already exists, so signup
+      // can't be used to enumerate accounts. resolveSignupOutcome preserves that
+      // by returning the identical outcome either way.
+      //
+      // What it deliberately does NOT do is claim a link was sent. For a
+      // returning user none is, and the old copy ("we've sent a secure link")
+      // left them waiting on an inbox that would never receive anything — with
+      // the reset link hidden, because it used to render only in login mode.
+      // See auth-signup-outcome.ts.
+      const outcome = resolveSignupOutcome(data);
+      if (outcome.kind === "failed") {
+        throw new Error("Unable to create account");
+      }
+      if (outcome.kind === "check-email") {
+        setMessage(outcome.message);
         return;
       }
 
-      await establishSessionAndGo(data.session.access_token);
+      await establishSessionAndGo(outcome.accessToken);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to create account");
     } finally {
@@ -285,6 +292,51 @@ export function AccountAuthForm() {
       await establishSessionAndGo(data.session.access_token);
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to sign in");
+    } finally {
+      setLoading(false);
+      resetCaptcha();
+    }
+  };
+
+  // An account that never got confirmed had no way back. Its verification link
+  // is one-time, and mailbox security scanners routinely fetch every link in a
+  // message before the human does — which burns the token and leaves the real
+  // click with "Email link is invalid or has expired". The auth log shows
+  // exactly that ("One-time token not found") for an applicant who signed up on
+  // 2026-08-28 and is still unconfirmed.
+  //
+  // Re-submitting the signup form was the only workaround, and it is both
+  // rate-limited (429 over_email_send_rate_limit) and not labelled as a resend,
+  // so nobody found it. resend() is the supported path and is enumeration-safe:
+  // it reports the same success whether or not a pending signup exists.
+  const handleResendConfirmation = async () => {
+    const address = email.trim();
+    if (!address) {
+      setError("Enter your email address first, then choose “Resend confirmation email”.");
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const { error: resendError } = await supabase.auth.resend({
+        type: "signup",
+        email: address,
+        options: {
+          emailRedirectTo: getEmailRedirectUrl(`/account/login?verified=1&next=${encodeURIComponent(nextPath)}`),
+          captchaToken: captchaToken ?? undefined,
+        },
+      });
+
+      if (resendError) {
+        throw new Error(resendError.message);
+      }
+
+      setMessage("If that address has an account still waiting on confirmation, a new link is on its way. It can take a minute — check spam too.");
+    } catch (submitError) {
+      setError(submitError instanceof Error ? submitError.message : "Unable to resend the confirmation email");
     } finally {
       setLoading(false);
       resetCaptcha();
@@ -618,14 +670,31 @@ export function AccountAuthForm() {
             {mode === "signup" ? "Sign in" : "Create an account"}
           </button>
         </p>
-        {mode === "login" && loginMethod === "email" ? (
-          <p>
+        {/* Shown in SIGNUP mode too, deliberately.
+            A returning user who has forgotten their password reliably ends up
+            on the signup tab — the partner landing sends them to "Sign in /
+            Create account", and creating an account is what they think the
+            affiliate flow asks for. Supabase answers that with silence (no
+            email, by design), so the recovery link is the only way out, and it
+            used to be the one thing hidden on that tab. These are static links
+            rendered for everyone, so nothing here reveals whether an account
+            exists. */}
+        {mode === "signup" || loginMethod === "email" ? (
+          <p className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1">
             <Link
               href="/account/forgot-password"
               className="vl-focus-ring inline-flex min-h-[36px] items-center rounded-[6px] px-1 text-[0.875rem] text-white/45 underline-offset-4 transition-colors duration-200 hover:text-white/80 hover:underline"
             >
               Forgot your password?
             </Link>
+            <button
+              type="button"
+              onClick={handleResendConfirmation}
+              disabled={loading}
+              className="vl-focus-ring inline-flex min-h-[36px] items-center rounded-[6px] px-1 text-[0.875rem] text-white/45 underline-offset-4 transition-colors duration-200 hover:text-white/80 hover:underline disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Resend confirmation email
+            </button>
           </p>
         ) : null}
       </div>
