@@ -89,35 +89,52 @@ need no per-session install:
   across `.ts/.tsx/.js/.jsx`. Resolved by the type system rather than by text
   match, so it finds every real call site and no false ones.
 
-**typescript-lsp needs a TypeScript in the workspace, not a global one.** The
-plugin is enabled by the checked-in settings and the marketplace entry carries
-its own `lspServers` config, so nothing is missing on the plugin side. Two
-things have to be true at session start:
+**typescript-lsp needs a TypeScript 5 it can reach.** The plugin is enabled by
+the checked-in settings and the marketplace entry carries its own `lspServers`
+config, so nothing is missing on the plugin side. What it needs is a real
+`tsserver`, and the session-start hook below now supplies one on every web
+session — you should not have to do this by hand.
 
-    npm install -g typescript-language-server   # the server binary
-    cd website && npm install                   # the tsserver it drives
+`typescript-language-server` looks for TypeScript in the **workspace** first and
+falls back to the global install. Either one satisfies it:
 
-The second line is the one that matters and the one that is easy to miss.
-`typescript-language-server` resolves TypeScript from the **workspace**, so with
-no `website/node_modules` it exits during `initialize` with "Could not find a
-valid TypeScript installation" and every LSP feature silently does nothing.
+    cd website && npm install       # website's pinned typescript ^5 (5.9.3)
+    npm install -g typescript@5     # global fallback, also works outside website/
 
-A global `typescript` does not rescue this, and installing one is actively
-misleading: bare `npm install -g typescript` now resolves to TypeScript 7 — the
-native port — which ships `tsc.js` and no `lib/tsserver.js`, and whose `bin`
-exposes only `tsc`. It cannot back a language server at all. `website`'s own
-`typescript: ^5` (5.9.3) is what the server needs, and a plain `npm install`
-there supplies it.
+The `@5` is not optional. Bare `npm install -g typescript` now resolves to
+TypeScript 7 — the native port — which ships `tsc.js` and no `lib/tsserver.js`,
+and whose `bin` exposes only `tsc`. It cannot back a language server at all, so
+installing it looks like a fix and changes nothing.
 
-The cloud container is ephemeral, so the `website` install has to live in the
-`vanta` environment's setup script next to the Superpowers install, or the LSP
-is dead in every fresh session. The client is spawned once at session start:
-installing deps mid-session fixes the workspace but not the running session, so
-restart it afterwards.
+With neither in place the server exits during `initialize` with "Could not find
+a valid TypeScript installation", and every LSP feature silently does nothing —
+no error surfaces anywhere.
+
+The client is spawned once at session start, so installing TypeScript
+mid-session fixes the container but not the running session: restart it
+afterwards.
 
 To tell a dead server from a broken plugin: `ps aux | grep
 typescript-language-server`. No process means it exited at startup, and the
-cause is almost always a missing `website/node_modules`.
+cause is almost always a missing TypeScript 5.
+
+## Session startup (checked in)
+
+`.claude/hooks/session-start.sh` runs before every Claude Code on the web
+session, registered as a `SessionStart` hook in `.claude/settings.json`. The
+cloud container is ephemeral and starts from a fresh clone, so without it
+`website/node_modules` is absent and `vitest`, `eslint`, `next build` and the
+typescript-lsp plugin all have nothing to run against.
+
+It installs `website`'s dependencies and makes sure a global
+`typescript-language-server` and `typescript@5` are present. It is idempotent
+(a warm container re-runs it in under a second) and it no-ops entirely unless
+`CLAUDE_CODE_REMOTE=true`, so it never mutates a local developer's machine.
+
+It runs synchronously, which costs a few seconds of session startup on a cold
+container but guarantees dependencies exist before the first tool call. Switch
+it to `{"async": true}` if you would rather have faster startup and accept the
+race.
 
 ## Other tooling
 
