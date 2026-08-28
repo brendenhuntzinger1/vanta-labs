@@ -10,7 +10,11 @@ import { DEFAULT_COMMISSION_HOLD_DAYS } from "@/lib/referral-config";
 // the same label the checkout screen, the invoice and Admin → Payments use.
 const CARD_FEE_LABEL = DEFAULT_CARD_PROCESSING_FEE.label;
 
-function escapeHtml(value: string) {
+// Exported so the marketing wrapper escapes the CAN-SPAM postal address exactly
+// the way campaignTemplate does — the two must agree, or the "is the address
+// already in this HTML?" check silently stops matching and mail goes out with
+// the address twice.
+export function escapeHtml(value: string) {
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")

@@ -5,6 +5,7 @@ import { generateUnsubscribeToken } from "@/lib/email/unsubscribe";
 import { getSiteUrl } from "@/lib/env";
 import { getEmailRuntimeConfig, resolveMarketingFrom } from "@/lib/email/settings";
 import type { EmailSendResult, EmailTemplate } from "@/lib/email/types";
+import { escapeHtml } from "@/lib/email/templates";
 
 // Compliance wrapper for every promotional/marketing send (welcome,
 // monthly benefits, birthday, win-back, launch, back-in-stock, cart
@@ -54,21 +55,46 @@ export async function sendMarketingEmail(
   const token = generateUnsubscribeToken(email);
   const unsubscribeUrl = `${getSiteUrl()}/api/unsubscribe?email=${encodeURIComponent(email)}&token=${token}`;
   const footerHtml = `<p style="margin:16px 0 0;font-size:11px;color:#71717a;">You're receiving this because you're a Vanta Labs customer or member. <a href="${unsubscribeUrl}" style="color:#a1a1aa;">Unsubscribe</a> from marketing emails.</p>`;
-  const pixelHtml = input.openTrackingPixelUrl
-    ? `<img src="${input.openTrackingPixelUrl}" width="1" height="1" alt="" style="display:none;" />`
-    : "";
-  const appendedHtml = `${footerHtml}${pixelHtml}`;
-
-  const html = input.html.includes("</body>")
-    ? input.html.replace("</body>", `${appendedHtml}</body>`)
-    : `${input.html}${appendedHtml}`;
-  const text = `${input.text}\n\nUnsubscribe: ${unsubscribeUrl}`;
 
   // Marketing sends from its OWN address when one is configured, so a campaign
   // that draws complaints damages only that domain's reputation — not the one
   // carrying receipts and password resets. Unset, this resolves to the
   // transactional From and nothing changes.
   const emailConfig = await getEmailRuntimeConfig();
+
+  // VL-13 / E-01 — THE CAN-SPAM POSTAL ADDRESS BELONGS TO EVERY COMMERCIAL
+  // MESSAGE, NOT JUST THE ONES COMPOSED IN ADMIN.
+  //
+  // `campaignTemplate` takes a postalAddress and renders it, and the campaign
+  // sender refuses to send without one. Nothing else did. The cart-recovery
+  // sequence — four emails, the highest-volume promotional mail this store
+  // sends — is built from its own templates, which never had an address
+  // parameter, so every recovery email went out with an unsubscribe link and no
+  // physical address. So did the birthday, win-back, launch and back-in-stock
+  // mails. An opt-out does not substitute for the address; 15 U.S.C. § 7704
+  // requires both.
+  //
+  // Applying it HERE rather than threading a new parameter through every
+  // template and call site means a template added tomorrow is compliant without
+  // its author knowing this rule: the wrapper that already owns suppression and
+  // the unsubscribe link owns the address too. Skipped when the rendered HTML
+  // already carries it, so campaignTemplate's own footer is not duplicated.
+  const postalAddress = String(emailConfig.marketingPostalAddress ?? "").trim();
+  const alreadyCarriesAddress = Boolean(postalAddress) && input.html.includes(escapeHtml(postalAddress).replace(/\n/g, "<br/>"));
+  const addressHtml = postalAddress && !alreadyCarriesAddress
+    ? `<p style="margin:12px 0 0;font-size:11px;color:#71717a;">${escapeHtml(postalAddress).replace(/\n/g, "<br/>")}</p>`
+    : "";
+
+  const pixelHtml = input.openTrackingPixelUrl
+    ? `<img src="${input.openTrackingPixelUrl}" width="1" height="1" alt="" style="display:none;" />`
+    : "";
+  const appendedHtml = `${footerHtml}${addressHtml}${pixelHtml}`;
+
+  const html = input.html.includes("</body>")
+    ? input.html.replace("</body>", `${appendedHtml}</body>`)
+    : `${input.html}${appendedHtml}`;
+  const addressText = postalAddress && !input.text.includes(postalAddress) ? `\n\n${postalAddress}` : "";
+  const text = `${input.text}\n\nUnsubscribe: ${unsubscribeUrl}${addressText}`;
   const result = await sendEmail({
     to: input.to,
     subject: input.subject,

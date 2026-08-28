@@ -30,6 +30,7 @@ import "server-only";
 // payment_events, which is the same exactly-once path the order webhooks use.
 
 import { supabaseAdmin } from "@/lib/supabase-server";
+import { recordMembershipChargeOrder } from "@/lib/membership-orders";
 
 export const MEMBERSHIP_EVENT_TYPES = new Set([
   "membership.created",
@@ -72,12 +73,16 @@ interface LocalMembershipRow {
   user_id: string;
   tier_id: string | null;
   status: string | null;
+  // Carried so the renewal ORDER can say which cycle was billed. Reading it
+  // from the event would be wrong: Veyra sends the plan's interval, and the
+  // local row is what every other membership surface reports from.
+  billing_cycle: string | null;
 }
 
 async function findLocalMembership(veyraMembershipId: string): Promise<LocalMembershipRow | null> {
   const { data, error } = await supabaseAdmin
     .from("customer_memberships")
-    .select("user_id, tier_id, status")
+    .select("user_id, tier_id, status, billing_cycle")
     .eq("veyra_membership_id", veyraMembershipId)
     .maybeSingle();
   if (error) throw error;
@@ -174,6 +179,38 @@ export async function handleMembershipEvent(
       amountCents: chargedCents,
       status: "succeeded",
       providerChargeId: veyraMembershipId,
+    });
+
+    // THE MONEY, WHERE THE REPORTS LOOK FOR IT (VL-29). The billing event above
+    // is read by one admin screen; every revenue surface reads `orders`.
+    //
+    // Keyed to the PERIOD, not the delivery: `next_renewal_at` is what Veyra
+    // says this charge bought, so a redelivery of the same renewal collapses
+    // onto the same order and next month's renewal is still its own. It falls
+    // back to the period just ended, then to the day, because an event missing
+    // both dates must still be recorded rather than dropped.
+    //
+    // THIS ASSUMES VEYRA DOES NOT SEND membership.renewed FOR THE FIRST INVOICE.
+    // The signup charge is booked by startMembershipSignup under a
+    // `membership-signup:<subscription>` key, and the two key namespaces cannot
+    // collide by construction — so a `renewed` event covering the period the
+    // signup already paid for would book a SECOND order for ONE charge. The
+    // event vocabulary this handler was written from says the signup event is
+    // `membership.created`, which is a no-op above, and no first-invoice
+    // `renewed` has ever been observed in production. If one ever is, note that
+    // the duplicate would already be visible one layer earlier, as two
+    // "renewal" rows in membership_billing_events for a single charge — that is
+    // the cheaper thing to watch, and it predates this order write.
+    const renewalPeriodKey =
+      (data.next_renewal_at ?? data.current_period_end ?? nowIso.slice(0, 10)) || nowIso.slice(0, 10);
+    await recordMembershipChargeOrder({
+      userId: local.user_id,
+      tierId: local.tier_id,
+      billingCycle: local.billing_cycle,
+      amountCents: chargedCents,
+      kind: "renewal",
+      paymentId: `membership-renewal:${veyraMembershipId}:${renewalPeriodKey}`,
+      paidAt: nowIso,
     });
 
     return { handled: true, membershipId: veyraMembershipId, userId: local.user_id };
