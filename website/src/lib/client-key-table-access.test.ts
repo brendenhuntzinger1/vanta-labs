@@ -203,3 +203,58 @@ describe("the locked tables are still written, server-side", () => {
     ).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A SCHEMA FILE HAS TO CLOSE ITS OWN TABLES. It cannot assume the database it
+// lands in has already been hardened.
+//
+// ads-system.sql enabled RLS on its thirteen tables and stopped there. In THIS
+// database that was enough, because
+// migrations-applied/20260828T0240_default_privilege_table_write_lockdown.sql
+// had already disarmed Supabase's default privilege — the one that grants anon
+// `arwdDxtm` on every new table in `public`, and the one that produced the
+// 64-of-70 grant sweep this project had to run.
+//
+// A fresh Supabase project has not had that fix. There, the file as written
+// would have created thirteen tables of ad spend, CPA and ROAS with the
+// publishable key able to READ AND WRITE them — while its own comment said "the
+// browser must never read the ad system". The production run did the revoke; the
+// file did not, so the protection existed only in this one database.
+//
+// Caught by the adversarial review of the session that wrote it, not by any
+// test, which is why this one exists now.
+// ---------------------------------------------------------------------------
+describe("schema files close their own tables to the publishable key", () => {
+  const ADS = "src/lib/sql/ads-system.sql";
+
+  const sql = () => {
+    const file = sqlFiles.find((candidate) => candidate.path === ADS);
+    expect(file, `${ADS} not found — was it moved?`).toBeDefined();
+    return file!.text;
+  };
+
+  it("ads-system.sql revokes anon and authenticated on every table it creates", () => {
+    // Inside the same loop that enables RLS, so the two can never drift apart
+    // by someone adding a table name to one array and not the other.
+    expect(sql()).toMatch(/revoke all on public\.%I from anon, authenticated/);
+  });
+
+  it("enabling RLS is not treated as sufficient on its own", () => {
+    // The defect, stated as source: an enable-RLS loop with no revoke beside it.
+    const body = sql();
+    const loop = body.slice(body.indexOf("6. RLS"));
+    const enables = [...loop.matchAll(/enable row level security/g)].length;
+    const revokes = [...loop.matchAll(/revoke all on public\.%I/g)].length;
+
+    expect(enables).toBeGreaterThan(0);
+    expect(revokes).toBe(enables);
+  });
+
+  it("closes its trigger function to PUBLIC, not just to anon", () => {
+    // PostgreSQL grants EXECUTE on a new function to PUBLIC. A revoke naming
+    // only anon and authenticated leaves PUBLIC covering both of them — the
+    // exact mechanism corrected in rpc-default-privilege-lockdown.sql.
+    expect(sql()).toContain("revoke all on function public.ad_action_log_no_rewrite() from public");
+    expect(sql()).toContain("alter function public.ad_action_log_no_rewrite() set search_path = public, pg_temp");
+  });
+});

@@ -10,13 +10,19 @@
 -- zero references to orders, order_items, products, customers, payments,
 -- coupons, referrals or ambassadors anywhere in this file.
 --
--- ONE DEVIATION FROM WHAT IS WRITTEN BELOW, applied deliberately. Section 6
--- enables RLS on all thirteen and stops there; the production run also did
--- `revoke all on public.<table> from anon, authenticated` for each, matching the
--- RLS-05 posture (migrations-applied/20260828T0245_...). A policy-less RLS table
--- already returns nothing to a client key, so that revoke changes no answer —
--- it means a future permissive policy is not on its own enough to publish the
--- store's ad spend, CPA and ROAS.
+-- THE PRODUCTION RUN DID MORE THAN THIS FILE ORIGINALLY SAID, and section 6 has
+-- since been corrected so the two match. The run also revoked anon and
+-- authenticated on all thirteen tables, closed the trigger function to PUBLIC,
+-- and pinned its search_path.
+--
+-- Leaving those only in the production run was a real defect, caught by the
+-- adversarial review of this session's diff: THIS database has the
+-- default-privilege fix (20260828T0240_...), but a fresh Supabase project does
+-- not, and there `enable row level security` alone would have handed the next
+-- environment thirteen tables of ad spend with the publishable key able to write
+-- them. A migration cannot assume the database it lands in has already been
+-- hardened. Section 6 now carries all three, and re-running it against this
+-- database is a no-op.
 --
 -- The one join that matters: utm_content == creative_id. It is stamped on the
 -- landing URL at publish time, captured by the existing attribution layer, and
@@ -348,6 +354,23 @@ create trigger ad_action_log_no_rewrite_trg
 -- Every table is enabled with no policy, so only the service-role key (which
 -- bypasses RLS) can reach them. The browser must never read the ad system: it
 -- contains competitor analysis, spend and the owner's private judgements.
+--
+-- RLS ALONE DOES NOT ACHIEVE THAT ON A FRESH DATABASE, which is why the revoke
+-- below is here rather than only in the production run. Supabase ships a DEFAULT
+-- PRIVILEGE granting anon and authenticated full rights on every new table in
+-- `public` (`anon=arwdDxtm`) — that default is what produced the 64-of-70 sweep
+-- this project had to run, and it is disarmed in THIS database by
+-- migrations-applied/20260828T0240_default_privilege_table_write_lockdown.sql.
+--
+-- A fresh Supabase project has not had that fix applied. So a file that only
+-- enables RLS hands the next environment thirteen tables of ad spend, CPA and
+-- ROAS with the publishable key able to write them — the exact thing the
+-- paragraph above says must never happen. A migration has to be self-contained;
+-- it cannot assume the database it lands in has already been hardened.
+--
+-- The revoke changes nothing where the tables are already locked, so it is safe
+-- to re-run, and matches the RLS-05 posture
+-- (migrations-applied/20260828T0245_rls05_revoke_select_policyless_rls_tables.sql).
 do $$
 declare t text;
 begin
@@ -358,8 +381,19 @@ begin
   ]
   loop
     execute format('alter table public.%I enable row level security', t);
+    execute format('revoke all on public.%I from anon, authenticated', t);
   end loop;
 end $$;
+
+-- The trigger function too: PostgreSQL grants EXECUTE on a new function to
+-- PUBLIC by default, and `public` is the word that does the work here — a
+-- revoke naming only anon and authenticated leaves PUBLIC covering both.
+revoke all on function public.ad_action_log_no_rewrite() from public;
+
+-- Pinned so the trigger cannot resolve a name through a caller-controlled
+-- search_path. Matches migrations-applied/20260828T0518_pin_function_search_path.sql,
+-- which had to add this after Supabase's advisor flagged the omission.
+alter function public.ad_action_log_no_rewrite() set search_path = public, pg_temp;
 
 -- -----------------------------------------------------------------------------
 -- 7. Verify
