@@ -1597,11 +1597,29 @@ export async function finalizeManualPayment(
   // inventory ambiguity is to never guess in the direction that invents units.
   if (stockCommitted) {
     const committedAt = new Date().toISOString();
+    // TWO STATEMENTS, DELIBERATELY. Writing both columns in one update couples
+    // them: PostgREST refuses the WHOLE statement over one unknown column, so
+    // until add-inventory-committed-latch.sql is applied, a combined write would
+    // take paid_side_effects_at down with the new column — losing a latch this
+    // lane has written correctly since review finding 2. Separate writes mean
+    // the new column can only cost the new fact.
     const { error: latchError } = await supabaseAdmin
       .from("orders")
-      .update({ paid_side_effects_at: committedAt, inventory_committed_at: committedAt })
+      .update({ paid_side_effects_at: committedAt })
       .eq("order_id", orderId)
       .is("paid_side_effects_at", null);
+
+    const { error: committedError } = await supabaseAdmin
+      .from("orders")
+      .update({ inventory_committed_at: committedAt })
+      .eq("order_id", orderId)
+      .is("inventory_committed_at", null);
+
+    if (committedError) {
+      // The cancel path reads this one. Without it a cancel will under-restock
+      // — recoverable by hand, unlike the over-restock the old signal caused.
+      console.error("Unable to record inventory_committed_at for manual order", orderId, committedError);
+    }
 
     if (latchError) {
       // Never fails the approval — the payment is verified and the stock has
