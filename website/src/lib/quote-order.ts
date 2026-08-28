@@ -21,7 +21,7 @@ import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
 import { isApprovedAmbassadorCustomer } from "@/lib/ambassador-status";
 import { calculateBulkSavingsDiscount } from "@/lib/bulk-savings";
 import { getHomepageControlConfig, getBulkSavingsControlConfig, getPaymentMethodsConfig, getCardProcessingFeeConfig, getShippingConfig, getReferralProgramConfig, getCouponPolicyConfig, getProfitSettings } from "@/lib/admin-control";
-import { computeProfit, resolveCustomerDiscount } from "@/lib/profit-engine";
+import { computeProfit, meetsFloor, resolveCustomerDiscount } from "@/lib/profit-engine";
 import { calculateCardProcessingFee, getPaymentMethodById, isManualPaymentMethod, type PaymentMethodConfig } from "@/lib/payment-methods";
 import { supabaseAdmin } from "@/lib/supabase-server";
 
@@ -763,15 +763,24 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     }
   }
   // Price the floor against REAL per-line cost: the chosen dose's cost if known,
-  // else the product's cost, else the conservative worst-case fallback. This can
-  // only tighten the floor for high-cost SKUs; a missing cost never sells below
-  // the old worst-case assumption.
+  // else the product's cost, else the conservative worst-case fallback.
+  //
+  // THE SAME THREE CASES AS resolveUnitCostCents, AND FOR THE SAME REASON. On a
+  // slug that HAS dose rows, the parent `products.product_cost_cents` is a stale
+  // inherited EvoLabs figure, not a cost for the dose actually being bought, so
+  // it is refused here exactly as the snapshot resolver refuses it. This guard
+  // used to substitute it, and the substitution does not merely "tighten the
+  // floor": where the stale parent sits BELOW worstCaseUnitCost it understates
+  // COGS, overstates profit, and lets a deep discount through the floor that the
+  // worst-case assumption would have stopped.
   const guardProductCost = roundMoney(lineItems.reduce((sum, line) => {
     const slug = String(line.product.id).split("::")[0];
     const doseCost = line.product.variantId ? unitCostByDoseId.get(line.product.variantId) : undefined;
     const unitCost = (doseCost && doseCost > 0)
       ? doseCost
-      : (unitCostBySlug.get(slug) ?? profitSettings.worstCaseUnitCost);
+      : (slugsWithDoses.has(slug)
+        ? profitSettings.worstCaseUnitCost
+        : (unitCostBySlug.get(slug) ?? profitSettings.worstCaseUnitCost));
     return sum + unitCost * line.quantity;
   }, 0));
   const guardProfit = computeProfit(
@@ -815,10 +824,7 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
     },
     { amount: discountAmount, components: [], label: "resolved" },
   );
-  if (
-    guardProfit.grossProfit < profitSettings.minProfitDollars
-    || (guardProfit.discountedSubtotal > 0 && guardProfit.grossMarginPercent < profitSettings.minProfitPercent)
-  ) {
+  if (!meetsFloor(guardProfit, profitSettings)) {
     throw new Error("Promotion unavailable on this order.");
   }
 
@@ -954,9 +960,10 @@ export async function quoteOrder(input: QuoteOrderInput): Promise<QuoteResult> {
   if (pointsDiscountAmount > 0) {
     displayLineItems.push({ label: "Rewards points", amountCents: -Math.round(pointsDiscountAmount * 100) });
   }
-  // Shipping protection is an OPT-IN paid add-on that defaults on. It gets its
-  // own labelled row so a one-tap shopper sees what they are paying for at the
-  // moment of authorization, not only in the drawer they may have scrolled past.
+  // Shipping protection is an OPT-IN paid add-on, off by default and never
+  // pre-selected (see shipping-protection.ts:12-19). It gets its own labelled
+  // row so a one-tap shopper sees what they are paying for at the moment of
+  // authorization, not only in the drawer they may have scrolled past.
   if (shippingProtectionFee > 0) {
     displayLineItems.push({ label: "Shipping Protection", amountCents: Math.round(shippingProtectionFee * 100) });
   }

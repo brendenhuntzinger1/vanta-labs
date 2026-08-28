@@ -81,7 +81,12 @@ export function resolveBundleConfig(input: { twoUnitPercent?: unknown; threePlus
   return {
     twoUnitPercent: toRate(input.twoUnitPercent, DEFAULT_BUNDLE_CONFIG.twoUnitPercent),
     threePlusPercent: toRate(input.threePlusPercent, DEFAULT_BUNDLE_CONFIG.threePlusPercent),
-    fiveUnitPercent: toRate(input.fiveUnitPercent, DEFAULT_BUNDLE_CONFIG.fiveUnitPercent ?? 0.10),
-    tenUnitPercent: toRate(input.tenUnitPercent, DEFAULT_BUNDLE_CONFIG.tenUnitPercent ?? 0.15),
+    // The tail fallbacks match bundleDiscountRate above (0.12 / 0.20). They are
+    // unreachable while DEFAULT_BUNDLE_CONFIG populates both fields, but they
+    // had drifted to 0.10 / 0.15 — a third copy of the rates that would have
+    // silently under-discounted the 5+ and 10+ tiers the day either field was
+    // dropped from the constant.
+    fiveUnitPercent: toRate(input.fiveUnitPercent, DEFAULT_BUNDLE_CONFIG.fiveUnitPercent ?? 0.12),
+    tenUnitPercent: toRate(input.tenUnitPercent, DEFAULT_BUNDLE_CONFIG.tenUnitPercent ?? 0.20),
   };
 }

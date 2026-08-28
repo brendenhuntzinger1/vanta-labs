@@ -1047,11 +1047,9 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     [referralDiscountApplied, pointsToRedeem, totalAfterCredit],
   );
 
-  // Shipping-protection add-on (loss/theft/damage). Added by DEFAULT — the
-  // cart and checkout both show it as a visible, pre-checked line item with
-  // its fee, and one untick removes it (still strictly optional). Fee is a
-  // percentage of the merchandise subtotal (shipping-protection.ts), mirrored
-  // exactly by the server (payment-service) so preview == charge.
+  // Shipping-protection add-on (loss/theft/damage). Fee is a percentage of the
+  // merchandise subtotal (shipping-protection.ts), mirrored exactly by the
+  // server (payment-service) so preview == charge.
   // OFF BY DEFAULT, because the published Shipping Policy says so in the store's
   // own words: Shipping Protection "is off by default and never pre-selected".
   // This was useState(true), so a paid add-on was pre-ticked on every cart and

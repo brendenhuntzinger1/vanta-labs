@@ -20,6 +20,11 @@
 // ambassador earns commission on the final discounted subtotal (before tax),
 // regardless of which customer discount applied — unless it's their own order.
 
+import {
+  PROCESSING_FEE_DEFAULT_PERCENT,
+  WORST_CASE_UNIT_COST_DEFAULT,
+} from "@/lib/admin-control-shared";
+
 function round(value: number): number {
   return Math.round(value * 100) / 100;
 }
@@ -43,11 +48,16 @@ export interface ProfitSettings {
 // product cost, processing fee, commission, and shipping cost. Raise these in
 // the admin (Control Center → Profit Protection) if you want a margin buffer
 // beyond break-even.
+//
+// The two numeric assumptions come from admin-control-shared.ts, the same
+// constants DEFAULT_PROFIT_CONFIG (admin-control.ts) is built from. They were
+// inlined literals here, and no file imported both, so this test-facing default
+// could drift away from the one the live checkout runs on with the suite green.
 export const DEFAULT_PROFIT_SETTINGS: ProfitSettings = {
   minProfitPercent: 0,
   minProfitDollars: 0,
-  worstCaseUnitCost: 33,
-  processingFeePercent: 8,
+  worstCaseUnitCost: WORST_CASE_UNIT_COST_DEFAULT,
+  processingFeePercent: PROCESSING_FEE_DEFAULT_PERCENT,
 };
 
 /** A customer discount component, in the order promotions are peeled off when
@@ -231,6 +241,13 @@ export interface ProfitBreakdown {
   processingFee: number;      // on the full amount charged incl. tax
   shippingCost: number;
   grossProfit: number;        // revenue − productCost − processing − commission − shippingCost
+  // GUARD-INTERNAL ONLY, NEVER RENDERED. Denominator is discountedSubtotal, NOT
+  // revenue, so this is not comparable to any margin a human sees; the 0
+  // returned at discountedSubtotal <= 0 is a sentinel both consumers gate on
+  // (meetsFloor below, quote-order.ts's floor check). Anything read by a person
+  // uses marginPercentOf (order-profit.ts), which answers null at zero revenue
+  // because null is the only answer that cannot flatter a loss. If this field is
+  // ever surfaced or logged, convert it there and update both comparisons.
   grossMarginPercent: number; // grossProfit / discountedSubtotal
   taxCollected: number;
   amountCharged: number;      // what the customer pays (incl. tax)
@@ -252,6 +269,7 @@ export function computeProfit(inputs: OrderInputs, discount: DiscountBreakdown):
   const grossProfit = round(
     revenue - inputs.productCost - processingFee - commission - inputs.shippingCost,
   );
+  // 0, not null, is deliberate — it is the sentinel the floor checks gate on. See the field doc above.
   const grossMarginPercent = discountedSubtotal > 0 ? round((grossProfit / discountedSubtotal) * 100) : 0;
 
   return {
@@ -278,7 +296,11 @@ export interface ProtectedOrder extends ProfitBreakdown {
   blockedReason: string | null;
 }
 
-function meetsFloor(p: ProfitBreakdown, settings: ProfitSettings): boolean {
+// THE floor predicate. Exported because the live checkout (quote-order.ts) ran
+// its own inlined copy of these two comparisons, so "is this order above the
+// floor?" had two homes and only one of them was the module documented as the
+// guardrail. One rule, one place.
+export function meetsFloor(p: ProfitBreakdown, settings: ProfitSettings): boolean {
   if (p.grossProfit < settings.minProfitDollars) return false;
   if (p.discountedSubtotal > 0 && p.grossMarginPercent < settings.minProfitPercent) return false;
   return true;

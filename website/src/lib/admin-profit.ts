@@ -4,6 +4,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { getProfitSettings, type ProfitSettingsConfig } from "@/lib/admin-control";
 import { computeOrderProfit, marginPercentOf, type OrderProfitLine, type OrderProfitResult } from "@/lib/order-profit";
 import { isEarnedCommission, isRevenueOrderStatus, isSaleOrder } from "@/lib/ledger";
+import { refundedTaxFor } from "@/lib/admin-tax-report";
 import { pointsToDollars } from "@/lib/points-math";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 
@@ -89,17 +90,6 @@ function processingFeeFor(order: OrderRecord, config: ProfitSettingsConfig): num
   return Math.max(0, base * (config.processingFeePercent / 100));
 }
 
-// The tax that came back with a refund. Nothing records it, so it is derived
-// from the two figures that exist: what the customer paid (tax included) and
-// what was returned. A full refund gives a ratio of exactly 1. Mirrors
-// admin-tax-report.refundedTaxFor so the profit report and the filing report
-// cannot disagree about the same refund.
-function refundedTaxPortion(amountPaid: number, taxCollected: number, refund: number): number {
-  if (taxCollected <= 0 || refund <= 0) return 0;
-  if (amountPaid <= 0) return taxCollected;
-  return Math.round(Math.min(taxCollected, taxCollected * Math.min(1, refund / amountPaid)) * 100) / 100;
-}
-
 function profitForOrder(
   order: OrderRecord,
   lines: OrderProfitLine[],
@@ -110,7 +100,6 @@ function profitForOrder(
   const merch = Math.max(0, Number(order.subtotal ?? 0) - Number(order.discount_amount ?? 0));
   const shippingRevenue = Math.max(0, Number(order.shipping_amount ?? 0));
   const taxCollected = Math.max(0, Number(order.tax_amount ?? 0));
-  const amountPaid = Math.max(0, Number(order.amount_paid ?? 0));
   // Other customer-paid revenue beyond merchandise + shipping + tax — the
   // shipping-protection add-on and any card surcharge. READ FROM THE COLUMNS
   // THAT RECORD THEM, always.
@@ -191,12 +180,15 @@ function profitForOrder(
     // explicitly rather than left to the default so the reason is on the record.
     processingFeeIsEstimate: true,
     refund: Math.max(0, Number(order.refund_amount ?? 0)),
-    // The tax handed back with the refund, derived the same way the sales-tax
-    // report derives it: nothing records the tax portion of a refund, so it is
-    // the refunded share of what was paid, capped at the tax charged. Only used
-    // when collected tax is configured as a pass-through — see
+    // The tax handed back with the refund. THE SAME FUNCTION the sales-tax
+    // filing report calls, not a copy of it: this was a second implementation
+    // whose comment claimed to mirror admin-tax-report.refundedTaxFor, and it
+    // did not. The two disagreed on a row marked "refunded" that carries no
+    // refund_amount (a legacy row written before that column existed) — the
+    // filing report treats the whole tax as returned, the copy returned zero.
+    // Only used when collected tax is configured as a pass-through — see
     // OrderProfitInput.refundedTax.
-    refundedTax: refundedTaxPortion(amountPaid, taxCollected, Math.max(0, Number(order.refund_amount ?? 0))),
+    refundedTax: refundedTaxFor(order),
     fallbackUnitCostCents: Math.round(config.worstCaseUnitCost * 100),
   });
 }
@@ -310,10 +302,13 @@ async function commissionByOrderId(orderIds: string[]): Promise<Map<string, numb
     // Those two produced the identical answer, and $0.00 of commission is the
     // most flattering number available: profit came out overstated on the
     // dashboard, in the CSV export and in the operator's push notification,
-    // with nothing to notice. The shipping overlay a few lines down degrades on
-    // error deliberately — it can only make profit look WORSE, and the
-    // migration may genuinely not have run. This one moves the figure the other
-    // way, so it fails loudly.
+    // with nothing to notice. The shipping overlay a few lines down tolerates
+    // the ONE error that means "the migration has not run" (42703, undefined
+    // column) and fails loudly on everything else — losing the overlay
+    // substitutes config.shippingCostPerOrder ($6 by default,
+    // admin-control.ts), so it makes profit look BETTER on every order that
+    // really shipped for more than the estimate. It was described here as
+    // only ever making profit look worse; that was the wrong direction.
     if (error) {
       console.error("Unable to read commissions for profit; profit would overstate by the commission owed", error);
       // WRAPPED, not rethrown raw. A PostgREST error is a plain object, so
@@ -356,9 +351,26 @@ async function shippingOverlayByOrderId(orderIds: string[]): Promise<Map<string,
       .from("orders")
       .select("order_id, actual_shipping_cost_cents, shipping_cost_source, profit_finalized")
       .in("order_id", chunk);
-    // Migration not run yet → no overlay; every order uses the estimate.
-    if (error || !data) return byOrder;
-    for (const raw of data as Array<{ order_id: string; actual_shipping_cost_cents: number | null; shipping_cost_source: string | null; profit_finalized: boolean | null }>) {
+    // MIGRATION NOT RUN IS ONE ERROR, NOT EVERY ERROR.
+    //
+    // 42703 (undefined column) is the only failure that really means "the
+    // order-profit-shipping-reconciliation.sql columns are not there yet", and
+    // falling back to the estimate is right for it. Every other failure — a
+    // statement timeout, a pooler 503, a permission error — was also swallowed
+    // here, and swallowing it silently replaces the exact label cost with
+    // config.shippingCostPerOrder on every affected order, which OVERSTATES
+    // profit whenever the real label cost was higher. Same wrapped-throw shape
+    // as the commission read above.
+    //
+    // `return` also exited the whole chunk loop rather than this chunk, so one
+    // failing chunk left earlier orders on exact costs and every later one on
+    // the estimate, with nothing on the screen marking the difference.
+    if (error) {
+      if (String((error as { code?: string }).code) === "42703") return byOrder;
+      const message = (error as { message?: string })?.message ?? String(error);
+      throw new Error(`shipping overlay read failed: ${message}`);
+    }
+    for (const raw of (data ?? []) as Array<{ order_id: string; actual_shipping_cost_cents: number | null; shipping_cost_source: string | null; profit_finalized: boolean | null }>) {
       byOrder.set(raw.order_id, {
         actualShippingCostCents: raw.actual_shipping_cost_cents == null ? null : Number(raw.actual_shipping_cost_cents),
         source: raw.shipping_cost_source ?? null,

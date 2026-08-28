@@ -11,7 +11,15 @@ import {
   type PaymentMethodConfig,
   type CardProcessingFeeConfig,
 } from "@/lib/payment-methods";
-import { PROCESSING_FEE_DEFAULT_PERCENT, describeEffectiveRate, parseRatePercent } from "@/lib/admin-control-shared";
+import {
+  DEFAULT_AMBASSADOR_COMMISSION_PERCENT,
+  DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT,
+  DEFAULT_REFERRAL_DISCOUNT_PERCENT,
+  PROCESSING_FEE_DEFAULT_PERCENT,
+  WORST_CASE_UNIT_COST_DEFAULT,
+  describeEffectiveRate,
+  parseRatePercent,
+} from "@/lib/admin-control-shared";
 
 // Re-exported so every existing/expected `@/lib/admin-control` import site
 // keeps working. The implementation itself lives in admin-control-shared.ts
@@ -21,7 +29,13 @@ import { PROCESSING_FEE_DEFAULT_PERCENT, describeEffectiveRate, parseRatePercent
 // otherwise-pure, dependency-free export like this one. A Client Component
 // (e.g. admin-control-center-client.tsx) must import `describeEffectiveRate`
 // from `@/lib/admin-control-shared` directly, not from here.
-export { describeEffectiveRate, parseRatePercent };
+export {
+  describeEffectiveRate,
+  parseRatePercent,
+  DEFAULT_REFERRAL_DISCOUNT_PERCENT,
+  DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT,
+  DEFAULT_AMBASSADOR_COMMISSION_PERCENT,
+};
 
 const CONTROL_ACTION = "admin_control_upsert";
 
@@ -480,18 +494,6 @@ export interface SalesTaxSettings extends SalesTaxConfig {
   taxjarApiKey: string;
   avalaraLicenseKey: string;
 }
-// Default customer discount for a valid ambassador referral code.
-export const DEFAULT_REFERRAL_DISCOUNT_PERCENT = 10;
-// Default personal discount an approved ambassador gets on their OWN purchases.
-// Deliberately HIGHER than the 10% customer/referral discount above: this is
-// the ambassador's own benefit, not their audience's, and the two rates are
-// independent by design. Raising it does not change what a referred customer
-// pays and does not change commission.
-export const DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT = 20;
-// Starting commission rate for a new ambassador when no explicit per-ambassador
-// rate is set. Admins can raise (or lock) any individual ambassador's rate in
-// Admin → Partners.
-export const DEFAULT_AMBASSADOR_COMMISSION_PERCENT = 10;
 
 // Reads the "tax" control section. Defaults are deliberately conservative:
 // with no nexus states configured, NO tax is collected anywhere — a store
@@ -632,7 +634,7 @@ export interface ProfitSettingsConfig {
 export const DEFAULT_PROFIT_CONFIG: ProfitSettingsConfig = {
   minProfitPercent: 0,
   minProfitDollars: 0,
-  worstCaseUnitCost: 33,
+  worstCaseUnitCost: WORST_CASE_UNIT_COST_DEFAULT,
   processingFeePercent: PROCESSING_FEE_DEFAULT_PERCENT,
   processingFeeIncludesTax: true,
   // FALSE BY OWNER'S DECISION. Collected sales tax is money held on behalf of a

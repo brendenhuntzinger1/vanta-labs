@@ -74,7 +74,6 @@ export function AdminControlCenterClient() {
   const [bundleTwoUnitPercent, setBundleTwoUnitPercent] = useState("");
   const [bundleThreePlusPercent, setBundleThreePlusPercent] = useState("");
   const [promoBuy2Get1HalfEnabled, setPromoBuy2Get1HalfEnabled] = useState(false);
-  const [promoFreeShippingThreshold, setPromoFreeShippingThreshold] = useState("");
   const [promoAnnouncement, setPromoAnnouncement] = useState("");
 
   const [shippingFlatRate, setShippingFlatRate] = useState("");
@@ -112,6 +111,7 @@ export function AdminControlCenterClient() {
   // Referral / ambassador program + coupon policy controls.
   const [referralEnabled, setReferralEnabled] = useState(true);
   const [referralPersonalDiscount, setReferralPersonalDiscount] = useState("");
+  const [referralDiscount, setReferralDiscount] = useState("");
   const [referralDefaultCommission, setReferralDefaultCommission] = useState("");
   const [referralCommissionsPaused, setReferralCommissionsPaused] = useState(false);
   const [couponsEnabled, setCouponsEnabled] = useState(true);
@@ -169,7 +169,6 @@ export function AdminControlCenterClient() {
     setBundleTwoUnitPercent(String(promotions.bundle_two_unit_percent ?? ""));
     setBundleThreePlusPercent(String(promotions.bundle_three_plus_percent ?? ""));
     setPromoBuy2Get1HalfEnabled(Boolean(promotions.buy_2_get_1_half_enabled ?? false));
-    setPromoFreeShippingThreshold(String(promotions.free_shipping_threshold ?? ""));
     setPromoAnnouncement(String(promotions.sitewide_announcement ?? ""));
 
     const shipping = next.shipping ?? {};
@@ -209,6 +208,7 @@ export function AdminControlCenterClient() {
     const referral = next.referral ?? {};
     setReferralEnabled(referral.enabled !== false);
     setReferralPersonalDiscount(referral.personal_discount_percent != null ? String(referral.personal_discount_percent) : "");
+    setReferralDiscount(referral.discount_percent != null ? String(referral.discount_percent) : "");
     setReferralDefaultCommission(referral.default_commission_percent != null ? String(referral.default_commission_percent) : "");
     setReferralCommissionsPaused(referral.commissions_paused === true);
 
@@ -300,7 +300,6 @@ export function AdminControlCenterClient() {
       { section: "promotions", key: "bundle_two_unit_percent", value: bundleTwoUnitPercent },
       { section: "promotions", key: "bundle_three_plus_percent", value: bundleThreePlusPercent },
       { section: "promotions", key: "buy_2_get_1_half_enabled", value: promoBuy2Get1HalfEnabled },
-      { section: "promotions", key: "free_shipping_threshold", value: promoFreeShippingThreshold },
       { section: "promotions", key: "sitewide_announcement", value: promoAnnouncement },
 
       { section: "shipping", key: "flat_rate", value: shippingFlatRate },
@@ -334,6 +333,7 @@ export function AdminControlCenterClient() {
 
       { section: "referral", key: "enabled", value: referralEnabled },
       { section: "referral", key: "personal_discount_percent", value: referralPersonalDiscount },
+      { section: "referral", key: "discount_percent", value: referralDiscount },
       { section: "referral", key: "default_commission_percent", value: referralDefaultCommission },
       { section: "referral", key: "commissions_paused", value: referralCommissionsPaused },
 
@@ -469,7 +469,6 @@ export function AdminControlCenterClient() {
               <label className="block text-zinc-300">Bundle &amp; Save — 2 units (% off)<input value={bundleTwoUnitPercent} onChange={(e) => setBundleTwoUnitPercent(e.target.value)} placeholder="5" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="block text-zinc-300">Bundle &amp; Save — 3+ units (% off)<input value={bundleThreePlusPercent} onChange={(e) => setBundleThreePlusPercent(e.target.value)} placeholder="8" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="flex items-center gap-2 text-zinc-300 sm:col-span-2"><input type="checkbox" checked={promoBuy2Get1HalfEnabled} onChange={(e) => setPromoBuy2Get1HalfEnabled(e.target.checked)} /> Enable Buy 2 Get 1 (50% Off)</label>
-              <label className="text-zinc-300">Free shipping threshold<input value={promoFreeShippingThreshold} onChange={(e) => setPromoFreeShippingThreshold(e.target.value)} className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
             <p className="mt-3 text-xs text-zinc-500">
               Coupon codes are managed separately with real redemption tracking — see{" "}
@@ -485,8 +484,8 @@ export function AdminControlCenterClient() {
               <label className="text-zinc-300">Free shipping over ($)<input value={shippingFreeThreshold} onChange={(e) => setShippingFreeThreshold(e.target.value)} placeholder="200" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Canada flat rate ($)<input value={shippingNaFlatRate} onChange={(e) => setShippingNaFlatRate(e.target.value)} placeholder="25" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="text-zinc-300">Canada free shipping over ($)<input value={shippingNaFreeThreshold} onChange={(e) => setShippingNaFreeThreshold(e.target.value)} placeholder="400" className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">International flat rate ($)<input value={shippingIntlFlatRate} onChange={(e) => setShippingIntlFlatRate(e.target.value)} placeholder="45" className="vl-input mt-1 w-full px-3 py-2" /></label>
-              <label className="text-zinc-300">International free shipping over ($)<input value={shippingIntlFreeThreshold} onChange={(e) => setShippingIntlFreeThreshold(e.target.value)} placeholder="500" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">International flat rate ($)<input value={shippingIntlFlatRate} onChange={(e) => setShippingIntlFlatRate(e.target.value)} placeholder="60" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="text-zinc-300">International free shipping over ($)<input value={shippingIntlFreeThreshold} onChange={(e) => setShippingIntlFreeThreshold(e.target.value)} placeholder="600" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
           </section>
 
@@ -623,6 +622,7 @@ export function AdminControlCenterClient() {
               )}
               <label className="flex items-center gap-2 text-zinc-300"><input type="checkbox" checked={referralCommissionsPaused} onChange={(e) => setReferralCommissionsPaused(e.target.checked)} /> Pause new commissions (codes still give the customer discount)</label>
               <label className="block text-zinc-300">Ambassador personal discount (% off their own orders)<input value={referralPersonalDiscount} onChange={(e) => setReferralPersonalDiscount(e.target.value)} placeholder="20" className="vl-input mt-1 w-full px-3 py-2" /></label>
+              <label className="block text-zinc-300">Customer referral discount (% off for shoppers using an ambassador&apos;s code)<input value={referralDiscount} onChange={(e) => setReferralDiscount(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
               <label className="block text-zinc-300">Default commission rate (% when an ambassador has no custom rate)<input value={referralDefaultCommission} onChange={(e) => setReferralDefaultCommission(e.target.value)} placeholder="10" className="vl-input mt-1 w-full px-3 py-2" /></label>
             </div>
           </section>

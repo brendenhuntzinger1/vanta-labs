@@ -14,6 +14,35 @@
 export const PROCESSING_FEE_DEFAULT_PERCENT = 8;
 
 /**
+ * Assumed unit cost for a SKU with no stored cost (worst case, dollars).
+ *
+ * Lives here, not in either consumer, because profit-engine.ts's
+ * DEFAULT_PROFIT_SETTINGS and admin-control.ts's DEFAULT_PROFIT_CONFIG each
+ * held their own literal `33` and nothing imported both, so the two could drift
+ * apart with the whole suite green.
+ */
+export const WORST_CASE_UNIT_COST_DEFAULT = 33;
+
+// THE THREE AMBASSADOR RATES. They are numerically close and mean entirely
+// different things, so they are pinned separately (ambassador-personal-discount.test.ts)
+// and single-sourced here: the approval email (email/templates.ts) is a Client-safe
+// module that cannot import admin-control.ts, and it used to carry its own
+// literal copies of all three.
+
+// Default customer discount for a valid ambassador referral code.
+export const DEFAULT_REFERRAL_DISCOUNT_PERCENT = 10;
+// Default personal discount an approved ambassador gets on their OWN purchases.
+// Deliberately HIGHER than the 10% customer/referral discount above: this is
+// the ambassador's own benefit, not their audience's, and the two rates are
+// independent by design. Raising it does not change what a referred customer
+// pays and does not change commission.
+export const DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT = 20;
+// Starting commission rate for a new ambassador when no explicit per-ambassador
+// rate is set. Admins can raise (or lock) any individual ambassador's rate in
+// Admin → Partners.
+export const DEFAULT_AMBASSADOR_COMMISSION_PERCENT = 10;
+
+/**
  * The highest processing fee this store will accept from a free-text box.
  *
  * `num()` in getProfitSettings had a lower bound and NO upper one, so a typo of

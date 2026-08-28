@@ -2,6 +2,11 @@ import type { EmailTemplate } from "@/lib/email/types";
 import { formatDisplayDate } from "@/lib/format-date";
 import { DEFAULT_CARD_PROCESSING_FEE } from "@/lib/payment-methods";
 import { DEFAULT_COMMISSION_HOLD_DAYS } from "@/lib/referral-config";
+import {
+  DEFAULT_AMBASSADOR_COMMISSION_PERCENT,
+  DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT,
+  DEFAULT_REFERRAL_DISCOUNT_PERCENT,
+} from "@/lib/admin-control-shared";
 
 // ONE CHARGE, ONE NAME. The receipt used to call the card surcharge "Card
 // processing fee" while the checkout screen called it "Service Fee" and the
@@ -576,9 +581,14 @@ export function ambassadorApprovedTemplate(input: {
 }): EmailTemplate {
   const name = escapeHtml(input.name);
   const code = input.referralCode ? escapeHtml(input.referralCode) : null;
-  const commissionPct = Number.isFinite(input.commissionPercent) ? Number(input.commissionPercent) : 10;
-  const personalPct = Number.isFinite(input.personalDiscountPercent) ? Number(input.personalDiscountPercent) : 20;
-  const referralPct = Number.isFinite(input.referralDiscountPercent) ? Number(input.referralDiscountPercent) : 10;
+  // The programme defaults, not literal 10/20/10 — same reason as holdDays
+  // below: these fire whenever the caller cannot resolve the live value, and a
+  // copy here would keep quoting the old rate to new ambassadors after the
+  // programme's was changed. admin-control-shared.ts is the client-safe home
+  // for them; admin-control.ts is `server-only` and cannot be imported here.
+  const commissionPct = Number.isFinite(input.commissionPercent) ? Number(input.commissionPercent) : DEFAULT_AMBASSADOR_COMMISSION_PERCENT;
+  const personalPct = Number.isFinite(input.personalDiscountPercent) ? Number(input.personalDiscountPercent) : DEFAULT_AMBASSADOR_PERSONAL_DISCOUNT_PERCENT;
+  const referralPct = Number.isFinite(input.referralDiscountPercent) ? Number(input.referralDiscountPercent) : DEFAULT_REFERRAL_DISCOUNT_PERCENT;
   // The programme default (30), not a literal 14 — the approval email told
   // new ambassadors the wrong hold whenever the caller could not resolve the
   // configured value.
