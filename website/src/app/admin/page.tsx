@@ -92,6 +92,7 @@ export default async function AdminHomePage() {
     revenueMetricsRead,
     lowStockRead,
     reconciliationFlagRead,
+    onlineVisitorsRead,
     workRead,
     criticalsRead,
     ...(canSeeProfit ? [profitWindowsRead] : []),
@@ -114,6 +115,12 @@ export default async function AdminHomePage() {
     ? revenueWindowsRead.value
     : { today: 0, last7Days: 0, last30Days: 0 };
   const onlineVisitors = onlineVisitorsRead.ok ? onlineVisitorsRead.value : 0;
+  // The live tile renders from a CLIENT component that refetches, so it was
+  // treated as self-healing and left out of the notice. It is not:
+  // /api/admin/metrics reads the same two sources, so when they are down the
+  // refetch 500s and the placeholder zeros stay. Both reads that feed it are
+  // now declared, and the tile is told they are placeholders.
+  const liveMetricsUnavailable = !revenueWindowsRead.ok || !onlineVisitorsRead.ok;
 
   const orders = orderList.rows;
 
@@ -225,6 +232,7 @@ export default async function AdminHomePage() {
             </p>
           </Link>
           <AdminLiveMetrics
+            initialUnavailable={liveMetricsUnavailable}
             initial={{
               onlineNow: onlineVisitors,
               revenue: revenueWindows,

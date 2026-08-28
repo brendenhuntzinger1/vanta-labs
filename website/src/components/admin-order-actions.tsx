@@ -18,6 +18,7 @@ export function AdminOrderActions({
   refundAmount,
   storeCreditRedeemedCents = 0,
   pointsRedeemed = 0,
+  orderPlacedIso = null,
   canRefund,
   initialCarrier,
   initialEstimatedDelivery,
@@ -33,6 +34,8 @@ export function AdminOrderActions({
   storeCreditRedeemedCents?: number;
   /** `orders.points_redeemed` — tender, and refundable. */
   pointsRedeemed?: number;
+  /** When the order was placed — the clock store-credit expiry is measured on. */
+  orderPlacedIso?: string | null;
   canRefund: boolean;
   initialCarrier?: string | null;
   initialEstimatedDelivery?: string | null;
@@ -162,7 +165,9 @@ export function AdminOrderActions({
     if (!cashAvailable) {
       void runAction(
         "refund",
-        `Return ${money(nonCashTender)} of store credit and points to this customer?\n\nThis order collected no cash, so nothing you have paid is being recorded. Vanta puts the credit and points back on the customer's account.`,
+        "Return this customer's store credit and points?\n\n"
+        + "This order collected no cash, so nothing you have paid is being recorded. Vanta puts the points back, and "
+        + "the store credit too IF it was spent this calendar month — credit older than that has expired and cannot be returned.",
         { reimbursementMethod, note: reimbursementNote.trim() || undefined },
       );
       return;
@@ -270,8 +275,28 @@ export function AdminOrderActions({
               {!cashAvailable ? (
                 <p className="rounded-lg border border-sky-300/40 bg-sky-300/10 px-3 py-2 text-[13px] text-sky-100">
                   <strong>This order collected no cash.</strong> It was settled with {money(nonCashTender)} of store
-                  credit and points, so there is nothing for you to send. Vanta returns the credit and the points to
-                  the customer&apos;s account itself.
+                  credit and points, so there is nothing for you to send — Vanta returns them itself.
+                </p>
+              ) : null}
+              {/* STORE CREDIT EXPIRES AT THE MONTH BOUNDARY, AND THE REFUND
+                  PATH HONOURS THAT. refundStoreCreditForOrder only re-credits
+                  redemptions whose ledger row is newer than the start of the
+                  current month (store-credit.ts, isRefundableRedemption), and
+                  when none qualify it returns false and writes nothing — no
+                  throw, so runRefundEffect raises no alert either. A return
+                  authorised a few weeks after the sale routinely crosses that
+                  boundary.
+
+                  Naming an amount on the button would therefore have promised
+                  money that will not move, on the one screen this whole phase
+                  exists to stop lying. The panel states the rule and the order's
+                  own date instead, and leaves the arithmetic visible. */}
+              {nonCashOutstanding ? (
+                <p className="rounded-lg border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
+                  <strong>Store credit is only returnable in the month it was spent.</strong>{" "}
+                  {storeCreditRedeemedCents > 0
+                    ? `This order spent ${money(Math.max(0, storeCreditRedeemedCents) / 100)} of credit${orderPlacedIso ? ` on ${new Date(orderPlacedIso).toLocaleDateString()}` : ""}. If that is not this calendar month it has already expired, and refunding will return the points but not the credit.`
+                    : "This order spent no store credit, so only points are returned."}
                 </p>
               ) : null}
               <div className={`grid gap-3 ${cashAvailable ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
@@ -310,12 +335,13 @@ export function AdminOrderActions({
                   ? "Recording…"
                   : cashAvailable
                     ? "Record manual reimbursement"
-                    : `Return store credit & points (${money(nonCashTender)})`}
+                    : "Return store credit & points"}
               </button>
               {cashAvailable && nonCashOutstanding ? (
                 <p className="text-[13px] text-zinc-400">
                   This order also used {money(nonCashTender)} of store credit and points. Refunding the full remaining
-                  balance returns those too; a partial refund does not.
+                  balance returns the points too, and the store credit if it was spent this calendar month; a partial
+                  refund returns neither.
                 </p>
               ) : null}
             </div>

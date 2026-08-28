@@ -1,5 +1,7 @@
 import "server-only";
 
+import { cache } from "react";
+
 import { supabaseAdmin } from "@/lib/supabase-server";
 import {
   BUCKETS,
@@ -186,6 +188,15 @@ type BucketDecisionRow = OrderBucketInput & { order_id: string };
 /**
  * How many orders sit in each bucket right now.
  *
+ * MEMOISED PER REQUEST. admin/layout.tsx needs these for the nav badges and
+ * admin/page.tsx needs them for the dashboard headline, and a layout cannot
+ * pass data to its children — so every /admin render ran the whole scan TWICE.
+ * That was survivable while the read was one capped request; it is not now that
+ * it pages the paid-order population. React's `cache` dedupes within a single
+ * render pass, which is exactly the case the Next docs name for this
+ * (01-app/03-api-reference/03-file-conventions/layout.md). It memoises nothing
+ * across requests, so the board is still computed fresh on every load.
+ *
  * PAGED. This select carried no `.limit()` and no `.range()`, which is not the
  * same as being unbounded: PostgREST caps every response at `db-max-rows`
  * (Supabase ships 1000) and does it SILENTLY — a valid array that simply stops.
@@ -195,7 +206,7 @@ type BucketDecisionRow = OrderBucketInput & { order_id: string };
  * setting this application cannot see, and `truncated` says so when the
  * ceiling — not the data — ended the read.
  */
-export async function getBucketCounts(): Promise<BucketBoard> {
+export const getBucketCounts = cache(async function getBucketCounts(): Promise<BucketBoard> {
   const { rows, truncated } = await readAllRowsBounded<BucketDecisionRow>(
     (from, to) =>
       supabaseAdmin
@@ -226,7 +237,7 @@ export async function getBucketCounts(): Promise<BucketBoard> {
     })),
     truncated,
   };
-}
+});
 
 /**
  * The orders in one bucket, oldest paid first — the order they should be worked.
@@ -279,11 +290,23 @@ export async function getBucketOrders(
 export interface ExceptionQueue {
   orders: QueueOrder[];
   /**
-   * True when the scan ceiling stopped before every candidate order had been
-   * examined. The list below is then "some of what needs a human", never "all
-   * of it", and the screen must say so.
+   * True when `orders` is not the whole set — for EITHER reason.
+   *
+   * THIS USED TO REPORT ONLY THE SCAN CEILING, AND THAT WAS THE SMALLER HALF OF
+   * THE PROBLEM. Widening the scan fixed half of ADM-03: every exception is now
+   * FOUND. But the results are sorted oldest-first and cut to `limit`, and
+   * returned / stalled / never-scanned parcels accumulate — they do not
+   * self-resolve — so a store carrying more than `limit` of them dropped
+   * today's exception exactly as the old 2,000-row scan window did, while
+   * reporting a complete list. The count tile said 121 and the list beneath it
+   * said 50, with nothing on the screen to reconcile them.
+   *
+   * A list cut by the display limit is just as incomplete as one cut by the
+   * ceiling, so both set this.
    */
   truncated: boolean;
+  /** How many orders actually matched, before the display limit cut the list. */
+  totalMatched: number;
 }
 
 /**
@@ -336,15 +359,21 @@ export async function getExceptionOrders(opts: { limit?: number } = {}): Promise
     { maxRows: MAX_BUCKET_ORDERS, label: "exception scan" },
   );
 
-  const orders = rows
+  const matched = rows
     .map((row) => toQueueOrder(row))
     .filter((o) => o.exceptions.length > 0)
     // Oldest first: the one that has been waiting longest is the one that has
-    // kept a customer waiting longest.
-    .sort((a, b) => String(a.paidAt ?? a.createdAt).localeCompare(String(b.paidAt ?? b.createdAt)))
-    .slice(0, limit);
+    // kept a customer waiting longest. This is the WORK order, and it is a
+    // different question from the SCAN order above — conflating the two is what
+    // put the answer two thousand orders in the past.
+    .sort((a, b) => String(a.paidAt ?? a.createdAt).localeCompare(String(b.paidAt ?? b.createdAt)));
 
-  return { orders, truncated };
+  return {
+    orders: matched.slice(0, limit),
+    // Either cut makes the list partial, and the screen is told about both.
+    truncated: truncated || matched.length > limit,
+    totalMatched: matched.length,
+  };
 }
 
 /** The definitions, for rendering the reason and the action beside each order. */

@@ -62,8 +62,10 @@ describe("an order settled entirely with store credit", () => {
     expect(html).toContain("Return store credit");
   });
 
-  it("states the credit still outstanding", () => {
-    expect(render(creditOnly)).toContain("$45.00");
+  it("states the credit still outstanding in the tender summary", () => {
+    const html = render(creditOnly);
+    expect(html).toContain("Store credit &amp; points");
+    expect(html).toContain("$45.00");
   });
 
   it("does not offer a cash amount box, which the server would reject", () => {
@@ -71,6 +73,45 @@ describe("an order settled entirely with store credit", () => {
     // recording cash returned would drive reported revenue below zero.
     const html = render(creditOnly);
     expect(html).not.toContain("Full remaining");
+  });
+});
+
+describe("what the control promises about store credit", () => {
+  // STORE CREDIT EXPIRES AT THE MONTH BOUNDARY. refundStoreCreditForOrder only
+  // re-credits redemptions newer than the start of the current month, and when
+  // none qualify it returns false and writes nothing — silently, since
+  // runRefundEffect alerts on a throw and not on a false. A return authorised a
+  // few weeks after the sale routinely crosses that boundary.
+  //
+  // The first version of this panel put the amount on the button — "Return
+  // store credit & points ($45.00)" — which is a promise that money will move.
+  // On an expired order it will not. That is the same defect class this whole
+  // phase exists to close, introduced by the control that closes it.
+  const creditOnly = { amountPaid: 0, refundAmount: 0, storeCreditRedeemedCents: 4_500 };
+
+  it("does not put an amount on the button, because the amount may not move", () => {
+    const html = render(creditOnly);
+    expect(html).toContain("Return store credit &amp; points");
+    expect(html).not.toContain("Return store credit &amp; points ($45.00)");
+  });
+
+  it("states the month rule wherever non-cash tender is outstanding", () => {
+    expect(render(creditOnly)).toContain("only returnable in the month it was spent");
+  });
+
+  it("states the rule on a cash order that also used credit", () => {
+    const html = render({ amountPaid: 120, refundAmount: 0, storeCreditRedeemedCents: 4_500 });
+    expect(html).toContain("only returnable in the month it was spent");
+  });
+
+  it("says nothing about credit expiry on an order that used none", () => {
+    const html = render({ amountPaid: 120, refundAmount: 0 });
+    expect(html).not.toContain("only returnable in the month it was spent");
+  });
+
+  it("names the order's own date, so the operator can apply the rule", () => {
+    const html = render({ ...creditOnly, orderPlacedIso: "2026-06-14T10:00:00.000Z" });
+    expect(html).toMatch(/6\/14\/2026|14\/06\/2026|2026/);
   });
 });
 

@@ -93,8 +93,17 @@ export default async function FulfillmentWorkstationPage() {
 
       {board.truncated || exceptionQueue.truncated ? (
         <p className="mb-6 rounded-xl border border-amber-300/40 bg-amber-300/10 px-4 py-3 text-sm text-amber-100">
-          <strong>This board is incomplete.</strong> The store holds more orders than one scan reads, so the
-          counts below are a floor, not a total — there is at least this much waiting, and possibly more.
+          <strong>This board is incomplete.</strong>{" "}
+          {exceptionQueue.truncated ? (
+            <>
+              {exceptionQueue.totalMatched} order{exceptionQueue.totalMatched === 1 ? "" : "s"} need attention and the
+              list below shows the {exceptionQueue.orders.length} that have been waiting longest. Work these, then
+              reload — the rest are not on this screen.{" "}
+            </>
+          ) : null}
+          {board.truncated
+            ? "The store also holds more orders than one scan reads, so the counts are a floor, not a total."
+            : ""}
         </p>
       ) : null}
 

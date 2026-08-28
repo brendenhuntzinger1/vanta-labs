@@ -254,6 +254,43 @@ describe("getExceptionOrders — what needs a human", () => {
     expect(result.truncated).toBe(false);
   });
 
+  it("still surfaces today's exception when the queue is already full of older ones", async () => {
+    // THE DISPLAY CAP RE-CREATED THE SCAN CAP. Widening the scan fixed half of
+    // ADM-03: every exception is now FOUND. But the results are sorted
+    // oldest-first and cut to `limit`, so once the store carries more than
+    // `limit` unresolved exceptions — and returned/stalled/never-scanned
+    // parcels accumulate, they do not self-resolve — today's exception is
+    // dropped again and nothing on the screen says so.
+    //
+    // The history here is `returned`, an EXCEPTION status. The first version of
+    // this suite built its history from `delivered` orders, which are filtered
+    // out before the slice, so exactly one exception survived and the cut was
+    // never exercised: the test passed without testing anything.
+    const older = Array.from({ length: 60 }, (_, index) =>
+      order({
+        order_id: `RETURNED-${String(index).padStart(5, "0")}`,
+        fulfillment_status: "returned",
+        paid_at: new Date(NOW - (5_000 - index) * HOUR).toISOString(),
+        created_at: new Date(NOW - (5_000 - index) * HOUR).toISOString(),
+      }));
+    const today = order({
+      order_id: "TODAY-2",
+      shippo_sync_status: "error",
+      shippo_sync_error: "Ship-from address is not valid",
+      paid_at: new Date(NOW - HOUR).toISOString(),
+      created_at: new Date(NOW - HOUR).toISOString(),
+    });
+    state.rows = [...older, today];
+
+    const result = await getExceptionOrders({ limit: 50 });
+
+    // The list is capped at 50 and worked oldest-first — that part is correct.
+    expect(result.orders).toHaveLength(50);
+    // But the screen must not present it as the whole story.
+    expect(result.truncated).toBe(true);
+    expect(result.totalMatched).toBe(61);
+  });
+
   it("returns exceptions oldest-paid first, the order they are worked", async () => {
     state.rows = [
       order({

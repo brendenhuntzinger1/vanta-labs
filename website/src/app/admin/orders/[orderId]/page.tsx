@@ -249,6 +249,7 @@ export default async function AdminOrderDetailPage({ params }: { params: Promise
           // as "Fully reimbursed" before anything has been reimbursed at all.
           storeCreditRedeemedCents={Number(data.store_credit_redeemed_cents ?? 0)}
           pointsRedeemed={Number(data.points_redeemed ?? 0)}
+          orderPlacedIso={data.paid_at ? String(data.paid_at) : (data.created_at ? String(data.created_at) : null)}
           canRefund={canManageRefunds(session.role)}
           initialCarrier={shipment?.carrier ?? null}
           initialEstimatedDelivery={shipment?.estimated_delivery ?? null}
