@@ -73,6 +73,17 @@ $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-columns.sql"     >>/tmp/vl-sc
 $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-constraints.sql" >>/tmp/vl-schema.log 2>&1 || true
 $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-functions.sql"   >>/tmp/vl-schema.log 2>&1 || true
 
+# FOREIGN KEYS, LAST, because they validate the rows already in the tables.
+#
+# `create table if not exists` discards the whole statement when the table is
+# already there -- including its `references` clauses -- so a harness built in
+# stages ends up with production's columns and almost none of its foreign keys.
+# Counted 2026-08-28: production 35, harness 17. Missing were order_items ->
+# orders, customer_memberships -> membership_tiers and product_doses ->
+# products, which is why every embedded select was untestable and why an
+# order_items column that never existed stayed invisible for so long.
+$PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-foreign-keys.sql" >>/tmp/vl-schema.log 2>&1 || true
+
 # POST-PARITY. Two independent reasons a file must land after the parity step,
 # both of which produce a harness that silently tests the wrong system.
 #

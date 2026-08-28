@@ -99,11 +99,55 @@ const lit = (values) =>
 const ident = (name) => `"${String(name).replace(/"/g, '""')}"`;
 
 /**
- * select=a,b,rel(x,y) — embedded resources are returned as correlated json
- * subqueries, which is what supabase-js expects for a nested select.
+ * Foreign keys, read from the live catalogue once and cached.
+ *
+ * Embeds need to know how two tables join, and the only honest source for that
+ * is the database itself — hard-coding pairs here would drift from the schema
+ * the shim exists to run faithfully.
  */
-function buildSelect(select) {
-  if (!select || select === "*") return "*";
+let fkCache = null;
+async function loadForeignKeys() {
+  if (fkCache) return fkCache;
+  const { rows } = await pool.query(`
+    select
+      src.relname  as src_table,
+      src_col.attname as src_column,
+      tgt.relname  as tgt_table,
+      tgt_col.attname as tgt_column
+    from pg_constraint con
+    join pg_class src on src.oid = con.conrelid
+    join pg_class tgt on tgt.oid = con.confrelid
+    join pg_namespace ns on ns.oid = src.relnamespace and ns.nspname = 'public'
+    join lateral unnest(con.conkey)  with ordinality as sk(attnum, ord) on true
+    join lateral unnest(con.confkey) with ordinality as tk(attnum, ord) on sk.ord = tk.ord
+    join pg_attribute src_col on src_col.attrelid = src.oid and src_col.attnum = sk.attnum
+    join pg_attribute tgt_col on tgt_col.attrelid = tgt.oid and tgt_col.attnum = tk.attnum
+    where con.contype = 'f'
+  `);
+  fkCache = rows;
+  return fkCache;
+}
+
+/**
+ * How `parent` and `child` join, in whichever direction the schema declares.
+ *
+ * Returns null when no foreign key connects them — the caller then drops the
+ * embed and says so, rather than inventing a join.
+ */
+function relationBetween(fks, parent, embedded) {
+  // One-to-many: the embedded table points at us. `orders` <- `order_items`.
+  const many = fks.find((f) => f.src_table === embedded && f.tgt_table === parent);
+  if (many) return { kind: "many", localColumn: many.tgt_column, foreignColumn: many.src_column };
+
+  // Many-to-one: we point at the embedded table. `customer_memberships` -> `membership_tiers`.
+  const one = fks.find((f) => f.src_table === parent && f.tgt_table === embedded);
+  if (one) return { kind: "one", localColumn: one.src_column, foreignColumn: one.tgt_column };
+
+  return null;
+}
+
+/** Split on commas that sit outside parentheses. */
+function splitTopLevel(select) {
   const parts = [];
   let depth = 0;
   let cur = "";
@@ -114,21 +158,76 @@ function buildSelect(select) {
     cur += ch;
   }
   if (cur) parts.push(cur);
-
-  return parts
-    .map((raw) => {
-      const p = raw.trim();
-      if (!p) return null;
-      if (p.includes("(")) return null; // embeds unsupported; caller must widen
-      const [expr, alias] = p.split(":").reverse();
-      const col = ident(expr.trim());
-      return alias ? `${col} AS ${ident(alias.trim())}` : col;
-    })
-    .filter(Boolean)
-    .join(", ") || "*";
+  return parts;
 }
 
-function parseQuery(url) {
+/**
+ * select=a,b,rel(x,y) — embedded resources are returned as correlated json
+ * subqueries, which is what supabase-js expects for a nested select.
+ *
+ * THIS USED TO BE A LIE. The docblock said exactly the above while the code
+ * did `if (p.includes("(")) return null` — every embed was silently dropped
+ * and the row came back without the key. Three separate audit phases lost time
+ * to it: nested order_items(...) reads could not be exercised at all (which is
+ * part of why an order_items column that does not exist stayed invisible),
+ * the order-detail page 400ed, and a membership store-credit grant could only
+ * be unit-tested. A test harness that quietly returns less than it was asked
+ * for is worse than one that refuses.
+ *
+ * An embed with no foreign key between the two tables is still dropped — but
+ * loudly, on stderr, because that is a schema question and guessing a join
+ * would be the same sin in a new costume.
+ */
+async function buildSelect(select, parentTable) {
+  if (!select || select === "*") return "*";
+
+  const fks = await loadForeignKeys().catch(() => []);
+  const out = [];
+
+  for (const raw of splitTopLevel(select)) {
+    const p = raw.trim();
+    if (!p) continue;
+
+    const embed = p.match(/^(?:([\w]+)\s*:\s*)?([\w]+)\s*(?:!\s*[\w]+\s*)?\((.*)\)$/s);
+    if (!embed) {
+      // `*` alongside an embed — `select=*,order_items(*)` — must stay a bare
+      // star. ident() would quote it into a column named "*", which is a 42703
+      // and was the first thing this rewrite got wrong.
+      if (p === "*") { out.push("*"); continue; }
+      const [expr, alias] = p.split(":").reverse();
+      const col = ident(expr.trim());
+      out.push(alias ? `${col} AS ${ident(alias.trim())}` : col);
+      continue;
+    }
+
+    const [, alias, table, innerRaw] = embed;
+    const rel = relationBetween(fks, parentTable, table);
+    if (!rel) {
+      console.warn(`[pgrst-shim] no foreign key joins ${parentTable} to ${table}; dropping embed "${p}"`);
+      continue;
+    }
+
+    const inner = await buildSelect(innerRaw.trim() || "*", table);
+    const key = ident(alias || table);
+    const t = ident(table);
+    const on = `${t}.${ident(rel.foreignColumn)} = ${ident(parentTable)}.${ident(rel.localColumn)}`;
+    const projection = inner === "*" ? `to_jsonb(${t})` : `to_jsonb(row) FROM (SELECT ${inner}) row`;
+
+    if (rel.kind === "many") {
+      out.push(inner === "*"
+        ? `(SELECT coalesce(json_agg(to_jsonb(${t})), '[]'::json) FROM ${t} WHERE ${on}) AS ${key}`
+        : `(SELECT coalesce(json_agg(row_to_json(r)), '[]'::json) FROM (SELECT ${inner} FROM ${t} WHERE ${on}) r) AS ${key}`);
+    } else {
+      out.push(inner === "*"
+        ? `(SELECT ${projection} FROM ${t} WHERE ${on}) AS ${key}`
+        : `(SELECT row_to_json(r) FROM (SELECT ${inner} FROM ${t} WHERE ${on}) r) AS ${key}`);
+    }
+  }
+
+  return out.join(", ") || "*";
+}
+
+async function parseQuery(url, parentTable) {
   const params = url.searchParams;
   const where = [];
   const values = [];
@@ -140,7 +239,7 @@ function parseQuery(url) {
   let select = "*";
 
   for (const [key, raw] of params.entries()) {
-    if (key === "select") { select = buildSelect(raw); continue; }
+    if (key === "select") { select = await buildSelect(raw, parentTable); continue; }
     if (key === "order") {
       order = " ORDER BY " + raw.split(",").map((o) => {
         const [col, ...mods] = o.split(".");
@@ -225,8 +324,9 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, value === undefined ? rows : value);
     }
 
-    const table = `public.${ident(path.replace(/^\//, ""))}`;
-    const q = parseQuery(url);
+    const tableName = path.replace(/^\//, "");
+    const table = `public.${ident(tableName)}`;
+    const q = await parseQuery(url, tableName);
 
     // ---- SELECT ---------------------------------------------------------
     if (req.method === "GET") {

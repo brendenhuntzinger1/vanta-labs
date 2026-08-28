@@ -332,9 +332,32 @@ class of defects this audit exists to find lives in that gap.
 
 ## Shim limitations to work around
 
-- **Embedded selects** (`select=a,b,rel(x,y)`) are not implemented. If a query
-  needs one, widen the select and join in application code, or add the embed to
-  the shim. Do not silently skip the test.
+- **Embedded selects** (`select=a,b,rel(x,y)`) ARE implemented, as of
+  2026-08-28. Both directions work — a child array (`orders` →
+  `order_items(...)`), a parent object (`customer_memberships` →
+  `membership_tiers(...)`), aliases (`items:order_items(...)`), `select=*`
+  beside an embed, and nesting.
+
+  They resolve the join by reading `pg_constraint`, the way PostgREST does, so
+  an embed only works when the foreign key actually exists in the harness
+  database. That was the real blocker: the bootstrap's `create table if not
+  exists` silently discards `references` clauses, leaving production with 35
+  foreign keys and the harness with 17 — including none of the three the
+  application embeds most. `harness-prod-parity-foreign-keys.sql` closes that
+  and the bootstrap applies it.
+
+  If an embed comes back missing from the row, the shim says why on stderr
+  (`no foreign key joins X to Y; dropping embed`). Treat that as a schema gap
+  to add to the parity file — not as a reason to widen the select and move on.
+  It will not guess a join, because a harness that guesses is a harness that
+  lies.
+
+  **This section previously said embeds were "not implemented", and before that
+  the shim's own docblock said they were returned as correlated subqueries
+  while the code dropped them on the floor.** Three audit phases lost time to
+  it: the order-detail page could not be browser-tested at all, a membership
+  store-credit grant fell back to unit tests, and a nested `order_items` read
+  of a column that does not exist stayed invisible.
 - If a query fails with a SQL error, **that is a finding until proven
   otherwise** — it may be a genuine schema/query mismatch, not a shim gap.
   Check which before dismissing it.
