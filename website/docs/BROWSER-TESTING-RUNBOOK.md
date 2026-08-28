@@ -63,6 +63,67 @@ returns 200 and the full storefront is drivable; without it, every host resets.
 
 ---
 
+## Chromium is not Safari, and a spoofed user-agent will not make it one
+
+**Only Chromium is pre-installed, and a UA string changes the string, not the
+engine.** Driving Chromium with an iPhone user-agent tests our layout, our DOM
+and our JavaScript. It does not test WebKit. That distinction is not academic
+here: TikTok, Instagram, Facebook and Snapchat on iOS all render in WKWebView,
+which is WebKit — so the platforms this runbook exists to protect are precisely
+the ones Chromium cannot speak for. Claiming a page is "verified on Safari"
+from a Chromium run is the same class of error as reading an
+`ERR_CONNECTION_RESET` as an outage.
+
+**Both other engines can be installed, and should be for any layout claim.**
+`playwright install` is otherwise discouraged here because it re-fetches
+Chromium for nothing; fetching an engine we do not have is a different matter.
+`playwright-core` is deliberately NOT a dependency of the app — nothing in the
+product imports it — so install it somewhere scratch along with the engines.
+Install into a scratch browsers path too, so the pre-installed Chromium is
+untouched, and drive the install with the CLI belonging to the same
+`playwright-core` you will `import`: the globally installed `playwright` is a
+different version and fetches a build the library then cannot find (it looks
+for `webkit-2336` and finds `webkit-2215`).
+
+    mkdir -p /tmp/pw && cd /tmp/pw && npm i playwright-core
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=0 PLAYWRIGHT_BROWSERS_PATH=/tmp/pw-engines \
+      node /tmp/pw/node_modules/playwright-core/cli.js install webkit firefox
+    npx playwright install-deps webkit      # needs root; WebKit needs ~40 shared libs
+
+Then run with `PLAYWRIGHT_BROWSERS_PATH=/tmp/pw-engines`, and make
+`playwright-core` resolvable from `website/` — a symlink into the scratch
+install is enough, and node_modules is gitignored.
+
+**Each engine meets the egress proxy differently.** The TLS 1.3 reset described
+above is not Chromium-specific, but the fix is:
+
+| Engine | Proxy behaviour | What it needs |
+|---|---|---|
+| Chromium | every host resets | `args: ['--ssl-version-max=tls1.2']` |
+| Firefox  | `NS_ERROR_NET_RESET` on every navigation | `firefoxUserPrefs: { 'security.tls.version.max': 3 }` (3 = TLS 1.2) |
+| WebKit   | negotiates fine | nothing |
+
+Without the Firefox pref every page looks dead, which reads exactly like a
+site-wide outage and is not one.
+
+Expect the occasional single-resource TLS handshake failure or `ERR_TIMED_OUT`
+even with the caps in place. Treat one that does not reproduce across engines
+or viewports as transport; a real layout defect reproduces everywhere.
+
+`scripts/cross-engine-check.mjs` runs the whole matrix and applies all of the
+above.
+
+    ENGINE=webkit node scripts/cross-engine-check.mjs            # local harness
+    ENGINE=firefox BASE_URL=https://www.vantalabsresearch.com \
+      node scripts/cross-engine-check.mjs                        # production, READ-ONLY
+
+Last full run, 2026-08-28, against production: WebKit, Firefox and Chromium,
+five viewports from 375x548 to 1680x1050, five routes each — no horizontal
+overflow and no layout defect in any combination. The only failures were the
+transport artifacts above.
+
+---
+
 ## What this is and is not
 
 It translates HTTP to SQL against a **real** Postgres running the **real**
