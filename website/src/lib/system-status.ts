@@ -480,6 +480,22 @@ export async function getSystemStatus(): Promise<IntegrationStatus[]> {
     blocksLaunch: true,
   });
 
+  // The bounce/complaint webhook secret. Without it that endpoint fails closed,
+  // so nothing suppresses an address the provider told us is dead or that
+  // reported us as spam — and the damage is invisible from this side until
+  // receipts and password resets start landing in spam. Not launch-blocking:
+  // the store sells fine, the sending reputation just decays.
+  const emailWebhook = (process.env.EMAIL_WEBHOOK_SECRET ?? "").trim();
+  out.push({
+    key: "email_webhook",
+    label: "Email bounce/complaint webhook secret",
+    level: emailWebhook ? "ok" : "warn",
+    detail: emailWebhook
+      ? "CONFIGURED — hard bounces and spam complaints suppress the address automatically"
+      : "MISSING — /api/webhooks/email fails closed, so bounces and spam complaints are never recorded and those addresses keep receiving marketing. Set EMAIL_WEBHOOK_SECRET, then add the endpoint in the provider dashboard.",
+    blocksLaunch: false,
+  });
+
   // The three ambassador rates, as the business logic actually resolves them,
   // with their provenance. Displayed here because "20% because it is stored"
   // and "20% because nothing is stored" are different facts.
