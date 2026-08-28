@@ -3,6 +3,7 @@ import "server-only";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { accrueCommissionForPaidOrder } from "@/lib/payment-webhook";
 import { recordSystemAlert } from "@/lib/monitoring";
+import { describeError } from "@/lib/operator-error";
 
 /**
  * RE-DERIVE COMMISSIONS THAT WERE NEVER RECORDED (review finding 1, P0).
@@ -167,23 +168,6 @@ function errorCode(error: unknown): string | null {
  * backlog this alert exists for, arrived with its diagnosis erased. Keep the
  * code, message, details and hint.
  */
-function describeError(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (error && typeof error === "object") {
-    const e = error as { code?: unknown; message?: unknown; details?: unknown; hint?: unknown };
-    const parts = [e.code, e.message, e.details, e.hint]
-      .filter((value) => value != null && String(value) !== "")
-      .map(String);
-    if (parts.length > 0) return parts.join(" | ");
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return String(error);
-    }
-  }
-  return String(error);
-}
-
 function round2(value: unknown): number {
   return Math.round(Number(value ?? 0) * 100) / 100;
 }

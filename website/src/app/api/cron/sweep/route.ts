@@ -15,6 +15,7 @@ import { runAutomationSweep } from "@/lib/email/automations";
 import { repairMissingShippingCosts } from "@/lib/shipping-cost-repair";
 import { repairIncompleteRefunds } from "@/lib/refund-effect-repair";
 import { recordSystemAlert } from "@/lib/monitoring";
+import { describeError } from "@/lib/operator-error";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -197,8 +198,13 @@ export async function GET(request: Request) {
       type: "cron_sweep_failed",
       severity: "critical",
       message: `Scheduled sweep had ${failed.length} failing job(s): ${failed.map(([name]) => JOBS[name].label).join(", ")}. Renewals, cart recovery, reservation expiry, or email retries may be stalled.`,
+      // describeError, NOT String(). A Supabase/PostgREST failure is a plain
+      // object, and String() on one is the literal "[object Object]" — which is
+      // exactly what this alert carried on 2026-08-28 for
+      // commission_accrual_repair, on the affiliate money path, with no other
+      // trace anywhere because the route still returns 200.
       context: Object.fromEntries(
-        failed.map(([name, result]) => [JOBS[name].label, String((result as PromiseRejectedResult).reason)]),
+        failed.map(([name, result]) => [JOBS[name].label, describeError((result as PromiseRejectedResult).reason)]),
       ),
     });
   }
@@ -213,7 +219,7 @@ export async function GET(request: Request) {
           ? { error: "did not finish before the sweep deadline" }
           : result.status === "fulfilled"
             ? result.value
-            : { error: String(result.reason) },
+            : { error: describeError(result.reason) },
       ]),
     ),
   });

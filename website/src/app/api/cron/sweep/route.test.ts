@@ -117,6 +117,46 @@ describe("the scheduled sweep", () => {
     expect(Object.keys(alert.context)).toEqual(["shippo_sync"]);
   });
 
+  // THE ALERT MUST SAY WHY, NOT JUST WHICH.
+  //
+  // On 2026-08-28 this alert fired for commission_accrual_repair — the affiliate
+  // money path — carrying `{ commission_accrual_repair: "[object Object]" }`.
+  // The route returns 200 even when a job rejects, deliberately, so nothing
+  // reached the runtime error log either: the reason existed, was handed to the
+  // alert, and was destroyed on the way in by `String(reason)`.
+  //
+  // It is destroyed for the errors this codebase actually throws. A Supabase /
+  // PostgREST failure is a plain `{ code, message, details, hint }` object, not
+  // an Error, and `String()` on a plain object is that literal text.
+  it("carries the REASON a job failed, not [object Object]", async () => {
+    // Exactly the shape supabase-js rejects with.
+    const postgrestError = {
+      code: "42501",
+      message: "permission denied for table referral_orders",
+      details: null,
+      hint: "grant SELECT to service_role",
+    };
+    commissionAccrualRepair.mockRejectedValueOnce(postgrestError);
+
+    const response = await callSweep();
+    const body = await response.json();
+
+    const alert = recordSystemAlert.mock.calls[0][0];
+    const reason = String((alert.context as Record<string, unknown>).commission_accrual_repair);
+
+    // What the operator needs in order to act.
+    expect(reason).toContain("42501");
+    expect(reason).toContain("permission denied for table referral_orders");
+
+    // The regression, stated rather than implied.
+    expect(String(postgrestError)).toBe("[object Object]");
+    expect(reason).not.toBe("[object Object]");
+
+    // The response body took the same path and had the same bug.
+    expect(String(body.commissionAccrualRepair.error)).toContain("42501");
+    expect(String(body.commissionAccrualRepair.error)).not.toBe("[object Object]");
+  });
+
   it("alerts on express-intent expiry too, rather than dropping it silently", async () => {
     expressIntents.mockRejectedValueOnce(new Error("nope"));
 
