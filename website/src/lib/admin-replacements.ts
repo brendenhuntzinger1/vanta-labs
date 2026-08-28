@@ -279,6 +279,45 @@ export async function createReplacementOrder(input: {
     }).catch(() => undefined);
   }
 
+  // THE INVENTORY RECEIPT (INV-04). This is the THIRD lane that moves stock on a
+  // paid order, and order-cancellation-inventory.ts states the contract for one:
+  // "If a third is ever added it MUST stamp `inventory_committed_at` after its
+  // stock moves, and only then."
+  //
+  // It did not, and the cost was silent. A replacement never took a reservation,
+  // so on cancel the NULL latch sent it down the release branch —
+  // releaseInventoryForOrder is a no-op with no hold to release — and the caller
+  // was handed "released" for units that were decremented and never came back.
+  // The shelf count drifts low, which is the direction that reports stock the
+  // store does not have as gone.
+  //
+  // STAMPED AFTER THE DECREMENT, AND ONLY ON A CLEAN ONE. A partial decrement
+  // deliberately leaves it NULL: restockInventoryForOrder returns EVERY line, so
+  // a receipt over a partial would invent units for the lines that never moved.
+  // Under-restock is recoverable by hand; over-restock oversells. The alert
+  // above is what tells a person which units to correct.
+  //
+  // NOT ADDED TO baseOrderRow either: that row is the last-resort fallback for a
+  // database missing the newer columns, and it is inserted before the decrement
+  // has run, which is exactly the meaning this latch must not carry.
+  if (decrement.failed === 0) {
+    try {
+      const committedAt = new Date().toISOString();
+      const { error: latchError } = await supabaseAdmin
+        .from("orders")
+        .update({ inventory_committed_at: committedAt, updated_at: committedAt })
+        .eq("order_id", orderId);
+      if (latchError) {
+        // Non-fatal by design: the parcel is already going out, and failing a
+        // replacement over its own bookkeeping would leave the customer without
+        // their apology. A missing latch under-restocks on a later cancel.
+        console.error("Unable to record inventory_committed_at for replacement", orderId, latchError);
+      }
+    } catch (error) {
+      console.error("Unable to record inventory_committed_at for replacement", orderId, error);
+    }
+  }
+
   // The replacement order lands in the admin fulfillment queue and is shipped
   // in-house. A replacement carries the customer's address like any other
   // order, so nothing about it may be transmitted to an outside provider.

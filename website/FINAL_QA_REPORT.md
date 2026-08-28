@@ -161,7 +161,7 @@ Legend: ✅ Proven here · 🧪 Logic proven, E2E needs staging · 🔵 Tier B (
 | Logged-in / guest checkout | `payment-service.test.ts` | 🧪 logic proven |
 | Referral codes / bundle discounts / membership pricing | `resolveCustomerDiscount` shared by checkout + guard; ~10k sweep | ✅ Proven (logic) |
 | Ambassador commissions | always paid on a valid code, on discounted subtotal; unit + sweep | ✅ Proven (logic) |
-| Taxes | tax on merchandise only, pass-through; sweep | ✅ Proven (logic) |
+| Taxes | tax on post-discount merchandise, plus shipping in the states that tax delivery charges; pass-through; sweep | ✅ Proven (logic) |
 | Shipping thresholds / free-ship cost | profit sweep accounts for store-borne shipping cost | ✅ Proven (logic) |
 | Payment method offered | **Card only** (Debit/Credit/Apple Pay); Cash App/Zelle/PayPal removed | ✅ Proven (config test) |
 | Payment processing | provider is a stub until you connect a real processor | 🔵 needs a processor |

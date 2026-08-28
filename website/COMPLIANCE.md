@@ -40,7 +40,7 @@ in the "Legal decisions" section.
 - [ ] **Card surcharge legality** — a 5% card fee is regulated/limited in some US states and often prohibited on debit cards. Confirm for the states you sell to, or disable/adjust it in Admin → Settings.
 - [ ] **Research-chemical / peptide regulations** — confirm your products, labeling, and claims comply with FDA/FTC and state law for "research use only" materials, including any prohibited destinations.
 - [ ] **Privacy law scope** — if you sell to CA (CCPA/CPRA), CO/VA/etc., or the EU/UK (GDPR), you may need specific disclosures, a "Do Not Sell/Share" link, and a data-request process. Decide your target markets.
-- [ ] **Sales tax / nexus** — set the correct tax rate(s) in Admin (a single flat rate is supported today); confirm where you have nexus and whether per-state rates or a tax service are required.
+- [ ] **Sales tax / nexus** — per-state rates are applied automatically from the destination address (`US_STATE_TAX_TABLE` in `src/lib/sales-tax.ts`), with per-state overrides in Admin and a TaxJar/Avalara provider seam already built in; confirm where you have nexus and whether a tax service is required.
 - [ ] **Business entity, licensing, and 1099-K** reporting for your payment accounts — confirm with an accountant.
 - [ ] **Chargeback/dispute policy** for manual payments (Cash App/Zelle have little buyer protection) — decide how you handle disputes.
 

@@ -27,7 +27,17 @@ export async function getLifetimeSavings(userId: string): Promise<LifetimeSaving
       .select("payment_status, discount_amount, store_credit_redeemed_cents, points_redeemed")
       .eq("customer_user_id", userId)
       .limit(2000);
-    if (error || !data) return ZERO;
+    // A FAILED READ IS NOT $0.00 OF SAVINGS, and this function has no way to
+    // say so: its return type is LifetimeSavings, and the account dashboard
+    // renders `lifetimeSavings.total` as a confident "Lifetime saved $0.00".
+    // Until the caller can render an unknown (the way it already does for a
+    // null points balance), the least this can do is leave a record — a
+    // customer reporting "my savings vanished" currently produces no log line
+    // at all to correlate against.
+    if (error || !data) {
+      console.error("Lifetime savings read failed; reporting zero:", error);
+      return ZERO;
+    }
 
     let discounts = 0;
     let storeCredit = 0;
@@ -52,7 +62,9 @@ export async function getLifetimeSavings(userId: string): Promise<LifetimeSaving
       points: round(points),
       paidOrders,
     };
-  } catch {
+  } catch (e) {
+    // Same reasoning as the error branch above.
+    console.error("Lifetime savings read threw; reporting zero:", e);
     return ZERO;
   }
 }

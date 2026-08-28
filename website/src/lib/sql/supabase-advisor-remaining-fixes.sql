@@ -113,6 +113,18 @@ select pg_temp.drop_index_if_exact_duplicate('public.idx_ambassadors_referral_co
 select pg_temp.drop_index_if_exact_duplicate('public.idx_admin_credentials_username');
 select pg_temp.drop_index_if_exact_duplicate('public.idx_admin_sessions_token_hash');
 select pg_temp.drop_index_if_exact_duplicate('public.idx_product_doses_product_slug_suffix');
+-- Two more pairs on `orders`, each declared twice under two names:
+--   orders_customer_email_idx (checkout-hardening.sql) duplicates
+--     idx_orders_customer_email (deploy-run-once, orders-schema, schema-complete-sync
+--     and both performance-advisor files)
+--   idx_orders_bulk_tier (admin-dashboard-rollups.sql) duplicates
+--     idx_orders_bulk_discount_tier (deploy-run-once, membership-billing,
+--     schema-complete-sync) — same column, same `where ... is not null`
+-- The name kept in each pair is the one the base schema creates. Note that
+-- admin-dashboard-rollups.sql recreates idx_orders_bulk_tier, so re-applying
+-- that file re-creates the duplicate and this sweep has to run again after it.
+select pg_temp.drop_index_if_exact_duplicate('public.orders_customer_email_idx');
+select pg_temp.drop_index_if_exact_duplicate('public.idx_orders_bulk_tier');
 
 -- 3) Fix SECURITY DEFINER search_path in public schema.
 -- Use a fixed path that preserves common Supabase/public function resolution.

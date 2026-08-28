@@ -6,11 +6,13 @@ import { hasUnknowns, type CommunicationRow, type CommunicationState } from "@/l
 /**
  * What the customer has been told about this order.
  *
- * Everything shown is derived from the order's own state and the failed-email
- * queue; nothing new is stored to render it. The one claim it will not make is
- * "Sent" — nothing records a successful send, so the honest label is that no
- * failure was recorded. An owner who needs certainty has the provider's log;
- * an owner who needs to spot a problem has this.
+ * Everything shown is derived from the order's own state, the failed-email queue
+ * and `order_email_log`; nothing new is stored to render it.
+ *
+ * SENT is claimed for the CONFIRMATION ROW ONLY, and only off a positive
+ * `order_email_log` row (E-07). That log is written by the order-confirmation
+ * lane alone, so shipping and delivery keep the weaker, honest label: no failure
+ * was recorded, which is not proof of delivery.
  */
 
 type Payload = {
@@ -30,6 +32,8 @@ const TONE: Record<CommunicationState, string> = {
   failed: "border-rose-400/40 bg-rose-400/10 text-rose-200",
   retrying: "border-amber-300/40 bg-amber-300/10 text-amber-200",
   recovered: "border-emerald-300/30 bg-emerald-300/[0.07] text-emerald-200",
+  // The only genuinely green state: a provider accepted this one on the record.
+  sent: "border-emerald-400/40 bg-emerald-400/10 text-emerald-100",
   no_failure_recorded: "border-white/10 bg-white/[0.03] text-zinc-300",
   not_due: "border-white/10 bg-white/[0.02] text-zinc-500",
   // Neither green nor red: this is a monitoring gap, and colouring it as
@@ -41,6 +45,7 @@ const STATE_LABEL: Record<CommunicationState, string> = {
   failed: "FAILED",
   retrying: "RETRYING",
   recovered: "SENT ON RETRY",
+  sent: "SENT",
   no_failure_recorded: "NO FAILURE RECORDED",
   not_due: "NOT DUE",
   cannot_determine: "CANNOT DETERMINE",
@@ -109,8 +114,9 @@ export function AdminOrderCommunications({ orderId }: { orderId: string }) {
         <div>
           <h2 className="text-sm font-semibold uppercase tracking-[0.16em] text-zinc-300">Customer communications</h2>
           <p className="mt-1 text-xs text-zinc-500">
-            Derived from the order&rsquo;s own state and the failed-email queue. Nothing records a successful send, so a
-            clean row means no failure was recorded — not proof of delivery.
+            Derived from the order&rsquo;s own state, the failed-email queue and the order email log. A confirmation
+            shown as SENT was accepted by the email provider; on every other row a clean result means no failure was
+            recorded — not proof of delivery.
           </p>
         </div>
         {retryable ? (

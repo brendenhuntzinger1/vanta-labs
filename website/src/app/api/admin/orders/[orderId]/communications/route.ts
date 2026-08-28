@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { verifyAdminSessionFromCookie } from "@/lib/admin-auth";
 import { supabaseAdmin } from "@/lib/supabase-server";
-import { deriveOrderCommunications } from "@/lib/order-communications";
+import { deriveOrderCommunications, type OrderEmailLogRow } from "@/lib/order-communications";
 import { retryPendingEmailsForOrder } from "@/lib/email/retry-queue";
 import { displayOrderReference } from "@/lib/order-reference";
 
@@ -49,6 +49,24 @@ async function loadCommunications(order: Record<string, unknown>) {
     /* leave null — unreadable, which the panel reports as CANNOT DETERMINE */
   }
 
+  // The only table that records a SUCCESSFUL send (E-07). Read separately, and
+  // its failure is treated differently from the failure above on purpose: a
+  // missing `pending_emails` hides failures and must show as CANNOT DETERMINE,
+  // whereas a missing `order_email_log` only costs the panel the ability to
+  // upgrade a clean row to SENT. So this one degrades to null and the panel
+  // falls back to exactly what it said before the log existed.
+  let emailLog: OrderEmailLogRow[] | null = null;
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("order_email_log")
+      .select("kind, status, provider, provider_message_id")
+      .eq("order_id", order.order_id as string)
+      .limit(20);
+    if (!error) emailLog = (data ?? []) as OrderEmailLogRow[];
+  } catch {
+    /* leave null — the panel simply cannot upgrade past "no failure recorded" */
+  }
+
   return {
     orderNumber,
     paymentStatus: (order.payment_status as string) ?? null,
@@ -62,6 +80,7 @@ async function loadCommunications(order: Record<string, unknown>) {
       shippedAt: (order.shipped_at as string) ?? null,
       deliveredAt: (order.delivered_at as string) ?? null,
       pendingEmails,
+      emailLog,
     }),
   };
 }

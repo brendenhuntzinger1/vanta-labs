@@ -205,7 +205,18 @@ create index if not exists ad_performance_daily_date_idx on public.ad_performanc
 -- Derived metrics are a view, not columns. CTR stored alongside clicks and
 -- impressions is a third number that can disagree with the two that produced
 -- it, and it always eventually does.
-create or replace view public.ad_performance_derived as
+--
+-- security_invoker IS LOAD-BEARING, and its absence would have undone section 6
+-- below. ad_performance_daily has RLS enabled with no policy, so no browser can
+-- read it — but a view created WITHOUT security_invoker runs as its OWNER, and
+-- the owner of a table is exempt from that table's RLS. Supabase's default
+-- privileges then grant SELECT on a new public view to anon and authenticated,
+-- so this view would have been an unauthenticated read of the store's entire ad
+-- spend, CPA and ROAS: precisely the data section 6 says "the browser must never
+-- read". The revoke below is the second half — invoker rights alone still leave
+-- the grant sitting there for any future policy to widen.
+create or replace view public.ad_performance_derived
+with (security_invoker = true) as
 select
   p.creative_id,
   p.stat_date,
@@ -227,6 +238,8 @@ select
   case when p.impressions > 0 then p.views_2s::numeric / p.impressions end as hook_rate,
   case when p.views_2s > 0 then p.views_6s::numeric / p.views_2s end as hold_rate
 from public.ad_performance_daily p;
+
+revoke all on public.ad_performance_derived from anon, authenticated;
 
 -- -----------------------------------------------------------------------------
 -- 5. Decisions, guardrails and the action log
