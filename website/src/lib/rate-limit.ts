@@ -106,6 +106,17 @@ async function alertOnce(bucket: string, stage: string, detail: string): Promise
       severity: "critical",
       message: `Rate limiting is OFF: ${stage} failed. Every throttled route is currently unlimited.`,
       context: { bucket, stage, detail },
+      // `lastDegradedAlertAt` is module state, so it throttles within one
+      // instance and nothing across them — and a storage outage hits every
+      // instance at once. The persisted window covers that.
+      //
+      // A PARTIAL FIX, AND WORTH SAYING SO: this path runs precisely because a
+      // Supabase read failed, so the dedupe read often fails too. It fails open
+      // by design (a throttle must never be why a real alert goes unsent), which
+      // means in a full Supabase outage there is still no throttling here. It
+      // helps in the case that is actually common — the rate_limits table alone
+      // being degraded — and does not close the storm in the worst case.
+      dedupeWindowMs: ALERT_THROTTLE_MS,
     });
   } catch {
     // The alert itself is best-effort; the console line below is the floor.

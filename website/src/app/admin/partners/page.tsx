@@ -177,6 +177,7 @@ export default async function AdminPartnersPage() {
           initialPayoutHistory={payoutHistory}
           initialMarketingResources={marketingResources}
           programDefaultDiscountPercent={referralProgram.discountPercent}
+          programDefaultCommissionPercent={referralProgram.defaultCommissionPercent}
         />
       </div>
     </div>

@@ -148,9 +148,18 @@ export async function getOpenCriticalAlertCount(): Promise<number> {
       .select("id", { count: "exact", head: true })
       .eq("severity", "critical")
       .is("resolved_at", null);
-    if (error) return 0;
+    // Still 0, still never throws — but no longer SILENT. A failed read here is
+    // indistinguishable on screen from "no criticals open", which is the exact
+    // reading an operator acts on by doing nothing. The badge cannot say so
+    // without widening this to `number | null` and changing both consumers, so
+    // at minimum the failure reaches the logs.
+    if (error) {
+      console.error("Critical-alert count read failed; badge may understate", error);
+      return 0;
+    }
     return Math.max(0, count ?? 0);
-  } catch {
+  } catch (err) {
+    console.error("Critical-alert count read threw; badge may understate", err);
     return 0;
   }
 }

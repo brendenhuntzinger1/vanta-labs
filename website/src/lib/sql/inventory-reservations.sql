@@ -1,4 +1,21 @@
 -- ============================================================================
+-- SUPERSEDED IN PART: inventory-enforce-positive-stock.sql MUST BE RE-RUN AFTER
+-- THIS FILE.
+--
+-- reserve_inventory() below enforces only when track_inventory = true. Nothing
+-- ever set that flag, so the whole reservation / oversell-prevention layer was
+-- dormant; inventory-enforce-positive-stock.sql redefines the function with the
+-- wider predicate `(track_inventory = true or inventory_quantity > 0)` and
+-- backfills the flag. `create or replace` means whichever file runs LAST wins,
+-- so applying this one on its own silently reverts that fix. The browser
+-- harness applies both, in that order, and asserts the wider predicate is the
+-- one installed (scripts/setup-local-harness.sh, parity self-check).
+--
+-- The TRACKED vs UNTRACKED paragraph below therefore describes THIS file's
+-- predicate, not the one in force.
+-- ============================================================================
+
+-- ============================================================================
 -- Enterprise inventory reservation.
 --
 -- Holds stock atomically the instant a checkout/payment session is created (an

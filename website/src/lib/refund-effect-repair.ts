@@ -401,38 +401,61 @@ async function collectRepairablePages(input: {
  */
 const SCAN_TRUNCATED_ALERT = "refund_scan_truncated";
 
+/** Unresolved side-effect failures are a standing condition too — see below. */
+const UNRECOVERED_ALERT = "refund_effects_unrecovered";
+
 /**
- * Is this standing condition already on file and unresolved?
+ * The newest UNRESOLVED alert of this type, with its context — or null when
+ * there is none, and null when the question cannot be answered.
  *
- * Truncation is not an event: the window is over the ceiling and stays there
- * until the backlog clears or someone widens it. `recordSystemAlert` has no
- * dedup of any kind, so writing it on every tick produced a CRITICAL row — and
- * therefore an operator email — every thirty minutes, indefinitely: 48 a day
- * for one unchanging fact, burying the alerts that ARE events. The sibling
- * shipping sweep already deduped its standing condition on state; this one did
- * not, which is the whole of the defect.
+ * Both alerts this file raises are standing conditions, not events.
+ * Truncation is over the ceiling and stays there until the backlog clears or
+ * someone widens it; a side-effect that could not be completed stays
+ * uncompleted until someone acts on it. `recordSystemAlert` deduplicates only
+ * on a caller-supplied time window over the TYPE, so writing either on every
+ * tick produced a CRITICAL row — and therefore an operator email — every thirty
+ * minutes, indefinitely: 48 a day for one unchanging fact, burying the alerts
+ * that ARE events. The sibling shipping sweep already deduped its standing
+ * condition on state; this one did not, which is the whole of the defect.
  *
  * Reported again the moment a human resolves the row, or if the check itself
  * cannot be made — a duplicate alert is a smaller failure than a missing one.
  */
-async function truncationAlreadyReported(): Promise<boolean> {
+async function latestUnresolvedAlert(
+  type: string,
+): Promise<{ context: Record<string, unknown> } | null> {
   try {
     const { data, error } = await supabaseAdmin
       .from("system_alerts")
-      .select("resolved_at, created_at")
-      .eq("type", SCAN_TRUNCATED_ALERT)
+      .select("resolved_at, created_at, context")
+      .eq("type", type)
       .order("created_at", { ascending: false })
       .limit(1);
-    if (error) return false;
-    const latest = (data ?? [])[0] as { resolved_at?: string | null } | undefined;
-    return Boolean(latest) && !latest?.resolved_at;
+    if (error) return null;
+    const latest = (data ?? [])[0] as
+      | { resolved_at?: string | null; context?: Record<string, unknown> | null }
+      | undefined;
+    if (!latest || latest.resolved_at) return null;
+    return { context: latest.context ?? {} };
   } catch {
-    return false;
+    return null;
   }
 }
 
+/**
+ * A stable identity for the SET of side-effects that could not be completed.
+ *
+ * Deduping on the TYPE alone would be worse than not deduping: a brand-new
+ * order's failure would be swallowed for as long as an older, unactioned row
+ * stood open — silencing exactly the alerts that are news. Sorted, so the same
+ * failures in a different scan order are the same signature.
+ */
+function failureSignature(failures: Array<{ orderId: string; effect: string }>): string {
+  return failures.map((failure) => `${failure.orderId}:${failure.effect}`).sort().join("|");
+}
+
 async function alertScanTruncated(result: RefundRepairResult): Promise<void> {
-  if (await truncationAlreadyReported()) return;
+  if (await latestUnresolvedAlert(SCAN_TRUNCATED_ALERT)) return;
   await recordSystemAlert({
     type: SCAN_TRUNCATED_ALERT,
     severity: "critical",
@@ -537,16 +560,24 @@ export async function repairIncompleteRefunds(options?: {
   if (result.scanTruncated) await alertScanTruncated(result);
 
   if (failures.length > 0) {
-    await recordSystemAlert({
-      type: "refund_effects_unrecovered",
-      severity: "critical",
-      message:
-        `${failures.length} refund side-effect(s) could not be completed. `
-        + "Revenue, loyalty points or store credit may not reflect these refunds.",
-      context: { failures: failures.slice(0, 25), totalFailed: failures.length },
-    }).catch((alertError) => {
-      console.error("Unable to record a refund-effect repair alert", alertError);
-    });
+    // Once per failing SET, not once per tick. The sweep runs every thirty
+    // minutes and re-attempts the same rows, so a failure that needs a human
+    // re-raised itself 48 times a day. Deduping on the signature keeps a NEW
+    // order's failure loud while an already-reported one stays quiet.
+    const signature = failureSignature(failures);
+    const standing = await latestUnresolvedAlert(UNRECOVERED_ALERT);
+    if (standing?.context.signature !== signature) {
+      await recordSystemAlert({
+        type: UNRECOVERED_ALERT,
+        severity: "critical",
+        message:
+          `${failures.length} refund side-effect(s) could not be completed. `
+          + "Revenue, loyalty points or store credit may not reflect these refunds.",
+        context: { failures: failures.slice(0, 25), totalFailed: failures.length, signature },
+      }).catch((alertError) => {
+        console.error("Unable to record a refund-effect repair alert", alertError);
+      });
+    }
   }
 
   return result;

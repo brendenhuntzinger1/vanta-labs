@@ -324,10 +324,38 @@ export async function adminForceReferralCode(input: {
 }
 
 export async function setReferralCodeLock(ambassadorId: string, locked: boolean): Promise<void> {
-  await Promise.all([
-    supabaseAdmin.from("ambassadors").update({ referral_code_locked: locked }).eq("id", ambassadorId),
-    supabaseAdmin.from("partners").update({ referral_code_locked: locked }).eq("id", ambassadorId),
-  ]);
+  // AMBASSADORS FIRST, SEQUENTIALLY, AND CHECKED — same ordering and same
+  // failure direction as applyReferralCodeChange above.
+  //
+  // ambassadors.referral_code_locked is the flag that actually GATES a code
+  // change (the `.eq("referral_code_locked", false)` guard on the atomic update
+  // and the lock check in changeOwnReferralCode both read it there); the
+  // `partners` copy is a display mirror the admin pages render. Running the two
+  // concurrently and reading neither result is the shape partner-portal.ts
+  // documents as the cause of the production rate drift: a rejected write on
+  // one table arrived after the other had already committed, and the caller was
+  // told it succeeded.
+  const { error } = await supabaseAdmin
+    .from("ambassadors")
+    .update({ referral_code_locked: locked })
+    .eq("id", ambassadorId);
+  if (error) throw error;
+
+  // The mirror is checked too, for the reason the mirror in
+  // applyReferralCodeChange is: a lock the admin list still shows as unlocked
+  // (or vice versa) is a divergence somebody has to be told about, and by here
+  // the gate itself is already correct — so this reports an honest error about
+  // a stale display copy rather than hiding it. A zero-row result is not an
+  // error: not every ambassador has a `partners` row.
+  const { error: partnerMirrorError } = await supabaseAdmin
+    .from("partners")
+    .update({ referral_code_locked: locked })
+    .eq("id", ambassadorId);
+  if (partnerMirrorError) {
+    throw new Error(
+      `The referral code lock is now ${locked ? "on" : "off"} and checkout is honouring it, but the admin copy could not be updated (${partnerMirrorError.message}).`,
+    );
+  }
 }
 
 export interface ReferralCodeChangeRecord {

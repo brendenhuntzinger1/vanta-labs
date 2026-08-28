@@ -173,7 +173,13 @@ export function AdminOrderActions({
       body: JSON.stringify(payload),
     });
 
-    const json = await res.json() as { success: boolean; error?: string; replacementOrderNumber?: string };
+    const json = await res.json() as {
+      success: boolean;
+      error?: string;
+      replacementOrderNumber?: string;
+      customerNotified?: boolean;
+      customerEmailQueued?: boolean;
+    };
     if (!res.ok || !json.success) {
       setMessage(json.error ?? "Action failed");
       setSaving(false);
@@ -181,7 +187,17 @@ export function AdminOrderActions({
     }
 
     if (action === "send_replacement") {
-      setMessage(`Replacement ${json.replacementOrderNumber ?? ""} created — it's in the fulfillment queue and the customer has been emailed.`.trim());
+      // The email claim is the route's answer, not an assumption. It used to be
+      // asserted unconditionally, so a send that never left the building still
+      // told the operator the customer had been informed of their reship.
+      const base = `Replacement ${json.replacementOrderNumber ?? ""} created — it's in the fulfillment queue.`.replace("  ", " ");
+      setMessage(
+        json.customerNotified
+          ? `${base} The customer has been emailed.`
+          : json.customerEmailQueued
+            ? `${base} The customer email could not be sent and has been queued for retry.`
+            : `${base} No customer email was sent — this order has no email address on file.`,
+      );
       setReplaceOpen(false);
       setSaving(false);
       router.refresh();

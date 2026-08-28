@@ -45,17 +45,29 @@ export function findClientExposedSecrets(env: NodeJS.ProcessEnv = process.env): 
 /** How many server-side Purchase events have been attempted, and accepted. */
 async function readPurchaseLedger(): Promise<ServerHealthInput["purchaseLedger"]> {
   try {
-    const { data, error } = await supabaseAdmin
-      .from("ad_purchase_events_sent")
-      .select("delivered")
-      .limit(1000);
+    // COUNTED, NOT PAGED. This used to read up to 1000 rows and report
+    // `data.length` as the lifetime total, so once the ledger passed 1000
+    // events the board froze at "1000 attempted" forever and the delivered
+    // share was computed over an arbitrary window rather than the ledger.
+    // A head count is one round trip and is not subject to any row cap.
+    // `order_id`, not `id`: this table's primary key IS order_id and it has no
+    // `id` column at all (sql/ads-purchase-idempotency.sql:24). Naming a column
+    // that does not exist errors 42703, which the branch below would then read
+    // as "table missing" and report the ledger as unavailable.
+    const [{ count: total, error: totalError }, { count: delivered, error: deliveredError }] = await Promise.all([
+      supabaseAdmin.from("ad_purchase_events_sent").select("order_id", { count: "exact", head: true }),
+      supabaseAdmin
+        .from("ad_purchase_events_sent")
+        .select("order_id", { count: "exact", head: true })
+        .eq("delivered", true),
+    ]);
     // A missing table is a legitimate state, not an error to surface: the
     // ledger is an enhancement and its absence only means "nothing recorded".
-    if (error || !data) return { available: false, total: 0, delivered: 0 };
+    if (totalError || deliveredError) return { available: false, total: 0, delivered: 0 };
     return {
       available: true,
-      total: data.length,
-      delivered: data.filter((row) => (row as { delivered?: boolean }).delivered).length,
+      total: total ?? 0,
+      delivered: delivered ?? 0,
     };
   } catch {
     return { available: false, total: 0, delivered: 0 };

@@ -60,6 +60,7 @@ export function AdminPartnersClient({
   initialPayoutHistory,
   initialMarketingResources,
   programDefaultDiscountPercent,
+  programDefaultCommissionPercent,
 }: {
   initialRows: AdminPartnerRow[];
   initialTiers: CommissionTierRule[];
@@ -70,6 +71,11 @@ export function AdminPartnersClient({
   // Shown for every ambassador who has no override of their own, so the roster
   // states the rate customers actually get rather than a blank cell.
   programDefaultDiscountPercent: number;
+  // Seeds the invite box. Previously a hardcoded "10" that matched the shipped
+  // default by coincidence: an owner who moved the program rate in Control
+  // Centre still got 10 pre-filled here, and every invite sent without touching
+  // the box wrote the old rate.
+  programDefaultCommissionPercent: number;
 }) {
   const [rows, setRows] = useState(initialRows);
   const [tiers, setTiers] = useState(initialTiers);
@@ -88,7 +94,7 @@ export function AdminPartnersClient({
   const [newResourceDescription, setNewResourceDescription] = useState("");
   const [inviteName, setInviteName] = useState("");
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteCommission, setInviteCommission] = useState("10");
+  const [inviteCommission, setInviteCommission] = useState(String(programDefaultCommissionPercent));
   const [newTierName, setNewTierName] = useState("");
   const [newTierMinSales, setNewTierMinSales] = useState("0");
   const [newTierPercent, setNewTierPercent] = useState("10");
@@ -244,7 +250,7 @@ export function AdminPartnersClient({
 
       setInviteName("");
       setInviteEmail("");
-      setInviteCommission("10");
+      setInviteCommission(String(programDefaultCommissionPercent));
       await refreshRows();
       setMessage("Partner invite sent and profile created.");
     } catch (error) {

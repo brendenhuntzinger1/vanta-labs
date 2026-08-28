@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getRequestIpAddress, getRequestUserAgent, verifyAdminSessionFromRequest } from "@/lib/admin-auth";
 import { canManageRefunds } from "@/lib/admin-roles";
 import { createPartnerInvite, getAdminPartnerRows } from "@/lib/partner-portal";
+import { getReferralProgramConfig } from "@/lib/admin-control";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -51,7 +52,11 @@ export async function POST(request: Request) {
     const body = await request.json();
     const name = String(body?.name ?? "").trim();
     const email = String(body?.email ?? "").trim().toLowerCase();
-    const commissionPercent = Number(body?.commissionPercent ?? 10);
+    // The fallback has to be the owner's configured program rate, not a literal.
+    // A fresh store ships with 10, so a hardcoded 10 here agreed by coincidence
+    // and silently ignored every commission change made in Control Centre.
+    const { defaultCommissionPercent } = await getReferralProgramConfig();
+    const commissionPercent = Number(body?.commissionPercent ?? defaultCommissionPercent);
 
     if (!name || !email || !email.includes("@")) {
       return NextResponse.json({ success: false, error: "Valid name and email are required" }, { status: 400 });

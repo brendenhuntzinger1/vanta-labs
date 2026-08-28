@@ -2061,6 +2061,52 @@ export async function processPaymentWebhook(payload: string, signature: string, 
       items: eventPayload.items,
     });
     await upsertOrderItems(orderId, eventPayload.items);
+
+    // A WEBHOOK-CREATED ORDER CANNOT KNOW ITS OWN TAX SPLIT — SAY SO RATHER
+    // THAN LEAVE AN UNEXPLAINED ANOMALY.
+    //
+    // This branch inserts a row only when the event named a real order that has
+    // no row yet — i.e. checkout's own pre-insert (checkout/express/authorize
+    // route.ts, insertOrderRow) failed and the webhook became the sole writer.
+    // basePayload carries subtotal/shipping/discount/amount_paid and nothing
+    // else, because the processor's callback carries nothing else: there is no
+    // tax, protection, card-fee or handling field on any event shape we accept
+    // (the only reads of tax_amount anywhere in this file are off the STORED
+    // row). So tax_amount, shipping_protection_fee, card_processing_fee,
+    // handling_fee and store_credit_redeemed_cents all land at their NOT NULL
+    // DEFAULT 0 while amount_paid includes every one of them.
+    //
+    // admin-reconciliation.ts then builds expectedTotal from those columns and
+    // flags total_mismatch by exactly the missing terms — a real flag, with no
+    // way for the operator to tell it apart from an actual overcharge.
+    //
+    // We do NOT back-fill by subtraction: the remainder is tax + protection +
+    // card fee + handling combined, and guessing the split would put an invented
+    // number on a tax report. The remainder is reported instead, so the
+    // reconciliation flag has a matching explanation next to it.
+    if (!orderRecord) {
+      const allocated = roundMoney(subtotal + shippingAmount - discountAmount);
+      const unallocated = roundMoney(amountPaid - allocated);
+      if (Math.abs(unallocated) > 0.01) {
+        await recordSystemAlert({
+          type: "webhook_created_order_incomplete",
+          severity: "warning",
+          message:
+            `Order ${orderId} was created from a webhook because no checkout row existed for it. `
+            + `$${unallocated.toFixed(2)} of the $${amountPaid.toFixed(2)} charged could not be attributed to `
+            + "subtotal, shipping or discount — it is some combination of tax, shipping protection, card fee and "
+            + "handling, and the event does not say which. Those columns are recorded as $0.00, so this order will "
+            + "flag on Reconciliation and will report no tax. Fill them in by hand from the processor's record.",
+          context: {
+            order_id: orderId,
+            event_id: eventId,
+            amount_paid: amountPaid,
+            allocated,
+            unallocated,
+          },
+        }).catch(() => {});
+      }
+    }
   }
 
   if (nextStatus === "paid") {

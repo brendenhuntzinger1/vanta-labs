@@ -20,6 +20,15 @@ export interface OrderProfitView {
   processingFee: number;
   commission: number;
   refund: number;
+  /**
+   * The slice of `refund` the engine actually reversed out of revenue — the
+   * whole refund when collected tax counts as profit, otherwise the refund less
+   * the tax returned (order-profit.ts). Optional, falling back to `refund`,
+   * which is the same number under the setting in force today; that keeps the
+   * fixture callers compiling without letting the panel print a deduction the
+   * total was never computed from.
+   */
+  revenueRefund?: number;
   taxCollected: number;
   profit: number;
   /** `null` when revenue is <= 0 — a margin has no meaning there. Renders "n/a". */
@@ -77,6 +86,7 @@ export function AdminOrderProfitPanel({
   orderId: string;
 }) {
   const estimated = profit.profitStatus === "estimated";
+  const revenueRefund = profit.revenueRefund ?? profit.refund;
 
 
 
@@ -141,10 +151,10 @@ export function AdminOrderProfitPanel({
             only takes back the non-tax part (order-profit.ts revenueRefund).
             Printing the gross refund here left the visible lines short of the
             Net profit below by exactly the tax returned. */}
-        {profit.revenueRefund > 0 ? (
+        {revenueRefund > 0 ? (
           <ExpenseRow
-            label={profit.revenueRefund < profit.refund ? "Refunds (excl. tax returned)" : "Refunds"}
-            amount={profit.revenueRefund}
+            label={revenueRefund < profit.refund ? "Refunds (excl. tax returned)" : "Refunds"}
+            amount={revenueRefund}
           />
         ) : null}
 

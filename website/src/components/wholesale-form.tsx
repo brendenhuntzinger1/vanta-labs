@@ -98,9 +98,10 @@ export function WholesaleForm() {
         <h3 className="vl2-serif mt-3 text-2xl text-white">Thanks — we have your inquiry</h3>
         <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-white/55">
           {/* Says only what the route actually guarantees. Success here means the
-              enquiry reached us; the customer auto-reply is sent best-effort and
-              its result is discarded (api/wholesale/route.ts), so claiming "we've
-              sent a confirmation to your email" was a promise nothing checked. */}
+              enquiry reached the INTERNAL inbox; the customer auto-reply that
+              follows is best-effort and its result is discarded
+              (api/wholesale/route.ts), so the previous wording — which asserted
+              that confirmation had been delivered — was a promise nothing checked. */}
           We&rsquo;ve got your details and will review them. Watch your inbox &mdash; we&rsquo;ll be in touch by email.
         </p>
         <button

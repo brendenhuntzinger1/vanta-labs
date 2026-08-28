@@ -62,14 +62,17 @@ grant select (
   price_cents,
   compare_at_price_cents,
   sale_price_cents,
-  -- Stock presentation. Drives the In Stock / Low stock badge and the
-  -- availability figure the public catalogue already publishes.
-  inventory_quantity,
+  -- Stock presentation, the derived half only: stock_status is the In Stock /
+  -- Low stock badge, track_inventory is a boolean that discloses no depth.
+  --
+  -- The raw quantities are NOT granted -- see the products migration for the
+  -- full reasoning. In short: the availability figure the public catalogue
+  -- publishes is clamped to MAX_UNITS_PER_ORDER_LINE (catalog.ts), so the
+  -- application deliberately caps what a reader of the page source learns,
+  -- while this grant handed over the uncapped count. The dose row is the
+  -- sellable unit, so its depth is the number that matters.
   stock_status,
-  low_stock_threshold,
-  reserved_quantity,
   track_inventory,
-  incoming_quantity,
   -- Compliance and lab documentation, public on purpose.
   batch_number,
   coa_url,
@@ -100,6 +103,13 @@ commit;
 --   min_profit_percent        profit floor, relative      -> the floor price
 --   min_selling_price_cents   computed floor              -> the floor price
 --   suggested_retail_cents    MSRP working figure         -> pricing strategy
+--
+-- WITHHELD SINCE 2026-08-28 (finding RLS-07):
+--
+--   inventory_quantity        units on the shelf          -> capital on hand
+--   reserved_quantity         units mid-checkout          -> live demand rate
+--   incoming_quantity         units inbound               -> restock timing
+--   low_stock_threshold       the badge's own trigger     -> infers the count
 --
 -- VERIFIED against production immediately after applying, with the storefront's
 -- own publishable key (sb_publishable_...):

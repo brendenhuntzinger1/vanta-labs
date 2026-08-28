@@ -688,6 +688,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
       }
 
       // Best-effort customer email — a mail hiccup never blocks the reship.
+      //
+      // But the OUTCOME is reported, because the admin panel used to state
+      // flatly that "the customer has been emailed" on every replacement. The
+      // await here discarded its EmailSendResult, and the catch below is dead
+      // for send failures: email/send.ts returns { success: false } rather than
+      // throwing. So a bounced or unconfigured send left the operator told the
+      // customer knew about their reship when nothing had gone out and nothing
+      // was queued. Same shape as the reimbursement path above.
+      let customerNotified = false;
+      let customerEmailQueued = false;
       if (replacement.customerEmail) {
         try {
           const original = await getOrderWithItems(orderId);
@@ -697,7 +707,16 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
             replacementOrderNumber: replacement.orderNumber,
             items: replacement.items,
           });
-          await sendEmail({ to: replacement.customerEmail, ...template });
+          const sent = await sendEmail({ to: replacement.customerEmail, ...template });
+          customerNotified = sent.success;
+          if (!sent.success) {
+            console.error("Replacement email not sent for order", orderId, sent.error);
+            await enqueueFailedEmail(
+              { to: replacement.customerEmail, subject: template.subject, html: template.html, text: template.text },
+              sent.error,
+            );
+            customerEmailQueued = true;
+          }
         } catch (emailError) {
           console.error("Unable to send replacement email", emailError);
         }
@@ -707,6 +726,10 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         success: true,
         replacementOrderId: replacement.orderId,
         replacementOrderNumber: replacement.orderNumber,
+        customerNotified,
+        // Distinguished from a plain failure so the panel does not promise a
+        // retry for an order that has no address to retry to.
+        customerEmailQueued,
       });
     }
 

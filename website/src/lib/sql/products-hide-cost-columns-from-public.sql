@@ -67,13 +67,19 @@ grant select (
   badge,
   position,
   sku,
-  -- Stock presentation. Quantities drive "In Stock" / "Low stock" badges and
-  -- are already exposed by the public catalogue API.
+  -- Stock presentation. stock_status is the derived badge the storefront is
+  -- built on; track_inventory is a boolean that discloses no depth.
+  --
+  -- THE RAW QUANTITIES ARE NOT HERE, and the note that used to sit in their
+  -- place -- "already exposed by the public catalogue API" -- was simply wrong.
+  -- catalog.ts says the opposite in as many words ("inventoryQuantity is
+  -- deliberately ABSENT ... the shelf depth is the owner's information"), and
+  -- what the API does publish is an availability figure clamped to
+  -- MAX_UNITS_PER_ORDER_LINE, so a reader of the page source learns at most
+  -- "ten or more". This grant handed the same reader the uncapped count plus
+  -- reserved_quantity and incoming_quantity -- how fast a line is moving and
+  -- what is on the water -- which the application never publishes in any form.
   stock_status,
-  inventory_quantity,
-  reserved_quantity,
-  incoming_quantity,
-  low_stock_threshold,
   track_inventory,
   -- Visibility flags: the RLS policy filters on these, and a reader that
   -- cannot see them cannot express the same predicate.
@@ -116,6 +122,13 @@ commit;
 --   min_profit_percent        profit floor, relative     -> the floor price
 --   min_selling_price_cents   computed floor             -> the floor price
 --   suggested_retail_cents    MSRP working figure        -> pricing strategy
+--
+-- WITHHELD SINCE 2026-08-28 (finding RLS-07), for the reason above:
+--
+--   inventory_quantity        units on the shelf         -> capital on hand
+--   reserved_quantity         units mid-checkout         -> live demand rate
+--   incoming_quantity         units inbound              -> restock timing
+--   low_stock_threshold       the badge's own trigger    -> infers the count
 --
 -- VERIFY (expect: rows for the first, 42501 for the second and third):
 --

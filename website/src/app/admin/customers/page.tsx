@@ -44,6 +44,8 @@ export default async function AdminCustomersPage({
         <p className="mt-2 text-sm text-zinc-400">
           {result.total} customer{result.total === 1 ? "" : "s"} — built from checkout orders. There is no separate
           customer-account system yet, so this reflects guest checkouts grouped by email, not registered accounts.
+          “Checkouts” counts every checkout this email started, including abandoned and failed ones; “Total spent”
+          counts only paid orders.
         </p>
 
         <form method="GET" className="vl-panel mt-6 flex flex-wrap gap-3 rounded-2xl p-4">
@@ -65,7 +67,13 @@ export default async function AdminCustomersPage({
               <tr>
                 <th className="px-4 py-3 text-left">Customer</th>
                 <th className="px-4 py-3 text-left">Email</th>
-                <th className="px-4 py-3 text-left">Orders</th>
+                {/* NOT "Orders". The number is a count of checkout ROWS — admin-customers.ts
+                    increments it unconditionally, while `totalSpent` next to it is filtered to
+                    paid statuses — so an abandoned or failed checkout is in this column and is
+                    not in the money column. Naming it what it counts is the honest fix; which
+                    rows are counted is a deliberate decision recorded in
+                    admin-customers-revenue.test.ts and is left alone. */}
+                <th className="px-4 py-3 text-left">Checkouts</th>
                 <th className="px-4 py-3 text-left">Total spent</th>
                 <th className="px-4 py-3 text-left">First order</th>
                 <th className="px-4 py-3 text-left">Last order</th>
@@ -82,7 +90,11 @@ export default async function AdminCustomersPage({
                   <td className="px-4 py-3 text-xs text-zinc-400">{fmtDate(customer.firstOrderAt)}</td>
                   <td className="px-4 py-3 text-xs text-zinc-400">{fmtDate(customer.lastOrderAt)}</td>
                   <td className="px-4 py-3">
-                    <Link href={`/admin/orders?search=${encodeURIComponent(customer.email)}`} className="text-xs text-cyan-300 hover:underline">
+                    {/* paymentStatus=all, so the linked list shows the same set this row
+                        counted. /admin/orders defaults to the "active" filter, which hides
+                        pending_payment and canceled rows — the count and the list it links to
+                        disagreed by construction. */}
+                    <Link href={`/admin/orders?search=${encodeURIComponent(customer.email)}&paymentStatus=all`} className="text-xs text-cyan-300 hover:underline">
                       View orders
                     </Link>
                   </td>

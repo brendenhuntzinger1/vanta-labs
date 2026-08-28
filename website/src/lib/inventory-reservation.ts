@@ -237,6 +237,22 @@ async function reportInventoryRpcFailure(rpc: string, orderId: string | null, er
       severity: "critical",
       message: `${rpc} failed. Stock is not moving; counts on the storefront are no longer trustworthy.`,
       context: { rpc, orderId, detail },
+      // THE MAP ALONE THROTTLED ALMOST NOTHING.
+      //
+      // It is module state, so it only spans one process. Of the three RPCs
+      // that reach here, only releaseInventoryForOrder is called in a loop
+      // within a single invocation (express-reconcile.ts's sweep);
+      // finalizeInventoryForOrder fires once per payment webhook and
+      // expireStaleReservations once per cron tick — i.e. always from a cold
+      // Map on a fresh serverless invocation. Those two are the ones that alert
+      // during an outage, and each one sent its own critical email.
+      //
+      // dedupeWindowMs is the persisted check, so the window survives the
+      // invocation. It groups by alert TYPE where the Map groups per RPC — an
+      // outage takes all three down together anyway, and a coarser window is
+      // the point of a throttle. The Map is kept as a free fast path that saves
+      // a query per iteration in the one genuinely looped caller.
+      dedupeWindowMs: INVENTORY_ALERT_THROTTLE_MS,
     });
   } catch {
     // The console line above is the floor.
@@ -284,6 +300,31 @@ async function readPendingHolds(
       .filter((line) => line.slug.length > 0 && line.quantity > 0);
   } catch {
     return null;
+  }
+}
+
+/**
+ * How many of this order's holds are already deducted.
+ *
+ * Only meaningful AFTER the finalize RPC has errored — see
+ * resolveFinalizeAfterError. A head count, so it costs one round trip and
+ * cannot be truncated by a row cap.
+ *
+ * 0 on any failure, which is the safe direction: it keeps the caller on the
+ * existing degraded path rather than letting a failed probe suppress a fallback
+ * that is genuinely needed.
+ */
+async function countFinalizedHolds(orderId: string): Promise<number> {
+  try {
+    const { count, error } = await supabaseAdmin
+      .from("inventory_reservations")
+      .select("id", { count: "exact", head: true })
+      .eq("order_id", orderId)
+      .eq("status", "finalized");
+    if (error) return 0;
+    return Math.max(0, count ?? 0);
+  } catch {
+    return 0;
   }
 }
 
@@ -344,6 +385,46 @@ export interface FinalizeInventoryResult {
   finalizedLines: Array<{ slug: string; variantId: string | null; quantity: number }> | null;
 }
 
+/**
+ * DID THE RPC FAIL, OR DID ONLY ITS ANSWER GET LOST?
+ *
+ * Both failure paths below used to answer `{ finalized: 0, degraded: true }`
+ * without looking, which conflates two opposite outcomes. `finalize_inventory_
+ * for_order` commits inside Postgres; a transport or client error raised AFTER
+ * that commit — a dropped socket, a timeout on the response, the 401 lane
+ * isTransientAuthRejection deliberately does NOT retry — is indistinguishable at
+ * this call site from an RPC that never ran.
+ *
+ * It matters because `degraded: true` is exactly what makes both callers run the
+ * legacy decrement (payment-webhook.ts, card and manual lanes), with no check
+ * that the holds are already finalized. So a lost response took every unit off
+ * the shelf a second time.
+ *
+ * The reservations rows are the record of what Postgres actually did, so they
+ * are asked. A non-zero count means the deduction is committed, and this returns
+ * what the success path would have returned — same finalizedLines guard, same
+ * ledger rows, same cache invalidation — so the caller skips the second
+ * decrement. Zero (or a probe that itself fails) keeps today's degraded answer.
+ *
+ * The alert still fires either way: the RPC edge really did fail, and the
+ * operator should hear about it even when the data survived.
+ */
+async function resolveFinalizeAfterError(
+  orderId: string,
+  pendingHolds: Array<{ slug: string; variantId: string | null; quantity: number }> | null,
+): Promise<FinalizeInventoryResult> {
+  const committed = await countFinalizedHolds(orderId);
+  if (committed <= 0) {
+    return { finalized: 0, degraded: true, finalizedLines: null };
+  }
+  invalidateCatalogCache();
+  if (pendingHolds) {
+    await recordFinalizedHolds(orderId, pendingHolds);
+  }
+  const finalizedLines = pendingHolds && pendingHolds.length >= committed ? pendingHolds : null;
+  return { finalized: committed, degraded: false, finalizedLines };
+}
+
 // A verified payment permanently deducts every active hold for the order.
 // Idempotent (a replay finds them already finalized). `finalized` is the number
 // of lines deducted; `degraded` means the RPC is unavailable so the caller must
@@ -364,7 +445,7 @@ export async function finalizeInventoryForOrder(orderId: string): Promise<Finali
       supabaseAdmin.rpc("finalize_inventory_for_order", { p_order_id: orderId }));
     if (error) {
       await reportInventoryRpcFailure("finalize_inventory_for_order", orderId, error);
-      return { finalized: 0, degraded: true, finalizedLines: null };
+      return resolveFinalizeAfterError(orderId, pendingHolds);
     }
     invalidateCatalogCache();
     const finalized = Number(data ?? 0);
@@ -382,7 +463,7 @@ export async function finalizeInventoryForOrder(orderId: string): Promise<Finali
     return { finalized, degraded: false, finalizedLines };
   } catch (error) {
     await reportInventoryRpcFailure("finalize_inventory_for_order", orderId, error);
-    return { finalized: 0, degraded: true, finalizedLines: null };
+    return resolveFinalizeAfterError(orderId, pendingHolds);
   }
 }
 
