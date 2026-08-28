@@ -5,6 +5,8 @@ import { canViewProfit } from "@/lib/admin-roles";
 import { getRevenueMetrics } from "@/lib/admin-revenue";
 import { getProfitWindowMetrics } from "@/lib/admin-profit";
 import { getSalesTaxReport } from "@/lib/admin-tax-report";
+import { failedReads, figure, settleRead } from "@/lib/admin-read";
+import { AdminReadFailureNotice, AdminTruncationNotice } from "@/components/admin-data-notices";
 
 export const dynamic = "force-dynamic";
 
@@ -28,27 +30,34 @@ export default async function AdminRevenuePage() {
     redirect("/vault");
   }
 
-  const metrics = await getRevenueMetrics().catch(() => ({
-    todayRevenue: 0,
-    todayOrders: 0,
-    totalPaidRevenue: 0,
-    totalPaidOrders: 0,
-    averageOrderValue: 0,
-    processingFeesCollected: 0,
-    pendingPayments: 0,
-    approvedPayments: 0,
-    awaitingFulfillment: 0,
-    shipped: 0,
-    byMethod: [],
-  }));
+  // EVERY READ ON THIS PAGE IS CARRIED AS AN OUTCOME, NOT AS A VALUE.
+  //
+  // These three used to be `.catch(() => zeros)` / `.catch(() => null)`, which
+  // rendered a database outage as "Today's Revenue $0.00 · 0 orders today" and
+  // "No sales tax collected yet" — the exact screen a healthy quiet Tuesday
+  // produces. See admin-read.ts.
+  const metricsRead = await settleRead("Revenue metrics", getRevenueMetrics);
   // COGS/margin is manager+ only — staff sees revenue, never profit.
-  const profit = canViewProfit(session.role)
-    ? await getProfitWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, ordersLast30Days: 0, hasEstimatedCost: false, truncated: false }))
-    : null;
-  const maxMethodRevenue = Math.max(1, ...metrics.byMethod.map((m) => m.revenue));
+  const showProfit = canViewProfit(session.role);
+  const profitRead = showProfit ? await settleRead("Net profit", getProfitWindowMetrics) : null;
   // Sales tax collected per destination state (for filing). Never blocks the
-  // dashboard if the query fails.
-  const taxReport = await getSalesTaxReport().catch(() => null);
+  // dashboard if the query fails — but never claims a clean filing either.
+  const taxRead = await settleRead("Sales tax report", getSalesTaxReport);
+
+  const metrics = metricsRead.ok ? metricsRead.value : null;
+  const profit = profitRead?.ok ? profitRead.value : null;
+  const taxReport = taxRead.ok ? taxRead.value : null;
+
+  const failures = failedReads([metricsRead, ...(profitRead ? [profitRead] : []), taxRead]);
+  const maxMethodRevenue = Math.max(1, ...(metrics?.byMethod ?? []).map((m) => m.revenue));
+
+  // The `truncated` flags these modules have always computed, finally rendered.
+  // A tax filing assembled from part of the year, presented as the year, is the
+  // worst case this notice exists for.
+  const truncatedSources = [
+    ...(profit?.truncated ? ["the net-profit windows"] : []),
+    ...(taxReport?.truncated ? ["the sales-tax filing report"] : []),
+  ];
 
   return (
     <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -64,38 +73,73 @@ export default async function AdminRevenuePage() {
           </div>
         </div>
 
+        {failures.length > 0 ? (
+          <div className="mt-6">
+            <AdminReadFailureNotice failures={failures} />
+          </div>
+        ) : null}
+
+        {truncatedSources.length > 0 ? (
+          <div className="mt-3">
+            <AdminTruncationNotice
+              sources={truncatedSources}
+              detail="Narrow the report by year, or raise the read ceiling, before filing or reporting anything from this screen."
+            />
+          </div>
+        ) : null}
+
         <div className="mt-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="Today's Revenue" value={money(metrics.todayRevenue)} sub={`${metrics.todayOrders} order${metrics.todayOrders === 1 ? "" : "s"} today`} accent />
-          <StatCard label="Total Paid Revenue" value={money(metrics.totalPaidRevenue)} sub={`${metrics.totalPaidOrders} paid orders`} />
-          <StatCard label="Average Order Value" value={money(metrics.averageOrderValue)} />
-          <StatCard label="Processing Fees Collected" value={money(metrics.processingFeesCollected)} sub="Card fees added at checkout" />
+          <StatCard
+            label="Today's Revenue"
+            value={figure(metricsRead, (m) => money(m.todayRevenue))}
+            sub={metrics ? `${metrics.todayOrders} order${metrics.todayOrders === 1 ? "" : "s"} today` : "Not loaded"}
+            accent
+          />
+          <StatCard
+            label="Total Paid Revenue"
+            value={figure(metricsRead, (m) => money(m.totalPaidRevenue))}
+            sub={metrics ? `${metrics.totalPaidOrders} paid orders` : "Not loaded"}
+          />
+          <StatCard label="Average Order Value" value={figure(metricsRead, (m) => money(m.averageOrderValue))} />
+          <StatCard
+            label="Processing Fees Collected"
+            value={figure(metricsRead, (m) => money(m.processingFeesCollected))}
+            sub="Card fees added at checkout"
+          />
         </div>
 
-        {profit?.truncated ? (
-          <p className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
-            Some orders were not included — the profit scan hit its ceiling. These figures are a floor, not a total.
-          </p>
-        ) : null}
-
-        {profit ? (
+        {profitRead ? (
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="Net Profit · Today" value={money(profit.today)} sub="After cost, commission, fees, shipping" accent />
-          <StatCard label="Net Profit · 7 days" value={money(profit.last7Days)} />
-          <StatCard label="Net Profit · 30 days" value={money(profit.last30Days)} sub={`${profit.ordersLast30Days} paid order${profit.ordersLast30Days === 1 ? "" : "s"}${profit.hasEstimatedCost ? " · incl. estimates" : ""}`} />
-          <StatCard label="Avg Profit / Order · 30d" value={money(profit.ordersLast30Days > 0 ? profit.last30Days / profit.ordersLast30Days : 0)} />
+          <StatCard label="Net Profit · Today" value={figure(profitRead, (p) => money(p.today))} sub="After cost, commission, fees, shipping" accent />
+          <StatCard label="Net Profit · 7 days" value={figure(profitRead, (p) => money(p.last7Days))} />
+          <StatCard
+            label="Net Profit · 30 days"
+            value={figure(profitRead, (p) => money(p.last30Days))}
+            sub={profit
+              ? `${profit.ordersLast30Days} paid order${profit.ordersLast30Days === 1 ? "" : "s"}${profit.hasEstimatedCost ? " · incl. estimates" : ""}${profit.truncated ? " · incomplete" : ""}`
+              : "Not loaded"}
+          />
+          <StatCard
+            label="Avg Profit / Order · 30d"
+            value={figure(profitRead, (p) => money(p.ordersLast30Days > 0 ? p.last30Days / p.ordersLast30Days : 0))}
+          />
         </div>
         ) : null}
 
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="Pending Payments" value={String(metrics.pendingPayments)} sub="Awaiting customer / verification" />
-          <StatCard label="Approved Payments" value={String(metrics.approvedPayments)} />
-          <StatCard label="Awaiting Fulfillment" value={String(metrics.awaitingFulfillment)} />
-          <StatCard label="Orders Shipped" value={String(metrics.shipped)} />
+          <StatCard label="Pending Payments" value={figure(metricsRead, (m) => String(m.pendingPayments))} sub="Awaiting customer / verification" />
+          <StatCard label="Approved Payments" value={figure(metricsRead, (m) => String(m.approvedPayments))} />
+          <StatCard label="Awaiting Fulfillment" value={figure(metricsRead, (m) => String(m.awaitingFulfillment))} />
+          <StatCard label="Orders Shipped" value={figure(metricsRead, (m) => String(m.shipped))} />
         </div>
 
         <div className="vl-panel mt-6 rounded-2xl p-5 sm:p-6">
           <h2 className="text-lg font-semibold">Revenue by Payment Method</h2>
-          {metrics.byMethod.length === 0 ? (
+          {!metrics ? (
+            /* NOT "No paid orders yet." An unread breakdown and an empty one are
+               different facts about the store. */
+            <p className="mt-3 text-sm text-rose-200">Payment mix could not be loaded — this is not a statement that there were no sales.</p>
+          ) : metrics.byMethod.length === 0 ? (
             <p className="mt-3 text-sm text-zinc-400">No paid orders yet.</p>
           ) : (
             <div className="mt-4 space-y-3">
@@ -125,15 +169,25 @@ export default async function AdminRevenuePage() {
             </div>
             <a href="/api/admin/tax/export" className="vl-btn-secondary inline-flex px-4 py-2 text-xs" download>Export CSV</a>
           </div>
-          {taxReport?.truncated ? (
-            <p className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
-              Not every taxed order could be read — this report hit its scan ceiling. The amounts below are a floor, not the total owed. Do not file from them.
+          {!taxReport ? (
+            /* A FILING REPORT MUST NEVER SAY "NOTHING TO REMIT" ON A FAILED
+               READ. This branch used to be shared with the genuinely-empty one
+               below, so an unreachable database told the owner they owed no
+               state any sales tax. */
+            <p className="mt-3 text-sm text-rose-200">
+              The sales tax report could not be loaded. <strong>Do not file from this screen</strong> — this is a failed
+              read, not a report that you collected no tax.
             </p>
-          ) : null}
-          {!taxReport || taxReport.byState.length === 0 ? (
+          ) : taxReport.byState.length === 0 ? (
             <p className="mt-3 text-sm text-zinc-400">No sales tax collected yet. Tax is charged only on orders shipping to your configured nexus states (Control Center → Sales Tax).</p>
           ) : (
             <div className="mt-4 overflow-x-auto">
+              {taxReport.truncated ? (
+                <p className="mb-3 rounded-lg border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
+                  <strong>This filing report is incomplete.</strong> More taxed orders exist than this read returned, so
+                  every figure below — and the CSV export — understates what you owe.
+                </p>
+              ) : null}
               <table className="w-full min-w-[540px] text-sm">
                 <thead>
                   <tr className="border-b border-white/10 text-left text-[11px] uppercase tracking-[0.14em] text-zinc-500">
@@ -157,7 +211,7 @@ export default async function AdminRevenuePage() {
                     </tr>
                   ))}
                   <tr>
-                    <td className="pt-2 font-semibold text-zinc-200">Total</td>
+                    <td className="pt-2 font-semibold text-zinc-200">{taxReport.truncated ? "Total (partial)" : "Total"}</td>
                     <td className="pt-2 text-zinc-300 tabular-nums">{taxReport.totals.orders}</td>
                     <td className="pt-2" />
                     <td className="pt-2 font-semibold text-white tabular-nums">{money(taxReport.totals.taxCollected)}</td>

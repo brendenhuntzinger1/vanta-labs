@@ -1,5 +1,7 @@
 import "server-only";
 
+import { cache } from "react";
+
 import { supabaseAdmin } from "@/lib/supabase-server";
 import {
   BUCKETS,
@@ -11,6 +13,7 @@ import {
   type OrderBucketInput,
 } from "@/lib/fulfillment-buckets";
 import { fulfillmentStatusLabel, normalizeLegacyStatus } from "@/lib/order-pipeline";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 
 // ---------------------------------------------------------------------------
 // THE OPERATIONAL QUEUES.
@@ -137,38 +140,121 @@ export interface BucketCount {
   count: number;
 }
 
+export interface BucketBoard {
+  counts: BucketCount[];
+  /**
+   * True when the scan ceiling stopped the read before every order had been
+   * bucketed, so every count below is a FLOOR. A board that is quietly short is
+   * a board that says there is less to do than there is.
+   */
+  truncated: boolean;
+}
+
+/**
+ * The columns a bucket decision reads.
+ *
+ * THE LAST THREE ARE CLOCKS, AND THEY WERE MISSING.
+ *
+ * Six of the eight exception rules read a status; two read a TIMESTAMP —
+ * carrier_never_scanned (label bought, never scanned) and transit_stalled
+ * (moving, then stopped). exceptionsForOrder measures both against
+ * label_purchased_at / updated_at / shipped_at, and a column that was never
+ * selected reaches it as `undefined`, which hoursSince answers `null` to. So
+ * both rules evaluated to "not stale" on every row, forever.
+ *
+ * Nothing errored and nothing looked wrong: the parcel the carrier never
+ * collected was simply counted under "Awaiting Carrier" — a normal, waiting,
+ * nobody-do-anything state — on the nav badge and on the dashboard headline
+ * that answers "what needs a human". The queue that RENDERS those orders reads
+ * the wider QUEUE_COLUMNS and got it right, so the board and its own queue
+ * disagreed.
+ *
+ * Kept as one list next to QUEUE_COLUMNS so the count and the queue cannot
+ * drift apart again.
+ */
+const BUCKET_DECISION_COLUMNS =
+  "order_id, payment_status, fulfillment_status, shippo_sync_status, "
+  + "label_purchase_claimed_at, shippo_transaction_id, "
+  + "label_purchased_at, shipped_at, updated_at";
+
+// Ceiling on one board, not a definition of the answer — see `truncated`.
+//
+// DELIBERATELY LOWER THAN THE REPORTING MODULES' 200,000, because this is not a
+// report. Those run on a screen an owner opens occasionally; these two run on
+// the shared admin layout and the workstation, on every page load.
+//
+// 200,000 was incoherent as a ceiling here: readAllRowsBounded pages strictly
+// sequentially, so reaching it costs 201 round trips — ~10s at a 50ms RTT before
+// Postgres does the OFFSET work — and no admin route sets maxDuration, so the
+// function is killed long before the loop ends. `truncated` would never be
+// returned, which means the "these counts are a floor" banner this change added
+// could never render at exactly the scale it was written for: the page would
+// 504 instead.
+//
+// 25,000 costs at most 26 sequential requests and about 25 MB, both of which
+// finish inside a default function budget — so a store past the ceiling gets the
+// honest banner instead of a dead page. A store that sustains more than 25,000
+// live paid orders needs the exception predicates pushed into SQL, which means
+// moving the rules out of fulfillment-buckets.ts and is a design decision, not a
+// constant.
+const MAX_BUCKET_ORDERS = 25_000;
+
+/** Exactly the shape BUCKET_DECISION_COLUMNS selects. */
+type BucketDecisionRow = OrderBucketInput & { order_id: string };
+
 /**
  * How many orders sit in each bucket right now.
  *
- * ONE query for the whole board, not one per bucket: the counts index is a
- * partial index on fulfillment_status restricted to paid physical orders, so
- * this is an index-only scan. Bucketing happens in memory over a few hundred
- * status/payment pairs, which is free compared to another round trip.
+ * MEMOISED PER REQUEST. admin/layout.tsx needs these for the nav badges and
+ * admin/page.tsx needs them for the dashboard headline, and a layout cannot
+ * pass data to its children — so every /admin render ran the whole scan TWICE.
+ * That was survivable while the read was one capped request; it is not now that
+ * it pages the paid-order population. React's `cache` dedupes within a single
+ * render pass, which is exactly the case the Next docs name for this
+ * (01-app/03-api-reference/03-file-conventions/layout.md). It memoises nothing
+ * across requests, so the board is still computed fresh on every load.
+ *
+ * PAGED. This select carried no `.limit()` and no `.range()`, which is not the
+ * same as being unbounded: PostgREST caps every response at `db-max-rows`
+ * (Supabase ships 1000) and does it SILENTLY — a valid array that simply stops.
+ * Past that many paid orders the entire board was computed from the first page
+ * and presented as the state of the store, so an operator with 1,500 orders
+ * waiting was told 1,000. Paging to exhaustion removes the dependency on a
+ * setting this application cannot see, and `truncated` says so when the
+ * ceiling — not the data — ended the read.
  */
-export async function getBucketCounts(): Promise<BucketCount[]> {
-  const { data, error } = await supabaseAdmin
-    .from("orders")
-    .select("payment_status, fulfillment_status, shippo_sync_status, label_purchase_claimed_at, shippo_transaction_id")
-    .neq("order_type", "membership")
-    .in("payment_status", ["paid", "awaiting_verification"]);
-
-  if (error) throw error;
+export const getBucketCounts = cache(async function getBucketCounts(): Promise<BucketBoard> {
+  const { rows, truncated } = await readAllRowsBounded<BucketDecisionRow>(
+    (from, to) =>
+      supabaseAdmin
+        .from("orders")
+        .select(BUCKET_DECISION_COLUMNS)
+        .neq("order_type", "membership")
+        .in("payment_status", ["paid", "awaiting_verification"])
+        // order_id is unique, so paging on it can neither repeat nor skip a row.
+        .order("order_id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: BucketDecisionRow[] | null; error: { message?: string } | null }>,
+    { maxRows: MAX_BUCKET_ORDERS, label: "bucket counts read" },
+  );
 
   const tally = new Map<BucketId, number>();
-  for (const row of data ?? []) {
-    const bucket = bucketForOrder(row as OrderBucketInput);
+  for (const row of rows) {
+    const bucket = bucketForOrder(row);
     if (!bucket) continue;
     tally.set(bucket, (tally.get(bucket) ?? 0) + 1);
   }
 
-  return BUCKETS.map((b) => ({
-    id: b.id,
-    label: b.label,
-    description: b.description,
-    operational: b.operational,
-    count: tally.get(b.id) ?? 0,
-  }));
-}
+  return {
+    counts: BUCKETS.map((b) => ({
+      id: b.id,
+      label: b.label,
+      description: b.description,
+      operational: b.operational,
+      count: tally.get(b.id) ?? 0,
+    })),
+    truncated,
+  };
+});
 
 /**
  * The orders in one bucket, oldest paid first — the order they should be worked.
@@ -183,7 +269,7 @@ export async function getBucketOrders(
 ): Promise<QueueOrder[]> {
   const limit = Math.min(500, Math.max(1, opts.limit ?? 100));
 
-  if (bucket === "exceptions") return getExceptionOrders({ limit });
+  if (bucket === "exceptions") return (await getExceptionOrders({ limit })).orders;
 
   const statuses = rawStatusesForBucket(bucket);
   if (statuses.length === 0) return [];
@@ -218,29 +304,93 @@ export async function getBucketOrders(
   return clean.slice(0, limit);
 }
 
+export interface ExceptionQueue {
+  orders: QueueOrder[];
+  /**
+   * True when `orders` is not the whole set — for EITHER reason.
+   *
+   * THIS USED TO REPORT ONLY THE SCAN CEILING, AND THAT WAS THE SMALLER HALF OF
+   * THE PROBLEM. Widening the scan fixed half of ADM-03: every exception is now
+   * FOUND. But the results are sorted oldest-first and cut to `limit`, and
+   * returned / stalled / never-scanned parcels accumulate — they do not
+   * self-resolve — so a store carrying more than `limit` of them dropped
+   * today's exception exactly as the old 2,000-row scan window did, while
+   * reporting a complete list. The count tile said 121 and the list beneath it
+   * said 50, with nothing on the screen to reconcile them.
+   *
+   * A list cut by the display limit is just as incomplete as one cut by the
+   * ceiling, so both set this.
+   */
+  truncated: boolean;
+  /** How many orders actually matched, before the display limit cut the list. */
+  totalMatched: number;
+}
+
 /**
  * Everything that needs a human, from every source.
  *
  * Deliberately a wider net than the bucket queries: an exception can be caused
- * by a payment status, a Shippo sync status or a stranded label claim, none of
- * which is a fulfillment status. Filtering in memory over paid + awaiting
- * verification orders is the honest way to catch all of them at once.
+ * by a payment status, a Shippo sync status, a stranded label claim or a clock
+ * that has run out, none of which is a fulfillment status. Filtering in memory
+ * over paid + awaiting verification orders is the honest way to catch all of
+ * them at once.
+ *
+ * THE SCAN USED TO POINT AT THE WRONG END OF THE STORE.
+ *
+ * It was `.order("paid_at", ascending: true).limit(2000)` — the two thousand
+ * OLDEST orders — and then filtered those in memory. Past two thousand paid
+ * orders that window is almost entirely long-delivered history, so a Shippo
+ * sync that failed this morning, a payment held this afternoon, a label bought
+ * yesterday and never scanned were all outside it. They appeared on no screen
+ * at all, and the board reported a calm day.
+ *
+ * Two changes, and both are needed:
+ *
+ *   1. The scan pages to exhaustion under a ceiling far above any plausible
+ *      store, so the window is not a window. `truncated` reports reaching it
+ *      rather than returning a shorter list as though it were the answer.
+ *   2. It reads NEWEST-first. If the ceiling is ever the binding constraint,
+ *      what falls off the end is the oldest history rather than today's work.
+ *
+ * The RESULT is still ordered oldest-paid first, because that is the order an
+ * operator works it. Scan order and work order are different questions, and
+ * conflating them is what put the answer two thousand orders in the past.
  */
-export async function getExceptionOrders(opts: { limit?: number } = {}): Promise<QueueOrder[]> {
+export async function getExceptionOrders(opts: { limit?: number } = {}): Promise<ExceptionQueue> {
   const limit = Math.min(500, Math.max(1, opts.limit ?? 100));
-  const { data, error } = await supabaseAdmin
-    .from("orders")
-    .select(QUEUE_COLUMNS)
-    .neq("order_type", "membership")
-    .in("payment_status", ["paid", "awaiting_verification"])
-    .order("paid_at", { ascending: true, nullsFirst: false })
-    .limit(2000);
-  if (error) throw error;
 
-  return (data ?? [])
-    .map((row) => toQueueOrder(row as unknown as Record<string, unknown>))
+  const { rows, truncated } = await readAllRowsBounded<Record<string, unknown>>(
+    (from, to) =>
+      supabaseAdmin
+        .from("orders")
+        .select(QUEUE_COLUMNS)
+        .neq("order_type", "membership")
+        .in("payment_status", ["paid", "awaiting_verification"])
+        // created_at rather than paid_at: an awaiting_verification order — one
+        // of the exception reasons — has no paid_at at all, and ordering a
+        // nullable column puts precisely those rows at whichever end the ceiling
+        // discards. created_at is present on every row.
+        .order("created_at", { ascending: false })
+        .order("order_id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: Record<string, unknown>[] | null; error: { message?: string } | null }>,
+    { maxRows: MAX_BUCKET_ORDERS, label: "exception scan" },
+  );
+
+  const matched = rows
+    .map((row) => toQueueOrder(row))
     .filter((o) => o.exceptions.length > 0)
-    .slice(0, limit);
+    // Oldest first: the one that has been waiting longest is the one that has
+    // kept a customer waiting longest. This is the WORK order, and it is a
+    // different question from the SCAN order above — conflating the two is what
+    // put the answer two thousand orders in the past.
+    .sort((a, b) => String(a.paidAt ?? a.createdAt).localeCompare(String(b.paidAt ?? b.createdAt)));
+
+  return {
+    orders: matched.slice(0, limit),
+    // Either cut makes the list partial, and the screen is told about both.
+    truncated: truncated || matched.length > limit,
+    totalMatched: matched.length,
+  };
 }
 
 /** The definitions, for rendering the reason and the action beside each order. */

@@ -3,6 +3,9 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { pointsToDollars } from "@/lib/points-math";
+import { hasCapturedPayment, isRevenueOrderStatus } from "@/lib/ledger";
+
 function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value);
 }
@@ -14,6 +17,9 @@ export function AdminOrderActions({
   initialTrackingNumber,
   amountPaid,
   refundAmount,
+  storeCreditRedeemedCents = 0,
+  pointsRedeemed = 0,
+  orderPlacedIso = null,
   canRefund,
   initialCarrier,
   initialEstimatedDelivery,
@@ -25,6 +31,12 @@ export function AdminOrderActions({
   initialTrackingNumber: string | null;
   amountPaid: number;
   refundAmount: number;
+  /** `orders.store_credit_redeemed_cents` — tender, and refundable. */
+  storeCreditRedeemedCents?: number;
+  /** `orders.points_redeemed` — tender, and refundable. */
+  pointsRedeemed?: number;
+  /** When the order was placed — the clock store-credit expiry is measured on. */
+  orderPlacedIso?: string | null;
   canRefund: boolean;
   initialCarrier?: string | null;
   initialEstimatedDelivery?: string | null;
@@ -58,6 +70,77 @@ export function AdminOrderActions({
   );
 
   const remaining = Math.max(0, amountPaid - refundAmount);
+
+  // ---------------------------------------------------------------------
+  // STORE CREDIT AND POINTS ARE TENDER, AND THIS PANEL USED TO FORGET IT.
+  //
+  // `remaining` above is a statement about CASH. The refund route is explicit
+  // that it is not the whole question: it computes the same `nonCashTender`
+  // from these two columns and deliberately accepts a refund on an order whose
+  // amount_paid is zero, because that is the only path by which a customer's
+  // store credit ever comes back.
+  //
+  // Gating the control on `remaining > 0` alone meant an order settled entirely
+  // with credit — amount_paid 0 — rendered "Fully reimbursed." in green on its
+  // first ever view, with no control anywhere in the admin able to return the
+  // credit. The screen reported a closed matter and the customer was out the
+  // money.
+  //
+  // Computed from the same two columns and the same exported points rate the
+  // server uses, so the panel cannot offer a refund the route would reject, or
+  // hide one it would accept.
+  // ---------------------------------------------------------------------
+  const nonCashTender = Math.round(
+    (Math.max(0, storeCreditRedeemedCents) / 100 + Math.max(0, pointsToDollars(pointsRedeemed))) * 100,
+  ) / 100;
+  /** The route's own idempotency guard: this order's refund has already run. */
+  const alreadyRefunded = String(initialPaymentStatus ?? "").toLowerCase() === "refunded";
+
+  // THE TENDER COLUMNS ARE WRITTEN AT ORDER CREATION, NOT AT PAYMENT.
+  //
+  // quote-order.ts writes points_redeemed and store_credit_redeemed_cents in the
+  // same row as `payment_status: "pending_payment"`; the credit is not debited
+  // until redeemStoreCredit runs in the payment-success webhook. So `amount_paid
+  // === 0` does NOT mean "settled entirely with credit" — on an order that has
+  // not been paid it means nothing has been settled at all.
+  //
+  // Reading cash alone therefore offered a "Return store credit & points" button
+  // on a fully credit-funded order still awaiting payment, and the route would
+  // have taken it: it guards on `payment_status === 'refunded'` and on
+  // nonCashTender, never on the order being paid. That writes `refunded` onto an
+  // order whose money is still coming, and the payment can then never land.
+  //
+  // Tender is only returnable once it was actually taken, which is what these
+  // two statuses mean.
+  //
+  // BOTH PREDICATES COME FROM THE LEDGER, NOT FROM A STRING COMPARISON HERE.
+  // ledger.ts is the canonical answer to "did this order take money", and its
+  // docblock names this exact trap (M-03): amount_paid is written at INSERT, so
+  // any surface that reads it without asking this question reports a sale that
+  // never happened. A local copy of the status list here would be the fifth.
+  const paymentStatusNow = String(initialPaymentStatus ?? "").toLowerCase();
+  /** The order took money/credit at some point — 'refunded' included. */
+  const everPaid = hasCapturedPayment(paymentStatusNow);
+  /** ...and there is still something to act on. A refunded order is finished. */
+  const tenderWasTaken = isRevenueOrderStatus(paymentStatusNow);
+
+  /** Cash is what an amount box can be about. Nothing else. */
+  const cashAvailable = remaining > 0 && tenderWasTaken;
+  const nonCashOutstanding = tenderWasTaken && !alreadyRefunded && nonCashTender > 0;
+  const canRecordReimbursement = tenderWasTaken && !alreadyRefunded && (cashAvailable || nonCashTender > 0);
+  /** Non-cash tender is on this order, whatever state it is in now. */
+  const usedNonCashTender = nonCashTender > 0;
+
+  /**
+   * The order's date as an unambiguous UTC calendar date.
+   *
+   * The expiry rule is measured against startOfCurrentMonthIso(), which is built
+   * from Date.UTC. Rendering this through toLocaleDateString() named a different
+   * month either side of a boundary — an order paid 2026-09-01T03:00Z displays
+   * as 8/31/2026 to an admin in UTC-7, who then tells a customer their live
+   * credit has expired. An ISO calendar date cannot drift.
+   */
+  const orderPlacedDate = orderPlacedIso ? String(orderPlacedIso).slice(0, 10) : null;
 
   const runAction = async (action: string, promptMessage?: string, extra?: Record<string, unknown>) => {
     if (promptMessage && !window.confirm(promptMessage)) {
@@ -116,6 +199,20 @@ export function AdminOrderActions({
 
     if (trimmed && (!Number.isFinite(parsedAmount) || (parsedAmount as number) <= 0)) {
       setMessage("Enter a valid refund amount, or leave blank to refund the remaining balance.");
+      return;
+    }
+
+    // A CREDIT-ONLY RETURN IS A DIFFERENT ACT AND GETS DIFFERENT WORDS. No cash
+    // moved and none is being claimed to have moved; Vanta itself puts the
+    // credit and the points back.
+    if (!cashAvailable) {
+      void runAction(
+        "refund",
+        "Return this customer's store credit and points?\n\n"
+        + "This order collected no cash, so nothing you have paid is being recorded. Vanta puts the points back, and "
+        + "the store credit too IF it was spent this calendar month — credit older than that has expired and cannot be returned.",
+        { note: reimbursementNote.trim() || undefined },
+      );
       return;
     }
 
@@ -193,6 +290,11 @@ export function AdminOrderActions({
         </p>
         <p className="mt-2 text-sm text-zinc-300">
           Paid {money(amountPaid)} • Reimbursed {money(refundAmount)} • Remaining {money(remaining)}
+          {nonCashTender > 0 ? (
+            <>
+              {" "}• Store credit &amp; points {money(nonCashTender)}
+            </>
+          ) : null}
         </p>
         {/* The most consequential sentence on the page gets the most prominent
             styling on it. Someone skimming must not read "reimbursement",
@@ -207,28 +309,67 @@ export function AdminOrderActions({
           adjust the count yourself in Inventory.
         </p>
         {canRefund ? (
-          remaining > 0 ? (
+          canRecordReimbursement ? (
             <div className="mt-3 space-y-3">
-              <div className="grid gap-3 sm:grid-cols-3">
-                <label className="text-sm text-zinc-300">Amount
-                  <input
-                    value={refundInput}
-                    onChange={(e) => setRefundInput(e.target.value)}
-                    placeholder={`Full remaining (${money(remaining)})`}
-                    className="vl-input mt-1 w-full px-3 py-2 text-sm"
-                  />
-                </label>
-                <label className="text-sm text-zinc-300">How you sent it
-                  <select
-                    value={reimbursementMethod}
-                    onChange={(e) => setReimbursementMethod(e.target.value)}
-                    className="vl-input mt-1 w-full px-3 py-2 text-sm"
-                  >
-                    <option value="zelle">Zelle</option>
-                    <option value="cashapp">Cash App</option>
-                    <option value="other">Other</option>
-                  </select>
-                </label>
+              {/* CREDIT-ONLY ORDERS GET NO AMOUNT BOX. The route rejects any
+                  non-zero amount on an order that collected no cash — recording
+                  cash returned that never was would push reported revenue below
+                  zero — so offering the field could only produce a 400. */}
+              {!cashAvailable ? (
+                <p className="rounded-lg border border-sky-300/40 bg-sky-300/10 px-3 py-2 text-[13px] text-sky-100">
+                  <strong>This order collected no cash.</strong> It was settled with {money(nonCashTender)} of store
+                  credit and points, so there is nothing for you to send — Vanta returns them itself.
+                </p>
+              ) : null}
+              {/* STORE CREDIT EXPIRES AT THE MONTH BOUNDARY, AND THE REFUND
+                  PATH HONOURS THAT. refundStoreCreditForOrder only re-credits
+                  redemptions whose ledger row is newer than the start of the
+                  current month (store-credit.ts, isRefundableRedemption), and
+                  when none qualify it returns false and writes nothing — no
+                  throw, so runRefundEffect raises no alert either. A return
+                  authorised a few weeks after the sale routinely crosses that
+                  boundary.
+
+                  Naming an amount on the button would therefore have promised
+                  money that will not move, on the one screen this whole phase
+                  exists to stop lying. The panel states the rule and the order's
+                  own date instead, and leaves the arithmetic visible. */}
+              {nonCashOutstanding ? (
+                <p className="rounded-lg border border-amber-300/40 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
+                  <strong>Store credit is only returnable in the month it was spent.</strong>{" "}
+                  {storeCreditRedeemedCents > 0
+                    ? `This order spent ${money(Math.max(0, storeCreditRedeemedCents) / 100)} of credit${orderPlacedDate ? ` on ${orderPlacedDate} (UTC)` : ""}. If that is not this calendar month it has already expired, and refunding will return the points but not the credit.`
+                    : "This order spent no store credit, so only points are returned."}
+                </p>
+              ) : null}
+              <div className={`grid gap-3 ${cashAvailable ? "sm:grid-cols-3" : "sm:grid-cols-2"}`}>
+                {cashAvailable ? (
+                  <label className="text-sm text-zinc-300">Amount
+                    <input
+                      value={refundInput}
+                      onChange={(e) => setRefundInput(e.target.value)}
+                      placeholder={`Full remaining (${money(remaining)})`}
+                      className="vl-input mt-1 w-full px-3 py-2 text-sm"
+                    />
+                  </label>
+                ) : null}
+                {/* ONLY WHERE MONEY MOVED. This select defaults to "zelle" and is
+                    posted with the refund, so a credit-only return wrote an audit
+                    row asserting the owner sent money by Zelle — on the screen
+                    that says "there is nothing for you to send". */}
+                {cashAvailable ? (
+                  <label className="text-sm text-zinc-300">How you sent it
+                    <select
+                      value={reimbursementMethod}
+                      onChange={(e) => setReimbursementMethod(e.target.value)}
+                      className="vl-input mt-1 w-full px-3 py-2 text-sm"
+                    >
+                      <option value="zelle">Zelle</option>
+                      <option value="cashapp">Cash App</option>
+                      <option value="other">Other</option>
+                    </select>
+                  </label>
+                ) : null}
                 <label className="text-sm text-zinc-300">Internal note (optional)
                   <input
                     value={reimbursementNote}
@@ -239,9 +380,40 @@ export function AdminOrderActions({
                 </label>
               </div>
               <button type="button" disabled={saving} onClick={handleRefund} className="vl-btn-secondary px-4 py-2 text-xs disabled:opacity-60">
-                {saving ? "Recording…" : "Record manual reimbursement"}
+                {saving
+                  ? "Recording…"
+                  : cashAvailable
+                    ? "Record manual reimbursement"
+                    : "Return store credit & points"}
               </button>
+              {cashAvailable && nonCashOutstanding ? (
+                <p className="text-[13px] text-zinc-400">
+                  This order also used {money(nonCashTender)} of store credit and points. Refunding the full remaining
+                  balance returns the points too, and the store credit if it was spent this calendar month; a partial
+                  refund returns neither.
+                </p>
+              ) : null}
             </div>
+          ) : !everPaid ? (
+            /* Not finished — never started. An unpaid order has taken nothing,
+               so there is nothing to give back, and saying "fully reimbursed"
+               here would be the same unearned all-clear in a new place. */
+            <p className="mt-3 text-sm text-zinc-400">
+              This order has not been paid ({paymentStatusNow.replace(/_/g, " ") || "unknown status"}), so no money,
+              store credit or points have been taken. There is nothing to return.
+            </p>
+          ) : usedNonCashTender ? (
+            /* REFUNDED IS A STATUS, NOT A RECEIPT. The route writes it from its
+               compare-and-set claim BEFORE the side effects run and regardless
+               of what they return, and refundStoreCreditForOrder returns false
+               without throwing when the redemption predates the current month —
+               so nothing alerts, the repair sweep skips it, and an emerald
+               "Fully reimbursed." would assert a return that never happened. */
+            <p className="mt-3 text-sm text-zinc-300">
+              Recorded as refunded. The points were returned; the {money(nonCashTender)} of store credit came back
+              only if it was spent in the same calendar month. Check the customer&apos;s balance before telling them
+              it is settled.
+            </p>
           ) : (
             <p className="mt-3 text-sm text-emerald-300">Fully reimbursed.</p>
           )

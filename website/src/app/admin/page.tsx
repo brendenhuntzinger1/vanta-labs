@@ -15,6 +15,8 @@ import { EMPTY_WORK_QUEUE, summarizeWorkQueue } from "@/lib/admin-work-queue";
 import { getAdminPartnerRows } from "@/lib/partner-portal";
 import { AdminControlCenterClient } from "@/components/admin-control-center-client";
 import { AdminLiveMetrics } from "@/components/admin-live-metrics";
+import { failedReads, figure, settleRead, UNKNOWN_FIGURE } from "@/lib/admin-read";
+import { AdminReadFailureNotice, AdminTruncationNotice } from "@/components/admin-data-notices";
 
 export const dynamic = "force-dynamic";
 
@@ -37,35 +39,90 @@ export default async function AdminHomePage() {
     redirect("/vault");
   }
 
-  const [orderList, products, partners, onlineVisitors, revenueWindows, revenueMetrics, lowStockCount, reconciliationFlagCount, profitWindows] = await Promise.all([
-    getAdminOrderRows({ pageSize: 25, paymentStatus: "active" }).catch(() => ({ rows: [], total: 0, page: 1, pageSize: 25, pageCount: 1 })),
-    listAdminProducts({ search: "", category: "all", status: "all" }).catch(() => []),
-    getAdminPartnerRows({ status: "all" }).catch(() => []),
-    getCurrentOnlineVisitorCount().catch(() => 0),
-    getRevenueWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, truncated: false })),
-    getRevenueMetrics().catch(() => null),
-    getLowStockCount().catch(() => 0),
-    getReconciliationFlagCount().catch(() => 0),
-    getProfitWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, ordersLast30Days: 0, hasEstimatedCost: false, truncated: false })),
+  // A FAILED READ IS NOT A ZERO — see admin-read.ts. Every figure below used to
+  // arrive through `.catch(() => 0)`, so a database that would not answer
+  // rendered this page as a calm store with no orders, no low stock, no
+  // reconciliation flags and nothing waiting to ship.
+  const [
+    orderListRead,
+    productsRead,
+    partnersRead,
+    onlineVisitorsRead,
+    revenueWindowsRead,
+    revenueMetricsRead,
+    lowStockRead,
+    reconciliationFlagRead,
+    profitWindowsRead,
+  ] = await Promise.all([
+    settleRead("Recent orders", () => getAdminOrderRows({ pageSize: 25, paymentStatus: "active" })),
+    settleRead("Products", () => listAdminProducts({ search: "", category: "all", status: "all" })),
+    settleRead("Partners", () => getAdminPartnerRows({ status: "all" })),
+    settleRead("Visitors online", getCurrentOnlineVisitorCount),
+    settleRead("Revenue windows", getRevenueWindowMetrics),
+    settleRead("Order counts", getRevenueMetrics),
+    settleRead("Low stock", getLowStockCount),
+    settleRead("Reconciliation flags", getReconciliationFlagCount),
+    settleRead("Net profit", getProfitWindowMetrics),
   ]);
 
   // What is waiting for a human. Same buckets the workstation renders, so the
   // dashboard headline and the pick queue cannot disagree.
-  const [workBuckets, openCriticals] = await Promise.all([
-    getBucketCounts().catch(() => null),
-    getOpenCriticalAlertCount().catch(() => 0),
+  const [workRead, criticalsRead] = await Promise.all([
+    settleRead("Fulfillment queue counts", getBucketCounts),
+    settleRead("Critical alerts", getOpenCriticalAlertCount),
   ]);
-  const work = workBuckets ? summarizeWorkQueue(workBuckets, openCriticals) : EMPTY_WORK_QUEUE;
+  const work = workRead.ok && criticalsRead.ok
+    ? summarizeWorkQueue(workRead.value.counts, criticalsRead.value)
+    : EMPTY_WORK_QUEUE;
+  const workKnown = workRead.ok && criticalsRead.ok;
 
   // Full profit analytics (calendar windows + lifetime aggregates) — only
   // fetched for roles allowed to see profit.
-  const profitDashboard = canViewProfit(session.role)
-    ? await getProfitDashboard().catch(() => null)
+  const canSeeProfit = canViewProfit(session.role);
+  const profitDashboardRead = canSeeProfit
+    ? await settleRead("Profit analytics", getProfitDashboard)
     : null;
+  const profitDashboard = profitDashboardRead?.ok ? profitDashboardRead.value : null;
+
+  const failures = failedReads([
+    orderListRead,
+    productsRead,
+    partnersRead,
+    revenueWindowsRead,
+    revenueMetricsRead,
+    lowStockRead,
+    reconciliationFlagRead,
+    onlineVisitorsRead,
+    workRead,
+    criticalsRead,
+    ...(canSeeProfit ? [profitWindowsRead] : []),
+    ...(profitDashboardRead ? [profitDashboardRead] : []),
+  ]);
+
+  // The `truncated` flags admin-profit has always computed and no screen has
+  // ever rendered. Lifetime revenue, margin and order count computed from a
+  // slice of history, presented as the whole of it.
+  const truncatedSources = [
+    ...(profitDashboard?.truncated ? ["the lifetime profit analytics"] : []),
+    ...(profitWindowsRead.ok && profitWindowsRead.value.truncated ? ["the 30-day profit windows"] : []),
+    ...(workRead.ok && workRead.value.truncated ? ["the fulfillment queue counts"] : []),
+  ];
+
+  const orderList = orderListRead.ok
+    ? orderListRead.value
+    : { rows: [] as Awaited<ReturnType<typeof getAdminOrderRows>>["rows"] };
+  const revenueWindows = revenueWindowsRead.ok
+    ? revenueWindowsRead.value
+    : { today: 0, last7Days: 0, last30Days: 0 };
+  const onlineVisitors = onlineVisitorsRead.ok ? onlineVisitorsRead.value : 0;
+  // The live tile renders from a CLIENT component that refetches, so it was
+  // treated as self-healing and left out of the notice. It is not:
+  // /api/admin/metrics reads the same two sources, so when they are down the
+  // refetch 500s and the placeholder zeros stay. Both reads that feed it are
+  // now declared, and the tile is told they are placeholders.
+  const liveMetricsUnavailable = !revenueWindowsRead.ok || !onlineVisitorsRead.ok;
 
   const orders = orderList.rows;
-  const publishedProducts = products.filter((product) => product.isPublished && product.isEnabled && !product.isArchived).length;
-  const pendingPartners = partners.filter((partner) => partner.status === "pending").length;
 
   return (
     <div className="vl-page-shell min-h-screen bg-zinc-950 px-4 py-8 text-zinc-100 sm:px-6 lg:px-8">
@@ -87,20 +144,11 @@ export default async function AdminHomePage() {
           </div>
         </section>
 
-        {/*
-          A REPORT THAT HIT ITS CEILING SAYS SO ON THE SCREEN.
-
-          readAllRowsBounded reports reaching maxRows rather than returning a
-          smaller number as though it were the answer (supabase-page.ts), and
-          every producer below carries `truncated` out with the figures. This
-          page dropped it, which put the flag back where it started: a floor,
-          presented as a total, with nothing to notice.
-        */}
-        {revenueWindows.truncated || profitWindows.truncated || profitDashboard?.truncated ? (
-          <p className="rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
-            Some orders were not included — a report on this page hit its scan ceiling. The revenue and profit figures below are a floor, not a total.
-          </p>
-        ) : null}
+        <AdminReadFailureNotice failures={failures} />
+        <AdminTruncationNotice
+          sources={truncatedSources}
+          detail="Every lifetime and window figure below is a floor. Nothing here should be reported as a total."
+        />
 
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
           {/*
@@ -114,49 +162,77 @@ export default async function AdminHomePage() {
             className="vl-panel rounded-2xl p-4 transition hover:border-white/25 sm:col-span-2"
           >
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Needs Fulfillment</p>
-            <p className={work.needsFulfillment > 0 ? "mt-2 text-2xl font-semibold text-amber-300" : "mt-2 text-2xl font-semibold text-white"}>
-              {work.needsFulfillment}
+            {/* AN UNREAD QUEUE IS NOT AN EMPTY QUEUE. A zero here is the single
+                most consequential lie this dashboard can tell: it is the number
+                the owner uses to decide whether to go and pack anything. */}
+            <p className={workKnown && work.needsFulfillment > 0 ? "mt-2 text-2xl font-semibold text-amber-300" : "mt-2 text-2xl font-semibold text-white"}>
+              {workKnown ? work.needsFulfillment : UNKNOWN_FIGURE}
             </p>
             <p className="mt-1 text-[11px] text-zinc-500">
-              {work.inProgress} in progress
-              {work.exceptions > 0 ? ` \u00b7 ${work.exceptions} need attention` : ""}
-              {work.openCriticalAlerts > 0 ? ` \u00b7 ${work.openCriticalAlerts} critical alert${work.openCriticalAlerts === 1 ? "" : "s"}` : ""}
+              {workKnown ? (
+                <>
+                  {work.inProgress} in progress
+                  {work.exceptions > 0 ? ` \u00b7 ${work.exceptions} need attention` : ""}
+                  {work.openCriticalAlerts > 0 ? ` \u00b7 ${work.openCriticalAlerts} critical alert${work.openCriticalAlerts === 1 ? "" : "s"}` : ""}
+                </>
+              ) : "Queue counts did not load — open the workstation"}
             </p>
           </Link>
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Paid Orders</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{revenueMetrics?.totalPaidOrders ?? 0}</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{figure(revenueMetricsRead, (m) => String(m.totalPaidOrders))}</p>
             <p className="mt-1 text-[11px] text-zinc-500">completed sales</p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Revenue · 30d</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{money(revenueWindows.last30Days)}</p>
-            <p className="mt-1 text-[11px] text-zinc-500">Today {money(revenueWindows.today)} · 7d {money(revenueWindows.last7Days)} · net of refunds, incl. tax</p>
+            <p className="mt-2 text-2xl font-semibold text-white">{figure(revenueWindowsRead, (r) => money(r.last30Days))}</p>
+            <p className="mt-1 text-[11px] text-zinc-500">
+              {revenueWindowsRead.ok
+                ? `Today ${money(revenueWindows.today)} · 7d ${money(revenueWindows.last7Days)} · net of refunds, incl. tax`
+                : "Revenue windows did not load"}
+            </p>
           </div>
           {canViewProfit(session.role) ? (
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Net Profit · 30d</p>
-            <p className={`mt-2 text-2xl font-semibold ${profitWindows.last30Days >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{money(profitWindows.last30Days)}</p>
-            <p className="mt-1 text-[11px] text-zinc-500">Today {money(profitWindows.today)} · 7d {money(profitWindows.last7Days)}{profitWindows.hasEstimatedCost ? " · incl. estimates" : ""}</p>
+            <p className={`mt-2 text-2xl font-semibold ${!profitWindowsRead.ok ? "text-zinc-400" : profitWindowsRead.value.last30Days >= 0 ? "text-emerald-300" : "text-rose-300"}`}>
+              {figure(profitWindowsRead, (p) => money(p.last30Days))}
+            </p>
+            <p className="mt-1 text-[11px] text-zinc-500">
+              {profitWindowsRead.ok
+                ? `Today ${money(profitWindowsRead.value.today)} · 7d ${money(profitWindowsRead.value.last7Days)}${profitWindowsRead.value.hasEstimatedCost ? " · incl. estimates" : ""}${profitWindowsRead.value.truncated ? " · incomplete" : ""}`
+                : "Profit did not load"}
+            </p>
           </div>
           ) : null}
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Published Products</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{publishedProducts}</p>
+            <p className="mt-2 text-2xl font-semibold text-white">
+              {figure(productsRead, (list) => String(list.filter((product) => product.isPublished && product.isEnabled && !product.isArchived).length))}
+            </p>
           </div>
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Pending Partners</p>
-            <p className="mt-2 text-2xl font-semibold text-white">{pendingPartners}</p>
+            <p className="mt-2 text-2xl font-semibold text-white">
+              {figure(partnersRead, (list) => String(list.filter((partner) => partner.status === "pending").length))}
+            </p>
           </div>
           <Link href="/admin/inventory" className="vl-panel rounded-2xl p-4 transition hover:border-white/25">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Low Stock</p>
-            <p className={lowStockCount > 0 ? "mt-2 text-2xl font-semibold text-amber-300" : "mt-2 text-2xl font-semibold text-white"}>{lowStockCount}</p>
+            <p className={lowStockRead.ok && lowStockRead.value > 0 ? "mt-2 text-2xl font-semibold text-amber-300" : "mt-2 text-2xl font-semibold text-white"}>
+              {figure(lowStockRead, String)}
+            </p>
           </Link>
           <Link href="/admin/reconciliation" className="vl-panel rounded-2xl p-4 transition hover:border-white/25">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Reconciliation Flags</p>
-            <p className={reconciliationFlagCount > 0 ? "mt-2 text-2xl font-semibold text-amber-300" : "mt-2 text-2xl font-semibold text-white"}>{reconciliationFlagCount}</p>
+            {/* "0 flags" is the answer an owner treats as an all-clear on the
+                ledger. It must never be what a failed read looks like. */}
+            <p className={reconciliationFlagRead.ok && reconciliationFlagRead.value > 0 ? "mt-2 text-2xl font-semibold text-amber-300" : "mt-2 text-2xl font-semibold text-white"}>
+              {figure(reconciliationFlagRead, String)}
+            </p>
           </Link>
           <AdminLiveMetrics
+            initialUnavailable={liveMetricsUnavailable}
             initial={{
               onlineNow: onlineVisitors,
               revenue: revenueWindows,
@@ -235,8 +311,15 @@ export default async function AdminHomePage() {
             </div>
             {/* "orders that took payment", not "paid orders": the count now
                 includes fully refunded ones, whose costs the store really
-                bore. Orders that never took a payment are still excluded. */}
-            <p className="mt-3 text-[11px] text-zinc-500">Lifetime figures across {profitDashboard.lifetime.orderCount} order{profitDashboard.lifetime.orderCount === 1 ? "" : "s"} that took payment (refunds included).</p>
+                bore. Orders that never took a payment are still excluded.
+
+                And whether that count is the WHOLE history is a separate
+                question, which admin-profit has always answered and no screen
+                used to ask — see ProfitDashboard.truncated. */}
+            <p className="mt-3 text-[11px] text-zinc-500">
+              Lifetime figures across {profitDashboard.lifetime.orderCount} order{profitDashboard.lifetime.orderCount === 1 ? "" : "s"} that took payment (refunds included)
+              {profitDashboard.truncated ? " — and that is a floor: the read stopped before the whole history had been seen." : "."}
+            </p>
           </section>
         ) : null}
 
@@ -278,7 +361,9 @@ export default async function AdminHomePage() {
               </tbody>
             </table>
 
-            {orders.length === 0 ? (
+            {!orderListRead.ok ? (
+              <p className="px-3 py-6 text-sm text-rose-200">Recent orders could not be loaded — this is not a statement that there are none.</p>
+            ) : orders.length === 0 ? (
               <p className="px-3 py-6 text-sm text-zinc-400">No orders yet.</p>
             ) : null}
           </div>

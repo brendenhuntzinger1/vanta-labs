@@ -21,12 +21,25 @@ export async function GET(request: Request) {
   const report = await getSalesTaxReport({ year });
 
   const lines: string[] = [];
+  // A FILING EXPORT THAT IS SHORT MUST SAY SO, IN THE FILE.
+  //
+  // getSalesTaxReport has always computed `truncated` and no caller has ever
+  // read it. This CSV is what the owner opens to work out what they owe each
+  // state; a silently partial one understates a tax liability and looks exactly
+  // like a complete one. The warning goes FIRST, so it cannot be scrolled past,
+  // and the totals row is relabelled below.
+  if (report.truncated) {
+    lines.push("WARNING: INCOMPLETE REPORT — DO NOT FILE FROM THIS FILE AS-IS.");
+    lines.push("The read stopped at its row ceiling before every taxed order had been seen.");
+    lines.push("Every figure below is a FLOOR: the tax actually owed is higher. Re-run per year (?year=YYYY) to narrow it.");
+    lines.push("");
+  }
   lines.push("SALES TAX BY STATE" + (year ? ` — ${year}` : " — all time"));
   lines.push(["State", "Orders", "Taxable Sales", "Tax Collected", "Tax Refunded", "Net Tax Due"].join(","));
   for (const s of report.byState) {
     lines.push([s.state, s.orders, s.taxableSales.toFixed(2), s.taxCollected.toFixed(2), s.taxRefunded.toFixed(2), s.netTax.toFixed(2)].map(csvSafeCell).join(","));
   }
-  lines.push(["TOTAL", report.totals.orders, "", report.totals.taxCollected.toFixed(2), report.totals.taxRefunded.toFixed(2), report.totals.netTax.toFixed(2)].map(csvSafeCell).join(","));
+  lines.push([report.truncated ? "TOTAL (PARTIAL — INCOMPLETE READ)" : "TOTAL", report.totals.orders, "", report.totals.taxCollected.toFixed(2), report.totals.taxRefunded.toFixed(2), report.totals.netTax.toFixed(2)].map(csvSafeCell).join(","));
 
   lines.push("");
   lines.push("ORDER DETAIL");
@@ -47,7 +60,9 @@ export async function GET(request: Request) {
     status: 200,
     headers: {
       "Content-Type": "text/csv; charset=utf-8",
-      "Content-Disposition": `attachment; filename=sales-tax-${year ?? "all"}-${new Date().toISOString().slice(0, 10)}.csv`,
+      // The filename carries the warning too: a file saved to disk, mailed to an
+      // accountant and opened next week has lost every banner but its name.
+      "Content-Disposition": `attachment; filename=sales-tax-${year ?? "all"}-${new Date().toISOString().slice(0, 10)}${report.truncated ? "-INCOMPLETE" : ""}.csv`,
     },
   });
 }
