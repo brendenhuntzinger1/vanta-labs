@@ -1675,6 +1675,40 @@ function scheduleShippoSync(orderId: string): void {
   }
 }
 
+/**
+ * How long the unattributed-event WARNING stays quiet after firing.
+ *
+ * Persisted rather than held in memory: each webhook is a fresh serverless
+ * invocation, so an in-process timestamp is always empty and throttles nothing.
+ * Same shape as express-reconcile's backlog throttle.
+ */
+const UNATTRIBUTED_WARNING_THROTTLE_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Has the warning lane been quiet long enough to fire again?
+ *
+ * FAILS OPEN in every error path — a throttle must never be the reason a real
+ * warning goes unsent. Only ever consulted for the warning; a critical
+ * unattributed charge is never throttled.
+ */
+async function unattributedWarningIsDue(): Promise<boolean> {
+  try {
+    const { data, error } = await supabaseAdmin
+      .from("system_alerts")
+      .select("created_at")
+      .eq("type", "payment_event_unattributed")
+      .eq("severity", "warning")
+      .order("created_at", { ascending: false })
+      .limit(1);
+    if (error || !data || data.length === 0) return true;
+    const last = Date.parse(String((data[0] as { created_at?: string }).created_at ?? ""));
+    if (!Number.isFinite(last)) return true;
+    return Date.now() - last > UNATTRIBUTED_WARNING_THROTTLE_MS;
+  } catch {
+    return true;
+  }
+}
+
 export async function processPaymentWebhook(payload: string, signature: string, secret: string, eventId: string) {
   const provider = getPaymentProvider();
   const isValid = provider.verifyWebhookSignature(payload, signature, secret);
@@ -1718,7 +1752,10 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   // real sender uses.
   const sessionId = resolveWebhookSessionId(eventPayload);
   const orderIdFromSession = sessionId ? await findOrderIdByPaymentId(sessionId) : null;
-  const orderId = orderIdFromSession ?? resolveWebhookOrderId(eventPayload) ?? `order-${randomUUID()}`;
+  const resolvedOrderId = orderIdFromSession ?? resolveWebhookOrderId(eventPayload);
+  // The synthetic id exists so the EVENT is still recorded under a unique scope
+  // when no sender put an order reference anywhere. It identifies nothing.
+  const orderId = resolvedOrderId ?? `order-${randomUUID()}`;
   const nextStatus = getOrderStatusForEventType(eventPayload.type ?? "");
 
   // Claim the event up front (atomic) so concurrent duplicate deliveries can't
@@ -1735,6 +1772,68 @@ export async function processPaymentWebhook(payload: string, signature: string, 
   }
 
   try {
+  // AN EVENT THAT NAMES NO ORDER MUST NOT CREATE ONE.
+  //
+  // When neither the session id nor any metadata resolves, `orderId` above is a
+  // freshly minted `order-<uuid>` that exists nowhere. getOrderByOrderId then
+  // returns null, and `if (!orderRecord || nextStatus !== "paid")` read that
+  // absence as "a brand-new webhook-created order" — so upsertOrderRecord
+  // INSERTED one: a row with no customer, no email, no address, no items, a $0
+  // total and fulfillment_status "pending". It landed in Needs Fulfillment
+  // looking exactly like a real order nobody could fulfil, and one arrived per
+  // unresolvable delivery — every '*' subscription event from the processor
+  // that carries no order reference at all.
+  //
+  // The event is still claimed and still marked processed (so a redelivery is
+  // not reprocessed), and an operator is told, because an unattributable money
+  // event is worth a human's attention. What does not happen is inventing the
+  // order it failed to name.
+  if (!resolvedOrderId) {
+    await markEventProcessed(eventId, orderId, nextStatus);
+    if (isRecognisedMoneyEvent(eventPayload.type ?? "")) {
+      // Critical only where money actually moved and is now unaccounted for. A
+      // failed or cancelled charge that names no order took nobody's money, and
+      // paging the owner for one at 3am is how a real critical gets ignored.
+      const moneyMoved = nextStatus === "paid" || nextStatus === "refunded" || nextStatus === "partially_refunded";
+      // THROTTLE THE NOISY LANE, NEVER THE MONEY ONE.
+      //
+      // Each critical here is a DISTINCT real charge that only a human can
+      // match, so suppressing one loses money visibility — those always fire.
+      // The warning lane is the one that can repeat: a processor that stopped
+      // sending our order reference produces one per delivery, and an operator
+      // who is emailed forty times learns to ignore the type, which is how the
+      // critical above gets missed too.
+      const due = moneyMoved || (await unattributedWarningIsDue());
+      if (due) {
+      await recordSystemAlert({
+        type: "payment_event_unattributed",
+        severity: moneyMoved ? "critical" : "warning",
+        message:
+          `A ${eventPayload.type ?? "payment"} webhook carried no order reference and no known session id, so `
+          + "it could not be matched to an order. No order was created for it"
+          + (moneyMoved
+            ? ": money moved for an order this system cannot name. Find this event in the processor's dashboard "
+              + "and match it by hand — the order it belongs to still reads unpaid."
+            : ", and nothing was charged. Worth a look only if these keep arriving, which would mean the "
+              + "processor stopped sending our order reference."),
+        context: {
+          event_id: eventId,
+          event_type: eventPayload.type ?? null,
+          provider_status: eventPayload.status ?? null,
+          amount: eventPayload.amount ?? null,
+        },
+      }).catch(() => {});
+      }
+    }
+    return {
+      duplicate: false,
+      eventId,
+      orderId,
+      status: nextStatus,
+      providerStatus: eventPayload.status ?? eventPayload.type ?? "unknown",
+    } satisfies WebhookEventState;
+  }
+
   const orderRecord = await getOrderByOrderId(orderId);
 
   // An event that says nothing about a money state must never write one. A '*'
