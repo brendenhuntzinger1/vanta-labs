@@ -360,3 +360,86 @@ describe("a read the sweep could not perform is never reported as a clean sweep"
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE SWEEP HAS TO SURVIVE A PROCESSOR THAT DOES NOT ANSWER, AND A BACKLOG.
+//
+// The read here has always been bounded (10 pages x 50 = 500 rows). The WORK
+// was not: 500 sequential HTTP round trips, no per-request timeout and no
+// elapsed-time check anywhere in the loop.
+//
+//   * `fetch` has no default request timeout, so ONE hung connection consumed
+//     the whole 60s function budget — and this job shares that budget with
+//     every other cron sweep (campaigns, automations, expiry), so one stuck
+//     session took all of them down with it. veyra-membership.ts fixed exactly
+//     this (K-19) for the same processor; this file was missed.
+//
+//   * 500 round trips cannot finish in 60s whatever each one costs, so at any
+//     real backlog the job was killed mid-run on every tick.
+//
+// Both are safe to bound: the sweep is idempotent and reads NEWEST FIRST, so a
+// freshly charged order is always at the front and what is left behind is the
+// oldest and least urgent.
+// ---------------------------------------------------------------------------
+describe("the sweep bounds its own work", () => {
+  it("gives every processor poll a timeout", async () => {
+    providerSays("paid");
+    await reconcileVeyraPendingPayments();
+
+    expect(fetchSession).toHaveBeenCalled();
+    const [, init] = fetchSession.mock.calls[0] as [string, RequestInit];
+    // AbortSignal.timeout(...) — not merely "a signal was passed": an already
+    // aborted or never-firing signal would satisfy a weaker assertion.
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+    expect(init?.signal?.aborted).toBe(false);
+  });
+
+  it("stops polling once its time budget is spent, and says how far it got", async () => {
+    // 500 rows, each poll costing more than the budget allows in total.
+    pendingRows = Array.from({ length: 500 }, (_, index) => ({
+      order_id: `order-${index}`,
+      payment_id: `cs_live_${index}`,
+      created_at: OLD,
+    }));
+    providerSays("unknown"); // neither settle nor retire — just costs a call
+
+    // Advance the clock 4s per poll: the 30s budget is spent after ~8 of them,
+    // which is what proves the loop stops on TIME rather than on row count.
+    const realNow = Date.now;
+    let clock = realNow();
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    fetchSession.mockImplementation(async () => {
+      clock += 4_000;
+      return { ok: true, json: async () => ({ status: "unknown" }) };
+    });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = await reconcileVeyraPendingPayments();
+
+      // Nowhere near all 500, and `checked` reports what was POLLED rather than
+      // the size of the queue — an operator reading it sees work done.
+      expect(fetchSession.mock.calls.length).toBeLessThan(20);
+      expect(result.checked).toBe(fetchSession.mock.calls.length);
+      expect(warn).toHaveBeenCalledWith(expect.stringMatching(/stopped after \d+s having polled \d+ of 500/));
+    } finally {
+      warn.mockRestore();
+      (Date.now as unknown as { mockRestore: () => void }).mockRestore();
+    }
+  });
+
+  it("polls everything when the backlog fits inside the budget", async () => {
+    // Guard rail: the budget must not cut short an ordinary run.
+    pendingRows = Array.from({ length: 25 }, (_, index) => ({
+      order_id: `order-${index}`,
+      payment_id: `cs_live_${index}`,
+      created_at: OLD,
+    }));
+    providerSays("paid");
+
+    const result = await reconcileVeyraPendingPayments();
+
+    expect(result.checked).toBe(25);
+    expect(result.settled).toBe(25);
+  });
+});
