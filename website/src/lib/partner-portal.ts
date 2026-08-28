@@ -2107,32 +2107,77 @@ export async function reversePayout(input: {
   if (!payout) throw new Error("Payout not found.");
   if (payout.reversed_at) throw new Error("This payout has already been reversed.");
 
+  // EVERY STEP BELOW IS ASSERTED, AND THE ORDER IS THE RECOVERY PLAN.
+  //
+  // This function used to discard the error on all four of its writes and then
+  // stamp the payout reversed regardless. One failed statement therefore ended
+  // with `reversed_at` set, `reversedCommissions: 0` returned as if the payout
+  // had simply paid nothing, and the two ledgers disagreeing about real money.
+  // The stamp is also the function's own re-entry guard ("This payout has
+  // already been reversed."), so the admin's only tool for the mess it had just
+  // created refused to run again: the desync was unrecoverable through the UI.
+  //
+  // The failure was worse than a lost update, because the FIRST write is what
+  // destroys the evidence. Resetting referral_orders nulls `payout_id`, which
+  // is the only link back from a commission to the payout that paid it. Once
+  // that link is gone, a commissions row still reading `paid` cannot be found
+  // by payout at all — not by this function, not by a repair sweep, not by an
+  // operator reading the admin.
+  //
+  // So the work is now ordered so that every prefix of it is retryable and
+  // every failure leaves the reversal INCOMPLETE rather than falsely finished:
+  //
+  //   1. snapshot which commissions this payout paid, before anything moves;
+  //   2. flip the commissions ledger (keyed by order id, guarded on 'paid');
+  //   3. reset referral_orders, which is the step that drops the payout link;
+  //   4. stamp `payouts`, then `partner_payouts` LAST — the guard above reads
+  //      partner_payouts, so stamping it last is what keeps a retry possible.
+  //
+  // Every step is idempotent under its own guard, so re-running the reversal
+  // after any failure converges: the steps that already landed claim no rows,
+  // and the ones that did not are completed.
+  const { data: paidRows, error: snapshotError } = await supabaseAdmin
+    .from("referral_orders")
+    .select("id, order_id")
+    .eq("payout_id", input.payoutId)
+    .eq("payment_status", "paid");
+  if (snapshotError) assertNoSupabaseError("referral_orders.select(reverse snapshot)", snapshotError);
+
+  // Mirror ONLY the commissions this payout paid, keyed by the exact order ids
+  // — the same rule payCommissions uses when it flips them to paid.
+  const paidOrderIds = (paidRows ?? []).map((row) => row.order_id).filter(Boolean) as string[];
+  if (paidOrderIds.length > 0) {
+    const { error: mirrorError } = await supabaseAdmin
+      .from("commissions")
+      .update({ status: "approved_for_payout", updated_at: nowIso })
+      .in("order_id", paidOrderIds)
+      .eq("status", "paid");
+    if (mirrorError) assertNoSupabaseError("commissions.update(reverse mirror)", mirrorError);
+  }
+
   // Reset the commissions this payout paid. The atomic guard on
   // payment_status='paid' means a concurrent reversal claims zero rows.
-  const { data: reset } = await supabaseAdmin
+  const { data: reset, error: resetError } = await supabaseAdmin
     .from("referral_orders")
     .update({ payment_status: "approved_for_payout", commission_paid_at: null, payout_id: null, updated_at: nowIso })
     .eq("payout_id", input.payoutId)
     .eq("payment_status", "paid")
     .select("id, order_id");
+  if (resetError) assertNoSupabaseError("referral_orders.update(reverse reset)", resetError);
   const reversedCommissions = (reset ?? []).length;
-
-  // Mirror ONLY the reversed commissions back on the commissions ledger.
-  const resetOrderIds = (reset ?? []).map((row) => row.order_id).filter(Boolean) as string[];
-  if (resetOrderIds.length > 0) {
-    await supabaseAdmin
-      .from("commissions")
-      .update({ status: "approved_for_payout", updated_at: nowIso })
-      .in("order_id", resetOrderIds)
-      .eq("status", "paid");
-  }
 
   // Stamp both payout tables reversed (records retained, never deleted).
   const reversalPatch = { reversed_at: nowIso, reversed_by: input.actorUsername ?? null, reversal_reason: input.reason ?? null };
-  await supabaseAdmin.from("partner_payouts").update(reversalPatch).eq("id", input.payoutId);
-  await supabaseAdmin.from("payouts").update(reversalPatch).eq("id", input.payoutId);
+  const { error: payoutsMirrorError } = await supabaseAdmin.from("payouts").update(reversalPatch).eq("id", input.payoutId);
+  if (payoutsMirrorError) assertNoSupabaseError("payouts.update(reverse stamp mirror)", payoutsMirrorError);
+  const { error: stampError } = await supabaseAdmin.from("partner_payouts").update(reversalPatch).eq("id", input.payoutId);
+  if (stampError) assertNoSupabaseError("partner_payouts.update(reverse stamp)", stampError);
 
-  await supabaseAdmin.from("admin_audit_logs").insert({
+  // The reversal itself is complete by here. A failed audit row is worth
+  // shouting about but must not throw: doing so would report a finished
+  // reversal as failed and invite an operator to chase money that has already
+  // moved back.
+  const { error: auditError } = await supabaseAdmin.from("admin_audit_logs").insert({
     actor_user_id: input.actorUserId ?? null,
     action: "partner_payout_reversed",
     target_table: "partner_payouts",
@@ -2145,6 +2190,9 @@ export async function reversePayout(input: {
       actorUsername: input.actorUsername ?? null,
     },
   });
+  if (auditError) {
+    console.error("Payout reversed but its audit row was not written", input.payoutId, auditError);
+  }
 
   return { reversedCommissions, amount: Number(payout.amount ?? 0) };
 }
