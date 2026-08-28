@@ -1,7 +1,6 @@
 "use client";
 
 import { createContext, useContext, useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import type { Product } from "@/lib/catalog-types";
 import type { ReferralCode } from "@/lib/referral-codes";
 import { calculateEarnedPoints, pointsToDollars } from "@/lib/points-math";
@@ -275,7 +274,6 @@ function calculateCouponDiscountAmount(subtotal: number, coupon: CouponDetails |
 }
 
 export function CartProvider({ children }: { children: React.ReactNode }) {
-  const router = useRouter();
   const [items, setItems] = useState<CartItem[]>([]);
   const [isCartOpen, setIsCartOpen] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
@@ -683,32 +681,42 @@ export function CartProvider({ children }: { children: React.ReactNode }) {
     setReferralDetails(null);
   }
 
-  // WARM /checkout THE MOMENT THERE IS SOMETHING TO CHECK OUT WITH.
+  // THE /checkout WARM-UP IS REMOVED, BECAUSE IT NEVER WARMED ANYTHING.
   //
-  // Both routes into checkout are router.push from a button -- cart-client.tsx
-  // and cart-drawer.tsx -- so nothing is fetched until the tap lands, and
-  // /checkout is force-dynamic and answers from the origin every time (measured
-  // in production: x-vercel-cache MISS on every request, ~485ms to first byte).
-  // That is the highest-intent tap in the funnel waiting on a cold render.
+  // What was here: `router.prefetch("/checkout")` on the empty -> non-empty
+  // cart transition, to spare the highest-intent tap in the funnel a cold
+  // render of a force-dynamic route (measured in production at the time:
+  // x-vercel-cache MISS every request, ~485ms to first byte).
   //
-  // Fetching the route ahead of the tap is safe here specifically because
-  // checkout/page.tsx is "use client" and its layout is a passthrough: rendering
-  // it has no server side effects. Every mutation still happens on submit, in
-  // POST /api/checkout/create-session, which is untouched.
+  // It did not work, and it was not free. Measured on the local harness against
+  // a production build, recording every request in the 5s after add-to-cart:
   //
-  // Deliberately not aggressive. It fires once, on the transition from an empty
-  // cart to a non-empty one -- not per render, not per page, and never for the
-  // visitors who are only browsing.
-  const hasItems = items.length > 0;
-  useEffect(() => {
-    if (!hasItems) return;
-    try {
-      router.prefetch("/checkout");
-    } catch {
-      // A prefetch is an optimisation and nothing more; if it throws, the tap
-      // simply fetches the route the way it always did.
-    }
-  }, [hasItems, router]);
+  //   fetch /checkout?_rsc=OUOrFHYl3WHjh8WY     <- prefetch, next-router-prefetch: 1
+  //   fetch /checkout?_rsc=_H8pLkHDPhnOYfo6     <- and again
+  //   script requests: 0
+  //
+  // Then, navigating client-side from /cart to /checkout, ANOTHER /checkout
+  // request went out. So the two prefetches bought nothing: the payload is not
+  // reused for the navigation, and no JavaScript chunk is warmed either — the
+  // prefetch fetches RSC payloads only, and zero script requests were made.
+  //
+  // That is the documented behaviour, not a bug in Next. From the guide shipped
+  // with this version (node_modules/next/dist/docs/01-app/02-guides/
+  // prefetching.md, "Prefetching static vs. dynamic routes"):
+  //
+  //   Dynamic page — Prefetched: "No, unless loading.js"
+  //                  Client Cache TTL: "Off, unless enabled" (staleTimes)
+  //
+  // /checkout is `export const dynamic = "force-dynamic"` (checkout/layout.tsx)
+  // and there is no loading.tsx anywhere in src/app, so it is squarely in that
+  // column. The net effect was two extra origin renders of the store's most
+  // expensive route on every add-to-cart, for no gain.
+  //
+  // TO ACTUALLY WARM IT, if that is wanted: add app/checkout/loading.tsx. The
+  // prefetch then fetches layout-to-loading-boundary and the tap gets an instant
+  // shell. Not done here — it makes checkout stream behind a skeleton, which is
+  // a visible change to the page a shopper is paying on, and that is a product
+  // decision rather than a performance finding.
 
   const itemCount = useMemo(() => items.reduce((sum, item) => sum + item.quantity, 0), [items]);
 
