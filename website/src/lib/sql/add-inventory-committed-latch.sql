@@ -26,6 +26,9 @@
 -- SAFE + idempotent: `add column if not exists`, nullable, no default, and the
 -- backfill only touches rows where the new column is still NULL.
 --
+-- APPLIED TO PRODUCTION 2026-08-28 as migration 20260828001215; the applied copy
+-- is recorded in sql/migrations-applied/ alongside its verification.
+--
 -- DEPLOY ORDER: run this migration BEFORE deploying the code. Without the
 -- column, the paid lanes' latch write fails (logged, never fatal — the payment
 -- still completes) and the cancel path's select errors, which is its
