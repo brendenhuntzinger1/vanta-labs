@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto";
 import { getPaymentProvider } from "@/lib/payment-provider";
 import { reserveInventoryForOrder, releaseInventoryForOrder, describeUnavailable, DEFAULT_RESERVATION_MINUTES, MANUAL_RESERVATION_MINUTES } from "@/lib/inventory-reservation";
+import { describeTenderShortfall, releaseOrderTender, reserveOrderTender } from "@/lib/tender-reservation";
 import { getPaymentMethodById, isManualPaymentMethod } from "@/lib/payment-methods";
 import {
   buildOrderRow,
@@ -304,6 +305,56 @@ export async function createCheckoutSession(
    throw new Error(describeUnavailable(reservation.unavailable));
  }
 
+ // Hold the non-cash tender the same way, and for the same reason. The quote
+ // above READ the store-credit and points balances; nothing claimed them, so
+ // until this call the same $50 of credit could fund every checkout the shopper
+ // could open at once — each order written with $50 off, each card charged the
+ // reduced amount, and the ledger debiting it once at settlement because
+ // redeemStoreCredit clamps to the live balance. The balance never went
+ // negative; the store just gave the discount away as many times as it was
+ // asked (VL-11).
+ //
+ // Unlike stock this does NOT fail open: a hold that could not be taken means
+ // the balance is not there, and charging a total priced with money the shopper
+ // does not have is the exact loss being prevented. Cancel and let them refresh.
+ //
+ // A FAILED hold is treated exactly like a refused one, for the reason G-03
+ // exists (checkout-session-failure-cleanup.test.ts): whatever ends this
+ // checkout, the customer is told no order was placed, so no order — and no
+ // stock hold — may be left behind to contradict that.
+ const abandonUnpaidOrder = async () => {
+   await releaseInventoryForOrder(orderId).catch((releaseError: unknown) => {
+     console.error("Unable to release inventory after a refused tender hold", orderId, releaseError);
+   });
+   await releaseOrderTender(orderId).catch((releaseError: unknown) => {
+     console.error("Unable to release held tender after a refused tender hold", orderId, releaseError);
+   });
+   const { error: cancelError } = await supabaseAdmin
+     .from("orders")
+     .update({ payment_status: "canceled", updated_at: new Date().toISOString() })
+     .eq("order_id", orderId);
+   if (cancelError) {
+     console.error("Unable to cancel order after a refused tender hold", orderId, cancelError);
+   }
+ };
+
+ let tender: Awaited<ReturnType<typeof reserveOrderTender>>;
+ try {
+   tender = await reserveOrderTender({
+     orderId,
+     userId: payload.customerUserId ?? null,
+     storeCreditCents: storeCreditRedeemedCents,
+     pointsRedeemed,
+   });
+ } catch (holdError) {
+   await abandonUnpaidOrder();
+   throw holdError;
+ }
+ if (!tender.ok) {
+   await abandonUnpaidOrder();
+   throw new Error(describeTenderShortfall(tender.shortOf));
+ }
+
  // Manual methods (settled off-platform) have no hosted processor session: the
  // customer follows on-page instructions and submits a transaction id. Only the
  // card method uses the payment provider (its existing hosted-checkout flow,
@@ -362,6 +413,12 @@ export async function createCheckoutSession(
    } catch (error) {
      await releaseInventoryForOrder(orderId).catch((releaseError: unknown) => {
        console.error("Unable to release inventory for failed checkout session", orderId, releaseError);
+     });
+     // The credit and points held moments ago belong to a checkout that will
+     // never be paid. Hand them straight back rather than leaving the shopper
+     // unable to spend their own balance until the sweep notices.
+     await releaseOrderTender(orderId).catch((releaseError: unknown) => {
+       console.error("Unable to release held tender for failed checkout session", orderId, releaseError);
      });
      const { error: cancelError } = await supabaseAdmin
        .from("orders")

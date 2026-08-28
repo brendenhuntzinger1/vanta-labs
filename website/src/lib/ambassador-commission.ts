@@ -192,26 +192,55 @@ export async function getEffectiveCommissionPercent(input: {
 
   const monthlySales = await getQualifyingMonthlySalesCount(input.ambassadorId);
 
-  // A TIER MUST BE EARNED.
+  // A TIER MUST BE EARNED, AND EARNING ONE CAN NEVER COST THE AMBASSADOR MONEY.
   //
-  // `matched` used to be seeded with tiers[0] BEFORE this loop, so an
-  // ambassador who qualified for nothing was still paid the lowest tier. With
-  // any active tier present, the rate the owner typed in the admin was
-  // therefore never used -- a tier whose threshold is 5 monthly sales applied
-  // to someone with zero, silently replacing an agreed rate.
+  // Two rules, one loop.
   //
-  // Starting from null and only assigning on a genuine qualification keeps the
-  // tier design intact (a tier with a threshold of 0 still applies to
-  // everyone, which is the owner's choice) while making the configured rate
-  // the floor rather than something a tier can quietly undercut.
+  // 1. A tier must be EARNED. `matched` used to be seeded with tiers[0] BEFORE
+  //    this loop, so an ambassador who qualified for nothing was still paid the
+  //    lowest tier and the rate the owner typed in the admin was never used.
+  //
+  // 2. A tier may only ever RAISE the rate. The loop below used to take the
+  //    highest THRESHOLD reached and pay whatever that rung said, so the rate
+  //    tracked the ladder even where the ladder descends. Production on
+  //    2026-08-27 was exactly that shape: the programme default is 15% (the
+  //    owner's recorded decision, and what /ambassador and /partner promise)
+  //    while the rungs are Starter 10 sales -> 10%, Growth 25 -> 12.5%, Elite
+  //    50 -> 15%. So the tenth qualifying sale of the month CUT the rate from
+  //    15% to 10%, and it stayed cut until the fiftieth. Selling more paid
+  //    less, silently, on every order for the rest of the month.
+  //
+  // The rule that fixes it is the one an ambassador would state: the rate never
+  // goes DOWN as monthly sales go UP. So the resolved rate is the best of every
+  // rate this ambassador has passed through -- each rung they have earned, plus
+  // the base rate itself while no rung had yet applied. A rung below what they
+  // were already being paid is simply inert; a rung above it still promotes
+  // them the moment it is reached.
+  //
+  // The base rate counts as one of those candidates only when the ladder leaves
+  // a gap at the bottom (its lowest active rung needs sales the ambassador did
+  // not always have). A ladder whose lowest rung is 0 applies from the very
+  // first order, so the base rate is never the rate anyone was on -- a
+  // zero-threshold rung replacing it outright stays the owner's choice.
+  const laddersFromZero = tiers.some((tier) => tier.minMonthlySales <= 0);
+
   let matched: (typeof tiers)[number] | null = null;
   for (const tier of tiers) {
-    if (monthlySales >= tier.minMonthlySales) {
+    if (monthlySales < tier.minMonthlySales) continue;
+    // Ties keep the FIRST rung reached: with two rungs paying the same, the one
+    // already earned is the one the ambassador is on.
+    if (!matched || tier.commissionPercent > matched.commissionPercent) {
       matched = tier;
     }
   }
 
   if (!matched) {
+    return { percent: ambassadorPercent, tierName: null };
+  }
+
+  // The rate they were on before any rung applied still stands if no rung has
+  // beaten it. Reported with no tier name, because no tier is paying it.
+  if (!laddersFromZero && ambassadorPercent > matched.commissionPercent) {
     return { percent: ambassadorPercent, tierName: null };
   }
 

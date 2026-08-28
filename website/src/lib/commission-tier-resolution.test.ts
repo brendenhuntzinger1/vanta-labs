@@ -128,8 +128,11 @@ describe("a tier has to be earned", () => {
   });
 
   it("applies a tier the moment it is genuinely reached", async () => {
+    // 12% agreed, and Silver pays 15% at five sales: reaching it is a RAISE,
+    // which is the only direction a tier is allowed to move the rate (see
+    // "a tier can only ever raise the rate" below).
     seed({
-      configuredPercent: 22, tiers: EARNED_LADDER,
+      configuredPercent: 12, tiers: EARNED_LADDER,
       history: [{}, {}, {}, {}, {}], // exactly five
     });
     expect(await effective()).toEqual({ percent: 15, tierName: "Silver" });
@@ -155,10 +158,13 @@ describe("only genuinely qualifying orders advance a tier", () => {
   /** Four real sales plus one of whatever is under test = five, the Silver rung. */
   const fourReal = [{}, {}, {}, {}];
 
+  /** Agreed rate BELOW Silver, so reaching the rung visibly changes the rate. */
+  const AGREED = 12;
+
   it("counts five real sales as five", async () => {
     // The control. Without this, every test below passes for the wrong reason:
     // "the fifth did not count" is indistinguishable from "five never counts".
-    seed({ configuredPercent: 22, tiers: EARNED_LADDER, history: [...fourReal, {}] });
+    seed({ configuredPercent: AGREED, tiers: EARNED_LADDER, history: [...fourReal, {}] });
     expect((await effective()).tierName).toBe("Silver");
   });
 
@@ -172,8 +178,8 @@ describe("only genuinely qualifying orders advance a tier", () => {
     ["one from last month", { lastMonth: true }],
   ] as const) {
     it(`does not let ${label} push the ambassador up a tier`, async () => {
-      seed({ configuredPercent: 22, tiers: EARNED_LADDER, history: [...fourReal, row] });
-      expect(await effective()).toEqual({ percent: 22, tierName: null });
+      seed({ configuredPercent: AGREED, tiers: EARNED_LADDER, history: [...fourReal, row] });
+      expect(await effective()).toEqual({ percent: AGREED, tierName: null });
     });
   }
 
@@ -181,10 +187,10 @@ describe("only genuinely qualifying orders advance a tier", () => {
     // Twenty orders, every one of them fraud-flagged. The Gold rung must stay
     // out of reach and the agreed rate must stand.
     seed({
-      configuredPercent: 22, tiers: EARNED_LADDER,
+      configuredPercent: AGREED, tiers: EARNED_LADDER,
       history: Array.from({ length: 20 }, () => ({ fraudFlag: true })),
     });
-    expect(await effective()).toEqual({ percent: 22, tierName: null });
+    expect(await effective()).toEqual({ percent: AGREED, tierName: null });
   });
 });
 
@@ -230,5 +236,98 @@ describe("falling back when there is nothing to resolve against", () => {
   it("uses the caller's fallback when the ambassador row is missing entirely", async () => {
     db.current = createFakeDb();
     expect(await effective(7)).toEqual({ percent: 7, tierName: null });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// VL-26 / SOT-01 / CFG-01 — THE LADDER DESCENDED, SO THE RATE DESCENDED.
+//
+// Production on 2026-08-27: the programme default is 15% (the owner's recorded
+// decision — admin_control referral.default_commission_percent, "15% is the
+// advertised base commission" — and what /ambassador and /partner promise),
+// while commission_tier_rules reads Starter 10 sales -> 10%, Growth 25 ->
+// 12.5%, Elite 50 -> 15%.
+//
+// The resolver took the highest THRESHOLD reached and paid that rung's rate, so
+// the tenth qualifying sale of the month cut the ambassador from 15% to 10% and
+// it stayed cut until the fiftieth. Every one of those tests would have passed
+// on the old code by simply not existing: the suite's ladders all ascended past
+// the configured rate, which is the one shape the bug cannot appear in.
+// ---------------------------------------------------------------------------
+
+/** Production's ladder, verbatim, on the day the defect was found. */
+const LIVE_LADDER = [
+  { name: "Starter", minMonthlySales: 10, percent: 10 },
+  { name: "Growth", minMonthlySales: 25, percent: 12.5 },
+  { name: "Elite", minMonthlySales: 50, percent: 15 },
+];
+
+/** The programme default those rungs sit under. */
+const PROGRAMME_DEFAULT = 15;
+
+function sales(count: number) {
+  return Array.from({ length: count }, () => ({}));
+}
+
+describe("a tier can only ever raise the rate", () => {
+  it("does not cut the rate on the tenth sale of the month", async () => {
+    // Nine sales pay the promised 15%. The tenth must not pay 10%.
+    seed({ configuredPercent: PROGRAMME_DEFAULT, tiers: LIVE_LADDER, history: sales(10) });
+    expect(await effective()).toEqual({ percent: PROGRAMME_DEFAULT, tierName: null });
+  });
+
+  it("holds that rate across every rung that pays less than it", async () => {
+    for (const count of [9, 10, 24, 25, 49]) {
+      seed({ configuredPercent: PROGRAMME_DEFAULT, tiers: LIVE_LADDER, history: sales(count) });
+      expect(await effective(), `${count} qualifying sales`).toEqual({
+        percent: PROGRAMME_DEFAULT,
+        tierName: null,
+      });
+    }
+  });
+
+  it("reports the top rung once it matches the rate, rather than undercutting it", async () => {
+    seed({ configuredPercent: PROGRAMME_DEFAULT, tiers: LIVE_LADDER, history: sales(50) });
+    expect(await effective()).toEqual({ percent: 15, tierName: "Elite" });
+  });
+
+  it("still promotes the moment a rung genuinely pays more", async () => {
+    // The ladder is not disabled — only its descents are. A rung above the base
+    // rate applies exactly as before, on the sale that earns it.
+    seed({
+      configuredPercent: PROGRAMME_DEFAULT,
+      tiers: [{ name: "Volume", minMonthlySales: 10, percent: 20 }],
+      history: sales(10),
+    });
+    expect(await effective()).toEqual({ percent: 20, tierName: "Volume" });
+  });
+
+  it("never drops an ambassador off a rung they already earned", async () => {
+    // A ladder that descends within itself: Base pays 15% from the first order,
+    // Volume pays 10% at ten. Ten sales must not undo the rung already held.
+    seed({
+      configuredPercent: 9,
+      tiers: [
+        { name: "Base", minMonthlySales: 0, percent: 15 },
+        { name: "Volume", minMonthlySales: 10, percent: 10 },
+      ],
+      history: sales(12),
+    });
+    expect(await effective()).toEqual({ percent: 15, tierName: "Base" });
+  });
+
+  it("leaves an ascending ladder resolving exactly as it always did", async () => {
+    // The negative control for the whole block: nothing above changes what a
+    // correctly-ordered ladder pays at any point on it.
+    for (const [count, expected] of [
+      [0, { percent: 10, tierName: "Starter" }],
+      [4, { percent: 10, tierName: "Starter" }],
+      [5, { percent: 15, tierName: "Silver" }],
+      [19, { percent: 15, tierName: "Silver" }],
+      [20, { percent: 20, tierName: "Gold" }],
+    ] as const) {
+      seed({ configuredPercent: 10, tiers: LADDER, history: sales(count) });
+      expect(await effective(), `${count} qualifying sales`).toEqual(expected);
+    }
   });
 });
