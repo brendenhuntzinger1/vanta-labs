@@ -36,4 +36,14 @@ if [ ! -f "$global_root/typescript/lib/tsserver.js" ]; then
   npm install -g typescript@5 --no-audit --no-fund
 fi
 
+# context7 runs anonymously without a key, and its shared anonymous quota
+# returns "Monthly quota exceeded" as an ordinary tool result rather than a
+# connection error — so it fails invisibly. Say so once, up front.
+if [ -z "${CONTEXT7_API_KEY:-}" ]; then
+  echo "[session-start] warning: CONTEXT7_API_KEY unset — context7 is on the" \
+       "shared anonymous quota and may silently return no docs."
+  echo "[session-start]          version-exact fallback:" \
+       "website/node_modules/next/dist/docs/"
+fi
+
 echo "[session-start] done"
