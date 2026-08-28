@@ -276,3 +276,157 @@ already prescribes. That removes the question rather than answering it.
 
 **Not investigated here.** This lane read the branch's file list only; no code on
 it was reviewed, run, or modified.
+
+---
+
+# Added 2026-08-28 — overnight polish pass
+
+Found while walking the store as a customer and as the owner, and while
+measuring the admin surfaces against a local harness seeded with **20,000
+orders**. Everything in this section was verified by measurement or by a
+production query; none of it was changed, and each entry says why.
+
+The fixes that WERE made that night are in the git history on `main`
+(`0b4b9a2`, eight commits) — this section is only what was deliberately left.
+
+---
+
+## PLB-11 — Eleven duplicate index pairs, and two repo files that disagree about them
+
+**Severity:** P3 · real · write-path cost on the hottest tables
+**Where:** production schema; `src/lib/sql/supabase-advisor-remaining-fixes.sql`
+vs `src/lib/sql/supabase-performance-advisor-verification.sql`
+
+**What is wrong.** Eleven pairs of exactly-equivalent indexes exist in
+production. Every INSERT maintains both members of each pair, and two of the
+pairs are on `orders` — the table every checkout writes to:
+
+```
+admin_credentials   admin_credentials_username_key | idx_admin_credentials_username
+admin_sessions      admin_sessions_token_hash_key  | idx_admin_sessions_token_hash
+ambassadors         ambassadors_referral_code_key  | idx_ambassadors_referral_code
+order_shipments     order_shipments_order_id_key   | idx_order_shipments_order_id
+orders              idx_orders_bulk_discount_tier  | idx_orders_bulk_tier
+orders              idx_orders_customer_email      | orders_customer_email_idx
+partners            partners_auth_user_id_key      | idx_partners_auth_user_id
+partners            partners_referral_code_key     | idx_partners_referral_code
+product_doses       product_doses_..._key          | idx_product_doses_product_slug_suffix
+products            products_slug_key              | idx_products_slug
+referral_orders     referral_orders_order_id_key   | idx_referral_orders_order_id
+```
+
+Confirmed interchangeable, not merely similar: `pg_stat_user_indexes` shows the
+planner using BOTH members of most pairs, which is what identical indexes look
+like in use.
+
+**Why it was not fixed.** The repository already contains the fix and already
+contradicts itself about it:
+
+* `supabase-advisor-remaining-fixes.sql` defines a `drop_index_if_exact_duplicate`
+  helper — which only drops an index when an exact equivalent survives — and
+  calls it for nine of these eleven. It has never been applied, or was applied
+  and then undone.
+* `supabase-performance-advisor-verification.sql` **asserts that ten of the very
+  indexes that file drops still exist.** Applying one file fails the other.
+* `deploy-run-once.sql` and `schema-complete-sync.sql` recreate them with
+  `create index if not exists`, so a drop is undone by the next deploy run
+  unless those files change too.
+
+Resolving that contradiction means editing nine schema files and deciding which
+of the two contradictory records is authoritative. That is a schema decision for
+the owner, not an overnight touch-up, and the cost of leaving it is a few
+percent of insert time — not a defect.
+
+**Recommended:** decide that `supabase-advisor-remaining-fixes.sql` is
+authoritative, apply its section 2, delete the ten assertions from the
+verification file, and remove the duplicate `create index` lines from
+`deploy-run-once.sql`, `schema-complete-sync.sql`, `orders-schema.sql`,
+`partner-system-repair.sql`, `affiliate-program-schema.sql`,
+`partner-portal-schema.sql`, `membership-billing.sql` and both
+performance-advisor files.
+
+---
+
+## PLB-12 — `/admin` costs 2.0s at 20,000 orders, and the admin layout costs ~0.35s on every page
+
+**Severity:** P2 · real · owner-facing, scales linearly with lifetime orders
+**Files:** `src/lib/admin-reconciliation.ts:101`, `src/lib/fulfillment-queues.ts:227`
+
+**Measured** on the local harness with 20,000 paid orders, production build:
+
+```
+/admin                    2.0s   (was 3.0s before the reads were parallelised)
+/admin/reconciliation     2.4s
+/admin/revenue            1.5s
+every other admin page   ~0.4s   <- the shared layout's cost
+storefront pages         ~0.03s  <- for comparison; customers are unaffected
+```
+
+Two lifetime scans of `orders` drive it. `getReconciliationFlags` reads EVERY
+order of every status to compute the flag badge, and `getBucketCounts` reads
+every paid order on the shared admin layout, so it is paid once per admin page
+load. Both are correct — both page to exhaustion and report `truncated` — they
+are simply proportional to lifetime orders. At 100k orders this is ~10s and ~2s.
+
+**Why it was not fixed.** `fulfillment-queues.ts:186-200` already documents the
+answer and calls it what it is: *"A store that sustains more than 25,000 live
+paid orders needs the exception predicates pushed into SQL, which means moving
+the rules out of `fulfillment-buckets.ts` and is a design decision, not a
+constant."* The same holds for the reconciliation rules. Moving both rule sets
+into SQL is real design work with real risk of the SQL and the TypeScript
+drifting apart — not an overnight change, and not a defect today at 19
+production orders.
+
+**What WAS done:** `/admin` now issues its twelve reads in one round instead of
+three, which is pure restructuring and cut 3.0s to 2.0s.
+
+---
+
+## PLB-13 — Admin list pages render one anchor per page of results
+
+**Severity:** P3 · real · admin-only, 2,000 DOM nodes at 50k orders
+**Files:** `src/app/admin/orders/page.tsx:125` and four sibling list pages
+
+`{Array.from({ length: result.pageCount }, ...)}` emits a full `<Link>` per page
+with no windowing, and `pageCount` comes straight from the row total with no
+clamp (`admin-orders.ts:138`). At 50,000 orders and 25 per page that is 2,000
+anchors on one page.
+
+**Why it was not fixed.** It touches five pages' markup for an admin-only
+cosmetic problem, which is more churn than a polish pass should spend. The fix
+is a standard windowed pager (first, last, and ±2 around the current page).
+
+---
+
+## PLB-14 — A declined card is a dead end with no retry control
+
+**Severity:** P3 · real · revenue recovery
+**File:** the secure-payment page, `/checkout/pay/[orderId]`
+
+The decline copy is genuinely good — *"That payment did not go through, and your
+card has not been charged. This is usually the bank declining the transaction
+rather than a problem with your order. Refresh to try again, or use a different
+card."* — and the behaviour behind it is completely correct. Verified end to end
+by driving a real `payment.failed` through the live webhook path: order
+`payment_failed`, reservation `released`, stock returned to 25 with
+`reserved_quantity` 0, `inventory_committed_at` still null, zero
+`referral_orders` and zero `commissions` rows, no confirmation email queued, and
+the coupon's `redemptions_count` NOT burned — a customer whose card declines
+does not lose their coupon.
+
+But the only way to act on it is the browser's own refresh button. There is no
+"Try again" control and no link back to the cart, and a declined card is one of
+the highest-value recovery moments a store has.
+
+**Why it was not fixed.** It is adding new UI, not repairing something broken —
+feature work rather than polish.
+
+---
+
+## PLB-15 — Supabase Auth leaked-password protection is still off
+
+**Severity:** P3 · real · not reachable from this session's tooling
+
+A Supabase **project setting** (Authentication → Passwords → "Prevent use of
+leaked passwords"), not schema and not code, so no migration or commit can turn
+it on. It has to be switched on in the Supabase dashboard.
