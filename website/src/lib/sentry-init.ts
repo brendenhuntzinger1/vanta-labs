@@ -31,6 +31,56 @@ type SentryInitOptions = Parameters<typeof SentryInit>[0];
  *   bill in exchange for performance data we are not asking for yet. Raise
  *   deliberately if performance becomes the question.
  */
+/**
+ * Scripts that in-app browsers INJECT into every page they render.
+ *
+ * These are not ours and we cannot fix them. Instagram's Android WebView
+ * injects `navigation_performance_logger_android`, which posts timing data over
+ * a Java bridge; when the user navigates away the bridge is torn down first, so
+ * its own `beforeunload` handler throws "Error invoking postMessage: Java
+ * object is gone". Sentry sees it only because its automatic instrumentation
+ * wraps addEventListener callbacks and reports a throw from ANY handler,
+ * including one injected by the host app.
+ */
+const IN_APP_BROWSER_INJECTED_SCRIPTS = [
+  "navigation_performance_logger_android",
+  "navigation_performance_logger_ios",
+];
+
+/**
+ * Is this an error thrown by an in-app browser's own injected instrumentation?
+ *
+ * NARROW ON PURPOSE, and keyed on the SCRIPT rather than on the browser. A real
+ * bug that happens to occur in the Instagram or TikTok webview is exactly the
+ * kind this project cares most about — the working agreement calls out in-app
+ * browser behaviour by name — so "the user agent is Instagram" must never be
+ * the reason an event is dropped. What is dropped is an error whose own stack
+ * frames are the host app's injected logger and none of which are ours.
+ *
+ * Why drop rather than sample: this scales with paid social traffic, which is
+ * about to start. One customer in Brazil produced two of these on 2026-08-26
+ * with zero users impacted; a launch campaign produces them by the thousand,
+ * and they would bury the errors that do matter.
+ */
+export function isInAppBrowserInjectedScriptError(event: {
+  exception?: { values?: Array<{ stacktrace?: { frames?: Array<{ filename?: string }> } }> };
+}): boolean {
+  const frames = (event.exception?.values ?? [])
+    .flatMap((value) => value.stacktrace?.frames ?? []);
+  if (frames.length === 0) return false;
+
+  const filenames = frames.map((frame) => String(frame.filename ?? ""));
+  const fromInjectedScript = filenames.some((name) =>
+    IN_APP_BROWSER_INJECTED_SCRIPTS.some((script) => name.includes(script)),
+  );
+  if (!fromInjectedScript) return false;
+
+  // If any frame is OUR bundle, the injected script may merely be in the path
+  // of a real bug of ours. Keep it.
+  const touchesOurCode = filenames.some((name) => name.includes("/_next/"));
+  return !touchesOurCode;
+}
+
 export function baseSentryOptions(): SentryInitOptions & { dsn: string } {
   const dsn = sentryDsn();
   if (!dsn) throw new Error("baseSentryOptions called without a DSN");
@@ -63,6 +113,9 @@ export function baseSentryOptions(): SentryInitOptions & { dsn: string } {
      */
     beforeSend(event) {
       try {
+        // Dropped BEFORE scrubbing: there is nothing to learn from it, and it
+        // arrives in proportion to paid social traffic.
+        if (isInAppBrowserInjectedScriptError(event)) return null;
         return scrubEvent(event);
       } catch {
         return null;

@@ -4,7 +4,7 @@ import { grantMonthlyStoreCreditSweep, runMembershipBillingSweep } from "@/lib/m
 import { runAbandonedCartSweep } from "@/lib/cart-recovery";
 import { autoApproveEligibleCommissions } from "@/lib/partner-portal";
 import { repairMissingCommissionAccruals } from "@/lib/commission-accrual-repair";
-import { expireStaleReservations } from "@/lib/inventory-reservation";
+import { expireStaleReservations, isTransientAuthRejection } from "@/lib/inventory-reservation";
 import { releaseAbandonedTenderHolds } from "@/lib/tender-reservation";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
 import { reapStrandedOrderEmails } from "@/lib/email/order-email-reaper";
@@ -107,6 +107,41 @@ const SWEEP_DEADLINE_MS = 50_000;
 /** A sweep that overruns overruns every tick. Report the condition, once. */
 const SWEEP_TIMEOUT_ALERT_DEDUPE_MS = 6 * 60 * 60 * 1000;
 
+/** One retry after a momentary auth refusal, before the job counts as failed. */
+const JOB_AUTH_RETRY_DELAY_MS = 250;
+
+/**
+ * Run one sweep job, retrying ONCE if Supabase refused it before it could run.
+ *
+ * PGRST303 "JWT issued at future" is a clock skew between the Vercel lambda and
+ * Supabase's PostgREST, and it is REAL here — production raised three of these
+ * on 2026-08-28, each killing a DIFFERENT job (commission_accrual_repair,
+ * tender_hold_release, store_credit), plus two more the day before on
+ * expire_stale_reservations. A different job each time is the signature of an
+ * infrastructure blip hitting whatever happened to be running, not a bug in any
+ * one job.
+ *
+ * inventory-reservation.ts already recognised this exact failure and retried it
+ * (rpcWithAuthRetry, and the isTransientAuthRejection reused here) — but only
+ * for its three RPCs. Every other job in this sweep had no such protection, so
+ * a blip that inventory shrugged off took a whole job out for thirty minutes.
+ *
+ * Retrying a whole job is safe by this route's own stated invariant: "each is
+ * individually idempotent, so the next tick simply picks them up again". One
+ * retry, not a loop, for the same reason inventory gives: hammering an edge
+ * that is already refusing makes an outage worse rather than shorter, and two
+ * consecutive refusals are a real incident that should alert.
+ */
+async function runJobWithAuthRetry(name: JobName): Promise<unknown> {
+  try {
+    return await (JOBS[name].run() as Promise<unknown>);
+  } catch (error) {
+    if (!isTransientAuthRejection(error)) throw error;
+    await new Promise((resolve) => setTimeout(resolve, JOB_AUTH_RETRY_DELAY_MS));
+    return await (JOBS[name].run() as Promise<unknown>);
+  }
+}
+
 export async function GET(request: Request) {
   const secret = process.env.CRON_SECRET;
   const authHeader = request.headers.get("authorization") ?? "";
@@ -130,7 +165,7 @@ export async function GET(request: Request) {
   const unfinished = new Set<JobName>(names);
   const jobs = names.map((name, index) =>
     Promise.resolve()
-      .then(() => JOBS[name].run() as Promise<unknown>)
+      .then(() => runJobWithAuthRetry(name))
       .then(
         (value) => { settled[index] = { status: "fulfilled", value }; },
         (reason: unknown) => { settled[index] = { status: "rejected", reason }; },

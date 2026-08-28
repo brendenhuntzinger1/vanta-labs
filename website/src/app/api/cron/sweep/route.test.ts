@@ -44,7 +44,18 @@ vi.mock("@/lib/membership-billing", () => ({
 vi.mock("@/lib/cart-recovery", () => ({ runAbandonedCartSweep: () => cartRecovery() }));
 vi.mock("@/lib/partner-portal", () => ({ autoApproveEligibleCommissions: () => commissions() }));
 vi.mock("@/lib/commission-accrual-repair", () => ({ repairMissingCommissionAccruals: () => commissionAccrualRepair() }));
-vi.mock("@/lib/inventory-reservation", () => ({ expireStaleReservations: () => reservations() }));
+vi.mock("@/lib/inventory-reservation", () => ({
+  expireStaleReservations: () => reservations(),
+  // The REAL predicate, not a stub: the retry it gates is the behaviour under
+  // test, and a stub that always said false (or always true) would make the
+  // retry cases pass for the wrong reason.
+  isTransientAuthRejection: (error: unknown) => {
+    const message = error instanceof Error
+      ? error.message
+      : String((error as { message?: unknown } | null)?.message ?? "");
+    return /\bjwt\b/i.test(message);
+  },
+}));
 vi.mock("@/lib/tender-reservation", () => ({ releaseAbandonedTenderHolds: () => tenderHolds() }));
 vi.mock("@/lib/email/retry-queue", () => ({ retryPendingEmails: () => emails() }));
 vi.mock("@/lib/express-reconcile", () => ({
@@ -155,6 +166,57 @@ describe("the scheduled sweep", () => {
     // The response body took the same path and had the same bug.
     expect(String(body.commissionAccrualRepair.error)).toContain("42501");
     expect(String(body.commissionAccrualRepair.error)).not.toBe("[object Object]");
+  });
+
+  // A MOMENTARY AUTH REFUSAL MUST NOT COST A WHOLE JOB FOR THIRTY MINUTES.
+  //
+  // PGRST303 "JWT issued at future" is a clock skew between the Vercel lambda
+  // and Supabase. Production raised three on 2026-08-28, each killing a
+  // DIFFERENT job (commission_accrual_repair, tender_hold_release,
+  // store_credit), plus two the day before on expire_stale_reservations. A
+  // different job each time is an infrastructure blip hitting whatever was
+  // running — not a bug in any one job.
+  //
+  // inventory-reservation.ts already retried this exact failure, but only for
+  // its own three RPCs; every other job was unprotected.
+  describe("a momentary auth refusal", () => {
+    it("is retried once and the job then succeeds, with no alert", async () => {
+      storeCredit.mockRejectedValueOnce({ code: "PGRST303", message: "JWT issued at future" });
+
+      const response = await callSweep();
+      const body = await response.json();
+
+      // Ran twice: the refusal, then the retry that worked.
+      expect(storeCredit).toHaveBeenCalledTimes(2);
+      expect(body.storeCredit).toEqual({ job: "storeCredit" });
+      // Nothing to tell the operator — it recovered on its own.
+      expect(recordSystemAlert).not.toHaveBeenCalled();
+    });
+
+    it("still alerts when the refusal persists, rather than hiding an outage", async () => {
+      const refusal = { code: "PGRST303", message: "JWT issued at future" };
+      storeCredit.mockRejectedValueOnce(refusal).mockRejectedValueOnce(refusal);
+
+      await callSweep();
+
+      expect(storeCredit).toHaveBeenCalledTimes(2);
+      expect(recordSystemAlert).toHaveBeenCalledTimes(1);
+      const alert = recordSystemAlert.mock.calls[0][0];
+      expect(alert.message).toContain("store_credit");
+      // And it says WHY, which is how this was diagnosed in the first place.
+      expect(String((alert.context as Record<string, unknown>).store_credit)).toContain("PGRST303");
+    });
+
+    it("does NOT retry an ordinary failure — one retry is for auth, not for bugs", async () => {
+      // A logic error must fail fast and loudly. Retrying it would double every
+      // side effect the job had already performed before throwing.
+      cartRecovery.mockRejectedValueOnce(new Error("cannot read property of undefined"));
+
+      await callSweep();
+
+      expect(cartRecovery).toHaveBeenCalledTimes(1);
+      expect(recordSystemAlert).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("alerts on express-intent expiry too, rather than dropping it silently", async () => {
