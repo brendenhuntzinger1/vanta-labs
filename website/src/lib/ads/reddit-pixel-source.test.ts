@@ -203,8 +203,17 @@ describe("the Reddit pixel is gated on consent, exactly like the others", () => 
   const snap = read(SNAP_PIXEL);
 
   it("reads the same stored consent key as every other tracker", () => {
-    expect(reddit).toContain('"vl_cookie_consent"');
-    expect(reddit).toContain('window.localStorage.getItem(STORAGE_KEY) === "accepted"');
+    // Asserted as a SHARED IMPORT, not as a matching string literal.
+    //
+    // This used to pin `"vl_cookie_consent"` inside this one file, which is
+    // precisely the thing that made the gate unsafe to change: the key was
+    // redeclared in eight files, the event name in six, and a test that pins
+    // one copy of a magic string cannot tell "every tracker agrees" from "this
+    // tracker happens to contain the same characters". Now there is one
+    // declaration, and the question is whether this component reaches it.
+    expect(reddit).toContain('from "@/lib/cookie-consent-client"');
+    expect(reddit).toContain("hasAcceptedConsent()");
+    expect(reddit).not.toContain('"vl_cookie_consent"');
   });
 
   it("renders nothing at all until consent is recorded", () => {
@@ -216,13 +225,18 @@ describe("the Reddit pixel is gated on consent, exactly like the others", () => 
   });
 
   it("treats blocked storage as a refusal, not as consent", () => {
-    expect(reddit).toMatch(/catch\s*\{[\s\S]*?return false;/);
+    // The rule now lives in the shared module, so it is asserted there — once,
+    // for every tracker — rather than four times over four copies.
+    // cookie-consent-client.test.ts proves the same rule behaviourally.
+    const shared = read(join(SRC, "lib", "cookie-consent-client.ts"));
+    expect(shared).toMatch(/catch\s*\{[\s\S]*?return false;/);
   });
 
   it("listens for consent being granted later in the same session", () => {
     // Otherwise accepting the banner does nothing until a full page reload.
-    expect(reddit).toContain('"vanta:cookie-consent"');
-    expect(reddit).toContain('window.addEventListener(CONSENT_EVENT, sync)');
+    expect(reddit).toContain("subscribeToConsent(sync)");
+    const shared = read(join(SRC, "lib", "cookie-consent-client.ts"));
+    expect(shared).toContain('CONSENT_EVENT = "vanta:cookie-consent"');
   });
 
   it("starts from the same default as the Snap pixel: not accepted", () => {

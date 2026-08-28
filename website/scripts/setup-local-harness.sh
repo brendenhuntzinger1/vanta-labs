@@ -42,6 +42,10 @@ SQL
 echo "==> base schema"
 $PSQL -q -f "$HERE/src/lib/sql/deploy-run-once.sql" >/tmp/vl-schema.log 2>&1 || true
 
+# Order matters. A file that SUPERSEDES an earlier definition must come after
+# the file it supersedes, and nothing applied later may redefine it — see
+# harness-prod-parity-functions.sql, which used to re-create admin_ops_summary
+# with its pre-fix body after the corrected one had already been applied.
 echo "==> feature schema files"
 for f in inventory-reservations inventory-ledger order-email-log v1.1-features \
          fulfillment-batches self-fulfillment-shippo membership-tiers-seed express-checkout \
@@ -52,7 +56,9 @@ for f in inventory-reservations inventory-ledger order-email-log v1.1-features \
          shipping-protection-persistence dynamic-sales-tax product-shipping-weights \
          product-cost-profit coupon-private-flag membership-billing launch-audit-indexes \
          add-order-items-order-id-index BASELINE-live-functions-2026-08-25 \
-         admin-control-current-view; do
+         admin-control-current-view \
+         inventory-enforce-positive-stock inventory-return-path \
+         add-inventory-restock-claim; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 
@@ -67,11 +73,63 @@ $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-columns.sql"     >>/tmp/vl-sc
 $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-constraints.sql" >>/tmp/vl-schema.log 2>&1 || true
 $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-functions.sql"   >>/tmp/vl-schema.log 2>&1 || true
 
+# LAST, and deliberately so. These rollups read columns the parity step above
+# adds (orders.refund_amount among them), so applying them with the feature
+# files fails on a fresh database — and they own admin_ops_summary, which
+# harness-prod-parity-functions.sql used to re-create with its pre-fix gross
+# body. Applying them here means the corrected definition is the one that wins.
+echo "==> revenue rollups (net revenue definition — must apply AFTER parity columns)"
+$PSQL -q -f "$HERE/src/lib/sql/admin-dashboard-rollups.sql"         >>/tmp/vl-schema.log 2>&1 || true
+$PSQL -q -f "$HERE/src/lib/sql/admin-partner-rollups.sql"           >>/tmp/vl-schema.log 2>&1 || true
+
 # Seed. Runbook section 3 described the required shapes but nothing applied them,
 # so a fresh harness came up with an empty catalogue and every checkout case was
 # unreachable. harness-seed.sql is synthetic and re-runnable (it truncates first).
 echo "==> seed (synthetic shapes, never production data)"
 $PSQL -q -f "$HERE/src/lib/sql/harness-seed.sql" >>/tmp/vl-schema.log 2>&1 || true
+
+# ---------------------------------------------------------------------------
+# PARITY SELF-CHECK.
+#
+# Every apply above ends in `|| true`, so a file that failed — or one that was
+# never listed at all — left the harness quietly wrong. That is how the harness
+# came to run the PRE-FIX bodies of adjust_inventory_on_sale and
+# reserve_inventory and to lack orders.inventory_restocked_at entirely: every
+# cancel/refund took the claim-failed branch and restocked nothing, so a
+# browser test of "cancel a paid order, confirm stock returns" could only pass
+# by asserting the bug.
+#
+# These assertions are behavioural, not a file list: they check the shape the
+# app actually depends on, so adding a superseding migration without listing it
+# above fails here instead of silently degrading every verification run.
+# ---------------------------------------------------------------------------
+echo "==> parity self-check"
+parity_failures=0
+check() { # name, sql returning boolean
+  if [ "$($PSQL -tAc "$2" 2>/dev/null | tr -d '[:space:]')" = "t" ]; then
+    echo "    ok   $1"
+  else
+    echo "    FAIL $1"
+    parity_failures=$((parity_failures + 1))
+  fi
+}
+
+check "orders.inventory_restocked_at exists (cancel/refund restock claim)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='inventory_restocked_at');"
+check "adjust_inventory_on_sale maintains stock_status (inventory-return-path.sql)" \
+  "select coalesce(bool_or(prosrc like '%stock_status%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='adjust_inventory_on_sale';"
+check "reserve_inventory enforces untracked-but-stocked (inventory-enforce-positive-stock.sql)" \
+  "select coalesce(bool_or(prosrc like '%inventory_quantity > 0%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='reserve_inventory';"
+check "admin_ops_summary sums NET revenue, not gross amount_paid (admin-dashboard-rollups.sql)" \
+  "select coalesce(bool_or(prosrc like '%refund_amount%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='admin_ops_summary';"
+
+if [ "$parity_failures" -ne 0 ]; then
+  echo ""
+  echo "!!  $parity_failures parity check(s) failed. The harness does NOT match production."
+  echo "!!  Verifying customer-facing behaviour against it would test the wrong system."
+  echo "!!  See /tmp/vl-schema.log for the apply errors."
+  exit 1
+fi
 
 echo "==> tables: $($PSQL -tAc "select count(*) from information_schema.tables where table_schema='public' and table_type='BASE TABLE';") (production: 68)"
 echo "==> products seeded: $($PSQL -tAc "select count(*) from products;")"

@@ -4,6 +4,7 @@ import { Analytics } from "@vercel/analytics/next";
 import { useEffect, useState } from "react";
 
 import { browserAdsReportingAllowed } from "@/lib/ads/ads-environment";
+import { hasAcceptedConsent, subscribeToConsent } from "@/lib/cookie-consent-client";
 
 /**
  * Vercel Analytics, behind the same consent gate as everything else.
@@ -20,18 +21,7 @@ import { browserAdsReportingAllowed } from "@/lib/ads/ads-environment";
  * This changes WHEN an existing first-party measurement script loads. It does
  * not add, enable or prepare any advertising tracker.
  */
-const STORAGE_KEY = "vl_cookie_consent";
-const CONSENT_EVENT = "vanta:cookie-consent";
 
-function hasAccepted(): boolean {
-  try {
-    return window.localStorage.getItem(STORAGE_KEY) === "accepted";
-  } catch {
-    // Storage blocked (private mode, some in-app browsers). Absence of a
-    // recorded "yes" is a no.
-    return false;
-  }
-}
 
 export function ConsentedAnalytics() {
   const [accepted, setAccepted] = useState(false);
@@ -56,17 +46,12 @@ export function ConsentedAnalytics() {
   }, []);
 
   useEffect(() => {
-    const sync = () => setAccepted(hasAccepted());
+    const sync = () => setAccepted(hasAcceptedConsent());
     sync();
 
     // The banner fires this on accept/decline; `storage` covers a choice made
     // in another tab.
-    window.addEventListener(CONSENT_EVENT, sync);
-    window.addEventListener("storage", sync);
-    return () => {
-      window.removeEventListener(CONSENT_EVENT, sync);
-      window.removeEventListener("storage", sync);
-    };
+    return subscribeToConsent(sync);
   }, []);
 
   if (!adsAllowed) return null;

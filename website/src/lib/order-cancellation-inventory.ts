@@ -122,7 +122,15 @@ export async function returnInventoryForCancelledOrder(
 ): Promise<CancellationInventoryOutcome> {
   const { data, error } = await supabaseAdmin
     .from("orders")
-    .select("order_id, paid_side_effects_at, order_items(product_id, variant_id, quantity)")
+    // NO `variant_id`: order_items has no such column in production, and the
+    // embedded select made this read fail with PostgREST 42703 — so EVERY
+    // cancellation took the error branch below, raised a critical alert and
+    // restocked nothing. The variant is encoded inside product_id as
+    // `slug::variantId` and parsed by parseOrderItemRef, which is why nothing
+    // downstream ever missed the field (OrderItemRef does not even declare it).
+    // Caught by supabase-schema-parity.test.ts once it began checking the
+    // columns of EMBEDDED resources rather than discarding them.
+    .select("order_id, paid_side_effects_at, order_items(product_id, quantity)")
     .eq("order_id", orderId)
     .maybeSingle();
 

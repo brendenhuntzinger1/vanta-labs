@@ -71,7 +71,12 @@ function freshOrder(overrides: Partial<OrderRow> = {}): OrderRow {
     customer_name: "A Buyer",
     tracking_number: null,
     carrier: null,
-    order_items: [{ product_id: "bpc-157", variant_id: "dose-5mg", quantity: 4 }],
+    // Production's order_items has NO variant_id column. The variant travels
+    // inside product_id as `slug::variantId` (parseOrderItemRef). This fixture
+    // used to invent the column, so the suite proved the reader worked against
+    // a schema production does not have — while the real embedded select was
+    // failing 42703 in production and restocking nothing.
+    order_items: [{ product_id: "bpc-157::dose-5mg", quantity: 4 }],
     ...overrides,
   };
 }
@@ -183,7 +188,7 @@ describe("every path that cancels an order returns its stock", () => {
     expect(result.ok).toBe(true);
     expect(db.order.fulfillment_status).toBe("cancelled");
     expect(db.restocked).toHaveLength(1);
-    expect(db.restocked[0]).toEqual([{ product_id: "bpc-157", variant_id: "dose-5mg", quantity: 4 }]);
+    expect(db.restocked[0]).toEqual([{ product_id: "bpc-157::dose-5mg", quantity: 4 }]);
   });
 
   it("covers the BULK cancel, which never called the restock at all", async () => {

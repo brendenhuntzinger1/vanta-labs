@@ -16,7 +16,6 @@ import { isBacWater } from "@/lib/bac-water";
 import { MAX_UNITS_PER_ORDER_LINE } from "@/lib/purchase-limits";
 // Free-shipping threshold comes from the shared shipping module so the "Free
 // Ship" badge can never disagree with what checkout actually charges.
-import { FREE_SHIPPING_THRESHOLD } from "@/lib/shipping";
 import { RecentlyViewed } from "@/components/recently-viewed";
 import { BacWaterAccessoryBlock, FrequentlyBoughtTogether } from "@/components/bac-water-upsell";
 import { CoaLibraryNotice } from "@/components/coa-library-notice";
@@ -171,7 +170,7 @@ export function ProductDetailClient({
   bacWater?: Product | null;
   coaDocuments?: PublicCoaDocument[];
 }) {
-  const { addToCart, membershipTiers, memberDiscountPercent } = useCart();
+  const { addToCart, membershipTiers, memberDiscountPercent, shippingConfig } = useCart();
   const defaultDose = product.doses?.find((dose) => dose.isDefault) ?? product.doses?.[0] ?? null;
   const [selectedDoseId, setSelectedDoseId] = useState<string | null>(defaultDose?.id ?? null);
   // The shopper's chosen quantity, BEFORE it is clamped to what is on the
@@ -806,7 +805,7 @@ export function ProductDetailClient({
                     const exceedsStock = option.quantity > maxSelectableQuantity;
                     const rate = bundleDiscountRate(option.quantity, bundleConfig);
                     const lineTotal = getBundleDiscountedLineTotal(unitPrice, option.quantity, bundleConfig);
-                    const freeShip = lineTotal >= FREE_SHIPPING_THRESHOLD;
+                    const freeShip = lineTotal >= shippingConfig.freeShippingThreshold;
                     return (
                       <button
                         key={option.quantity}

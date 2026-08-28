@@ -8,7 +8,6 @@ import { formatCartCurrency, useCart, getShippingProgress } from "@/components/c
 import { bundleDiscountRate, getBundleDiscountedLineTotal, getNextBundleTier } from "@/lib/bundle-pricing";
 import { bestPaidTier, computeCartMembershipValue } from "@/lib/member-pricing";
 import { calculateShippingProtectionFee } from "@/lib/shipping-protection";
-import { FREE_SHIPPING_THRESHOLD } from "@/lib/shipping";
 import { EXPRESS_CHECKOUT_ENABLED } from "@/lib/express-checkout";
 import { ExpressApplePayButton } from "@/components/express-apple-pay-button";
 import { BacWaterCartCheckboxes } from "@/components/bac-water-upsell";
@@ -657,7 +656,7 @@ export function CartDrawer() {
                   <span className="text-[2rem] font-semibold leading-none tracking-tight text-white tabular-nums">{formatCartCurrency(total)}</span>
                 </div>
                 <p className="mt-3 text-[11px] leading-relaxed text-zinc-600">
-                  Shipping &amp; sales tax are calculated from your address at payment. Free shipping over {formatCartCurrency(FREE_SHIPPING_THRESHOLD)}.
+                  Shipping &amp; sales tax are calculated from your address at payment. Free shipping over {formatCartCurrency(freeShipThreshold)}.
                 </p>
               </div>
             </div>
@@ -683,7 +682,7 @@ export function CartDrawer() {
                 </svg>
                 <span>
                   Apple Pay adds <span className="text-zinc-300">sales tax</span> and shipping from your delivery address, so your final total there may be higher.
-                  {" "}Free shipping over {formatCartCurrency(FREE_SHIPPING_THRESHOLD)}.
+                  {" "}Free shipping over {formatCartCurrency(freeShipThreshold)}.
                 </span>
               </p>
             ) : (
