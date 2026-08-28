@@ -79,20 +79,45 @@ need no per-session install:
   writing against an unfamiliar API, alongside `node_modules/next/dist/docs/`.
   It reaches a hosted service (`mcp.context7.com`), so queries leave the
   machine — library names only, never repository content.
+  It runs anonymously unless `CONTEXT7_API_KEY` is set, and the anonymous tier
+  is a shared monthly quota that does run out — when it does, every lookup
+  returns "Monthly quota exceeded" rather than failing loudly at connect time.
+  Set the key in the `vanta` environment if you rely on it; until then fall
+  back to `website/node_modules/next/dist/docs/`, which is version-exact
+  anyway.
 - **typescript-lsp** — go-to-definition, find-references and live type errors
   across `.ts/.tsx/.js/.jsx`. Resolved by the type system rather than by text
   match, so it finds every real call site and no false ones.
 
-**typescript-lsp needs a binary the settings file cannot carry.** The plugin is
-enabled by the checked-in settings, but the language server itself is a global
-npm package:
+**typescript-lsp needs a TypeScript in the workspace, not a global one.** The
+plugin is enabled by the checked-in settings and the marketplace entry carries
+its own `lspServers` config, so nothing is missing on the plugin side. Two
+things have to be true at session start:
 
-    npm install -g typescript-language-server typescript
+    npm install -g typescript-language-server   # the server binary
+    cd website && npm install                   # the tsserver it drives
 
-The cloud container is ephemeral, so this must live in the `vanta` environment's
-setup script next to the Superpowers install — otherwise the plugin loads with
-nothing behind it and its features silently do nothing. If go-to-definition is
-unavailable, check for the binary before assuming the plugin is broken.
+The second line is the one that matters and the one that is easy to miss.
+`typescript-language-server` resolves TypeScript from the **workspace**, so with
+no `website/node_modules` it exits during `initialize` with "Could not find a
+valid TypeScript installation" and every LSP feature silently does nothing.
+
+A global `typescript` does not rescue this, and installing one is actively
+misleading: bare `npm install -g typescript` now resolves to TypeScript 7 — the
+native port — which ships `tsc.js` and no `lib/tsserver.js`, and whose `bin`
+exposes only `tsc`. It cannot back a language server at all. `website`'s own
+`typescript: ^5` (5.9.3) is what the server needs, and a plain `npm install`
+there supplies it.
+
+The cloud container is ephemeral, so the `website` install has to live in the
+`vanta` environment's setup script next to the Superpowers install, or the LSP
+is dead in every fresh session. The client is spawned once at session start:
+installing deps mid-session fixes the workspace but not the running session, so
+restart it afterwards.
+
+To tell a dead server from a broken plugin: `ps aux | grep
+typescript-language-server`. No process means it exited at startup, and the
+cause is almost always a missing `website/node_modules`.
 
 ## Other tooling
 
