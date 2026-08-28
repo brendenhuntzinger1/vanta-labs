@@ -59,23 +59,27 @@ retained partial-refund revenue.
 
 ---
 
-## 2. One `admin_control` row — the sales-tax setting
+## 2. One control setting — sales tax as profit
 
 **This is the one that decides whether your profit numbers actually change.**
 
 The code default for `count_sales_tax_as_profit` is now `false`
 (`admin-control.ts`). **That default is only consulted when the key is absent.**
 The Control Center writes this key on every save of its Profit section
-(`admin-control-center-client.tsx:308`), and its client-side default is `true` —
-so if that page has ever been saved, `admin_control` holds `true` and the code
+(`admin-control-center-client.tsx:350`), and its client-side default is `true` —
+so if that page has ever been saved, the control store holds `true` and the code
 change does nothing at all.
 
 **Two ways to apply it, your choice:**
 
 - **Through the UI (no SQL, recommended):** Control Center → Profit Protection →
   turn *Count sales tax as profit* **off** → Save.
-- **By SQL:** run query (c) below to see the current value first, then the
-  update.
+- **By SQL:** there is nothing to UPDATE. The control store is append-only —
+  every save INSERTs a row into `admin_audit_logs` with
+  `action = 'admin_control_upsert'`, and the `admin_control_current` view
+  resolves the newest row per key. Changing the value means appending a new
+  one, which is exactly what the Control Center does. Use query (c) below to
+  read the value in force; make the change through the UI.
 
 **Effect.** Every profit figure drops by the sales tax on every order —
 dashboard, 30-day tile, per-order profit panel, CSV export. That is the point:
@@ -110,10 +114,13 @@ where payment_status in ('paid', 'partially_refunded', 'refunded')
 **(c) What is the sales-tax setting actually set to right now?**
 
 ```sql
-select section, key, value
-from public.admin_control
-where section = 'profit'
-order by key;
+select target_table as section,
+       target_id    as key,
+       metadata->>'value' as value,
+       created_at
+from public.admin_control_current
+where target_table = 'profit'
+order by target_id;
 ```
 
 If no `count_sales_tax_as_profit` row comes back, the code default now applies
@@ -138,9 +145,11 @@ Worth stating plainly, since it was the condition you set:
 
 - **No `UPDATE` to any order.** Every change above is to how orders are *read*.
 - **No backfill.** Nothing recomputes a stored figure.
-- **The one row that changes is a setting**, not a record — `admin_control`,
-  section `profit`, key `count_sales_tax_as_profit`. It is reversible by
-  flipping it back.
+- **The one row that changes is a setting**, not a record — the control store
+  (`admin_audit_logs`, `action = 'admin_control_upsert'`, surfaced by the
+  `admin_control_current` view), section `profit`, key
+  `count_sales_tax_as_profit`. It is reversible by flipping it back, which
+  appends another row rather than overwriting this one.
 - `orders.shipping_profit_cents` remains `NULL` on manually-corrected orders
   (finding F-14). Fixing that *would* need a data change and is deliberately
   **not** proposed here.

@@ -4,9 +4,12 @@
 // not two hand-synced copies, so client/server totals can never drift apart
 // and trip the "Altered total detected" check.
 //
-// There is intentionally NO service/handling fee: the only charges added to
-// merchandise are shipping (when under the free-shipping threshold) and sales
-// tax. Do not reintroduce a handling/service fee here.
+// THIS MODULE adds no service/handling fee — shipping and sales tax are the
+// only charges it computes, and a handling fee must not be reintroduced here.
+// It is not a claim about the order total: the optional Shipping Protection
+// add-on and the card Service Fee are separate, separately disclosed line items
+// added in quote-order.ts. This used to read as the broader promise, which the
+// charged total has not matched since either of those shipped.
 
 export const FREE_SHIPPING_THRESHOLD = 200;
 export const DOMESTIC_SHIPPING_FEE = 15;

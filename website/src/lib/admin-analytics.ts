@@ -1,5 +1,6 @@
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { isRevenueOrderStatus, isSaleOrder, netOrderRevenue } from "@/lib/ledger";
+import { readAllRowsBounded } from "@/lib/supabase-page";
 
 const ONLINE_WINDOW_MINUTES = 5;
 
@@ -16,6 +17,14 @@ export async function getCurrentOnlineVisitorCount() {
     .gte("created_at", onlineWindowStartIso())
     .in("event_type", ["session_start", "page_view"])
     .not("session_id", "is", null)
+    // A CEILING ON MEMORY, NOT A GUARANTEE OF EXACTNESS. PostgREST's
+    // `db-max-rows` (Supabase ships it at 1,000 — see supabase-page.ts) caps
+    // every response regardless of what is asked for, so the real ceiling on
+    // this read is that setting, not this number, and a larger literal would
+    // buy headroom that does not exist. Unlike the money reads this one is not
+    // paged: an exact distinct count needs a `count(distinct session_id)` RPC,
+    // and a five-minute window of session_start/page_view rows has never come
+    // near either bound.
     .limit(5000);
 
   if (error) {
@@ -32,10 +41,16 @@ export async function getCurrentOnlineVisitorCount() {
   return sessions.size;
 }
 
+// UTC, NOT THE SERVER'S LOCAL MIDNIGHT. The two other surfaces that put a
+// "Today" figure on the same screens both cut the day in UTC —
+// admin-revenue.getRevenueMetrics (Date.UTC(...)) and
+// admin-profit.getProfitWindowMetrics (the ISO date slice) — and this one used
+// `setHours(0,0,0,0)`. Identical wherever TZ is UTC (which production is), and
+// silently a different day anywhere else, which is exactly the kind of
+// disagreement between two tiles on one dashboard that nobody can explain.
 function dayStartIso() {
   const date = new Date();
-  date.setHours(0, 0, 0, 0);
-  return date.toISOString();
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate())).toISOString();
 }
 
 function daysAgoIso(days: number) {
@@ -125,57 +140,70 @@ function revenueFromRows(rows: RevenueRow[]) {
   };
 }
 
+const REVENUE_COLUMNS = "amount_paid, refund_amount, payment_status, order_type, paid_at, created_at";
+
+// Ceiling on one read, not a definition of the answer — the same one
+// admin-revenue.ts puts on its fallback aggregation.
+const MAX_REVENUE_ORDERS = 200_000;
+
+// PAGED, LIKE EVERY OTHER READ THAT FEEDS A MONEY FIGURE.
+//
+// These four selects carried no `.range()` and no `.limit()`, which is not the
+// same as unbounded: PostgREST caps every response at its `db-max-rows`
+// (Supabase's default is 1,000) and says nothing when it does. admin-profit.ts
+// records reproducing exactly that — 1,500 orders against a 1,000-row cap
+// reported a third less money with no error and no warning — and every other
+// financial read on this branch (admin-profit, admin-revenue, admin-tax-report)
+// pages to exhaustion for it. These two functions were the last that did not,
+// and they feed the "Revenue · 30d" tile on /admin and the metrics API.
+//
+// `.order("id")` is the deterministic tiebreak paging needs; paid_at and
+// created_at are not unique, so ordering on those alone could repeat or skip
+// rows between pages.
+function revenueSelect() {
+  return supabaseAdmin.from("orders").select(REVENUE_COLUMNS);
+}
+
+function pageRevenueRows(
+  build: (query: ReturnType<typeof revenueSelect>) => ReturnType<typeof revenueSelect>,
+  label: string,
+) {
+  return readAllRowsBounded<RevenueRow>(
+    (from, to) =>
+      build(revenueSelect())
+        .order("id", { ascending: true })
+        .range(from, to) as unknown as PromiseLike<{ data: RevenueRow[] | null; error: { message?: string } | null }>,
+    { maxRows: MAX_REVENUE_ORDERS, label },
+  );
+}
+
 export async function getRevenueWindowMetrics() {
   const monthStartIso = daysAgoIso(30);
 
-  const [{ data: paidRows, error: paidError }, { data: fallbackRows, error: fallbackError }] = await Promise.all([
-    supabaseAdmin
-      .from("orders")
-      .select("amount_paid, refund_amount, payment_status, order_type, paid_at, created_at")
-      .gte("paid_at", monthStartIso),
-    supabaseAdmin
-      .from("orders")
-      .select("amount_paid, refund_amount, payment_status, order_type, paid_at, created_at")
-      .is("paid_at", null)
-      .gte("created_at", monthStartIso),
+  const [paid, fallback] = await Promise.all([
+    pageRevenueRows((q) => q.gte("paid_at", monthStartIso), "revenue window read"),
+    pageRevenueRows((q) => q.is("paid_at", null).gte("created_at", monthStartIso), "revenue window fallback read"),
   ]);
 
-  if (paidError) {
-    throw paidError;
-  }
-
-  if (fallbackError) {
-    throw fallbackError;
-  }
-
-  const allRows = [...(paidRows ?? []), ...(fallbackRows ?? [])] as RevenueRow[];
-  return revenueFromRows(allRows);
+  return {
+    ...revenueFromRows([...paid.rows, ...fallback.rows]),
+    // Reported, not absorbed: a smaller number presented as the whole story is
+    // the failure mode the pager exists to end. /admin renders it next to the
+    // profit report's own flag.
+    truncated: paid.truncated || fallback.truncated,
+  };
 }
 
 async function getRevenueRowsInRange(input: RevenueRangeInput) {
-  const [{ data: paidRows, error: paidError }, { data: fallbackRows, error: fallbackError }] = await Promise.all([
-    supabaseAdmin
-      .from("orders")
-      .select("amount_paid, refund_amount, payment_status, order_type, paid_at, created_at")
-      .gte("paid_at", input.fromIso)
-      .lte("paid_at", input.toIso),
-    supabaseAdmin
-      .from("orders")
-      .select("amount_paid, refund_amount, payment_status, order_type, paid_at, created_at")
-      .is("paid_at", null)
-      .gte("created_at", input.fromIso)
-      .lte("created_at", input.toIso),
+  const [paid, fallback] = await Promise.all([
+    pageRevenueRows((q) => q.gte("paid_at", input.fromIso).lte("paid_at", input.toIso), "revenue trend read"),
+    pageRevenueRows(
+      (q) => q.is("paid_at", null).gte("created_at", input.fromIso).lte("created_at", input.toIso),
+      "revenue trend fallback read",
+    ),
   ]);
 
-  if (paidError) {
-    throw paidError;
-  }
-
-  if (fallbackError) {
-    throw fallbackError;
-  }
-
-  return [...(paidRows ?? []), ...(fallbackRows ?? [])] as RevenueRow[];
+  return [...paid.rows, ...fallback.rows];
 }
 
 function isoDay(value: Date) {

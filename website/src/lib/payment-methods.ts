@@ -88,7 +88,11 @@ function roundMoney(value: number): number {
   return Math.round(value * 100) / 100;
 }
 
-// The card processing fee is NOT passed on to customers — the merchant absorbs
+// The card processing fee IS passed on to customers: it is added on top of
+// expectedTotal on the card lane (quote-order.ts:926) and disclosed as its own
+// labelled row (quote-order.ts:973), never folded into "Subtotal". This comment
+// used to open "NOT passed on to customers — the merchant absorbs", which the
+// three lines below it already contradicted.
 // Enabled at 3% labeled "Service Fee" per the owner's decision (2026-07),
 // matching the value they saved in Admin → Payments → Settings (the stored
 // admin override always wins over this default anyway — this just keeps the

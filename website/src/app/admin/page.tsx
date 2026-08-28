@@ -42,11 +42,11 @@ export default async function AdminHomePage() {
     listAdminProducts({ search: "", category: "all", status: "all" }).catch(() => []),
     getAdminPartnerRows({ status: "all" }).catch(() => []),
     getCurrentOnlineVisitorCount().catch(() => 0),
-    getRevenueWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0 })),
+    getRevenueWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, truncated: false })),
     getRevenueMetrics().catch(() => null),
     getLowStockCount().catch(() => 0),
     getReconciliationFlagCount().catch(() => 0),
-    getProfitWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, ordersLast30Days: 0, hasEstimatedCost: false })),
+    getProfitWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, ordersLast30Days: 0, hasEstimatedCost: false, truncated: false })),
   ]);
 
   // What is waiting for a human. Same buckets the workstation renders, so the
@@ -87,6 +87,21 @@ export default async function AdminHomePage() {
           </div>
         </section>
 
+        {/*
+          A REPORT THAT HIT ITS CEILING SAYS SO ON THE SCREEN.
+
+          readAllRowsBounded reports reaching maxRows rather than returning a
+          smaller number as though it were the answer (supabase-page.ts), and
+          every producer below carries `truncated` out with the figures. This
+          page dropped it, which put the flag back where it started: a floor,
+          presented as a total, with nothing to notice.
+        */}
+        {revenueWindows.truncated || profitWindows.truncated || profitDashboard?.truncated ? (
+          <p className="rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
+            Some orders were not included — a report on this page hit its scan ceiling. The revenue and profit figures below are a floor, not a total.
+          </p>
+        ) : null}
+
         <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-7">
           {/*
             THE FIRST NUMBER ON THE PAGE, because it is the only one that
@@ -116,7 +131,7 @@ export default async function AdminHomePage() {
           <div className="vl-panel rounded-2xl p-4">
             <p className="text-[11px] uppercase tracking-[0.22em] text-zinc-500">Revenue · 30d</p>
             <p className="mt-2 text-2xl font-semibold text-white">{money(revenueWindows.last30Days)}</p>
-            <p className="mt-1 text-[11px] text-zinc-500">Today {money(revenueWindows.today)} · 7d {money(revenueWindows.last7Days)}</p>
+            <p className="mt-1 text-[11px] text-zinc-500">Today {money(revenueWindows.today)} · 7d {money(revenueWindows.last7Days)} · net of refunds, incl. tax</p>
           </div>
           {canViewProfit(session.role) ? (
           <div className="vl-panel rounded-2xl p-4">
@@ -191,7 +206,7 @@ export default async function AdminHomePage() {
 
             <div className="mt-4 grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
               {([
-                ["Gross revenue", money(profitDashboard.lifetime.grossRevenue)],
+                ["Gross revenue (before refunds)", money(profitDashboard.lifetime.grossRevenue)],
                 // "n/a", never "0.0%": a margin is a proportion of revenue, and
                 // at or below zero revenue there is none to take a proportion of.
                 ["Net margin", percent(profitDashboard.lifetime.netMarginPercent)],
@@ -219,7 +234,7 @@ export default async function AdminHomePage() {
             <div>
               <p className="text-xs uppercase tracking-[0.28em] text-zinc-400">Orders Snapshot</p>
               <h2 className="mt-2 text-2xl font-semibold text-white">Recent Orders</h2>
-              <p className="mt-2 text-sm text-zinc-400">Latest paid and pending orders visible right inside admin home.</p>
+              <p className="mt-2 text-sm text-zinc-400">Latest active orders — abandoned and unpaid checkouts are hidden, the same filter /admin/orders opens on.</p>
             </div>
             <Link href="/admin/orders" className="vl-btn-secondary px-4 py-2 text-xs">Open Full Orders</Link>
           </div>

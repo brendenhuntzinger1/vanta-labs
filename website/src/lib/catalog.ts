@@ -493,13 +493,21 @@ export const getCatalogProductsByCategory = unstable_cache(
  * purchase decision, and this is only ever called on the checkout path.
  *
  * ONLY TRACKED ROWS ARE RETURNED. That is not a filter for convenience — it is
- * what keeps checkout agreeing with the storefront. `track_inventory` defaults
- * to false, and an untracked row's count is decorative: the storefront sells it
- * freely and reserve_inventory() lets it through without a hold. Returning the
- * count anyway made quoteOrder's guard enforce a number nothing else believed,
- * so a shopper could be refused 10 units of something the site was advertising
- * as available — a lost sale caused by a figure the owner had been told was
- * inert.
+ * what keeps this guard agreeing with the STOREFRONT. `track_inventory` defaults
+ * to false, and on an untracked row the count is decorative to the catalogue:
+ * resolveStockStatus above only applies "zero means zero" with tracking on, so
+ * the site advertises the product as available whatever the number says.
+ * Returning the count anyway made quoteOrder's guard refuse 10 units of
+ * something the site was advertising — a lost sale caused by a figure the owner
+ * had been told was inert.
+ *
+ * This comment used to justify the filter on the atomic reservation instead,
+ * claiming reserve_inventory() "lets it through without a hold" for an untracked
+ * row. It does not: sql/inventory-enforce-positive-stock.sql:58,69 gate on
+ * `(track_inventory = true or inventory_quantity > 0)`, so an untracked row
+ * carrying a positive count IS enforced there. Whether the storefront should
+ * therefore respect that count too is a separate question about the filter, not
+ * about this guard.
  *
  * Keys are `slug` for a product-level count and the dose UUID for a variant.
  * A failure returns an empty map, which makes the guard a no-op — the atomic

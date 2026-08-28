@@ -43,7 +43,7 @@ export default async function AdminRevenuePage() {
   }));
   // COGS/margin is manager+ only — staff sees revenue, never profit.
   const profit = canViewProfit(session.role)
-    ? await getProfitWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, ordersLast30Days: 0, hasEstimatedCost: false }))
+    ? await getProfitWindowMetrics().catch(() => ({ today: 0, last7Days: 0, last30Days: 0, ordersLast30Days: 0, hasEstimatedCost: false, truncated: false }))
     : null;
   const maxMethodRevenue = Math.max(1, ...metrics.byMethod.map((m) => m.revenue));
   // Sales tax collected per destination state (for filing). Never blocks the
@@ -70,6 +70,12 @@ export default async function AdminRevenuePage() {
           <StatCard label="Average Order Value" value={money(metrics.averageOrderValue)} />
           <StatCard label="Processing Fees Collected" value={money(metrics.processingFeesCollected)} sub="Card fees added at checkout" />
         </div>
+
+        {profit?.truncated ? (
+          <p className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
+            Some orders were not included — the profit scan hit its ceiling. These figures are a floor, not a total.
+          </p>
+        ) : null}
 
         {profit ? (
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -119,6 +125,11 @@ export default async function AdminRevenuePage() {
             </div>
             <a href="/api/admin/tax/export" className="vl-btn-secondary inline-flex px-4 py-2 text-xs" download>Export CSV</a>
           </div>
+          {taxReport?.truncated ? (
+            <p className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 px-3 py-2 text-[13px] text-amber-100">
+              Not every taxed order could be read — this report hit its scan ceiling. The amounts below are a floor, not the total owed. Do not file from them.
+            </p>
+          ) : null}
           {!taxReport || taxReport.byState.length === 0 ? (
             <p className="mt-3 text-sm text-zinc-400">No sales tax collected yet. Tax is charged only on orders shipping to your configured nexus states (Control Center → Sales Tax).</p>
           ) : (

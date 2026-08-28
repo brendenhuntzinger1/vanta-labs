@@ -644,7 +644,7 @@ export const DEFAULT_PROFIT_CONFIG: ProfitSettingsConfig = {
   //
   // THIS DEFAULT ONLY APPLIES WHEN THE KEY IS ABSENT. The Control Center writes
   // `count_sales_tax_as_profit` on every save of its Profit section
-  // (admin-control-center-client.tsx:308), so an admin_control row very likely
+  // (admin-control-center-client.tsx:350), so a stored row very likely
   // already holds `true` — in which case this default is never consulted and the
   // stored value must be changed too. See docs/findings/BLOCK-F-PRODUCTION-CHANGES.md.
   countSalesTaxAsProfit: false,
