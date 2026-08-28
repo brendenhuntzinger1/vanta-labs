@@ -133,36 +133,28 @@ const POST_GATE_DESTINATION = "/";
 const SOCIAL_DESTINATION = "/products";
 const NEVER_A_DESTINATION = ["/legal"];
 
-// SOCIAL TRAFFIC GOES TO THE SHOP; EVERYONE ELSE GETS THE HOME PAGE.
+// THE HOME PAGE IS SKIPPED ONLY WHERE ITS HERO CANNOT PLAY.
 //
-// Somebody who tapped a link in TikTok is mid-scroll and came to look at a
-// product. The catalog is the shortest honest path to that, and it also keeps
-// the highest-risk browsers off the animated hero entirely. Somebody who typed
-// the domain, or found it through search, is choosing to visit the brand and
-// gets the home page they asked for.
+// The spinning vial IS the home page, and it is meant to be seen. One class of
+// browser cannot show it: an app's embedded WebView, where five rounds of
+// fixes still ended with an iPhone showing the vial alone on white. Those
+// visitors go to the catalog, and hero-video.tsx independently serves them a
+// still — the same decision, made twice, on the same signal.
 //
-// Judged on how the visitor ARRIVED, never on anything a link can assert about
-// where it wants them sent. A campaign marker or a social referrer is evidence
-// of a traffic source; it is not a destination, so the worst a forged one can
-// do is show the catalog.
-function cameFromSocial(): boolean {
+// THIS USED TO ASK "did they come from social", WHICH IS A MUCH WIDER NET THAN
+// THE ONE PLATFORM THAT BREAKS. It matched ttclid, fbclid, igshid, sccid,
+// twclid, a utm_* value containing "paid", and a social referrer — so mobile
+// Safari from a TikTok ad, and desktop Chrome from a Google Ads click carrying
+// utm_medium=paid, both lost the hero they render perfectly well. Measured on
+// the harness, 2026-08-28. Traffic source is not a rendering capability, and a
+// browser that can play the vial should always get it.
+//
+// Judged on the browser alone. Nothing a link asserts is consulted, so no
+// campaign marker or referrer — forged or genuine — can move a visitor.
+function heroAnimationUnsupported(): boolean {
   if (typeof window === "undefined") return false;
   try {
-    const params = new URLSearchParams(window.location.search);
-    // The markers real campaigns actually carry.
-    for (const key of ["ttclid", "fbclid", "igshid", "sccid", "twclid", "utm_source", "utm_medium"]) {
-      const value = params.get(key);
-      if (!value) continue;
-      if (key.startsWith("utm_")) {
-        if (/tiktok|instagram|facebook|meta|snap|reddit|pinterest|twitter|social|paid/i.test(value)) return true;
-      } else {
-        return true;
-      }
-    }
-    // An in-app browser IS social traffic, whatever the URL carries.
-    if (detectInAppBrowser()) return true;
-    const ref = document.referrer;
-    return Boolean(ref) && /tiktok|instagram|facebook|snapchat|reddit|pinterest|t\.co|lnkd\.in/i.test(ref);
+    return detectInAppBrowser();
   } catch {
     return false;
   }
@@ -189,7 +181,7 @@ function destinationAfterGate(pathname: string | null): string | null {
   // Only a visitor who arrived on the home page is re-routed. Anyone who asked
   // for a specific page — a product, the cart, checkout — stays there; sending
   // them to the catalog would throw away the click that brought them.
-  if (pathname === POST_GATE_DESTINATION && cameFromSocial()) {
+  if (pathname === POST_GATE_DESTINATION && heroAnimationUnsupported()) {
     // ATTRIBUTION SURVIVES THE REDIRECT. ttclid, fbclid, utm_*, a referral
     // code — everything the campaign attached is carried onto the catalog.
     // Dropping it here would silently break attribution for exactly the paid

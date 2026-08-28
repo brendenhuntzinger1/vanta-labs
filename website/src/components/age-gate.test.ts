@@ -296,10 +296,13 @@ describe("the gate survives an app's own toolbars", () => {
     // destination and which an in-app browser can land you on by accident.
     expect(gate).toMatch(/const NEVER_A_DESTINATION = \["\/legal"\];/);
     expect(gate).toMatch(/if \(stranded\) return POST_GATE_DESTINATION;/);
-    // Social traffic is sent to the catalog, and ONLY from the home page — a
-    // visitor who asked for a specific page keeps it.
+    // The hero animation is skipped ONLY where it does not work, and the
+    // bounce happens ONLY from the home page — a visitor who asked for a
+    // specific page keeps it.
     expect(gate).toMatch(/const SOCIAL_DESTINATION = "\/products";/);
-    expect(gate).toMatch(/if \(pathname === POST_GATE_DESTINATION && cameFromSocial\(\)\) \{/);
+    expect(gate).toMatch(
+      /if \(pathname === POST_GATE_DESTINATION && heroAnimationUnsupported\(\)\) \{/,
+    );
     // Attribution must survive the redirect or paid traffic stops being
     // measurable, and the loss would be invisible until a report came back empty.
     expect(gate).toMatch(/return `\$\{SOCIAL_DESTINATION\}\$\{query\}`;/);
@@ -316,8 +319,9 @@ describe("the gate survives an app's own toolbars", () => {
     }
 
     // document.referrer is a special case. Reading it to CLASSIFY a visitor as
-    // social traffic is fine and is what cameFromSocial does. Using it to build
-    // a destination would not be: the referrer is attacker-controlled, so a
+    // an in-app browser is fine and is what heroAnimationUnsupported does. Using
+    // it to build a destination would not be: the referrer is attacker-
+    // controlled, so a
     // path derived from it is an open redirect. Allow the read, and require the
     // destination to remain one of the two hard-coded constants.
     // Bound the slice to this function alone: it is declared at the top level,
@@ -365,5 +369,81 @@ describe("the gate's policy links are tappable", () => {
       expect(link).toContain("-my-1");
       expect(link).toContain("inline-block");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// THE HERO ANIMATION IS SKIPPED ONLY WHERE IT DOES NOT WORK.
+//
+// The spinning vial is the home page, and the owner wants it seen. It is
+// skipped for exactly one reason: an app's embedded browser could not play it.
+// Five rounds of fixes ended with an iPhone showing the vial alone on white, so
+// those visitors are sent to the catalog instead and hero-video.tsx serves them
+// a still.
+//
+// That skip used to be keyed on "came from social", which is a much wider net
+// than the one platform that breaks. Measured on the harness, 2026-08-28,
+// BEFORE this change — every one of these lost the home page:
+//
+//   Safari iOS        + ?ttclid=                        -> /products
+//   Safari iOS        + ?fbclid=                        -> /products
+//   Safari iOS        + utm_source=tiktok               -> /products
+//   Desktop Chrome    + ?ttclid=                        -> /products
+//   Desktop Chrome    + utm_source=google&utm_medium=paid -> /products
+//
+// The last one is the sharpest: a Google Ads click on a desktop, on a browser
+// that renders the canvas hero perfectly, never saw it. None of these browsers
+// has the bug the skip exists for. The owner's rule is "keep the vial, skip it
+// where it doesn't work" — so the classifier is the in-app check and nothing
+// else.
+//
+// A campaign marker must not decide this. It says where a visitor came FROM,
+// not what their browser can render, and it is attacker-supplied besides.
+// ---------------------------------------------------------------------------
+
+describe("the home page is skipped only where the hero cannot play", () => {
+  const gate = read("src/components/age-gate.tsx");
+
+  it("decides on the browser, never on a campaign marker or referrer", () => {
+    const fnStart = gate.indexOf("function heroAnimationUnsupported");
+    expect(fnStart, "heroAnimationUnsupported must exist").toBeGreaterThan(-1);
+    const after = gate.slice(fnStart);
+    const fn = after.slice(0, after.indexOf("\n}") + 2);
+
+    // The whole decision, and the only input it is allowed.
+    expect(fn).toContain("detectInAppBrowser()");
+
+    // The markers that used to drive it. A browser that renders the hero must
+    // keep the home page no matter which link it arrived through.
+    for (const marker of [
+      "ttclid",
+      "fbclid",
+      "igshid",
+      "sccid",
+      "twclid",
+      "utm_source",
+      "utm_medium",
+      "document.referrer",
+      "location.search",
+      "URLSearchParams",
+    ]) {
+      expect(
+        fn,
+        `${marker} says where a visitor came from, not whether their browser can play the hero`,
+      ).not.toContain(marker);
+    }
+  });
+
+  it("still carries attribution across the bounce it does make", () => {
+    // Narrowing the trigger must not quietly drop the query on the visitors
+    // who ARE still redirected, or in-app paid traffic stops being measurable.
+    expect(gate).toMatch(/return `\$\{SOCIAL_DESTINATION\}\$\{query\}`;/);
+  });
+
+  it("keeps the in-app skip that the whole mechanism exists for", () => {
+    // hero-video.tsx serves these visitors a still image; this sends them to
+    // the catalog. Both halves are the same decision and must agree.
+    expect(gate).toContain("detectInAppBrowser");
+    expect(read("src/components/hero-video.tsx")).toContain("detectInAppBrowser");
   });
 });
