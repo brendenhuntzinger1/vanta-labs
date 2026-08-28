@@ -173,6 +173,64 @@ export async function closeBatch(batchId: string): Promise<void> {
   if (error) throw error;
 }
 
+/**
+ * Discard a batch entirely.
+ *
+ * A HARD DELETE, and it is the honest operation here. The header of this file
+ * states the property that makes it safe: a batch is an operational grouping
+ * and holds no payment, inventory, fulfillment or shipping state, so removing
+ * one leaves every order exactly as it was. "Delete every row in both batch
+ * tables and no order would be wrong" is not a throwaway line — it is the
+ * design constraint, and this function is what cashes it in.
+ *
+ * Membership goes with it through the `on delete cascade` on
+ * fulfillment_batch_orders.batch_id. That matters for more than tidiness:
+ * `idx_fulfillment_batch_orders_one_active` allows an order exactly one live
+ * membership, so a batch created by mistake would otherwise hold its orders
+ * hostage from every future batch. Deleting it releases them.
+ *
+ * removeFromBatch() timestamps rather than deletes because pulling ONE order is
+ * a real operational event worth keeping. Discarding the whole batch is the
+ * opposite: the operator is saying the grouping should never have existed, and
+ * there is no history worth preserving about a session that did not happen.
+ *
+ * Returns what was destroyed so the caller can audit it — after the row is
+ * gone, nothing can answer "what was in it".
+ */
+export async function deleteBatch(batchId: string): Promise<{
+  deleted: boolean;
+  label: string | null;
+  orderIds: string[];
+}> {
+  const { data: batch, error: readError } = await supabaseAdmin
+    .from("fulfillment_batches")
+    .select("id, label")
+    .eq("id", batchId)
+    .maybeSingle();
+  if (readError) throw readError;
+  if (!batch) return { deleted: false, label: null, orderIds: [] };
+
+  // Read membership BEFORE the delete: the cascade takes these rows with it,
+  // and the audit log is the only place they will exist afterwards.
+  const { data: members } = await supabaseAdmin
+    .from("fulfillment_batch_orders")
+    .select("order_id")
+    .eq("batch_id", batchId)
+    .is("removed_at", null);
+
+  const { error } = await supabaseAdmin
+    .from("fulfillment_batches")
+    .delete()
+    .eq("id", batchId);
+  if (error) throw error;
+
+  return {
+    deleted: true,
+    label: String(batch.label),
+    orderIds: (members ?? []).map((m) => String(m.order_id)),
+  };
+}
+
 /** Pull one order out of a batch. A timestamp, not a delete — see the migration. */
 export async function removeFromBatch(batchId: string, orderId: string): Promise<void> {
   const { error } = await supabaseAdmin

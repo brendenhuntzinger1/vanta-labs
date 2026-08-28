@@ -5,6 +5,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import {
   closeBatch,
   createBatch,
+  deleteBatch,
   getNextToPack,
   getPickList,
   listBatches,
@@ -107,6 +108,66 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ success: false, error: "Unsupported action." }, { status: 400 });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unable to update the batch.";
+    return NextResponse.json({ success: false, error: message }, { status: 400 });
+  }
+}
+
+/**
+ * Discard a batch.
+ *
+ * SPENDS NOTHING AND CHANGES NO ORDER. A batch is an operational grouping only
+ * (see the header of fulfillment-batches.ts), so this removes the grouping and
+ * releases its orders back to Ready to Fulfill. Postage already bought in
+ * Shippo is untouched — deleting a batch is not a void, and nothing here calls
+ * a carrier.
+ */
+export async function DELETE(request: Request) {
+  const session = await verifyAdminSessionFromRequest(request);
+  if (!session) return unauthorized();
+
+  const url = new URL(request.url);
+  let batchId = url.searchParams.get("batchId") ?? "";
+  if (!batchId) {
+    // Accept a body too, so the client can use the same JSON shape as PATCH.
+    try {
+      const body = await request.json() as { batchId?: string };
+      batchId = typeof body.batchId === "string" ? body.batchId : "";
+    } catch { /* no body — the query string was the only source. */ }
+  }
+  if (!batchId) {
+    return NextResponse.json({ success: false, error: "batchId is required." }, { status: 400 });
+  }
+
+  try {
+    const result = await deleteBatch(batchId);
+    if (!result.deleted) {
+      return NextResponse.json({ success: false, error: "Batch not found." }, { status: 404 });
+    }
+
+    await supabaseAdmin.from("admin_audit_logs").insert({
+      action: "fulfillment_batch_delete",
+      target_table: "fulfillment_batches",
+      target_id: batchId,
+      metadata: {
+        label: result.label,
+        // The membership is gone with the batch. This is the only surviving
+        // record of which orders were in it.
+        orderIds: result.orderIds,
+        orderCount: result.orderIds.length,
+        performedAt: new Date().toISOString(),
+        performedBy: session.username,
+        ipAddress: getRequestIpAddress(request),
+        userAgent: getRequestUserAgent(request),
+      },
+    });
+
+    return NextResponse.json({
+      success: true,
+      label: result.label,
+      released: result.orderIds.length,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unable to delete the batch.";
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }
