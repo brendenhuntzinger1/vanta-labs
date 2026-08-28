@@ -635,8 +635,18 @@ export function ProductDetailClient({
                 ) : null}
               </div>
 
+              {/* The separator belongs to the lab name, not to the dose. Written
+                  as `{doseFromSlug} · {product.labName}`, a product with a dose
+                  in its slug and no lab name rendered a dangling "10MG ·".
+                  Latent rather than live today — no production slug carries a
+                  dose suffix, so the block does not render at all — but all 38
+                  published products have a NULL lab_name, so the first product
+                  named `bpc-157-10mg` shows it to every visitor. The harness
+                  seeds exactly that shape, which is how it surfaced. */}
               {doseFromSlug && (
-                <p className="mt-1 text-xs text-white/45">{doseFromSlug} · {product.labName}</p>
+                <p className="mt-1 text-xs text-white/45">
+                  {product.labName ? `${doseFromSlug} · ${product.labName}` : doseFromSlug}
+                </p>
               )}
 
               {(product.shortDescription ?? product.description) ? (
