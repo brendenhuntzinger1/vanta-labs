@@ -3,11 +3,16 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { isPasswordSetupLink } from "@/lib/auth-link-fragment";
+
 // ---------------------------------------------------------------------------
 // Audit E2 — what may unlock the "choose a new password" form.
 //
 // The form changes a password WITHOUT asking for the current one, which is
-// correct for someone arriving from a recovery link and wrong for anyone else.
+// correct for someone arriving from a recovery OR invite link and wrong for
+// anyone else. (Invite was added for the affiliate half of the 2026-08-29
+// signup alert: an invited ambassador has no password at all, so this form is
+// the only surface that can give them one.)
 // /account/settings re-authenticates before a password change; this page cannot,
 // because the whole point is that the person does not know their password. The
 // arrival check is therefore the only thing separating the two.
@@ -29,15 +34,24 @@ const SOURCE = readFileSync(
   "utf8",
 );
 
-/** The predicate as the component computes it, extracted so it can be exercised. */
-function looksLikeRecoveryLink(hash: string): boolean {
-  const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
-  return params.get("type") === "recovery";
-}
+// The predicate is no longer hand-copied here. It lives in
+// lib/auth-link-fragment.ts and the component imports the same function these
+// tests do, so the two cannot drift — which is what a duplicated copy invited.
+// Its full truth table is in auth-link-fragment.test.ts; what is pinned below
+// is the part this PAGE depends on.
+const looksLikeRecoveryLink = isPasswordSetupLink;
 
 describe("reset-password arrival check", () => {
   it("accepts a genuine recovery fragment", () => {
     expect(looksLikeRecoveryLink("#access_token=abc&refresh_token=def&type=recovery")).toBe(true);
+  });
+
+  it("accepts an admin invite fragment", () => {
+    // inviteUserByEmail creates the account with NO password, so this form is
+    // the only thing that can give an invited ambassador one. Refusing the
+    // fragment made the whole invite path a dead end — production ambassador
+    // ZAIN sat approved, with a live referral code and no way in, for six days.
+    expect(looksLikeRecoveryLink("#access_token=abc&refresh_token=def&type=invite")).toBe(true);
   });
 
   it("rejects a signup-confirmation fragment", () => {
@@ -61,12 +75,23 @@ describe("reset-password arrival check", () => {
     expect(looksLikeRecoveryLink("#type=not-recovery")).toBe(false);
   });
 
-  it("the component parses the fragment rather than substring-matching it", () => {
-    expect(SOURCE).toContain("new URLSearchParams");
-    expect(SOURCE).toContain('params.get("type") === "recovery"');
+  it("the component uses the shared predicate rather than its own copy", () => {
+    expect(SOURCE).toContain("isPasswordSetupLink");
+    expect(SOURCE).toContain('from "@/lib/auth-link-fragment"');
     // The two substring tests that made a signup redirect look like a recovery.
     expect(SOURCE).not.toContain('hash.includes("access_token=")');
     expect(SOURCE).not.toContain('hash.includes("type=recovery")');
+  });
+
+  it("reads the fragment before the first await", () => {
+    // Supabase consumes and strips the fragment as soon as it processes it. A
+    // read placed after `await getSession()` races that and intermittently sees
+    // an empty hash, which locks out the person the page exists for.
+    const hashRead = SOURCE.indexOf("window.location.hash");
+    const firstAwait = SOURCE.indexOf("await supabase.auth.getSession()");
+    expect(hashRead).toBeGreaterThan(-1);
+    expect(firstAwait).toBeGreaterThan(-1);
+    expect(hashRead).toBeLessThan(firstAwait);
   });
 
   it("a PASSWORD_RECOVERY event is never downgraded by a later session read", () => {

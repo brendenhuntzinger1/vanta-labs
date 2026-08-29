@@ -2,8 +2,10 @@
 
 import { useEffect } from "react";
 
+import { isActionablePasswordSetupLink } from "@/lib/auth-link-fragment";
+
 // ---------------------------------------------------------------------------
-// Catch a password-recovery link that GoTrue delivered to the wrong page.
+// Catch a password-setup link that GoTrue delivered to the wrong page.
 //
 // WHY (audit E6). Supabase only honours a `redirect_to` that appears in the
 // project's Redirect URLs allowlist. If
@@ -18,10 +20,20 @@ import { useEffect } from "react";
 // entire history exactly one password reset has ever been requested, and its
 // recovery token is still unspent a month later.
 //
-// So: on any page, if a recovery fragment shows up where no reset form exists,
-// carry it to the page that does. The fragment is passed through untouched —
-// it is what the Supabase client reads to establish the recovery session, and
-// this component deliberately does not parse, store or transmit it.
+// INVITES LAND HERE TOO, AND USED NOT TO BE CARRIED.
+//
+// An admin invite (createPartnerInvite -> auth.admin.inviteUserByEmail) comes
+// back as `type=invite`, and this component forwarded only `type=recovery`. So
+// an invited ambassador — who has NO password, because that is what
+// inviteUserByEmail creates — clicked their link, landed on the storefront, and
+// had no route to a form that could give them one. createPartnerInvite now
+// names the redirect explicitly as well; this stays the safety net for the
+// allowlist gap, exactly as it is for recovery.
+//
+// So: on any page, if a password-setup fragment shows up where no such form
+// exists, carry it to the page that does. The fragment is passed through
+// untouched — it is what the Supabase client reads to establish the session,
+// and this component deliberately does not parse, store or transmit it.
 //
 // This is a safety net, not the fix. The allowlist entry should still be set;
 // with it, this code never runs.
@@ -37,12 +49,9 @@ export function RecoveryLinkCatcher() {
     if (window.location.pathname === RESET_PATH) return;
 
     const hash = window.location.hash;
-    if (!hash || hash.length < 2) return;
-
-    const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
-    if (params.get("type") !== "recovery") return;
-    // A recovery fragment without tokens is nothing to act on.
-    if (!params.get("access_token")) return;
+    // Recovery or invite, and only when it actually carries a token: a
+    // fragment with no `access_token` is nothing to act on.
+    if (!isActionablePasswordSetupLink(hash)) return;
 
     // replace(), not assign(): the misdirected URL should not sit in history
     // where a back-navigation would replay a one-time token.

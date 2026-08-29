@@ -58,6 +58,7 @@ export interface StalledSignupSummary {
 }
 
 interface AuthUserLike {
+  id?: string;
   created_at?: string;
   email?: string | null;
   email_confirmed_at?: string | null;
@@ -111,14 +112,20 @@ export function summariseStalledSignups(users: AuthUserLike[], now: number): Omi
   return { scanned: users.length, stalled, domains, oldestCreatedAt: oldest };
 }
 
-export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
+/**
+ * Every auth user, paged. Shared by both checks in this file.
+ *
+ * Bounded by MAX_PAGES so a growing user table can never turn a sweep job into
+ * a long one. A listUsers failure is reported and the partial list returned:
+ * a sweep job that throws takes the whole sweep's error budget with it, and the
+ * next tick tries again.
+ */
+async function listAllAuthUsers(): Promise<AuthUserLike[]> {
   const collected: AuthUserLike[] = [];
 
   for (let page = 1; page <= MAX_PAGES; page += 1) {
     const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: PAGE_SIZE });
     if (error) {
-      // A sweep job that throws takes the whole sweep's error budget with it.
-      // Report and stop; the next tick tries again.
       console.error("[auth-health] unable to list users", error);
       break;
     }
@@ -126,6 +133,12 @@ export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
     collected.push(...users);
     if (users.length < PAGE_SIZE) break;
   }
+
+  return collected;
+}
+
+export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
+  const collected = await listAllAuthUsers();
 
   const summary = summariseStalledSignups(collected, Date.now());
   if (summary.stalled === 0) {
@@ -152,6 +165,184 @@ export async function alertOnStalledSignups(): Promise<StalledSignupSummary> {
       scanned: summary.scanned,
       domains: summary.domains,
       oldestCreatedAt: summary.oldestCreatedAt,
+    },
+    dedupeWindowMs: ALERT_DEDUPE_MS,
+  });
+
+  return { ...summary, alerted: true };
+}
+
+// ---------------------------------------------------------------------------
+// WATCH FOR AMBASSADORS WHO CANNOT GET IN.
+//
+// The check above is about SIGNUPS, and it is deliberately time-boxed: past
+// STALLED_SIGNUP_LOOKBACK_MS an unconfirmed account is treated as somebody who
+// changed their mind, because otherwise the number only grows. That is right
+// for a shopper and wrong for an ambassador, and the difference is money.
+//
+// An APPROVED ambassador has a live referral code. It is in their bio, it is
+// being handed out, it resolves at checkout, and it accrues commission — all of
+// which keeps working whether or not they can ever open the portal to see it.
+// So the very condition that stops mattering for a shopper after seven days is
+// the one that matters MOST here, and for as long as it lasts.
+//
+// That gap is not hypothetical. Ambassador ZAIN was invited on 2026-08-23,
+// approved an hour later, and never confirmed and never signed in; the signup
+// alert reported them twice and would have gone quiet on 2026-08-30 with
+// nothing fixed and the code still live. Nobody was going to be told again.
+//
+// This is the check that does not expire. It joins the ambassadors an operator
+// has actually approved against auth, and reports the ones who have never once
+// signed in — whatever the reason, and however long ago.
+// ---------------------------------------------------------------------------
+
+/**
+ * Grace period before an approved ambassador counts as locked out.
+ *
+ * They have to receive the mail, find it, and act on it. A day is comfortably
+ * longer than that and still inside the window where an invite link is valid,
+ * so this fires while the link can still be re-sent rather than after.
+ */
+export const PARTNER_LOCKED_OUT_AFTER_MS = 24 * 60 * 60 * 1000;
+
+/** Why this ambassador cannot sign in. Each needs a different repair. */
+export type PartnerLockoutReason =
+  /** Approved, has an auth account, has never once signed in. */
+  | "never_signed_in"
+  /** Approved with no auth account at all — nothing to sign in to. */
+  | "no_auth_user"
+  /** Approved, but the auth account it points at no longer exists. */
+  | "auth_user_missing";
+
+export interface LockedOutPartner {
+  partnerId: string;
+  /** Public already, and the thing an operator searches /admin/partners by. */
+  referralCode: string | null;
+  reason: PartnerLockoutReason;
+  approvedAt: string | null;
+}
+
+export interface LockedOutPartnerSummary {
+  checked: number;
+  lockedOut: number;
+  partners: LockedOutPartner[];
+  alerted: boolean;
+}
+
+export interface PartnerLike {
+  id?: string;
+  status?: string | null;
+  referral_code?: string | null;
+  auth_user_id?: string | null;
+  approved_at?: string | null;
+  created_at?: string | null;
+}
+
+/**
+ * Approved ambassadors who have never signed in.
+ *
+ * NO EMAIL IS RECORDED, for the same reason domainOf exists above: a system
+ * alert is read by more people and retained longer than the tables behind it.
+ * The referral code identifies the row in /admin/partners and is public
+ * anyway, so it costs nothing and is the fastest thing to act on.
+ */
+export function summarisePartnersLockedOut(
+  partners: PartnerLike[],
+  users: AuthUserLike[],
+  now: number,
+): Omit<LockedOutPartnerSummary, "alerted"> {
+  const usersById = new Map<string, AuthUserLike>();
+  for (const user of users) {
+    if (user.id) usersById.set(user.id, user);
+  }
+
+  const lockedOutBefore = now - PARTNER_LOCKED_OUT_AFTER_MS;
+  const lockedOut: LockedOutPartner[] = [];
+  let checked = 0;
+
+  for (const partner of partners) {
+    // Only APPROVED ambassadors. A pending applicant who cannot sign in is the
+    // signup check's business; a rejected or disabled one is nobody's.
+    if (String(partner.status ?? "").toLowerCase() !== "approved") continue;
+    checked += 1;
+
+    // Date the grace period from approval where we have it — that is the moment
+    // the code went live — and from row creation otherwise.
+    const since = partner.approved_at ?? partner.created_at ?? null;
+    const sinceMs = since ? Date.parse(since) : NaN;
+    // An unparseable date must not silently exempt a locked-out ambassador, so
+    // only a date we can read and that is still inside the grace window skips.
+    if (Number.isFinite(sinceMs) && sinceMs > lockedOutBefore) continue;
+
+    const authUserId = partner.auth_user_id ?? null;
+    let reason: PartnerLockoutReason;
+    if (!authUserId) {
+      reason = "no_auth_user";
+    } else {
+      const user = usersById.get(authUserId);
+      if (!user) {
+        reason = "auth_user_missing";
+      } else if (user.last_sign_in_at) {
+        continue; // They have been in. Whatever else is true, they are not locked out.
+      } else {
+        reason = "never_signed_in";
+      }
+    }
+
+    lockedOut.push({
+      partnerId: String(partner.id ?? ""),
+      referralCode: partner.referral_code ?? null,
+      reason,
+      approvedAt: partner.approved_at ?? null,
+    });
+  }
+
+  return { checked, lockedOut: lockedOut.length, partners: lockedOut };
+}
+
+export async function alertOnPartnersLockedOut(): Promise<LockedOutPartnerSummary> {
+  const { data, error } = await supabaseAdmin
+    .from("partners")
+    .select("id, status, referral_code, auth_user_id, approved_at, created_at")
+    .eq("status", "approved");
+
+  if (error) {
+    // Same contract as the check above: report and return, never throw. A sweep
+    // job that throws spends the whole sweep's error budget on itself.
+    console.error("[auth-health] unable to read partners", error);
+    return { checked: 0, lockedOut: 0, partners: [], alerted: false };
+  }
+
+  const partners = (data ?? []) as PartnerLike[];
+  if (partners.length === 0) {
+    return { checked: 0, lockedOut: 0, partners: [], alerted: false };
+  }
+
+  const users = await listAllAuthUsers();
+  const summary = summarisePartnersLockedOut(partners, users, Date.now());
+  if (summary.lockedOut === 0) {
+    return { ...summary, alerted: false };
+  }
+
+  const codes = summary.partners
+    .map((partner) => partner.referralCode)
+    .filter((code): code is string => Boolean(code));
+  const codeNote = codes.length > 0 ? ` Referral code(s): ${codes.join(", ")}.` : "";
+
+  await recordSystemAlert({
+    type: "partner_locked_out",
+    severity: "warning",
+    message:
+      `${summary.lockedOut} approved ambassador(s) have never signed in.`
+      + codeNote
+      + " Their referral codes are live and earning commission they cannot see."
+      + " An invited ambassador has no password until they open their invite link, so re-send it"
+      + " (or have them use Forgot Password) rather than waiting — unlike the signup alert this"
+      + " condition does not expire, and it will keep reporting until they get in or are disabled.",
+    context: {
+      lockedOut: summary.lockedOut,
+      checked: summary.checked,
+      partners: summary.partners,
     },
     dedupeWindowMs: ALERT_DEDUPE_MS,
   });

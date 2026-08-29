@@ -7,7 +7,7 @@ import { repairMissingCommissionAccruals } from "@/lib/commission-accrual-repair
 import { expireStaleReservations, isTransientAuthRejection } from "@/lib/inventory-reservation";
 import { releaseAbandonedTenderHolds } from "@/lib/tender-reservation";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
-import { alertOnStalledSignups } from "@/lib/auth-health";
+import { alertOnPartnersLockedOut, alertOnStalledSignups } from "@/lib/auth-health";
 import { reapStrandedOrderEmails } from "@/lib/email/order-email-reaper";
 import { expireStaleExpressIntents, reconcileVeyraPendingPayments } from "@/lib/express-reconcile";
 import { sweepMissingShipments, sweepUnsyncedOrders } from "@/lib/shippo/order-sync";
@@ -98,6 +98,12 @@ const JOBS = {
   // unconfirmed auth.users row is the only evidence a delivery problem leaves,
   // and this is the only thing that looks at it.
   signupConfirmations: { label: "signup_confirmation_watch", run: alertOnStalledSignups },
+  // Watch for APPROVED ambassadors who have never signed in. The job above is
+  // time-boxed on purpose -- past its lookback an unconfirmed signup is someone
+  // who changed their mind -- and that is exactly wrong for an ambassador whose
+  // referral code is already live and earning. This one does not expire, so a
+  // partner who cannot reach their portal stays reported until they get in.
+  partnerAccess: { label: "partner_access_watch", run: alertOnPartnersLockedOut },
 } as const;
 
 type JobName = keyof typeof JOBS;

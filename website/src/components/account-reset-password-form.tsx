@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { isPasswordSetupLink } from "@/lib/auth-link-fragment";
 
 export function AccountResetPasswordForm() {
   const router = useRouter();
@@ -35,10 +36,20 @@ export function AccountResetPasswordForm() {
     //
     // The earlier version also accepted a bare `access_token=` in the hash,
     // which matches a SIGNUP confirmation redirect as readily as a recovery
-    // one. Only the explicit recovery markers are accepted now.
+    // one. Only the explicit password-setup markers are accepted now.
+    //
+    // TWO OF THEM, NOT ONE. `invite` is how an admin-invited ambassador
+    // arrives, and auth.admin.inviteUserByEmail creates that account with NO
+    // password — so this form is the only thing that can ever give them one.
+    // Accepting only `recovery` left the whole invite path a dead end; see
+    // lib/auth-link-fragment.ts. `signup` is still refused: a confirmation
+    // redirect carries an access_token too, and it is not a password-setup
+    // link.
+    //
+    // Read synchronously, before any await: Supabase strips the fragment once
+    // it has consumed it, so this is the only moment it is reliably present.
     const hash = typeof window !== "undefined" ? window.location.hash : "";
-    const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
-    const looksLikeRecoveryLink = params.get("type") === "recovery";
+    const looksLikePasswordSetupLink = isPasswordSetupLink(hash);
 
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
       if (event === "PASSWORD_RECOVERY" && active) {
@@ -55,7 +66,7 @@ export function AccountResetPasswordForm() {
       // Never downgrade a PASSWORD_RECOVERY event that has already fired: the
       // event is the stronger signal, and Supabase strips the fragment once it
       // has consumed it, so the hash may legitimately be empty by now.
-      setHasRecoverySession((current) => current === true || (Boolean(data.session) && looksLikeRecoveryLink));
+      setHasRecoverySession((current) => current === true || (Boolean(data.session) && looksLikePasswordSetupLink));
     })();
 
     return () => {

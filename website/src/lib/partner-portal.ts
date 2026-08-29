@@ -1743,8 +1743,29 @@ export async function createPartnerInvite(input: {
 }) {
   const referralCode = generateReferralCode(input.name);
   const actorUserId = input.createdByUserId ?? null;
+  // NAME WHERE THE INVITE LANDS.
+  //
+  // Without `redirectTo`, GoTrue sends the invitee to the project's Site URL —
+  // the storefront home page — with `#access_token=...&type=invite` in the
+  // address bar and nothing there that can read it. inviteUserByEmail creates
+  // the auth user with NO password, so that page is the end of the road: they
+  // cannot sign in, and nothing tells them to use "forgot password" instead.
+  // That is not hypothetical. Ambassador ZAIN was invited on 2026-08-23 and
+  // approved an hour later with a live referral code, and six days on still had
+  // `encrypted_password` NULL, `email_confirmed_at` NULL and `last_sign_in_at`
+  // NULL — the only invited account in the project's history, and the only one
+  // stuck. Every other ambassador signed up through the storefront instead and
+  // confirmed within a minute.
+  //
+  // Supabase only honours a redirect that is in the project's Redirect URLs
+  // allowlist, which lives in the dashboard and cannot be asserted from here;
+  // when it is missing GoTrue falls back to the Site URL exactly as before.
+  // RecoveryLinkCatcher is the safety net for that case and now carries
+  // `type=invite` as well as `type=recovery`. Naming it here is the fix; the
+  // catcher is the belt to its braces.
   const { data: invitedUser, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
     data: { role: "partner", invited_by: actorUserId },
+    redirectTo: `${getSiteUrl()}/account/reset-password`,
   });
 
   if (inviteError) {

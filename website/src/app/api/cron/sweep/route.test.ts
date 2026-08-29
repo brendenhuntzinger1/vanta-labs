@@ -30,6 +30,7 @@ const shippingCostRepair = sentinel("shippingCostRepair");
 const refundEffectRepair = sentinel("refundEffectRepair");
 const tenderHolds = sentinel("tenderHolds");
 const signupConfirmations = sentinel("signupConfirmations");
+const partnerAccess = sentinel("partnerAccess");
 interface SystemAlert {
   type: string;
   severity: string;
@@ -71,7 +72,10 @@ vi.mock("@/lib/email/campaign-sender", () => ({ runCampaignSweep: () => emailCam
 vi.mock("@/lib/email/automations", () => ({ runAutomationSweep: () => emailAutomations() }));
 vi.mock("@/lib/shipping-cost-repair", () => ({ repairMissingShippingCosts: () => shippingCostRepair() }));
 vi.mock("@/lib/refund-effect-repair", () => ({ repairIncompleteRefunds: () => refundEffectRepair() }));
-vi.mock("@/lib/auth-health", () => ({ alertOnStalledSignups: () => signupConfirmations() }));
+vi.mock("@/lib/auth-health", () => ({
+  alertOnStalledSignups: () => signupConfirmations(),
+  alertOnPartnersLockedOut: () => partnerAccess(),
+}));
 vi.mock("@/lib/monitoring", () => ({ recordSystemAlert: (alert: SystemAlert) => recordSystemAlert(alert) }));
 
 const SECRET = "test-cron-secret";
@@ -106,12 +110,13 @@ describe("the scheduled sweep", () => {
     expect(body.shippingCostRepair).toEqual({ job: "shippingCostRepair" });
     expect(body.refundEffectRepair).toEqual({ job: "refundEffectRepair" });
     expect(body.signupConfirmations).toEqual({ job: "signupConfirmations" });
+    expect(body.partnerAccess).toEqual({ job: "partnerAccess" });
   });
 
   it("runs every job exactly once", async () => {
     await callSweep();
 
-    for (const job of [membership, storeCredit, cartRecovery, commissions, reservations, tenderHolds, emails, paymentReconcile, expressIntents, shippoSync, shipmentRepair, shippingCostRepair, refundEffectRepair, signupConfirmations]) {
+    for (const job of [membership, storeCredit, cartRecovery, commissions, reservations, tenderHolds, emails, paymentReconcile, expressIntents, shippoSync, shipmentRepair, shippingCostRepair, refundEffectRepair, signupConfirmations, partnerAccess]) {
       expect(job).toHaveBeenCalledTimes(1);
     }
   });
