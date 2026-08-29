@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 
 import { sendEmail } from "@/lib/email/send";
 import { passwordResetTemplate } from "@/lib/email/templates";
-import { enqueueFailedEmail } from "@/lib/email/retry-queue";
+import { recordSystemAlert } from "@/lib/monitoring";
 import { createServerClient, supabaseAdmin } from "@/lib/supabase-server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getRequestIpAddress, rateLimitKeyForRequest } from "@/lib/request-ip";
@@ -32,7 +32,11 @@ export const dynamic = "force-dynamic";
 // This route closes that. It mints the recovery link with the ADMIN API — which
 // generates a link WITHOUT sending anything — and then puts it through the same
 // sendEmail() as every other transactional message, so it inherits the
-// provider, the From identity, the bounce webhook and the retry queue.
+// provider, the From identity and the bounce webhook.
+//
+// It does NOT inherit the retry queue, and that is deliberate: a recovery link
+// goes stale the moment another is minted, so a delayed retry would deliver a
+// dead link. See deliverResetEmail below.
 //
 // WHY IT STILL FALLS BACK TO SUPABASE.
 //
@@ -41,7 +45,7 @@ export const dynamic = "force-dynamic";
 // refuses, the provider is unconfigured, the send errors — we fall back to
 // `resetPasswordForEmail`, which is exactly what happened before this route
 // existed. The change is therefore strictly additive: at worst it behaves like
-// the old code, at best it delivers a branded, monitored, retryable email.
+// the old code, at best it delivers a branded email the bounce webhook can see.
 //
 // ENUMERATION SAFETY IS THE HARD CONSTRAINT.
 //
@@ -151,9 +155,31 @@ async function deliverResetEmail(email: string, redirectTo: string): Promise<voi
       return;
     }
 
-    // The provider refused. Queue it so the sweep retries with backoff, then
-    // fall through to Supabase so the customer is not left waiting on a retry.
-    await enqueueFailedEmail({ to: email, ...template }, result.error);
+    // The provider refused. Fall through to the Supabase fallback below — and
+    // deliberately DO NOT queue this message for retry.
+    //
+    // A recovery link is not an ordinary transactional email and must not be
+    // treated like one. `auth.users.recovery_token` holds a SINGLE token per
+    // user, so the fallback's `resetPasswordForEmail` overwrites the token
+    // inside the link we just built. Queuing it would deliver, minutes later, a
+    // second password-reset email whose link is already dead — after the
+    // customer had a working one in hand. Two reset emails for one request is
+    // confusing at best; a dead one arriving second is worse than nothing.
+    //
+    // The failure still has to be visible, which is what the alert is for.
+    await recordSystemAlert({
+      type: "password_reset_provider_failed",
+      severity: "warning",
+      message:
+        "The configured email provider refused a password-reset send, so it fell back to "
+        + "Supabase Auth's own email. Recovery still works, but it is no longer using the "
+        + "branded template and the bounce webhook cannot see it. Check the provider in "
+        + "Admin -> Settings.",
+      context: { error: String(result.error ?? "unknown").slice(0, 300) },
+      dedupeWindowMs: 60 * 60 * 1000,
+    }).catch(() => {
+      /* An alert must never be the reason a reset email does not go out. */
+    });
   } catch (adminError) {
     console.error("[auth/password-reset] in-house send failed; falling back to Supabase", adminError);
   }
