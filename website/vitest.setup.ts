@@ -74,4 +74,54 @@ import { vi } from "vitest";
 
 void vi;
 
+// ---------------------------------------------------------------------------
+// THE ONE THING THAT DOES BELONG TO EVERY SUITE: refuse to run the DB-backed
+// tests against the BROWSER HARNESS database.
+//
+// This is not a mock, so the rule above is intact — it is a precondition, and
+// it is here rather than in the thirteen suites that read
+// VANTA_TEST_DATABASE_URL because the fourteenth is the one that will forget.
+//
+// WHY. Those suites build their own minimal fixtures, so pointing them at the
+// harness database REBUILDS `orders` — 107 columns down to 39. What makes that
+// worth a hard stop rather than a warning is how it fails afterwards:
+//
+//   - setup-local-harness.sh does `createdb || true` and deploy-run-once.sql
+//     does `create table if not exists`, so re-running setup CANNOT repair the
+//     damaged table. The base schema is a no-op once the table exists.
+//   - The parity self-check kept reporting every row green, because it only
+//     covered columns harness-prod-parity-columns.sql re-adds.
+//
+// So the harness went on serving a wrong database while insisting it was
+// correct, and the browser evidence taken from it was wrong in a way nothing
+// surfaced. A launch audit lost a headline finding to exactly this: a product
+// whose doses had been wiped read as Out of Stock, and that was reported as 15
+// unsellable products in production. Failing loudly here is much cheaper.
+//
+// Use a throwaway: `createdb vanta_scratch` and point the variable at that.
+// ---------------------------------------------------------------------------
+const HARNESS_DATABASES = new Set(["storefront"]);
+
+const testDatabaseUrl = process.env.VANTA_TEST_DATABASE_URL;
+if (testDatabaseUrl) {
+  let databaseName: string | undefined;
+  try {
+    databaseName = decodeURIComponent(new URL(testDatabaseUrl).pathname.replace(/^\//, ""));
+  } catch {
+    // An unparseable value is the suites' own problem to report, not ours.
+  }
+
+  if (databaseName && HARNESS_DATABASES.has(databaseName)) {
+    throw new Error(
+      `VANTA_TEST_DATABASE_URL points at "${databaseName}", which is the browser harness database.\n`
+        + "The DB-backed suites rebuild `orders` with their own minimal schema, which would silently\n"
+        + "destroy the harness — and setup-local-harness.sh cannot repair it, because its `createdb`\n"
+        + "and `create table if not exists` are both no-ops once the table exists.\n\n"
+        + "Use a throwaway database instead:\n"
+        + "  createdb -h /tmp -p 55432 -U postgres vanta_scratch\n"
+        + "  VANTA_TEST_DATABASE_URL=postgres://postgres@localhost:55432/vanta_scratch npm test",
+    );
+  }
+}
+
 export {};

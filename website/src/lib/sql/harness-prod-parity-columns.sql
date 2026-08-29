@@ -58,6 +58,25 @@ alter table public.membership_billing_events add column if not exists tier_id uu
 alter table public.membership_billing_events add column if not exists status text;
 alter table public.membership_billing_events add column if not exists provider_charge_id text;
 alter table public.membership_billing_events add column if not exists failure_reason text;
+-- THESE FOUR COME FROM deploy-run-once.sql's `create table public.orders`, and
+-- are repeated here ON PURPOSE. That CREATE is `if not exists`, and
+-- setup-local-harness.sh does `createdb || true` rather than dropping the
+-- database — so once the orders table exists in ANY shape, the base schema file
+-- is a no-op and cannot repair it. This file is the only repair mechanism the
+-- harness has, so anything a damaged orders table can lose has to be listed
+-- here or it is lost for good.
+--
+-- Not hypothetical: pointing VANTA_TEST_DATABASE_URL at the harness database
+-- lets the DB-backed suites rebuild `orders` with their own minimal schema,
+-- which drops exactly these four. Re-running setup then reported every parity
+-- check green while scripts/harness-pay-order.mjs died on `column "payment_id"
+-- does not exist`, because the checks only covered columns this file re-adds.
+-- The four checks in setup-local-harness.sh now cover these too, and
+-- src/test-support refuses to point the suites at this database at all.
+alter table public.orders add column if not exists payment_id text;
+alter table public.orders add column if not exists provider_event_id text;
+alter table public.orders add column if not exists referral_code text;
+alter table public.orders add column if not exists ambassador_id uuid;
 alter table public.orders add column if not exists refund_amount numeric(12,2) default 0;
 alter table public.orders add column if not exists refunded_at timestamptz;
 alter table public.orders add column if not exists state text;
