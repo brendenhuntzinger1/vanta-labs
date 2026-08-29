@@ -99,8 +99,12 @@ const toUser = (row) => ({
   aud: "authenticated",
   role: "authenticated",
   email: row.email,
-  email_confirmed_at: row.created_at,
-  confirmed_at: row.created_at,
+  // REAL, not assumed. This used to report row.created_at unconditionally, so
+  // every harness user looked confirmed and no test could exercise the
+  // unconfirmed paths — which are exactly the ones that stranded four accounts
+  // on 2026-08-29 (resend confirmation, the locked-out-ambassador sweep).
+  email_confirmed_at: row.email_confirmed_at ?? null,
+  confirmed_at: row.email_confirmed_at ?? null,
   phone: row.phone ?? "",
   created_at: row.created_at,
   updated_at: row.created_at,
@@ -273,6 +277,9 @@ export async function handleAuth(req, res, url, pool, send, readBody) {
           error_description: "User already registered",
         }), true;
       }
+      // email_confirmed_at stays NULL: a freshly signed-up user is unconfirmed
+      // until they follow the link, which is the state the whole confirmation
+      // path exists to move them out of.
       const created = await q(
         `insert into auth.users (email, encrypted_password, raw_user_meta_data, created_at)
          values ($1, $2, $3, now()) returning *`,

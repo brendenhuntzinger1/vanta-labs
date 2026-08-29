@@ -110,6 +110,9 @@ describe("accountConfirmationResendTemplate", () => {
 // ---------------------------------------------------------------------------
 
 const ROUTE = readFileSync(join(process.cwd(), "src/app/api/auth/signup/route.ts"), "utf8");
+/** The resend/fallback half lives here, shared with /api/auth/resend-confirmation. */
+const CONFIRM_LIB = readFileSync(join(process.cwd(), "src/lib/auth-confirmation-email.ts"), "utf8");
+const RESEND_ROUTE = readFileSync(join(process.cwd(), "src/app/api/auth/resend-confirmation/route.ts"), "utf8");
 const FORM = readFileSync(join(process.cwd(), "src/components/account-auth-form.tsx"), "utf8");
 
 describe("POST /api/auth/signup", () => {
@@ -157,15 +160,20 @@ describe("POST /api/auth/signup", () => {
     // Mailing a sign-in link to anyone who types a CONFIRMED address into the
     // signup form would be a nuisance vector. Unconfirmed is the one state
     // where the person is provably stuck.
-    expect(ROUTE).toContain("findUnconfirmedUser");
-    expect(ROUTE).toContain("email_confirmed_at");
+    expect(CONFIRM_LIB).toContain("findUnconfirmedUser");
+    expect(CONFIRM_LIB).toContain("email_confirmed_at");
+    // Both entry points go through the one implementation, so there is only
+    // one enumeration-safe path to get wrong.
+    expect(ROUTE).toContain("sendBrandedConfirmationResend");
+    expect(RESEND_ROUTE).toContain("sendBrandedConfirmationResend");
   });
 
   it("falls back to Supabase's own send and alerts when the provider refuses", () => {
     // Moving the send in-house makes our provider a new single point of failure
     // for account access; the fallback is what keeps the change additive.
-    expect(ROUTE).toContain("auth.resend(");
-    expect(ROUTE).toContain("signup_confirmation_provider_failed");
+    expect(CONFIRM_LIB).toContain("auth.resend(");
+    expect(CONFIRM_LIB).toContain("signup_confirmation_provider_failed");
+    expect(ROUTE).toContain("fallBackToSupabaseConfirmation");
   });
 });
 
@@ -181,5 +189,32 @@ describe("the signup form", () => {
 
   it("shows the shared check-email copy, which is true for new and returning alike", () => {
     expect(FORM).toContain("SIGNUP_CHECK_EMAIL_MESSAGE");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The resend button. It used to call supabase.auth.resend() from the browser,
+// which mails Supabase's own template — the message Gmail filed as spam, links
+// stripped. Re-sending someone an identical copy of the email they already
+// could not use is not a recovery path.
+// ---------------------------------------------------------------------------
+
+describe("POST /api/auth/resend-confirmation", () => {
+  it("sends a branded magic link rather than Supabase's template", () => {
+    expect(RESEND_ROUTE).toContain("sendBrandedConfirmationResend");
+    expect(CONFIRM_LIB).toContain("accountConfirmationResendTemplate");
+    expect(CONFIRM_LIB).toContain('type: "magiclink"');
+  });
+
+  it("is enumeration-safe, rate limited and captcha-verified like its siblings", () => {
+    expect(RESEND_ROUTE).toContain("GENERIC_RESPONSE");
+    expect(RESEND_ROUTE).toContain("verifyTurnstileToken");
+    expect(RESEND_ROUTE).toContain("resend-confirmation-ip");
+    expect(RESEND_ROUTE).toContain("resend-confirmation-email:");
+  });
+
+  it("the form posts to it instead of calling Supabase directly", () => {
+    expect(FORM).toContain('"/api/auth/resend-confirmation"');
+    expect(FORM).not.toContain('supabase.auth.resend(');
   });
 });

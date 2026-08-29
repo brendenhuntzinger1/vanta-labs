@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 
 import { sendEmail } from "@/lib/email/send";
-import { accountConfirmationTemplate, accountConfirmationResendTemplate } from "@/lib/email/templates";
-import { recordSystemAlert } from "@/lib/monitoring";
+import { accountConfirmationTemplate } from "@/lib/email/templates";
+import { fallBackToSupabaseConfirmation, sendBrandedConfirmationResend } from "@/lib/auth-confirmation-email";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { checkRateLimit } from "@/lib/rate-limit";
 import { getRequestIpAddress, rateLimitKeyForRequest } from "@/lib/request-ip";
@@ -196,7 +196,7 @@ async function createAccountAndSend(input: {
     // Overwhelmingly this is "user already registered". Nothing is created and
     // nothing is said — but an account stranded UNCONFIRMED is exactly the
     // person this whole change is for, so they get a branded way back in.
-    await resendToUnconfirmed(input.email, input.redirectTo);
+    await sendBrandedConfirmationResend(input.email, input.redirectTo);
     return;
   }
 
@@ -210,92 +210,5 @@ async function createAccountAndSend(input: {
     return;
   }
 
-  await fallBackToSupabase(input.email, "signup", result.error);
-}
-
-/**
- * A branded way back for an address that already exists but never confirmed.
- *
- * Deliberately narrow. A confirmed account gets NOTHING — sending a magic link
- * to anyone who types an existing address into the signup form would turn this
- * route into a way to mail arbitrary people a sign-in link for their own
- * account, which is a nuisance vector even though it grants no access.
- * Unconfirmed is the one state where the person is provably stuck, and it is
- * the state the four accounts stranded on 2026-08-29 were in.
- */
-async function resendToUnconfirmed(email: string, redirectTo: string): Promise<void> {
-  // auth.users is not reachable through PostgREST, so this goes through the
-  // admin API rather than a table read.
-  const found = await findUnconfirmedUser(email);
-  if (!found) return;
-
-  const link = await supabaseAdmin.auth.admin.generateLink({
-    type: "magiclink",
-    email,
-    options: { redirectTo },
-  });
-
-  if (link.error || !link.data?.properties?.action_link) return;
-
-  const template = accountConfirmationResendTemplate({
-    name: greetingName(String(found.user_metadata?.full_name ?? "")),
-    confirmUrl: link.data.properties.action_link,
-  });
-
-  const result = await sendEmail({ to: email, ...template });
-  if (!result.success) {
-    await fallBackToSupabase(email, "signup", result.error);
-  }
-}
-
-interface AdminUserLike {
-  id?: string;
-  email?: string | null;
-  email_confirmed_at?: string | null;
-  confirmed_at?: string | null;
-  user_metadata?: Record<string, unknown> | null;
-}
-
-/** The one unconfirmed account for this address, or null. Bounded paging. */
-async function findUnconfirmedUser(email: string): Promise<AdminUserLike | null> {
-  const target = email.toLowerCase();
-  for (let page = 1; page <= 5; page += 1) {
-    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: 200 });
-    if (error) return null;
-    const users = (data?.users ?? []) as AdminUserLike[];
-    const match = users.find((user) => String(user.email ?? "").toLowerCase() === target);
-    if (match) {
-      return match.email_confirmed_at || match.confirmed_at ? null : match;
-    }
-    if (users.length < 200) return null;
-  }
-  return null;
-}
-
-/**
- * Hand the send back to Supabase Auth when ours refuses.
- *
- * Strictly additive, the same bargain /api/auth/password-reset strikes: moving
- * a send in-house makes our provider a new single point of failure for account
- * access, so when our path fails we do exactly what the old code did. The
- * customer still gets an email — the plain one — and the operator gets told
- * that branding and bounce visibility are off for now.
- */
-async function fallBackToSupabase(email: string, type: "signup", providerError?: string): Promise<void> {
-  try {
-    await supabaseAdmin.auth.resend({ type, email });
-  } catch (resendError) {
-    console.error("[auth/signup] supabase fallback send failed", resendError);
-  }
-
-  await recordSystemAlert({
-    type: "signup_confirmation_provider_failed",
-    severity: "warning",
-    message:
-      "The configured email provider refused a signup confirmation, so it fell back to Supabase Auth's "
-      + "own email. Signup still works, but that message is unbranded and invisible to the bounce "
-      + "webhook — which is the combination that stranded four accounts on 2026-08-29.",
-    context: { providerError: providerError ?? null },
-    dedupeWindowMs: 60 * 60 * 1000,
-  }).catch(() => {});
+  await fallBackToSupabaseConfirmation(input.email, result.error);
 }

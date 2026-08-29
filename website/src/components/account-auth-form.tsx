@@ -361,20 +361,25 @@ export function AccountAuthForm() {
     setMessage(null);
 
     try {
-      const { error: resendError } = await supabase.auth.resend({
-        type: "signup",
-        email: address,
-        options: {
-          emailRedirectTo: getEmailRedirectUrl(`/account/login?verified=1&next=${encodeURIComponent(nextPath)}`),
-          captchaToken: captchaToken ?? undefined,
-        },
+      // THROUGH THE SERVER, for the same reason signup is.
+      //
+      // This used to call the Supabase client's resend(), which mails their own
+      // template — the exact message Gmail filed as spam on 2026-08-29, links
+      // stripped on the way in. Re-sending someone an identical copy of the
+      // email they already could not use is not a recovery path. The route
+      // mints a magic link and sends it branded instead.
+      const resendResponse = await fetch("/api/auth/resend-confirmation", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: address, captchaToken: captchaToken ?? "", nextPath }),
       });
+      const resendJson = await resendResponse.json().catch(() => null);
 
-      if (resendError) {
-        throw new Error(resendError.message);
+      if (!resendResponse.ok && resendJson && typeof resendJson.error === "string") {
+        throw new Error(resendJson.error);
       }
 
-      setMessage("If that address has an account still waiting on confirmation, a new link is on its way. It can take a minute — check spam too.");
+      setMessage(resendJson?.message ?? "If that address has an account still waiting on confirmation, a new link is on its way. It can take a minute — check spam too.");
     } catch (submitError) {
       setError(submitError instanceof Error ? submitError.message : "Unable to resend the confirmation email");
     } finally {

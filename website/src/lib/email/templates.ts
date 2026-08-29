@@ -949,9 +949,15 @@ export function referralCodeAssignedTemplate(input: {
       titleHtml: `${name}, your referral code is ready`,
       bodyHtml: `
         <p>Your referral code: <strong>${escapeHtml(input.referralCode)}</strong></p>
-        <p>Your referral link: <a href="${escapeHtml(input.referralLink)}" style="color:#f2c94c;">${escapeHtml(input.referralLink)}</a></p>
         <p>You'll earn ${input.commissionPercent}% commission on qualifying orders placed through your link.</p>
+        <p style="font-size:12px;color:#a1a1aa;word-break:break-all;">${escapeHtml(input.referralLink)}</p>
       `,
+      // A real button, not the inline link this used to carry. An ambassador
+      // has to be able to grab this on a phone in one tap; an underlined URL in
+      // a paragraph is the shape recipients skim past, and the shape a spam
+      // filter strips.
+      ctaLabel: "Open my dashboard",
+      ctaUrl: input.referralLink,
     }),
     text: toText([
       `Hi ${input.name},`,
@@ -1309,9 +1315,17 @@ export function contactFormNotificationTemplate(input: {
     input.message,
   ].filter((line): line is string => line !== null);
 
+  // Branded too. It goes to the owner rather than a customer, which lowers the
+  // embarrassment but not the stakes: an unstyled wall of <p> is exactly what
+  // gets filed as spam, and a contact-form notification in a spam folder is a
+  // customer whose message nobody answers.
   return {
     subject: `Vanta Labs Contact Form - ${input.subject}`,
-    html: lines.map((line) => (line ? `<p>${escapeHtml(line)}</p>` : "<br />")).join(""),
+    html: renderLayout({
+      preheader: `${input.firstName} ${input.lastName}: ${input.subject}`,
+      titleHtml: "New contact form message",
+      bodyHtml: lines.map((line) => (line ? `<p>${escapeHtml(line)}</p>` : "")).join(""),
+    }),
     text: lines.join("\n"),
   };
 }
@@ -1389,7 +1403,11 @@ export function wholesaleInquiryNotificationTemplate(input: {
   return {
     // Named so it is unmistakable in an inbox and filterable away from orders.
     subject: `WHOLESALE INQUIRY — ${input.firstName} ${input.lastName}`,
-    html: lines.map((line) => (line ? `<p>${escapeHtml(line)}</p>` : "<br />")).join(""),
+    html: renderLayout({
+      preheader: `${input.firstName} ${input.lastName} — wholesale`,
+      titleHtml: "New wholesale inquiry",
+      bodyHtml: lines.map((line) => (line ? `<p>${escapeHtml(line)}</p>` : "")).join(""),
+    }),
     text: lines.join("\n"),
   };
 }
@@ -1398,16 +1416,28 @@ export function wholesaleInquiryNotificationTemplate(input: {
 // about timing: no response-time commitment is configured anywhere in this
 // system, and inventing one here would be a promise the business never made.
 export function wholesaleInquiryAutoReplyTemplate(input: { firstName: string }): EmailTemplate {
-  const greeting = input.firstName ? `Hi ${input.firstName},` : "Hello,";
-  const body = [
-    greeting,
-    "Thanks for contacting Vanta Labs. We've received your wholesale inquiry and will review the information you submitted.",
-    "— Vanta Labs",
-  ];
+  // BRANDED, like every other customer-facing message. It used to be three
+  // escaped <p> tags and nothing else — the same bare shape Gmail filed as
+  // spam on 2026-08-29 — sent to a prospective wholesale buyer, which is about
+  // the worst audience to look untrustworthy in front of.
+  const name = escapeHtml(input.firstName);
   return {
     subject: "Wholesale Request Received — Vanta Labs",
-    html: body.map((line) => `<p>${escapeHtml(line)}</p>`).join(""),
-    text: body.join("\n\n"),
+    html: renderLayout({
+      preheader: "We've got your wholesale inquiry.",
+      titleHtml: name ? `Thanks, ${name}` : "Thanks for getting in touch",
+      bodyHtml:
+        `<p>We've received your wholesale inquiry and will review the information you submitted.</p>`
+        + `<p>If anything changes in the meantime, just reply to this email.</p>`,
+    }),
+    text: toText([
+      input.firstName ? `Hi ${input.firstName},` : "Hello,",
+      "",
+      "We've received your wholesale inquiry and will review the information you submitted.",
+      "If anything changes in the meantime, just reply to this email.",
+      "",
+      "- Vanta Labs",
+    ]),
   };
 }
 

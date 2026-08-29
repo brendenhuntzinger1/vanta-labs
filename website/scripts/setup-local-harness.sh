@@ -38,6 +38,10 @@ create table if not exists auth.users (id uuid primary key default gen_random_uu
 -- foreign keys point at. Harness-only: passwords are clear text here, which is
 -- why that shim documents itself as not a security boundary.
 alter table auth.users add column if not exists encrypted_password text;
+-- Confirmation state is REAL here, not assumed. gotrue-shim.mjs reports it
+-- verbatim so the unconfirmed paths (resend confirmation, the locked-out
+-- ambassador sweep) can actually be exercised.
+alter table auth.users add column if not exists email_confirmed_at timestamptz;
 alter table auth.users add column if not exists raw_user_meta_data jsonb default '{}'::jsonb;
 alter table auth.users add column if not exists raw_app_meta_data jsonb default '{}'::jsonb;
 alter table auth.users add column if not exists phone text;
