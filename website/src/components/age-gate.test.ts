@@ -447,3 +447,35 @@ describe("the home page is skipped only where the hero cannot play", () => {
     expect(read("src/components/hero-video.tsx")).toContain("detectInAppBrowser");
   });
 });
+
+// ---------------------------------------------------------------------------
+// The gate renders on all 111 public URLs, so its heading is on all of them.
+// ---------------------------------------------------------------------------
+describe("the age gate does not add a second H1 to every page", () => {
+  const src = readFileSync(join(process.cwd(), "src/components/age-gate.tsx"), "utf8");
+
+  it("titles the dialog with something other than an h1", () => {
+    // Measured on production: every one of the 55 sitemap URLs carried two H1s
+    // — the page's own, plus this one. A modal's title is not the document's
+    // top-level heading, and the page underneath already has one.
+    expect(src).not.toMatch(/<h1[^>]*id="age-gate-title"/);
+    expect(src).toMatch(/<h2[^>]*id="age-gate-title"/);
+  });
+
+  it("still names the dialog through the same id", () => {
+    // aria-labelledby resolves by id and does not care about the tag, so the
+    // accessible name is unchanged. This is the whole reason the swap is safe;
+    // if the id or the reference ever moves, the dialog goes unnamed.
+    expect(src).toMatch(/aria-labelledby="age-gate-title"/);
+    expect(src).toMatch(/id="age-gate-title"/);
+    expect(src).toMatch(/role="dialog"/);
+    expect(src).toMatch(/aria-modal="true"/);
+  });
+
+  it("keeps the heading's styling classes, so nothing moves", () => {
+    const heading = src.match(/<h2[^>]*id="age-gate-title"[^>]*>/)?.[0] ?? "";
+    for (const cls of ["vl2-serif", "mt-4", "text-4xl", "text-white", "sm:text-5xl"]) {
+      expect(heading).toContain(cls);
+    }
+  });
+});

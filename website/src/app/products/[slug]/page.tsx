@@ -7,6 +7,7 @@ import { getHomepageControlConfig } from "@/lib/admin-control";
 import { getPublishedCoaDocumentsForProduct } from "@/lib/coa";
 import { getStorefrontCoupon } from "@/lib/coupons";
 import { isBacWater, resolveBacWaterProduct } from "@/lib/bac-water";
+import { siteUrl } from "@/lib/site-identity";
 
 export const dynamic = "force-dynamic";
 
@@ -52,7 +53,11 @@ export async function generateMetadata({
   };
 }
 
-const SITE_URL = (process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") || "https://vantalabsresearch.com");
+// Via site-identity so the Product schema's url cannot disagree with the
+// canonical on the same page. The local copy fell back to the APEX, which
+// 308-redirects to www — a Product url pointing at a redirect if the env var
+// were ever unset. It is set in production, so this never fired.
+const SITE_URL = siteUrl();
 
 export default async function ProductDetailPage({
   params,

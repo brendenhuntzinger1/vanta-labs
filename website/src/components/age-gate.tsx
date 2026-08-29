@@ -476,7 +476,17 @@ export function AgeGate({ children }: { children: React.ReactNode }) {
             <span className="h-px w-6 bg-[color:var(--accent-gold)]/30" />
           </p>
 
-          <h1 id="age-gate-title" className="vl2-serif mt-4 text-4xl text-white sm:text-5xl">Vanta Labs</h1>
+          {/* h2, not h1. This dialog renders on all 111 public URLs, so an h1 here
+              put a second top-level heading on every page in the site — measured
+              across all 55 sitemap URLs. A modal title is not the document's
+              top-level heading, and the page beneath it already has one.
+
+              Nothing else changes: aria-labelledby below resolves this by ID and
+              does not care about the tag, so the dialog keeps exactly the same
+              accessible name, and the styling is entirely utility classes rather
+              than a bare-element rule. Verified in the browser at 390px: identical
+              computed font, colour and box. */}
+          <h2 id="age-gate-title" className="vl2-serif mt-4 text-4xl text-white sm:text-5xl">Vanta Labs</h2>
           <p className="mt-3 text-sm text-white/55 sm:text-base">Research Integrity. Verified Quality.</p>
 
           {/* Trust chips */}
