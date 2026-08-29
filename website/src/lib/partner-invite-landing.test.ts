@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { isActionablePasswordSetupLink } from "@/lib/auth-link-fragment";
+import { ambassadorInviteTemplate } from "@/lib/email/templates";
 
 // ---------------------------------------------------------------------------
 // WHERE AN ADMIN INVITE LANDS — the affiliate half of the 2026-08-29
@@ -53,9 +54,11 @@ describe("hop 1 — the invite names where it lands", () => {
   });
 
   it("it is built from the configured site URL rather than hardcoded", () => {
-    const inviteCall = PARTNER_PORTAL.slice(PARTNER_PORTAL.indexOf("inviteUserByEmail"));
-    const redirectLine = inviteCall.slice(0, inviteCall.indexOf("});"));
-    expect(redirectLine).toContain("getSiteUrl()");
+    // The invite send moved into inviteAmbassadorUser(), so the redirect is now
+    // built once at the call site and threaded through. The property under test
+    // is unchanged: it comes from NEXT_PUBLIC_SITE_URL, not a literal host.
+    expect(PARTNER_PORTAL).toContain("redirectTo: `${getSiteUrl()}/account/reset-password`");
+    expect(PARTNER_PORTAL).not.toContain("redirectTo: \"https://");
   });
 });
 
@@ -109,5 +112,71 @@ describe("the widening that must NOT happen", () => {
     // in visitor fires it too, and /account/settings re-authenticates before a
     // password change precisely so this page cannot be used to skip that.
     expect(RESET_FORM).not.toContain('"SIGNED_IN"');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// hop 0 — the invite email itself.
+//
+// Fixing where the link LANDS is worth nothing if the message carrying it gets
+// filed as phishing, which is what happened to the signup confirmations on
+// 2026-08-29: Resend reported "delivered" for every stuck account and not one
+// was ever clicked. The invite went out through the same Supabase mailer, in
+// the same bare-anchor shape, and it matters more here — inviteUserByEmail
+// creates the account with NO password, so this link is the only way in.
+// ---------------------------------------------------------------------------
+
+describe("hop 0 — the invite is ours to send, and branded", () => {
+  it("mints the invite link instead of letting Supabase mail it", () => {
+    expect(PARTNER_PORTAL).toContain("generateLink");
+    expect(PARTNER_PORTAL).toContain('type: "invite"');
+  });
+
+  it("sends it with the branded template through the app's own provider", () => {
+    expect(PARTNER_PORTAL).toContain("ambassadorInviteTemplate");
+    expect(PARTNER_PORTAL).toContain("sendAmbassadorEmail");
+  });
+
+  it("still falls back to inviteUserByEmail, so the change is additive", () => {
+    // Moving a send in-house makes our provider a new single point of failure
+    // for an ambassador's only route into their account.
+    expect(PARTNER_PORTAL).toContain("inviteUserByEmail");
+    expect(PARTNER_PORTAL).toContain("partner_invite_provider_failed");
+  });
+});
+
+describe("the invite email", () => {
+  const template = ambassadorInviteTemplate({
+    name: "Zain",
+    inviteUrl: "https://example.test/verify?token=abc&type=invite",
+    commissionPercent: 20,
+  });
+
+  it("carries the link as a real button, not a naked anchor", () => {
+    expect(template.html).toContain("https://example.test/verify?token=abc&amp;type=invite");
+    expect(template.html).toContain("border-radius:999px");
+    expect(template.html).toContain("Set my password");
+  });
+
+  it("is branded, which is the whole difference from the one that got filtered", () => {
+    expect(template.html).toContain("Vanta Labs");
+    expect(template.html).toContain("background:#050505");
+  });
+
+  it("says what to do when the single-use link expires", () => {
+    // The failure mode that stranded ZAIN for six days: a dead link and no
+    // stated way back.
+    expect(template.html).toContain("Forgot your password?");
+    expect(template.text).toContain("Forgot your password?");
+  });
+
+  it("states the commission rate when the admin set one", () => {
+    expect(template.html).toContain("20%");
+    const noRate = ambassadorInviteTemplate({ name: "Zain", inviteUrl: "https://example.test/x" });
+    expect(noRate.html).not.toContain("commission rate is set to");
+  });
+
+  it("carries the link in the plain-text part too", () => {
+    expect(template.text).toContain("https://example.test/verify?token=abc&type=invite");
   });
 });

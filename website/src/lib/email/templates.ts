@@ -618,6 +618,51 @@ export function deliveryConfirmationTemplate(input: {
   };
 }
 
+/**
+ * The email an ADMIN-INVITED ambassador gets. Branded, and ours to send.
+ *
+ * createPartnerInvite used to leave this to `auth.admin.inviteUserByEmail`,
+ * which mails Supabase's unstyled "Invite user" template — the same bare-anchor
+ * shape that got signup confirmations filed as phishing. It matters more here,
+ * not less: inviteUserByEmail creates the account with NO password, so this
+ * link is the ONLY way that person ever gets one. Ambassador ZAIN was invited
+ * on 2026-08-23 and approved an hour later with a live referral code, and six
+ * days on had still never confirmed or signed in.
+ */
+export function ambassadorInviteTemplate(input: { name: string; inviteUrl: string; commissionPercent?: number }): EmailTemplate {
+  const name = escapeHtml(input.name);
+  const rate = typeof input.commissionPercent === "number" && Number.isFinite(input.commissionPercent)
+    ? `<p>Your commission rate is set to <strong>${escapeHtml(String(input.commissionPercent))}%</strong>.</p>`
+    : "";
+  return {
+    subject: "You're invited to the Vanta Labs ambassador program",
+    html: renderLayout({
+      preheader: "Set your password and pick up your referral link.",
+      titleHtml: name ? `${name}, you're in` : "You're invited",
+      bodyHtml:
+        `<p>You've been invited to the Vanta Labs ambassador program. Tap below to set a password and open your dashboard, where your referral link and earnings live.</p>`
+        + rate
+        + `<p>This link can only be used once. If it expires, use “Forgot your password?” on the sign-in page with this address.</p>`,
+      ctaLabel: "Set my password",
+      ctaUrl: input.inviteUrl,
+    }),
+    text: toText([
+      name ? `${input.name},` : "Hello,",
+      "",
+      "You've been invited to the Vanta Labs ambassador program.",
+      "Set a password and open your dashboard:",
+      input.inviteUrl,
+      "",
+      typeof input.commissionPercent === "number" && Number.isFinite(input.commissionPercent)
+        ? `Your commission rate is set to ${input.commissionPercent}%.`
+        : "",
+      "This link can only be used once. If it expires, use \"Forgot your password?\" with this address.",
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 export function ambassadorApplicationReceivedTemplate(input: { name: string }): EmailTemplate {
   const name = escapeHtml(input.name);
   return {

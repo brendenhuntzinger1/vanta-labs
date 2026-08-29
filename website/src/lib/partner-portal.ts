@@ -10,11 +10,13 @@ import type { EmailTemplate } from "@/lib/email/types";
 import {
   ambassadorApplicationReceivedTemplate,
   ambassadorApprovedTemplate,
+  ambassadorInviteTemplate,
   ambassadorDeniedTemplate,
   ambassadorPayoutSentTemplate,
   newAmbassadorApplicationTemplate,
   referralCodeAssignedTemplate,
 } from "@/lib/email/templates";
+import { recordSystemAlert } from "@/lib/monitoring";
 import { getSiteUrl } from "@/lib/env";
 import { DEFAULT_REFERRAL_DISCOUNT_PERCENT, getBusinessSettings, getReferralProgramConfig } from "@/lib/admin-control";
 import { resolveAmbassadorCustomerDiscount } from "@/lib/ambassador-discount";
@@ -1732,6 +1734,83 @@ export async function getAdminOperationsSummary(): Promise<AdminOperationsSummar
   };
 }
 
+/**
+ * Create the invited ambassador's auth user and mail them a BRANDED invite.
+ *
+ * `inviteUserByEmail` does both in one call, and the email half is the problem:
+ * it uses Supabase's own unstyled "Invite user" template, which is the same
+ * bare-anchor shape that got signup confirmations filed as phishing by Gmail on
+ * 2026-08-29. That matters more for an invite than for a signup, because
+ * inviteUserByEmail creates the account with NO password — the link in that
+ * email is the ONLY way the person ever gets one.
+ *
+ * `generateLink({ type: "invite" })` does the same account creation and returns
+ * the link WITHOUT sending anything, so the message can go out through
+ * sendEmail() with renderLayout's branding, from the identity configured in
+ * Admin → Settings, and visible to the bounce webhook. Same trade as
+ * /api/auth/signup and /api/auth/password-reset.
+ *
+ * FALLS BACK, so this is strictly additive: if minting or sending fails, it
+ * calls inviteUserByEmail exactly as before. At worst an invite behaves the way
+ * it did; at best it arrives looking like the rest of this brand's mail.
+ */
+async function inviteAmbassadorUser(input: {
+  email: string;
+  name: string;
+  commissionPercent: number;
+  actorUserId: string | null;
+  redirectTo: string;
+}): Promise<{ user?: { id?: string } | null } | null> {
+  const metadata = { role: "partner", invited_by: input.actorUserId };
+
+  const minted = await supabaseAdmin.auth.admin.generateLink({
+    type: "invite",
+    email: input.email,
+    options: { redirectTo: input.redirectTo, data: metadata },
+  });
+
+  if (!minted.error && minted.data?.properties?.action_link) {
+    const template = ambassadorInviteTemplate({
+      name: input.name,
+      inviteUrl: minted.data.properties.action_link,
+      commissionPercent: input.commissionPercent,
+    });
+    const sent = await sendAmbassadorEmail(input.email, template, "ambassador invite");
+    if (sent) {
+      return { user: minted.data.user ?? null };
+    }
+    // The account EXISTS now — generateLink created it — so the fallback below
+    // would fail on "already registered" and leave the person with no email at
+    // all. Hand this one to Supabase's own mailer instead, and say so.
+    await recordSystemAlert({
+      type: "partner_invite_provider_failed",
+      severity: "warning",
+      message:
+        `The configured email provider refused the ambassador invite for ${input.email}, so it fell `
+        + "back to Supabase Auth's own unbranded email. The invite still works, but that message is "
+        + "the one Gmail filed as phishing on 2026-08-29 — check the invite actually landed.",
+      context: { email: input.email },
+      dedupeWindowMs: 60 * 60 * 1000,
+    }).catch(() => {});
+
+    const { error: resendError } = await supabaseAdmin.auth.resend({ type: "signup", email: input.email });
+    if (resendError) {
+      console.error("[partner-portal] supabase invite fallback failed", resendError);
+    }
+    return { user: minted.data.user ?? null };
+  }
+
+  // Minting itself failed. Do exactly what this function did before it existed.
+  const { data: invitedUser, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
+    data: metadata,
+    redirectTo: input.redirectTo,
+  });
+  if (inviteError) {
+    assertNoSupabaseError("auth.admin.inviteUserByEmail", inviteError);
+  }
+  return invitedUser;
+}
+
 export async function createPartnerInvite(input: {
   name: string;
   email: string;
@@ -1763,14 +1842,13 @@ export async function createPartnerInvite(input: {
   // RecoveryLinkCatcher is the safety net for that case and now carries
   // `type=invite` as well as `type=recovery`. Naming it here is the fix; the
   // catcher is the belt to its braces.
-  const { data: invitedUser, error: inviteError } = await supabaseAdmin.auth.admin.inviteUserByEmail(input.email, {
-    data: { role: "partner", invited_by: actorUserId },
+  const invitedUser = await inviteAmbassadorUser({
+    email: input.email,
+    name: input.name,
+    commissionPercent: input.commissionPercent,
+    actorUserId,
     redirectTo: `${getSiteUrl()}/account/reset-password`,
   });
-
-  if (inviteError) {
-    assertNoSupabaseError("auth.admin.inviteUserByEmail", inviteError);
-  }
 
   const partnerId = randomUUID();
 
@@ -1785,7 +1863,7 @@ export async function createPartnerInvite(input: {
   // See src/lib/sql/partner-invite-convergence.sql (audit finding F-013).
   const { data: invited, error } = await supabaseAdmin.rpc("create_partner_invite", {
     p_id: partnerId,
-    p_auth_user_id: invitedUser.user?.id ?? null,
+    p_auth_user_id: invitedUser?.user?.id ?? null,
     p_name: input.name,
     p_email: input.email,
     p_referral_code: referralCode,

@@ -158,6 +158,7 @@ vi.mock("@/lib/email/templates", () => ({
   ambassadorDeniedTemplate: () => ({ subject: "s", html: "h" }),
   ambassadorPayoutSentTemplate: () => ({ subject: "s", html: "h" }),
   newAmbassadorApplicationTemplate: () => ({ subject: "s", html: "h" }),
+  ambassadorInviteTemplate: () => ({ subject: "s", html: "h" }),
   referralCodeAssignedTemplate: () => ({ subject: "s", html: "h" }),
 }));
 vi.mock("@/lib/admin-control", () => ({
@@ -177,6 +178,7 @@ vi.mock("@/lib/ambassador-settings", () => ({
 vi.mock("@/lib/supabase-server", () => ({
   supabaseAdmin: {
     auth: {
+      resend: async () => ({ data: {}, error: null }),
       admin: {
         // Supabase Auth refuses to re-invite an address that already has an
         // account. Modelled because it decides whether the DB half runs at all.
@@ -187,6 +189,24 @@ vi.mock("@/lib/supabase-server", () => ({
           const id = `aaaaaaaa-0000-4000-8000-${String(authUsersByEmail.size + 1).padStart(12, "0")}`;
           authUsersByEmail.set(email, id);
           return { data: { user: { id } }, error: null };
+        },
+        // The invite is now minted rather than mailed by Supabase, so the app
+        // can send it branded — see inviteAmbassadorUser. Same refusal for an
+        // address that already has an account, because that refusal is what
+        // these tests are about.
+        generateLink: async ({ type, email }: { type: string; email: string }) => {
+          if (type !== "invite") {
+            return { data: null, error: { message: `unexpected generateLink type ${type}` } };
+          }
+          if (authUsersByEmail.has(email)) {
+            return { data: null, error: { message: "User already registered" } };
+          }
+          const id = `aaaaaaaa-0000-4000-8000-${String(authUsersByEmail.size + 1).padStart(12, "0")}`;
+          authUsersByEmail.set(email, id);
+          return {
+            data: { properties: { action_link: `https://example.test/invite/${id}` }, user: { id } },
+            error: null,
+          };
         },
       },
     },
