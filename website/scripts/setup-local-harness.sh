@@ -155,6 +155,21 @@ check "orders.inventory_restocked_at exists (cancel/refund restock claim)" \
   "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='inventory_restocked_at');"
 check "orders.inventory_committed_at exists (the restock SIGNAL)" \
   "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='inventory_committed_at');"
+# The four columns scripts/harness-pay-order.mjs SELECTs. They are created by
+# deploy-run-once.sql's `create table ... if not exists`, which is a no-op once
+# the table exists in any shape — so a damaged orders table loses them
+# permanently unless harness-prod-parity-columns.sql re-adds them. It now does;
+# these assert it, because the previous check set covered only columns that file
+# already owned and so reported green on a database the payment harness could
+# not read.
+check "orders.payment_id exists (harness-pay-order.mjs SELECTs it)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='payment_id');"
+check "orders.provider_event_id exists (webhook idempotency key)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='provider_event_id');"
+check "orders.referral_code exists (affiliate attribution)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='referral_code');"
+check "orders.ambassador_id exists (affiliate attribution)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='ambassador_id');"
 check "adjust_inventory_on_sale maintains stock_status (inventory-return-path.sql)" \
   "select coalesce(bool_or(prosrc like '%stock_status%'), false) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='public' and p.proname='adjust_inventory_on_sale';"
 check "reserve_inventory enforces untracked-but-stocked (inventory-enforce-positive-stock.sql)" \

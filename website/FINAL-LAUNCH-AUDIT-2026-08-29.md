@@ -22,15 +22,24 @@ than inferred from source.
 chased down was either already fixed and deployed, or turned out to be a
 configuration/data decision rather than a bug.
 
-Two items should be **decided before you spend on traffic** — neither is a code
-fault, both are yours to call:
+One item is **yours to decide** — it is not a code fault:
 
 1. **Sales tax has been switched off since 2026-08-23** — $0 collected on every
-   order since, including both recent real orders.
-2. **15 of your 36 live products currently show "Out of Stock"** and cannot be
-   bought.
+   order since, including both recent real orders. *Reviewed by the owner on
+   2026-08-29 and deliberately deferred.*
 
 Everything else is operational tidy-up.
+
+> ### Correction — 2026-08-29, after first publication
+>
+> The first version of this document carried a second headline finding: *"15 of
+> your 36 live products cannot be bought."* **That finding was wrong and is
+> withdrawn.** So were the two claims that hung off it — that 17 products could
+> oversell, and that stale express orders were holding stock.
+>
+> The catalogue is healthy: **36 of 36 live products are sellable, and 36 of 36
+> are stock-gated.** The details, and how the error happened, are in
+> [Withdrawn findings](#withdrawn-findings--corrected-2026-08-29).
 
 ---
 
@@ -58,13 +67,19 @@ holds.
 **PII hygiene — BROWSER.** The confirmation page and `order_email_log` both mask
 the customer address (`a************@example.com`).
 
-### Out-of-stock gating is honest — BROWSER
+### Stock gating is honest in BOTH directions — BROWSER
 
-A tracked product at zero (`stock_status` still says "In Stock" in the column,
-tracking on) renders a **disabled "Out of Stock" button**, and
-`reserve_inventory` independently returns `false` for it. Display and checkout
-agree, so there is no path where a customer is shown a purchasable product that
-fails at the till.
+Verified on the two shapes that actually exist in this catalogue:
+
+- **Genuinely empty** (no doses, parent at zero, tracking on): renders a
+  **disabled "Out of Stock" button**, and `reserve_inventory` independently
+  returns `false`. Display and checkout agree, so nobody is shown a purchasable
+  product that fails at the till.
+- **Parent-zero but dose-stocked** — the shape 15 live products actually have:
+  renders **In Stock and purchasable**, and the hold lands on the dose rather
+  than the parent. This is the runbook's F-001 and it passes. See
+  [Withdrawn findings](#withdrawn-findings--corrected-2026-08-29) — reading only
+  the first shape is what produced the retracted claim.
 
 ### Money math — PROD-DATA
 
@@ -94,6 +109,7 @@ The extra a few pence over subtotal+shipping on some orders is
 | `npm run lint` | **0 errors**, 49 warnings (all unused vars in test files) |
 | `npm test` | **5,508 passed**, 106 skipped |
 | `npm test` **with real Postgres** (`VANTA_TEST_DATABASE_URL`) | **5,614 passed / 389 files, 0 skipped** |
+| Re-run after this audit's fixes | **5,627 passed / 390 files, 0 skipped** |
 
 The 106 normally-skipped tests are the ones that matter most — double payout,
 exactly-once payout claim, refund correctness, inventory return path, invite
@@ -119,7 +135,7 @@ Inventory reservations in production are clean: every row is `released` or
 
 ## Decide before you scale traffic
 
-### 1. Sales tax is switched off — PROD-DATA
+### Sales tax is switched off — PROD-DATA
 
 `admin_control` has `tax.nexus_states = ""` (empty), set **2026-08-23**. With no
 nexus states configured, `computeSalesTax` returns `no_nexus` and collects
@@ -146,25 +162,101 @@ it should go back before volume increases.
 
 **Where:** Admin → tax settings → `nexus_states`.
 
-### 2. 15 of 36 live products cannot be bought — PROD-DATA
+---
 
-Tracking is **on** in production, and these have `inventory_quantity = 0`, so
-they render "Out of Stock":
+## Withdrawn findings — corrected 2026-08-29
 
-`5-amino-1mq`, `b12`, `bpc-157`, `bpc-157-tb-500`, `cjc-1295-ipamorelin`,
-`epithalon`, `glp-2`, `glp-3`, `kisspeptin`, `klow`, `mt-2-melanotan-ii`,
-`nad`, `selank`, `semax`, `snap-8`
+Three claims in the first version of this document were **wrong**. They shared a
+single root cause, and correcting them removes the second of the two "decide
+before you scale" items entirely.
 
-That includes several of your headline SKUs. The system is behaving correctly —
-the question is whether the shelf is genuinely empty or the counts were simply
-never entered in `/admin/inventory`. Sending paid traffic to a catalogue where
-42% of it is unbuyable is the most expensive thing on this list.
+### What was claimed, and what is actually true
 
-**The other half of the same setting:** 17 of the 36 live products have
-`track_inventory = false`, so they sell with **no stock gate at all** and can
-oversell without limit. Now that you fulfil your own orders, that is a
-fulfilment risk in the opposite direction. The split is currently 19 tracked
-(15 of them at zero) / 17 untracked.
+| Claimed | Actual |
+|---|---|
+| 15 of 36 live products cannot be bought | **All 36 are buyable** |
+| 17 products can oversell without limit | **All 36 are stock-gated**; none is ungated |
+| 2 express orders are holding inventory | **No stale order holds any stock** |
+
+### The root cause: the parent row is a stale shadow
+
+This catalogue sells through **doses** (variants in `product_doses`), not through
+the parent `products` row. For a dosed product, `products.inventory_quantity`
+is not the stock — `src/lib/catalog.ts` says so in as many words, and
+`mapProductRow` acts on it:
+
+```ts
+const backingAvailability = defaultDose
+  ? defaultDose.availableQuantity ?? undefined
+  : sellable(productLevelQuantity, reservedQuantity);
+```
+
+A dosed product's badge comes from its **default dose**, never from the zero
+parent. All 15 products I flagged have an enabled default dose marked In Stock
+carrying 15–29 units — with 144 units behind `glp-3`, 116 behind `glp-2`, 48
+behind `bpc-157` and 38 behind `nad`. Roughly 530 units of real inventory that
+I reported as unsellable.
+
+The same mistake produced the oversell claim, which was wrong twice over:
+
+- **The catalogue never reads per-product `track_inventory`.** `resolveStockStatus`
+  gates on `inventoryActive` (`catalog.ts:37`), which is the single **global**
+  admin setting (`inventory-settings.ts:47`). A parent flagged untracked is gated
+  exactly as hard as one flagged tracked.
+- **`reserve_inventory` gates the dose, not the parent.** With a variant supplied
+  it locks `product_doses` on `(track_inventory = true or inventory_quantity > 0)`,
+  and `inventory-enforce-positive-stock.sql:112-118` backfills
+  `track_inventory = true` for every product *and* dose holding stock. A dose with
+  real stock is tracked by construction.
+
+Nothing is ungated.
+
+### Two narrower things that ARE true — CODE
+
+Correcting an overclaim must not swing into the opposite overclaim, so both of
+these survive the retraction:
+
+1. **`quoteOrder`'s secondary guard has a blind spot.** `getStockLevelsBySlugs`
+   filters `track_inventory === true` for products (`catalog.ts:532`) and doses
+   (`catalog.ts:549`), so any row enforced *solely* by holding a positive count is
+   silently omitted from that map. This is a pre-checkout UX gap, **not** an
+   oversell hole — `reserve_inventory` still returns false and refuses the sale.
+2. **A legacy cart line with no `variantId` reads the parent's zero.**
+   `sanitizeCartItems` rehydrates persisted localStorage lines verbatim and never
+   re-resolves a missing variant (`cart-context.tsx:240`), and `/api/cart/validate`
+   falls to its `bySlug` branch for such a line (`route.ts:194`), which reads
+   `products.inventory_quantity` — zero for all 15 of these. That line is then
+   marked sold out and dropped from the cart. Already logged as a P1 in
+   `docs/PHASE1-SYSTEM-MAP.md:508`. Stated at **CODE** tier: the read paths were
+   confirmed in the tree, but this was not reproduced in a browser.
+
+### Proven, this time on the right shape — BROWSER
+
+Reproduced against a harness product carrying production's exact shape (parent
+`inventory_quantity = 0`, tracking on, default dose holding 25 units):
+
+    /products/bpc-157-10mg  ->  ADD TO CART enabled, no Out of Stock badge
+      -> added to cart -> checkout -> order written
+      -> hold placed AGAINST THE DOSE (reservation.variant_id set)
+      -> default dose reserved_quantity 0 -> 1
+      -> parent row untouched: inventory_quantity 0, reserved 0
+
+That also closes **F-001**, the runbook's own number-one priority, which had
+never been verified.
+
+### Why I got it wrong
+
+The browser check that "confirmed" the finding ran against a harness database I
+had corrupted earlier in this same audit — pointing the DB-backed suites at it
+via `VANTA_TEST_DATABASE_URL` had rebuilt the schema and wiped `product_doses`.
+The product I tested therefore had **no doses at all**, so its Out of Stock
+badge was correct for that database and meaningless for production. I
+generalised from it anyway.
+
+That is precisely the trap recorded as finding 10 below, and it caught me
+before I wrote it down. Two lessons, both now fixed in the tooling: the harness
+guard in finding 10 exists so this cannot recur, and a stock claim must be read
+from the **dose** rows, never the parent.
 
 ---
 
@@ -173,8 +265,8 @@ fulfilment risk in the opposite direction. The split is currently 19 tracked
 | # | Item | Evidence |
 |---|---|---|
 | 3 | Two paid orders awaiting fulfilment with no tracking number: **VL-3B91237B** (Aug 28), **VL-C98B8AB1** (Aug 27) | PROD-DATA |
-| 4 | 2 express orders pending >24h at the processor, holding inventory — abandoned 3DS challenges. They will never settle on their own; cancel or complete them | Sentry `VANTA-LABS-2` |
-| 5 | 2 orders need shipping cost entered by hand (Shippo can't read the postage back); 1 Shippo label purchased that matched no order | Sentry `VANTA-LABS-6`, `VANTA-LABS-4` |
+| 4 | 5 abandoned checkouts sit >24h in `pending_payment`. Sentry warned they hold inventory; **they do not** — every one shows `active_holds = 0`, the sweep released their stock. No money moved. Clear them at leisure | PROD-DATA (supersedes Sentry `VANTA-LABS-2`) |
+| 5 | **VL-E8F4D52F** shipped with tracking but no postage cost, so its profit is still unfinalized; 1 Shippo label purchased that matched no order | PROD-DATA, Sentry `VANTA-LABS-4` |
 | 6 | **Supabase leaked-password protection is disabled.** One toggle; checks new passwords against HaveIBeenPwned | Supabase advisor |
 | 7 | 3 of 25 accounts never confirmed their email. 22/25 confirmed *and* signed in, so delivery is working — these look like ordinary abandoned signups, not a systemic failure | PROD-DATA |
 
@@ -182,36 +274,86 @@ fulfilment risk in the opposite direction. The split is currently 19 tracked
 
 ## Minor findings
 
-**8. The referral-code endpoint leaks the ambassador roster — PROD-DATA + CODE.**
-`validate_referral_code` is `SECURITY DEFINER` and executable by `anon`, which is
-*by design* — the cart validates codes in the browser with the anon key. But it
-returns `ambassador_name` **and** `ambassador_id` on a hit, with no rate limit at
-the PostgREST layer. Brute-forcing short referral codes against
-`/rest/v1/rpc/validate_referral_code` would harvest the real names and internal
-UUIDs of every approved ambassador. The cart needs the name to display "referred
-by"; it does not need the UUID. Dropping `ambassador_id` from the return would
-cost nothing.
+**8. The referral-code endpoint exposes the ambassador roster — known, deferred
+by owner decision. No change made.** `validate_referral_code` is
+`SECURITY DEFINER` and anon-executable *by design* — the cart validates codes in
+the browser with the anon key. Brute-forcing short codes against
+`/rest/v1/rpc/validate_referral_code` would harvest approved ambassadors' real
+names, with no rate limit at the PostgREST layer.
 
-**9. The CASL consent split has no regression test — EXECUTED.** Finding 6 above
-(marketing box unchecked for Canada) is correct in code and browser-proven, but
-no test covers it. A one-line change to that ternary would silently create a
-compliance problem in Canada with every suite still green.
+I proposed dropping `ambassador_id` from the return and **withdrew it after
+review**. Three reasons, all verified against the tree:
 
-**10. Two harness-tooling gaps found while running this audit — EXECUTED.**
-Neither affects production, both cost time:
+- **It would not close the leak.** The roster is `ambassador_name`, and that
+  field is load-bearing: `referral-qualification.ts:138` renders it on three
+  surfaces (`cart-drawer.tsx:479`, `cart/cart-client.tsx:476`,
+  `checkout/page.tsx:1105`). The UUID buys an anon caller nothing — `ambassadors`
+  is RLS-locked to owner-or-admin, and no anon-callable RPC accepts an
+  ambassador id.
+- **It would risk a live price path.** `cart-context.tsx:261` does
+  `Boolean(code.ambassadorId)`. That guard is a no-op only while the RPC always
+  returns the PK; drop the field alone and the cart silently stops previewing a
+  discount the server still charges — the exact defect class this file has
+  already been repaired for twice.
+- **The real remedy is already documented and consciously deferred.**
+  `referral-rpc-minimise.sql:50-53` names it — move validation behind a
+  rate-limited application route and revoke the anon grant — and records it as
+  too large a change to a live checkout path to attempt opportunistically.
+  `20260827233116_...sql:212` marks it *"Owner decision (RLS-09)"*.
 
-- `scripts/harness-pay-order.mjs` — the documented way to drive payment
-  outcomes — selects `payment_id`, `provider_event_id`, `referral_code` and
-  `ambassador_id`, which are the **exact four columns** the harness schema
-  lacks versus production. It crashes on `column "payment_id" does not exist`
-  until they are added. The harness therefore cannot exercise affiliate
-  attribution or webhook idempotency out of the box; both are covered by unit
-  and DB tests only.
-- Pointing `VANTA_TEST_DATABASE_URL` at the harness `storefront` database
-  **destroys it** — the suites rebuild `orders` with their own minimal schema
-  (107 columns → 39). The parity self-check then passes on a stale run while the
-  live database is wrong. Worth a line in the runbook, and worth having the
-  suites refuse a database named `storefront`.
+So this stays open as a **question for the owner**, not a patch: accept the
+exposure, or fund the move to a rate-limited server route. Note also that
+`customer_discount_percent` must **not** be removed from the RPC —
+`referral-rpc-minimise.sql:1-9` carries an explicit DO-NOT-RUN header recording
+that doing so regressed a real incident (a 15% ambassador's customers were
+offered 10%).
+
+**9. The CASL consent split had no regression test — FIXED. EXECUTED.** The
+jurisdiction split above is correct and browser-proven, but nothing guarded it:
+changing `isUnitedStates(form.country)` to `true` would put every Canadian
+shopper back on the mailing list with the whole suite still green.
+
+`src/lib/marketing-consent-default.test.ts` now covers it — 13 tests, no
+production code touched. `isUnitedStates` and the ternary are module-private to
+a `"use client"` page and vitest runs `environment: "node"` with no jsdom, so the
+test **lifts the real expression out of the page and executes it**, the technique
+`harness-embed-parity.test.ts:73` already uses on the shim's parser and the trade
+`checkout-no-bypass.test.ts:14` already made for this same file.
+
+It asserts the result rather than the spelling: both country helpers are injected,
+so the behaviour-identical `!isCanada(...)` rewrite still passes while
+`: true`, `: marketingChoice` and an inverted test all fail. **Proven to fail for
+the right reason** — flipping the live ternary to `true` turned 3 assertions red;
+restoring it returned all 13 to green.
+
+**10. The harness could silently serve a wrong database — FIXED. EXECUTED.**
+This is the defect that produced the retracted finding above, so it is written
+up as one fault rather than the two symptoms it presented as.
+
+**Root cause.** `src/lib/admin-financial-surfaces.test.ts` is the one DB-backed
+suite that connects straight to `VANTA_TEST_DATABASE_URL`, and it runs
+`ORDERS_DDL` from `src/lib/e2e/block-f-fixture.ts:14-17`, which does
+`drop table if exists public.orders cascade` and rebuilds it with 39 columns.
+Point that variable at the harness database and its `orders` table is replaced
+in place, losing `payment_id`, `provider_event_id`, `referral_code` and
+`ambassador_id`.
+
+**Why it stayed invisible — the part that actually mattered.** Re-running
+`setup-local-harness.sh` could not repair it: `createdb || true` never drops the
+database, and every orders DDL in the build is `create table if not exists`, so
+the base schema is a no-op against an existing table. Meanwhile the parity
+self-check reported every row green, because it only covered columns
+`harness-prod-parity-columns.sql` re-adds. The harness went on serving a wrong
+database while insisting it was correct, and `scripts/harness-pay-order.mjs`
+died on `column "payment_id" does not exist`.
+
+**Fixed, three ways, each verified:**
+
+| Change | Proof |
+|---|---|
+| `harness-prod-parity-columns.sql` now re-adds the four columns, so setup *repairs* a damaged table | Dropped all four, re-ran setup, all four returned |
+| Four new parity checks assert them | Check SQL returns `f` with the column dropped, `t` once restored |
+| `vitest.setup.ts` refuses to run when `VANTA_TEST_DATABASE_URL` names the harness database | Blocks `storefront` with a message naming the fix; a throwaway DB still runs (5 tests pass) |
 
 ---
 
@@ -242,6 +384,11 @@ exact on every real order, the purchase path works end to end, and the recent
 round of fixes is deployed and holding — only one new Sentry issue in 24 hours,
 and that one is benign.
 
-Before you turn on traffic: **restore sales-tax nexus, and fix the stock counts
-so your catalogue is actually buyable.** Those two are worth more than
-everything else in this document combined.
+The catalogue is healthy too — 36 of 36 live products sellable and stock-gated.
+The finding that said otherwise was mine, and it was wrong; the correction and
+its cause are recorded above rather than quietly edited out.
+
+That leaves **sales-tax nexus** as the one open judgement call, and the owner
+has reviewed it and chosen to defer. Everything else outstanding is physical
+work — ship the two paid orders, enter the postage on VL-E8F4D52F — plus one
+toggle in the Supabase dashboard.
