@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { SiteHeaderV2 } from "@/components/site-header-v2";
 import { HeroVideo } from "@/components/hero-video";
@@ -8,6 +9,14 @@ import { getCatalogProducts } from "@/lib/catalog";
 import { CHECKOUT_SHORT, COA_SHORT, FULFILMENT_SHORT, TESTING_SHORT, trustPoints } from "@/lib/trust-claims";
 
 export const dynamic = "force-dynamic";
+
+// Ads append their own tracking parameters to the landing URL. Without a
+// canonical, each variant is a separate page competing with the real one.
+// This lived on the root layout until it was found to be leaking onto every
+// other route's <head> — see the note there.
+export const metadata: Metadata = {
+  alternates: { canonical: "/" },
+};
 
 /**
  * K-21. The CLAIMS come from @/lib/trust-claims — the single source, with

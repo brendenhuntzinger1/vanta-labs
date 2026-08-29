@@ -13,7 +13,11 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const { slug } = await params;
   if (!isPolicySlug(slug)) return {};
   const policy = await getPolicy(slug);
-  return { title: policy.title, description: `${policy.title} — Vanta Labs.` };
+  return {
+    title: policy.title,
+    description: `${policy.title} — Vanta Labs.`,
+    alternates: { canonical: `/legal/${slug}` },
+  };
 }
 
 // All policy pages (Research Disclaimer, Privacy, Terms, Shipping, Refund,

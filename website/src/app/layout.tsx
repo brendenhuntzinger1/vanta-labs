@@ -116,9 +116,15 @@ export const metadata: Metadata = {
   },
   description: HOME_DESCRIPTION,
   applicationName: BRAND_LEGAL_NAME,
-  // Ads append their own tracking parameters to the landing URL. Without a
-  // canonical, each variant is a separate page competing with the real one.
-  alternates: { canonical: "/" },
+  // NO `alternates` here. A canonical set on the ROOT LAYOUT is inherited by
+  // every child route that does not set its own, and the relative path is not
+  // re-resolved per route — so this one line put a canonical pointing at the
+  // HOMEPAGE into the <head> of every research article, every legal policy and
+  // /partner. Roughly thirty indexable URLs asked Google to drop them and fold
+  // them into "/", while sitemap.xml simultaneously offered them for indexing.
+  //
+  // The homepage declares its own in page.tsx, which is the reason this line
+  // was originally added (ad tracking parameters) and the correct place for it.
   manifest: "/site.webmanifest",
   icons: {
     icon: [

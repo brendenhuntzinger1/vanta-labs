@@ -4,13 +4,15 @@ import { Suspense } from "react";
 import { PartnerProgramLanding } from "@/components/partner-program-landing";
 import { getPartnerProgramStats } from "@/lib/partner-portal";
 import { getPublicProgramTerms } from "@/lib/public-program-terms";
+import { pageMetadata } from "@/lib/page-metadata";
 
 export const dynamic = "force-dynamic";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = pageMetadata({
+  path: "/partner",
   title: "Partner Program",
   description: "Partner with Vanta Labs. Earn competitive commissions referring researchers to premium, third-party verified research compounds.",
-};
+});
 
 async function getPartnerPageData() {
   try {

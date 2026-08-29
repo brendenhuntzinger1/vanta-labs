@@ -14,7 +14,7 @@ export async function generateMetadata({ params }: { params: Promise<{ slug: str
   const { slug } = await params;
   if (!isArticleSlug(slug)) return {};
   const article = await getArticle(slug);
-  return { title: article.title, description: article.excerpt };
+  return { title: article.title, description: article.excerpt, alternates: { canonical: `/research/${slug}` } };
 }
 
 function renderBody(body: string) {
