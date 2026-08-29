@@ -56,6 +56,54 @@ await app.prepare();
 // server.
 process.env.NODE_ENV = "test";
 
-createServer((req, res) => handle(req, res)).listen(port, "127.0.0.1", () => {
+// STRIP THE TWO HEADERS THAT ASSUME https. HARNESS ONLY.
+//
+// middleware.ts sets, correctly for production:
+//
+//   Content-Security-Policy: …; upgrade-insecure-requests
+//   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+//
+// This server listens on plain http and speaks no TLS.
+// `upgrade-insecure-requests` rewrites every subresource URL to https, so on an
+// engine that applies it to loopback the whole page dies: measured 2026-08-29,
+// 14 of 14 scripts failed with "Error performing TLS handshake", React never
+// booted, and the age gate's Continue button stayed disabled forever. A dead
+// site that is purely an artifact of a production header on a plaintext port.
+//
+// Chromium hides it — it exempts potentially-trustworthy origins (localhost,
+// 127.0.0.1) from the upgrade — which is why this went unnoticed while Chromium
+// was the only engine installed. WebKit does not exempt loopback, and WebKit is
+// what every iOS in-app browser runs, i.e. precisely what we most need to test.
+//
+// HSTS is dropped for a second reason: honoured on 127.0.0.1 it PINS the origin
+// to https inside the browser profile, so a later, otherwise-correct run is
+// upgraded and fails before it starts.
+//
+// Confined to this file. middleware.ts is untouched and production still sends
+// both headers; this server is development-only and never deployed.
+const HTTPS_ONLY_HEADERS = ["strict-transport-security"];
+function stripHttpsOnlyHeaders(res) {
+  const setHeader = res.setHeader.bind(res);
+  res.setHeader = (name, value) => {
+    const key = String(name).toLowerCase();
+    if (HTTPS_ONLY_HEADERS.includes(key)) return res;
+    if (key === "content-security-policy" && value != null) {
+      // Drop only the one directive; every other protection stays on, so the
+      // harness still exercises the real CSP.
+      const filtered = (Array.isArray(value) ? value : [value]).map((v) =>
+        String(v)
+          .split(";")
+          .map((d) => d.trim())
+          .filter((d) => d && d.toLowerCase() !== "upgrade-insecure-requests")
+          .join("; "),
+      );
+      return setHeader(name, Array.isArray(value) ? filtered : filtered[0]);
+    }
+    return setHeader(name, value);
+  };
+  return res;
+}
+
+createServer((req, res) => handle(req, stripHttpsOnlyHeaders(res))).listen(port, "127.0.0.1", () => {
   console.log(`harness server on http://127.0.0.1:${port}  NODE_ENV=${process.env.NODE_ENV}`);
 });

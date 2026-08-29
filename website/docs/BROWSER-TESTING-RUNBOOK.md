@@ -368,8 +368,20 @@ Before any other browser work, prove **one complete purchase**:
 cart → discount applied → payment (mock) → order row written → inventory
 decremented → confirmation email queued → order appears in the fulfilment queue.
 
-Checkout is the core transaction of this business and it has never been
-exercised in any environment. Everything else in G+H is secondary.
+Checkout is the core transaction of this business. **It was finally driven
+end to end on 2026-08-29, in real WebKit, at 393x664 inside a TikTok
+user-agent** — the first complete purchase in any environment:
+
+    guest checkout -> order row VL-133391F0 written (pending_payment)
+    -> order_items row written -> signed webhook -> paid
+    -> inventory 15 -> 14, inventory_committed_at set
+    -> confirmation email queued (order_email_log)
+    -> /order-confirmation renders "Thank you for your order"
+
+Two harness defects had been blocking it, both since fixed and both invisible
+until an engine other than Chromium was tried — see "Shim limitations" below.
+Re-run it after any change to cart, pricing, orders or inventory; it is still
+the test that outranks everything.
 
 Check at each step that the **database** agrees with the **screen**. The whole
 class of defects this audit exists to find lives in that gap.
@@ -419,27 +431,43 @@ class of defects this audit exists to find lives in that gap.
   it: the order-detail page could not be browser-tested at all, a membership
   store-credit grant fell back to unit tests, and a nested `order_items` read
   of a column that does not exist stayed invisible.
-- **The mock payment gateway is NOT reachable through the harness**, despite
-  `PAYMENT_PROVIDER=mock` and `harness-server.mjs` putting `NODE_ENV` back to
-  `test`. Measured 2026-08-28 on a clean restart:
+- **`PAYMENT_PROVIDER=mock` is still NOT reachable through the harness.** The
+  lockout throws `PAYMENT_PROVIDER=mock/test is forbidden in production`,
+  because Next re-establishes its own environment after `prepare()` and the
+  parent's `NODE_ENV` reassignment does not follow. See the long comment in
+  `harness-server.mjs`.
 
-      GET /api/catalog/payment-methods  ->  500
-      "PAYMENT_PROVIDER=mock/test is forbidden in production."
+  **Use the live provider against the local stub instead** (section 7 above) —
+  and note that this ALSO clears what this entry used to claim was permanently
+  lost. With `PAYMENT_PROVIDER=live` + `veyra-stub.mjs`:
 
-  The lockout reads `process.env.NODE_ENV` at call time and the value is not
-  inlined at build, so this is not a build-constant problem — Next
-  re-establishes its own environment after `prepare()` and the parent's
-  reassignment does not follow. See the long comment in `harness-server.mjs`.
+      GET /api/catalog/payment-methods  ->  200, card method + badges
 
-  What this costs: **the card service-fee row has never rendered in any browser
-  evidence gathered through this harness.** Cart and checkout still load and
-  still total correctly, because the route fails closed and the page degrades —
-  but any claim about the fee disclosure on those pages is NOT browser-proven,
-  and a completed mock purchase cannot be driven here at all.
+  so the card fee disclosure IS reachable, and a complete purchase IS drivable
+  here. The old text said neither was possible; it was measuring `mock` mode
+  and generalising from it.
 
-  Do not "fix" this by weakening the lockout. It is the control that stops
-  `/api/checkout/mock-pay` marking orders paid in production, and it
+  Do not "fix" the `mock` path by weakening the lockout. It is the control that
+  stops `/api/checkout/mock-pay` marking orders paid in production, and it
   deliberately has no override variable.
+
+- **Two harness defects that hid behind Chromium, both fixed 2026-08-29.**
+  Neither was a site bug; both made the site look broken.
+
+  `harness-server.mjs` passed through `Strict-Transport-Security` and CSP's
+  `upgrade-insecure-requests` — correct for production, fatal on a plaintext
+  port. WebKit rewrote every asset URL to `https://127.0.0.1:3000`, all 14
+  scripts failed the TLS handshake, React never booted and the age gate could
+  never be passed. Chromium exempts loopback from the upgrade, so it looked
+  fine there for as long as Chromium was the only engine installed. The server
+  now strips both; middleware.ts is untouched.
+
+  `pgrst-shim.mjs` had no case for PostgREST's `columns=` bulk-insert spec, so
+  it reached the unknown-filter guard and refused — correctly, but `columns`
+  narrows a write rather than widening a read. Checkout wrote the order, minted
+  the payment session, then died on `Unable to create order items`, leaving an
+  orphan. The declared column set is now honoured, which is also what keeps a
+  bulk insert's values in the right columns.
 
 - **`bac-water` is not seeded**, so `/api/catalog/bac-water` 404s on every page
   that renders the bacteriostatic-water upsell — which is most of them,

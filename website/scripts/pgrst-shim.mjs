@@ -283,6 +283,9 @@ async function parseQuery(url, parentTable) {
   let limit = "";
   let offset = "";
   let select = "*";
+  // PostgREST's bulk-insert column spec, e.g. columns="a","b". Captured here,
+  // applied by the POST handler; it is never a WHERE predicate.
+  let columnsParam = null;
 
   for (const [key, raw] of params.entries()) {
     if (key === "select") { select = await buildSelect(raw, parentTable); continue; }
@@ -299,6 +302,10 @@ async function parseQuery(url, parentTable) {
     if (key === "limit") { limit = ` LIMIT ${Number(raw) || 0}`; continue; }
     if (key === "offset") { offset = ` OFFSET ${Number(raw) || 0}`; continue; }
     if (key.startsWith("on_conflict")) continue;
+    // `columns` is PostgREST's bulk-insert column spec, not a predicate. It
+    // NARROWS a write — naming exactly which payload keys become columns — so
+    // the unknown-filter guard below must not see it. Read by the POST handler.
+    if (key === "columns") { columnsParam = raw; continue; }
 
     if (key === "or" || key === "and") {
       where.push(buildBoolean(key, raw, bind));
@@ -322,6 +329,7 @@ async function parseQuery(url, parentTable) {
 
   return {
     select,
+    columnsParam,
     where: where.length ? ` WHERE ${where.join(" AND ")}` : "",
     order, limit, offset, values,
   };
@@ -424,7 +432,25 @@ const server = http.createServer(async (req, res) => {
       const rowsIn = Array.isArray(body) ? body : [body];
       if (!rowsIn.length || !rowsIn[0]) return send(res, 400, { message: "empty body" });
 
-      const cols = [...new Set(rowsIn.flatMap((r) => Object.keys(r)))];
+      // THE DECLARED COLUMN SET WINS.
+      //
+      // `?columns="a","b"` is how PostgREST is told which payload keys become
+      // columns. It exists so a bulk insert of rows with differing keys still
+      // produces one consistent tuple shape — deriving the columns from the
+      // union of payload keys instead reintroduces exactly the heterogeneity
+      // the parameter is there to remove, and a row missing a key would shift
+      // its values into the wrong columns.
+      //
+      // A key present in the payload but NOT declared is dropped, which is
+      // PostgREST's behaviour and is a narrowing, never a widening. A declared
+      // column missing from a row binds NULL, so the database applies its own
+      // default or rejects it — the same answer production would give.
+      const declared = q.columnsParam
+        ? q.columnsParam.split(",").map((c) => c.trim().replace(/^"|"$/g, "")).filter(Boolean)
+        : null;
+      const cols = declared && declared.length
+        ? declared
+        : [...new Set(rowsIn.flatMap((r) => Object.keys(r)))];
       const values = [];
       const tuples = rowsIn.map((r) => `(${cols.map((c) => {
         values.push(r[c] === undefined ? null : r[c]);
