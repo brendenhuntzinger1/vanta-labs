@@ -97,6 +97,15 @@ function pathBypassesMaintenance(pathname: string) {
     || pathname.startsWith("/api/veyra")
     || pathname.startsWith("/api/coa")
     || pathname.startsWith("/api/health")
+    // Password recovery, for the same reason as /api/unsubscribe above: these
+    // are promises made in an email that has ALREADY been delivered. A customer
+    // who clicks a reset link during a maintenance window is the one person who
+    // most needs the page to answer, and rewriting them to /maintenance burns
+    // the one-time token in the link for nothing. Reaching these two pages
+    // grants no access to the storefront the window is closing.
+    || pathname === "/account/forgot-password"
+    || pathname === "/account/reset-password"
+    || pathname.startsWith("/api/auth/password-reset")
     || isStaticAsset(pathname)
   );
 }
@@ -309,7 +318,12 @@ export async function middleware(request: NextRequest) {
   // cron (/api/cron, bearer-secret) live under other prefixes and are NOT
   // same-origin, so they're intentionally excluded. SameSite=Lax already
   // mitigates classic CSRF; this is a second, explicit layer.
-  const CSRF_PROTECTED_PREFIXES = ["/api/admin", "/api/account", "/api/membership", "/api/partner"];
+  // /api/auth is here because it both SETS the session cookie and now sends
+  // password-reset mail. SameSite=Lax already stops a cross-site POST's
+  // Set-Cookie from sticking, so this is the second layer rather than the only
+  // one -- but it was the single auth endpoint outside the list, which is not a
+  // distinction any auth endpoint should have.
+  const CSRF_PROTECTED_PREFIXES = ["/api/admin", "/api/account", "/api/auth", "/api/membership", "/api/partner"];
   if (
     isStateChangingMethod(request.method) &&
     CSRF_PROTECTED_PREFIXES.some((prefix) => pathname.startsWith(prefix)) &&

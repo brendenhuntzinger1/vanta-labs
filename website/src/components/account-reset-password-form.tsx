@@ -16,15 +16,29 @@ export function AccountResetPasswordForm() {
   useEffect(() => {
     let active = true;
 
-    // SECURITY: only a genuine PASSWORD RECOVERY session may change the password
-    // here without re-entering the current one. A normally logged-in user has a
-    // live Supabase session too — accepting that would let anyone with a
-    // hijacked open session silently reset the owner's password (the settings
-    // page deliberately re-authenticates for exactly this reason). We recognize
-    // recovery via the `type=recovery` marker Supabase puts in the URL hash and
-    // the PASSWORD_RECOVERY auth event, and accept nothing else.
+    // WHAT THIS CHECK ACTUALLY DOES, AND WHAT IT DOES NOT (audit E2).
+    //
+    // It keeps a NORMALLY SIGNED-IN visitor off this form, so the only way to
+    // reach a no-current-password change is to arrive from a recovery link.
+    // That is a real and useful property: /account/settings re-authenticates
+    // before changing a password, and without this gate a signed-in session
+    // would silently bypass that by visiting this URL.
+    //
+    // It is NOT a defence against a stolen session. The fragment is client
+    // supplied and nothing here can verify it, so anyone holding a victim's
+    // tokens can hand-build one — and in any case they could call
+    // supabase.auth.updateUser({ password }) directly and skip this page
+    // entirely. This page is not, and cannot be, that boundary. The control
+    // that IS one is GoTrue's "secure password change" setting (require recent
+    // re-authentication), configured on the Supabase project; see
+    // docs/findings/EMAIL-AUTH-AUDIT-2026-08-28.md.
+    //
+    // The earlier version also accepted a bare `access_token=` in the hash,
+    // which matches a SIGNUP confirmation redirect as readily as a recovery
+    // one. Only the explicit recovery markers are accepted now.
     const hash = typeof window !== "undefined" ? window.location.hash : "";
-    const looksLikeRecoveryLink = hash.includes("type=recovery") || hash.includes("access_token=");
+    const params = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
+    const looksLikeRecoveryLink = params.get("type") === "recovery";
 
     const { data: sub } = supabase.auth.onAuthStateChange((event) => {
       if (event === "PASSWORD_RECOVERY" && active) {
@@ -38,7 +52,10 @@ export function AccountResetPasswordForm() {
       // rejected (the user is sent to forgot-password to get a real link).
       const { data } = await supabase.auth.getSession();
       if (!active) return;
-      setHasRecoverySession(Boolean(data.session) && looksLikeRecoveryLink);
+      // Never downgrade a PASSWORD_RECOVERY event that has already fired: the
+      // event is the stronger signal, and Supabase strips the fragment once it
+      // has consumed it, so the hash may legitimately be empty by now.
+      setHasRecoverySession((current) => current === true || (Boolean(data.session) && looksLikeRecoveryLink));
     })();
 
     return () => {
@@ -69,6 +86,13 @@ export function AccountResetPasswordForm() {
       if (updateError) {
         throw new Error(updateError.message);
       }
+
+      // Someone resetting their password is very often doing it BECAUSE they
+      // think someone else has been in the account. Revoking every other
+      // session makes the new password mean what they expect it to mean;
+      // leaving them live means the intruder keeps their access. Best-effort:
+      // this must never turn a successful reset into a visible failure.
+      await supabase.auth.signOut({ scope: "others" }).catch(() => {});
 
       const { data } = await supabase.auth.getSession();
       const accessToken = data.session?.access_token;

@@ -11,6 +11,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { CookieConsent } from "@/components/cookie-consent";
 import { CONSENT_COOKIE_NAME } from "@/lib/cookie-consent-server";
 import { EntryDiagnostics } from "@/components/entry-diagnostics";
+import { RecoveryLinkCatcher } from "@/components/recovery-link-catcher";
 import { StorefrontOffersBar } from "@/components/storefront-offers-bar";
 import { cookies } from "next/headers";
 import {
@@ -252,6 +253,10 @@ export default async function RootLayout({
             ]),
           }}
         />
+        {/* Mounted OUTSIDE the age gate on purpose: a customer arriving on a
+            misdirected password-reset link must be carried to the reset form
+            before the gate can hold them on a page that has no such form. */}
+        <RecoveryLinkCatcher />
         <CartProvider>
           <Suspense fallback={null}>
             <SiteAnalyticsTracker />

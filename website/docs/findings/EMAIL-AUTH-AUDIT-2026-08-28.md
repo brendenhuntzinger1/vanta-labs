@@ -20,6 +20,38 @@ affiliate (ambassador) sign-in, and application/signup email verification.
 **No production state was changed.** No test orders, no account creation, no
 emails sent, no writes of any kind.
 
+---
+
+## Status — all findings remediated in code, 2026-08-29
+
+Every finding below is fixed on this branch except the parts that are
+**operator actions on the Supabase and Resend dashboards**, which no code
+change can perform. Those three are listed in §6 and are the only work
+outstanding.
+
+| # | Fix | Where |
+|---|---|---|
+| E1 | Password reset now minted with the admin API and sent through `sendEmail()` — branded template, bounce webhook, retry queue — with a fallback to Supabase if any step fails. Verification's split documented accurately instead of denied. | `api/auth/password-reset/`, `email/settings.ts` |
+| E2 | Arrival check parses the fragment and requires `type=recovery`; a bare `access_token` (a signup redirect) no longer opens the form. Other sessions revoked after a successful change. Comment now states what is actually enforced. | `account-reset-password-form.tsx` |
+| E3 | `/login` redirects to `/account/login`; `PartnerLoginForm` deleted. | `app/login/page.tsx` |
+| E4 | All five ambassador emails go through one helper that checks the result and queues failures for the sweep. The application queue row closes only when the owner alert really went out. | `partner-portal.ts` |
+| E5 | Admin settings warns, in place, when campaigns share the receipts domain. | `admin-settings-client.tsx` |
+| E6 | A recovery fragment delivered to any other page is carried to the reset form, so a missing allowlist entry no longer strands the customer. | `recovery-link-catcher.tsx` |
+| E7 | New sweep job raises a system alert when signups stay unconfirmed, grouped by mailbox domain. | `auth-health.ts` |
+| E8, E9 | Both routes sanitise before answering; the provider's text is logged, not shown. | `partner/apply`, `contact` |
+| E10 | "Back to sign in" added. | `account-forgot-password-form.tsx` |
+| E11 | `/api/auth` added to the CSRF prefix list. | `middleware.ts` |
+| E12 | The un-sendable verification template removed and replaced with a note saying why there is none; the four unwired templates labelled as not yet sending. | `email/templates.ts` |
+| E13 | Both recovery pages and the reset endpoint bypass maintenance mode, for the same reason `/api/unsubscribe` does. | `middleware.ts` |
+
+**Gate:** 5495 tests passed / 0 failed (23 added), typecheck clean, lint 0
+errors, production build clean. Re-driven in Chromium at desktop and 390×844:
+`/login` 307s to `/account/login`; forgot-password posts to the new route and
+returns the identical generic answer for a known and an unknown address; a
+`type=signup` fragment is now refused by the reset form where it used to be
+accepted; a genuine `type=recovery` fragment still opens it; a recovery
+fragment dropped on the home page is carried to the reset form.
+
 ## Evidence grades
 
 | Grade | Meaning |
@@ -345,16 +377,31 @@ Not established by this audit, and not inferred:
 
 ---
 
-## 5. Suggested order of work
+## 6. What code cannot do — three dashboard actions
 
-1. **E6** — check the Supabase redirect allowlist and run one real password
-   reset. Five minutes; unblocks the only recovery path a locked-out customer
-   has, and it has never been proven to work.
-2. **E3** — redirect `/login` to `/account/login`. One line; removes a
-   recovery-less affiliate dead end and a CAPTCHA time bomb.
-3. **E4** — check `sendEmail` results in `partner-portal.ts` and enqueue
-   failures. Restores a signal that is currently absent.
-4. **E1** — correct the documentation, or unify the sending path.
-5. **E2** — gate on `PASSWORD_RECOVERY`, enable secure password change, fix the
-   comment.
-6. **E5, E7** — set `marketing_from`; add an unconfirmed-account alert.
+These are the only items still open. Each is a setting on a third-party
+dashboard; none can be asserted by a test or changed from this repository.
+
+1. **Add the reset URL to Supabase's allowlist.** Authentication → URL
+   Configuration → Redirect URLs must contain
+   `https://www.vantalabsresearch.com/account/reset-password`. The E6 catcher
+   now rescues customers when this is missing, but a rescue is not a fix — with
+   the entry present the link lands correctly the first time. **Then send
+   yourself one real reset**, which has still never been completed end to end in
+   production.
+
+2. **Turn on secure password change.** Authentication → Providers → Email →
+   "Secure password change" makes GoTrue require a recent re-authentication
+   before `updateUser({ password })` succeeds. This is the control E2 is really
+   about: no client-side check can bind a fragment to a genuine recovery,
+   because the fragment is supplied by the browser and an attacker holding a
+   session can call Supabase directly without loading our page at all. The code
+   fix narrows what the page accepts and revokes sibling sessions afterwards;
+   this setting is what makes a stolen session unable to change a password.
+
+3. **Give marketing its own sending subdomain.** Verify e.g.
+   `mail.vantalabsresearch.com` with Resend, then set the Marketing From address
+   in Admin → Settings. Deliberately not set from here: pointing it at an
+   unverified domain would stop marketing email dead. Until it is set, campaign
+   complaints land on the reputation of the domain that carries receipts and
+   password resets, and the admin page now says so.

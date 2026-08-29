@@ -89,8 +89,12 @@ export async function POST(request: Request) {
     const result = await sendEmail({ to: supportEmail, replyTo: email, ...template });
 
     if (!result.success) {
+      // The provider's own text names the vendor and can carry an API status
+      // ("Resend API error (401): ..."). It is exactly what safe-error.ts exists
+      // to keep off a customer's screen, and this endpoint is anonymous.
+      console.error("[contact] notification send failed:", result.error);
       return NextResponse.json(
-        { success: false, error: result.error ?? "Email delivery is not configured." },
+        { success: false, error: "We couldn't send your message just now. Please try again shortly." },
         { status: 500 },
       );
     }

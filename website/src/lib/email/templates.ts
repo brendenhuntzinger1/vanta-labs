@@ -123,29 +123,21 @@ export function couponAnnouncementTemplate(input: {
   };
 }
 
-export function emailVerificationTemplate(input: { name: string; verifyUrl: string }): EmailTemplate {
-  const name = escapeHtml(input.name);
-  return {
-    subject: "Verify your Vanta Labs account",
-    html: renderLayout({
-      preheader: "Confirm your email to activate your account.",
-      titleHtml: `Hi ${name}, please verify your email`,
-      bodyHtml: `<p>Click below to confirm your email address and activate your account.</p><p>If you didn't create this account, you can safely ignore this email.</p>`,
-      ctaLabel: "Verify Email",
-      ctaUrl: input.verifyUrl,
-    }),
-    text: toText([
-      `Hi ${input.name},`,
-      "",
-      "Confirm your email address to activate your account:",
-      input.verifyUrl,
-      "",
-      "If you didn't create this account, you can safely ignore this email.",
-      "",
-      "- Vanta Labs",
-    ]),
-  };
-}
+// THERE IS DELIBERATELY NO ACCOUNT-VERIFICATION TEMPLATE HERE (audit E1/E12).
+//
+// One used to sit at this spot, unused, for the whole life of the file. It was
+// worse than dead code: it made `settings.ts`'s claim that account verification
+// "flows through the same sendEmail()" look true at a glance, and that claim
+// was what hid the fact that nothing monitors confirmation delivery at all.
+//
+// The signup confirmation is sent by Supabase Auth, from the SMTP settings and
+// templates in the Supabase dashboard, and this app cannot take it over:
+// `generateLink({ type: "signup" })` requires the user's password, which we do
+// not hold for an existing unconfirmed account. If that ever changes, the
+// template belongs here -- until then, its absence is the accurate statement.
+//
+// Password reset is the opposite case and IS ours: see passwordResetTemplate
+// below, sent by /api/auth/password-reset.
 
 export function passwordResetTemplate(input: { name: string; resetUrl: string }): EmailTemplate {
   const name = escapeHtml(input.name);
@@ -873,6 +865,14 @@ export function membershipWelcomeTemplate(input: { name: string; tierName: strin
     text: toText([`Welcome, ${input.name || "there"}.`, "", `You're now a ${input.tierName} member.`, "", "- Vanta Labs"]),
   };
 }
+
+// NOT WIRED UP YET. The four templates below (trial confirmation, monthly
+// benefits, birthday, new product launch) have no send site anywhere in the
+// app. They are kept because the features they belong to are half-built --
+// /api/account/birthday already collects the date -- but nothing sends them
+// today, so do not read their existence as evidence that a customer receives
+// them. Wire one through sendMarketingEmail() (they are all promotional) before
+// assuming otherwise.
 
 export function membershipTrialConfirmationTemplate(input: {
   name: string;

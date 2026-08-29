@@ -359,6 +359,18 @@ export function AdminSettingsClient({
               className="vl-input mt-1 w-full px-3 py-2 text-sm"
             />
           </Labeled>
+          {/* Standing risk, surfaced rather than left to be discovered after a
+              campaign has already cost the receipts domain its reputation. Not
+              styled as an error: sending this way works, it is just a decision
+              that should be made deliberately (audit E5). */}
+          {email.marketingSharesTransactionalDomain ? (
+            <p className="mt-2 rounded-lg border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-xs leading-relaxed text-amber-200">
+              Campaigns are currently sent from <strong>{email.effectiveMarketingFrom || "the transactional address"}</strong> — the
+              same address as receipts and password resets. Spam complaints from a campaign will land on that
+              domain&apos;s reputation, and the first mail to suffer is the mail customers need. Set a separate
+              marketing subdomain above once it is verified with your provider.
+            </p>
+          ) : null}
         </div>
 
         <div className="mt-3">
