@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { supabase } from "@/lib/supabase";
 import { TurnstileWidget } from "@/components/turnstile-widget";
-import { resolveSignupOutcome } from "@/lib/auth-signup-outcome";
+import { resolveSignupOutcome, SIGNUP_CHECK_EMAIL_MESSAGE } from "@/lib/auth-signup-outcome";
 
 // When a Turnstile site key is configured, every auth call carries a CAPTCHA
 // token that Supabase verifies — blocking bots from draining email + SMS spend.
@@ -224,6 +224,46 @@ export function AccountAuthForm() {
     setMessage(null);
 
     try {
+      // THROUGH THE SERVER, SO THE CONFIRMATION EMAIL IS OURS.
+      //
+      // A browser-side signUp() makes Supabase Auth mail the confirmation
+      // itself, from its own unstyled template, invisible to the bounce
+      // webhook and the send log. That is what stranded four signups on
+      // 2026-08-29 — Resend said "delivered" for every one of them and Gmail
+      // had filed them as phishing. /api/auth/signup mints the link with the
+      // admin API and sends it branded through sendEmail() instead.
+      //
+      // The route answers identically for a new and an existing address, so it
+      // cannot be used to probe which addresses have accounts; see its header.
+      const signupResponse = await fetch("/api/auth/signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          email: email.trim(),
+          password,
+          fullName: fullName.trim(),
+          businessType,
+          referredByCode: referralCodeFromUrl || "",
+          captchaToken: captchaToken ?? "",
+          nextPath,
+        }),
+      });
+      const signupJson = await signupResponse.json().catch(() => null);
+
+      if (signupResponse.ok && signupJson?.success) {
+        setMessage(signupJson.message ?? SIGNUP_CHECK_EMAIL_MESSAGE);
+        return;
+      }
+      // A refusal the customer can act on (weak password, captcha, rate limit)
+      // is theirs to see. Anything else falls through to the client path below.
+      if (signupJson && signupJson.success === false && typeof signupJson.error === "string") {
+        throw new Error(signupJson.error);
+      }
+
+      // FALLBACK, and the reason this change is strictly additive: if the route
+      // is unreachable or answers with something unexpected, do exactly what
+      // this form did before it existed. At worst signup behaves as it always
+      // has; at best the customer gets a branded email we can see.
       const { data, error: signUpError } = await supabase.auth.signUp({
         email: email.trim(),
         password,

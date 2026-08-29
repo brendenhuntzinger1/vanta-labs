@@ -123,21 +123,97 @@ export function couponAnnouncementTemplate(input: {
   };
 }
 
-// THERE IS DELIBERATELY NO ACCOUNT-VERIFICATION TEMPLATE HERE (audit E1/E12).
+// THE ACCOUNT-CONFIRMATION TEMPLATE IS BACK, AND IT IS NOW SENT.
 //
-// One used to sit at this spot, unused, for the whole life of the file. It was
-// worse than dead code: it made `settings.ts`'s claim that account verification
-// "flows through the same sendEmail()" look true at a glance, and that claim
-// was what hid the fact that nothing monitors confirmation delivery at all.
+// It used to sit at this spot unused, which was worse than dead code: it made
+// settings.ts's claim that verification "flows through the same sendEmail()"
+// look true at a glance, and that claim hid the fact that nothing monitored
+// confirmation delivery at all. It was then deleted, and the note left in its
+// place said this app COULD NOT take the email over, because
+// `generateLink({ type: "signup" })` needs a password we do not hold.
 //
-// The signup confirmation is sent by Supabase Auth, from the SMTP settings and
-// templates in the Supabase dashboard, and this app cannot take it over:
-// `generateLink({ type: "signup" })` requires the user's password, which we do
-// not hold for an existing unconfirmed account. If that ever changes, the
-// template belongs here -- until then, its absence is the accurate statement.
+// That was right about an EXISTING unconfirmed account and wrong about the
+// moment that matters. At signup the person has just typed their password, so
+// a server route holds it and can mint the link — which is what
+// /api/auth/signup now does. The old constraint is still real for the RESEND
+// case, and that case is served by a magic link instead.
 //
-// Password reset is the opposite case and IS ours: see passwordResetTemplate
-// below, sent by /api/auth/password-reset.
+// WHY IT WAS WORTH MOVING (2026-08-29).
+//
+// Supabase's default confirmation email is unstyled HTML: a bare <h2>, one
+// sentence, and a naked <a>. It is well-formed and it delivers — Resend
+// reported "delivered" for every stuck account — and it still did not work,
+// because that shape is indistinguishable from phishing and Gmail filed it
+// accordingly. Four of nine signups over four days never confirmed, while the
+// order confirmations rendered by renderLayout above, on the same domain
+// through the same Resend account, landed every time.
+//
+// Sending it from here fixes three things at once: it renders branded like
+// every other message, it goes out from the identity an operator configured in
+// Admin → Settings, and it becomes visible to the bounce webhook and the send
+// log. The last one is the point. This email was the only piece of the system
+// with no telemetry at all, which is why a customer had to report it.
+
+export function accountConfirmationTemplate(input: { name: string; confirmUrl: string }): EmailTemplate {
+  const name = escapeHtml(input.name);
+  return {
+    subject: "Confirm your Vanta Labs account",
+    html: renderLayout({
+      preheader: "One tap to finish setting up your account.",
+      titleHtml: name ? `Welcome, ${name}` : "Confirm your email",
+      bodyHtml: `<p>Tap the button below to confirm this email address and finish setting up your Vanta Labs account.</p><p>If you didn't create an account, you can ignore this email and nothing will happen.</p>`,
+      ctaLabel: "Confirm my email",
+      ctaUrl: input.confirmUrl,
+    }),
+    text: toText([
+      name ? `Welcome, ${input.name},` : "Welcome,",
+      "",
+      "Confirm this email address to finish setting up your Vanta Labs account:",
+      input.confirmUrl,
+      "",
+      "If you didn't create an account, you can ignore this email.",
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
+/**
+ * The same confirmation, for someone whose account already exists unconfirmed.
+ *
+ * A signup link cannot be re-minted for them — `generateLink({ type: "signup" })`
+ * needs the password, and we do not store it — so the resend is a MAGIC LINK.
+ * Verifying one confirms the address and signs them in, which is the outcome
+ * they were waiting for either way, and it is the only branded route back for
+ * an account already stranded by a confirmation that never arrived.
+ */
+export function accountConfirmationResendTemplate(input: { name: string; confirmUrl: string }): EmailTemplate {
+  const name = escapeHtml(input.name);
+  return {
+    subject: "Your Vanta Labs sign-in link",
+    html: renderLayout({
+      preheader: "Finish setting up your account.",
+      titleHtml: name ? `Welcome back, ${name}` : "Finish setting up your account",
+      bodyHtml: `<p>Tap the button below to confirm your email address and sign in. This link expires shortly and can only be used once.</p><p>If you didn't ask for this, you can ignore this email.</p>`,
+      ctaLabel: "Confirm and sign in",
+      ctaUrl: input.confirmUrl,
+    }),
+    text: toText([
+      name ? `Welcome back, ${input.name},` : "Welcome back,",
+      "",
+      "Confirm your email address and sign in:",
+      input.confirmUrl,
+      "",
+      "This link expires shortly and can only be used once.",
+      "If you didn't ask for this, you can ignore this email.",
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
+// Password reset is the same shape and was moved first: see
+// passwordResetTemplate below, sent by /api/auth/password-reset.
 
 export function passwordResetTemplate(input: { name: string; resetUrl: string }): EmailTemplate {
   const name = escapeHtml(input.name);

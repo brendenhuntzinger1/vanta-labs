@@ -238,6 +238,79 @@ export async function handleAuth(req, res, url, pool, send, readBody) {
     return send(res, 200, { users: rows.rows.map(toUser), aud: "authenticated" }), true;
   }
 
+  // ---- admin generate_link ------------------------------------------------
+  // Real GoTrue mints a verification link and returns it WITHOUT sending any
+  // email, which is what /api/auth/password-reset and /api/auth/signup rely on
+  // to send branded mail through Resend instead of Supabase's own template.
+  //
+  // Implemented here because those two routes are the ONLY way a customer gets
+  // into an account, and without this the harness answers 501 and every browser
+  // test of signup exercises the fallback path rather than the real one. That
+  // is precisely the gap that let a broken confirmation email reach production
+  // on 2026-08-29.
+  //
+  // Harness-only, and not a security boundary: the token is the same
+  // mintAccessToken() the rest of this file uses, and passwords are stored in
+  // clear text here exactly as the header of this file already warns.
+  if (path === "/admin/generate_link" && req.method === "POST") {
+    const body = (await readBody(req)) ?? {};
+    const type = String(body.type ?? "");
+    const email = String(body.email ?? "").trim().toLowerCase();
+    const redirect = String(body.redirect_to ?? "");
+
+    if (!email) return send(res, 400, { error: "validation_failed" }), true;
+
+    const existing = await q("select * from auth.users where lower(email) = $1", [email]);
+
+    let row;
+    if (type === "signup") {
+      // Real GoTrue REFUSES to mint a signup link for an address that already
+      // has an account. The app depends on that refusal — it is the branch that
+      // sends an unconfirmed user a magic link instead — so model it.
+      if (existing.rows.length) {
+        return send(res, 422, {
+          error: "user_already_exists",
+          error_description: "User already registered",
+        }), true;
+      }
+      const created = await q(
+        `insert into auth.users (email, encrypted_password, raw_user_meta_data, created_at)
+         values ($1, $2, $3, now()) returning *`,
+        [email, String(body.password ?? ""), JSON.stringify(body.data ?? {})],
+      );
+      row = created.rows[0];
+    } else if (type === "magiclink" || type === "recovery" || type === "invite") {
+      if (!existing.rows.length) {
+        return send(res, 404, { error: "user_not_found" }), true;
+      }
+      row = existing.rows[0];
+    } else {
+      return send(res, 501, {
+        error: "not_implemented",
+        error_description: `gotrue-shim does not implement generate_link type "${type}".`,
+      }), true;
+    }
+
+    const user = toUser(row);
+    const token = mintAccessToken(user);
+    const fragment =
+      `#access_token=${token}&type=${type}&expires_in=${TOKEN_TTL_SECONDS}`
+      + `&refresh_token=harness-refresh-${row.id}&token_type=bearer`;
+
+    // FLAT, exactly as GoTrue answers: supabase-js splits action_link and its
+    // siblings into `properties` and leaves the rest as `user`. Nesting them
+    // here would make data.properties.action_link undefined and every caller
+    // would take its failure branch while this shim reported 200.
+    return send(res, 200, {
+      ...user,
+      action_link: `${redirect || "http://127.0.0.1:3000"}${fragment}`,
+      email_otp: "000000",
+      hashed_token: `harness-hashed-${row.id}`,
+      verification_type: type,
+      redirect_to: redirect,
+    }), true;
+  }
+
   // Anything else auth-shaped is explicitly NOT implemented — fail loudly
   // rather than silently returning a shape that looks like success.
   return send(res, 501, {
