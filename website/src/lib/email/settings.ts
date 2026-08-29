@@ -14,11 +14,37 @@ import { getControlSnapshot } from "@/lib/admin-control";
 // DISABLED BY DEFAULT: until `enabled` is turned on (and the chosen
 // provider's credentials are present), getEmailProvider() returns the no-op
 // provider, so nothing is sent and no action that triggers an email ever
-// fails. Once enabled + configured, EVERY transactional email in the app
-// (order confirmation, payment received, payment approved/rejected, shipping
-// updates, password resets, account verification, ambassador notifications,
-// etc.) flows through the same sendEmail() and starts delivering
-// automatically.
+// fails. Once enabled + configured, transactional email (order confirmation,
+// payment received, payment approved/rejected, shipping updates, password
+// resets, ambassador notifications, etc.) flows through the same sendEmail()
+// and starts delivering automatically.
+//
+// ONE EMAIL IS NOT SENT FROM HERE, AND IT MATTERS (audit E1).
+//
+// The SIGNUP CONFIRMATION email is sent by SUPABASE AUTH, using the SMTP
+// settings and templates configured in the Supabase dashboard -- not by this
+// provider and not from the `from` address below. `supabase.auth.signUp()` and
+// `supabase.auth.resend({ type: "signup" })` are the only things that trigger
+// it, and neither passes through sendEmail(). The admin API cannot be used to
+// take it over either: `generateLink({ type: "signup" })` requires the user's
+// password, which we do not hold for an existing unconfirmed account.
+//
+// Consequences an operator has to know about, because none of them are visible
+// from this dashboard:
+//
+//   * turning email on here does NOT turn on signup confirmation, and turning
+//     it off does not turn confirmation off;
+//   * a confirmation that bounces does not reach /api/webhooks/email, so it
+//     appears in no suppression list and no alert. The cron sweep's
+//     `signup_confirmation_watch` job (lib/auth-health.ts) exists precisely to
+//     notice that absence, and is the only thing that will;
+//   * the sending domain in the Supabase dashboard has its own reputation,
+//     separate from the one below.
+//
+// This header previously claimed confirmation flowed through sendEmail() too.
+// It never has. Password reset DID have the same gap and no longer does -- it
+// is minted with the admin API and sent through sendEmail() by
+// /api/auth/password-reset.
 // -------------------------------------------------------------------------
 
 export type EmailProviderName = "smtp" | "resend" | "sendgrid";
@@ -146,6 +172,17 @@ export interface EmailAdminSettings {
    * mail is unaffected by the address being blank.
    */
   marketingReady: boolean;
+  /**
+   * True when campaigns are going out from the SAME address as receipts and
+   * password resets, because no separate marketing From has been set.
+   *
+   * Not an error -- it is the default, and it sends perfectly well. It is a
+   * standing deliverability risk that is invisible until it has already
+   * happened: spam complaints from a campaign land on the domain's reputation,
+   * and the first mail to suffer is the mail customers actually need. Surfaced
+   * so it is a decision rather than an oversight (audit E5).
+   */
+  marketingSharesTransactionalDomain: boolean;
 }
 
 function isReady(config: EmailRuntimeConfig): boolean {
@@ -178,6 +215,8 @@ export async function getEmailAdminSettings(): Promise<EmailAdminSettings> {
     marketingFrom: config.marketingFrom,
     effectiveMarketingFrom: resolveMarketingFrom(config),
     marketingReady: config.enabled && isReady(config) && Boolean(config.marketingPostalAddress.trim()),
+    // Only worth flagging once there is actually a From to share.
+    marketingSharesTransactionalDomain: Boolean(config.from.trim()) && !config.marketingFrom.trim(),
   };
 }
 

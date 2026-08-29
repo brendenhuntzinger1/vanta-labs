@@ -5,6 +5,8 @@ import { validateReferralCodeFormat } from "@/lib/referral-code-validation";
 import { isEarnedCommission, isRevenueOrderStatus, isSaleOrder, netOrderRevenue, REVENUE_ORDER_STATUSES } from "@/lib/ledger";
 import { readAllRowsBounded } from "@/lib/supabase-page";
 import { sendEmail } from "@/lib/email/send";
+import { enqueueFailedEmail } from "@/lib/email/retry-queue";
+import type { EmailTemplate } from "@/lib/email/types";
 import {
   ambassadorApplicationReceivedTemplate,
   ambassadorApprovedTemplate,
@@ -254,6 +256,44 @@ async function enqueueNotification(kind: string, recipient: string, payload: Rec
   return data?.id as string | undefined;
 }
 
+// ---------------------------------------------------------------------------
+// EVERY AMBASSADOR EMAIL GOES THROUGH HERE (audit E4).
+//
+// What was wrong. Ambassador mail was the only transactional family in the app
+// with NO durable retry and NO failure signal. The order paths enqueue a failed
+// send to `pending_emails`, which the cron sweep drains with backoff; nothing
+// in this file did. Worse, most call sites wrote
+//
+//     try { await sendEmail(...) } catch { /* non-critical */ }
+//
+// and `sendEmail` is documented to NEVER THROW — it returns `{ success: false }`
+// — so the catch was dead code and a failed send left no trace anywhere: not in
+// Sentry, not in a log table, not on the admin dashboard. An approved
+// ambassador simply never heard, and no one could find out.
+//
+// This routes every one of them through the same queue the receipts use. The
+// return value still says whether the email went out NOW, because callers use
+// it to decide whether to close a notification_queue row — but a `false` now
+// means "queued for retry", not "gone for ever".
+// ---------------------------------------------------------------------------
+async function sendAmbassadorEmail(
+  to: string,
+  template: EmailTemplate,
+  context: string,
+): Promise<boolean> {
+  const result = await sendEmail({ to, ...template });
+  if (result.success) {
+    return true;
+  }
+
+  console.error(`[partner-portal] ${context} email failed for ${to}: ${result.error ?? "unknown error"}`);
+  // Best-effort by construction: enqueueFailedEmail swallows a missing table
+  // and never throws, so a queue that is not migrated yet cannot turn a failed
+  // notification into a failed approval.
+  await enqueueFailedEmail({ to, ...template }, result.error);
+  return false;
+}
+
 async function sendPartnerStatusEmail(input: {
   to: string;
   name: string;
@@ -312,8 +352,7 @@ async function sendPartnerStatusEmail(input: {
     template = ambassadorDeniedTemplate({ name: input.name });
   }
 
-  const result = await sendEmail({ to: input.to, ...template });
-  return result.success;
+  return sendAmbassadorEmail(input.to, template, `ambassador ${input.status}`);
 }
 
 // TELLING AN AMBASSADOR THEY EARN 0% IS WORSE THAN NOT WRITING.
@@ -355,8 +394,7 @@ async function sendReferralCodeAssignedEmail(input: {
     commissionPercent: resolvedPercent,
   });
 
-  const result = await sendEmail({ to: input.to, ...template });
-  return result.success;
+  return sendAmbassadorEmail(input.to, template, "referral code assigned");
 }
 
 export async function autoApproveEligibleCommissions() {
@@ -731,9 +769,13 @@ export async function createPartnerApplication(input: {
 
   try {
     const template = ambassadorApplicationReceivedTemplate({ name: input.name });
-    await sendEmail({ to: input.email, ...template });
-  } catch {
-    // Non-critical notification; the application itself already succeeded above.
+    // Result checked, and a failure queued for retry. This used to discard it
+    // inside a catch that could never fire — see sendAmbassadorEmail.
+    await sendAmbassadorEmail(input.email, template, "application received");
+  } catch (applicantEmailError) {
+    // Genuinely unexpected (the queue insert throwing, say). The application
+    // itself already succeeded above and must not be undone by it.
+    console.error("[partner-portal] application-received notification failed", applicantEmailError);
   }
 
   // Notify the admin: queue a dashboard notification AND email the owner so a
@@ -746,19 +788,26 @@ export async function createPartnerApplication(input: {
     });
 
     const { supportEmail } = await getBusinessSettings();
+    let ownerAlerted = false;
     if (supportEmail) {
       const ownerAlert = newAmbassadorApplicationTemplate({
         applicantName: input.name,
         applicantEmail: input.email,
         adminUrl: `${getSiteUrl().replace(/\/$/, "")}/admin/partners`,
       });
-      await sendEmail({ to: supportEmail, ...ownerAlert });
+      ownerAlerted = await sendAmbassadorEmail(supportEmail, ownerAlert, "new application (owner alert)");
+    } else {
+      // No support address configured, so there is no owner alert to wait on
+      // and nothing this row is still holding open.
+      ownerAlerted = true;
     }
 
-    // Mark the queued notification handled once the owner alert has been sent,
-    // so the admin "pending notifications" count reflects real unsent work
-    // instead of growing forever — this kind previously had no consumer.
-    if (applicationQueueRowId) {
+    // Close the queue row ONLY when the owner alert actually went out. It used
+    // to be marked sent regardless of the result, so the admin's "pending
+    // notifications" count reported work as handled that had never happened —
+    // the precise opposite of what the count is for. A queued retry leaves the
+    // row pending, which is now accurate rather than decorative.
+    if (applicationQueueRowId && ownerAlerted) {
       const { error: markSentError } = await supabaseAdmin
         .from("notification_queue")
         .update({ status: "sent", sent_at: new Date().toISOString() })
@@ -767,8 +816,11 @@ export async function createPartnerApplication(input: {
         assertNoSupabaseError("notification_queue.update(application received sent)", markSentError);
       }
     }
-  } catch {
-    // Admin alert is best-effort; the application itself already succeeded.
+  } catch (adminAlertError) {
+    // The application itself already succeeded and must not be undone by a
+    // notification. Logged rather than swallowed: a silent catch here is how the
+    // original defect stayed invisible for a month.
+    console.error("[partner-portal] new-application admin alert failed", adminAlertError);
   }
 
   return resolved;
@@ -1989,8 +2041,12 @@ export async function updatePartnerStatus(input: {
           assertNoSupabaseError("notification_queue.update(sent)", queueUpdateError);
         }
       }
-    } catch {
-      // Keep pending queue row for retry workflows.
+    } catch (statusEmailError) {
+      // Leave the queue row pending: it is the record that this ambassador has
+      // not been told. sendAmbassadorEmail has already put the message itself on
+      // `pending_emails`, which the cron sweep drains — the row here is the
+      // admin-visible half of the same fact.
+      console.error("[partner-portal] status-change notification failed", statusEmailError);
     }
   }
 
@@ -2005,8 +2061,10 @@ export async function updatePartnerStatus(input: {
         commissionPercent: input.commissionPercent,
         storedCommissionPercent: existingPartner.commission_percent,
       });
-    } catch {
-      // Non-critical notification; the referral code change itself already succeeded above.
+    } catch (referralEmailError) {
+      // The referral code change itself already succeeded above; the send has
+      // its own retry (sendAmbassadorEmail), so this only catches the unexpected.
+      console.error("[partner-portal] referral-code notification failed", referralEmailError);
     }
   }
 
@@ -2334,9 +2392,12 @@ export async function markCommissionsPaid(input: {
       const methodLabel = payoutMethod && isValidPayoutMethod(payoutMethod)
         ? AMBASSADOR_PAYOUT_METHOD_LABELS[payoutMethod]
         : (payoutMethod ?? "your chosen method");
-      await sendEmail({
-        to: String(partner.email),
-        ...ambassadorPayoutSentTemplate({
+      // Money has already moved. If this email fails the ambassador is owed a
+      // "we paid you" that must still arrive, so it goes on the retry queue
+      // rather than being dropped.
+      await sendAmbassadorEmail(
+        String(partner.email),
+        ambassadorPayoutSentTemplate({
           name: String(partner.name ?? ""),
           amount: payoutAmount,
           method: methodLabel,
@@ -2344,9 +2405,11 @@ export async function markCommissionsPaid(input: {
           orderCount: claimed.length,
           dashboardUrl: `${getSiteUrl().replace(/\/$/, "")}/account/ambassador`,
         }),
-      });
-    } catch {
-      // Payout already recorded; email is non-critical.
+        "payout sent",
+      );
+    } catch (payoutEmailError) {
+      // Payout already recorded and must never be undone by a notification.
+      console.error("[partner-portal] payout-sent notification failed", payoutEmailError);
     }
   }
 

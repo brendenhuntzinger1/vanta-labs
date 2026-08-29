@@ -1,36 +1,22 @@
-import type { Metadata } from "next";
 import { redirect } from "next/navigation";
-import { PartnerLoginForm } from "@/components/partner-login-form";
-import { detectRoleFromUser } from "@/lib/auth-role";
-import { getAuthenticatedUser } from "@/lib/auth-session";
 
-export const metadata: Metadata = {
-  title: "Partner Sign In",
-  description: "Sign in to the Vanta Labs partner portal.",
-  // Transactional/auth surface: robots.ts already disallows these paths, and
-  // this is the per-page half of the same statement, exactly as /cart does it.
-  robots: { index: false, follow: false },
-};
+export const dynamic = "force-dynamic";
 
-export default async function LoginPage() {
-  const user = await getAuthenticatedUser();
-
-  if (user) {
-    const role = detectRoleFromUser(user);
-    if (role === "admin") {
-      redirect("/admin/partners");
-    }
-    if (role === "partner") {
-      redirect("/partner/dashboard");
-    }
-    // A signed-in customer landing on the partner login page is confusing —
-    // send them to their account instead of showing a partner form.
-    redirect("/account");
-  }
-
-  return (
-    <div className="min-h-screen bg-[#0b0b0b] px-4 py-14 sm:px-6 lg:px-8">
-      <PartnerLoginForm />
-    </div>
-  );
+// Ambassadors are ordinary customer accounts, so there is no separate partner
+// login. /partner/login has said exactly that, and forwarded to the single
+// account sign-in, for a while. This route did not: it rendered its own
+// "Partner Portal — Secure Login" form asking for "your approved partner
+// credentials", which do not exist.
+//
+// Worse, that form was a DEAD END (audit E3). It carried no "Forgot your
+// password?", no "Resend confirmation email" and no Turnstile token, so an
+// affiliate who reached it and could not sign in had no route out — and the
+// day a CAPTCHA secret is set in the Supabase dashboard, every tokenless call
+// from it would start being rejected with no code change to point at.
+//
+// Nothing in the app ever linked here; it was reachable only by bookmark or an
+// old link, which is exactly the returning-affiliate case it failed. Forwarding
+// to the single account sign-in gives those visitors the full form.
+export default function LegacyPartnerLoginRedirect() {
+  redirect("/account/login");
 }

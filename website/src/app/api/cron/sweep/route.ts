@@ -7,6 +7,7 @@ import { repairMissingCommissionAccruals } from "@/lib/commission-accrual-repair
 import { expireStaleReservations, isTransientAuthRejection } from "@/lib/inventory-reservation";
 import { releaseAbandonedTenderHolds } from "@/lib/tender-reservation";
 import { retryPendingEmails } from "@/lib/email/retry-queue";
+import { alertOnStalledSignups } from "@/lib/auth-health";
 import { reapStrandedOrderEmails } from "@/lib/email/order-email-reaper";
 import { expireStaleExpressIntents, reconcileVeyraPendingPayments } from "@/lib/express-reconcile";
 import { sweepMissingShipments, sweepUnsyncedOrders } from "@/lib/shippo/order-sync";
@@ -91,6 +92,12 @@ const JOBS = {
   emailCampaigns: { label: "email_campaigns", run: runCampaignSweep },
   // Marketing: retention sequences (welcome, post-purchase, win-back).
   emailAutomations: { label: "email_automations", run: runAutomationSweep },
+  // Watch for signups stuck unconfirmed. The confirmation email is sent by
+  // Supabase Auth rather than this app, so it appears in NONE of the email
+  // machinery above -- no retry row, no bounce event, no send log. An
+  // unconfirmed auth.users row is the only evidence a delivery problem leaves,
+  // and this is the only thing that looks at it.
+  signupConfirmations: { label: "signup_confirmation_watch", run: alertOnStalledSignups },
 } as const;
 
 type JobName = keyof typeof JOBS;

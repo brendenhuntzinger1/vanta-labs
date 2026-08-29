@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createPartnerApplication } from "@/lib/partner-portal";
 import { createServerClient } from "@/lib/supabase-server";
 import { checkRateLimit } from "@/lib/rate-limit";
+import { customerSafeMessage } from "@/lib/safe-error";
 
 export async function POST(request: Request) {
   try {
@@ -56,7 +57,14 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ success: true, partner: result });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unable to submit application";
+    // Sanitised, matching /api/auth/session and /api/contact. A raw message here
+    // hands an applicant a Postgres relation or column name ("null value in
+    // column referral_code of relation ambassadors"), and this route is
+    // reachable by anyone with an account. Logged in full server-side, so no
+    // diagnostic is lost; genuinely applicant-facing validation text still
+    // passes, because the sanitiser is a deny-list.
+    console.error("[partner/apply]", error);
+    const message = customerSafeMessage(error, "Unable to submit application");
     return NextResponse.json({ success: false, error: message }, { status: 400 });
   }
 }
