@@ -1,8 +1,5 @@
 import type { MetadataRoute } from "next";
-
-function siteUrl() {
-  return (process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") || "https://vantalabsresearch.com");
-}
+import { siteUrl } from "@/lib/site-identity";
 
 export default function robots(): MetadataRoute.Robots {
   // Non-production deployments (Vercel preview/staging, local dev) disallow the

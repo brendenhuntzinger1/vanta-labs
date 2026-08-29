@@ -1,13 +1,10 @@
 import type { MetadataRoute } from "next";
+import { siteUrl } from "@/lib/site-identity";
 import { getCatalogProducts } from "@/lib/catalog";
 import { ARTICLE_SLUGS } from "@/lib/articles";
 import { POLICY_SLUGS } from "@/lib/legal-content";
 
 export const dynamic = "force-dynamic";
-
-function siteUrl() {
-  return process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") || "https://vantalabsresearch.com";
-}
 
 export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   const base = siteUrl();

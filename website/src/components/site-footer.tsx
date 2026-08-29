@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { RESEARCH_USE_SENTENCE, trustPoints } from "@/lib/trust-claims";
+import { BRAND_LEGAL_NAME } from "@/lib/site-identity";
 
 const FOOTER_COLUMNS = {
   shop: [
@@ -79,9 +80,14 @@ export function SiteFooter() {
         <div className="grid grid-cols-2 gap-x-6 gap-y-10 md:grid-cols-[1.6fr_1fr_1fr_1fr]">
           <div className="col-span-2 md:col-span-1">
             <p className="vl2-serif text-lg tracking-[0.08em] text-white">Vanta Labs</p>
+            {/* Names the ENTITY once, in the company description, where a company
+                description normally names its company. The heading above stays the
+                short visual brand; this is the only prose on the site that spells
+                out the full registered name, which is what lets Google tie the
+                phrase people search for to this domain. */}
             <p className="mt-4 max-w-md text-sm leading-7 text-white/55">
-              Premium biotech research supply with verified quality standards, transparent batch documentation,
-              and streamlined fulfillment.
+              {BRAND_LEGAL_NAME} is a premium biotech research supply company with verified quality
+              standards, transparent batch documentation, and streamlined fulfillment.
             </p>
             <div className="mt-6 inline-flex items-center rounded-full border border-white/15 bg-white/[0.03] px-3.5 py-1.5 text-[11px] uppercase tracking-[0.18em] text-white/70">
               Research Use Only
@@ -108,7 +114,7 @@ export function SiteFooter() {
               support@vantalabsresearch.com
             </a>
           </p>
-          <p className="text-white/45">© 2026 Vanta Labs. All Rights Reserved.</p>
+          <p className="text-white/45">© 2026 {BRAND_LEGAL_NAME}. All Rights Reserved.</p>
         </div>
       </div>
     </footer>

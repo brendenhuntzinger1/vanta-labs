@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { TITLE_TEMPLATE } from "@/lib/site-identity";
 
 const read = (p: string) => readFileSync(join(process.cwd(), p), "utf8");
 
@@ -142,7 +143,14 @@ describe("product pages do not double the brand in their title", () => {
     const layout = read("src/app/layout.tsx");
     // The layout appends "| Vanta Labs"; the page must not do it as well, or
     // every product page reads "GLP-1 | Vanta Labs | Vanta Labs".
-    expect(layout).toContain('template: "%s | Vanta Labs"');
+    //
+    // Assert the template's VALUE, not its spelling in the source. The literal
+    // moved into site-identity.ts when the brand entity was given one home, and
+    // a grep for the old inline string failed while the behaviour it guards was
+    // completely unchanged. The value is the thing this test actually cares
+    // about; the layout still has to wire it through, which is the second half.
+    expect(TITLE_TEMPLATE).toBe("%s | Vanta Labs");
+    expect(layout).toContain("template: TITLE_TEMPLATE");
     expect(page).toContain("const title = product.seoTitle ?? product.name;");
     // Social cards bypass the template, so they still carry the brand — but
     // only when it is not already there.

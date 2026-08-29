@@ -21,6 +21,15 @@ import {
   parseDismissed,
   visibleOffers,
 } from "@/lib/storefront-offers";
+import {
+  HOME_DESCRIPTION,
+  HOME_TITLE,
+  BRAND_LEGAL_NAME,
+  TITLE_TEMPLATE,
+  organizationSchema,
+  siteUrl as resolveSiteUrl,
+  webSiteSchema,
+} from "@/lib/site-identity";
 import { ConsentedAnalytics } from "@/components/consented-analytics";
 import { TikTokPixel } from "@/components/tiktok-pixel";
 import { SnapPixel } from "@/components/snap-pixel";
@@ -96,16 +105,17 @@ const manrope = Manrope({
 
 // Falls back to the production domain (never localhost) so link-preview crawlers
 // always resolve absolute Open Graph image URLs even if the env var is unset.
-const siteUrl = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "") || "https://vantalabsresearch.com";
+// The fallback is www, because the apex 308-redirects to it — see site-identity.ts.
+const siteUrl = resolveSiteUrl();
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
   title: {
-    default: "Vanta Labs | Premium Research Peptides",
-    template: "%s | Vanta Labs",
+    default: HOME_TITLE,
+    template: TITLE_TEMPLATE,
   },
-  description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
-  applicationName: "Vanta Labs",
+  description: HOME_DESCRIPTION,
+  applicationName: BRAND_LEGAL_NAME,
   // Ads append their own tracking parameters to the landing URL. Without a
   // canonical, each variant is a separate page competing with the real one.
   alternates: { canonical: "/" },
@@ -122,16 +132,16 @@ export const metadata: Metadata = {
   },
   openGraph: {
     type: "website",
-    siteName: "Vanta Labs",
-    title: "Vanta Labs | Premium Research Peptides",
-    description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
+    siteName: BRAND_LEGAL_NAME,
+    title: HOME_TITLE,
+    description: HOME_DESCRIPTION,
     url: siteUrl,
     images: [{ url: "/images/og-vanta-labs.png", width: 1200, height: 630, alt: "Vanta Labs" }],
   },
   twitter: {
     card: "summary_large_image",
-    title: "Vanta Labs | Premium Research Peptides",
-    description: "Premium laboratory-grade research materials with verified quality standards and third-party COAs.",
+    title: HOME_TITLE,
+    description: HOME_DESCRIPTION,
     images: ["/images/og-vanta-labs.png"],
   },
   // Only the real production deployment is indexable. Vercel preview/staging
@@ -235,22 +245,7 @@ export default async function RootLayout({
         <script
           type="application/ld+json"
           dangerouslySetInnerHTML={{
-            __html: JSON.stringify([
-              {
-                "@context": "https://schema.org",
-                "@type": "Organization",
-                name: "Vanta Labs",
-                url: siteUrl,
-                logo: `${siteUrl}/images/vanta-logo.png`,
-                description: "Premium research peptides — third-party tested, made in the USA.",
-              },
-              {
-                "@context": "https://schema.org",
-                "@type": "WebSite",
-                name: "Vanta Labs",
-                url: siteUrl,
-              },
-            ]),
+            __html: JSON.stringify([organizationSchema(), webSiteSchema()]),
           }}
         />
         {/* Mounted OUTSIDE the age gate on purpose: a customer arriving on a

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { BRAND_LEGAL_NAME, BRAND_SHORT_NAME } from "./site-identity";
 
 /**
  * Metadata for a static marketing page.
@@ -29,7 +30,7 @@ export function pageMetadata({
   title: string;
   description: string;
 }): Metadata {
-  const fullTitle = `${title} | Vanta Labs`;
+  const fullTitle = `${title} | ${BRAND_SHORT_NAME}`;
   return {
     title,
     description,
@@ -40,7 +41,10 @@ export function pageMetadata({
     // card with no image, which is worse than the generic card it replaced.
     openGraph: {
       type: "website",
-      siteName: "Vanta Labs",
+      // The ENTITY name, not the visual brand: og:site_name is one of the two
+      // fields Google reads to decide what this site is called, so it has to
+      // agree with the homepage and the Organization schema on every URL.
+      siteName: BRAND_LEGAL_NAME,
       title: fullTitle,
       description,
       url: path,
