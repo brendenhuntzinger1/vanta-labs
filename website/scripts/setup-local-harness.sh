@@ -59,6 +59,11 @@ $PSQL -q -f "$HERE/src/lib/sql/deploy-run-once.sql" >/tmp/vl-schema.log 2>&1 || 
 # the file it supersedes, and nothing applied later may redefine it — see
 # harness-prod-parity-functions.sql, which used to re-create admin_ops_summary
 # with its pre-fix body after the corrected one had already been applied.
+# rate-limits is in this list because without `rate_limit_hits` the limiter
+# FAILS OPEN on every call — the documented, deliberate behaviour when its store
+# is unreachable. The harness therefore applied no throttling at all, so signup
+# flooding, reset flooding and resend flooding could not be tested here and the
+# QA scripts had to report them UNENFORCED rather than passing.
 echo "==> feature schema files"
 for f in inventory-reservations inventory-ledger order-email-log v1.1-features \
          fulfillment-batches self-fulfillment-shippo membership-tiers-seed express-checkout \
@@ -71,7 +76,8 @@ for f in inventory-reservations inventory-ledger order-email-log v1.1-features \
          add-order-items-order-id-index BASELINE-live-functions-2026-08-25 \
          admin-control-current-view \
          inventory-enforce-positive-stock inventory-return-path \
-         add-inventory-restock-claim add-inventory-committed-latch; do
+         add-inventory-restock-claim add-inventory-committed-latch \
+         rate-limits; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 

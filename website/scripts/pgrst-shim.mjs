@@ -406,6 +406,26 @@ const server = http.createServer(async (req, res) => {
     const table = `public.${ident(tableName)}`;
     const q = await parseQuery(url, tableName);
 
+    // ---- COUNT (HEAD + Prefer: count=exact) -----------------------------
+    //
+    // supabase-js's `.select("id", { count: "exact", head: true })` issues a
+    // HEAD and reads the total out of Content-Range. Without this the shim
+    // answered 405, which is an ERROR to the caller — and lib/rate-limit.ts
+    // treats an error from its count as "the store is unreachable" and FAILS
+    // OPEN by design. So every rate limit in the app silently did nothing under
+    // the harness, and signup/reset/resend flooding could not be tested at all.
+    if (req.method === "HEAD") {
+      const sql = `SELECT count(*)::bigint AS n FROM ${table}${q.where}`;
+      const { rows } = await pool.query(sql, q.values);
+      const total = Number(rows[0]?.n ?? 0);
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        // PostgREST's shape: `<first>-<last>/<total>`, and `*/0` when empty.
+        "Content-Range": total ? `0-${total - 1}/${total}` : `*/0`,
+      });
+      return res.end(), true;
+    }
+
     // ---- SELECT ---------------------------------------------------------
     if (req.method === "GET") {
       const sql = `SELECT ${q.select} FROM ${table}${q.where}${q.order}${q.limit}${q.offset}`;
@@ -421,8 +441,18 @@ const server = http.createServer(async (req, res) => {
         }
         return send(res, 200, rows[0]);
       }
+      // When an exact count is asked for, the total must be the table's, not
+      // the page's — otherwise a limited read reports its own length as the
+      // total and every paging guard in the app mis-reads it.
+      let total = rows.length;
+      if (/count=exact/.test(prefer)) {
+        const { rows: counted } = await pool.query(
+          `SELECT count(*)::bigint AS n FROM ${table}${q.where}`, q.values,
+        );
+        total = Number(counted[0]?.n ?? rows.length);
+      }
       return send(res, 200, rows, {
-        "Content-Range": `0-${Math.max(rows.length - 1, 0)}/${rows.length}`,
+        "Content-Range": total ? `0-${Math.max(rows.length - 1, 0)}/${total}` : `*/0`,
       });
     }
 
