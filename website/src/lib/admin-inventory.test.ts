@@ -112,7 +112,7 @@ const harness = vi.hoisted(() => {
 });
 
 vi.mock("@/lib/supabase-server", () => ({ supabaseAdmin: harness.supabaseAdmin }));
-vi.mock("@/lib/back-in-stock", () => ({ notifyBackInStock: async () => {} }));
+vi.mock("@/lib/back-in-stock", () => ({ notifyBackInStock: async () => 0, notifyRestockedLine: async () => 0 }));
 
 import {
   adjustInventoryLine,

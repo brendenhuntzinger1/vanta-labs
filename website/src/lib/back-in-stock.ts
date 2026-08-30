@@ -121,3 +121,65 @@ export async function notifyBackInStock(productSlug: string, productName: string
     return 0;
   }
 }
+
+/**
+ * Notify the waitlist for a stock line that has just come back in stock.
+ *
+ * THE ONE PLACE THAT RESOLVES A LINE TO A SLUG.
+ *
+ * `notifyBackInStock` takes a product SLUG, and every restock path holds ids
+ * instead — so the resolution was written out inline at the single call site
+ * that had it, and every other restock path simply did not notify.
+ *
+ * `adjustStock` in inventory-operations.ts is the writer behind "Receive
+ * shipment", "Receive incoming" and the per-line Adjust drawer. It reads the
+ * old count, writes the new one, flips stock_status from "Out of Stock" back to
+ * "In Stock" and invalidates the catalog cache — and never imported this module
+ * at all. So a product restocked the way the owner actually restocks things
+ * went back on sale and the people who had asked to be told heard nothing.
+ *
+ * Worse than a one-off miss: their row stays `notified = false` while the
+ * product is on sale, and the only path that did notify fires on a genuine
+ * 0 → positive transition, so the next sell-out-and-restock cycle through the
+ * receive flow skips them again. The product sells to everyone except the
+ * people who asked for it.
+ *
+ * Best-effort by construction — never throws, because a notification must not
+ * be able to fail a stock movement that has already been written.
+ */
+export async function notifyRestockedLine(input: {
+  productId: string;
+  doseId?: string | null;
+}): Promise<number> {
+  try {
+    if (input.doseId) {
+      const { data: dose } = await supabaseAdmin
+        .from("product_doses")
+        .select("product_id, label")
+        .eq("id", input.doseId)
+        .maybeSingle();
+      if (!dose?.product_id) return 0;
+
+      const { data: product } = await supabaseAdmin
+        .from("products")
+        .select("slug, name")
+        .eq("id", dose.product_id)
+        .maybeSingle();
+      if (!product?.slug) return 0;
+
+      return await notifyBackInStock(String(product.slug), String(product.name ?? "Product"), input.doseId);
+    }
+
+    const { data: product } = await supabaseAdmin
+      .from("products")
+      .select("slug, name")
+      .eq("id", input.productId)
+      .maybeSingle();
+    if (!product?.slug) return 0;
+
+    return await notifyBackInStock(String(product.slug), String(product.name ?? "Product"));
+  } catch (error) {
+    console.error("[back-in-stock] restock notification failed", error);
+    return 0;
+  }
+}

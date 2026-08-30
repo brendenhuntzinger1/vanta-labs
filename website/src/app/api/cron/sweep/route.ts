@@ -17,6 +17,7 @@ import { repairMissingShippingCosts } from "@/lib/shipping-cost-repair";
 import { repairIncompleteRefunds } from "@/lib/refund-effect-repair";
 import { recordSystemAlert } from "@/lib/monitoring";
 import { describeError } from "@/lib/operator-error";
+import { runBirthdayBonusSweep } from "@/lib/membership";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -71,6 +72,11 @@ const JOBS = {
   // it a shopper's own credit stays locked to an order that will never settle.
   // Idempotent, and it never touches an order that has been paid.
   tenderHoldsReleased: { label: "tender_hold_release", run: releaseAbandonedTenderHolds },
+  // Grant and announce birthday bonuses. The settings page promises "we'll send
+  // a bonus on your next one", and the only thing that could grant one was a
+  // dashboard page render on the exact UTC day — so in the ordinary case the
+  // customer got neither the points nor an email. Idempotent per year.
+  birthdayBonus: { label: "birthday_bonus", run: runBirthdayBonusSweep },
   // Retry transactional emails (receipts/shipping) that failed to send.
   emailRetry: { label: "email_retry", run: retryPendingEmails },
   // Settle charges whose confirmation webhook was lost. This is the only thing

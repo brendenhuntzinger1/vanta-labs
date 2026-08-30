@@ -31,6 +31,7 @@ const refundEffectRepair = sentinel("refundEffectRepair");
 const tenderHolds = sentinel("tenderHolds");
 const signupConfirmations = sentinel("signupConfirmations");
 const partnerAccess = sentinel("partnerAccess");
+const birthdayBonus = sentinel("birthdayBonus");
 interface SystemAlert {
   type: string;
   severity: string;
@@ -43,6 +44,7 @@ vi.mock("@/lib/membership-billing", () => ({
   runMembershipBillingSweep: () => membership(),
   grantMonthlyStoreCreditSweep: () => storeCredit(),
 }));
+vi.mock("@/lib/membership", () => ({ runBirthdayBonusSweep: () => birthdayBonus() }));
 vi.mock("@/lib/cart-recovery", () => ({ runAbandonedCartSweep: () => cartRecovery() }));
 vi.mock("@/lib/partner-portal", () => ({ autoApproveEligibleCommissions: () => commissions() }));
 vi.mock("@/lib/commission-accrual-repair", () => ({ repairMissingCommissionAccruals: () => commissionAccrualRepair() }));

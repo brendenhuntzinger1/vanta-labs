@@ -190,6 +190,35 @@ export async function applyDeliveryEvents(events: DeliveryEvent[]): Promise<Deli
       continue;
     }
 
+    // MAKE THE ACCOUNT PAGE TELL THE TRUTH.
+    //
+    // email_suppressions is the authoritative gate, but the Notifications tab
+    // renders its checkbox from customer_preferences.marketing_emails — which a
+    // provider suppression never touched. So a customer who pressed "report
+    // spam" saw "Product news and promotions" still ticked, and pressing Save
+    // on that panel posted marketingEmails: true and asked for the suppression
+    // to be lifted. The preferences route now refuses to lift a provider
+    // suppression; this stops the page inviting them to try.
+    //
+    // Best-effort, exactly like the unsubscribe route's identical mirror: the
+    // suppression above already did the work that matters.
+    try {
+      const { data } = await supabaseAdmin.auth.admin.listUsers({ perPage: 1000 });
+      const matchedUser = data?.users.find(
+        (user) => user.email?.toLowerCase() === event.email.toLowerCase(),
+      );
+      if (matchedUser) {
+        await supabaseAdmin
+          .from("customer_preferences")
+          .upsert(
+            { user_id: matchedUser.id, marketing_emails: false, updated_at: new Date().toISOString() },
+            { onConflict: "user_id" },
+          );
+      }
+    } catch {
+      // Non-fatal; the suppression is what actually gates the send.
+    }
+
     // A complaint is the signal worth waking someone for: it damages the
     // sending domain that also carries receipts. A hard bounce is logged at
     // the lower severity — it is routine list hygiene.

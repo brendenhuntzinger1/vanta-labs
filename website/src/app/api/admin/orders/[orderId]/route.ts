@@ -9,7 +9,7 @@ import { supabaseAdmin } from "@/lib/supabase-server";
 import { sendEmail } from "@/lib/email/send";
 import { enqueueFailedEmail } from "@/lib/email/retry-queue";
 import { getBusinessSettings } from "@/lib/admin-control";
-import { deliveryConfirmationTemplate, orderConfirmationTemplate, reimbursementRecordedTemplate, replacementOrderTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
+import { deliveryConfirmationTemplate, orderCancelledTemplate, orderConfirmationTemplate, reimbursementRecordedTemplate, replacementOrderTemplate, shippingUpdateTemplate } from "@/lib/email/templates";
 import { createReplacementOrder } from "@/lib/admin-replacements";
 import { syncOrderToShippo } from "@/lib/shippo/order-sync";
 import { refundedMerchandiseFraction, updateCommissionOnRefund } from "@/lib/payment-webhook";
@@ -806,6 +806,40 @@ export async function PATCH(request: Request, context: { params: Promise<{ order
         // The pre-carrier reasoning that used to sit here was also wrong:
         // FULFILLMENT_TRANSITIONS allows label_purchased -> cancelled, and the
         // chokepoint handles that case by alerting rather than inventing stock.
+
+        // TELL THE CUSTOMER, WHICH NOTHING DID.
+        //
+        // Cancelling emitted no email and none was possible: notificationFor()
+        // returns a notification only for `delivered` or for entering the
+        // carrier network, so the fulfilment writer says nothing for
+        // `cancelled`, and there was no cancellation template at all.
+        // FULFILLMENT_TRANSITIONS permits cancelling from `paid`, so a customer
+        // who had already been charged got an "Order Confirmed" email and then
+        // silence, and went on waiting for a shipping notice.
+        //
+        // Queued on failure, never allowed to fail the cancellation: the stock
+        // is already back and the status is already written.
+        try {
+          const order = await getOrderWithItems(orderId);
+          if (order?.customer_email) {
+            const { supportEmail } = await getBusinessSettings();
+            const template = orderCancelledTemplate({
+              customerName: String(order.customer_name ?? ""),
+              // The reference the CUSTOMER holds, not the internal key.
+              orderId: String(order.order_number ?? "") || orderId,
+              reason: typeof body.note === "string" ? body.note : null,
+              supportEmail: supportEmail || null,
+            });
+            const message = { to: String(order.customer_email), ...template, replyTo: supportEmail || undefined };
+            const result = await sendEmail(message);
+            if (!result.success) {
+              console.error(`[admin/orders] cancellation email failed for ${orderId}: ${result.error ?? "unknown error"}`);
+              await enqueueFailedEmail(message, result.error);
+            }
+          }
+        } catch (cancelNotifyError) {
+          console.error("[admin/orders] cancellation notification failed", cancelNotifyError);
+        }
       }
 
       if (action === "resend_confirmation") {

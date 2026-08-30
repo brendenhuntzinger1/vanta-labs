@@ -634,9 +634,31 @@ export async function updateAdminProduct(productId: string, input: ProductUpdate
     assertPublishablePrice(best, input.name ?? (beforeProduct?.name as string | undefined));
   }
 
+  // Read the count this save is about to replace, so a 0 → positive edit can
+  // notify the waitlist. Only when the editor actually touched inventory — an
+  // unrelated save (a price, a description) must not cost a query.
+  let inventoryBefore: number | null = null;
+  if (nextInventory !== undefined) {
+    const { data: current } = await supabaseAdmin
+      .from("products")
+      .select("inventory_quantity")
+      .eq("id", productId)
+      .maybeSingle();
+    inventoryBefore = current?.inventory_quantity == null ? null : Number(current.inventory_quantity);
+  }
+
   const { error } = await supabaseAdmin.from("products").update(payload).eq("id", productId);
   if (error) {
     throw error;
+  }
+
+  // The third restock path. This writes inventory_quantity and stock_status
+  // directly rather than going through adjustStock, so it notified nobody —
+  // an owner who fixes a sold-out count here put the product back on sale with
+  // the waitlist none the wiser.
+  if (nextInventory !== undefined && inventoryBefore === 0 && nextInventory > 0) {
+    const { notifyRestockedLine } = await import("@/lib/back-in-stock");
+    await notifyRestockedLine({ productId });
   }
 
   if (input.doses) {

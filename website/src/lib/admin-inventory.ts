@@ -444,20 +444,10 @@ export async function adjustInventoryLine(input: InventoryLineAdjustment) {
 
   // Fire back-in-stock notifications on a genuine 0 → in-stock transition.
   if (wasOutOfStock && restockedTo > 0) {
-    try {
-      const { notifyBackInStock } = await import("@/lib/back-in-stock");
-      if (input.doseId) {
-        const { data: dose } = await supabaseAdmin.from("product_doses").select("product_id, label").eq("id", input.doseId).maybeSingle();
-        if (dose?.product_id) {
-          const { data: product } = await supabaseAdmin.from("products").select("slug, name").eq("id", dose.product_id).maybeSingle();
-          if (product?.slug) await notifyBackInStock(String(product.slug), String(product.name ?? "Product"), input.doseId);
-        }
-      } else {
-        const { data: product } = await supabaseAdmin.from("products").select("slug, name").eq("id", input.productId).maybeSingle();
-        if (product?.slug) await notifyBackInStock(String(product.slug), String(product.name ?? "Product"));
-      }
-    } catch {
-      // Notifications are best-effort; the inventory update already succeeded.
-    }
+    // One implementation, shared with adjustStock — which backs the receive and
+    // adjust flows and used to notify nobody, because this resolution was
+    // written out inline here and nowhere else.
+    const { notifyRestockedLine } = await import("@/lib/back-in-stock");
+    await notifyRestockedLine({ productId: input.productId, doseId: input.doseId ?? null });
   }
 }

@@ -846,6 +846,117 @@ export function ambassadorPayoutSentTemplate(input: {
  * UI has no field for one — so it asks them to reply, which reaches the support
  * address and is the action the page has always described.
  */
+/**
+ * "Confirm your new email address."
+ *
+ * THE LAST CUSTOMER-FACING AUTH EMAIL SUPABASE STILL SENT FOR US.
+ *
+ * Changing an email in /account/settings called supabase.auth.updateUser({
+ * email }) from the browser, so GoTrue mailed its own unstyled template, from
+ * Supabase's identity, with a button pointing at
+ * https://<project>.supabase.co/auth/v1/verify — an off-domain link in an
+ * unbranded message, invisible to the send log, the retry queue and the bounce
+ * webhook. That is the exact shape Gmail filed as spam on 2026-08-29, stripping
+ * its links so there was nothing to click. Signup, resend, password reset and
+ * the ambassador invite were all moved in-house; this one was missed, while the
+ * UI promised "Check your new email address to confirm the change."
+ *
+ * Keep the parameter list free of comments — see campaignTemplate.
+ */
+/**
+ * "Your order has been cancelled."
+ *
+ * There was no cancellation template at all, and no path that could have sent
+ * one: notificationFor() emits a notification only for `delivered` or for
+ * entering the carrier network, so the fulfilment writer says nothing for
+ * `cancelled`. FULFILLMENT_TRANSITIONS permits cancelling from `paid`, so this
+ * covered orders the customer had ALREADY BEEN CHARGED for — they received an
+ * "Order Confirmed" email, then silence, and kept waiting for a shipping notice
+ * that was never coming. The only trace was an in-app row they had to log in
+ * and go looking for.
+ *
+ * `refundNote` is written by the operator. It is the one place to say what
+ * happens to the money, which is the customer's first question.
+ *
+ * Keep the parameter list free of comments — see campaignTemplate.
+ */
+export function orderCancelledTemplate(input: {
+  customerName: string;
+  orderId: string;
+  reason?: string | null;
+  refundNote?: string | null;
+  supportEmail?: string | null;
+}): EmailTemplate {
+  const name = escapeHtml(input.customerName || "there");
+  const reason = String(input.reason ?? "").trim();
+  const refundNote = String(input.refundNote ?? "").trim();
+  const support = escapeHtml(String(input.supportEmail ?? "support@vantalabsresearch.com"));
+  return {
+    subject: `Your Vanta Labs order ${input.orderId} has been cancelled`,
+    html: renderLayout({
+      preheader: `Order ${input.orderId} was cancelled.`,
+      titleHtml: `${name}, your order has been cancelled`,
+      bodyHtml:
+        `<p>Order <strong>${escapeHtml(input.orderId)}</strong> has been cancelled and will not ship.</p>`
+        + (reason ? `<p>${escapeHtml(reason)}</p>` : "")
+        + `<p>${refundNote
+            ? escapeHtml(refundNote)
+            : "If you were charged for this order, the payment is being returned to your original payment method. Refunds usually appear within 5–10 business days, depending on your bank."}</p>`
+        + `<p>If this wasn't expected, reply to this email and we'll sort it out.</p>`,
+      footerNoteHtml: `<p style="margin:10px 0 0;font-size:12px;color:#71717a;">Questions? Reach us at <a href="mailto:${support}" style="color:#a1a1aa;">${support}</a>.</p>`,
+    }),
+    text: toText([
+      `Hi ${input.customerName || "there"},`,
+      "",
+      `Order ${input.orderId} has been cancelled and will not ship.`,
+      reason || null,
+      "",
+      refundNote
+        || "If you were charged for this order, the payment is being returned to your original payment method. "
+           + "Refunds usually appear within 5-10 business days, depending on your bank.",
+      "",
+      `If this wasn't expected, reply to this email or reach us at ${input.supportEmail ?? "support@vantalabsresearch.com"}.`,
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
+export function emailChangeConfirmationTemplate(input: {
+  name: string;
+  newEmail: string;
+  confirmUrl: string;
+}): EmailTemplate {
+  const name = escapeHtml(input.name);
+  return {
+    subject: "Confirm your new Vanta Labs email address",
+    html: renderLayout({
+      preheader: "One tap confirms the new address on your account.",
+      titleHtml: name ? `${name}, confirm your new email` : "Confirm your new email",
+      bodyHtml:
+        `<p>You asked to change the email address on your Vanta Labs account to <strong>${escapeHtml(input.newEmail)}</strong>.</p>`
+        + `<p>Tap the button below to confirm it. Until you do, your account keeps its current address and nothing changes.</p>`,
+      ctaLabel: "Confirm my new email",
+      ctaUrl: input.confirmUrl,
+      footerNoteHtml:
+        `<p style="margin:10px 0 0;font-size:12px;color:#71717a;">If you didn't ask for this, ignore this email — the change will not happen — and consider changing your password.</p>`,
+    }),
+    text: toText([
+      name ? `Hi ${input.name},` : "Hi,",
+      "",
+      `You asked to change the email address on your Vanta Labs account to ${input.newEmail}.`,
+      "Confirm it here:",
+      "",
+      input.confirmUrl,
+      "",
+      "Until you do, your account keeps its current address and nothing changes.",
+      "If you didn't ask for this, ignore this email and consider changing your password.",
+      "",
+      "- Vanta Labs",
+    ]),
+  };
+}
+
 export function ambassadorInfoRequestedTemplate(input: { name: string; supportEmail?: string; applicationUrl: string }): EmailTemplate {
   const name = escapeHtml(input.name);
   const support = escapeHtml(input.supportEmail ?? "support@vantalabsresearch.com");

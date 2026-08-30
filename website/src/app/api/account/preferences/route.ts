@@ -3,6 +3,7 @@ import { detectRoleFromUser } from "@/lib/auth-role";
 import { getAuthenticatedUser } from "@/lib/auth-session";
 import { supabaseAdmin } from "@/lib/supabase-server";
 import { customerSafeMessage } from "@/lib/safe-error";
+import { CUSTOMER_CHOSEN_SUPPRESSION_REASONS } from "@/lib/email/suppression-reasons";
 
 function unauthorizedResponse() {
   return NextResponse.json({ success: false, error: "Unauthorized" }, { status: 401 });
@@ -41,7 +42,25 @@ export async function PATCH(request: Request) {
             .from("email_suppressions")
             .upsert({ email, reason: "account_preference", created_at: new Date().toISOString() }, { onConflict: "email" });
         } else if (body.marketingEmails === true) {
-          await supabaseAdmin.from("email_suppressions").delete().eq("email", email);
+          // ONLY LIFT WHAT THE CUSTOMER THEMSELVES PUT THERE.
+          //
+          // This used to be an unconditional delete on the address, which also
+          // removed the `complained` and `bounced` rows the delivery webhook
+          // writes — so ticking this box put a customer who had pressed "report
+          // spam", or an address that hard-bounced, back on every marketing
+          // list. Worse, a provider suppression did not mirror into
+          // customer_preferences, so the box rendered ALREADY TICKED for those
+          // people and any save of the panel resurrected them without the
+          // customer changing a thing.
+          //
+          // Mailing complainers is the fastest way to wreck a sending domain's
+          // reputation, and that domain also carries every receipt, password
+          // reset and confirmation. See lib/email/suppression-reasons.ts.
+          await supabaseAdmin
+            .from("email_suppressions")
+            .delete()
+            .eq("email", email)
+            .in("reason", [...CUSTOMER_CHOSEN_SUPPRESSION_REASONS]);
         }
       } catch {
         // Non-fatal; the preference row is saved regardless.

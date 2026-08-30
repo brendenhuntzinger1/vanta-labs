@@ -139,6 +139,21 @@ export async function adjustStock(input: {
     orderId: input.orderId ?? null,
   });
 
+  // THE WAITLIST, ON THE PATH THE OWNER ACTUALLY RESTOCKS THROUGH.
+  //
+  // This function backs "Receive shipment", "Receive incoming" and the per-line
+  // Adjust drawer, and it already flips stock_status back to "In Stock" and
+  // invalidates the catalog cache a few lines above — it put the product back
+  // on sale and told nobody who had asked to be told. The only path that did
+  // notify was the quantity quick-save in adjustInventoryLine.
+  //
+  // Gated on a genuine 0 → positive transition, the same condition that path
+  // uses, so topping up a line that was never out of stock sends nothing.
+  if (before === 0 && after > 0) {
+    const { notifyRestockedLine } = await import("@/lib/back-in-stock");
+    await notifyRestockedLine({ productId: input.ref.productId, doseId: input.ref.doseId ?? null });
+  }
+
   return { ok: true, quantityBefore: before, quantityAfter: after };
 }
 

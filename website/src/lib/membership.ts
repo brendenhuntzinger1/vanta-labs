@@ -3,6 +3,8 @@ import { getControlSnapshot } from "@/lib/admin-control";
 import { calculateEarnedPoints, dollarsToPoints, pointsToDollars, POINTS_PER_DOLLAR_REDEMPTION } from "@/lib/points-math";
 import { getStoreCreditBalanceCents } from "@/lib/store-credit";
 import { isMembershipActive } from "@/lib/membership-status";
+import { sendMarketingEmail } from "@/lib/email/marketing";
+import { membershipBirthdayTemplate } from "@/lib/email/templates";
 
 export { isMembershipActive } from "@/lib/membership-status";
 
@@ -691,6 +693,114 @@ export async function awardReferralSignupBonus(newUserId: string, referrerUserId
 // Lazy check meant to run whenever a customer visits their dashboard: since
 // there's no scheduled job runner in this app, birthdays are checked
 // on-demand rather than by a daily cron.
+/**
+ * Grant and announce every birthday bonus due today.
+ *
+ * THE PROMISE THE SETTINGS PAGE MADE AND NOBODY KEPT.
+ *
+ * Saving a birthday answers "Birthday saved. We'll send a bonus on your next
+ * one!", and the field is captioned "add your birthday for a rewards bonus on
+ * the day". Neither was true. checkAndAwardBirthdayBonus had exactly one caller
+ * — the /account dashboard page render — and returns false unless today IS the
+ * birthday, so the bonus landed only if the customer happened to open their
+ * dashboard during that one UTC day. No email was ever sent: the birthday
+ * template had zero production callers.
+ *
+ * So a customer handed over their date of birth on an explicit promise of an
+ * email and points, and in the ordinary case received neither. The window shut
+ * at UTC midnight and nothing retried.
+ *
+ * The function's own comment blamed "no scheduled job runner in this app",
+ * which is stale — the sweep runs twenty-odd jobs, several of which mail. This
+ * is the birthday one. It reuses the same per-year guard, so a customer who
+ * DOES open their dashboard first is not paid twice.
+ *
+ * The email is MARKETING, not transactional: it is a gift announcement, so it
+ * goes through sendMarketingEmail, which honours suppression and appends the
+ * unsubscribe footer. Suppression stops the mail, never the points — the bonus
+ * is owed either way.
+ */
+export async function runBirthdayBonusSweep(): Promise<{ granted: number; emailed: number }> {
+  const settings = await getMembershipBonusSettings();
+  if (!settings.birthdayBonusEnabled) {
+    return { granted: 0, emailed: 0 };
+  }
+
+  const today = new Date();
+  const month = today.getUTCMonth();
+  const day = today.getUTCDate();
+
+  // Read every stored birthday and match on month/day here. `birthday` is a
+  // date, so "same day in any year" is not something a simple column filter can
+  // express, and this table is small enough that the alternative — a SQL
+  // function to maintain alongside it — buys nothing.
+  const { data, error } = await supabaseAdmin
+    .from("customer_preferences")
+    .select("user_id, birthday, birthday_bonus_year")
+    .not("birthday", "is", null);
+
+  if (error) {
+    console.error("[membership] birthday sweep could not read preferences", error);
+    return { granted: 0, emailed: 0 };
+  }
+
+  const currentYear = today.getUTCFullYear();
+  let granted = 0;
+  let emailed = 0;
+
+  for (const row of data ?? []) {
+    const birthday = new Date(String(row.birthday));
+    if (Number.isNaN(birthday.getTime())) continue;
+    if (birthday.getUTCMonth() !== month || birthday.getUTCDate() !== day) continue;
+    if (Number(row.birthday_bonus_year) === currentYear) continue;
+
+    const userId = String(row.user_id);
+    try {
+      await recordPointsLedgerEntry({
+        userId,
+        amount: settings.birthdayBonusPoints,
+        reason: "birthday_bonus",
+      });
+      await supabaseAdmin
+        .from("customer_preferences")
+        .upsert(
+          { user_id: userId, birthday_bonus_year: currentYear, updated_at: new Date().toISOString() },
+          { onConflict: "user_id" },
+        );
+      granted += 1;
+    } catch (grantError) {
+      // One customer's failure must not stop the rest of the day's birthdays.
+      console.error("[membership] birthday bonus could not be granted", userId, grantError);
+      continue;
+    }
+
+    // The points are banked. The email is a courtesy on top and is never
+    // allowed to undo them.
+    try {
+      const { data: account } = await supabaseAdmin.auth.admin.getUserById(userId);
+      const email = account?.user?.email;
+      if (!email) continue;
+      const fullName = typeof account?.user?.user_metadata?.full_name === "string"
+        ? account.user.user_metadata.full_name
+        : "";
+      const result = await sendMarketingEmail({
+        to: email,
+        campaignType: "membership_birthday",
+        templateKey: "membership_birthday",
+        ...membershipBirthdayTemplate({
+          name: fullName.trim().split(/\s+/)[0] ?? "",
+          bonusPoints: settings.birthdayBonusPoints,
+        }),
+      });
+      if (result.success) emailed += 1;
+    } catch (mailError) {
+      console.error("[membership] birthday email failed", userId, mailError);
+    }
+  }
+
+  return { granted, emailed };
+}
+
 export async function checkAndAwardBirthdayBonus(userId: string, birthday: string | null) {
   if (!birthday) {
     return false;

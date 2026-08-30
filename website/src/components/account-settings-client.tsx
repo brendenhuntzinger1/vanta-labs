@@ -81,9 +81,38 @@ export function AccountSettingsClient({
         }
       }
 
-      if (Object.keys(updates).length > 0) {
-        const { error } = await supabase.auth.updateUser(updates);
+      // THE EMAIL CHANGE GOES THROUGH THE SERVER, SO ITS EMAIL IS OURS.
+      //
+      // supabase.auth.updateUser({ email }) makes GoTrue mail its own unstyled
+      // template, from Supabase's identity, with a button pointing at
+      // <project>.supabase.co — unbranded, off-domain, invisible to the send
+      // log and the bounce webhook. That is the message shape Gmail filed as
+      // spam on 2026-08-29, stripping the links so there was nothing to click,
+      // and it was the last customer-facing auth email still sent that way.
+      // /api/account/email-change mints the same link with the admin API and
+      // sends it branded instead. GoTrue still owns the change itself.
+      //
+      // The name is a plain profile write with no email attached, so it stays
+      // here.
+      let emailChangeMessage: string | null = null;
+      if (updates.data) {
+        const { error } = await supabase.auth.updateUser({ data: updates.data });
         if (error) throw new Error(error.message);
+      }
+
+      if (updates.email) {
+        const response = await fetch("/api/account/email-change", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email: updates.email }),
+        });
+        const result = (await response.json().catch(() => null)) as
+          | { success: boolean; message?: string; error?: string }
+          | null;
+        if (!response.ok || !result?.success) {
+          throw new Error(result?.error ?? "Unable to start that email change.");
+        }
+        emailChangeMessage = result.message ?? null;
       }
 
       if (phoneChanged) {
@@ -96,7 +125,13 @@ export function AccountSettingsClient({
         if (!result.success) throw new Error(result.error ?? "Unable to save phone number.");
       }
 
-      setProfileMessage(updates.email ? "Profile updated. Check your new email address to confirm the change." : "Profile updated.");
+      // Quote the route's own sentence when there is one: it names the address
+      // the link went to, and says the account keeps its current address until
+      // the link is followed.
+      setProfileMessage(
+        emailChangeMessage
+          ?? (updates.email ? "Profile updated. Check your new email address to confirm the change." : "Profile updated."),
+      );
     } catch (error) {
       setProfileError(error instanceof Error ? error.message : "Unable to update profile");
     } finally {

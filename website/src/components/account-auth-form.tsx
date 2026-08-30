@@ -87,23 +87,8 @@ export function AccountAuthForm() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [completingVerification, setCompletingVerification] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // Sign in with a texted one-time code as an alternative to email + password.
-  const [loginMethod, setLoginMethod] = useState<"email" | "phone">("email");
-  const [phone, setPhone] = useState("");
-  const [otpCode, setOtpCode] = useState("");
-  const [otpSent, setOtpSent] = useState(false);
-  const [otpCooldown, setOtpCooldown] = useState(0);
-  // Single-use Turnstile token + a bump counter to reset the widget after each try.
-  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
-  const [captchaResetKey, setCaptchaResetKey] = useState(0);
-
-  // True only when this page load is a return from Supabase's email
-  // confirmation link: new links carry ?verified=1 (set on emailRedirectTo
-  // below); older, already-sent links are detected by the auth tokens Supabase
-  // puts in the URL fragment. Captured once at first render, before the
-  // Supabase client consumes and strips that fragment.
+  // WHETHER THIS PAGE LOAD REALLY IS A RETURN FROM AN EMAILED LINK.
+  //
   // Classified ONCE, at first render, before supabase-js can consume the
   // fragment (the browser client is lazily constructed on first `supabase.auth`
   // access, which happens later, inside the effect below).
@@ -122,6 +107,51 @@ export function AccountAuthForm() {
     return searchParams.get("verified") === "1" || Boolean(window.location.hash);
   });
   const isVerificationReturn = authReturn.kind === "session";
+
+  // WHAT HAPPENS WHEN THE LINK IS DEAD.
+  //
+  // Three ways a confirmation link fails, and until now all three landed the
+  // customer on an ordinary, unannotated sign-in form:
+  //
+  //   * GoTrue redirected with `#error=access_denied&error_code=otp_expired`
+  //     — a spent or expired token. Mailbox security scanners pre-fetch links
+  //     and burn them before the human clicks, which is exactly what happened
+  //     to the applicant of 2026-08-28 ("One-time token not found").
+  //   * /auth/confirm could not forward at all and sent `?link=invalid`.
+  //   * `?verified=1` arrived with no fragment — a re-opened, shared or typed
+  //     URL. The address IS confirmed by then (GoTrue verified before
+  //     redirecting), so this is not an error; they just need to sign in. What
+  //     it must never do is promote a leftover localStorage session.
+  //
+  // Seeded as INITIAL STATE rather than set from an effect: all three inputs
+  // are known at first render, so an effect would only paint the bare form and
+  // then re-render — a cascading render, and a visible flash of the very
+  // "nothing happened" page this exists to replace.
+  const [message, setMessage] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null;
+    if (authReturn.kind !== "none" || !arrivedFromEmailLink) return null;
+    return searchParams.get("verified") === "1"
+      ? "Your email address is confirmed. Sign in below to finish setting up your account."
+      : null;
+  });
+  const [error, setError] = useState<string | null>(() => {
+    if (authReturn.kind === "error") return deadAuthLinkMessage(authReturn.errorCode);
+    const linkProblem = searchParams.get("link");
+    if (!linkProblem) return null;
+    return linkProblem === "unavailable"
+      ? "We couldn't check that link just now. Enter your email below and we'll send you a new one."
+      : deadAuthLinkMessage();
+  });
+  // Sign in with a texted one-time code as an alternative to email + password.
+  const [loginMethod, setLoginMethod] = useState<"email" | "phone">("email");
+  const [phone, setPhone] = useState("");
+  const [otpCode, setOtpCode] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpCooldown, setOtpCooldown] = useState(0);
+  // Single-use Turnstile token + a bump counter to reset the widget after each try.
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  const [captchaResetKey, setCaptchaResetKey] = useState(0);
+
 
   // A shopper who clicked the confirmation link in Supabase's built-in
   // verification email lands back here with a session already established
@@ -193,41 +223,6 @@ export function AccountAuthForm() {
       active = false;
     };
   }, [router, nextPath, isVerificationReturn]);
-
-  // WHAT HAPPENS WHEN THE LINK IS DEAD.
-  //
-  // Three ways a confirmation link fails, and until now all three landed the
-  // customer on an ordinary, unannotated sign-in form:
-  //
-  //   * GoTrue redirected with `#error=access_denied&error_code=otp_expired`
-  //     — a spent or expired token. Mailbox security scanners pre-fetch links
-  //     and burn them before the human clicks, which is exactly what happened
-  //     to the applicant of 2026-08-28 ("One-time token not found").
-  //   * /auth/confirm could not forward at all and sent `?link=invalid`.
-  //   * `?verified=1` arrived with no fragment — a re-opened, shared or typed
-  //     URL. The address IS confirmed by then (GoTrue verified before
-  //     redirecting), so this is not an error; they just need to sign in. What
-  //     it must never do is promote a leftover localStorage session.
-  useEffect(() => {
-    if (authReturn.kind === "error") {
-      setError(deadAuthLinkMessage(authReturn.errorCode));
-      return;
-    }
-
-    const linkProblem = searchParams.get("link");
-    if (linkProblem) {
-      setError(
-        linkProblem === "unavailable"
-          ? "We couldn't check that link just now. Enter your email below and we'll send you a new one."
-          : deadAuthLinkMessage(),
-      );
-      return;
-    }
-
-    if (authReturn.kind === "none" && arrivedFromEmailLink && searchParams.get("verified") === "1") {
-      setMessage("Your email address is confirmed. Sign in below to finish setting up your account.");
-    }
-  }, [authReturn, arrivedFromEmailLink, searchParams]);
 
   // Tick down the "Text me a code" cooldown once per second.
   useEffect(() => {

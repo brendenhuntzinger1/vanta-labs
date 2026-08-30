@@ -48,6 +48,8 @@ const INPUTS: Record<string, unknown> = {
   ambassadorApplicationReceivedTemplate: { name: "Zain" },
   ambassadorApprovedTemplate: { name: "Zain", referralCode: "ZAIN", dashboardUrl: URL_, commissionPercent: 20, personalDiscountPercent: 20, referralDiscountPercent: 10 },
   ambassadorPayoutSentTemplate: { name: "Zain", amount: 250, method: "PayPal", handle: "z@example.test", orderCount: 5, dashboardUrl: URL_ },
+  orderCancelledTemplate: { customerName: "Zain", orderId: "VL-1001", reason: "Out of stock", refundNote: "Refunded in full.", supportEmail: "support@vantalabsresearch.com" },
+  emailChangeConfirmationTemplate: { name: "Zain", newEmail: "new@example.com", confirmUrl: URL_ },
   ambassadorInfoRequestedTemplate: { name: "Zain", supportEmail: "support@vantalabsresearch.com", applicationUrl: URL_ },
   ambassadorDeniedTemplate: { name: "Zain" },
   commissionEarnedTemplate: { name: "Zain", commissionAmount: 24, unpaidBalance: 120, referralCode: "ZAIN", dashboardUrl: URL_ },
