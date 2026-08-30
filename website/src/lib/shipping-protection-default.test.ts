@@ -31,9 +31,24 @@ const read = (path: string) => readFileSync(path, "utf8");
 
 describe("shipping protection is off by default, as the Shipping Policy promises", () => {
   it("the cart does not pre-select it", () => {
+    // THIS USED TO BE `expect(source).toContain("useState(false)")`, which
+    // cart-context.tsx satisfies ten times over — nine of them nothing to do
+    // with shipping protection. The assertion passed on any boolean in the file
+    // starting false, so deleting the shipping-protection state entirely, or
+    // moving its default behind a variable, left it green.
+    //
+    // The negative guard beside it was real but narrow: it only ever caught the
+    // single literal spelling `useState(true)`.
+    //
+    // So this now matches the ONE declaration, and reads its initial value out
+    // of the match rather than searching the file for a string.
     const source = read("src/components/cart-context.tsx");
-    expect(source).toContain("useState(false)");
-    expect(source).not.toMatch(/const \[shippingProtectionEnabled, setShippingProtectionEnabled\] = useState\(true\)/);
+    const declaration = /const \[shippingProtectionEnabled, setShippingProtectionEnabled\] = useState\(([^)]*)\)/
+      .exec(source);
+
+    expect(declaration, "no shippingProtectionEnabled useState declaration found at all").toBeTruthy();
+    expect(declaration![1].trim(), "shipping protection is pre-selected, which the Shipping Policy says it is not")
+      .toBe("false");
   });
 
   it("the policy still makes the promise the cart is now keeping", () => {

@@ -126,8 +126,20 @@ $PSQL -q -f "$HERE/src/lib/sql/harness-prod-parity-foreign-keys.sql" >>/tmp/vl-s
 #    harness-prod-parity-functions.sql used to re-create with its pre-fix gross
 #    body — applying them here is what makes the corrected definition win.
 echo "==> post-parity migrations"
+# pending-emails-order-link is C-02, and leaving it out of this list made the
+# harness a schema BEHIND production. Verified against the live project on
+# 2026-08-30: public.pending_emails there carries order_id and email_kind, and
+# public.pending_emails_order_idx exists. The harness carried neither.
+#
+# That is not a cosmetic drift. retryPendingEmails detects the missing columns
+# and falls back to the legacy query — so in the harness the sweep sends with no
+# idempotency key and never closes the send-once slot it just satisfied, which
+# is precisely the duplicate-receipt defect C-02 fixed. Any harness run
+# asserting "a retried webhook does not send a second confirmation" was
+# exercising the OLD path, so a pass there said nothing about the code
+# production actually runs.
 for f in referral-orders-commission-lifecycle referral-orders-manual-review-status \
-         refund-exactly-once-indexes; do
+         refund-exactly-once-indexes pending-emails-order-link automation-send-once; do
   [ -f "$HERE/src/lib/sql/$f.sql" ] && $PSQL -q -f "$HERE/src/lib/sql/$f.sql" >>/tmp/vl-schema.log 2>&1 || true
 done
 
@@ -169,6 +181,32 @@ check() { # name, sql returning boolean
 
 check "orders.inventory_restocked_at exists (cancel/refund restock claim)" \
   "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='inventory_restocked_at');"
+
+# C-02. retryPendingEmails checks for these columns at RUNTIME and quietly falls
+# back to the legacy query when they are absent, so their absence does not
+# error — it just moves the sweep onto the code path that sends a second
+# receipt. A harness missing them cannot tell the fix from the defect.
+check "pending_emails.order_id exists (C-02: the retry sweep can close the send-once slot)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='pending_emails' and column_name='order_id');"
+check "pending_emails.email_kind exists (C-02)" \
+  "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='pending_emails' and column_name='email_kind');"
+# The guard the whole send-once claim rests on. Application code cannot make an
+# email exactly-once on its own; this partial unique index is what does it.
+check "order_email_log_one_live unique index exists (send-once is DB-enforced, not just code)" \
+  "select exists (select 1 from pg_indexes where schemaname='public' and indexname='order_email_log_one_live');"
+
+# CALLED, not merely present. release_inventory_for_order existed, had the right
+# signature and the right grants, and raised `column "batch_limit" does not
+# exist` on every invocation — a line copy-pasted from expire_stale_reservations,
+# whose parameter that is. Every existence check in this file passed while no
+# inventory hold was ever released. A function is only proven by running it.
+check "release_inventory_for_order actually runs (not just exists)" \
+  "select public.release_inventory_for_order('parity-probe-no-such-order') = 0;"
+
+# The automation send-once slot. Without it claimAutomationSend() cannot detect a
+# duplicate, and two overlapping sweeps mail the customer twice.
+check "email_send_log_automation_once unique index exists (automation send-once)" \
+  "select exists (select 1 from pg_indexes where schemaname='public' and indexname='email_send_log_automation_once');"
 check "orders.inventory_committed_at exists (the restock SIGNAL)" \
   "select exists (select 1 from information_schema.columns where table_schema='public' and table_name='orders' and column_name='inventory_committed_at');"
 # The four columns scripts/harness-pay-order.mjs SELECTs. They are created by

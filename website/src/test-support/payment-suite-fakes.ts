@@ -269,6 +269,13 @@ export function supabaseServerModule() {
       getUser: async () => ({ data: { user: null }, error: null }),
       admin: {
         inviteUserByEmail: async () => ({ data: null, error: null }),
+        // isApprovedAmbassadorCustomer reads the ACCOUNT's own email here rather
+        // than trusting the address on the order — a guest who typed an
+        // ambassador's address used to collect their personal discount. These
+        // suites drive quote-order with fixtures that are nobody's ambassador,
+        // so "no such account" is the honest answer and keeps the personal
+        // discount out of the money math they are actually asserting.
+        getUserById: async () => ({ data: { user: null }, error: null }),
       },
     },
   };

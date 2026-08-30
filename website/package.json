@@ -10,11 +10,14 @@
     "test": "vitest run",
     "harness:build": "NODE_ENV=test next build",
     "harness:start": "NODE_ENV=test node scripts/harness-server.mjs",
+    "qa:seed": "node scripts/qa-seed-roles.mjs",
     "qa:roles": "node scripts/qa-role-boundaries.mjs",
+    "qa:crossaccount": "node scripts/qa-cross-account.mjs",
     "qa:journey": "node scripts/qa-customer-journey.mjs",
     "qa:abuse": "node scripts/qa-abuse-and-roles.mjs",
-    "qa:all": "npm run qa:roles && npm run qa:journey && npm run qa:purchase && npm run qa:abuse",
-    "qa:purchase": "node scripts/qa-purchase-path.mjs"
+    "qa:all": "npm run qa:seed && npm run qa:roles && npm run qa:crossaccount && npm run qa:journey && npm run qa:purchase && npm run qa:abuse",
+    "qa:purchase": "node scripts/qa-purchase-path.mjs",
+    "qa:purchase:mobile": "QA_VIEWPORT=mobile node scripts/qa-purchase-path.mjs"
   },
   "dependencies": {
     "@basis-theory/basis-theory-js": "^4.30.2",

@@ -255,24 +255,65 @@ async function main() {
   };
 
   // ---- roles ------------------------------------------------------------
-  const roles = [{ name: "guest", cookie: null }];
+  // THE ROLES THIS HARNESS EXISTS TO PROBE, AND WHAT HAPPENED WHEN IT HAD NONE.
+  //
+  // This list used to come from QA_ROLES with `?? "{}"` behind it, and NOTHING
+  // in this repository ever set QA_ROLES — not package.json, not another
+  // script, not the docs. So the loop below never ran a single iteration,
+  // `roles` never held anything but a signed-out guest, and the admin session
+  // failed too (admin_credentials is empty until it is seeded). Both failures
+  // printed one line each and the run carried on to finish with:
+  //
+  //     166 probes, 0 findings.
+  //     Every protected route refused every role that should not reach it.
+  //
+  // ...and exit 0. That sentence was the evidence behind this repo's role
+  // isolation claims, and every word after "guest" in it was unearned. With the
+  // roles actually present the same probe set is 1000 probes, not 166.
+  //
+  // So the default is now the seeded fixtures rather than nothing, and a role
+  // that cannot be established is FATAL. A boundary harness that quietly probes
+  // fewer roles than it reports is worse than no harness: it manufactures the
+  // confidence that stops anyone looking.
+  const DEFAULT_ROLES = {
+    unverified: "qa.unverified@example.test",
+    verified: "qa.verified@example.test",
+    member: "qa.member@example.test",
+    applicant: "qa.applicant@example.test",
+    ambassador: "qa.ambassador@example.test",
+    other: "qa.other@example.test",
+  };
 
-  for (const [name, email] of Object.entries(JSON.parse(process.env.QA_ROLES ?? "{}"))) {
+  const roles = [{ name: "guest", cookie: null }];
+  const unavailable = [];
+
+  for (const [name, email] of Object.entries(JSON.parse(process.env.QA_ROLES ?? JSON.stringify(DEFAULT_ROLES)))) {
     try {
       roles.push({ name, cookie: await customerSession(email, process.env.QA_PASSWORD ?? "HarnessPass123!") });
     } catch (error) {
-      console.log(`  ! could not establish ${name} (${email}): ${String(error).slice(0, 120)}`);
+      unavailable.push(`${name} (${email}): ${String(error).slice(0, 120)}`);
     }
   }
 
   let admin = null;
   try {
     admin = await adminSession(process.env.QA_ADMIN_USER ?? "qaadmin", process.env.QA_ADMIN_PASS ?? "QaAdmin123!Pass");
-    console.log("  admin session established");
   } catch (error) {
-    console.log(`  ! could not establish admin: ${String(error).slice(0, 120)}`);
+    unavailable.push(`admin: ${String(error).slice(0, 120)}`);
   }
-  console.log(`  roles: ${roles.map((r) => r.name).join(", ")}${admin ? ", admin" : ""}\n`);
+
+  if (unavailable.length) {
+    console.log("  COULD NOT ESTABLISH EVERY ROLE — refusing to report a boundary result.\n");
+    for (const line of unavailable) console.log(`    ! ${line}`);
+    console.log("\n  These accounts are created by scripts/qa-seed-roles.mjs. Run it first:");
+    console.log("      node scripts/qa-seed-roles.mjs\n");
+    console.log("  Probing with the roles that DID sign in would test a smaller boundary than");
+    console.log("  the summary line claims, which is the exact failure this check exists to stop.");
+    await pool.end();
+    process.exit(1);
+  }
+
+  console.log(`  roles: ${roles.map((r) => r.name).join(", ")}, admin\n`);
 
   // ---- 1. admin API refuses every non-admin ------------------------------
   for (const role of roles) {
@@ -312,6 +353,62 @@ async function main() {
       role: "guest", cookie: null, url: concrete(route, ids),
       expect: bouncedToLogin, why: "guest must be bounced to the login form",
     });
+  }
+
+  // ---- 4b. THE POSITIVE CONTROL: admin must actually GET IN ---------------
+  //
+  // Everything above asks "who is refused". Nothing asked "does anyone get in",
+  // and the admin session — which this script goes to the trouble of
+  // establishing — was used for one console.log and never probed. Without this
+  // pass, an admin area that refused EVERY caller, or 500ed on every route,
+  // would score zero findings and read as perfect isolation. Locked is not the
+  // same as secure, and a boundary harness that cannot tell them apart is
+  // measuring one side of the boundary.
+  //
+  // GET only. The refusal probes above may safely fire a DELETE at a
+  // nonexistent id; an ADMITTED one would run it for real.
+  //
+  // WHAT COUNTS AS "GOT IN". Not 2xx — the ids substituted into [param] routes
+  // are placeholders that name nothing, so a 400 or 404 there is the route
+  // working correctly and saying "no such record". Reading those as failures
+  // would bury the two answers that actually mean something:
+  //
+  //   * an AUTH refusal (401/403, or a bounce to a login form) — the admin
+  //     session did not get in, so every "refused" result above is unfalsifiable
+  //   * a 5xx — the guard threw instead of deciding, which is a refusal by
+  //     accident and reverts the moment the exception stops
+  const admitted = (status, location) => {
+    if (status >= 500) return false;
+    if (status === 401 || status === 403) return false;
+    if (status >= 300 && status < 400) return !/\/(account\/login|vault|admin\/login)/.test(location ?? "");
+    return true;
+  };
+
+  // Kept OUT of `findings`, and reported separately, because the two results
+  // answer different questions and only one of them is a boundary defect.
+  // "This one admin page 500s" is worth saying; it does not mean an outsider got
+  // in. "NO admin page is reachable" does — it means every refusal above is
+  // unfalsifiable, and that is what this run gates on.
+  const control = { reached: 0, failed: [] };
+  const controlProbe = async (url, method = "GET") => {
+    let status; let location = null;
+    try {
+      const res = await fetch(`${BASE}${url}`, {
+        method, redirect: "manual", headers: { Cookie: admin },
+      });
+      status = res.status;
+      location = res.headers.get("location");
+    } catch (error) {
+      control.failed.push({ url, status: "REQUEST_FAILED", why: String(error).slice(0, 120) });
+      return;
+    }
+    if (admitted(status, location)) control.reached += 1;
+    else control.failed.push({ url, status, location });
+  };
+
+  for (const route of PROTECTED_PAGES_ADMIN) await controlProbe(concrete(route, ids));
+  for (const route of PROTECTED_API_ADMIN.filter((r) => r.methods.includes("GET"))) {
+    await controlProbe(concrete(route.url, ids));
   }
 
   // ---- 5. IDOR: another customer's records -------------------------------
@@ -367,7 +464,31 @@ async function main() {
     console.log("  Every protected route refused every role that should not reach it.");
   }
 
+  // THE CONTROL, REPORTED WHETHER OR NOT IT IS CLEAN.
+  //
+  // A refusal result only means something if somebody CAN get in. Printing the
+  // reached count next to the refusal count is what makes "0 findings" readable
+  // as isolation rather than as an admin area that is simply broken.
+  console.log(`\n  positive control: the admin session reached ${control.reached} admin routes.`);
+  if (control.failed.length) {
+    console.log(`  ${control.failed.length} it could not reach (NOT boundary findings — an admin being`);
+    console.log("  refused or erroring is a different defect from an outsider getting in):");
+    for (const f of control.failed.slice(0, 12)) {
+      console.log(`    ${String(f.status).padEnd(4)} ${f.url}${f.location ? ` -> ${f.location}` : ""}`);
+    }
+    if (control.failed.length > 12) console.log(`    ... and ${control.failed.length - 12} more`);
+    console.log("  A 5xx here is usually the harness, not the product: harness-server.mjs documents");
+    console.log("  that NODE_ENV is baked at build time, so the PAYMENT_PROVIDER=mock guard fires on");
+    console.log("  any admin page that reads payment configuration. Check harness.log before filing it.");
+  }
+
   await pool.end();
+  // Fails on a boundary finding, or if the control is entirely dead — in which
+  // case "0 findings" would mean nothing at all.
+  if (control.reached === 0) {
+    console.log("\n  THE ADMIN SESSION REACHED NOTHING, so no refusal above is falsifiable.");
+    process.exit(1);
+  }
   process.exit(findings.length ? 1 : 0);
 }
 

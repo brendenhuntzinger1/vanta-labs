@@ -179,10 +179,32 @@ race.
 
 ## Local permission allowlist
 
-Supabase `execute_sql` and `apply_migration` are auto-approved in the checked-in
-`.claude/settings.json`, so SQL calls don't prompt in any session, cloud or
-local. Auto-approval only removes the permission dialog — the production
-Supabase rules above still apply.
+`.claude/settings.json` allow-lists Supabase `execute_sql` and `apply_migration`
+(and 29 other read-only Supabase / Playwright / GitHub / Vercel / Sentry calls).
+Auto-approval only removes the permission dialog — the production Supabase rules
+above still apply.
+
+**Those rules do not apply in a cloud session, and this section used to claim
+they did.** A cloud container starts from a fresh clone, and a fresh clone is an
+*untrusted* workspace. Every project-scoped `permissions.allow` entry is dropped
+before the first tool call, which the CLI records and nothing surfaces:
+
+    Dropped 31 project-scoped permissions.allow entries — workspace not yet trusted
+    Ignoring 31 permissions.allow entries from .claude/settings.json: this
+    workspace has not been trusted. Run Claude Code interactively here once and
+    accept the trust dialog, or set
+    projects["/home/user/vanta-labs"].hasTrustDialogAccepted: true in
+    /root/.claude.json.
+
+So in the cloud the allowlist buys nothing and every one of those calls prompts.
+On a laptop, where the trust dialog was answered once, it works as written.
+
+Trust is one gate, not two: the same drop is why the checked-in
+`extraKnownMarketplaces` never registers and the TypeScript LSP never starts
+(see the plugin section above). Granting trust fixes both at once, and it is
+deliberately a human's decision — a repository that could trust itself from a
+`SessionStart` hook could also load plugin code into every later session, which
+is the thing the gate exists to prevent. Do not automate around it.
 
 `.claude/settings.local.json` is gitignored and available for per-developer
 grants on top of that; `scripts/setup-claude-local-settings.sh` recreates it

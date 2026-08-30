@@ -114,6 +114,20 @@ function pathBypassesMaintenance(pathname: string) {
     || pathname === "/account/forgot-password"
     || pathname === "/account/reset-password"
     || pathname.startsWith("/api/auth/password-reset")
+    // Signup confirmation, for exactly the reason above, and harder. The three
+    // lines before this bypass password recovery because "these are promises
+    // made in an email that has ALREADY been delivered" — and that was written
+    // while the branded confirmation hop, which is the same promise in the same
+    // inbox, went unlisted.
+    //
+    // An unconfirmed customer cannot sign in at all, so this link is their only
+    // way into the account they just made. Rewriting it to /maintenance makes
+    // the branded link look broken to the one person who cannot route around it,
+    // and /api/auth/resend-confirmation went with it, so they could not even ask
+    // for another. Reaching either grants no access to the storefront the window
+    // is closing — the same argument that already justified the reset pages.
+    || pathname === "/auth/confirm"
+    || pathname.startsWith("/api/auth/resend-confirmation")
     || isStaticAsset(pathname)
   );
 }

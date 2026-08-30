@@ -260,8 +260,33 @@ export function orderConfirmationTemplate(input: {
   // separate column) when negative. Splitting it this way means the line items
   // ALWAYS sum to Total, whether the order had discounts, an add-on, or both.
   const residual = Math.round((input.subtotal + input.shipping + tax + cardFee - input.total) * 100) / 100;
-  const savings = Math.max(0, residual);
-  const addOn = Math.max(0, -residual);
+
+  // ...BUT THE PROMO DISCOUNT IS NOT PART OF THAT RESIDUAL'S JOB.
+  //
+  // savings and addOn used to be the two halves of the residual alone, and
+  // `input.discount` — a stored column every caller passes — was never read. So
+  // an order with BOTH a discount and an add-on netted them against each other
+  // and printed the difference as the discount. A $20 promo on an order that
+  // also bought $15 of shipping protection nets to $5, and the receipt said
+  // "Discounts & credits -$5.00" with no protection line to account for the
+  // other fifteen. Not rounding: a different number, on the document customers
+  // reconcile against their card statement.
+  //
+  // So the discount is taken out first and shown as itself, and the residual
+  // keeps its original job for everything that is NOT itemised — points and
+  // store credit when what is left is a reduction, an add-on when it is a
+  // charge. The lines still sum to Total, which is the property the residual
+  // existed for.
+  //
+  // A discount larger than the whole order is not believed. It would imply an
+  // add-on of the difference, which is never real, and printing it would turn a
+  // bad stored value into a nonsensical receipt; the residual alone is the
+  // safer answer there, and it is what this did before.
+  const gross = Math.round((input.subtotal + input.shipping + tax + cardFee) * 100) / 100;
+  const discount = input.discount > 0 && input.discount <= gross ? input.discount : 0;
+  const other = Math.round((residual - discount) * 100) / 100;
+  const credits = Math.max(0, other);
+  const addOn = Math.max(0, -other);
   const rows = input.items
     .map(
       (item) =>
@@ -285,7 +310,8 @@ export function orderConfirmationTemplate(input: {
           ${rows}
           ${summaryRow("Subtotal", money(input.subtotal), { border: true })}
           ${summaryRow("Shipping", money(input.shipping))}
-          ${savings > 0 ? summaryRow("Discounts &amp; credits", `-${money(savings)}`) : ""}
+          ${discount > 0 ? summaryRow("Discount", `-${money(discount)}`) : ""}
+          ${credits > 0 ? summaryRow("Credits applied", `-${money(credits)}`) : ""}
           ${tax > 0 ? summaryRow("Sales tax", money(tax)) : ""}
           ${cardFee > 0 ? summaryRow(escapeHtml(CARD_FEE_LABEL), money(cardFee)) : ""}
           ${addOn > 0 ? summaryRow("Shipping protection", money(addOn)) : ""}
@@ -302,7 +328,8 @@ export function orderConfirmationTemplate(input: {
       "",
       `Subtotal: ${money(input.subtotal)}`,
       `Shipping: ${money(input.shipping)}`,
-      savings > 0 ? `Discounts & credits: -${money(savings)}` : null,
+      discount > 0 ? `Discount: -${money(discount)}` : null,
+      credits > 0 ? `Credits applied: -${money(credits)}` : null,
       tax > 0 ? `Sales tax: ${money(tax)}` : null,
       cardFee > 0 ? `${CARD_FEE_LABEL}: ${money(cardFee)}` : null,
       addOn > 0 ? `Shipping protection: ${money(addOn)}` : null,

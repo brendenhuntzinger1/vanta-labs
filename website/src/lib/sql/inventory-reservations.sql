@@ -229,12 +229,27 @@ begin
     n := n + 1;
   end loop;
 
-  -- Hitting the ceiling every tick means holds are being created faster than
-  -- they are reclaimed, which is worth seeing in the Postgres log.
-  if n >= batch_limit then
-    raise warning 'expire_stale_reservations released the full per-tick batch of % holds; more remain for the next sweep', batch_limit;
-  end if;
-
+  -- NO BATCH CEILING HERE. This releases the holds of ONE named order, so there
+  -- is nothing to page through and no ceiling to hit.
+  --
+  -- These four lines used to be a copy of expire_stale_reservations' per-tick
+  -- warning, `batch_limit` and all — and batch_limit is that function's
+  -- parameter, declared nowhere in this one. PL/pgSQL resolves it when the line
+  -- runs, and the line runs on EVERY call because the `if` condition is always
+  -- evaluated, so the whole function raised
+  --
+  --     ERROR: column "batch_limit" does not exist
+  --
+  -- every single time. No hold was ever released through it: a failed or
+  -- cancelled checkout left its stock reserved until expire_stale_reservations
+  -- happened past it. The give-away was in the message it would have printed —
+  -- it names the other function.
+  --
+  -- The live database does NOT carry this version (checked 2026-08-30:
+  -- pg_proc.prosrc for release_inventory_for_order contains no "batch_limit"),
+  -- so production is unaffected. The hazard was this FILE: deploy-run-once
+  -- re-applies it, which would have installed the broken copy over the working
+  -- one.
   return n;
 end;
 $$;

@@ -34,7 +34,23 @@ import pg from "pg";
 
 const BASE = process.env.QA_BASE_URL ?? "http://127.0.0.1:3000";
 const DB = process.env.QA_DATABASE_URL ?? "postgres://postgres@localhost:55432/storefront";
-const HARNESS_LOG = process.env.QA_HARNESS_LOG ?? null;
+/**
+ * WHERE THE APP'S OWN LOG IS, WITHOUT BEING TOLD.
+ *
+ * This was `process.env.QA_HARNESS_LOG ?? null`, and every email assertion in
+ * this file skips when it is null. Nothing sets the variable — not the npm
+ * script, not qa:all — so the default run silently gave up on precisely the two
+ * steps the harness exists for: that paying sends exactly ONE confirmation, and
+ * that a retried webhook does not send a second. They reported as skips, under
+ * a heading that says skips are not verified, and the run still exited 0.
+ *
+ * qa-harness-up.sh already writes the log to a known place, so look there.
+ * An explicit QA_HARNESS_LOG still wins; the fallback only removes the case
+ * where the log exists and nobody thought to point at it.
+ */
+const DEFAULT_HARNESS_LOG = `${process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/harness.log`;
+const HARNESS_LOG = process.env.QA_HARNESS_LOG
+  ?? (existsSync(DEFAULT_HARNESS_LOG) ? DEFAULT_HARNESS_LOG : null);
 const WEBHOOK_SECRET = process.env.PAYMENT_WEBHOOK_SECRET ?? "harness-webhook-secret";
 
 if (!/127\.0\.0\.1|localhost/.test(BASE)) {
@@ -179,6 +195,24 @@ const CLIENT_IP = (() => {
   return `100.${64 + (a % 64)}.${b}.${(c % 254) + 1}`;
 })();
 
+/**
+ * THE SAME PURCHASE, AT PHONE SIZE.
+ *
+ * Most of this store's traffic is mobile, and this is the money path — but every
+ * context here was desktop-only, so the one flow it is least affordable to get
+ * wrong was the one never driven at 390x844. The journey harness checks mobile
+ * for the signed-in account pages; nothing checked mobile through cart,
+ * checkout, payment and the receipt.
+ *
+ *   QA_VIEWPORT=mobile npm run qa:purchase
+ *
+ * isMobile + hasTouch as well as the viewport, because a narrow desktop window
+ * is not a phone: it does not dispatch touch events and it does not get the
+ * mobile layout branches that read pointer capability.
+ */
+const MOBILE = { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true };
+const VIEWPORT_OPTS = process.env.QA_VIEWPORT === "mobile" ? MOBILE : {};
+
 async function passAgeGate(page) {
   await page.goto(`${BASE}/`, { waitUntil: "domcontentloaded" });
 
@@ -294,7 +328,7 @@ async function main() {
     ?? ["/opt/pw-browsers/chromium-1194/chrome-linux/chrome", "/opt/pw-browsers/chromium/chrome-linux/chrome"]
       .find((p) => existsSync(p));
   const browser = await chromium.launch(CHROME ? { executablePath: CHROME } : {});
-  const context = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+  const context = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
   const page = await context.newPage();
 
   const GUEST_EMAIL = `guest.${stamp}@example.test`;
@@ -487,9 +521,22 @@ async function main() {
     if (!row?.order_number) return SKIP("this order carries no order_number to quote");
     // The raw key is `order-<uuid>` and appears nowhere on the customer's
     // receipt, so quoting it would give them a reference support cannot use.
-    const log = HARNESS_LOG && existsSync(HARNESS_LOG) ? readFileSync(HARNESS_LOG, "utf8") : "";
-    const quotedRaw = log.includes(`Not sent: "Order Confirmed - ${orderId}"`);
-    assert(!quotedRaw, "the confirmation subject quoted the raw order-<uuid> key");
+    //
+    // TWO WAYS THIS USED TO PASS WITHOUT LOOKING.
+    //
+    // With no harness log it read `const log = ... : ""`, and `"".includes(x)`
+    // is false, so the assertion held and the step reported `quotes VL-XXXX`
+    // having inspected nothing at all. And even with a log it only ever checked
+    // that the RAW key was absent — never that the friendly number was there —
+    // so a subject carrying no order reference, or somebody else's, passed too.
+    if (!HARNESS_LOG || !existsSync(HARNESS_LOG)) {
+      return SKIP("no harness log, so the subject cannot be read — this proves nothing either way");
+    }
+    const log = readFileSync(HARNESS_LOG, "utf8");
+    assert(!log.includes(`Not sent: "Order Confirmed - ${orderId}"`),
+      "the confirmation subject quoted the raw order-<uuid> key");
+    assert(log.includes(`Not sent: "Order Confirmed - ${row.order_number}"`),
+      `no confirmation subject quoted this order's own number (${row.order_number})`);
     return `quotes ${row.order_number}`;
   });
 
@@ -559,7 +606,7 @@ async function main() {
       [GUEST_EMAIL, JSON.stringify({ full_name: "Guest Buyer", role: "customer" })],
     );
 
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
     await passAgeGate(p);
     await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
@@ -597,7 +644,7 @@ async function main() {
       [impostor, `claim.${stamp}@example.test`]);
 
     const number = (await q("select order_number from orders where order_id = $1", [orderId])).rows[0]?.order_number;
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
     await passAgeGate(p);
     await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
@@ -630,7 +677,7 @@ async function main() {
       [MEMBER_EMAIL, JSON.stringify({ full_name: "Signed In Buyer", role: "customer" })],
     );
 
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
     await passAgeGate(p);
     await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
@@ -701,7 +748,7 @@ async function main() {
 
   await step("the confirmation page recognises an authenticated customer", async () => {
     if (!signedInOrder) return SKIP("no signed-in order to view");
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const p = await ctx.newPage();
     await passAgeGate(p);
     await p.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
@@ -735,7 +782,7 @@ async function main() {
       [email, JSON.stringify({ full_name: "Mid Checkout", role: "customer" })],
     )).rows[0];
 
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const tab1 = await ctx.newPage();
     await passAgeGate(tab1);
 
@@ -789,7 +836,7 @@ async function main() {
       [email, JSON.stringify({ full_name: "Return Tab", role: "customer" })],
     )).rows[0];
 
-    const ctx = await browser.newContext({ extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
+    const ctx = await browser.newContext({ ...VIEWPORT_OPTS, extraHTTPHeaders: { "x-real-ip": CLIENT_IP } });
     const tab1 = await ctx.newPage();
     await passAgeGate(tab1);
     await tab1.goto(`${BASE}/account/login`, { waitUntil: "domcontentloaded" });
@@ -915,6 +962,32 @@ async function main() {
     for (const sk of skipped) console.log(`  ${sk.section} :: ${sk.name}\n      ${sk.detail}`);
   }
   await pool.end();
+
+  // A CASCADE OF SKIPS IS NOT A PASS, AND IT USED TO EXIT 0.
+  //
+  // Almost every step here needs the order the first one creates. When checkout
+  // refuses, that step skips and takes twelve of the eighteen with it —
+  // including "paying sends exactly one confirmation" and "a retried webhook
+  // does not send a second", which are the two this harness exists for. The
+  // output said so plainly, under a heading reading "these are NOT verified",
+  // and then returned 0 anyway, so `qa:all` carried straight on and the run
+  // recorded as green.
+  //
+  // That is exactly how it read on 2026-08-30: 6 passed, 0 failed, 12 skipped,
+  // exit 0, with the receipt never once demonstrated. (The cause was the
+  // runbook's first env block saying PAYMENT_PROVIDER=mock, which the compiled
+  // guard rejects unconditionally — see the runbook.)
+  //
+  // Individual skips stay legitimate: a step that needs a harness log it was
+  // not given should say so and move on. What cannot stand is a run where more
+  // was skipped than proven, because the summary line then describes a purchase
+  // path nobody walked.
+  const passed = results.length - failed.length - skipped.length;
+  if (!failed.length && skipped.length > passed) {
+    console.log(`\n  ${skipped.length} steps skipped against ${passed} passed — this run is not evidence`);
+    console.log("  of anything the harness is for. Fix the skips before reading the result.");
+    process.exit(1);
+  }
   process.exit(failed.length ? 1 : 0);
 }
 

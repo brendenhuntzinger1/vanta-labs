@@ -77,6 +77,79 @@ export async function loadAutomations(): Promise<AutomationRow[]> {
   return (data ?? []).filter((row) => isAutomationKey(row.key)) as AutomationRow[];
 }
 
+/**
+ * Take the send-once slot for one (automation, reference) BEFORE sending.
+ *
+ * loadAlreadySent() below is a read, and the log write happens after the send,
+ * so on its own the pair is a read-then-write: two overlapping sweeps both read
+ * "not sent" for the same reference and both mail the customer. Nothing stopped
+ * that — it simply had not happened yet.
+ *
+ * The claim is an INSERT against `email_send_log_automation_once`, the partial
+ * unique index in sql/automation-send-once.sql. A unique violation (23505) is
+ * not an error here: it is the answer. Somebody else already holds this one, so
+ * this sweep does not send.
+ *
+ * Same shape as the order-email send-once slot, and for the same reason: the
+ * only thing that can make "exactly once" true across two processes is a
+ * constraint, not a lookup.
+ *
+ * Status is 'sending' until the outcome is known. A row left at 'sending' by a
+ * crashed sweep still holds the slot, which is the safe direction — a missed
+ * marketing email costs nothing next to a duplicate one, and that is exactly
+ * the complaint this store already had.
+ */
+async function claimAutomationSend(
+  campaignType: string,
+  referenceId: string,
+  email: string,
+  templateKey: string,
+): Promise<boolean> {
+  const { error } = await supabaseAdmin.from("email_send_log").insert({
+    campaign_type: campaignType,
+    reference_id: referenceId,
+    recipient_email: email,
+    template_key: templateKey,
+    sent_at: new Date().toISOString(),
+    status: "sending",
+  });
+  if (!error) return true;
+  if (error.code === "23505") return false;   // already claimed — not an error
+  // Anything else (the index missing on an un-migrated database, a transport
+  // failure) must NOT silently become a send. Refusing here means the sweep
+  // skips a recipient it cannot prove is unsent, which is the direction that
+  // does not mail somebody twice.
+  throw error;
+}
+
+/** Record how the claimed send actually went. */
+async function closeAutomationSend(
+  campaignType: string,
+  referenceId: string,
+  status: "sent" | "failed",
+): Promise<void> {
+  try {
+    await supabaseAdmin
+      .from("email_send_log")
+      .update({ status, sent_at: new Date().toISOString() })
+      .eq("campaign_type", campaignType)
+      .eq("reference_id", referenceId)
+      .eq("status", "sending");
+  } catch {
+    // Best-effort, exactly as the log write always was: the mail has already
+    // gone and a bookkeeping failure must not turn that into a retry.
+  }
+}
+
+/**
+ * Exported for the concurrency proof in automation-send-once.test.ts, which
+ * runs two sweeps against a fake log enforcing the same unique index and
+ * asserts ONE message goes out. There is no other way to exercise an
+ * interleaving from a test.
+ */
+export const claimAutomationSendForTest = claimAutomationSend;
+export const closeAutomationSendForTest = closeAutomationSend;
+
 /** Everything already sent for an automation, as its dedup keys. */
 async function loadAlreadySent(key: AutomationKey): Promise<Set<string>> {
   const sent = new Set<string>();
@@ -287,20 +360,47 @@ export async function runAutomationSweep(input?: { now?: number }): Promise<Auto
           postalAddress: config.marketingPostalAddress,
         });
 
+        const campaignType = `automation:${automation.key}`;
+        const templateKey = `automation_${automation.key}`;
+
+        // CLAIM BEFORE SENDING. alreadySent above is a snapshot taken once per
+        // automation; this is the check that holds across two sweeps running at
+        // the same time. If another one already has this reference, stop here.
+        if (!(await claimAutomationSend(campaignType, target.referenceId, target.email, templateKey))) {
+          result.skipped++;
+          continue;
+        }
+
         const sendResult = await sendMarketingEmail({
           to: target.email,
-          campaignType: `automation:${automation.key}`,
+          campaignType,
           referenceId: target.referenceId,
-          templateKey: `automation_${automation.key}`,
+          templateKey,
+          // The claim row IS the log row now, so the sender must not write a
+          // second one — that is what the unique index would reject anyway.
+          alreadyLogged: true,
           ...template,
         });
 
         if (sendResult.success) {
+          await closeAutomationSend(campaignType, target.referenceId, "sent");
           result.sent++;
           result.byKey[automation.key] = (result.byKey[automation.key] ?? 0) + 1;
         } else if (sendResult.suppressed) {
+          // Unsubscribed. Nothing was mailed, so release the slot rather than
+          // leaving a 'sending' row that would block a legitimate later send if
+          // they ever resubscribe.
+          await supabaseAdmin.from("email_send_log")
+            .delete()
+            .eq("campaign_type", campaignType)
+            .eq("reference_id", target.referenceId)
+            .eq("status", "sending");
           result.skipped++;
         } else {
+          // 'failed' falls outside the unique index, so this recipient stays
+          // eligible for the next sweep — one provider hiccup must not drop
+          // them from the sequence permanently.
+          await closeAutomationSend(campaignType, target.referenceId, "failed");
           result.failed++;
         }
       }

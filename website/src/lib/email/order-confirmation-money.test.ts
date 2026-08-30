@@ -20,16 +20,24 @@ import { orderConfirmationTemplate } from "@/lib/email/templates";
 // which is exactly the sort of claim that stays true right up until someone adds
 // a fee. This checks it.
 //
-// WHY A DERIVED DISCOUNT IS WORTH PINNING. The template does not receive a
-// discount figure. It computes a residual —
+// WHY A DERIVED RESIDUAL IS WORTH PINNING. The template computes a residual —
 //
 //     subtotal + shipping + tax + cardFee − total
 //
-// — and shows a positive residual as "Discounts & credits" and a negative one
-// as "Shipping protection". That is a good design (points, store credit and a
-// promo code all reduce the total without each needing a field), and it means
-// a mistake anywhere upstream surfaces here as a wrong number rather than a
-// missing line.
+// — and splits what is left over after the promo discount into "Credits
+// applied" when it is a reduction and "Shipping protection" when it is a
+// charge. That is a good design for the parts that have no field of their own
+// (points and store credit both reduce the total), and it means a mistake
+// anywhere upstream surfaces here as a wrong number rather than a missing line.
+//
+// The promo discount is NOT one of those parts any more, and the label below
+// changed with it. It used to share the residual's single "Discounts & credits"
+// row, which meant an order carrying both a discount and shipping protection
+// netted them together and printed the difference as the discount — $20 off
+// against $15 of protection reported as "you saved $5". `discount` is a stored
+// column every caller already passes, so it is now shown as itself and the
+// residual covers only the remainder. Every assertion here is unchanged; only
+// the row it reads is renamed.
 // ---------------------------------------------------------------------------
 
 const ITEMS = [
@@ -68,7 +76,7 @@ describe("an order with no discount", () => {
 
   it("shows no discount line at all, rather than a zero one", () => {
     // A "-$0.00" line reads as a failed discount and generates a support email.
-    expect(lines).not.toHaveProperty("Discounts & credits");
+    expect(lines).not.toHaveProperty("Discount");
     expect(email.html).not.toContain("-$0.00");
   });
 
@@ -83,7 +91,7 @@ describe("an order with a discount", () => {
   const lines = moneyLines(email.html);
 
   it("shows the discount as a reduction, not as a charge", () => {
-    expect(lines["Discounts & credits"]).toBe("-$20.00");
+    expect(lines.Discount).toBe("-$20.00");
   });
 
   it("still shows the full subtotal and shipping beside it", () => {
@@ -93,7 +101,7 @@ describe("an order with a discount", () => {
 
   it("the lines sum to the total", () => {
     const n = (v: string) => Number(v.replace(/[$,]/g, ""));
-    expect(n(lines.Subtotal) + n(lines.Shipping) + n(lines["Discounts & credits"]))
+    expect(n(lines.Subtotal) + n(lines.Shipping) + n(lines.Discount))
       .toBeCloseTo(n(lines.Total), 2);
   });
 
@@ -115,7 +123,7 @@ describe("an order with tax and a card fee as well", () => {
   it("shows every component the customer was charged", () => {
     expect(lines["Sales tax"]).toBe("$12.50");
     expect(Object.keys(lines).some((k) => /fee/i.test(k))).toBe(true);
-    expect(lines["Discounts & credits"]).toBe("-$20.00");
+    expect(lines.Discount).toBe("-$20.00");
   });
 
   it("still sums to the total, which is the whole claim", () => {
@@ -124,7 +132,7 @@ describe("an order with tax and a card fee as well", () => {
       (Object.entries(lines).find(([k]) => /fee/i.test(k))?.[1] ?? "$0.00").replace(/[$,]/g, ""),
     );
     expect(n(lines.Subtotal) + n(lines.Shipping) + n(lines["Sales tax"]) + fee
-      + n(lines["Discounts & credits"])).toBeCloseTo(n(lines.Total), 2);
+      + n(lines.Discount)).toBeCloseTo(n(lines.Total), 2);
   });
 });
 
@@ -136,7 +144,7 @@ describe("an order with shipping protection", () => {
 
   it("shows the add-on as a charge, not as a negative discount", () => {
     expect(lines["Shipping protection"]).toBe("$6.99");
-    expect(lines).not.toHaveProperty("Discounts & credits");
+    expect(lines).not.toHaveProperty("Discount");
   });
 
   it("sums to the total", () => {

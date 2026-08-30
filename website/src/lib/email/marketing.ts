@@ -38,7 +38,19 @@ export async function isMarketingSuppressed(to: string): Promise<boolean> {
 }
 
 export async function sendMarketingEmail(
-  input: { to: string; campaignType: string; referenceId?: string; templateKey: string; openTrackingPixelUrl?: string } & EmailTemplate,
+  input: {
+    to: string;
+    campaignType: string;
+    referenceId?: string;
+    templateKey: string;
+    openTrackingPixelUrl?: string;
+    /**
+     * The caller already wrote the email_send_log row (it claimed the
+     * send-once slot before calling). Writing a second one here would be a
+     * duplicate the automation unique index rejects anyway.
+     */
+    alreadyLogged?: boolean;
+  } & EmailTemplate,
 ): Promise<EmailSendResult & { suppressed?: boolean }> {
   const email = input.to.trim().toLowerCase();
 
@@ -133,6 +145,7 @@ export async function sendMarketingEmail(
   // whether the send succeeded turns a transient provider failure into a
   // permanent one: the recipient looks done and is never retried.
   try {
+    if (input.alreadyLogged) return result;
     await supabaseAdmin.from("email_send_log").insert({
       campaign_type: input.campaignType,
       reference_id: input.referenceId ?? null,

@@ -209,7 +209,23 @@ const decodeCookie = (page, value) => page.evaluate((v) => {
 // is the part the application controls. Whether a real provider then delivers
 // it is the provider's business and cannot be asserted from here.
 // ---------------------------------------------------------------------------
-const HARNESS_LOG = process.env.QA_HARNESS_LOG ?? null;
+/**
+ * WHERE THE APP'S OWN LOG IS, WITHOUT BEING TOLD.
+ *
+ * This was `process.env.QA_HARNESS_LOG ?? null`, and every email assertion in
+ * this file skips when it is null. Nothing sets the variable — not the npm
+ * script, not qa:all — so the default run silently gave up on precisely the two
+ * steps the harness exists for: that paying sends exactly ONE confirmation, and
+ * that a retried webhook does not send a second. They reported as skips, under
+ * a heading that says skips are not verified, and the run still exited 0.
+ *
+ * qa-harness-up.sh already writes the log to a known place, so look there.
+ * An explicit QA_HARNESS_LOG still wins; the fallback only removes the case
+ * where the log exists and nobody thought to point at it.
+ */
+const DEFAULT_HARNESS_LOG = `${process.env.QA_LOG_DIR ?? "/tmp/vanta-qa"}/harness.log`;
+const HARNESS_LOG = process.env.QA_HARNESS_LOG
+  ?? (existsSync(DEFAULT_HARNESS_LOG) ? DEFAULT_HARNESS_LOG : null);
 
 function mailSince(offset) {
   if (!HARNESS_LOG || !existsSync(HARNESS_LOG)) return null;
@@ -1324,6 +1340,22 @@ async function main() {
   // ---- 15. Change email --------------------------------------------------
   section("15. Change email");
 
+  /**
+   * WHICHEVER PASSWORD IS ON THE ACCOUNT RIGHT NOW.
+   *
+   * This journey rotates the password three times (PASSWORD -> NEW_PASSWORD ->
+   * THIRD_PASSWORD) and some sections reset it directly, so no constant is
+   * reliably current by the time this section runs. /api/account/email-change
+   * now re-authenticates server-side, so passing a stale one would fail these
+   * steps with a 403 that looks exactly like the route being broken.
+   *
+   * The gotrue shim stores the password verbatim (harness only, and it says so
+   * about itself), so the account row is the honest answer.
+   */
+  const currentPassword = async () => (await q(
+    "select encrypted_password from auth.users where id = $1", [userId],
+  )).rows[0].encrypted_password;
+
   await step("the customer is signed in before the email-change checks", async () => {
     // Re-authenticate rather than assuming: earlier sections deliberately clear
     // cookies (the dead-link landing, the old-password check), and a section
@@ -1346,14 +1378,41 @@ async function main() {
     return `signed in as ${me.body?.customer?.email ?? me.body?.email ?? "(customer)"}`;
   });
 
+  await step("a session alone cannot move the account to a new address", async () => {
+    // THE DEFECT THIS STEP EXISTS FOR. /api/account/email-change used to read
+    // `email` and nothing else, while the re-authentication that was supposed
+    // to guard it ran in the browser. So a stolen session cookie was enough to
+    // point the account at an attacker's mailbox, confirm it from there, and
+    // then take the account through password reset — surviving the real owner
+    // changing their password back.
+    const target = `takeover.${stamp}@example.test`;
+    const res = await apiAs(page, "/api/account/email-change", { method: "POST", body: { email: target } });
+    assert(!res.ok, `a password-less email change was answered ${res.status}`);
+
+    const wrong = await apiAs(page, "/api/account/email-change", {
+      method: "POST", body: { email: target, currentPassword: "not-the-password" },
+    });
+    assert(wrong.status === 403, `a WRONG current password was answered ${wrong.status}, not 403`);
+
+    // The database is the witness: no pending change may have been recorded.
+    const row = (await q("select email from auth.users where id = $1", [userId])).rows[0];
+    assert(row.email === EMAIL, `the account moved to ${row.email} without a password`);
+    return `${res.status} with no password, ${wrong.status} with a wrong one, account untouched`;
+  });
+
   await step("an address already in use is refused", async () => {
     const other = (await q(
       "select email from auth.users where email <> $1 and email like '%@example.test' limit 1", [EMAIL],
     )).rows[0];
     if (!other) return SKIP("no other address exists to collide with");
-    const res = await apiAs(page, "/api/account/email-change", { method: "POST", body: { email: other.email } });
+    const res = await apiAs(page, "/api/account/email-change", {
+      method: "POST", body: { email: other.email, currentPassword: await currentPassword() },
+    });
     assert(res.status !== 401,
       "refused as UNAUTHENTICATED, which is not the refusal under test — the session was lost");
+    assert(res.status !== 403,
+      "refused as a BAD PASSWORD, which is not the refusal under test — this step tracks whichever "
+      + "password the earlier sections left on the account, so fix that rather than the route");
     assert(!res.ok, `taking another account's address was answered ${res.status}`);
     assert(/already|in use/i.test(String(res.body?.error ?? "")),
       `refused, but not for being taken: ${JSON.stringify(res.body)}`);
@@ -1363,8 +1422,11 @@ async function main() {
   await step("changing to a free address sends OUR branded email to the NEW address", async () => {
     const target = `moved.${stamp}@example.test`;
     const before = mailOffset();
-    const res = await apiAs(page, "/api/account/email-change", { method: "POST", body: { email: target } });
+    const res = await apiAs(page, "/api/account/email-change", {
+      method: "POST", body: { email: target, currentPassword: await currentPassword() },
+    });
     assert(res.status !== 401, "the email-change call ran unauthenticated");
+    assert(res.status !== 403, `the current password was rejected: ${JSON.stringify(res.body)}`);
 
     const mail = mailSince(before);
     if (mail) {

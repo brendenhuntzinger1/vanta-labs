@@ -258,12 +258,42 @@ EMAIL_ENABLED=false
 EMAIL_PROVIDER=none
 NEXT_PUBLIC_ENABLE_ANALYTICS=false
 CHECKOUT_ENABLED=true
-PAYMENT_PROVIDER=mock
 NEXT_PUBLIC_EXPRESS_CHECKOUT_ENABLED=false
+SHIPPO_WEBHOOK_SECRET=harness-shippo-secret
+PAYMENT_PROVIDER=live
+VEYRA_API_BASE=http://127.0.0.1:59999
+VEYRA_SECRET_KEY=stub-secret-not-real
+PAYMENT_WEBHOOK_SECRET=harness-webhook-secret
 ```
 
-`EMAIL_ENABLED=false` and `PAYMENT_PROVIDER=mock` are load-bearing: they make it
-impossible for a synthetic test to mail a real person or reach a real processor.
+**`PAYMENT_PROVIDER=live`, not `mock`, and this block used to say `mock`.** That
+was wrong and it cost a whole diagnosis round: with `mock`, every call to
+`/api/checkout/create-session` throws before it does anything, so no order is
+ever created and the purchase harness skips twelve of its eighteen steps —
+including "exactly one confirmation email" — while still exiting 0. The section
+below ("Checkout needs the LIVE provider…") had the right answer all along;
+these two blocks disagreed, and the wrong one came first.
+
+`live` here reaches nothing real: `VEYRA_API_BASE` points at
+`scripts/veyra-stub.mjs` on loopback, which only mints session ids. That is the
+whole point — the genuine live code path, against a stub that cannot take money.
+
+`EMAIL_ENABLED=false` is load-bearing in the same way: it makes it impossible
+for a synthetic test to mail a real person.
+
+`SHIPPO_WEBHOOK_SECRET` and `PAYMENT_WEBHOOK_SECRET` are load-bearing in the
+other direction. Both webhook routes fail **closed** without them — correctly,
+since an unconfigured secret must never mean "accept anything" — so their
+absence does not look like a configuration problem, it looks like shipping,
+delivery and payment settlement being broken.
+
+`SHIPPO_WEBHOOK_SECRET` is load-bearing in the other direction. Without it
+`/api/webhooks/shippo` fails **closed** with 503 — correctly, since an
+unconfigured secret must never mean "accept anything" — and section 13 of the
+customer journey (shipping, delivery, and both of their emails) cannot pass at
+all. It was missing from this list, so those three steps had never run. The
+value only has to match `qa-customer-journey.mjs`, which defaults to
+`harness-shippo-secret`.
 
 ### 5b. Env goes in `.env.test.local`, NOT `.env.local`
 
@@ -297,6 +327,25 @@ restarts, so a fix looks like a no-op until you do:
 ```bash
 rm -rf .next && npm run harness:build
 ```
+
+**`npm run build` overwrites the harness build, and the harness keeps running
+against it.** They share `.next`. A production build is `NODE_ENV=production`, so
+Next does not read `.env.test.local` at all — the server comes back up with no
+Supabase URL, no payment provider and no webhook secrets, and the failures land
+where nobody suspects the build: sign-in stops setting a session cookie, the
+account page bounces to the login form, refreshes look like they log the customer
+out. Certifying a release is exactly when you run both, so this is easy to walk
+into:
+
+```bash
+npm run build                       # the certification build
+rm -rf .next && npm run harness:build && bash scripts/qa-harness-up.sh
+```
+
+Run the production build LAST, or rebuild the harness after it. `qa-harness-up.sh`
+now checks the catalogue rather than a 200 on the home page, so this shows up as
+`CATALOGUE EMPTY OR FAILING` at bring-up instead of as a dozen unrelated-looking
+session failures four minutes later.
 
 ### 7. Payments: run LIVE mode against a local stub
 
@@ -388,23 +437,57 @@ class of defects this audit exists to find lives in that gap.
 
 ---
 
-## The three QA harnesses — run these before hand-driving anything
+## The QA harnesses — run these before hand-driving anything
 
-Hand-driving a browser proves one path once. These three scripts prove the same
+Hand-driving a browser proves one path once. These scripts prove the same
 things every time, and they are the fastest way to find out whether a change
 broke something a long way from where you were working.
 
-    npm run qa:all          # all four, ~6 minutes
+    npm run qa:all           # the lot, in order
 
-    npm run qa:roles        # 861 probes: every protected route x every role
-    npm run qa:journey      # 61 steps: age gate -> delivered order -> logout
-    npm run qa:purchase     # 13 steps: guest buys, pays, gets ONE receipt
-    npm run qa:abuse        # 16 steps: flooding, CSRF, XSS, fixation, cookies
+    npm run qa:seed          # the accounts every role probe needs
+    npm run qa:roles         # 1001 probes: every protected route x every role
+    npm run qa:crossaccount  # 15 probes: one customer reaching for another's data
+    npm run qa:journey       # 60+ steps: age gate -> delivered order -> logout
+    npm run qa:purchase      # 13 steps: guest buys, pays, gets ONE receipt
+    npm run qa:abuse         # 16 steps: flooding, CSRF, XSS, fixation, cookies
 
 `qa:roles` discovers every route from the filesystem and reads the HTTP methods
 each one exports, so a route added without a guard fails it the moment it
 exists — which a hand-maintained list can never do, because nobody remembers to
 add the route they just wrote.
+
+**`qa:seed` is not optional, and this is why.** `qa:roles` used to take its role
+list from a `QA_ROLES` environment variable that nothing in this repository ever
+set. The loop that signs the roles in therefore never ran an iteration, the
+admin login failed too (`admin_credentials` is empty until seeded), both were
+caught and printed as one-line notes, and the run finished:
+
+    166 probes, 0 findings.
+    Every protected route refused every role that should not reach it.
+
+...and exited 0. Every word after "guest" in that sentence was unearned — the
+only role ever probed was a signed-out visitor. With the accounts present the
+same probe set is **1001** probes. A missing role is now fatal rather than a
+note, and the roles default to the seeded fixtures instead of to nothing.
+
+`qa:roles` also runs a **positive control**: the admin session must actually
+reach the admin routes. Without it, an admin area that refused *everybody* — or
+500ed on every request — would score zero findings and read as perfect
+isolation. Locked is not the same as secure. The control is reported separately
+from the boundary findings, because an admin being refused is a different defect
+from an outsider getting in, and only "the admin reached nothing" invalidates
+the run.
+
+`qa:crossaccount` answers the question `qa:roles` structurally cannot. Every
+`[param]` `qa:roles` substitutes is a placeholder that belongs to nobody, so a
+route that looks up a row, finds none, and returns 404 is indistinguishable
+there from one that finds the row, checks the owner, and refuses. Both read as
+"refused". `qa:crossaccount` gives one customer a real order, address, cart and
+partner record, then asks for each by its real id as a *different* signed-in
+customer — and checks the database afterwards rather than believing the status
+code, because a route can answer 200 and change nothing, or 500 and change
+something.
 
 `qa:journey` is the whole customer lifecycle in ONE browser session, which is
 the only way to catch state that survives (or fails to survive) a navigation: a
